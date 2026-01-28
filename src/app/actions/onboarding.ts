@@ -22,19 +22,12 @@ export async function completeOnboarding(data: {
         const supabase = await createClient()
 
         // First refresh session to ensure cookies are valid
-        const { data: sessionData, error: sessionError } = await supabase.auth.getSession()
+        const { data: { user }, error: authError } = await supabase.auth.getUser()
 
-        if (sessionError) {
-            console.error('Session error:', sessionError)
+        if (authError || !user) {
+            console.error('Auth error:', authError)
             return { success: false, error: 'Session expired. Please login again.' }
         }
-
-        if (!sessionData.session) {
-            console.error('No session found')
-            return { success: false, error: 'Please login to continue' }
-        }
-
-        const user = sessionData.session.user
 
         // Validate username format
         if (!data.username || data.username.length < 3) {

@@ -21,8 +21,9 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import TaskTemplates from "./TaskTemplates";
-import FileTreePicker from "../FileTreePicker";
+import TaskAttachmentPicker from "./components/TaskAttachmentPicker";
 import { ProjectNode } from "@/lib/db/schema";
+import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 
 
 
@@ -67,10 +68,7 @@ export default function CreateTaskModal({
     const [subtasks, setSubtasks] = useState<{ id: string; title: string }[]>([]);
     const [tags, setTags] = useState<string[]>([]);
     const [attachments, setAttachments] = useState<ProjectNode[]>([]);
-    // const [isFilePickerOpen, setIsFilePickerOpen] = useState(false); // Removed
-    const [view, setView] = useState<'form' | 'picker'>('form');
-
-
+    const [isFilePickerOpen, setIsFilePickerOpen] = useState(false);
 
     // Reset form when opening
     useEffect(() => {
@@ -80,12 +78,8 @@ export default function CreateTaskModal({
             setSubtasks([]);
             setTags([]);
             setAttachments([]);
-            setAttachments([]);
             setShowAdvanced(false);
-            setView('form');
-
-
-
+            setIsFilePickerOpen(false);
             // Don't reset createAnother as user might want it to persist
         }
     }, [isOpen]);
@@ -106,29 +100,10 @@ export default function CreateTaskModal({
                 assigneeId: assigneeId || null,
                 dueDate: dueDate || null,
                 attachmentIds: attachments.map(a => a.id),
+                subtasks: subtasks.map(st => ({ title: st.title, completed: false })),
                 projectId
             };
 
-
-            
-            // We need to ensure we have projectId. It should be passed as prop. 
-            // If not, we might be in trouble. Let's assume parent passes it in `onCreate` or we fix the prop.
-            // Actually, `onCreate` is the parent handler. The Modal currently just calls `onCreate`.
-            // So we should modify the PARENT to call the server action, OR modify this to call it.
-            // Architecture plan said: "Wire up CreateTaskModal to Server Action". 
-            // Let's pass the server action responsibility to here for self-containment, 
-            // BUT the modal doesn't know ProjectID.
-            
-            // Let's stick to the current pattern: Modal gathers data, Parent executes action.
-            // Wait, previous instructions said "Wire up CreateTaskModal to Server Action". 
-            // I will update the props to include projectId and call action directly here? 
-            // No, easier to keep it dumb and let TasksTab (which has projectId) call the action.
-            // BUT, looking at TasksTab, it just logs "Create Task". 
-            // So I will update `TasksTab.tsx` to call the action! 
-            
-            // Reverting thoughts: I will keep this component "dumb" and just pass data up.
-            // I will update TasksTab to actually call the server action.
-            
             onCreate(taskData); 
         } catch (e) {
             console.error(e);
@@ -140,12 +115,9 @@ export default function CreateTaskModal({
                 setTitle("");
                 setDescription("");
                 setSubtasks([]);
-                setSubtasks([]);
-                setTags([]);
                 setTags([]);
                 setAttachments([]);
             }
-            setView('form');
         }
     };
 
@@ -198,40 +170,21 @@ export default function CreateTaskModal({
                 {/* Header Section */}
                 <div className="px-6 py-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between flex-shrink-0">
                     <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
-                        {view === 'picker' ? "Select Attachment" : "Create New Task"}
+                        Create New Task
                     </h2>
                     <button 
-                        onClick={view === 'picker' ? () => setView('form') : onClose}
+                        onClick={onClose}
                         className="p-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-full text-zinc-500 dark:text-zinc-400 transition-colors"
                     >
-                         {view === 'picker' ? (
-                            <span className="text-xs font-medium">Back</span> // Or Icon
-                         ) : (
-                            <X className="w-5 h-5" />
-                         )}
+                        <X className="w-5 h-5" />
                     </button>
                 </div>
 
                 {/* Form Content Area */}
                 <div className="flex-1 overflow-y-auto p-6 space-y-6">
-                    {view === 'picker' ? (
-                        <div className="h-full">
-                            <FileTreePicker 
-                                projectId={projectId}
-                                projectName={projectName}
-                                onFileSelect={(node) => {
-                                    if (!attachments.find(a => a.id === node.id)) {
-                                        setAttachments([...attachments, node]);
-                                    }
-                                    setView('form');
-                                }}
-                                selectedFileId={attachments[attachments.length - 1]?.id}
-                            />
-                        </div>
-                    ) : (
-                        <div className="space-y-6">
+                    <div className="space-y-6">
 
-                        {/* Section 1: Sprint & Story Points */}
+                        {/* Section 1: Sprint & Attachments */}
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             {/* Sprint Selector */}
                             <div className="space-y-1.5">
@@ -248,13 +201,10 @@ export default function CreateTaskModal({
                                         <option value="">Backlog (no sprint)</option>
                                         {sprints
                                             .filter(s => {
-                                                // Only show sprints that:
-                                                // 1. Have no end date (always available)
-                                                // 2. Have end date in the future (not yet ended)
                                                 if (!s.endDate) return true;
                                                 const endDate = new Date(s.endDate);
                                                 const today = new Date();
-                                                today.setHours(0, 0, 0, 0); // Reset to start of day for fair comparison
+                                                today.setHours(0, 0, 0, 0); 
                                                 return endDate >= today;
                                             })
                                             .map(s => (
@@ -267,7 +217,7 @@ export default function CreateTaskModal({
                             </div>
                             
                             
-                            {/* Attachments Section (Replaces Story Points) */}
+                            {/* Attachments Section */}
                             <div className="space-y-1.5">
                                 <label className="text-xs font-medium flex items-center gap-2 text-zinc-500 dark:text-zinc-400">
                                     <Paperclip className="w-3.5 h-3.5 text-zinc-500" />
@@ -294,7 +244,7 @@ export default function CreateTaskModal({
 
                                     {/* Add Button */}
                                     <button
-                                        onClick={() => setView('picker')}
+                                        onClick={() => setIsFilePickerOpen(true)}
                                         className="text-sm text-blue-600 hover:text-blue-700 dark:text-blue-400 font-medium flex items-center gap-1.5 transition-colors"
                                     >
                                         <Plus className="w-4 h-4" />
@@ -312,7 +262,7 @@ export default function CreateTaskModal({
                                 value={title}
                                 onChange={(e) => setTitle(e.target.value)}
                                 placeholder="Task title"
-                                className="w-full text-xl font-semibold bg-transparent border-none placeholder-zinc-300 dark:placeholder-zinc-600 focus:ring-0 p-0 text-zinc-900 dark:text-zinc-100"
+                                className="w-full text-xl font-semibold bg-transparent border-none placeholder-zinc-300 dark:placeholder-zinc-600 focus:ring-0 focus:outline-none focus:border-none p-0 text-zinc-900 dark:text-zinc-100 shadow-none ring-0 outline-none"
                                 autoFocus
                             />
                         </div>
@@ -515,11 +465,9 @@ export default function CreateTaskModal({
                             )}
                         </AnimatePresence>
                     </div>
-                    )}
                 </div>
 
                 {/* Footer Section */}
-                {view === 'form' && (
                 <div className="p-6 border-t border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/50 flex items-center justify-between gap-3 flex-shrink-0">
 
                     <label className="flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-400 cursor-pointer select-none">
@@ -547,10 +495,18 @@ export default function CreateTaskModal({
                         </button>
                     </div>
                 </div>
-                )}
             </motion.div>
+
+            {/* Nested File Picker Dialog */}
+            <TaskAttachmentPicker 
+                isOpen={isFilePickerOpen}
+                onClose={() => setIsFilePickerOpen(false)}
+                projectId={projectId}
+                projectName={projectName}
+                attachments={attachments}
+                setAttachments={setAttachments}
+            />
+
         </div>
-
-
     );
 }

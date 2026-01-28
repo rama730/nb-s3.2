@@ -105,6 +105,7 @@ export default function ProjectDashboardClient({
     // Extract data from project - using extended fields that may come from backend joins
     const tasks = extendedProject?.project_tasks || [];
     const files = extendedProject?.project_files || [];
+    const initialFileNodes = extendedProject?.initialFileNodes || [];
     const members = project?.project_collaborators || [];
     const sprints = extendedProject?.project_sprints || [];
 
@@ -234,6 +235,19 @@ export default function ProjectDashboardClient({
         toast.info("Project finalization coming soon");
     }, []);
 
+    // Memoize the Files tab to prevent unmounting/remounting on parent re-renders (e.g. scroll)
+    const filesTabContent = useMemo(() => (
+        <TabErrorBoundary tabName="Files">
+            <FilesTab
+                projectId={project.id}
+                projectName={project.title}
+                currentUserId={currentUserId || undefined}
+                isOwnerOrMember={isOwnerOrMember}
+                initialFileNodes={initialFileNodes}
+            />
+        </TabErrorBoundary>
+    ), [project.id, project.title, currentUserId, isOwnerOrMember, initialFileNodes]);
+
     // Render active tab content
     const renderTabContent = () => {
         switch (activeTab) {
@@ -344,6 +358,8 @@ export default function ProjectDashboardClient({
                             projectCreatorId={project.owner_id}
                             initialTasks={tasks}
                             totalCount={tasks.length}
+                            members={allMembers}
+                            sprints={sprints}
                         />
                     </TabErrorBoundary>
                 );
@@ -356,16 +372,7 @@ export default function ProjectDashboardClient({
                 );
 
             case "files":
-                return (
-                    <TabErrorBoundary tabName="Files">
-                        <FilesTab
-                            projectId={project.id}
-                            projectName={project.title}
-                            currentUserId={currentUserId || undefined}
-                            isOwnerOrMember={isOwnerOrMember}
-                        />
-                    </TabErrorBoundary>
-                );
+                return filesTabContent;
 
             case "settings":
                 if (!isOwner) return null;

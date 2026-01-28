@@ -6,6 +6,8 @@ import { X, ChevronRight, CheckSquare, MessageCircle, Paperclip, Activity, Check
 import { cn } from "@/lib/utils";
 import { useTaskCounts } from "@/hooks/useTaskCounts";
 import { deleteTaskAction } from "@/app/actions/project";
+import TaskStatusBadge from "./badges/TaskStatusBadge";
+import TaskPriorityBadge from "./badges/TaskPriorityBadge";
 import DetailsTab from "./TaskDetailTabs/DetailsTab";
 import SubtasksTab from "./TaskDetailTabs/SubtasksTab";
 import CommentsTab from "./TaskDetailTabs/CommentsTab";
@@ -82,7 +84,7 @@ export default function TaskDetailPanel({
                 animate={{ x: 0 }}
                 exit={{ x: "100%" }}
                 transition={{ type: "spring", damping: 25, stiffness: 200 }}
-                className="fixed right-0 top-[var(--header-height,64px)] bottom-0 w-full max-w-2xl bg-white dark:bg-zinc-900 shadow-2xl z-[201] flex flex-col border-l border-zinc-200 dark:border-zinc-800"
+                className="fixed right-0 top-[var(--header-height,64px)] bottom-0 w-full max-w-2xl bg-white dark:bg-zinc-900 shadow-2xl z-[201] flex flex-col border-l border-zinc-200 dark:border-zinc-800 lg:w-[42rem] xl:w-[48rem]"
             >
                 {/* Header */}
                 <div className="flex-shrink-0 border-b border-zinc-200 dark:border-zinc-800">
@@ -93,23 +95,8 @@ export default function TaskDetailPanel({
                             </button>
                             <div className="flex items-center gap-3">
                                 <p className="text-xs text-zinc-500 font-mono">#{task.id.slice(0, 8)}</p>
-                                <span className={cn(
-                                    "px-2 py-0.5 rounded text-xs font-medium capitalize",
-                                    task.status === 'done' ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400" :
-                                    task.status === 'in_progress' ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" :
-                                    "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
-                                )}>
-                                    {task.status.replace("_", " ")}
-                                </span>
-                                <span className={cn(
-                                    "px-2 py-0.5 rounded text-xs font-medium capitalize",
-                                    task.priority === 'urgent' ? "bg-rose-100 text-rose-700" :
-                                    task.priority === 'high' ? "bg-orange-100 text-orange-700" :
-                                    task.priority === 'medium' ? "bg-amber-100 text-amber-700" :
-                                    "bg-zinc-100 text-zinc-600 dark:bg-zinc-800"
-                                )}>
-                                    {task.priority}
-                                </span>
+                                <TaskStatusBadge status={task.status} />
+                                <TaskPriorityBadge priority={task.priority} />
                             </div>
                         </div>
                         <div className="flex items-center gap-2">
@@ -166,7 +153,7 @@ export default function TaskDetailPanel({
                 </div>
 
                 {/* Content */}
-                <div className="flex-1 overflow-y-auto">
+                <div className="flex-1 overflow-y-auto relative bg-white dark:bg-zinc-900">
                     {activeTab === "details" && (
                         <DetailsTab task={task} isOwnerOrMember={isOwnerOrMember} sprints={sprints} members={members} projectId={projectId} />
                     )}

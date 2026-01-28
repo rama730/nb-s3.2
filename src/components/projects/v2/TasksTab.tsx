@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useMemo } from "react";
-import { Users, UserPlus, ChevronDown, ChevronUp } from "lucide-react";
+import { useState } from "react";
+import { Users, UserPlus } from "lucide-react";
 import { AnimatePresence } from "framer-motion";
 import { useRealtimeTasks } from "@/hooks/useRealtimeTasks";
 import { createTaskAction } from "@/app/actions/project";
@@ -13,6 +13,9 @@ import CreateTaskModal from "@/components/projects/v2/tasks/CreateTaskModal";
 import TaskDetailPanel from "@/components/projects/v2/tasks/TaskDetailPanel";
 import { Task } from "@/components/projects/v2/tasks/TaskCard";
 
+import FocusStrip from "./tasks/components/FocusStrip";
+import { useTaskFilters } from "./tasks/hooks/useTaskFilters";
+
 interface TasksTabProps {
     projectId: string;
     projectName?: string;
@@ -20,8 +23,10 @@ interface TasksTabProps {
     isOwner?: boolean;
     isOwnerOrMember: boolean;
     projectCreatorId?: string;
-    initialTasks?: any[]; // Allow loose typing from backend for now
+    initialTasks?: any[]; 
     totalCount?: number;
+    members?: any[];
+    sprints?: any[];
 }
 
 export default function TasksTab({
@@ -33,6 +38,8 @@ export default function TasksTab({
     projectCreatorId,
     initialTasks = [],
     totalCount = 0,
+    members = [],
+    sprints = [],
 }: TasksTabProps) {
     // Local State
     const [viewMode, setViewMode] = useState<'board' | 'list'>('board');
@@ -41,40 +48,18 @@ export default function TasksTab({
     const [isReorderMode, setIsReorderMode] = useState(false);
     const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(new Set());
 
-    const [myFocusExpanded, setMyFocusExpanded] = useState(true);
-    const [needsOwnerExpanded, setNeedsOwnerExpanded] = useState(true);
-
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [editingTask, setEditingTask] = useState<Task | null>(null);
 
-    // Realtime task updates (auto-refreshes when tasks change)
+    // Realtime task updates
     const { tasks: allTasks } = useRealtimeTasks(projectId, initialTasks as Task[]);
 
-    // Filtering Logic
-    const filteredTasks = useMemo(() => {
-        let tasks = [...allTasks];
-        if (scope === 'backlog') {
-            // Assume backlog means no sprint_id or specific status
-            // For now, just a dummy filter if we don't have sprint data on tasks
-            // tasks = tasks.filter(t => !t.sprint_id);
-        }
-        return tasks;
-    }, [allTasks, scope]);
-
-    const myFocusTasks = useMemo(() => {
-        if (!currentUserId) return [];
-        return filteredTasks.filter(t => 
-            t.assignee_id === currentUserId && 
-            t.status !== 'done'
-        );
-    }, [filteredTasks, currentUserId]);
-
-    const needsOwnerTasks = useMemo(() => {
-        return filteredTasks.filter(t => 
-            !t.assignee_id && 
-            t.status !== 'done'
-        );
-    }, [filteredTasks]);
+    // Optimized Filters Hook
+    const { filteredTasks, myFocusTasks, needsOwnerTasks } = useTaskFilters({
+        tasks: allTasks,
+        currentUserId,
+        scope
+    });
 
     // Handlers
     const toggleTaskSelection = (taskId: string) => {
@@ -96,13 +81,13 @@ export default function TasksTab({
                 sprintId: data.sprintId || null,
                 storyPoints: data.storyPoints || undefined,
                 dueDate: data.dueDate || null,
+                attachmentNodeIds: data.attachmentIds || [],
             };
 
             const result = await createTaskAction(taskData);
             
             if (result.success) {
                 setShowCreateModal(false);
-                // Task will auto-update via realtime subscription
             } else {
                 console.error("Failed to create task:", result.error);
                 alert(result.error || "Failed to create task");
@@ -117,7 +102,7 @@ export default function TasksTab({
         <div className="space-y-4 relative">
             {/* Sticky Header */}
             <div className="sticky top-0 z-40 bg-zinc-50/95 dark:bg-zinc-900/95 backdrop-blur-sm border-b border-zinc-200 dark:border-zinc-800 pb-4 -mx-6 px-6 pt-0 -mt-2">
-                <div className="h-4"></div> {/* Spacer for top padding consistency without breaking sticky */}
+                <div className="h-4"></div> 
                 <div className="flex items-start justify-between gap-4">
                     <div>
                         <div className="flex items-center gap-2">
@@ -155,66 +140,25 @@ export default function TasksTab({
             </div>
 
             {/* Focus Strips */}
-            {(myFocusTasks.length > 0 || needsOwnerTasks.length > 0) && (
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-                    {/* My Focus */}
-                    <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-sm">
-                        <button
-                            onClick={() => setMyFocusExpanded(!myFocusExpanded)}
-                            className="w-full flex items-center justify-between gap-3 px-4 py-3"
-                        >
-                            <div className="flex items-center gap-2 text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-                                <Users className="w-4 h-4 text-indigo-500" />
-                                My Focus
-                            </div>
-                            <div className="flex items-center gap-2">
-                                <span className="text-xs text-zinc-500">{myFocusTasks.length}</span>
-                                {myFocusExpanded ? <ChevronUp className="w-4 h-4 text-zinc-400" /> : <ChevronDown className="w-4 h-4 text-zinc-400" />}
-                            </div>
-                        </button>
-                        {myFocusExpanded && (
-                            <div className="px-4 pb-4 space-y-2">
-                                {myFocusTasks.map(task => (
-                                    <div key={task.id} onClick={() => setEditingTask(task)} className="p-2 hover:bg-zinc-50 dark:hover:bg-zinc-800 rounded-lg cursor-pointer transition-colors border border-transparent hover:border-zinc-100 dark:hover:border-zinc-700">
-                                        <div className="font-medium text-sm text-zinc-800 dark:text-zinc-200">{task.title}</div>
-                                        <div className="text-xs text-zinc-500 mt-1 capitalize">{task.status.replace('_', ' ')} • {task.priority}</div>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                    </div>
-
-                    {/* Needs Owner */}
-                    <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-sm">
-                        <button
-                            onClick={() => setNeedsOwnerExpanded(!needsOwnerExpanded)}
-                            className="w-full flex items-center justify-between gap-3 px-4 py-3"
-                        >
-                            <div className="flex items-center gap-2 text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-                                <UserPlus className="w-4 h-4 text-orange-500" />
-                                Needs Owner
-                            </div>
-                            <div className="flex items-center gap-2">
-                                <span className="text-xs text-zinc-500">{needsOwnerTasks.length}</span>
-                                {needsOwnerExpanded ? <ChevronUp className="w-4 h-4 text-zinc-400" /> : <ChevronDown className="w-4 h-4 text-zinc-400" />}
-                            </div>
-                        </button>
-                        {needsOwnerExpanded && (
-                            <div className="px-4 pb-4 space-y-2">
-                                {needsOwnerTasks.map(task => (
-                                    <div key={task.id} onClick={() => setEditingTask(task)} className="flex items-center justify-between p-2 hover:bg-zinc-50 dark:hover:bg-zinc-800 rounded-lg cursor-pointer transition-colors border border-transparent hover:border-zinc-100 dark:hover:border-zinc-700">
-                                        <div>
-                                            <div className="font-medium text-sm text-zinc-800 dark:text-zinc-200">{task.title}</div>
-                                            <div className="text-xs text-zinc-500 mt-1 capitalize">{task.priority}</div>
-                                        </div>
-                                        <button className="px-2 py-1 text-xs bg-blue-50 text-blue-600 rounded border border-blue-100 hover:bg-blue-100">Claim</button>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                    </div>
-                </div>
-            )}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                 <FocusStrip 
+                    title="My Focus" 
+                    icon={Users} 
+                    iconColorClass="text-indigo-500"
+                    tasks={myFocusTasks}
+                    onTaskClick={setEditingTask}
+                 />
+                 <FocusStrip 
+                    title="Needs Owner" 
+                    icon={UserPlus} 
+                    iconColorClass="text-orange-500"
+                    tasks={needsOwnerTasks}
+                    onTaskClick={setEditingTask}
+                    renderTaskAction={() => (
+                        <button className="px-2 py-1 text-xs bg-blue-50 text-blue-600 rounded border border-blue-100 hover:bg-blue-100">Claim</button>
+                    )}
+                 />
+            </div>
 
             {/* Main Content */}
             {viewMode === 'board' ? (
@@ -242,6 +186,8 @@ export default function TasksTab({
                 onCreate={handleCreateTask}
                 projectId={projectId}
                 projectName={projectName}
+                members={members}
+                sprints={sprints}
             />
 
             <AnimatePresence>
@@ -252,6 +198,8 @@ export default function TasksTab({
                         projectId={projectId}
                         isOwnerOrMember={isOwnerOrMember}
                         isOwner={isOwner}
+                        members={members}
+                        sprints={sprints}
                     />
                 )}
             </AnimatePresence>

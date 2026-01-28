@@ -5,26 +5,57 @@ import { profiles, projectFileIndex, projectMembers, projectNodeEvents, projectN
 import type { ProjectNode } from "@/lib/db/schema";
 import { eq, and, isNull, isNotNull, ilike, inArray, sql, desc, type SQL } from "drizzle-orm";
 
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import prettier from "prettier";
 
 async function assertProjectAccess(projectId: string, userId: string) {
-    const [project] = await db
-        .select({ id: projects.id, ownerId: projects.ownerId })
-        .from(projects)
-        .where(eq(projects.id, projectId));
+    // Backward-compatible alias: write access
+    await assertProjectWriteAccess(projectId, userId);
+}
 
+async function getProjectAccess(projectId: string, userId: string | null) {
+    const rows = await db
+        .select({ id: projects.id, ownerId: projects.ownerId, visibility: projects.visibility })
+        .from(projects)
+        .where(eq(projects.id, projectId))
+        .limit(1);
+
+    const project = rows[0];
     if (!project) throw new Error("Project not found");
-    if (project.ownerId === userId) return;
+
+    const isPublic = project.visibility === 'public';
+    if (!userId) {
+        return { project, canRead: isPublic, canWrite: false };
+    }
+
+    if (project.ownerId === userId) return { project, canRead: true, canWrite: true };
 
     const member = await db
-        .select({ id: projectMembers.id })
+        .select({ id: projectMembers.id, role: projectMembers.role })
         .from(projectMembers)
         .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, userId)))
         .limit(1);
 
-    if (member.length === 0) throw new Error("Forbidden");
+    if (member.length > 0) {
+        const role = member[0]?.role;
+        const canWrite = role !== 'viewer';
+        return { project, canRead: true, canWrite };
+    }
+
+    return { project, canRead: isPublic, canWrite: false };
+}
+
+async function assertProjectReadAccess(projectId: string, userId: string | null) {
+    const access = await getProjectAccess(projectId, userId);
+    if (!access.canRead) throw new Error("Forbidden");
+    return access;
+}
+
+async function assertProjectWriteAccess(projectId: string, userId: string) {
+    const access = await getProjectAccess(projectId, userId);
+    if (!access.canWrite) throw new Error("Forbidden");
+    return access;
 }
 
 async function getTaskProjectId(taskId: string): Promise<string> {
@@ -42,14 +73,13 @@ async function getTaskProjectId(taskId: string): Promise<string> {
 export async function getProjectNodes(projectId: string, parentId: string | null = null, query?: string) {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) throw new Error("Unauthorized");
 
     if (!projectId) {
         console.error("getProjectNodes called with undefined projectId");
         return [];
     }
 
-    await assertProjectAccess(projectId, user.id);
+    const access = await assertProjectReadAccess(projectId, user?.id ?? null);
 
     let whereClause;
     if (query && query.trim()) {
@@ -72,7 +102,7 @@ export async function getProjectNodes(projectId: string, parentId: string | null
     });
 
     // Auto-create default root folder if project is empty at root
-    if (!parentId && !query && nodes.length === 0) {
+    if (access.canWrite && !!user && !parentId && !query && nodes.length === 0) {
         try {
             // Fetch project title
             const [project] = await db.select({ title: projects.title }).from(projects).where(eq(projects.id, projectId));
@@ -112,15 +142,14 @@ export async function recordProjectNodeEvent(projectId: string, nodeId: string, 
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new Error("Unauthorized");
-    await assertProjectAccess(projectId, user.id);
+    await assertProjectWriteAccess(projectId, user.id);
     await recordNodeEvent(projectId, user.id, nodeId, type, metadata);
 }
 
 export async function getLastNodeEvent(projectId: string, nodeId: string) {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) throw new Error("Unauthorized");
-    await assertProjectAccess(projectId, user.id);
+    await assertProjectReadAccess(projectId, user?.id ?? null);
 
     const rows = await db
         .select({
@@ -148,8 +177,7 @@ export async function getLastNodeEvent(projectId: string, nodeId: string) {
 export async function getTaskLinkCounts(projectId: string, nodeIds: string[]) {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) throw new Error("Unauthorized");
-    await assertProjectAccess(projectId, user.id);
+    await assertProjectReadAccess(projectId, user?.id ?? null);
 
     const unique = Array.from(new Set(nodeIds)).filter(Boolean);
     if (unique.length === 0) return {} as Record<string, number>;
@@ -172,8 +200,7 @@ export async function getTaskLinkCounts(projectId: string, nodeIds: string[]) {
 export async function getNodesByIds(projectId: string, nodeIds: string[]) {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) throw new Error("Unauthorized");
-    await assertProjectAccess(projectId, user.id);
+    await assertProjectReadAccess(projectId, user?.id ?? null);
 
     const unique = Array.from(new Set(nodeIds)).filter(Boolean);
     if (unique.length === 0) return [];
@@ -187,7 +214,7 @@ export async function formatProjectFileContent(projectId: string, filename: stri
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new Error("Unauthorized");
-    await assertProjectAccess(projectId, user.id);
+    await assertProjectWriteAccess(projectId, user.id);
 
     const ext = filename.split('.').pop()?.toLowerCase();
     const parser =
@@ -208,7 +235,7 @@ export async function upsertProjectFileIndex(projectId: string, nodeId: string, 
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new Error("Unauthorized");
-    await assertProjectAccess(projectId, user.id);
+    await assertProjectWriteAccess(projectId, user.id);
 
     // only index reasonably-sized text to avoid DB bloat
     const MAX_CHARS = 200_000;
@@ -234,8 +261,7 @@ export async function upsertProjectFileIndex(projectId: string, nodeId: string, 
 export async function searchProjectFileIndex(projectId: string, query: string, limit: number = 50) {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) throw new Error("Unauthorized");
-    await assertProjectAccess(projectId, user.id);
+    await assertProjectReadAccess(projectId, user?.id ?? null);
 
     const q = (query || "").trim();
     if (!q) return [] as Array<{ nodeId: string; snippet: string }>;
@@ -256,7 +282,7 @@ export async function acquireProjectNodeLock(projectId: string, nodeId: string, 
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new Error("Unauthorized");
-    await assertProjectAccess(projectId, user.id);
+    await assertProjectWriteAccess(projectId, user.id);
 
     const now = new Date();
     const expiresAt = new Date(now.getTime() + ttlSeconds * 1000);
@@ -330,7 +356,7 @@ export async function refreshProjectNodeLock(projectId: string, nodeId: string, 
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new Error("Unauthorized");
-    await assertProjectAccess(projectId, user.id);
+    await assertProjectWriteAccess(projectId, user.id);
 
     const now = new Date();
     const expiresAt = new Date(now.getTime() + ttlSeconds * 1000);
@@ -353,7 +379,7 @@ export async function releaseProjectNodeLock(projectId: string, nodeId: string) 
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new Error("Unauthorized");
-    await assertProjectAccess(projectId, user.id);
+    await assertProjectWriteAccess(projectId, user.id);
 
     await db.delete(projectNodeLocks).where(
         and(
@@ -370,7 +396,7 @@ export async function createFolder(projectId: string, parentId: string | null, n
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new Error("Unauthorized");
-    await assertProjectAccess(projectId, user.id);
+    await assertProjectWriteAccess(projectId, user.id);
 
     const [node] = await db.insert(projectNodes).values({
         projectId,
@@ -394,7 +420,7 @@ export async function createFileNode(projectId: string, parentId: string | null,
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new Error("Unauthorized");
-    await assertProjectAccess(projectId, user.id);
+    await assertProjectWriteAccess(projectId, user.id);
 
     const [node] = await db.insert(projectNodes).values({
         projectId,
@@ -416,7 +442,7 @@ export async function renameNode(nodeId: string, newName: string, projectId: str
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new Error("Unauthorized");
-    await assertProjectAccess(projectId, user.id);
+    await assertProjectWriteAccess(projectId, user.id);
 
     const [node] = await db.update(projectNodes)
         .set({ name: newName, updatedAt: new Date() })
@@ -428,11 +454,54 @@ export async function renameNode(nodeId: string, newName: string, projectId: str
     return node;
 }
 
+export async function updateProjectFileStats(projectId: string, nodeId: string, size: number) {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error("Unauthorized");
+    await assertProjectWriteAccess(projectId, user.id);
+
+    // Update size and updatedAt
+    const [node] = await db.update(projectNodes)
+        .set({
+            size: size,
+            updatedAt: new Date()
+        })
+        .where(and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId)))
+        .returning();
+
+    revalidatePath(`/projects/${projectId}`);
+    return node;
+}
+
+export async function getProjectFileContent(projectId: string, nodeId: string) {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+
+    // Verify read access (works for public projects too)
+    await assertProjectReadAccess(projectId, user?.id ?? null);
+
+    const node = await db.query.projectNodes.findFirst({
+        where: and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId)),
+        columns: { s3Key: true }
+    });
+
+    if (!node || !node.s3Key) {
+        throw new Error("File not found");
+    }
+
+    // Use admin client to bypass RLS for public viewers
+    const adminClient = await createAdminClient();
+    const { data, error } = await adminClient.storage.from("project-files").download(node.s3Key);
+
+    if (error) throw error;
+    return await data.text();
+}
+
 export async function trashNode(nodeId: string, projectId: string) {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new Error("Unauthorized");
-    await assertProjectAccess(projectId, user.id);
+    await assertProjectWriteAccess(projectId, user.id);
 
     // Check if system node
     const node = await db.query.projectNodes.findFirst({
@@ -464,7 +533,7 @@ export async function restoreNode(nodeId: string, projectId: string) {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new Error("Unauthorized");
-    await assertProjectAccess(projectId, user.id);
+    await assertProjectWriteAccess(projectId, user.id);
 
     await db.update(projectNodes)
         .set({ deletedAt: null, deletedBy: null, updatedAt: new Date() })
@@ -477,8 +546,9 @@ export async function restoreNode(nodeId: string, projectId: string) {
 export async function getTrashNodes(projectId: string, query?: string) {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
+    // Trash is an editing view; members only.
     if (!user) throw new Error("Unauthorized");
-    await assertProjectAccess(projectId, user.id);
+    await assertProjectWriteAccess(projectId, user.id);
 
     const q = query?.trim();
     const whereClause = q
@@ -495,7 +565,7 @@ export async function purgeNode(nodeId: string, projectId: string) {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new Error("Unauthorized");
-    await assertProjectAccess(projectId, user.id);
+    await assertProjectWriteAccess(projectId, user.id);
 
     const node = await db.query.projectNodes.findFirst({
         where: and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId)),
@@ -517,7 +587,7 @@ export async function deleteNode(nodeId: string, projectId: string) {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new Error("Unauthorized");
-    await assertProjectAccess(projectId, user.id);
+    await assertProjectWriteAccess(projectId, user.id);
 
     const node = await db.query.projectNodes.findFirst({
         where: and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId)),
@@ -538,7 +608,7 @@ export async function moveNode(nodeId: string, newParentId: string | null, proje
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new Error("Unauthorized");
-    await assertProjectAccess(projectId, user.id);
+    await assertProjectWriteAccess(projectId, user.id);
 
     const [node] = await db.update(projectNodes)
         .set({ parentId: newParentId, updatedAt: new Date() })
@@ -553,8 +623,7 @@ export async function moveNode(nodeId: string, newParentId: string | null, proje
 export async function getBreadcrumbs(projectId: string, folderId: string | null) {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) throw new Error("Unauthorized");
-    await assertProjectAccess(projectId, user.id);
+    await assertProjectReadAccess(projectId, user?.id ?? null);
 
     // Simple recursive fetch or just building iteratively if depth is small.
     // For now we might not strictly need this server action if we manage state on client, 
@@ -585,7 +654,7 @@ export async function linkNodeToTask(taskId: string, nodeId: string) {
     if (!user) throw new Error("Unauthorized");
 
     const projectId = await getTaskProjectId(taskId);
-    await assertProjectAccess(projectId, user.id);
+    await assertProjectWriteAccess(projectId, user.id);
 
     // Ensure node belongs to same project and is not deleted
     const node = await db.query.projectNodes.findFirst({
@@ -615,7 +684,7 @@ export async function unlinkNodeFromTask(taskId: string, nodeId: string) {
     if (!user) throw new Error("Unauthorized");
 
     const projectId = await getTaskProjectId(taskId);
-    await assertProjectAccess(projectId, user.id);
+    await assertProjectWriteAccess(projectId, user.id);
 
     // Ensure node belongs to the same project (prevents unlinking arbitrary links across projects)
     const node = await db.query.projectNodes.findFirst({
@@ -633,7 +702,7 @@ export async function getTaskAttachments(taskId: string) {
     if (!user) throw new Error("Unauthorized");
 
     const projectId = await getTaskProjectId(taskId);
-    await assertProjectAccess(projectId, user.id);
+    await assertProjectReadAccess(projectId, user.id);
 
     const rows = await db
         .select({
@@ -654,7 +723,7 @@ export async function countTaskAttachments(taskId: string) {
     if (!user) throw new Error("Unauthorized");
 
     const projectId = await getTaskProjectId(taskId);
-    await assertProjectAccess(projectId, user.id);
+    await assertProjectReadAccess(projectId, user.id);
 
     const rows = await db
         .select({ count: sql<number>`count(*)` })

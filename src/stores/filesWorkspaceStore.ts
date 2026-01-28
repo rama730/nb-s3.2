@@ -32,6 +32,22 @@ export type SoftLock = {
   expiresAt: number;
 };
 
+export type FileState = {
+  content: string;
+  isDirty: boolean;
+  lastSavedAt?: number;
+
+}; // In-memory cache for open files
+
+export type EditorSymbol = {
+  name: string;
+  kind: number; // Monaco symbol kind
+  range: { startLineNumber: number; endLineNumber: number };
+  children?: EditorSymbol[];
+};
+
+
+
 type ProjectWorkspaceState = {
   // ---- Explorer ----
   explorerMode: ExplorerMode;
@@ -49,6 +65,7 @@ type ProjectWorkspaceState = {
   childrenByParentId: Record<string, string[]>; // parentId key; root uses "__root__"
   loadedChildren: Record<string, boolean>;
   taskLinkCounts: Record<string, number>; // nodeId -> count
+  activeFileSymbols: EditorSymbol[];
 
   // ---- Workspace (tabs/split) ----
   splitEnabled: boolean;
@@ -61,6 +78,12 @@ type ProjectWorkspaceState = {
 
   // ---- Collaboration ----
   locksByNodeId: Record<string, SoftLock>;
+
+  // ---- In-Memory File Cache (Not Persisted) ----
+  fileStates: Record<string, FileState>;
+
+  // Transient UI state
+  requestedScrollPosition: { nodeId: string; line: number } | null;
 };
 
 type FilesWorkspaceState = {
@@ -68,6 +91,7 @@ type FilesWorkspaceState = {
 
   // getters
   _get: (projectId: string) => ProjectWorkspaceState;
+  ensureProjectWorkspace: (projectId: string) => void;
 
   // explorer actions
   setExplorerMode: (projectId: string, mode: ExplorerMode) => void;
@@ -86,6 +110,9 @@ type FilesWorkspaceState = {
   removeNodeFromCaches: (projectId: string, nodeId: string) => void;
   setTaskLinkCounts: (projectId: string, counts: Record<string, number>) => void;
 
+  // file content actions
+
+
   // workspace actions
   setSplitEnabled: (projectId: string, enabled: boolean) => void;
   setSplitRatio: (projectId: string, ratio: number) => void;
@@ -95,6 +122,8 @@ type FilesWorkspaceState = {
   closeOtherTabs: (projectId: string, paneId: WorkspacePane["id"], keepNodeId: string) => void;
   closeTabsToRight: (projectId: string, paneId: WorkspacePane["id"], fromNodeId: string) => void;
   setActiveTab: (projectId: string, paneId: WorkspacePane["id"], nodeId: string | null) => void;
+  reorderTabs: (projectId: string, paneId: WorkspacePane["id"], order: string[]) => void;
+  moveTabToPane: (projectId: string, fromPaneId: WorkspacePane["id"], toPaneId: WorkspacePane["id"], nodeId: string, index?: number) => void;
 
   // prefs
   setPrefs: (projectId: string, prefs: Partial<EditorPreferences>) => void;
@@ -102,6 +131,14 @@ type FilesWorkspaceState = {
   // locks
   setLock: (projectId: string, lock: SoftLock) => void;
   clearLock: (projectId: string, nodeId: string) => void;
+
+  // file state actions
+  setFileState: (projectId: string, nodeId: string, state: Partial<FileState>) => void;
+  setActiveFileSymbols: (projectId: string, symbols: EditorSymbol[]) => void;
+  setNodes: (projectId: string, nodes: ProjectNode[]) => void;
+  // actions
+  requestScrollTo: (projectId: string, nodeId: string, line: number) => void;
+  clearScrollRequest: (projectId: string) => void;
 };
 
 const DEFAULT_PREFS: EditorPreferences = {
@@ -138,18 +175,38 @@ function defaultWorkspace(): ProjectWorkspaceState {
 
     prefs: DEFAULT_PREFS,
     locksByNodeId: {},
+
+    fileStates: {},
+
+    activeFileSymbols: [],
+    requestedScrollPosition: null,
   };
 }
 
 const ROOT_KEY = "__root__";
 const parentKey = (parentId: string | null) => parentId ?? ROOT_KEY;
 
+// React 19 + useSyncExternalStore requires selector results to be stable.
+// This fallback must be a stable reference (do not mutate it).
+const FALLBACK_WORKSPACE: ProjectWorkspaceState = Object.freeze(defaultWorkspace());
+
 export const useFilesWorkspaceStore = create<FilesWorkspaceState>()(
   persist(
     (set, get) => ({
       byProjectId: {},
 
-      _get: (projectId) => get().byProjectId[projectId] ?? defaultWorkspace(),
+      _get: (projectId) => get().byProjectId[projectId] ?? FALLBACK_WORKSPACE,
+
+      ensureProjectWorkspace: (projectId) =>
+        set((state) => {
+          if (state.byProjectId[projectId]) return state;
+          return {
+            byProjectId: {
+              ...state.byProjectId,
+              [projectId]: defaultWorkspace(),
+            },
+          };
+        }),
 
       setExplorerMode: (projectId, mode) =>
         set((state) => ({
@@ -326,6 +383,8 @@ export const useFilesWorkspaceStore = create<FilesWorkspaceState>()(
           delete nextFav[nodeId];
           const nextPinned = { ...ws.pinnedByTabId };
           delete nextPinned[nodeId];
+          const nextFileStates = { ...ws.fileStates };
+          delete nextFileStates[nodeId];
 
           // close from panes
           const closeFromPane = (pane: WorkspacePane) => ({
@@ -344,6 +403,7 @@ export const useFilesWorkspaceStore = create<FilesWorkspaceState>()(
                 recents: nextRecents,
                 favorites: nextFav,
                 pinnedByTabId: nextPinned,
+                fileStates: nextFileStates,
                 panes: {
                   left: closeFromPane(ws.panes.left),
                   right: closeFromPane(ws.panes.right),
@@ -355,11 +415,48 @@ export const useFilesWorkspaceStore = create<FilesWorkspaceState>()(
 
       setTaskLinkCounts: (projectId, counts) =>
         set((state) => {
+          const ws = state.byProjectId[projectId];
+          if (!ws) return state;
+          return {
+            byProjectId: {
+              ...state.byProjectId,
+              [projectId]: {
+                ...ws,
+                taskLinkCounts: { ...ws.taskLinkCounts, ...counts },
+              },
+            },
+          };
+        }),
+
+      setFileState: (projectId, nodeId, fileState) =>
+        set((state) => {
+          const ws = state.byProjectId[projectId];
+          if (!ws) return state;
+
+          const prev = ws.fileStates[nodeId] || { content: "", isDirty: false };
+          return {
+            byProjectId: {
+              ...state.byProjectId,
+              [projectId]: {
+                ...ws,
+                fileStates: {
+                  ...ws.fileStates,
+                  [nodeId]: { ...prev, ...fileState },
+                },
+              },
+            },
+          };
+        }),
+
+
+
+      setActiveFileSymbols: (projectId, symbols) =>
+        set((state) => {
           const ws = state.byProjectId[projectId] ?? defaultWorkspace();
           return {
             byProjectId: {
               ...state.byProjectId,
-              [projectId]: { ...ws, taskLinkCounts: { ...ws.taskLinkCounts, ...counts } },
+              [projectId]: { ...ws, activeFileSymbols: symbols },
             },
           };
         }),
@@ -501,6 +598,63 @@ export const useFilesWorkspaceStore = create<FilesWorkspaceState>()(
           };
         }),
 
+      reorderTabs: (projectId, paneId, order) =>
+        set((state) => {
+          const ws = state.byProjectId[projectId] ?? defaultWorkspace();
+          const pane = ws.panes[paneId];
+          // Ensure we don't lose tabs if 'order' is partial (?) - usually dragging returns full list
+          return {
+            byProjectId: {
+              ...state.byProjectId,
+              [projectId]: {
+                ...ws,
+                panes: { ...ws.panes, [paneId]: { ...pane, openTabIds: order } },
+              },
+            },
+          };
+        }),
+
+      moveTabToPane: (projectId, fromPaneId, toPaneId, nodeId, index) =>
+        set((state) => {
+          const ws = state.byProjectId[projectId] ?? defaultWorkspace();
+          const fromPane = ws.panes[fromPaneId];
+          const toPane = ws.panes[toPaneId];
+
+          if (!fromPane.openTabIds.includes(nodeId)) return state;
+
+          // Remove from source
+          const nextFromIds = fromPane.openTabIds.filter((id) => id !== nodeId);
+          const nextFromActive =
+            fromPane.activeTabId === nodeId
+              ? nextFromIds[nextFromIds.length - 1] ?? null
+              : fromPane.activeTabId;
+
+          // Add to dest
+          const nextToIds = [...toPane.openTabIds];
+          if (index !== undefined && index >= 0) {
+            nextToIds.splice(index, 0, nodeId);
+          } else {
+            nextToIds.push(nodeId);
+          }
+
+          // Ensure unique just in case
+          const uniqueToIds = Array.from(new Set(nextToIds));
+
+          return {
+            byProjectId: {
+              ...state.byProjectId,
+              [projectId]: {
+                ...ws,
+                panes: {
+                  ...ws.panes,
+                  [fromPaneId]: { ...fromPane, openTabIds: nextFromIds, activeTabId: nextFromActive },
+                  [toPaneId]: { ...toPane, openTabIds: uniqueToIds, activeTabId: nodeId }, // Activate in new pane
+                },
+              },
+            },
+          };
+        }),
+
       setPrefs: (projectId, prefs) =>
         set((state) => {
           const ws = state.byProjectId[projectId] ?? defaultWorkspace();
@@ -538,12 +692,62 @@ export const useFilesWorkspaceStore = create<FilesWorkspaceState>()(
             },
           };
         }),
-    }),
+      setNodes: (projectId, nodes) =>
+        set((state) => {
+          const ws = state.byProjectId[projectId] ?? defaultWorkspace();
+          const nodesById = { ...ws.nodesById };
+          const childrenByParentId = { ...ws.childrenByParentId };
+
+          for (const node of nodes) {
+            nodesById[node.id] = node;
+            const pid = node.parentId || "root";
+            if (!childrenByParentId[pid]) childrenByParentId[pid] = [];
+            // A simple implementation: reset children if it's a bulk set? 
+            // Or just ensure unique.
+            if (!childrenByParentId[pid].includes(node.id)) {
+              childrenByParentId[pid].push(node.id);
+            }
+          }
+
+          return {
+            byProjectId: {
+              ...state.byProjectId,
+              [projectId]: { ...ws, nodesById, childrenByParentId },
+            },
+          };
+        }),
+
+
+
+      requestScrollTo: (projectId, nodeId, line) =>
+        set((state) => {
+          const ws = state.byProjectId[projectId] ?? defaultWorkspace();
+          return {
+            byProjectId: {
+              ...state.byProjectId,
+              [projectId]: { ...ws, requestedScrollPosition: { nodeId, line } },
+            },
+          };
+        }),
+
+      clearScrollRequest: (projectId) =>
+        set((state) => {
+          const ws = state.byProjectId[projectId];
+          if (!ws) return state;
+          return {
+            byProjectId: {
+              ...state.byProjectId,
+              [projectId]: { ...ws, requestedScrollPosition: null },
+            },
+          };
+        }),
+
+    }), // Closing state creator
     {
       name: "files-workspace-v2",
       partialize: (state) => ({
         byProjectId: Object.fromEntries(
-          Object.entries(state.byProjectId).map(([projectId, ws]) => [
+          Object.entries(state.byProjectId).map(([projectId, ws]: [string, ProjectWorkspaceState]) => [
             projectId,
             {
               // persist UX prefs + workspace state; do not persist server caches

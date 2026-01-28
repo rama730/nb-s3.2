@@ -11,12 +11,16 @@ export interface Task {
     title: string;
     status: string;
     priority: string;
-    assignee_id?: string | null;
-    due_date?: string | null;
-    story_points?: number | null;
+    assigneeId?: string | null;
+    dueDate?: string | null;
+    storyPoints?: number | null;
+    sprintId?: string | null;
+    creatorId?: string | null;
     assignee?: {
         full_name?: string;
+        fullName?: string; // Support both for safety
         avatar_url?: string;
+        avatarUrl?: string;
     } | null;
 }
 
@@ -30,24 +34,8 @@ interface TaskCardProps {
     isBulkMode?: boolean;
 }
 
-// Helper for status colors
-const getStatusStyles = (status: string) => {
-    switch (status) {
-        case 'done': return "bg-emerald-100 text-emerald-700 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400 dark:border-emerald-800";
-        case 'in_progress': return "bg-blue-100 text-blue-700 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800";
-        case 'todo': return "bg-zinc-100 text-zinc-600 border-zinc-200 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700";
-        default: return "bg-zinc-100 text-zinc-600 border-zinc-200";
-    }
-};
-
-const getPriorityStyles = (priority: string) => {
-    switch (priority) {
-        case 'urgent': return "bg-rose-100 text-rose-700 border-rose-200 dark:bg-rose-900/30 dark:text-rose-400 dark:border-rose-800";
-        case 'high': return "bg-orange-100 text-orange-700 border-orange-200 dark:bg-orange-900/30 dark:text-orange-400 dark:border-orange-800";
-        case 'medium': return "bg-yellow-100 text-yellow-700 border-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-400 dark:border-yellow-800";
-        default: return "bg-zinc-100 text-zinc-600 border-zinc-200 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700";
-    }
-};
+import TaskStatusBadge from "./badges/TaskStatusBadge";
+import TaskPriorityBadge from "./badges/TaskPriorityBadge";
 
 export const TaskCard = memo(function TaskCard({
     task,
@@ -97,15 +85,11 @@ export const TaskCard = memo(function TaskCard({
 
                 {/* Chips Row */}
                 <div className="flex flex-wrap items-center gap-1.5">
-                    <span className={cn("px-2 py-0.5 rounded-md text-[10px] font-bold border capitalize", getStatusStyles(task.status))}>
-                        {task.status?.replace("_", " ")}
-                    </span>
-                    <span className={cn("px-2 py-0.5 rounded-md text-[10px] font-bold border capitalize", getPriorityStyles(task.priority))}>
-                        {task.priority}
-                    </span>
-                    {task.story_points && (
+                    <TaskStatusBadge status={task.status} />
+                    <TaskPriorityBadge priority={task.priority} />
+                    {task.storyPoints && (
                         <span className="px-2 py-0.5 rounded-md text-[10px] font-bold border bg-zinc-50 border-zinc-200 text-zinc-500 dark:bg-zinc-800 dark:border-zinc-700">
-                            {task.story_points} pts
+                            {task.storyPoints} pts
                         </span>
                     )}
                 </div>
@@ -116,11 +100,11 @@ export const TaskCard = memo(function TaskCard({
                         {task.assignee ? (
                             <div className="flex items-center gap-1.5" title={task.assignee.full_name}>
                                 <Avatar className="w-5 h-5">
-                                    <AvatarImage src={task.assignee.avatar_url} />
-                                    <AvatarFallback className="text-[9px]">{task.assignee.full_name?.substring(0, 2).toUpperCase()}</AvatarFallback>
+                                    <AvatarImage src={task.assignee.avatarUrl || task.assignee.avatar_url} />
+                                    <AvatarFallback className="text-[9px]">{(task.assignee.fullName || task.assignee.full_name)?.substring(0, 2).toUpperCase()}</AvatarFallback>
                                 </Avatar>
                                 <span className="text-xs text-zinc-600 dark:text-zinc-400 max-w-[80px] truncate">
-                                    {task.assignee.full_name}
+                                    {task.assignee.fullName || task.assignee.full_name}
                                 </span>
                             </div>
                         ) : (
@@ -133,19 +117,19 @@ export const TaskCard = memo(function TaskCard({
                         )}
                     </div>
 
-                    {task.due_date && (
+                    {task.dueDate && (
                         <div className={cn(
                             "flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-md",
-                            new Date(task.due_date) < new Date() ? "text-rose-600 bg-rose-50" : "text-zinc-500 bg-zinc-50"
+                            new Date(task.dueDate) < new Date() ? "text-rose-600 bg-rose-50" : "text-zinc-500 bg-zinc-50"
                         )}>
                             <Calendar className="w-3 h-3" />
-                            {format(new Date(task.due_date), "MMM d")}
+                            {format(new Date(task.dueDate), "MMM d")}
                         </div>
                     )}
                 </div>
 
                 {/* Claim Action (Optional) */}
-                {onClaim && !task.assignee_id && (
+                {onClaim && !task.assigneeId && (
                     <div className="pt-2 border-t border-zinc-100 dark:border-zinc-800">
                         <button
                             onClick={(e) => {

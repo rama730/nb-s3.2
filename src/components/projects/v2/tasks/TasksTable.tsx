@@ -86,13 +86,13 @@ export default function TasksTable({
                             {task.assignee ? (
                                 <div className="flex items-center gap-2">
                                     <Avatar className="w-5 h-5">
-                                        <AvatarImage src={task.assignee.avatar_url} />
+                                        <AvatarImage src={task.assignee.avatarUrl || task.assignee.avatar_url} />
                                         <AvatarFallback className="text-[9px]">
-                                            {task.assignee.full_name?.substring(0, 2).toUpperCase()}
+                                            {(task.assignee.fullName || task.assignee.full_name)?.substring(0, 2).toUpperCase()}
                                         </AvatarFallback>
                                     </Avatar>
                                     <span className="text-sm text-zinc-600 dark:text-zinc-400 truncate max-w-[100px]">
-                                        {task.assignee.full_name}
+                                        {task.assignee.fullName || task.assignee.full_name}
                                     </span>
                                 </div>
                             ) : (
@@ -100,9 +100,9 @@ export default function TasksTable({
                             )}
                         </td>
                         <td className="px-4 py-3 border-b border-zinc-100 dark:border-zinc-800/50">
-                            {task.due_date ? (
+                            {task.dueDate ? (
                                 <span className="text-sm text-zinc-600 dark:text-zinc-400">
-                                    {format(new Date(task.due_date), "MMM d, yyyy")}
+                                    {format(new Date(task.dueDate), "MMM d, yyyy")}
                                 </span>
                             ) : (
                                 <span className="text-xs text-zinc-400">-</span>

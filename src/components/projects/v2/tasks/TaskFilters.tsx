@@ -78,7 +78,7 @@ export default function TaskFilters({
                         animate={{ opacity: 1, y: 0, scale: 1 }}
                         exit={{ opacity: 0, y: 10, scale: 0.95 }}
                         transition={{ duration: 0.1 }}
-                        className="absolute top-full left-0 z-50 mt-2 w-[340px] max-w-[calc(100vw-2rem)] rounded-xl shadow-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 overflow-hidden"
+                        className="absolute top-full right-0 z-50 mt-2 w-[340px] max-w-[calc(100vw-2rem)] origin-top-right rounded-xl shadow-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 overflow-hidden"
                     >
                         {/* Header */}
                         <div className="px-4 py-3 border-b border-zinc-100 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-900/50 flex items-center justify-between">

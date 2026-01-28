@@ -19,7 +19,10 @@ import {
   StarOff,
   List,
   Clock,
+  CheckSquare,
+  Square,
 } from "lucide-react";
+import { FileIcon } from "./FileIcons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -52,10 +55,12 @@ import {
   getTaskLinkCounts,
 } from "@/app/actions/files";
 import { filesParentKey, useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
+import OutlinePanel from "./OutlinePanel";
+import SourceControlPanel from "./SourceControlPanel";
 
 type VisibleRow =
-  | { kind: "node"; nodeId: string; level: number; parentId: string | null }
-  | { kind: "loading"; parentId: string; level: number }
+  | { kind: "node"; nodeId: string; level: number; parentId: string | null; indentationGuides: boolean[] }
+  | { kind: "loading"; parentId: string; level: number; indentationGuides: boolean[] }
   | { kind: "empty"; level: number };
 
 function formatBytes(bytes?: number | null) {
@@ -104,7 +109,7 @@ function buildVisibleRows(args: {
 
   const rows: VisibleRow[] = [];
 
-  const walk = (parentId: string | null, level: number) => {
+  const walk = (parentId: string | null, level: number, ancestors: boolean[]) => {
     const key = filesParentKey(parentId);
     const childIds = childrenByParentId[key] || [];
     const sorted = sortIds(childIds);
@@ -114,22 +119,37 @@ function buildVisibleRows(args: {
       return;
     }
 
-    for (const id of sorted) {
-      rows.push({ kind: "node", nodeId: id, level, parentId });
+    for (let i = 0; i < sorted.length; i++) {
+      const id = sorted[i];
+      const isLast = i === sorted.length - 1;
+      
+      // For the current row, we pass the *current* ancestors state.
+      // The `indentationGuides` strictly depends on ancestors. 
+      // The "current level" guide state (isLast or not) determines what *children* see, 
+      // but for *this* node's own row, we just need to know about parents.
+      // Actually, standard tree view drawing uses the ancestors array to draw N vertical lines.
+      
+      rows.push({ kind: "node", nodeId: id, level, parentId, indentationGuides: ancestors });
+      
       const node = nodesById[id];
       if (node?.type === "folder" && expandedFolderIds[id]) {
         const childKey = filesParentKey(id);
         const loaded = !!loadedChildren[childKey];
+        // When going deeper, we add the status of THIS level (is it last?) to the ancestors.
+        // If this node is NOT last, we need a vertical line for its children -> `!isLast` is true.
+        // If this node IS last, we don't draw a line for its children -> `!isLast` is false.
+        const nextAncestors = [...ancestors, !isLast];
+        
         if (!loaded) {
-          rows.push({ kind: "loading", parentId: id, level: level + 1 });
+          rows.push({ kind: "loading", parentId: id, level: level + 1, indentationGuides: nextAncestors });
         } else {
-          walk(id, level + 1);
+          walk(id, level + 1, nextAncestors);
         }
       }
     }
   };
 
-  walk(null, 0);
+  walk(null, 0, []);
   return rows;
 }
 
@@ -139,15 +159,38 @@ export default function FileExplorer({
   canEdit,
   onOpenFile,
   onNodeDeleted,
+  mode = "default",
+  selectedNodeIds = [],
+  onSelectionChange,
 }: {
   projectId: string;
   projectName?: string;
   canEdit: boolean;
   onOpenFile: (node: ProjectNode) => void;
   onNodeDeleted?: (nodeId: string) => void;
+  mode?: "default" | "select";
+  selectedNodeIds?: string[];
+  onSelectionChange?: (nodeIds: string[]) => void;
 }) {
   const { showToast } = useToast();
-  const ws = useFilesWorkspaceStore((s) => s._get(projectId));
+  const [accessError, setAccessError] = useState<string | null>(null);
+
+
+  // Granular selectors for performance (avoid re-rendering tree on file content changes)
+  const nodesById = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.nodesById || {});
+  const childrenByParentId = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.childrenByParentId || {});
+  const loadedChildren = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.loadedChildren || {});
+  const expandedFolderIds = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.expandedFolderIds || {});
+  const explorerMode = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.explorerMode || "tree");
+  const searchQuery = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.searchQuery || "");
+  const favorites = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.favorites || {});
+  const recents = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.recents || []);
+  const sort = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.sort || "name");
+  const foldersFirst = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.foldersFirst || true);
+  const selectedNodeId = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.selectedNodeId);
+  const selectedFolderId = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.selectedFolderId);
+  const taskLinkCounts = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.taskLinkCounts || {});
+
   const upsertNodes = useFilesWorkspaceStore((s) => s.upsertNodes);
   const setChildren = useFilesWorkspaceStore((s) => s.setChildren);
   const markChildrenLoaded = useFilesWorkspaceStore((s) => s.markChildrenLoaded);
@@ -196,6 +239,12 @@ export default function FileExplorer({
     query: "",
   });
 
+
+  
+  
+  const [isOutlineOpen, setIsOutlineOpen] = useState(false);
+  const [isSourceControlOpen, setIsSourceControlOpen] = useState(false);
+
   const bootedRef = useRef(false);
 
   const supabaseRef = useRef<ReturnType<typeof createClient> | null>(null);
@@ -212,16 +261,23 @@ export default function FileExplorer({
       const alreadyLoaded = currentWs?.loadedChildren?.[key];
       
       if (!opts?.force && alreadyLoaded) return;
-      const nodes = (await getProjectNodes(projectId, parentId)) as ProjectNode[];
-      upsertNodes(projectId, nodes);
-      setChildren(projectId, parentId, nodes.map((n) => n.id));
-      markChildrenLoaded(projectId, parentId);
+      try {
+        setAccessError(null);
+        const nodes = (await getProjectNodes(projectId, parentId)) as ProjectNode[];
+        upsertNodes(projectId, nodes);
+        setChildren(projectId, parentId, nodes.map((n) => n.id));
+        markChildrenLoaded(projectId, parentId);
 
-      // batch fetch link counts for visible files in this listing
-      const fileIds = nodes.filter((n) => n.type === "file").map((n) => n.id);
-      if (fileIds.length) {
-        const counts = await getTaskLinkCounts(projectId, fileIds);
-        setTaskLinkCounts(projectId, counts);
+        // batch fetch link counts for visible files in this listing
+        const fileIds = nodes.filter((n) => n.type === "file").map((n) => n.id);
+        if (fileIds.length) {
+          const counts = await getTaskLinkCounts(projectId, fileIds);
+          setTaskLinkCounts(projectId, counts);
+        }
+      } catch (e: any) {
+        const msg = e?.message || "Failed to load files";
+        // Avoid throwing into React render; show a clean state instead.
+        setAccessError(msg);
       }
     },
     [markChildrenLoaded, projectId, setChildren, setTaskLinkCounts, upsertNodes]
@@ -249,39 +305,38 @@ export default function FileExplorer({
 
   // If folders are expanded programmatically (e.g., via breadcrumbs), ensure children are loaded.
   useEffect(() => {
-    const expanded = Object.entries(ws.expandedFolderIds)
+    const expanded = Object.entries(expandedFolderIds)
       .filter(([_, isOpen]) => isOpen)
       .map(([id]) => id);
     if (expanded.length === 0) return;
 
     for (const folderId of expanded) {
       const key = filesParentKey(folderId);
-      if (!ws.loadedChildren[key]) {
+      if (!loadedChildren[key]) {
         void loadChildren(folderId);
       }
     }
-  }, [loadChildren, ws.expandedFolderIds, ws.loadedChildren]);
+  }, [loadChildren, expandedFolderIds, loadedChildren]);
 
   const visibleRows = useMemo(() => {
     return buildVisibleRows({
-      nodesById: ws.nodesById,
-      childrenByParentId: ws.childrenByParentId,
-      loadedChildren: ws.loadedChildren,
-      expandedFolderIds: ws.expandedFolderIds,
-      sort: ws.sort,
-      foldersFirst: ws.foldersFirst,
+      nodesById,
+      childrenByParentId,
+      loadedChildren,
+      expandedFolderIds,
+      sort,
+      foldersFirst,
     });
   }, [
-    ws.childrenByParentId,
-    ws.expandedFolderIds,
-    ws.foldersFirst,
-    ws.loadedChildren,
-    ws.nodesById,
-    ws.sort,
+    childrenByParentId,
+    expandedFolderIds,
+    foldersFirst,
+    loadedChildren,
+    nodesById,
+    sort,
   ]);
 
-  const selectedNode = ws.selectedNodeId ? ws.nodesById[ws.selectedNodeId] : null;
-  const selectedFolderId = ws.selectedFolderId ?? null;
+  const selectedNode = selectedNodeId ? nodesById[selectedNodeId] : null;
 
   const openCreate = (kind: "file" | "folder") => {
     if (!canEdit) return;
@@ -301,12 +356,12 @@ export default function FileExplorer({
     try {
       // Duplicate validation within parent
       const parentId = createDialog.parentId ?? null;
-      if (!ws.loadedChildren[filesParentKey(parentId)]) {
+      if (!loadedChildren[filesParentKey(parentId)]) {
         // Load siblings for accurate validation (one-time)
         await loadChildren(parentId, { force: true });
       }
-      const siblingIds = ws.childrenByParentId[filesParentKey(parentId)] || [];
-      const siblings = siblingIds.map((id) => ws.nodesById[id]).filter(Boolean);
+      const siblingIds = childrenByParentId[filesParentKey(parentId)] || [];
+      const siblings = siblingIds.map((id) => nodesById[id]).filter(Boolean);
       const dup = siblings.some((s) => s.name.toLowerCase() === name.toLowerCase());
       if (dup) {
         showToast("A file/folder with that name already exists here.", "error");
@@ -353,7 +408,7 @@ export default function FileExplorer({
   const commitRename = async () => {
     const nodeId = renameState.nodeId;
     if (!nodeId) return;
-    const node = ws.nodesById[nodeId];
+    const node = nodesById[nodeId];
     if (!node) return;
     const nextName = renameState.value.trim();
     if (!nextName || nextName === renameState.original) {
@@ -363,8 +418,8 @@ export default function FileExplorer({
 
     // duplicate validation inside folder
     const parentId = node.parentId ?? null;
-    const siblingIds = ws.childrenByParentId[filesParentKey(parentId)] || [];
-    const siblings = siblingIds.map((id) => ws.nodesById[id]).filter(Boolean);
+    const siblingIds = childrenByParentId[filesParentKey(parentId)] || [];
+    const siblings = siblingIds.map((id) => nodesById[id]).filter(Boolean);
     const dup = siblings.some((s) => s.id !== nodeId && s.name.toLowerCase() === nextName.toLowerCase());
     if (dup) {
       showToast("A file/folder with that name already exists here.", "error");
@@ -411,7 +466,7 @@ export default function FileExplorer({
           showToast("Can't move a folder into its own descendant.", "error");
           return;
         }
-        cur = ws.nodesById[cur]?.parentId ?? null;
+        cur = nodesById[cur]?.parentId ?? null;
       }
     }
 
@@ -451,12 +506,30 @@ export default function FileExplorer({
 
   const handleToggleFolder = async (node: ProjectNode) => {
     if (node.type !== "folder") return;
-    const next = !ws.expandedFolderIds[node.id];
+    const next = !expandedFolderIds[node.id];
     toggleExpanded(projectId, node.id, next);
     if (next) await loadChildren(node.id);
   };
 
   const handleSelect = (node: ProjectNode) => {
+    if (mode === "select") {
+        if (!onSelectionChange) return;
+        if (node.type === "folder") {
+            // Optional: allow folder selection? For now, just files?
+            // If user wants to select folder, we might need different logic.
+            // Let's stick to files for "Task Attachments" as requested.
+            void handleToggleFolder(node); 
+            return;
+        }
+        
+        const exists = selectedNodeIds.includes(node.id);
+        const newSelection = exists
+            ? selectedNodeIds.filter(id => id !== node.id)
+            : [...selectedNodeIds, node.id];
+        onSelectionChange(newSelection);
+        return;
+    }
+
     setSelectedNode(projectId, node.id, node.type === "folder" ? node.id : node.parentId ?? null);
     if (node.type === "file") {
       addRecent(projectId, node.id);
@@ -471,7 +544,7 @@ export default function FileExplorer({
   const [isTrashLoading, setIsTrashLoading] = useState(false);
 
   useEffect(() => {
-    const q = ws.searchQuery.trim();
+    const q = searchQuery.trim();
     if (!q) {
       setSearchResults([]);
       return;
@@ -495,22 +568,22 @@ export default function FileExplorer({
     }, 200);
 
     return () => clearTimeout(t);
-  }, [projectId, upsertNodes, ws.searchQuery]);
+  }, [projectId, upsertNodes, searchQuery]);
 
   // Trash listing
   useEffect(() => {
-    if (ws.explorerMode !== "trash") return;
+    if (explorerMode !== "trash") return;
     setIsTrashLoading(true);
     void (async () => {
       try {
-        const nodes = (await getTrashNodes(projectId, ws.searchQuery.trim() || undefined)) as ProjectNode[];
+        const nodes = (await getTrashNodes(projectId, searchQuery.trim() || undefined)) as ProjectNode[];
         upsertNodes(projectId, nodes);
         setTrashNodesState(nodes);
       } finally {
         setIsTrashLoading(false);
       }
     })();
-  }, [projectId, upsertNodes, ws.explorerMode, ws.searchQuery]);
+  }, [projectId, upsertNodes, explorerMode, searchQuery]);
 
   // Quick open results
   useEffect(() => {
@@ -518,8 +591,8 @@ export default function FileExplorer({
     const q = quickOpen.query.trim();
 
     if (!q) {
-      const recentNodes = ws.recents
-        .map((id) => ws.nodesById[id])
+      const recentNodes = recents
+        .map((id) => nodesById[id])
         .filter((n): n is ProjectNode => !!n && n.type === "file")
         .slice(0, 20);
       setQuickOpenResults(recentNodes);
@@ -539,9 +612,9 @@ export default function FileExplorer({
     }, 150);
 
     return () => clearTimeout(t);
-  }, [projectId, quickOpen.open, quickOpen.query, upsertNodes, ws.nodesById, ws.recents]);
+  }, [projectId, quickOpen.open, quickOpen.query, upsertNodes, nodesById, recents]);
 
-  const effectiveMode = ws.searchQuery.trim() ? "search" : ws.explorerMode;
+  const effectiveMode = searchQuery.trim() ? "search" : explorerMode;
 
   const rowsToRender = useMemo(() => {
     if (effectiveMode === "search") {
@@ -551,14 +624,14 @@ export default function FileExplorer({
       );
     }
     if (effectiveMode === "favorites") {
-      const ids = Object.keys(ws.favorites).filter((id) => ws.favorites[id]);
-      const nodes = ids.map((id) => ws.nodesById[id]).filter(Boolean);
+      const ids = Object.keys(favorites).filter((id) => favorites[id]);
+      const nodes = ids.map((id) => nodesById[id]).filter(Boolean);
       return nodes.map(
         (n) => ({ kind: "node", nodeId: n.id, level: 0, parentId: n.parentId ?? null } as VisibleRow)
       );
     }
     if (effectiveMode === "recents") {
-      const nodes = ws.recents.map((id) => ws.nodesById[id]).filter(Boolean);
+      const nodes = recents.map((id) => nodesById[id]).filter(Boolean);
       return nodes.map(
         (n) => ({ kind: "node", nodeId: n.id, level: 0, parentId: n.parentId ?? null } as VisibleRow)
       );
@@ -569,7 +642,7 @@ export default function FileExplorer({
       );
     }
     return visibleRows;
-  }, [effectiveMode, searchResults, trashNodesState, visibleRows, ws.favorites, ws.nodesById, ws.recents]);
+  }, [effectiveMode, searchResults, trashNodesState, visibleRows, favorites, nodesById, recents]);
 
   // Keyboard navigation: arrows operate on the currently rendered list.
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -581,12 +654,12 @@ export default function FileExplorer({
     return map;
   }, [rowsToRender]);
 
-  const selectedIndex = ws.selectedNodeId ? rowIndexById.get(ws.selectedNodeId) : undefined;
+  const selectedIndex = selectedNodeId ? rowIndexById.get(selectedNodeId) : undefined;
 
   const focusRow = (index: number) => {
     const row = rowsToRender[index];
     if (row?.kind === "node") {
-      const node = ws.nodesById[row.nodeId];
+      const node = nodesById[row.nodeId];
       if (node) handleSelect(node);
     }
   };
@@ -622,19 +695,19 @@ export default function FileExplorer({
       e.preventDefault();
       const prev = selectedIndex === undefined ? 0 : Math.max(0, selectedIndex - 1);
       focusRow(prev);
-    } else if (e.key === "ArrowRight") {
+    } else    if (e.key === "ArrowRight") {
       if (!selectedNode) return;
       if (selectedNode.type === "folder") {
         e.preventDefault();
-        if (!ws.expandedFolderIds[selectedNode.id]) await handleToggleFolder(selectedNode);
+        if (!expandedFolderIds[selectedNode.id]) await handleToggleFolder(selectedNode);
       }
     } else if (e.key === "ArrowLeft") {
       if (!selectedNode) return;
-      if (selectedNode.type === "folder" && ws.expandedFolderIds[selectedNode.id]) {
+      if (selectedNode.type === "folder" && expandedFolderIds[selectedNode.id]) {
         e.preventDefault();
         toggleExpanded(projectId, selectedNode.id, false);
       } else if (selectedNode.parentId) {
-        const parent = ws.nodesById[selectedNode.parentId];
+        const parent = nodesById[selectedNode.parentId];
         if (parent) {
           e.preventDefault();
           handleSelect(parent);
@@ -669,7 +742,7 @@ export default function FileExplorer({
   const handleDropOnFolder = async (folderId: string, draggedId: string) => {
     if (!canEdit) return;
     if (folderId === draggedId) return;
-    const oldParentId = ws.nodesById[draggedId]?.parentId ?? null;
+    const oldParentId = nodesById[draggedId]?.parentId ?? null;
 
     try {
       const updated = await moveNode(draggedId, folderId, projectId);
@@ -704,32 +777,61 @@ export default function FileExplorer({
       );
     }
 
+    // Indentation guides rendering
+    // We render a flex container of 16px wide blocks.
+    const guides = row.indentationGuides?.map((active, i) => (
+      <div
+        key={i}
+        className={cn(
+          "w-4 h-full flex-shrink-0 border-l transition-colors",
+          active ? "border-zinc-200 dark:border-zinc-800" : "border-transparent"
+        )}
+      />
+    ));
+
+    // Pad the guides container to push content
+    // The last block is where the chevron/icon goes.
+    // If we have N guides, that covers N levels. The content starts at N+1?
+    // Actually, `row.level` is the depth. `row.indentationGuides` length should match `row.level`.
+    
     if (row.kind === "loading") {
       return (
-        <div className="flex items-center gap-2 px-2 py-1.5 text-xs text-zinc-500" style={{ paddingLeft: `${row.level * 16 + 8}px` }}>
-          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-          Loading...
+        <div className="flex items-center h-[22px]">
+          {guides}
+          <div className="w-4 flex justify-center">{/* Spacer for chevron */}</div>
+          <div className="flex items-center gap-2 text-xs text-zinc-500 ml-1">
+            <Loader2 className="w-3 h-3 animate-spin" />
+            Loading...
+          </div>
         </div>
       );
     }
 
-    const node = ws.nodesById[row.nodeId];
+    const node = nodesById[row.nodeId];
     if (!node) return null;
     const isFolder = node.type === "folder";
-    const isExpanded = isFolder && !!ws.expandedFolderIds[node.id];
-    const isSelected = ws.selectedNodeId === node.id;
+    const isExpanded = isFolder && !!expandedFolderIds[node.id];
+    const isSelected = selectedNodeId === node.id;
     const isRenaming = renameState.nodeId === node.id;
-    const isFav = !!ws.favorites[node.id];
-    const linkCount = ws.taskLinkCounts[node.id] ?? 0;
+    const isFav = !!favorites[node.id];
+    const linkCount = taskLinkCounts[node.id] ?? 0;
+    
+    // Status color
+    // We don't have isDirty in the node object here (it's in fileStates), 
+    // but we can check if there's a fileState entry with isDirty.
+    const fileState = useFilesWorkspaceStore.getState().byProjectId[projectId]?.fileStates[node.id];
+    const isDirty = fileState?.isDirty;
 
     return (
       <div
         className={cn(
-          "group flex items-center gap-2 px-2 py-1.5 rounded-md transition-colors",
-          isSelected ? "bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-300" : "hover:bg-zinc-100 dark:hover:bg-zinc-800",
+          "group flex items-center h-[22px] rounded-sm transition-colors cursor-pointer select-none",
+          isSelected 
+            ? "bg-blue-600/10 dark:bg-blue-500/20 text-blue-700 dark:text-blue-300" 
+            : "hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300",
           draggingId === node.id && "opacity-60"
         )}
-        style={{ paddingLeft: `${row.level * 16 + 8}px` }}
+        style={{ paddingRight: 8 }} 
         draggable={canEdit}
         onDragStart={(e) => {
           beginDrag(node.id);
@@ -741,7 +843,7 @@ export default function FileExplorer({
           if (!isFolder) return;
           e.preventDefault();
           e.dataTransfer.dropEffect = "move";
-          if (!ws.expandedFolderIds[node.id]) {
+          if (!expandedFolderIds[node.id]) {
             if (!expandHoverTimer.current[node.id]) {
               expandHoverTimer.current[node.id] = setTimeout(() => {
                 void handleToggleFolder(node);
@@ -764,28 +866,42 @@ export default function FileExplorer({
         }}
         onClick={() => handleSelect(node)}
       >
-        {isFolder ? (
-          <button
-            className="w-5 h-5 inline-flex items-center justify-center text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
-            onClick={(e) => {
-              e.stopPropagation();
-              void handleToggleFolder(node);
-            }}
-            aria-label={isExpanded ? "Collapse folder" : "Expand folder"}
-          >
-            {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-          </button>
-        ) : (
-          <span className="w-5 h-5" />
-        )}
+        {/* Tree Lines */}
+        {guides}
 
-        {isFolder ? (
-          isExpanded ? <FolderOpen className="w-4 h-4 text-blue-500" /> : <Folder className="w-4 h-4 text-blue-500" />
-        ) : (
-          <FileText className="w-4 h-4 text-zinc-400" />
-        )}
+        {/* Chevron / Toggle */}
+        <div className="w-4 h-full flex items-center justify-center flex-shrink-0">
+          {isFolder ? (
+            <button
+              className="w-full h-full flex items-center justify-center text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
+              onClick={(e) => {
+                e.stopPropagation();
+                void handleToggleFolder(node);
+              }}
+              aria-label={isExpanded ? "Collapse folder" : "Expand folder"}
+            >
+              {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+            </button>
+          ) : null}
+        </div>
 
-        <div className="flex-1 min-w-0">
+        {/* Icon */}
+        <div className="mr-1.5 flex-shrink-0 flex items-center">
+            {mode === "select" && node.type === "file" ? (
+                 <div className="mr-1 text-zinc-400">
+                    {selectedNodeIds.includes(node.id) ? (
+                        <CheckSquare className="w-4 h-4 text-blue-500" />
+                    ) : (
+                        <Square className="w-4 h-4" />
+                    )}
+                 </div>
+            ) : (
+                <FileIcon name={node.name} isFolder={isFolder} isOpen={isExpanded} size="w-4 h-4" />
+            )}
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 min-w-0 flex items-center min-h-0 overflow-hidden">
           {isRenaming ? (
             <Input
               value={renameState.value}
@@ -795,128 +911,126 @@ export default function FileExplorer({
                 if (e.key === "Escape") setRenameState({ nodeId: null, value: "", original: "" });
               }}
               autoFocus
-              className="h-7 text-xs"
+              className="h-6 text-xs px-1 py-0 w-full"
               onClick={(e) => e.stopPropagation()}
             />
           ) : (
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="text-sm font-medium truncate">{node.name}</span>
-              {!isFolder ? (
-                <span className="text-[10px] text-zinc-400 flex-shrink-0">
-                  {extOf(node.name) ? `.${extOf(node.name)}` : ""}
-                </span>
-              ) : null}
-              {!isFolder ? (
-                <span className="text-[10px] text-zinc-400 flex-shrink-0">{formatBytes(node.size)}</span>
-              ) : null}
+            <div className="flex items-center gap-2 min-w-0 w-full">
+              <span className={cn(
+                "text-[13px] truncate leading-none",
+                 isDirty ? "text-yellow-600 dark:text-yellow-400" : ""
+              )}>
+                {node.name}
+              </span>
+              
+              {/* Optional: extension or size could be shown, but VS Code usually hides them in explorer unless spacious */}
               {linkCount > 0 ? (
-                <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 flex-shrink-0">
-                  Linked {linkCount}
+                <span className="text-[9px] px-1 rounded-sm bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 flex-shrink-0 font-mono">
+                  {linkCount}
                 </span>
               ) : null}
             </div>
           )}
         </div>
 
-        <button
-          className="opacity-0 group-hover:opacity-100 transition-opacity w-7 h-7 inline-flex items-center justify-center rounded hover:bg-zinc-200/60 dark:hover:bg-zinc-700/60"
-          onClick={(e) => {
-            e.stopPropagation();
-            toggleFavorite(projectId, node.id);
-          }}
-          aria-label={isFav ? "Unfavorite" : "Favorite"}
-          title={isFav ? "Unfavorite" : "Favorite"}
-        >
-          {isFav ? <Star className="w-4 h-4" /> : <StarOff className="w-4 h-4" />}
-        </button>
-
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
-              onClick={(e) => e.stopPropagation()}
-              disabled={!canEdit}
+        {/* Hover Actions */}
+        <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity ml-auto pl-2 bg-gradient-to-l from-white via-white to-transparent dark:from-zinc-900 dark:via-zinc-900 h-full">
+            <button
+              className="w-5 h-5 flex items-center justify-center rounded hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleFavorite(projectId, node.id);
+              }}
+              title={isFav ? "Unfavorite" : "Favorite"}
             >
-              <MoreVertical className="w-4 h-4" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
-            {effectiveMode === "trash" ? (
-              <>
-                <DropdownMenuItem
-                  onClick={async () => {
-                    await restoreNode(node.id, projectId);
-                    showToast("Restored", "success");
-                    const nodes = (await getTrashNodes(projectId)) as ProjectNode[];
-                    setTrashNodesState(nodes);
-                    await loadChildren(node.parentId ?? null, { force: true });
-                  }}
+              {isFav ? <Star className="w-3 h-3 fill-yellow-400 text-yellow-400" /> : <Star className="w-3 h-3" />}
+            </button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  className="w-5 h-5 flex items-center justify-center rounded hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
+                  onClick={(e) => e.stopPropagation()}
                   disabled={!canEdit}
                 >
-                  <RotateCcw className="w-4 h-4 mr-2" />
-                  Restore
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={async () => {
-                    const res = await purgeNode(node.id, projectId);
-                    if ((res as any)?.s3Key) {
-                      const supabase = getSupabase();
-                      await supabase.storage.from("project-files").remove([(res as any).s3Key]);
-                    }
-                    showToast("Deleted permanently", "success");
-                    const nodes = (await getTrashNodes(projectId)) as ProjectNode[];
-                    setTrashNodesState(nodes);
-                  }}
-                  disabled={!canEdit}
-                >
-                  <Trash2 className="w-4 h-4 mr-2" />
-                  Delete permanently
-                </DropdownMenuItem>
-              </>
-            ) : (
-              <>
-                <DropdownMenuItem onClick={() => openRename(node)} disabled={!canEdit}>
-                  <Pencil className="w-4 h-4 mr-2" />
-                  Rename
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => openMove(node)} disabled={!canEdit}>
-                  <FolderOpen className="w-4 h-4 mr-2" />
-                  Move…
-                </DropdownMenuItem>
-                {isFolder ? (
+                  <MoreVertical className="w-3 h-3" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+                {effectiveMode === "trash" ? (
                   <>
                     <DropdownMenuItem
-                      onClick={() => {
-                        setSelectedNode(projectId, node.id, node.id);
-                        openCreate("file");
+                      onClick={async () => {
+                        await restoreNode(node.id, projectId);
+                        showToast("Restored", "success");
+                        const nodes = (await getTrashNodes(projectId)) as ProjectNode[];
+                        setTrashNodesState(nodes);
+                        await loadChildren(node.parentId ?? null, { force: true });
                       }}
                       disabled={!canEdit}
                     >
-                      <Plus className="w-4 h-4 mr-2" />
-                      New file
+                      <RotateCcw className="w-4 h-4 mr-2" />
+                      Restore
                     </DropdownMenuItem>
                     <DropdownMenuItem
-                      onClick={() => {
-                        setSelectedNode(projectId, node.id, node.id);
-                        openCreate("folder");
+                      onClick={async () => {
+                        const res = await purgeNode(node.id, projectId);
+                        if ((res as any)?.s3Key) {
+                          const supabase = getSupabase();
+                          await supabase.storage.from("project-files").remove([(res as any).s3Key]);
+                        }
+                        showToast("Deleted permanently", "success");
+                        const nodes = (await getTrashNodes(projectId)) as ProjectNode[];
+                        setTrashNodesState(nodes);
                       }}
                       disabled={!canEdit}
                     >
-                      <Plus className="w-4 h-4 mr-2" />
-                      New folder
+                      <Trash2 className="w-4 h-4 mr-2" />
+                      Delete permanently
                     </DropdownMenuItem>
                   </>
-                ) : null}
-                <DropdownMenuItem onClick={() => openDelete(node)} disabled={!canEdit}>
-                  <Trash2 className="w-4 h-4 mr-2" />
-                  Move to Trash
-                </DropdownMenuItem>
-              </>
-            )}
-          </DropdownMenuContent>
-        </DropdownMenu>
+                ) : (
+                  <>
+                    <DropdownMenuItem onClick={() => openRename(node)} disabled={!canEdit}>
+                      <Pencil className="w-4 h-4 mr-2" />
+                      Rename
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => openMove(node)} disabled={!canEdit}>
+                      <FolderOpen className="w-4 h-4 mr-2" />
+                      Move…
+                    </DropdownMenuItem>
+                    {isFolder ? (
+                      <>
+                        <DropdownMenuItem
+                          onClick={() => {
+                            setSelectedNode(projectId, node.id, node.id);
+                            openCreate("file");
+                          }}
+                          disabled={!canEdit}
+                        >
+                          <Plus className="w-4 h-4 mr-2" />
+                          New file
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={() => {
+                            setSelectedNode(projectId, node.id, node.id);
+                            openCreate("folder");
+                          }}
+                          disabled={!canEdit}
+                        >
+                          <Plus className="w-4 h-4 mr-2" />
+                          New folder
+                        </DropdownMenuItem>
+                      </>
+                    ) : null}
+                    <DropdownMenuItem onClick={() => openDelete(node)} disabled={!canEdit}>
+                      <Trash2 className="w-4 h-4 mr-2" />
+                      Move to Trash
+                    </DropdownMenuItem>
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+        </div>
       </div>
     );
   };
@@ -1010,7 +1124,7 @@ export default function FileExplorer({
       <div className="p-3 border-b border-zinc-200 dark:border-zinc-800 space-y-2">
         <Input
           placeholder="Search files…"
-          value={ws.searchQuery}
+          value={searchQuery}
           onChange={(e) => setSearchQuery(projectId, e.target.value)}
           className="h-8"
         />
@@ -1019,68 +1133,71 @@ export default function FileExplorer({
             <Button
               type="button"
               size="sm"
-              variant={ws.explorerMode === "tree" ? "default" : "outline"}
-              className="h-7 px-2 text-xs"
+              variant={explorerMode === "tree" ? "default" : "outline"}
+              className="h-7 w-7 p-0"
               onClick={() => setExplorerMode(projectId, "tree")}
+              title="All files"
             >
-              <List className="w-3.5 h-3.5 mr-1" />
-              All
+              <List className="w-4 h-4" />
             </Button>
             <Button
               type="button"
               size="sm"
-              variant={ws.explorerMode === "favorites" ? "default" : "outline"}
-              className="h-7 px-2 text-xs"
+              variant={explorerMode === "favorites" ? "default" : "outline"}
+              className="h-7 w-7 p-0"
               onClick={() => setExplorerMode(projectId, "favorites")}
+              title="Favorites"
             >
-              <Star className="w-3.5 h-3.5 mr-1" />
-              Favorites
+              <Star className="w-4 h-4" />
             </Button>
             <Button
               type="button"
               size="sm"
-              variant={ws.explorerMode === "recents" ? "default" : "outline"}
-              className="h-7 px-2 text-xs"
+              variant={explorerMode === "recents" ? "default" : "outline"}
+              className="h-7 w-7 p-0"
               onClick={() => setExplorerMode(projectId, "recents")}
+              title="Recent files"
             >
-              <Clock className="w-3.5 h-3.5 mr-1" />
-              Recent
+              <Clock className="w-4 h-4" />
             </Button>
             <Button
               type="button"
               size="sm"
-              variant={ws.explorerMode === "trash" ? "default" : "outline"}
-              className="h-7 px-2 text-xs"
+              variant={explorerMode === "trash" ? "default" : "outline"}
+              className="h-7 w-7 p-0"
               onClick={() => setExplorerMode(projectId, "trash")}
+              disabled={!canEdit}
+              title="Trash"
             >
-              <Trash2 className="w-3.5 h-3.5 mr-1" />
-              Trash
+              <Trash2 className="w-4 h-4" />
             </Button>
           </div>
           <select
             className="h-8 rounded-md border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-xs px-2"
-            value={ws.sort}
+            value={sort}
             onChange={(e) => setSort(projectId, e.target.value as any)}
           >
             <option value="name">Sort: Name</option>
             <option value="updated">Sort: Updated</option>
             <option value="type">Sort: Type</option>
           </select>
-          <label className="flex items-center gap-2 text-xs text-zinc-500 select-none">
-            <input
-              type="checkbox"
-              checked={ws.foldersFirst}
-              onChange={(e) => setFoldersFirst(projectId, e.target.checked)}
-            />
-            Folders first
-          </label>
+
           {isSearching ? <span className="text-xs text-zinc-400">Searching…</span> : null}
         </div>
       </div>
 
       {/* List */}
-      <div className="flex-1 overflow-hidden">
-        {isBooting || (effectiveMode === "trash" && isTrashLoading) ? (
+      <div className="flex-1 overflow-hidden flex flex-col min-h-0">
+        {accessError ? (
+          <div className="p-6 text-sm text-zinc-500">
+            <div className="font-semibold text-zinc-900 dark:text-zinc-100">Files unavailable</div>
+            <div className="mt-1">
+              {accessError === "Forbidden"
+                ? "You don’t have permission to view this project’s files."
+                : accessError}
+            </div>
+          </div>
+        ) : isBooting || (effectiveMode === "trash" && isTrashLoading) ? (
           <div className="p-6 text-sm text-zinc-500 flex items-center gap-2">
             <Loader2 className="w-4 h-4 animate-spin" />
             Loading…
@@ -1093,6 +1210,44 @@ export default function FileExplorer({
           />
         )}
       </div>
+      
+      
+      {/* Source Control Section */}
+      {effectiveMode === "tree" ? (
+        <div className="flex-none border-t border-zinc-200 dark:border-zinc-800 flex flex-col transition-[height] duration-200" style={{ height: isSourceControlOpen ? "150px" : "auto" }}>
+            <button 
+                className="w-full flex items-center gap-1 px-2 py-1 bg-zinc-50 dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800 text-xs font-semibold text-zinc-600 dark:text-zinc-600 hover:text-zinc-900 dark:hover:text-zinc-100"
+                onClick={() => setIsSourceControlOpen(!isSourceControlOpen)}
+            >
+                {isSourceControlOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                Source Control
+            </button>
+            {isSourceControlOpen && (
+                <div className="flex-1 overflow-y-auto overflow-x-hidden min-h-0 bg-white dark:bg-zinc-900">
+                    <SourceControlPanel projectId={projectId} className="px-2" />
+                </div>
+            )}
+        </div>
+      ) : null}
+
+      {/* Outline Section */}
+      {effectiveMode === "tree" || effectiveMode === "search" ? (
+        <div className="flex-none border-t border-zinc-200 dark:border-zinc-800 flex flex-col transition-[height] duration-200" style={{ height: isOutlineOpen ? "250px" : "auto" }}>
+            <button 
+                className="w-full flex items-center gap-1 px-2 py-1 bg-zinc-50 dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800 text-xs font-semibold text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"
+                onClick={() => setIsOutlineOpen(!isOutlineOpen)}
+            >
+                {isOutlineOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                Outline
+            </button>
+            {isOutlineOpen && (
+                <div className="flex-1 overflow-y-auto overflow-x-hidden min-h-0 bg-white dark:bg-zinc-900">
+                    <OutlinePanel projectId={projectId} className="px-2" />
+                </div>
+            )}
+        </div>
+      ) : null}
+
 
       {/* Create dialog */}
       <Dialog

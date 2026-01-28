@@ -1,9 +1,9 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useDeferredValue } from "react";
 import { ProjectNode } from "@/lib/db/schema";
 import { Button } from "@/components/ui/button";
-import { Diff, Loader2, Save, Trash2, Wand2 } from "lucide-react";
+import { Diff, Loader2, Save, Trash2, Wand2, SplitSquareHorizontal, Map } from "lucide-react";
 import { useTheme } from "next-themes";
 import dynamic from "next/dynamic";
 import {
@@ -13,18 +13,20 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import MarkdownPreview from "./preview/MarkdownPreview";
 
-const CodeEditor = dynamic(() => import("./editor/CodeEditor"), {
+const CodeEditor = dynamic(() => import("./editor/MonacoCodeEditor"), {
   ssr: false,
   loading: () => (
     <div className="flex items-center justify-center h-full text-zinc-500 bg-white dark:bg-[#1e1e1e]">
       <Loader2 className="w-5 h-5 animate-spin mr-2" />
-      Loading editor...
+      Initializing Monaco...
     </div>
   ),
 });
 import { diffLines } from "diff";
 import { formatProjectFileContent, getLastNodeEvent } from "@/app/actions/files";
+import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 
 interface FileEditorProps {
   file: ProjectNode;
@@ -76,7 +78,39 @@ export default function FileEditor({
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [isDiffOpen, setIsDiffOpen] = useState(false);
   const [isFormatting, setIsFormatting] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
+
+  // Defer content for preview to avoid typing lag
+  const deferredContent = useDeferredValue(content);
+
+  const isMarkdown = file.name.endsWith(".md");
+
+  useEffect(() => {
+      setShowPreview(false);
+  }, [file.id]);
+
   const [lastEvent, setLastEvent] = useState<{ type: string; at: number; by: string | null } | null>(null);
+  
+  
+  const setActiveFileSymbols = useFilesWorkspaceStore((s) => s.setActiveFileSymbols);
+  const requestedScrollPosition = useFilesWorkspaceStore((s) => s.byProjectId[file.projectId]?.requestedScrollPosition);
+  const clearScrollRequest = useFilesWorkspaceStore((s) => s.clearScrollRequest);
+
+  const scrollToLine = useMemo(() => {
+     if (requestedScrollPosition && requestedScrollPosition.nodeId === file.id) {
+         return requestedScrollPosition.line;
+     }
+     return null;
+  }, [requestedScrollPosition, file.id]);
+
+  useEffect(() => {
+      if (scrollToLine) {
+          const t = setTimeout(() => {
+              clearScrollRequest(file.projectId);
+          }, 100); // clear quickly
+          return () => clearTimeout(t);
+      }
+  }, [scrollToLine, file.projectId, clearScrollRequest]);
 
   const confirmTitle = useMemo(() => {
     if (isDirty) return "Move to Trash (unsaved changes)";
@@ -93,7 +127,7 @@ export default function FileEditor({
     void (async () => {
       try {
         const evt = await getLastNodeEvent(file.projectId, file.id);
-        if (!cancelled) setLastEvent(evt as any);
+        if (!cancelled) setLastEvent(evt);
       } catch {
         if (!cancelled) setLastEvent(null);
       }
@@ -220,11 +254,23 @@ export default function FileEditor({
             )}
             Save
           </Button>
+
+          {isMarkdown ? (
+            <Button
+              variant={showPreview ? "default" : "ghost"}
+              size="sm"
+              className="h-8 w-8 p-0"
+              onClick={() => setShowPreview(!showPreview)}
+              title="Toggle Preview"
+            >
+              <SplitSquareHorizontal className="w-4 h-4" />
+            </Button>
+          ) : null}
         </div>
       </div>
 
       {/* Editor Area */}
-      <div className="flex-1 relative overflow-hidden">
+      <div className="flex-1 relative overflow-hidden min-h-0">
         {isLoading ? (
           <div className="flex items-center justify-center h-full text-zinc-500">
             <Loader2 className="w-5 h-5 animate-spin mr-2" />
@@ -257,21 +303,48 @@ export default function FileEditor({
                 wordWrap={wordWrap}
                 fontSize={fontSize}
                 minimapEnabled={minimapEnabled}
+                onSymbolsChange={(syms) => setActiveFileSymbols(file.projectId, syms)}
+                scrollToLine={scrollToLine}
               />
             </div>
           </div>
         ) : (
-          <CodeEditor
-            filename={file.name}
-            value={content}
-            onChange={onChange}
-            theme={isDark ? "dark" : "light"}
-            readOnly={!canEdit}
-            lineNumbers={lineNumbers}
-            wordWrap={wordWrap}
-            fontSize={fontSize}
-            minimapEnabled={minimapEnabled}
-          />
+             showPreview && isMarkdown ? (
+                <div className="absolute inset-0 flex">
+                    <div className="w-1/2 h-full border-r border-zinc-200 dark:border-zinc-800">
+                         <CodeEditor
+                            filename={file.name}
+                            value={content}
+                            onChange={onChange}
+                            theme={isDark ? "dark" : "light"}
+                            readOnly={!canEdit}
+                            lineNumbers={lineNumbers}
+                            wordWrap={wordWrap}
+                            fontSize={fontSize}
+                            minimapEnabled={minimapEnabled}
+                            onSymbolsChange={(syms) => setActiveFileSymbols(file.projectId, syms)}
+                            scrollToLine={scrollToLine}
+                          />
+                    </div>
+                    <div className="w-1/2 h-full">
+                        <MarkdownPreview content={deferredContent} />
+                    </div>
+                </div>
+            ) : (
+              <CodeEditor
+                filename={file.name}
+                value={content}
+                onChange={onChange}
+                theme={isDark ? "dark" : "light"}
+                readOnly={!canEdit}
+                lineNumbers={lineNumbers}
+                wordWrap={wordWrap}
+                fontSize={fontSize}
+                minimapEnabled={minimapEnabled}
+                onSymbolsChange={(syms) => setActiveFileSymbols(file.projectId, syms)}
+                scrollToLine={scrollToLine}
+              />
+            )
         )}
       </div>
 

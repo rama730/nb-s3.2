@@ -38,11 +38,12 @@ export function useRealtimeTasks(projectId: string, initialTasks: Task[] = []) {
                     console.log("Realtime Task Event:", payload);
 
                     if (payload.eventType === 'INSERT') {
-                        setTasks((prev) => [payload.new as Task, ...prev]);
-                        // Optional: Show toast "New task created"
+                        const newTask = normalizeTask(payload.new);
+                        setTasks((prev) => [newTask, ...prev]);
                     } else if (payload.eventType === 'UPDATE') {
+                        const updatedTask = normalizeTask(payload.new);
                         setTasks((prev) =>
-                            prev.map((t) => (t.id === payload.new.id ? { ...t, ...payload.new } as Task : t))
+                            prev.map((t) => (t.id === updatedTask.id ? { ...t, ...updatedTask } as Task : t))
                         );
                     } else if (payload.eventType === 'DELETE') {
                         setTasks((prev) => prev.filter((t) => t.id !== payload.old.id));
@@ -60,4 +61,19 @@ export function useRealtimeTasks(projectId: string, initialTasks: Task[] = []) {
     }, [projectId, router, supabase]);
 
     return { tasks, setTasks };
+}
+
+// Helper to normalize Supabase payload (snake_case) to App Model (camelCase)
+function normalizeTask(raw: any): Task {
+    return {
+        ...raw,
+        // Map common snake_case fields to camelCase
+        assigneeId: raw.assignee_id,
+        sprintId: raw.sprint_id,
+        creatorId: raw.creator_id,
+        projectId: raw.project_id,
+        dueDate: raw.due_date,
+        storyPoints: raw.story_points,
+        // Keep snake_case for now if needed, but primary is camel
+    } as Task;
 }

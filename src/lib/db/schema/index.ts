@@ -186,6 +186,25 @@ export const tasks = pgTable('tasks', {
     sprintIdx: index('tasks_sprint_idx').on(t.sprintId),
     assigneeIdx: index('tasks_assignee_idx').on(t.assigneeId),
     statusIdx: index('tasks_status_idx').on(t.status),
+    // Composite indexes for filtering
+    projectStatusIdx: index('tasks_project_status_idx').on(t.projectId, t.status),
+    projectSprintIdx: index('tasks_project_sprint_idx').on(t.projectId, t.sprintId),
+    projectAssigneeIdx: index('tasks_project_assignee_idx').on(t.projectId, t.assigneeId),
+}))
+
+// ============================================================================
+// TASK SUBTASKS TABLE
+// ============================================================================
+export const taskSubtasks = pgTable('task_subtasks', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    taskId: uuid('task_id').notNull().references(() => tasks.id, { onDelete: 'cascade' }),
+    title: text('title').notNull(),
+    completed: boolean('completed').default(false).notNull(),
+    position: integer('position').default(0).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+    taskIdx: index('task_subtasks_task_idx').on(t.taskId),
 }))
 
 // ============================================================================
@@ -391,6 +410,14 @@ export const tasksRelations = relations(tasks, ({ one, many }) => ({
         relationName: 'creator',
     }),
     attachments: many(taskNodeLinks),
+    subtasks: many(taskSubtasks),
+}))
+
+export const taskSubtasksRelations = relations(taskSubtasks, ({ one }) => ({
+    task: one(tasks, {
+        fields: [taskSubtasks.taskId],
+        references: [tasks.id],
+    }),
 }))
 
 export const projectNodesRelations = relations(projectNodes, ({ one, many }) => ({
@@ -591,6 +618,9 @@ export type Message = typeof messages.$inferSelect
 export type NewMessage = typeof messages.$inferInsert
 export type MessageAttachment = typeof messageAttachments.$inferSelect
 export type NewMessageAttachment = typeof messageAttachments.$inferInsert
+
+export type TaskSubtask = typeof taskSubtasks.$inferSelect
+export type NewTaskSubtask = typeof taskSubtasks.$inferInsert
 
 export type ProjectNode = typeof projectNodes.$inferSelect
 export type NewProjectNode = typeof projectNodes.$inferInsert

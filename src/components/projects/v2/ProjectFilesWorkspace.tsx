@@ -15,6 +15,23 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import {
+  DndContext,
+  DragOverlay,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  horizontalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { DraggableTab } from "./DraggableTab";
+import {
   FileCode,
   FileImage,
   MoreVertical,
@@ -34,8 +51,11 @@ import {
   releaseProjectNodeLock,
   searchProjectFileIndex,
   upsertProjectFileIndex,
+  updateProjectFileStats,
+  getProjectFileContent,
 } from "@/app/actions/files";
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
+import { BreadcrumbBar } from "./navigation/BreadcrumbBar";
 
 interface ProjectFilesWorkspaceProps {
   projectId: string;
@@ -74,11 +94,43 @@ export default function ProjectFilesWorkspace({
   projectName,
   currentUserId,
   isOwnerOrMember,
-}: ProjectFilesWorkspaceProps) {
+  initialFileNodes,
+}: ProjectFilesWorkspaceProps & { initialFileNodes?: ProjectNode[] }) {
   const canEdit = isOwnerOrMember;
   const { showToast } = useToast();
 
-  const ws = useFilesWorkspaceStore((s) => s._get(projectId));
+  const ensureProjectWorkspace = useFilesWorkspaceStore((s) => s.ensureProjectWorkspace);
+  const setNodes = useFilesWorkspaceStore((s) => s.setNodes);
+
+  useEffect(() => {
+    ensureProjectWorkspace(projectId);
+    if (initialFileNodes && initialFileNodes.length > 0) {
+        // Only set if we haven't loaded yet? Or always hydrate? 
+        // Always hydrating ensures fresh server data.
+        // We really should check if we already have data to avoid overwriting local optimistic updates if any.
+        // But for initial load it's fine.
+        const current = useFilesWorkspaceStore.getState().byProjectId[projectId]?.nodesById;
+        if (!current || Object.keys(current).length === 0) {
+            setNodes(projectId, initialFileNodes);
+        }
+    }
+  }, [ensureProjectWorkspace, projectId, initialFileNodes, setNodes]);
+
+  // Granular selectors to avoid re-renders on every store update (e.g. file content changes)
+  const leftOpenTabIds = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.panes.left.openTabIds || []);
+  const rightOpenTabIds = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.panes.right.openTabIds || []);
+  const leftActiveTabId = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.panes.left.activeTabId);
+  const rightActiveTabId = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.panes.right.activeTabId);
+  const splitEnabled = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.splitEnabled);
+  const splitRatio = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.splitRatio ?? 0.5);
+  const explorerMode = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.explorerMode || "tree");
+  const nodesById = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.nodesById || {});
+  
+  // Specific objects we need (excluding fileStates which changes too often)
+  const panes = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.panes || { left: { openTabIds: [], activeTabId: null }, right: { openTabIds: [], activeTabId: null } });
+  const prefs = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.prefs || { lineNumbers: true, wordWrap: false, fontSize: 14, minimap: true });
+  const pinnedByTabId = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.pinnedByTabId || {});
+  
   const openTab = useFilesWorkspaceStore((s) => s.openTab);
   const closeTabStore = useFilesWorkspaceStore((s) => s.closeTab);
   const pinTab = useFilesWorkspaceStore((s) => s.pinTab);
@@ -93,6 +145,46 @@ export default function ProjectFilesWorkspace({
   const setSelectedNode = useFilesWorkspaceStore((s) => s.setSelectedNode);
   const toggleExpanded = useFilesWorkspaceStore((s) => s.toggleExpanded);
   const upsertNodes = useFilesWorkspaceStore((s) => s.upsertNodes);
+  const setFileState = useFilesWorkspaceStore((s) => s.setFileState);
+  const reorderTabs = useFilesWorkspaceStore((s) => s.reorderTabs);
+  const moveTabToPane = useFilesWorkspaceStore((s) => s.moveTabToPane);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
+
+  const handleDragEnd = useCallback((event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over) return;
+
+    const state = useFilesWorkspaceStore.getState().byProjectId[projectId];
+    if (!state) return;
+    
+    const findPane = (id: string) => {
+      if (id === "left" || id === "right") return id;
+      if (state.panes.left.openTabIds.includes(id)) return "left";
+      if (state.panes.right.openTabIds.includes(id)) return "right";
+      return null;
+    };
+
+    const activePane = findPane(active.id as string);
+    const overPane = findPane(over.id as string);
+
+    if (!activePane || !overPane) return;
+
+    if (activePane === overPane) {
+      const pane = state.panes[activePane];
+      const oldIndex = pane.openTabIds.indexOf(active.id as string);
+      const newIndex = pane.openTabIds.indexOf(over.id as string);
+      if (oldIndex !== newIndex && newIndex !== -1) {
+        reorderTabs(projectId, activePane as PaneId, arrayMove(pane.openTabIds, oldIndex, newIndex));
+      }
+    } else {
+      const overIndex = state.panes[overPane].openTabIds.indexOf(over.id as string);
+      moveTabToPane(projectId, activePane as PaneId, overPane as PaneId, active.id as string, overIndex);
+    }
+  }, [projectId, reorderTabs, moveTabToPane]);
 
   const [activePane, setActivePane] = useState<PaneId>("left");
 
@@ -115,21 +207,57 @@ export default function ProjectFilesWorkspace({
   });
   const prevActiveRef = useRef<Record<PaneId, string | null>>({ left: null, right: null });
 
-  const panesToRender: PaneId[] = ws.splitEnabled ? ["left", "right"] : ["left"];
+  const panesToRender: PaneId[] = splitEnabled ? ["left", "right"] : ["left"];
 
   const [findOpen, setFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState("");
   const [findLoading, setFindLoading] = useState(false);
   const [findResults, setFindResults] = useState<Array<{ nodeId: string; snippet: string }>>([]);
 
+  const failedLookupsRef = useRef<Set<string>>(new Set());
+  const opsInProgressRef = useRef<Set<string>>(new Set());
+
   const ensureNodeMetadata = useCallback(
     async (nodeIds: string[]) => {
-      const missing = nodeIds.filter((id) => !ws.nodesById[id]);
+      if (nodeIds.length === 0) return;
+
+      const state = useFilesWorkspaceStore.getState();
+      const currentWs = state.byProjectId[projectId];
+      if (!currentWs) return;
+      
+      // Filter out IDs that:
+      // 1. Are already in the store
+      // 2. Are known failures
+      // 3. Are ALREADY being fetched (opsInProgress)
+      const missing = nodeIds.filter((id) => 
+        !currentWs.nodesById[id] && 
+        !failedLookupsRef.current.has(id) &&
+        !opsInProgressRef.current.has(`meta:${id}`)
+      );
+      
       if (missing.length === 0) return;
-      const nodes = (await getNodesByIds(projectId, missing)) as ProjectNode[];
-      upsertNodes(projectId, nodes);
+
+      // Mark as in-progress
+      missing.forEach(id => opsInProgressRef.current.add(`meta:${id}`));
+      
+      try {
+        const nodes = (await getNodesByIds(projectId, missing)) as ProjectNode[];
+        
+        // Track failed lookups
+        const foundIds = new Set(nodes.map(n => n.id));
+        missing.forEach(id => {
+          if (!foundIds.has(id)) failedLookupsRef.current.add(id);
+        });
+
+        if (nodes.length > 0) {
+          upsertNodes(projectId, nodes);
+        }
+      } finally {
+        // Clear in-progress flag
+        missing.forEach(id => opsInProgressRef.current.delete(`meta:${id}`));
+      }
     },
-    [projectId, upsertNodes, ws.nodesById]
+    [projectId, upsertNodes] 
   );
 
   // Find-in-project shortcut: Ctrl/Cmd+Shift+F
@@ -176,6 +304,9 @@ export default function ProjectFilesWorkspace({
   const loadFileContent = useCallback(
     async (node: ProjectNode) => {
       if (!node?.id || !node.s3Key) return;
+      if (opsInProgressRef.current.has(node.id)) return; // Already loading
+      
+      opsInProgressRef.current.add(node.id);
 
       const nextToken = (loadTokenRef.current.get(node.id) || 0) + 1;
       loadTokenRef.current.set(node.id, nextToken);
@@ -198,18 +329,41 @@ export default function ProjectFilesWorkspace({
             error: null,
           }),
           node,
-          isLoading: true,
+          isLoading: true, // Optimistically true
           error: null,
         },
       }));
 
+      // Check global cache first using getState() to avoid dependency on ws changes
+      const state = useFilesWorkspaceStore.getState();
+      const ws = state.byProjectId[projectId];
+      const cached = ws?.fileStates?.[node.id];
+      
+      if (cached) {
+        setTabById((prev) => ({
+          ...prev,
+          [node.id]: {
+            ...prev[node.id],
+            content: cached.content,
+            isDirty: cached.isDirty,
+            lastSavedAt: cached.lastSavedAt,
+            savedSnapshot: cached.content,
+            isLoading: false,
+          },
+        }));
+        if (cached.content || cached.isDirty) {
+             opsInProgressRef.current.delete(node.id);
+             return; 
+        }
+      }
+
       try {
-        const supabase = getSupabase();
-        const { data, error } = await supabase.storage.from("project-files").download(node.s3Key);
-        if (error) throw error;
-        const text = await data.text();
+        const text = await getProjectFileContent(projectId, node.id);
         const latestToken = loadTokenRef.current.get(node.id);
         if (latestToken !== nextToken) return;
+
+        // Update global cache
+        setFileState(projectId, node.id, { content: text, isDirty: false });
 
         setTabById((prev) => ({
           ...prev,
@@ -235,9 +389,11 @@ export default function ProjectFilesWorkspace({
             error: e?.message || "Failed to load file content",
           },
         }));
+      } finally {
+        opsInProgressRef.current.delete(node.id);
       }
     },
-    [getSupabase]
+    [getSupabase, projectId, setFileState] // Removed "ws" dependency (implicit or explicit)
   );
 
   const acquireLockForNode = useCallback(
@@ -308,9 +464,11 @@ export default function ProjectFilesWorkspace({
         await loadFileContent(node);
       }
 
-      await acquireLockForNode(node);
+      if (canEdit) {
+        await acquireLockForNode(node);
+      }
     },
-    [acquireLockForNode, activePane, loadFileContent, openTab, projectId, setSelectedNode]
+    [acquireLockForNode, activePane, canEdit, loadFileContent, openTab, projectId, setSelectedNode]
   );
 
   const saveTab = useCallback(
@@ -350,6 +508,15 @@ export default function ProjectFilesWorkspace({
           .update(tab.node.s3Key, blob, { upsert: true });
         if (error) throw error;
 
+        // Calculate size in bytes
+        const size = new TextEncoder().encode(tab.content).length;
+
+        // Update metadata in DB
+        await updateProjectFileStats(projectId, nodeId, size);
+        
+        // Update local node store immediately
+        upsertNodes(projectId, [{ ...tab.node, size }]);
+
         // Update search index for text-like files (best-effort)
         try {
           const ext = tab.node.name.split(".").pop()?.toLowerCase();
@@ -366,6 +533,7 @@ export default function ProjectFilesWorkspace({
         }
 
         const savedAt = Date.now();
+        setFileState(projectId, nodeId, { isDirty: false, lastSavedAt: savedAt });
         setTabById((prev) => ({
           ...prev,
           [nodeId]: { ...prev[nodeId], isSaving: false, isDirty: false, offlineQueued: false, lastSavedAt: savedAt },
@@ -452,17 +620,26 @@ export default function ProjectFilesWorkspace({
   );
 
   // Restore / ensure metadata + content for persisted tabs
+  // Restore / ensure metadata + content for persisted tabs
   useEffect(() => {
     const allOpenIds = Array.from(
-      new Set([...ws.panes.left.openTabIds, ...ws.panes.right.openTabIds])
+      new Set([...leftOpenTabIds, ...rightOpenTabIds])
     );
     if (allOpenIds.length === 0) return;
 
     void (async () => {
+      // 1. Metadata
       await ensureNodeMetadata(allOpenIds);
+      
+      // 2. Content
+      // Use getState() to get the freshest nodes (metadata might have just been loaded)
+      const currentWs = useFilesWorkspaceStore.getState().byProjectId[projectId];
+      if (!currentWs) return;
+
       for (const id of allOpenIds) {
-        const node = ws.nodesById[id];
+        const node = currentWs.nodesById[id];
         if (!node) continue;
+        
         if (!tabByIdRef.current[id]) {
           setTabById((prev) => ({
             ...prev,
@@ -485,27 +662,29 @@ export default function ProjectFilesWorkspace({
         }
       }
     })();
+    // Dependencies are now just the ID lists (strings). 
+    // We intentionally exclude 'ensureNodeMetadata' and 'loadFileContent' if they are stable.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, ws.panes.left.openTabIds.join(","), ws.panes.right.openTabIds.join(",")]);
+  }, [projectId, leftOpenTabIds.join(","), rightOpenTabIds.join(",")]);
 
   // Save previous active tab on switch, per pane (best-effort)
   useEffect(() => {
     for (const paneId of panesToRender) {
       const prev = prevActiveRef.current[paneId];
-      const current = ws.panes[paneId].activeTabId;
+      const current = panes[paneId]?.activeTabId;
       if (prev && prev !== current) {
         const prevTab = tabByIdRef.current[prev];
         if (prevTab?.isDirty && canEdit) void saveTab(prev, { silent: true, reason: "switch" });
       }
       prevActiveRef.current[paneId] = current;
     }
-  }, [canEdit, panesToRender, saveTab, ws.panes.left.activeTabId, ws.panes.right.activeTabId]);
+  }, [canEdit, panesToRender, saveTab, panes.left?.activeTabId, panes.right?.activeTabId]);
 
   // Ensure active tabs attempt to acquire a lock
   useEffect(() => {
     if (!currentUserId) return;
     for (const paneId of panesToRender) {
-      const id = ws.panes[paneId].activeTabId;
+      const id = panes[paneId]?.activeTabId;
       if (!id) continue;
       const tab = tabById[id];
       if (!tab) continue;
@@ -513,13 +692,13 @@ export default function ProjectFilesWorkspace({
       if (!canEdit) continue;
       void acquireLockForNode(tab.node);
     }
-  }, [acquireLockForNode, canEdit, currentUserId, panesToRender, tabById, ws.panes.left.activeTabId, ws.panes.right.activeTabId]);
+  }, [acquireLockForNode, canEdit, currentUserId, panesToRender, tabById, panes.left?.activeTabId, panes.right?.activeTabId]);
 
   // Debounced autosave per pane active tab
   useEffect(() => {
     for (const paneId of panesToRender) {
       if (autosaveTimerRef.current[paneId]) clearTimeout(autosaveTimerRef.current[paneId]!);
-      const id = ws.panes[paneId].activeTabId;
+      const id = panes[paneId]?.activeTabId;
       if (!id || !canEdit) continue;
       const tab = tabById[id];
       if (!tab || !tab.isDirty || tab.isSaving) continue;
@@ -533,14 +712,14 @@ export default function ProjectFilesWorkspace({
         if (autosaveTimerRef.current[paneId]) clearTimeout(autosaveTimerRef.current[paneId]!);
       }
     };
-  }, [canEdit, panesToRender, saveTab, tabById, ws.panes.left.activeTabId, ws.panes.right.activeTabId]);
+  }, [canEdit, panesToRender, saveTab, tabById, panes.left?.activeTabId, panes.right?.activeTabId]);
 
   // Keepalive for active locks
   useEffect(() => {
     if (!currentUserId) return;
     const interval = setInterval(() => {
       for (const paneId of panesToRender) {
-        const id = ws.panes[paneId].activeTabId;
+        const id = panes[paneId]?.activeTabId;
         if (!id) continue;
         const tab = tabByIdRef.current[id];
         if (!tab?.hasLock) continue;
@@ -548,7 +727,7 @@ export default function ProjectFilesWorkspace({
       }
     }, 45_000);
     return () => clearInterval(interval);
-  }, [currentUserId, panesToRender, projectId, ws.panes.left.activeTabId, ws.panes.right.activeTabId]);
+  }, [currentUserId, panesToRender, projectId, panes.left?.activeTabId, panes.right?.activeTabId]);
 
   // Flush offline queue when back online
   useEffect(() => {
@@ -562,8 +741,11 @@ export default function ProjectFilesWorkspace({
         if (!ids.length) return;
         void (async () => {
           await ensureNodeMetadata(ids);
+          const currentWs = useFilesWorkspaceStore.getState().byProjectId[projectId];
+          if (!currentWs) return;
+
           for (const id of ids) {
-            const node = ws.nodesById[id];
+            const node = currentWs.nodesById[id];
             if (!node) continue;
             // Ensure tab state exists / reflects queued content
             setTabById((prev) => ({
@@ -598,13 +780,13 @@ export default function ProjectFilesWorkspace({
     };
     window.addEventListener("online", onOnline);
     return () => window.removeEventListener("online", onOnline);
-  }, [acquireLockForNode, ensureNodeMetadata, projectId, saveTab, ws.nodesById]);
+  }, [acquireLockForNode, ensureNodeMetadata, projectId, saveTab]);
 
   const startResize = (e: React.MouseEvent) => {
-    if (!ws.splitEnabled) return;
+    if (!splitEnabled) return;
     e.preventDefault();
     const startX = e.clientX;
-    const startRatio = ws.splitRatio;
+    const startRatio = splitRatio;
     const container = (e.currentTarget as HTMLElement).parentElement;
     const width = container?.getBoundingClientRect().width || 1;
 
@@ -621,10 +803,10 @@ export default function ProjectFilesWorkspace({
   };
 
   const nothingOpen =
-    ws.panes.left.openTabIds.length === 0 && (!ws.splitEnabled || ws.panes.right.openTabIds.length === 0);
+    panes.left.openTabIds.length === 0 && (!splitEnabled || panes.right.openTabIds.length === 0);
 
   return (
-    <div className="min-h-[70vh] h-[calc(100vh-220px)] flex bg-white dark:bg-zinc-950 overflow-hidden rounded-lg border border-zinc-200 dark:border-zinc-800 shadow-sm relative isolate">
+    <div className="flex-1 w-full min-h-0 flex bg-white dark:bg-zinc-950 overflow-hidden rounded-lg border border-zinc-200 dark:border-zinc-800 shadow-sm relative isolate">
       {/* Explorer */}
       <div className="w-[320px] flex-shrink-0 border-r border-zinc-200 dark:border-zinc-800 flex flex-col h-full bg-zinc-50/50 dark:bg-zinc-900/50 relative z-10">
         <FileExplorer
@@ -669,27 +851,27 @@ export default function ProjectFilesWorkspace({
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
                 <DropdownMenuItem
-                  onClick={() => setPrefs(projectId, { lineNumbers: !ws.prefs.lineNumbers })}
+                  onClick={() => setPrefs(projectId, { lineNumbers: !prefs.lineNumbers })}
                 >
-                  {ws.prefs.lineNumbers ? "Hide" : "Show"} line numbers
+                  {prefs.lineNumbers ? "Hide" : "Show"} line numbers
                 </DropdownMenuItem>
                 <DropdownMenuItem
-                  onClick={() => setPrefs(projectId, { wordWrap: !ws.prefs.wordWrap })}
+                  onClick={() => setPrefs(projectId, { wordWrap: !prefs.wordWrap })}
                 >
-                  {ws.prefs.wordWrap ? "Disable" : "Enable"} word wrap
+                  {prefs.wordWrap ? "Disable" : "Enable"} word wrap
                 </DropdownMenuItem>
                 <DropdownMenuItem
-                  onClick={() => setPrefs(projectId, { minimap: !ws.prefs.minimap })}
+                  onClick={() => setPrefs(projectId, { minimap: !prefs.minimap })}
                 >
-                  {ws.prefs.minimap ? "Hide" : "Show"} minimap
+                  {prefs.minimap ? "Hide" : "Show"} minimap
                 </DropdownMenuItem>
                 <DropdownMenuItem
-                  onClick={() => setPrefs(projectId, { fontSize: Math.max(12, ws.prefs.fontSize - 1) })}
+                  onClick={() => setPrefs(projectId, { fontSize: Math.max(12, prefs.fontSize - 1) })}
                 >
                   Font size: -
                 </DropdownMenuItem>
                 <DropdownMenuItem
-                  onClick={() => setPrefs(projectId, { fontSize: Math.min(20, ws.prefs.fontSize + 1) })}
+                  onClick={() => setPrefs(projectId, { fontSize: Math.min(20, prefs.fontSize + 1) })}
                 >
                   Font size: +
                 </DropdownMenuItem>
@@ -700,37 +882,43 @@ export default function ProjectFilesWorkspace({
               size="sm"
               variant="outline"
               className="h-8"
-              onClick={() => setSplitEnabled(projectId, !ws.splitEnabled)}
+              onClick={() => setSplitEnabled(projectId, !splitEnabled)}
             >
               <SplitSquareVertical className="w-4 h-4 mr-2" />
-              {ws.splitEnabled ? "Single" : "Split"}
+              {splitEnabled ? "Single" : "Split"}
             </Button>
           </div>
         </div>
 
         <div className="relative z-10 flex-1 overflow-hidden flex">
-          <Pane
-            projectId={projectId}
+          <DndContext 
+            sensors={sensors} 
+            collisionDetection={closestCenter} 
+            onDragEnd={handleDragEnd}
+          >
+            <Pane
+              projectId={projectId}
             paneId="left"
             canEdit={canEdit}
-            width={ws.splitEnabled ? `${ws.splitRatio * 100}%` : "100%"}
-            tabIds={orderedTabIds(ws.panes.left.openTabIds, ws.pinnedByTabId)}
-            activeTabId={ws.panes.left.activeTabId}
-            pinnedById={ws.pinnedByTabId}
+            width={splitEnabled ? `${splitRatio * 100}%` : "100%"}
+            tabIds={orderedTabIds(panes.left.openTabIds, pinnedByTabId)}
+            activeTabId={panes.left.activeTabId}
+            pinnedById={pinnedByTabId}
             tabById={tabById}
-            prefs={ws.prefs}
+            prefs={prefs}
             setActivePane={() => setActivePane("left")}
             setActiveTab={(id) => useFilesWorkspaceStore.getState().setActiveTab(projectId, "left", id)}
             onCloseTab={(id) => void closeTab("left", id)}
             onPinTab={(id, pinned) => pinTab(projectId, "left", id, pinned)}
             onCloseOthers={(id) => closeOtherTabs(projectId, "left", id)}
             onCloseToRight={(id) => closeTabsToRight(projectId, "left", id)}
-            onChange={(id, next) =>
+            onChange={(id, next) => {
+              setFileState(projectId, id, { content: next, isDirty: true });
               setTabById((prev) => ({ ...prev, [id]: { ...prev[id], content: next, isDirty: true } }))
-            }
+            }}
             onSave={(id) => void saveTab(id)}
             onRetryLoad={(id) => {
-              const node = ws.nodesById[id];
+              const node = nodesById[id];
               if (node) void loadFileContent(node);
             }}
             onDelete={(id) => void deleteFile(id)}
@@ -741,7 +929,7 @@ export default function ProjectFilesWorkspace({
             onNavigatePathNode={(node) => void openFileInPane(node, "left")}
           />
 
-          {ws.splitEnabled ? (
+          {splitEnabled ? (
             <div
               className="w-1 cursor-col-resize bg-zinc-200 dark:bg-zinc-800 hover:bg-indigo-300 dark:hover:bg-indigo-700 transition-colors"
               onMouseDown={startResize}
@@ -749,29 +937,30 @@ export default function ProjectFilesWorkspace({
             />
           ) : null}
 
-          {ws.splitEnabled ? (
+          {splitEnabled ? (
             <Pane
               projectId={projectId}
               paneId="right"
               canEdit={canEdit}
-              width={`${(1 - ws.splitRatio) * 100}%`}
-              tabIds={orderedTabIds(ws.panes.right.openTabIds, ws.pinnedByTabId)}
-              activeTabId={ws.panes.right.activeTabId}
-              pinnedById={ws.pinnedByTabId}
+              width={`${(1 - splitRatio) * 100}%`}
+              tabIds={orderedTabIds(panes.right.openTabIds, pinnedByTabId)}
+              activeTabId={panes.right.activeTabId}
+              pinnedById={pinnedByTabId}
               tabById={tabById}
-            prefs={ws.prefs}
+            prefs={prefs}
               setActivePane={() => setActivePane("right")}
               setActiveTab={(id) => useFilesWorkspaceStore.getState().setActiveTab(projectId, "right", id)}
               onCloseTab={(id) => void closeTab("right", id)}
               onPinTab={(id, pinned) => pinTab(projectId, "right", id, pinned)}
               onCloseOthers={(id) => closeOtherTabs(projectId, "right", id)}
               onCloseToRight={(id) => closeTabsToRight(projectId, "right", id)}
-              onChange={(id, next) =>
+              onChange={(id, next) => {
+                setFileState(projectId, id, { content: next, isDirty: true });
                 setTabById((prev) => ({ ...prev, [id]: { ...prev[id], content: next, isDirty: true } }))
-              }
+              }}
               onSave={(id) => void saveTab(id)}
               onRetryLoad={(id) => {
-                const node = ws.nodesById[id];
+                const node = nodesById[id];
                 if (node) void loadFileContent(node);
               }}
               onDelete={(id) => void deleteFile(id)}
@@ -782,6 +971,7 @@ export default function ProjectFilesWorkspace({
               onNavigatePathNode={(node) => void openFileInPane(node, "right")}
             />
           ) : null}
+          </DndContext>
         </div>
 
         {nothingOpen ? (
@@ -843,7 +1033,7 @@ export default function ProjectFilesWorkspace({
                   ) : (
                     <div className="divide-y divide-zinc-200 dark:divide-zinc-800">
                       {findResults.map((r) => {
-                        const node = ws.nodesById[r.nodeId];
+                        const node = nodesById[r.nodeId];
                         return (
                           <button
                             key={r.nodeId}
@@ -937,68 +1127,34 @@ function Pane({
         )}
         onMouseDown={setActivePane}
       >
-        {tabIds.length === 0 ? (
-          <div className="px-2 py-1 text-xs text-zinc-400">No tabs</div>
-        ) : (
-          tabIds.map((id) => {
-            const tab = tabById[id];
-            const name = tab?.node?.name || id;
-            const isActive = id === activeTabId;
-            const isDirty = !!tab?.isDirty;
-            const pinned = !!pinnedById[id];
-            return (
-              <div
-                key={id}
-                className={cn(
-                  "flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium border transition-colors",
-                  isActive
-                    ? "bg-zinc-100 dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700 text-zinc-900 dark:text-zinc-100"
-                    : "bg-transparent border-transparent text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-900/50"
-                )}
-                title={name}
-              >
-                <button
-                  className="truncate max-w-[160px] text-left"
-                  onClick={() => setActiveTab(id)}
-                >
-                  {name}
-                </button>
-                {isDirty ? <span className="w-2 h-2 rounded-full bg-amber-500" /> : null}
-
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <button className="w-5 h-5 inline-flex items-center justify-center rounded hover:bg-zinc-200/60 dark:hover:bg-zinc-700/60">
-                      <MoreVertical className="w-3 h-3" />
-                    </button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuItem onClick={() => onPinTab(id, !pinned)}>
-                      {pinned ? <PinOff className="w-4 h-4 mr-2" /> : <Pin className="w-4 h-4 mr-2" />}
-                      {pinned ? "Unpin" : "Pin"}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => onCloseToRight(id)}>
-                      Close to right
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => onCloseOthers(id)}>
-                      Close others
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => onCloseTab(id)}>
-                      Close
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-
-                <button
-                  className="w-5 h-5 inline-flex items-center justify-center rounded hover:bg-zinc-200/60 dark:hover:bg-zinc-700/60"
-                  onClick={() => onCloseTab(id)}
-                  aria-label="Close tab"
-                >
-                  <X className="w-3 h-3" />
-                </button>
-              </div>
-            );
-          })
-        )}
+        <SortableContext items={tabIds} strategy={horizontalListSortingStrategy}>
+          {tabIds.length === 0 ? (
+            <div className="px-2 py-1 text-xs text-zinc-400">No tabs</div>
+          ) : (
+            tabIds.map((id) => {
+              const tab = tabById[id];
+              const name = tab?.node?.name || id;
+              const isActive = id === activeTabId;
+              const isDirty = !!tab?.isDirty;
+              const pinned = !!pinnedById[id];
+              return (
+                <DraggableTab
+                  key={id}
+                  id={id}
+                  name={name}
+                  isActive={isActive}
+                  isDirty={isDirty}
+                  isPinned={pinned}
+                  onActivate={() => setActiveTab(id)}
+                  onClose={() => onCloseTab(id)}
+                  onPin={(p) => onPinTab(id, p)}
+                  onCloseOthers={() => onCloseOthers(id)}
+                  onCloseToRight={() => onCloseToRight(id)}
+                />
+              );
+            })
+          )}
+        </SortableContext>
       </div>
 
       {/* Breadcrumbs */}
@@ -1012,7 +1168,7 @@ function Pane({
       </div>
 
       {/* Editor */}
-      <div className="flex-1 overflow-hidden">
+      <div className="flex-1 overflow-hidden min-h-0 min-w-0">
         {activeTab ? (
           activeTab.node.mimeType?.startsWith("image/") ? (
             <div className="flex flex-col h-full items-center justify-center p-8 text-center">
@@ -1056,98 +1212,5 @@ function Pane({
   );
 }
 
-function BreadcrumbBar({
-  projectId,
-  node,
-  onCrumbClick,
-  onNavigateNode,
-}: {
-  projectId: string;
-  node: ProjectNode | null;
-  onCrumbClick: (folderId: string) => void;
-  onNavigateNode: (node: ProjectNode) => void;
-}) {
-  const [crumbs, setCrumbs] = useState<Array<{ id: string; name: string; parentId: string | null }>>([]);
-  const [isEditing, setIsEditing] = useState(false);
-  const [pathInput, setPathInput] = useState("");
 
-  useEffect(() => {
-    const folderId = node?.type === "file" ? node.parentId ?? null : node?.id ?? null;
-    if (!folderId) {
-      setCrumbs([]);
-      return;
-    }
-    void (async () => {
-      const data = (await getBreadcrumbs(projectId, folderId)) as any[];
-      setCrumbs(
-        (data || []).map((c) => ({
-          id: c.id,
-          name: c.name,
-          parentId: c.parentId ?? null,
-        }))
-      );
-    })();
-  }, [projectId, node?.id, node?.parentId, node?.type]);
-
-  return (
-    <div
-      className="flex items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400 overflow-x-auto"
-      onDoubleClick={() => {
-        const currentPath = crumbs.map((c) => c.name).join("/");
-        setPathInput(currentPath);
-        setIsEditing(true);
-      }}
-      title="Double-click to type a path"
-    >
-      <span className="font-semibold text-zinc-700 dark:text-zinc-200">Path</span>
-      <span className="text-zinc-400">/</span>
-
-      {isEditing ? (
-        <input
-          className="h-6 px-2 rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 text-xs text-zinc-900 dark:text-zinc-100 outline-none"
-          value={pathInput}
-          onChange={(e) => setPathInput(e.target.value)}
-          autoFocus
-          onBlur={() => setIsEditing(false)}
-          onKeyDown={(e) => {
-            if (e.key === "Escape") {
-              e.preventDefault();
-              setIsEditing(false);
-              return;
-            }
-            if (e.key === "Enter") {
-              e.preventDefault();
-              const parts = pathInput
-                .split("/")
-                .map((p) => p.trim())
-                .filter(Boolean);
-              void (async () => {
-                const found = (await findNodeByPathAny(projectId, parts)) as ProjectNode | null;
-                if (found) {
-                  if (found.type === "folder") onCrumbClick(found.id);
-                  else onNavigateNode(found);
-                }
-                setIsEditing(false);
-              })();
-            }
-          }}
-        />
-      ) : crumbs.length === 0 ? (
-        <span className="text-zinc-400">Root</span>
-      ) : (
-        crumbs.map((c, idx) => (
-          <React.Fragment key={c.id}>
-            <button
-              className="hover:underline text-zinc-700 dark:text-zinc-200"
-              onClick={() => onCrumbClick(c.id)}
-            >
-              {c.name}
-            </button>
-            {idx < crumbs.length - 1 ? <span className="text-zinc-400">/</span> : null}
-          </React.Fragment>
-        ))
-      )}
-    </div>
-  );
-}
 

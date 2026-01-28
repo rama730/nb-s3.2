@@ -58,16 +58,16 @@ function transformProfile(profile: any): Profile | null {
 // --- Provider ---
 export function AuthProvider({
     children,
-    initialSession,
+    initialUser,
     initialProfile
 }: {
     children: React.ReactNode;
-    initialSession: Session | null;
+    initialUser: User | null;
     initialProfile: any | null;
 }) {
     const [state, setState] = useState<AuthState>({
-        user: initialSession?.user ?? null,
-        session: initialSession,
+        user: initialUser,
+        session: null, // session will be populated by client-side listener
         profile: initialProfile ? transformProfile(initialProfile) : null,
         isLoading: false, // Initialized immediately with server data
     });

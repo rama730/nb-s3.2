@@ -278,7 +278,7 @@ function mapStatus(status?: string): 'draft' | 'active' | 'completed' | 'archive
 // TASK & SPRINT ACTIONS (PHASE 8 OPTIMIZATION)
 // ============================================================================
 import { z } from "zod";
-import { tasks, projectSprints, projectMembers } from "@/lib/db/schema";
+import { tasks, projectSprints, projectMembers, taskNodeLinks, taskSubtasks } from "@/lib/db/schema";
 
 const createTaskSchema = z.object({
     projectId: z.string().uuid(),
@@ -294,7 +294,8 @@ const createTaskSchema = z.object({
         title: z.string(),
         completed: z.boolean().default(false)
     })).optional(),
-    tags: z.array(z.string()).optional()
+    tags: z.array(z.string()).optional(),
+    attachmentNodeIds: z.array(z.string().uuid()).optional()
 });
 
 export async function createTaskAction(data: z.infer<typeof createTaskSchema>) {
@@ -327,25 +328,50 @@ export async function createTaskAction(data: z.infer<typeof createTaskSchema>) {
             }
         }
 
-        // 2. Insert Task
-        const [newTask] = await db.insert(tasks).values({
-            projectId: validated.projectId,
-            title: validated.title,
-            description: validated.description,
-            status: validated.status,
-            priority: validated.priority,
-            sprintId: validated.sprintId || null,
-            assigneeId: validated.assigneeId || null,
-            creatorId: user.id,
-            storyPoints: validated.storyPoints,
-            dueDate: validated.dueDate ? new Date(validated.dueDate) : null,
-        }).returning();
+        // 2. Insert Task & Attachments Transactionally
+        const result = await db.transaction(async (tx) => {
+            const [newTask] = await tx.insert(tasks).values({
+                projectId: validated.projectId,
+                title: validated.title,
+                description: validated.description,
+                status: validated.status,
+                priority: validated.priority,
+                sprintId: validated.sprintId || null,
+                assigneeId: validated.assigneeId || null,
+                creatorId: user.id,
+                storyPoints: validated.storyPoints,
+                dueDate: validated.dueDate ? new Date(validated.dueDate) : null,
+            }).returning();
+
+            if (validated.attachmentNodeIds && validated.attachmentNodeIds.length > 0) {
+                await tx.insert(taskNodeLinks).values(
+                    validated.attachmentNodeIds.map(nodeId => ({
+                        taskId: newTask.id,
+                        nodeId: nodeId,
+                        createdBy: user.id
+                    }))
+                );
+            }
+
+            if (validated.subtasks && validated.subtasks.length > 0) {
+                await tx.insert(taskSubtasks).values(
+                    validated.subtasks.map((st, index) => ({
+                        taskId: newTask.id,
+                        title: st.title,
+                        completed: st.completed,
+                        position: index
+                    }))
+                );
+            }
+
+            return newTask;
+        });
 
         // Note: We don't need to manually revalidate if we are using Realtime
         // But for fallback and initial load consistency:
         revalidatePath(`/projects/${validated.projectId}`);
 
-        return { success: true, task: newTask };
+        return { success: true, task: result };
     } catch (error) {
         console.error("Failed to create task:", error);
         return { success: false, error: error instanceof Error ? error.message : "Failed to create task" };

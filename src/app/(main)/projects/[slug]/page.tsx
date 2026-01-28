@@ -1,13 +1,13 @@
 import { notFound } from 'next/navigation';
 import { db } from '@/lib/db';
-import { projects, profiles, projectFollows, projectMembers, savedProjects } from '@/lib/db/schema';
+import { projects, profiles, projectFollows, projectMembers, savedProjects, projectNodes } from '@/lib/db/schema';
 import { eq, sql, and } from 'drizzle-orm';
 import { createClient } from '@/lib/supabase/server';
 import ProjectDashboardClient from '@/components/projects/dashboard/ProjectDashboardClient';
 
 export const dynamic = 'force-dynamic';
 
-async function getProject(slug: string, currentUserId?: string | null) {
+async function getProject(slug: string, currentUserId?: string | null, searchTab?: string) {
     // Simple direct query - try slug first, then id
     let project = null;
 
@@ -62,6 +62,7 @@ async function getProject(slug: string, currentUserId?: string | null) {
     let projectTasks: any[] = [];
     let projectRoles: any[] = [];
     let projectCollaborators: any[] = [];
+    let initialFileNodes: any[] = [];
 
     try {
         projectSprints = await db.query.projectSprints.findMany({
@@ -82,15 +83,25 @@ async function getProject(slug: string, currentUserId?: string | null) {
 
         projectTasks = await db.query.tasks.findMany({
             where: (tasks, { eq }) => eq(tasks.projectId, project.id),
-            orderBy: (tasks, { desc }) => [desc(tasks.createdAt)]
+            orderBy: (tasks, { desc }) => [desc(tasks.createdAt)],
+            with: {
+                assignee: true,
+                creator: true,
+                attachments: true
+            }
         });
 
         projectRoles = await db.query.projectOpenRoles.findMany({
             where: (roles, { eq }) => eq(roles.projectId, project.id),
             orderBy: (roles, { desc }) => [desc(roles.createdAt)]
         });
+
+        // Pre-fetch files if on files tab
+        if (searchTab === 'files') {
+             initialFileNodes = await db.select().from(projectNodes).where(eq(projectNodes.projectId, project.id));
+        }
     } catch (e) {
-        console.warn("Failed to fetch sprints/tasks/roles. Schema might not be pushed.", e);
+        console.warn("Failed to fetch sprints/tasks/roles/files. Schema might not be pushed.", e);
         // Fallback to empty arrays so the UI still renders
     }
 
@@ -113,6 +124,7 @@ async function getProject(slug: string, currentUserId?: string | null) {
         project_tasks: projectTasks,
         project_open_roles: projectRoles,
         project_collaborators: projectCollaborators,
+        initialFileNodes,
         problem_statement: (project as any).problemStatement || null,
         solution_statement: (project as any).solutionStatement || null,
         owner: owner ? { // Pass as 'owner' for client consistency
@@ -144,14 +156,21 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
     };
 }
 
-export default async function ProjectDetailPage({ params }: { params: Promise<{ slug: string }> }) {
+export default async function ProjectDetailPage({ 
+    params, 
+    searchParams 
+}: { 
+    params: Promise<{ slug: string }>,
+    searchParams: Promise<{ tab?: string }>
+}) {
     const { slug } = await params;
+    const { tab } = await searchParams;
 
     // Server-side Auth Check
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
 
-    const project = await getProject(slug, user?.id);
+    const project = await getProject(slug, user?.id, tab);
 
     if (!project) {
         notFound();

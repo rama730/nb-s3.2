@@ -40,8 +40,8 @@ export default async function RootLayout({
   children: React.ReactNode;
 }>) {
   const supabase = await createClient();
-  const { data: { session } } = await supabase.auth.getSession();
-  const userProfile = session ? await getUserProfile(session.user.id) : null;
+  const { data: { user } } = await supabase.auth.getUser();
+  const userProfile = user ? await getUserProfile(user.id) : null;
 
   return (
     <html lang="en" suppressHydrationWarning>
@@ -50,7 +50,7 @@ export default async function RootLayout({
       >
         <ThemeProvider>
           <QueryProvider>
-            <AuthProvider initialSession={session} initialProfile={userProfile}>
+            <AuthProvider initialUser={user} initialProfile={userProfile}>
               <RealtimeProvider>
                 <ChatProvider>
                   {children}

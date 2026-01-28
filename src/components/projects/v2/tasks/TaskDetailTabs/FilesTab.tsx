@@ -287,8 +287,14 @@ export default function FilesTab({ taskId, isOwnerOrMember, projectId, taskTitle
                                 <button
                                     type="button"
                                     onClick={() => void handleDownload(node)}
-                                    className="p-2 rounded-lg text-zinc-400 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-colors"
-                                    title="Download"
+                                    disabled={!canEdit}
+                                    className={[
+                                        "p-2 rounded-lg transition-colors",
+                                        canEdit
+                                            ? "text-zinc-400 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/20"
+                                            : "text-zinc-300 cursor-not-allowed dark:text-zinc-600",
+                                    ].join(" ")}
+                                    title={canEdit ? "Download" : "Preview only"}
                                 >
                                     <Download className="w-4 h-4" />
                                 </button>

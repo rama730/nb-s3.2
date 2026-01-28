@@ -28,6 +28,19 @@ USING (
   OR EXISTS (SELECT 1 FROM public.project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid())
 );
 
+-- Public read for public projects (GitHub-like viewing)
+DROP POLICY IF EXISTS project_nodes_public_read ON public.project_nodes;
+CREATE POLICY project_nodes_public_read ON public.project_nodes
+FOR SELECT
+USING (
+  EXISTS (
+    SELECT 1 FROM public.projects p
+    WHERE p.id = project_id
+      AND p.visibility = 'public'
+  )
+  AND deleted_at IS NULL
+);
+
 DROP POLICY IF EXISTS project_nodes_write ON public.project_nodes;
 CREATE POLICY project_nodes_write ON public.project_nodes
 FOR ALL
@@ -55,6 +68,18 @@ FOR SELECT
 USING (
   EXISTS (SELECT 1 FROM public.projects p WHERE p.id = project_id AND p.owner_id = auth.uid())
   OR EXISTS (SELECT 1 FROM public.project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid())
+);
+
+-- Public read for public projects (best-effort: search only for public viewers)
+DROP POLICY IF EXISTS project_file_index_public_read ON public.project_file_index;
+CREATE POLICY project_file_index_public_read ON public.project_file_index
+FOR SELECT
+USING (
+  EXISTS (
+    SELECT 1 FROM public.projects p
+    WHERE p.id = project_id
+      AND p.visibility = 'public'
+  )
 );
 
 DROP POLICY IF EXISTS project_file_index_write ON public.project_file_index;
@@ -152,6 +177,20 @@ USING (
       SELECT 1 FROM public.project_members m
       WHERE m.project_id::text = split_part(name, '/', 2) AND m.user_id = auth.uid()
     )
+  )
+);
+
+-- Public read of storage objects for public projects (required for preview)
+DROP POLICY IF EXISTS project_files_public_read ON storage.objects;
+CREATE POLICY project_files_public_read ON storage.objects
+FOR SELECT
+USING (
+  bucket_id = 'project-files'
+  AND split_part(name, '/', 1) = 'projects'
+  AND EXISTS (
+    SELECT 1 FROM public.projects p
+    WHERE p.id::text = split_part(name, '/', 2)
+      AND p.visibility = 'public'
   )
 );
 

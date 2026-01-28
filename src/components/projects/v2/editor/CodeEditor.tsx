@@ -94,6 +94,7 @@ export default function CodeEditor({
       theme={theme === "dark" ? oneDark : undefined}
       height="100%"
       width="100%"
+      className="h-full text-base"
       extensions={extensions}
       basicSetup={{
         lineNumbers,

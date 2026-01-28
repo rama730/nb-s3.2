@@ -1,7 +1,5 @@
-"use client";
-
 import React, { useState, useMemo } from "react";
-import { Plus, ChevronRight, CalendarDays, CheckCircle } from "lucide-react";
+import { Plus, ChevronRight, CalendarDays, CheckCircle, Paperclip, Flag, MoreHorizontal, User } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import { motion, AnimatePresence } from "framer-motion";
@@ -24,10 +22,13 @@ export interface SprintTask {
     id: string;
     sprintId: string | null;
     title: string;
-    status: "todo" | "in_progress" | "done";
+    status: "todo" | "in_progress" | "done" | "blocked";
     priority: "low" | "medium" | "high" | "urgent";
     storyPoints?: number | null;
     updatedAt?: string | null;
+    assignee?: { id: string; fullName: string | null; avatarUrl: string | null } | null;
+    creator?: { id: string; fullName: string | null; avatarUrl: string | null } | null;
+    attachments?: any[];
 }
 
 interface SprintPlanningProps {
@@ -72,6 +73,13 @@ export default function SprintPlanning({
         if (!displaySprintId) return [];
         return tasks.filter(t => t.sprintId === displaySprintId);
     }, [tasks, displaySprintId]);
+
+    // Calculate Progress
+    const progress = useMemo(() => {
+        if (sprintTasks.length === 0) return 0;
+        const done = sprintTasks.filter(t => t.status === 'done').length;
+        return Math.round((done / sprintTasks.length) * 100);
+    }, [sprintTasks]);
 
     // Empty state
     if (sprints.length === 0) {
@@ -121,9 +129,9 @@ export default function SprintPlanning({
     }
 
     return (
-        <div className="flex gap-6">
+        <div className="flex gap-6 h-[calc(100vh-200px)] overflow-hidden">
             {/* LEFT SIDEBAR: Sprint Cards - Fixed width */}
-            <div className="w-[320px] flex-shrink-0 space-y-4">
+            <div className="w-[320px] flex-shrink-0 flex flex-col gap-4 overflow-y-auto pr-2 custom-scrollbar">
                 <div>
                     <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">Sprint History</h3>
                     <p className="text-xs text-zinc-500 mt-0.5">Select a goal to view details</p>
@@ -132,55 +140,65 @@ export default function SprintPlanning({
                 {isOwnerOrMember && (
                     <button
                         onClick={() => setShowCreateModal(true)}
-                        className="w-full py-2.5 bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 font-semibold rounded-lg hover:opacity-90 transition-opacity flex items-center justify-center gap-2 text-sm"
+                        className="w-full py-2.5 bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 font-semibold rounded-lg hover:opacity-90 transition-opacity flex items-center justify-center gap-2 text-sm shrink-0"
                     >
                         <Plus className="w-4 h-4" />
                         New Goal
                     </button>
                 )}
 
-                <div className="space-y-2.5">
+                <div className="space-y-2.5 pb-10">
                     {sortedSprints.map(sprint => (
                         <button
                             key={sprint.id}
                             onClick={() => setSelectedSprintId(sprint.id)}
                             className={cn(
-                                "w-full text-left p-4 rounded-lg transition-all relative group border",
+                                "w-full text-left p-4 rounded-xl transition-all relative group border flex flex-col gap-3",
                                 currentSprint?.id === sprint.id
-                                    ? "bg-indigo-50 dark:bg-indigo-950/40 border-indigo-300 dark:border-indigo-800 shadow-sm"
-                                    : "bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 hover:border-zinc-300 dark:hover:border-zinc-700"
+                                    ? "bg-white dark:bg-zinc-900 border-indigo-500/50 shadow-md ring-1 ring-indigo-500/20"
+                                    : "bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 hover:border-zinc-300 dark:hover:border-zinc-700 hover:shadow-sm"
                             )}
                         >
+                            {/* Status Stripe */}
                             {sprint.status === 'active' && (
-                                <div className="absolute left-0 top-0 bottom-0 w-1 bg-emerald-500 rounded-l-lg" />
+                                <div className="absolute left-0 top-3 bottom-3 w-1 bg-emerald-500 rounded-r-full" />
                             )}
-                            
-                            <div className="flex items-start justify-between gap-2 mb-2.5">
+
+                            {/* Header: Name + Status */}
+                            <div className="flex items-center justify-between w-full">
                                 <span className={cn(
-                                    "text-[10px] px-2.5 py-1 rounded-md font-bold uppercase tracking-wide",
-                                    sprint.status === 'active' ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-400" :
+                                    "text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wide",
+                                    sprint.status === 'active' ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400" :
                                     sprint.status === 'completed' ? "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400" :
-                                    "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-400"
+                                    "bg-indigo-50 text-indigo-600 dark:bg-indigo-500/10 dark:text-indigo-400"
                                 )}>
                                     {sprint.status}
                                 </span>
                                 {currentSprint?.id === sprint.id && (
-                                    <ChevronRight className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                                    <motion.div layoutId="active-indicator">
+                                        <ChevronRight className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                                    </motion.div>
                                 )}
                             </div>
                             
-                            <h4 className="font-semibold text-sm text-zinc-900 dark:text-zinc-100 mb-2 line-clamp-2 pr-1">
+                            {/* Sprint Name */}
+                            <h4 className="font-bold text-sm text-zinc-900 dark:text-zinc-100 leading-tight">
                                 {sprint.name}
                             </h4>
+
+                            {/* Goal Display - Enhancement */}
+                            <div className="text-xs text-zinc-500 dark:text-zinc-400 bg-zinc-50 dark:bg-zinc-800/50 p-2 rounded-lg border border-zinc-100 dark:border-zinc-800/50 line-clamp-2">
+                                <span className="font-semibold text-zinc-700 dark:text-zinc-300 mr-1">Goal:</span>
+                                {sprint.goal || "No goal set for this sprint."}
+                            </div>
                             
-                            <div className="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
-                                <CalendarDays className="w-3.5 h-3.5 shrink-0" />
-                                <span className="truncate">
+                            {/* Dates */}
+                            <div className="flex items-center gap-1.5 text-[11px] text-zinc-400 dark:text-zinc-500 font-medium pt-1">
+                                <CalendarDays className="w-3 h-3 shrink-0" />
+                                <span>
                                     {sprint.startDate && sprint.endDate ? (
                                         `${format(new Date(sprint.startDate), "MMM d")} - ${format(new Date(sprint.endDate), "MMM d")}`
-                                    ) : (
-                                        "No dates set"
-                                    )}
+                                    ) : "No dates"}
                                 </span>
                             </div>
                         </button>
@@ -189,7 +207,7 @@ export default function SprintPlanning({
             </div>
 
             {/* RIGHT CONTENT: Sprint Details - Flexible width */}
-            <div className="flex-1 min-w-0">
+            <div className="flex-1 min-w-0 flex flex-col overflow-hidden bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
                 {currentSprint ? (
                     <AnimatePresence mode="wait">
                         <motion.div
@@ -198,71 +216,187 @@ export default function SprintPlanning({
                             animate={{ opacity: 1 }}
                             exit={{ opacity: 0 }}
                             transition={{ duration: 0.15 }}
-                            className="space-y-6"
+                            className="flex flex-col h-full"
                         >
                             {/* Sprint Header */}
-                            <div className="flex items-start justify-between gap-4">
-                                <div className="flex-1 min-w-0">
-                                    <h2 className="text-2xl font-bold text-zinc-900 dark:text-zinc-100 mb-2">
-                                        {currentSprint.goal || currentSprint.name}
-                                    </h2>
-                                    <div className="flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-400">
-                                        <CalendarDays className="w-4 h-4 shrink-0" />
-                                        <span>{format(new Date(currentSprint.startDate), "MMM d, yyyy")} - {format(new Date(currentSprint.endDate), "MMM d, yyyy")}</span>
+                            <div className="p-6 border-b border-zinc-200 dark:border-zinc-800 shrink-0 bg-zinc-50/50 dark:bg-zinc-900/50">
+                                <div className="flex items-start justify-between gap-6 mb-6">
+                                    <div>
+                                         <div className="flex items-center gap-3 mb-2">
+                                            <h2 className="text-2xl font-bold text-zinc-900 dark:text-zinc-100">
+                                                {currentSprint.name}
+                                            </h2>
+                                            <span className={cn(
+                                                "text-xs px-2.5 py-1 rounded-full font-semibold uppercase tracking-wide border",
+                                                currentSprint.status === 'active' 
+                                                    ? "bg-emerald-50 border-emerald-200 text-emerald-700 dark:bg-emerald-900/20 dark:border-emerald-800 dark:text-emerald-400" 
+                                                    : "bg-zinc-100 border-zinc-200 text-zinc-600 dark:bg-zinc-800 dark:border-zinc-700 dark:text-zinc-400"
+                                            )}>
+                                                {currentSprint.status}
+                                            </span>
+                                         </div>
+                                        <p className="text-lg text-zinc-600 dark:text-zinc-400 font-serif italic">
+                                            "{currentSprint.goal || "Focus on delivering value."}"
+                                        </p>
+                                    </div>
+                                    <div className="flex flex-col items-end gap-1">
+                                         <div className="text-2xl font-bold font-mono text-zinc-900 dark:text-zinc-100">
+                                            {progress}%
+                                         </div>
+                                         <div className="text-xs text-zinc-500 font-medium uppercase tracking-wider">Complete</div>
+                                    </div>
+                                </div>
+
+                                {/* Stats Bar */}
+                                <div className="flex items-center gap-6 text-sm text-zinc-500 dark:text-zinc-400 border-t border-zinc-200 dark:border-zinc-800 pt-4">
+                                    <div className="flex items-center gap-2">
+                                        <CalendarDays className="w-4 h-4" />
+                                        <span>
+                                            {format(new Date(currentSprint.startDate), "MMM d")} - {format(new Date(currentSprint.endDate), "MMM d, yyyy")}
+                                        </span>
+                                    </div>
+                                    <div className="w-px h-4 bg-zinc-300 dark:bg-zinc-700" />
+                                    <div>
+                                        <span className="font-semibold text-zinc-900 dark:text-zinc-100 mr-1">{sprintTasks.length}</span> Tasks
+                                    </div>
+                                    <div className="w-px h-4 bg-zinc-300 dark:bg-zinc-700" />
+                                    <div>
+                                        <span className="font-semibold text-zinc-900 dark:text-zinc-100 mr-1">
+                                            {sprintTasks.reduce((acc, t) => acc + (t.storyPoints || 0), 0)}
+                                        </span> 
+                                        Points
                                     </div>
                                 </div>
                             </div>
 
-                            {/* Tasks List */}
-                            <div>
-                                <h3 className="text-base font-semibold text-zinc-900 dark:text-zinc-100 mb-3">Sprint Tasks</h3>
-                                <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl overflow-hidden">
-                                    {sprintTasks.length === 0 ? (
-                                        <div className="p-12 text-center">
-                                            <p className="text-zinc-500 text-sm">No tasks in this sprint yet.</p>
-                                            <p className="text-zinc-400 text-xs mt-1">Assign tasks from the Tasks tab.</p>
+                            {/* Tasks List - Architectural View */}
+                            <div className="flex-1 overflow-y-auto p-0 bg-zinc-50/30 dark:bg-black/20">
+                                {sprintTasks.length === 0 ? (
+                                    <div className="h-full flex flex-col items-center justify-center text-center p-10">
+                                        <div className="w-16 h-16 bg-zinc-100 dark:bg-zinc-800 rounded-full flex items-center justify-center mb-4">
+                                            <CheckCircle className="w-8 h-8 text-zinc-300 dark:text-zinc-600" />
                                         </div>
-                                    ) : (
-                                        <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
-                                            {sprintTasks.map(task => (
-                                                <div
-                                                    key={task.id}
-                                                    className="p-3.5 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 transition-colors flex items-center gap-3"
-                                                >
+                                        <p className="text-zinc-900 dark:text-zinc-100 font-medium">No tasks in this sprint</p>
+                                        <p className="text-zinc-500 text-sm mt-1">Assign tasks from the "Tasks" tab to see them here.</p>
+                                    </div>
+                                ) : (
+                                    <div className="divide-y divide-zinc-100 dark:divide-zinc-800/50">
+                                        {sprintTasks.map(task => (
+                                            <div
+                                                key={task.id}
+                                                className="group flex items-center gap-4 p-4 hover:bg-white dark:hover:bg-zinc-900 transition-all border-l-2 border-transparent hover:border-indigo-500"
+                                            >
+                                                {/* 1. Status & Identity */}
+                                                <div className="w-[40px] shrink-0 flex justify-center">
                                                     <div className={cn(
-                                                        "w-2 h-2 rounded-full shrink-0",
-                                                        task.status === 'done' ? "bg-emerald-500" :
-                                                        task.status === 'in_progress' ? "bg-blue-500" :
-                                                        "bg-zinc-300"
+                                                        "w-2.5 h-2.5 rounded-full ring-2 ring-offset-2 ring-offset-zinc-50 dark:ring-offset-zinc-900",
+                                                        task.status === 'done' ? "bg-emerald-500 ring-emerald-200 dark:ring-emerald-900" :
+                                                        task.status === 'in_progress' ? "bg-blue-500 ring-blue-200 dark:ring-blue-900" :
+                                                        task.status === 'blocked' ? "bg-red-500 ring-red-200 dark:ring-red-900" :
+                                                        "bg-zinc-300 ring-zinc-200 dark:ring-zinc-700"
                                                     )} />
-                                                    <div className="flex-1 min-w-0">
-                                                        <p className={cn(
-                                                            "text-sm font-medium truncate",
-                                                            task.status === 'done' ? "text-zinc-400 line-through" : "text-zinc-900 dark:text-zinc-100"
+                                                </div>
+
+                                                {/* 2. Title & ID */}
+                                                <div className="flex-1 min-w-0 grid gap-0.5">
+                                                    <div className="flex items-center gap-2">
+                                                        <h4 className={cn(
+                                                            "font-medium text-[15px] truncate transition-colors",
+                                                            task.status === 'done' ? "text-zinc-400 line-through" : "text-zinc-900 dark:text-zinc-100 group-hover:text-indigo-600 dark:group-hover:text-indigo-400"
                                                         )}>
                                                             {task.title}
-                                                        </p>
+                                                        </h4>
                                                     </div>
-                                                    <div className="flex items-center gap-2 shrink-0">
-                                                        {task.storyPoints && (
-                                                            <span className="text-xs font-medium text-zinc-600 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800 px-2 py-1 rounded">
-                                                                {task.storyPoints} pts
-                                                            </span>
-                                                        )}
-                                                        <span className={cn(
-                                                            "text-[10px] px-2 py-1 rounded font-semibold uppercase tracking-wide",
-                                                            task.status === 'done' ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400" :
-                                                            task.status === 'in_progress' ? "bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" :
-                                                            "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
-                                                        )}>
-                                                            {task.status === 'in_progress' ? 'In Progress' : task.status}
-                                                        </span>
+                                                    <div className="flex items-center gap-2 text-xs text-zinc-400">
+                                                        <span className="font-mono">TASK</span>
+                                                        <span>•</span>
+                                                        <span className="capitalize">{task.status.replace('_', ' ')}</span>
                                                     </div>
                                                 </div>
-                                            ))}
-                                        </div>
-                                    )}
-                                </div>
+
+                                                {/* 3. People (Assignee + Reporter) */}
+                                                <div className="hidden sm:flex items-center gap-3 shrink-0 px-2 min-w-[140px]">
+                                                    {/* Creator/Reporter */}
+                                                    <div className="flex flex-col items-end">
+                                                        <span className="text-[10px] text-zinc-400 uppercase tracking-wider font-medium">Rep</span>
+                                                        {task.creator ? (
+                                                            <div className="flex items-center gap-1.5" title={`Reporter: ${task.creator.fullName}`}>
+                                                                <span className="text-xs text-zinc-600 dark:text-zinc-400 max-w-[80px] truncate">
+                                                                    {task.creator.fullName?.split(' ')[0]}
+                                                                </span>
+                                                                <div className="w-5 h-5 rounded-full bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center overflow-hidden border border-zinc-200 dark:border-zinc-700">
+                                                                    {task.creator.avatarUrl ? (
+                                                                        <img src={task.creator.avatarUrl} alt="" className="w-full h-full object-cover" />
+                                                                    ) : (
+                                                                        <User className="w-3 h-3 text-zinc-400" />
+                                                                    )}
+                                                                </div>
+                                                            </div>
+                                                        ) : <span className="text-xs text-zinc-300">-</span>}
+                                                    </div>
+
+                                                    <div className="w-px h-6 bg-zinc-200 dark:bg-zinc-800" />
+
+                                                    {/* Assignee */}
+                                                    <div className="flex flex-col items-start">
+                                                        <span className="text-[10px] text-zinc-400 uppercase tracking-wider font-medium">Asg</span>
+                                                        {task.assignee ? (
+                                                             <div className="flex items-center gap-1.5" title={`Assignee: ${task.assignee.fullName}`}>
+                                                                <div className="w-6 h-6 rounded-full bg-indigo-50 dark:bg-indigo-900/30 flex items-center justify-center overflow-hidden border border-indigo-100 dark:border-indigo-800 text-indigo-600 dark:text-indigo-400 text-xs font-semibold">
+                                                                    {task.assignee.avatarUrl ? (
+                                                                        <img src={task.assignee.avatarUrl} alt="" className="w-full h-full object-cover" />
+                                                                    ) : (
+                                                                        task.assignee.fullName?.[0] || <User className="w-3 h-3" />
+                                                                    )}
+                                                                </div>
+                                                                <span className="text-xs font-medium text-zinc-900 dark:text-zinc-100 max-w-[80px] truncate">
+                                                                    {task.assignee.fullName?.split(' ')[0]}
+                                                                </span>
+                                                            </div>
+                                                        ) : (
+                                                            <span className="text-xs italic text-zinc-400">Unassigned</span>
+                                                        )}
+                                                    </div>
+                                                </div>
+
+                                                {/* 4. Context Metadata (Files, Pts, Priority) */}
+                                                <div className="hidden md:flex items-center gap-4 shrink-0 px-2 min-w-[120px] justify-end">
+                                                    {/* Attachments */}
+                                                    {task.attachments && task.attachments.length > 0 && (
+                                                        <div className="flex items-center gap-1 text-zinc-400" title={`${task.attachments.length} attachments`}>
+                                                            <Paperclip className="w-3.5 h-3.5" />
+                                                            <span className="text-xs font-medium">{task.attachments.length}</span>
+                                                        </div>
+                                                    )}
+
+                                                    {/* Priority */}
+                                                    <div title={`Priority: ${task.priority}`}>
+                                                        <Flag className={cn(
+                                                            "w-4 h-4",
+                                                            task.priority === 'urgent' ? 'text-red-500 fill-red-500' :
+                                                            task.priority === 'high' ? 'text-orange-500 fill-orange-500' :
+                                                            task.priority === 'medium' ? 'text-yellow-500' : 'text-zinc-300'
+                                                        )} />
+                                                    </div>
+
+                                                    {/* Story Points */}
+                                                    {task.storyPoints !== null && (
+                                                        <span className="text-xs font-mono font-medium text-zinc-500 bg-zinc-100 dark:bg-zinc-800 px-1.5 py-0.5 rounded border border-zinc-200 dark:border-zinc-700">
+                                                            {task.storyPoints}
+                                                        </span>
+                                                    )}
+                                                </div>
+
+                                                {/* 5. Actions */}
+                                                <div className="shrink-0 pl-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                    <button className="p-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100">
+                                                        <MoreHorizontal className="w-4 h-4" />
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
                             </div>
                         </motion.div>
                     </AnimatePresence>
