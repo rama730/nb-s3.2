@@ -9,6 +9,7 @@ import { searchMessages, type MessageWithSender, type ConversationWithDetails } 
 import { MessageSquare, Search, X, Loader2, PenSquare } from 'lucide-react';
 import { useDebounce } from '@/hooks/hub/useDebounce';
 import { NewChatModal } from './NewChatModal';
+import { Virtuoso } from 'react-virtuoso';
 
 // ============================================================================
 // MESSAGES CLIENT
@@ -221,8 +222,7 @@ export default function MessagesClient({ initialConversations = [], targetUser }
                 {/* Content: Search Results or Conversation List */}
                 <div className="flex-1 overflow-y-auto">
                     {showSearchResults ? (
-                         // ... Search Results ...
-                         isSearching ? (
+                        isSearching ? (
                             <div className="flex items-center justify-center p-8">
                                 <Loader2 className="w-6 h-6 animate-spin text-blue-600" />
                             </div>
@@ -269,117 +269,120 @@ export default function MessagesClient({ initialConversations = [], targetUser }
                                 })}
                             </div>
                         )
-                    ) : ( 
-                        // Conversation List
-                        showLoading ? (
-                            <div className="flex items-center justify-center p-8">
-                                <div className="animate-spin rounded-full h-6 w-6 border-2 border-blue-600 border-t-transparent" />
+                    ) : showLoading ? (
+                        <div className="flex items-center justify-center p-8">
+                            <div className="animate-spin rounded-full h-6 w-6 border-2 border-blue-600 border-t-transparent" />
+                        </div>
+                    ) : filteredConversations.length === 0 && !isDraftMode ? (
+                        <div className="flex flex-col items-center justify-center h-full p-6 text-center">
+                            <div className="w-16 h-16 bg-zinc-100 dark:bg-zinc-800 rounded-full flex items-center justify-center mb-4">
+                                <MessageSquare className="w-8 h-8 text-zinc-400" />
                             </div>
-                        ) : filteredConversations.length === 0 && !isDraftMode ? (
-                            <div className="flex flex-col items-center justify-center h-full p-6 text-center">
-                                <div className="w-16 h-16 bg-zinc-100 dark:bg-zinc-800 rounded-full flex items-center justify-center mb-4">
-                                    <MessageSquare className="w-8 h-8 text-zinc-400" />
-                                </div>
-                                <p className="text-sm text-zinc-500 dark:text-zinc-400">
-                                    No conversations yet
-                                </p>
-                                <button 
-                                    onClick={() => setIsNewChatOpen(true)}
-                                    className="mt-4 text-sm font-medium text-blue-600 hover:text-blue-700 hover:underline"
-                                >
-                                    Start a new chat
-                                </button>
-                            </div>
-                        ) : (
-                            <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
-                                {/* DRAFT ITEM */}
-                                {isDraftMode && targetUser && (
-                                    <div className="w-full flex items-center gap-3 p-4 bg-blue-50 dark:bg-blue-950/30 border-l-2 border-blue-600">
+                            <p className="text-sm text-zinc-500 dark:text-zinc-400">
+                                No conversations yet
+                            </p>
+                            <button
+                                onClick={() => setIsNewChatOpen(true)}
+                                className="mt-4 text-sm font-medium text-blue-600 hover:text-blue-700 hover:underline"
+                            >
+                                Start a new chat
+                            </button>
+                        </div>
+                    ) : (
+                        <Virtuoso
+                            style={{ height: '100%' }}
+                            data={filteredConversations}
+                            itemContent={(index, conv) => {
+                                const participant = conv.participants[0];
+                                const unread = unreadCounts[conv.id] || 0;
+                                const isActive = conv.id === activeConversationId && !isDraftMode;
+
+                                return (
+                                    <button
+                                        key={conv.id}
+                                        onClick={() => openConversation(conv.id)}
+                                        className={`w-full flex items-center gap-3 p-4 transition-colors text-left border-b border-zinc-50 dark:border-zinc-800/50 ${isActive
+                                            ? 'bg-blue-50 dark:bg-blue-950/30 border-l-2 border-l-blue-600'
+                                            : 'hover:bg-zinc-50 dark:hover:bg-zinc-800/50 border-l-2 border-l-transparent'
+                                            }`}
+                                    >
                                         <div className="relative flex-shrink-0">
                                             <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center overflow-hidden">
-                                                {targetUser.avatarUrl ? (
-                                                    <img src={targetUser.avatarUrl} alt="" className="w-full h-full object-cover" />
+                                                {participant?.avatarUrl ? (
+                                                    <img
+                                                        src={participant.avatarUrl}
+                                                        alt={participant.fullName || ''}
+                                                        className="w-full h-full object-cover"
+                                                    />
                                                 ) : (
-                                                     <span className="text-white font-medium">
-                                                        {(targetUser.fullName || targetUser.username || '?')[0].toUpperCase()}
+                                                    <span className="text-white font-medium">
+                                                        {(participant?.fullName || participant?.username || '?')[0].toUpperCase()}
                                                     </span>
                                                 )}
                                             </div>
+                                            {unread > 0 && (
+                                                <span className="absolute -top-1 -right-1 w-5 h-5 flex items-center justify-center bg-red-500 text-white text-xs font-bold rounded-full">
+                                                    {unread > 9 ? '9+' : unread}
+                                                </span>
+                                            )}
                                         </div>
+
                                         <div className="flex-1 min-w-0">
-                                             <div className="flex items-center justify-between mb-0.5">
-                                                 <span className="font-medium text-sm text-zinc-900 dark:text-white truncate">
-                                                     {targetUser.fullName || targetUser.username}
-                                                 </span>
-                                                 <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-600 dark:bg-blue-900/50 dark:text-blue-300 font-medium">
-                                                     New
-                                                 </span>
-                                             </div>
-                                             <p className="text-sm text-zinc-500 dark:text-zinc-400 truncate">
-                                                 Say hello 👋
-                                             </p>
-                                        </div>
-                                    </div>
-                                )}
-
-                                {filteredConversations.map(conv => {
-                                    // ... existing map logic ...
-                                    const participant = conv.participants[0];
-                                    const unread = unreadCounts[conv.id] || 0;
-                                    const isActive = conv.id === activeConversationId && !isDraftMode;
-
-                                    return (
-                                        <button
-                                            key={conv.id}
-                                            onClick={() => openConversation(conv.id)}
-                                            className={`w-full flex items-center gap-3 p-4 transition-colors text-left ${isActive
-                                                ? 'bg-blue-50 dark:bg-blue-950/30 border-l-2 border-blue-600'
-                                                : 'hover:bg-zinc-50 dark:hover:bg-zinc-800/50'
-                                                }`}
-                                        >
-                                            <div className="relative flex-shrink-0">
-                                                <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center overflow-hidden">
-                                                    {participant?.avatarUrl ? (
-                                                        <img
-                                                            src={participant.avatarUrl}
-                                                            alt={participant.fullName || ''}
-                                                            className="w-full h-full object-cover"
-                                                        />
-                                                    ) : (
-                                                        <span className="text-white font-medium">
-                                                            {(participant?.fullName || participant?.username || '?')[0].toUpperCase()}
-                                                        </span>
-                                                    )}
-                                                </div>
-                                                {unread > 0 && (
-                                                    <span className="absolute -top-1 -right-1 w-5 h-5 flex items-center justify-center bg-red-500 text-white text-xs font-bold rounded-full">
-                                                        {unread > 9 ? '9+' : unread}
+                                            <div className="flex items-center justify-between mb-0.5">
+                                                <span className={`font-medium text-sm truncate ${unread > 0 || isActive ? 'text-zinc-900 dark:text-white' : 'text-zinc-700 dark:text-zinc-300'}`}>
+                                                    {participant?.fullName || participant?.username || 'Unknown'}
+                                                </span>
+                                                {conv.lastMessage && (
+                                                    <span className="text-xs text-zinc-400 flex-shrink-0 ml-2">
+                                                        {formatTime(new Date(conv.lastMessage.createdAt))}
                                                     </span>
                                                 )}
                                             </div>
-
-                                            <div className="flex-1 min-w-0">
-                                                <div className="flex items-center justify-between mb-0.5">
-                                                    <span className={`font-medium text-sm truncate ${unread > 0 || isActive ? 'text-zinc-900 dark:text-white' : 'text-zinc-700 dark:text-zinc-300'}`}>
-                                                        {participant?.fullName || participant?.username || 'Unknown'}
-                                                    </span>
-                                                    {conv.lastMessage && (
-                                                        <span className="text-xs text-zinc-400 flex-shrink-0 ml-2">
-                                                            {formatTime(new Date(conv.lastMessage.createdAt))}
-                                                        </span>
-                                                    )}
+                                            <p className={`text-sm truncate ${unread > 0 ? 'text-zinc-700 dark:text-zinc-200 font-medium' : 'text-zinc-500 dark:text-zinc-400'}`}>
+                                                {conv.lastMessage?.content || 'No messages yet'}
+                                            </p>
+                                        </div>
+                                    </button>
+                                );
+                            }}
+                            components={{
+                                Header: () => (
+                                    <>
+                                        {isDraftMode && targetUser && (
+                                            <div className="w-full flex items-center gap-3 p-4 bg-blue-50 dark:bg-blue-950/30 border-l-2 border-blue-600 border-b border-zinc-100 dark:border-zinc-800">
+                                                <div className="relative flex-shrink-0">
+                                                    <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center overflow-hidden">
+                                                        {targetUser.avatarUrl ? (
+                                                            <img src={targetUser.avatarUrl} alt="" className="w-full h-full object-cover" />
+                                                        ) : (
+                                                            <span className="text-white font-medium">
+                                                                {(targetUser.fullName || targetUser.username || '?')[0].toUpperCase()}
+                                                            </span>
+                                                        )}
+                                                    </div>
                                                 </div>
-                                                <p className={`text-sm truncate ${unread > 0 ? 'text-zinc-700 dark:text-zinc-200 font-medium' : 'text-zinc-500 dark:text-zinc-400'}`}>
-                                                    {conv.lastMessage?.content || 'No messages yet'}
-                                                </p>
+                                                <div className="flex-1 min-w-0">
+                                                    <div className="flex items-center justify-between mb-0.5">
+                                                        <span className="font-medium text-sm text-zinc-900 dark:text-white truncate">
+                                                            {targetUser.fullName || targetUser.username}
+                                                        </span>
+                                                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-600 dark:bg-blue-900/50 dark:text-blue-300 font-medium">
+                                                            New
+                                                        </span>
+                                                    </div>
+                                                    <p className="text-sm text-zinc-500 dark:text-zinc-400 truncate">
+                                                        Say hello 👋
+                                                    </p>
+                                                </div>
                                             </div>
-                                        </button>
-                                    );
-                                })}
-                            </div>
-                        )
+                                        )}
+                                    </>
+                                )
+                            }}
+                        />
                     )}
                 </div>
+
             </div>
 
             {/* Main Content - Message Thread */}

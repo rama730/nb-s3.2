@@ -1,5 +1,5 @@
 import { pgTable, uuid, text, timestamp, boolean, jsonb, index, integer, bigint, foreignKey } from 'drizzle-orm/pg-core'
-import { relations } from 'drizzle-orm'
+import { relations, sql } from 'drizzle-orm'
 
 
 // ============================================================================
@@ -31,6 +31,15 @@ export const profiles = pgTable('profiles', {
     // Optimize lookups by username (common in URLs) and email (auth)
     usernameIdx: index('profiles_username_idx').on(t.username),
     emailIdx: index('profiles_email_idx').on(t.email),
+    // Optimization: GIN Index for fast skill matching (1M Users Scalability)
+    skillsIdx: index('profiles_skills_idx').using('gin', t.skills),
+    interestsIdx: index('profiles_interests_idx').using('gin', t.interests),
+    // Optimization: Sort Index for ISR (Profile Page Optimization)
+    // Optimized for getPopularUsernames which sorts by createdAt DESC
+    createdAtIdx: index('profiles_created_at_idx').on(t.createdAt),
+    // Optimization: GIN Index for fast user search (Connections Optimization)
+    usernameSearchIdx: index('profiles_username_search_idx').using('gin', sql`${t.username} gin_trgm_ops`),
+    fullNameSearchIdx: index('profiles_full_name_search_idx').using('gin', sql`${t.fullName} gin_trgm_ops`),
 }))
 
 // ============================================================================
@@ -71,6 +80,11 @@ export const projects = pgTable('projects', {
     skills: jsonb('skills').$type<string[]>().default([]),
     visibility: text('visibility', { enum: ['public', 'private', 'unlisted'] }).default('public'),
     status: text('status', { enum: ['draft', 'active', 'completed', 'archived'] }).default('draft'),
+
+    // Project Key System
+    key: text('key').unique(), // e.g. "NB"
+    currentTaskNumber: integer('current_task_number').default(0),
+
     lookingForCollaborators: boolean('looking_for_collaborators').default(false),
     maxCollaborators: text('max_collaborators'),
     lifecycleStages: jsonb('lifecycle_stages').$type<string[]>().default([]),
@@ -85,6 +99,10 @@ export const projects = pgTable('projects', {
     categoryStatusIdx: index('projects_category_status_idx').on(t.category, t.status),
     // Sort index for the main "Newest Projects" feed
     createdAtStatusIdx: index('projects_created_at_status_idx').on(t.createdAt, t.status),
+    keyIdx: index('projects_key_idx').on(t.key),
+    // Optimization: GIN Index for fast project search (Hub Optimization)
+    titleSearchIdx: index('projects_title_search_idx').using('gin', sql`${t.title} gin_trgm_ops`),
+    descriptionSearchIdx: index('projects_description_search_idx').using('gin', sql`${t.description} gin_trgm_ops`),
 }))
 
 // ============================================================================
@@ -177,6 +195,10 @@ export const tasks = pgTable('tasks', {
     description: text('description'),
     status: text('status', { enum: ['todo', 'in_progress', 'done', 'blocked'] }).default('todo').notNull(),
     priority: text('priority', { enum: ['low', 'medium', 'high', 'urgent'] }).default('medium').notNull(),
+
+    // Project Key System
+    taskNumber: integer('task_number'), // e.g. 12 (displayed as NB-12)
+
     storyPoints: integer('story_points'),
     dueDate: timestamp('due_date', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
@@ -190,6 +212,11 @@ export const tasks = pgTable('tasks', {
     projectStatusIdx: index('tasks_project_status_idx').on(t.projectId, t.status),
     projectSprintIdx: index('tasks_project_sprint_idx').on(t.projectId, t.sprintId),
     projectAssigneeIdx: index('tasks_project_assignee_idx').on(t.projectId, t.assigneeId),
+    // Optimization: GIN Index for fast title search (Tasks Search Optimization)
+    titleSearchIdx: index('tasks_title_search_idx').using('gin', sql`${t.title} gin_trgm_ops`),
+    // Optimization: Ordering Index (Tasks Sorting Optimization)
+    // Optimized for "ORDER BY task_number DESC" which is default view
+    projectNumberIdx: index('tasks_project_number_idx').on(t.projectId, t.taskNumber),
 }))
 
 // ============================================================================
@@ -235,7 +262,9 @@ export const projectNodes = pgTable('project_nodes', {
 }, (t) => ({
     projectIdx: index('project_nodes_project_idx').on(t.projectId),
     parentIdx: index('project_nodes_parent_idx').on(t.parentId),
-    folderContentIdx: index('project_nodes_folder_content_idx').on(t.projectId, t.parentId),
+    // Optimization: Covered Index for listing (Listing Optimization)
+    // Allows "Index Only Scan" for getProjectNodes which filters by (projectId, parentId) and sorts by (type, name)
+    listingIdx: index('project_nodes_listing_idx').on(t.projectId, t.parentId, t.type, t.name),
     // Self-referencing FK with cascade
     parentFk: foreignKey({
         columns: [t.parentId],
@@ -268,6 +297,9 @@ export const projectFileIndex = pgTable('project_file_index', {
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
     projectIdx: index('project_file_index_project_idx').on(t.projectId),
+    // Optimization: GIN Index for fast trigram search (Search Optimization)
+    // Needs `CREATE EXTENSION IF NOT EXISTS pg_trgm;` in migration
+    contentSearchIdx: index('project_file_index_content_search_idx').using('gin', sql`${t.content} gin_trgm_ops`),
 }))
 
 // ============================================================================
@@ -535,6 +567,10 @@ export const messages = pgTable('messages', {
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
 }, (t) => ({
     conversationCreatedIdx: index('messages_conversation_created_idx').on(t.conversationId, t.createdAt),
+    // Optimization: GIN Index for fast full-text search (Messages Search Optimization)
+    contentSearchIdx: index('messages_content_search_idx').using('gin', sql`to_tsvector('english', coalesce(${t.content}, ''))`),
+    // Optimization: Sender Index for lookups
+    senderIdx: index('messages_sender_idx').on(t.senderId),
 }))
 
 // ============================================================================

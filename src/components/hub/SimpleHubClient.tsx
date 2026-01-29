@@ -9,6 +9,7 @@ import { VirtuosoGrid } from 'react-virtuoso';
 import { useQueryClient } from '@tanstack/react-query';
 
 // Hooks
+import { useSearchParams } from 'next/navigation';
 import { useHubProjectsSimple } from '@/hooks/hub/useHubProjectsSimple';
 import { useAuth } from '@/hooks/useAuth';
 
@@ -60,6 +61,7 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
     const [showMobileSidebar, setShowMobileSidebar] = useState(false);
 
     // Filter State
+    // Filter State
     const [filterView, setFilterView] = useState<FilterView>(FILTER_VIEWS.ALL);
     const [statusFilter, setStatusFilter] = useState<ProjectStatus>(PROJECT_STATUS.ALL);
     const [typeFilter, setTypeFilter] = useState<ProjectType>(PROJECT_TYPE.ALL);
@@ -80,6 +82,9 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
     const [showAddToCollectionModal, setShowAddToCollectionModal] = useState(false);
 
     // --- Derived Data ---
+    const searchParams = useSearchParams();
+    const search = searchParams?.get('q') || undefined;
+
     const currentUser = useMemo(() => {
         if (user) {
             return {
@@ -99,11 +104,12 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
         type: typeFilter,
         tech: selectedTech,
         sort: sortBy,
+        search, // Connected Global Search
         // Simple logic: if 'My Projects', include user's ID
-        includedIds: undefined, // Simpler: filter by creator_id in backend if needed, or keeping it "Open" for now. 
+        includedIds: undefined, 
         // Note: Real "My Projects" logic should ideally filter by ownerId in the query, 
         // but for now we stick to the main feed. If strict "My Projects" needed, we pass ownerId.
-    }), [statusFilter, typeFilter, selectedTech, sortBy]);
+    }), [statusFilter, typeFilter, selectedTech, sortBy, search]);
 
     // --- Data Fetching ---
     const {

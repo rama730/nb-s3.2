@@ -8,6 +8,7 @@ import { useTaskCounts } from "@/hooks/useTaskCounts";
 import { deleteTaskAction } from "@/app/actions/project";
 import TaskStatusBadge from "./badges/TaskStatusBadge";
 import TaskPriorityBadge from "./badges/TaskPriorityBadge";
+import { formatTaskId } from "@/lib/project-key";
 import DetailsTab from "./TaskDetailTabs/DetailsTab";
 import SubtasksTab from "./TaskDetailTabs/SubtasksTab";
 import CommentsTab from "./TaskDetailTabs/CommentsTab";
@@ -94,7 +95,11 @@ export default function TaskDetailPanel({
                                 <ChevronRight className="w-5 h-5 text-zinc-500" />
                             </button>
                             <div className="flex items-center gap-3">
-                                <p className="text-xs text-zinc-500 font-mono">#{task.id.slice(0, 8)}</p>
+                                <p className="text-xs text-zinc-500 font-mono">
+                                    {task.taskNumber && task.project?.key 
+                                        ? formatTaskId(task.project.key, task.taskNumber) 
+                                        : `#${task.id.slice(0, 8)}`}
+                                </p>
                                 <TaskStatusBadge status={task.status} />
                                 <TaskPriorityBadge priority={task.priority} />
                             </div>

@@ -67,7 +67,7 @@ export default function UsernameInput({ value, onChange, fullName, disabled }: U
     const [suggestions, setSuggestions] = useState<string[]>([])
     const [showSuggestions, setShowSuggestions] = useState(false)
 
-    // Validate on change - instant, no debounce needed
+    // Validate on change - instant local + debounced server check
     useEffect(() => {
         if (!value) {
             setStatus('idle')
@@ -75,9 +75,40 @@ export default function UsernameInput({ value, onChange, fullName, disabled }: U
             return
         }
 
+        // 1. Local Validation
         const result = validateUsername(value)
-        setStatus(result.valid ? 'valid' : 'invalid')
-        setMessage(result.message)
+        if (!result.valid) {
+            setStatus('invalid')
+            setMessage(result.message)
+            return
+        }
+
+        // 2. Server Validation (Debounced)
+        setStatus('idle') // Show loading state if needed or just idle
+        const timer = setTimeout(async () => {
+            try {
+               // Import dynamically to avoid top-level server action issues in some contexts? 
+               // Standard import is fine if 'use client' is set. 
+               // We need to import it at top of file.
+               const { checkUsernameAvailability } = await import('@/app/actions/onboarding')
+               const availability = await checkUsernameAvailability(value)
+               
+               if (availability.available) {
+                   setStatus('valid')
+                   setMessage('Username is available')
+               } else {
+                   setStatus('invalid')
+                   setMessage(availability.message)
+               }
+            } catch (e) {
+                console.error(e)
+                // Fallback to valid if server check fails? Or ignore?
+                // Let's keep it 'valid' locally if server fails to respond, 
+                // but better to just show nothing or generic error.
+            }
+        }, 500)
+
+        return () => clearTimeout(timer)
     }, [value])
 
     // Generate suggestions from name

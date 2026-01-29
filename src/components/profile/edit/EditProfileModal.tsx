@@ -15,11 +15,11 @@ interface EditProfileModalProps {
     open: boolean;
     onOpenChange: (open: boolean) => void;
     profile: any;
-    // We can also accept an optimistic update callback if needed, but router refresh usually handles it.
-    // Or we update local state in parent. 
+    // Optimistic update callback
+    onOptimisticUpdate?: (updates: any) => void;
 }
 
-export function EditProfileModal({ open, onOpenChange, profile }: EditProfileModalProps) {
+export function EditProfileModal({ open, onOpenChange, profile, onOptimisticUpdate }: EditProfileModalProps) {
     const router = useRouter();
     const { showToast } = useToast();
     const queryClient = useQueryClient();
@@ -67,6 +67,11 @@ export function EditProfileModal({ open, onOpenChange, profile }: EditProfileMod
 
                 // 2. Refresh global profile state for TopNav
                 await refreshProfile();
+
+                // 3. Optimistic Update (Instant feedback)
+                if (onOptimisticUpdate) {
+                    onOptimisticUpdate(transformedData);
+                }
 
                 showToast("Profile updated successfully", "success");
                 onOpenChange(false);

@@ -33,7 +33,7 @@ import {
 import { DraggableTab } from "./DraggableTab";
 import {
   FileCode,
-  FileImage,
+  Layers,
   MoreVertical,
   Pin,
   PinOff,
@@ -53,9 +53,13 @@ import {
   upsertProjectFileIndex,
   updateProjectFileStats,
   getProjectFileContent,
+  getProjectFileSignedUrl,
 } from "@/app/actions/files";
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 import { BreadcrumbBar } from "./navigation/BreadcrumbBar";
+import type { FilesViewMode } from "@/stores/filesWorkspaceStore";
+import { isAssetLike, isTextLike } from "./utils/fileKind";
+import AssetPreview from "./preview/AssetPreview";
 
 interface ProjectFilesWorkspaceProps {
   projectId: string;
@@ -80,6 +84,8 @@ type TabState = {
   offlineQueued: boolean;
   error?: string | null;
   lastSavedAt?: number;
+  assetUrl?: string | null;
+  assetUrlExpiresAt?: number | null;
 };
 
 function orderedTabIds(openIds: string[], pinnedById: Record<string, boolean>) {
@@ -124,6 +130,7 @@ export default function ProjectFilesWorkspace({
   const splitEnabled = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.splitEnabled);
   const splitRatio = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.splitRatio ?? 0.5);
   const explorerMode = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.explorerMode || "tree");
+  const viewMode = useFilesWorkspaceStore((s) => (s.byProjectId[projectId]?.viewMode as FilesViewMode) || "code");
   const nodesById = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.nodesById || {});
   
   // Specific objects we need (excluding fileStates which changes too often)
@@ -140,6 +147,7 @@ export default function ProjectFilesWorkspace({
   const setSplitRatio = useFilesWorkspaceStore((s) => s.setSplitRatio);
   const setPrefs = useFilesWorkspaceStore((s) => s.setPrefs);
   const removeNodeFromCaches = useFilesWorkspaceStore((s) => s.removeNodeFromCaches);
+  const setViewMode = useFilesWorkspaceStore((s) => s.setViewMode);
   const setLock = useFilesWorkspaceStore((s) => s.setLock);
   const clearLock = useFilesWorkspaceStore((s) => s.clearLock);
   const setSelectedNode = useFilesWorkspaceStore((s) => s.setSelectedNode);
@@ -396,6 +404,27 @@ export default function ProjectFilesWorkspace({
     [getSupabase, projectId, setFileState] // Removed "ws" dependency (implicit or explicit)
   );
 
+  const signedUrlCacheRef = useRef<Map<string, { url: string; expiresAt: number }>>(new Map());
+
+  const ensureSignedUrlForNode = useCallback(
+    async (node: ProjectNode) => {
+      if (!node?.id) return null;
+
+      const cached = signedUrlCacheRef.current.get(node.id);
+      const now = Date.now();
+      if (cached && cached.expiresAt > now + 5_000) return cached.url;
+
+      const ttlSeconds = 300;
+      const res = (await getProjectFileSignedUrl(projectId, node.id, ttlSeconds)) as {
+        url: string;
+        expiresAt: number;
+      };
+      signedUrlCacheRef.current.set(node.id, { url: res.url, expiresAt: res.expiresAt });
+      return res.url;
+    },
+    [projectId]
+  );
+
   const acquireLockForNode = useCallback(
     async (node: ProjectNode) => {
       if (!currentUserId) return;
@@ -443,7 +472,11 @@ export default function ProjectFilesWorkspace({
       openTab(projectId, targetPane, node.id);
       setSelectedNode(projectId, node.id, node.parentId ?? null);
 
-      if (!tabByIdRef.current[node.id]) {
+      const wantsPreview =
+        isAssetLike(node) && (viewMode === "assets" || viewMode === "all" || (viewMode === "code" && !isTextLike(node)));
+
+      const existing = tabByIdRef.current[node.id];
+      if (!existing) {
         setTabById((prev) => ({
           ...prev,
           [node.id]: {
@@ -459,16 +492,59 @@ export default function ProjectFilesWorkspace({
             lockInfo: null,
             offlineQueued: false,
             error: null,
+            assetUrl: null,
+            assetUrlExpiresAt: null,
           },
         }));
-        await loadFileContent(node);
+      } else {
+        // Keep metadata fresh
+        setTabById((prev) => ({ ...prev, [node.id]: { ...prev[node.id], node } }));
+      }
+
+      if (wantsPreview) {
+        const now = Date.now();
+        const canReuse =
+          existing?.assetUrl &&
+          (existing.assetUrlExpiresAt ?? 0) > now + 5_000;
+        if (!canReuse) {
+          setTabById((prev) => ({ ...prev, [node.id]: { ...prev[node.id], isLoading: true, error: null } }));
+          try {
+            const url = await ensureSignedUrlForNode(node);
+            const exp = signedUrlCacheRef.current.get(node.id)?.expiresAt ?? null;
+            setTabById((prev) => ({
+              ...prev,
+              [node.id]: {
+                ...prev[node.id],
+                node,
+                isLoading: false,
+                assetUrl: url,
+                assetUrlExpiresAt: exp,
+              },
+            }));
+          } catch (e: any) {
+            setTabById((prev) => ({
+              ...prev,
+              [node.id]: {
+                ...prev[node.id],
+                node,
+                isLoading: false,
+                error: e?.message || "Failed to load preview",
+              },
+            }));
+          }
+        }
+      } else {
+        // Editor path (text/code or "All" mode selecting text-like)
+        if (!existing || (!existing.content && !existing.isDirty)) {
+          await loadFileContent(node);
+        }
       }
 
       if (canEdit) {
         await acquireLockForNode(node);
       }
     },
-    [acquireLockForNode, activePane, canEdit, loadFileContent, openTab, projectId, setSelectedNode]
+    [acquireLockForNode, activePane, canEdit, ensureSignedUrlForNode, loadFileContent, openTab, projectId, setSelectedNode, viewMode]
   );
 
   const saveTab = useCallback(
@@ -656,16 +732,36 @@ export default function ProjectFilesWorkspace({
               lockInfo: null,
               offlineQueued: false,
               error: null,
+              assetUrl: null,
+              assetUrlExpiresAt: null,
             },
           }));
-          await loadFileContent(node);
+          const wantsPreview =
+            isAssetLike(node) && (viewMode === "assets" || viewMode === "all" || (viewMode === "code" && !isTextLike(node)));
+          if (wantsPreview) {
+            try {
+              const url = await ensureSignedUrlForNode(node);
+              const exp = signedUrlCacheRef.current.get(node.id)?.expiresAt ?? null;
+              setTabById((prev) => ({
+                ...prev,
+                [id]: { ...prev[id], isLoading: false, assetUrl: url, assetUrlExpiresAt: exp },
+              }));
+            } catch (e: any) {
+              setTabById((prev) => ({
+                ...prev,
+                [id]: { ...prev[id], isLoading: false, error: e?.message || "Failed to load preview" },
+              }));
+            }
+          } else {
+            await loadFileContent(node);
+          }
         }
       }
     })();
     // Dependencies are now just the ID lists (strings). 
     // We intentionally exclude 'ensureNodeMetadata' and 'loadFileContent' if they are stable.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, leftOpenTabIds.join(","), rightOpenTabIds.join(",")]);
+  }, [projectId, leftOpenTabIds.join(","), rightOpenTabIds.join(","), viewMode]);
 
   // Save previous active tab on switch, per pane (best-effort)
   useEffect(() => {
@@ -813,6 +909,7 @@ export default function ProjectFilesWorkspace({
           projectId={projectId}
           projectName={projectName}
           canEdit={canEdit}
+          viewMode={viewMode}
           onOpenFile={(node) => void openFileInPane(node)}
           onNodeDeleted={(nodeId) => removeNodeFromCaches(projectId, nodeId)}
         />
@@ -833,6 +930,19 @@ export default function ProjectFilesWorkspace({
             Editor
           </div>
           <div className="flex items-center gap-2">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button size="sm" variant="outline" className="h-8">
+                  <Layers className="w-4 h-4 mr-2" />
+                  View: {viewMode === "code" ? "Code" : viewMode === "assets" ? "Assets" : "All"}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => setViewMode(projectId, "code")}>Code</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setViewMode(projectId, "assets")}>Assets</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setViewMode(projectId, "all")}>All</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             <Button
               size="sm"
               variant="outline"
@@ -1170,14 +1280,8 @@ function Pane({
       {/* Editor */}
       <div className="flex-1 overflow-hidden min-h-0 min-w-0">
         {activeTab ? (
-          activeTab.node.mimeType?.startsWith("image/") ? (
-            <div className="flex flex-col h-full items-center justify-center p-8 text-center">
-              <div className="w-24 h-24 rounded-2xl bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center mb-4">
-                <FileImage className="w-10 h-10 text-zinc-400" />
-              </div>
-              <h3 className="text-lg font-medium">Image Preview</h3>
-              <p className="text-zinc-500 text-sm mt-2">{activeTab.node.name}</p>
-            </div>
+          isAssetLike(activeTab.node) && activeTab.assetUrl ? (
+            <AssetPreview node={activeTab.node} signedUrl={activeTab.assetUrl} />
           ) : (
             <FileEditor
               file={activeTab.node}

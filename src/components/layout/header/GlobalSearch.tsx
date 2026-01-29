@@ -85,9 +85,9 @@ export default function GlobalSearch({ onOpenCommandPalette, condensed = false }
             e.preventDefault();
             e.stopPropagation();
             if (context === "hub") {
-                // For hub context, directly update URL and open command palette
+                // For hub context, directly update URL - Hub Priority Search
                 router.push(`/hub?q=${encodeURIComponent(query.trim())}`);
-                onOpenCommandPalette(query, context);
+                // Don't open command palette for Hub search
             } else if (context === "explorer") {
                 // For explorer context, update URL with search query
                 router.push(`/explorer?q=${encodeURIComponent(query.trim())}`);

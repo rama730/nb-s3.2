@@ -51,8 +51,8 @@ export default function TasksTab({
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [editingTask, setEditingTask] = useState<Task | null>(null);
 
-    // Realtime task updates
-    const { tasks: allTasks } = useRealtimeTasks(projectId, initialTasks as Task[]);
+    // Expose setTasks for optimistic updates
+    const { tasks: allTasks, setTasks } = useRealtimeTasks(projectId, initialTasks as Task[]);
 
     // Optimized Filters Hook
     const { filteredTasks, myFocusTasks, needsOwnerTasks } = useTaskFilters({
@@ -70,32 +70,62 @@ export default function TasksTab({
     };
 
     const handleCreateTask = async (data: any) => {
-        try {
-            const taskData = {
-                projectId,
-                title: data.title,
-                description: data.description || "",
-                priority: data.priority || "medium",
-                status: "todo" as const,
-                assigneeId: data.assigneeId || null,
-                sprintId: data.sprintId || null,
-                storyPoints: data.storyPoints || undefined,
-                dueDate: data.dueDate || null,
-                attachmentNodeIds: data.attachmentIds || [],
-            };
+        // Optimistic UI: Create fake task and show immediately
+        const tempId = crypto.randomUUID();
+        const optimisticTask: Task = {
+            id: tempId,
+            projectId,
+            title: data.title,
+            description: data.description || null,
+            status: "todo",
+            priority: data.priority || "medium",
+            type: data.type || "task",
+            taskNumber: 0, // Pending
+            creatorId: currentUserId || null,
+            assigneeId: data.assigneeId || null,
+            sprintId: data.sprintId || null,
+            storyPoints: data.storyPoints || null,
+            dueDate: data.dueDate ? new Date(data.dueDate).toISOString() : null,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            // Ensure other required Task fields are present with defaults
+            subtasks: [],
+            attachmentCount: data.attachmentIds?.length || 0,
+            commentCount: 0,
+            // Any other fields from Task interface
+            tags: data.tags || [],
+        } as unknown as Task; // Cast if partial
 
-            const result = await createTaskAction(taskData);
-            
-            if (result.success) {
-                setShowCreateModal(false);
-            } else {
-                console.error("Failed to create task:", result.error);
-                alert(result.error || "Failed to create task");
-            }
-        } catch (error) {
-            console.error("Error creating task:", error);
-            alert("An error occurred while creating the task");
-        }
+        setTasks(prev => [optimisticTask, ...prev]);
+        setShowCreateModal(false); // Close immediately (0ms latency loop)
+
+        // Run server action in background
+        createTaskAction({
+             projectId,
+             title: data.title,
+             description: data.description || "",
+             priority: data.priority || "medium",
+             status: "todo",
+             assigneeId: data.assigneeId || null,
+             sprintId: data.sprintId || null,
+             storyPoints: data.storyPoints || undefined,
+             dueDate: data.dueDate || null,
+             attachmentNodeIds: data.attachmentIds || [],
+        }).then(result => {
+             if (result.success && result.task) {
+                 // Replace optimistic with real
+                 setTasks(prev => prev.map(t => t.id === tempId ? (result.task as unknown as Task) : t));
+             } else {
+                 // Revert on error
+                 console.error("Failed to create task:", result.error);
+                 setTasks(prev => prev.filter(t => t.id !== tempId));
+                 alert(result.error || "Failed to create task");
+             }
+        }).catch(err => {
+             console.error("Exception creating task", err);
+             setTasks(prev => prev.filter(t => t.id !== tempId));
+             alert("An error occurred while creating the task");
+        });
     };
 
     return (

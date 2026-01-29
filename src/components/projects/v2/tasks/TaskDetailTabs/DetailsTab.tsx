@@ -75,8 +75,7 @@ export default function DetailsTab({ task, isOwnerOrMember, sprints = [], member
     const availableSprints = sprints;
     
     // Debug logging for development
-    // console.log("DetailsTab members:", members);
-    // console.log("DetailsTab sprints:", availableSprints);
+
 
     const creatorName = task.creator?.fullName || task.creator?.full_name || "Unknown";
     const creatorAvatar = task.creator?.avatarUrl || task.creator?.avatar_url;
@@ -220,8 +219,7 @@ export default function DetailsTab({ task, isOwnerOrMember, sprints = [], member
             </div>
 
             {/* Sidebar Properties (Right Col) */}
-            {/* Safari Fix: Use flex-col and ensure width is handled */}
-            <div className="space-y-6 w-full lg:w-auto">
+            <div className="space-y-6 w-full min-w-0">
                 <div className="sticky top-6 p-5 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-sm space-y-6">
                     <div className="flex items-center gap-2 pb-4 border-b border-zinc-100 dark:border-zinc-800">
                         <h3 className="text-xs font-bold text-zinc-900 dark:text-zinc-100 uppercase tracking-wider">Properties</h3>

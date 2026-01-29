@@ -497,6 +497,36 @@ export async function getProjectFileContent(projectId: string, nodeId: string) {
     return await data.text();
 }
 
+export async function getProjectFileSignedUrl(projectId: string, nodeId: string, ttlSeconds: number = 300) {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+
+    // Verify read access (works for public projects too)
+    await assertProjectReadAccess(projectId, user?.id ?? null);
+
+    const node = await db.query.projectNodes.findFirst({
+        where: and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId)),
+        columns: { s3Key: true }
+    });
+
+    if (!node || !node.s3Key) {
+        throw new Error("File not found");
+    }
+
+    // Use admin client to bypass storage policy edge-cases (public viewers).
+    const adminClient = await createAdminClient();
+    const { data, error } = await adminClient.storage
+        .from("project-files")
+        .createSignedUrl(node.s3Key, Math.max(30, Math.min(3600, ttlSeconds)));
+
+    if (error) throw error;
+    if (!data?.signedUrl) throw new Error("Failed to create signed URL");
+
+    const now = Date.now();
+    const ttlMs = Math.max(30, Math.min(3600, ttlSeconds)) * 1000;
+    return { url: data.signedUrl, expiresAt: now + ttlMs };
+}
+
 export async function trashNode(nodeId: string, projectId: string) {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();

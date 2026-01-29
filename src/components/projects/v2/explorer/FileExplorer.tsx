@@ -3,26 +3,28 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Virtuoso } from "react-virtuoso";
 import {
-  ChevronRight,
+  CheckSquare,
   ChevronDown,
+  ChevronRight,
+  Clock,
+  FileText,
   Folder,
   FolderOpen,
-  FileText,
-  MoreVertical,
-  Plus,
-  Upload,
-  Trash2,
-  Pencil,
-  RotateCcw,
+  List,
   Loader2,
+  MoreVertical,
+  Pencil,
+  Plus,
+  RotateCcw,
+  Search,
+  Square,
   Star,
   StarOff,
-  List,
-  Clock,
-  CheckSquare,
-  Square,
+  Trash2,
+  Upload,
 } from "lucide-react";
 import { FileIcon } from "./FileIcons";
+import { FileTreeRow } from "./FileTreeRow";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -55,6 +57,8 @@ import {
   getTaskLinkCounts,
 } from "@/app/actions/files";
 import { filesParentKey, useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
+import type { FilesViewMode } from "@/stores/filesWorkspaceStore";
+import { isAssetLike, isTextLike } from "../utils/fileKind";
 import OutlinePanel from "./OutlinePanel";
 import SourceControlPanel from "./SourceControlPanel";
 
@@ -84,6 +88,7 @@ function buildVisibleRows(args: {
   expandedFolderIds: Record<string, boolean>;
   sort: "name" | "updated" | "type";
   foldersFirst: boolean;
+  includeNode?: (node: ProjectNode) => boolean;
 }): VisibleRow[] {
   const {
     nodesById,
@@ -92,6 +97,7 @@ function buildVisibleRows(args: {
     expandedFolderIds,
     sort,
     foldersFirst,
+    includeNode,
   } = args;
 
   const sortIds = (ids: string[]) => {
@@ -112,7 +118,11 @@ function buildVisibleRows(args: {
   const walk = (parentId: string | null, level: number, ancestors: boolean[]) => {
     const key = filesParentKey(parentId);
     const childIds = childrenByParentId[key] || [];
-    const sorted = sortIds(childIds);
+    const sorted = sortIds(childIds).filter((id) => {
+      const n = nodesById[id];
+      if (!n) return false;
+      return includeNode ? includeNode(n) : true;
+    });
 
     if (level === 0 && sorted.length === 0) {
       rows.push({ kind: "empty", level: 0 });
@@ -157,6 +167,7 @@ export default function FileExplorer({
   projectId,
   projectName,
   canEdit,
+  viewMode = "code",
   onOpenFile,
   onNodeDeleted,
   mode = "default",
@@ -166,6 +177,7 @@ export default function FileExplorer({
   projectId: string;
   projectName?: string;
   canEdit: boolean;
+  viewMode?: FilesViewMode;
   onOpenFile: (node: ProjectNode) => void;
   onNodeDeleted?: (nodeId: string) => void;
   mode?: "default" | "select";
@@ -203,6 +215,7 @@ export default function FileExplorer({
   const toggleFavorite = useFilesWorkspaceStore((s) => s.toggleFavorite);
   const setTaskLinkCounts = useFilesWorkspaceStore((s) => s.setTaskLinkCounts);
   const setExplorerMode = useFilesWorkspaceStore((s) => s.setExplorerMode);
+  const setViewMode = useFilesWorkspaceStore((s) => s.setViewMode);
 
   const [isBooting, setIsBooting] = useState(true);
   const [createDialog, setCreateDialog] = useState<
@@ -246,6 +259,7 @@ export default function FileExplorer({
   const [isSourceControlOpen, setIsSourceControlOpen] = useState(false);
 
   const bootedRef = useRef(false);
+  const autoExpandedSystemRootRef = useRef(false);
 
   const supabaseRef = useRef<ReturnType<typeof createClient> | null>(null);
   const getSupabase = useCallback(() => {
@@ -296,6 +310,22 @@ export default function FileExplorer({
     } else if (!alreadyLoaded) {
       await loadChildren(null);
     }
+
+    // UX: if the project uses a single system "root folder", auto-expand it once
+    // so users immediately see files (GitHub-like browsing).
+    if (!autoExpandedSystemRootRef.current) {
+      autoExpandedSystemRootRef.current = true;
+      const ws = useFilesWorkspaceStore.getState().byProjectId[projectId];
+      const rootIds = ws?.childrenByParentId?.[filesParentKey(null)] || [];
+      if (rootIds.length === 1) {
+        const rootNode = ws?.nodesById?.[rootIds[0]];
+        const isSystem = !!(rootNode?.metadata as any)?.isSystem;
+        if (rootNode?.type === "folder" && isSystem) {
+          useFilesWorkspaceStore.getState().toggleExpanded(projectId, rootNode.id, true);
+          await loadChildren(rootNode.id);
+        }
+      }
+    }
     setIsBooting(false);
   }, [loadChildren]);
 
@@ -318,6 +348,18 @@ export default function FileExplorer({
     }
   }, [loadChildren, expandedFolderIds, loadedChildren]);
 
+  const includeFileByMode = useCallback(
+    (node: ProjectNode) => {
+      if (node.type !== "file") return true;
+      if (viewMode === "all") return true;
+      if (viewMode === "assets") return isAssetLike(node);
+      // code
+      return isTextLike(node) || !isAssetLike(node);
+    },
+    [viewMode]
+  );
+
+  // Pure tree calculation - decoupled from fast-changing state like selection
   const visibleRows = useMemo(() => {
     return buildVisibleRows({
       nodesById,
@@ -326,14 +368,17 @@ export default function FileExplorer({
       expandedFolderIds,
       sort,
       foldersFirst,
+      includeNode: (n) => (n.type === "folder" ? true : includeFileByMode(n)),
     });
   }, [
-    childrenByParentId,
-    expandedFolderIds,
-    foldersFirst,
-    loadedChildren,
+    // structural dependencies (slow changing)
     nodesById,
+    childrenByParentId,
+    loadedChildren,
+    expandedFolderIds,
     sort,
+    foldersFirst,
+    includeFileByMode, // depends on viewMode
   ]);
 
   const selectedNode = selectedNodeId ? nodesById[selectedNodeId] : null;
@@ -368,9 +413,19 @@ export default function FileExplorer({
         return;
       }
 
+
       if (createDialog.kind === "folder") {
         const node = await createFolder(projectId, parentId, name);
+        // Optimistic update: cache node
         upsertNodes(projectId, [node as ProjectNode]);
+        
+        // Optimistic update: append to parent's child list
+        const parentKey = filesParentKey(parentId);
+        const currentChildren = childrenByParentId[parentKey] || [];
+        // prevent duplicate id entry if server returns same id for some reason (rare)
+        if (!currentChildren.includes(node.id)) {
+             setChildren(projectId, parentId, [...currentChildren, node.id]);
+        }
       } else {
         const fileExt = name.includes(".") ? name.split(".").pop() : "txt";
         const storagePath = `projects/${projectId}/${Math.random().toString(36).substring(2)}.${fileExt}`;
@@ -387,11 +442,17 @@ export default function FileExplorer({
           size: 0,
           mimeType: "text/plain",
         });
+        
+        // Optimistic update
         upsertNodes(projectId, [node as ProjectNode]);
+        const parentKey = filesParentKey(parentId);
+        const currentChildren = childrenByParentId[parentKey] || [];
+        if (!currentChildren.includes(node.id)) {
+             setChildren(projectId, parentId, [...currentChildren, node.id]);
+        }
       }
 
-      // refresh listing for that parent
-      await loadChildren(parentId, { force: true });
+      // No need to await loadChildren(parentId, { force: true }); -> instant show
       if (parentId) toggleExpanded(projectId, parentId, true);
       showToast("Created", "success");
       setCreateDialog({ open: false });
@@ -400,41 +461,56 @@ export default function FileExplorer({
     }
   };
 
+  const openUpload = (parentId: string | null) => {
+    if (!canEdit) return;
+    const input = document.createElement("input");
+    input.type = "file";
+    input.onchange = async () => {
+        const file = input.files?.[0];
+        if (!file) return;
+        try {
+            const supabase = getSupabase();
+            const ext = file.name.split(".").pop();
+            const fileName = `${Math.random().toString(36).substring(2)}.${ext}`;
+            const filePath = `projects/${projectId}/${fileName}`;
+            const { error } = await supabase.storage.from("project-files").upload(filePath, file);
+            if (error) throw error;
+            const node = await createFileNode(projectId, parentId, {
+                name: file.name,
+                s3Key: filePath,
+                size: file.size,
+                mimeType: file.type,
+            });
+            upsertNodes(projectId, [node as ProjectNode]);
+            
+            // Optimistic update
+            const parentKey = filesParentKey(parentId);
+            const currentChildren = childrenByParentId[parentKey] || [];
+            if (!currentChildren.includes(node.id)) {
+                 setChildren(projectId, parentId, [...currentChildren, node.id]);
+            }
+            
+            // await loadChildren(parentId); // REMOVED for speed
+            
+            if (parentId) toggleExpanded(projectId, parentId, true);
+            
+            // Auto-open logic
+            onOpenFile(node as ProjectNode);
+            
+            showToast("Uploaded", "success");
+        } catch (e: any) {
+            showToast(`Upload failed: ${e?.message || "Unknown error"}`, "error");
+        }
+    };
+    input.click();
+  };
+
   const openRename = (node: ProjectNode) => {
     if (!canEdit) return;
     setRenameState({ nodeId: node.id, value: node.name, original: node.name });
   };
 
-  const commitRename = async () => {
-    const nodeId = renameState.nodeId;
-    if (!nodeId) return;
-    const node = nodesById[nodeId];
-    if (!node) return;
-    const nextName = renameState.value.trim();
-    if (!nextName || nextName === renameState.original) {
-      setRenameState({ nodeId: null, value: "", original: "" });
-      return;
-    }
 
-    // duplicate validation inside folder
-    const parentId = node.parentId ?? null;
-    const siblingIds = childrenByParentId[filesParentKey(parentId)] || [];
-    const siblings = siblingIds.map((id) => nodesById[id]).filter(Boolean);
-    const dup = siblings.some((s) => s.id !== nodeId && s.name.toLowerCase() === nextName.toLowerCase());
-    if (dup) {
-      showToast("A file/folder with that name already exists here.", "error");
-      return;
-    }
-
-    try {
-      const updated = await renameNode(nodeId, nextName, projectId);
-      upsertNodes(projectId, [updated as ProjectNode]);
-      showToast("Renamed", "success");
-      setRenameState({ nodeId: null, value: "", original: "" });
-    } catch (e: any) {
-      showToast(`Rename failed: ${e?.message || "Unknown error"}`, "error");
-    }
-  };
 
   const openDelete = (node: ProjectNode) => {
     if (!canEdit) return;
@@ -514,13 +590,7 @@ export default function FileExplorer({
   const handleSelect = (node: ProjectNode) => {
     if (mode === "select") {
         if (!onSelectionChange) return;
-        if (node.type === "folder") {
-            // Optional: allow folder selection? For now, just files?
-            // If user wants to select folder, we might need different logic.
-            // Let's stick to files for "Task Attachments" as requested.
-            void handleToggleFolder(node); 
-            return;
-        }
+
         
         const exists = selectedNodeIds.includes(node.id);
         const newSelection = exists
@@ -618,31 +688,39 @@ export default function FileExplorer({
 
   const rowsToRender = useMemo(() => {
     if (effectiveMode === "search") {
-      return searchResults.map(
-        (n) =>
-          ({ kind: "node", nodeId: n.id, level: 0, parentId: n.parentId ?? null } as VisibleRow)
-      );
+      return searchResults
+        .filter((n) => n.type === "folder" || includeFileByMode(n))
+        .map(
+          (n) =>
+            ({ kind: "node", nodeId: n.id, level: 0, parentId: n.parentId ?? null, indentationGuides: [] } as VisibleRow)
+        );
     }
     if (effectiveMode === "favorites") {
       const ids = Object.keys(favorites).filter((id) => favorites[id]);
       const nodes = ids.map((id) => nodesById[id]).filter(Boolean);
-      return nodes.map(
-        (n) => ({ kind: "node", nodeId: n.id, level: 0, parentId: n.parentId ?? null } as VisibleRow)
-      );
+      return nodes
+        .filter((n) => n.type === "folder" || includeFileByMode(n))
+        .map(
+          (n) => ({ kind: "node", nodeId: n.id, level: 0, parentId: n.parentId ?? null, indentationGuides: [] } as VisibleRow)
+        );
     }
     if (effectiveMode === "recents") {
       const nodes = recents.map((id) => nodesById[id]).filter(Boolean);
-      return nodes.map(
-        (n) => ({ kind: "node", nodeId: n.id, level: 0, parentId: n.parentId ?? null } as VisibleRow)
-      );
+      return nodes
+        .filter((n) => n.type === "folder" || includeFileByMode(n))
+        .map(
+          (n) => ({ kind: "node", nodeId: n.id, level: 0, parentId: n.parentId ?? null, indentationGuides: [] } as VisibleRow)
+        );
     }
     if (effectiveMode === "trash") {
-      return trashNodesState.map(
-        (n) => ({ kind: "node", nodeId: n.id, level: 0, parentId: n.parentId ?? null } as VisibleRow)
-      );
+      return trashNodesState
+        .filter((n) => n.type === "folder" || includeFileByMode(n))
+        .map(
+          (n) => ({ kind: "node", nodeId: n.id, level: 0, parentId: n.parentId ?? null, indentationGuides: [] } as VisibleRow)
+        );
     }
     return visibleRows;
-  }, [effectiveMode, searchResults, trashNodesState, visibleRows, favorites, nodesById, recents]);
+  }, [effectiveMode, includeFileByMode, searchResults, trashNodesState, visibleRows, favorites, nodesById, recents]);
 
   // Keyboard navigation: arrows operate on the currently rendered list.
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -794,169 +872,69 @@ export default function FileExplorer({
     // If we have N guides, that covers N levels. The content starts at N+1?
     // Actually, `row.level` is the depth. `row.indentationGuides` length should match `row.level`.
     
+    // Loading Row
     if (row.kind === "loading") {
+      const guides = row.indentationGuides.map((active, i) => (
+        <div
+          key={i}
+          className={cn(
+            "w-4 h-full flex-shrink-0 border-l transition-colors",
+            active ? "border-zinc-200 dark:border-zinc-800" : "border-transparent"
+          )}
+        />
+      ));
       return (
         <div className="flex items-center h-[22px]">
           {guides}
-          <div className="w-4 flex justify-center">{/* Spacer for chevron */}</div>
-          <div className="flex items-center gap-2 text-xs text-zinc-500 ml-1">
-            <Loader2 className="w-3 h-3 animate-spin" />
-            Loading...
-          </div>
+          <div className="w-4 h-full" />
+          <Loader2 className="w-3 h-3 text-zinc-400 animate-spin ml-2" />
         </div>
       );
     }
 
+    // Node Row
     const node = nodesById[row.nodeId];
     if (!node) return null;
+
     const isFolder = node.type === "folder";
-    const isExpanded = isFolder && !!expandedFolderIds[node.id];
+    const expanded = !!expandedFolderIds[node.id];
     const isSelected = selectedNodeId === node.id;
-    const isRenaming = renameState.nodeId === node.id;
     const isFav = !!favorites[node.id];
     const linkCount = taskLinkCounts[node.id] ?? 0;
-    
-    // Status color
-    // We don't have isDirty in the node object here (it's in fileStates), 
-    // but we can check if there's a fileState entry with isDirty.
-    const fileState = useFilesWorkspaceStore.getState().byProjectId[projectId]?.fileStates[node.id];
-    const isDirty = fileState?.isDirty;
 
     return (
-      <div
-        className={cn(
-          "group flex items-center h-[22px] rounded-sm transition-colors cursor-pointer select-none",
-          isSelected 
-            ? "bg-blue-600/10 dark:bg-blue-500/20 text-blue-700 dark:text-blue-300" 
-            : "hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300",
-          draggingId === node.id && "opacity-60"
-        )}
-        style={{ paddingRight: 8 }} 
-        draggable={canEdit}
-        onDragStart={(e) => {
-          beginDrag(node.id);
-          e.dataTransfer.setData("text/plain", node.id);
-          e.dataTransfer.effectAllowed = "move";
-        }}
-        onDragEnd={endDrag}
-        onDragOver={(e) => {
-          if (!isFolder) return;
-          e.preventDefault();
-          e.dataTransfer.dropEffect = "move";
-          if (!expandedFolderIds[node.id]) {
-            if (!expandHoverTimer.current[node.id]) {
-              expandHoverTimer.current[node.id] = setTimeout(() => {
-                void handleToggleFolder(node);
-                expandHoverTimer.current[node.id] = null;
-              }, 500);
-            }
-          }
-        }}
-        onDragLeave={() => {
-          if (expandHoverTimer.current[node.id]) {
-            clearTimeout(expandHoverTimer.current[node.id]!);
-            expandHoverTimer.current[node.id] = null;
-          }
-        }}
-        onDrop={(e) => {
-          if (!isFolder) return;
-          e.preventDefault();
-          const draggedId = e.dataTransfer.getData("text/plain");
-          if (draggedId) void handleDropOnFolder(node.id, draggedId);
-        }}
-        onClick={() => handleSelect(node)}
-      >
-        {/* Tree Lines */}
-        {guides}
+        <FileTreeRow 
+            node={node}
+            indentationGuides={row.indentationGuides}
+            isSelected={isSelected}
+            isExpanded={expanded}
+            canEdit={canEdit}
+            isInSelectionMode={mode === "select"}
+            isSelectedInMode={mode === "select" ? selectedNodeIds.includes(node.id) : false}
+            
+            // Interaction
+            onToggle={() => void handleToggleFolder(node)}
+            onSelect={() => handleSelect(node)}
+            onContextMenu={(e) => {
+                e.preventDefault();
+            }}
+            
+            // Drag
+            onDragStart={() => beginDrag(node.id)}
+            onDragEnd={endDrag}
+            onDrop={(draggedId) => {
+                 if (isFolder) void handleDropOnFolder(node.id, draggedId);
+            }}
 
-        {/* Chevron / Toggle */}
-        <div className="w-4 h-full flex items-center justify-center flex-shrink-0">
-          {isFolder ? (
-            <button
-              className="w-full h-full flex items-center justify-center text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
-              onClick={(e) => {
-                e.stopPropagation();
-                void handleToggleFolder(node);
-              }}
-              aria-label={isExpanded ? "Collapse folder" : "Expand folder"}
-            >
-              {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-            </button>
-          ) : null}
-        </div>
-
-        {/* Icon */}
-        <div className="mr-1.5 flex-shrink-0 flex items-center">
-            {mode === "select" && node.type === "file" ? (
-                 <div className="mr-1 text-zinc-400">
-                    {selectedNodeIds.includes(node.id) ? (
-                        <CheckSquare className="w-4 h-4 text-blue-500" />
-                    ) : (
-                        <Square className="w-4 h-4" />
-                    )}
-                 </div>
-            ) : (
-                <FileIcon name={node.name} isFolder={isFolder} isOpen={isExpanded} size="w-4 h-4" />
-            )}
-        </div>
-
-        {/* Content */}
-        <div className="flex-1 min-w-0 flex items-center min-h-0 overflow-hidden">
-          {isRenaming ? (
-            <Input
-              value={renameState.value}
-              onChange={(e) => setRenameState((s) => ({ ...s, value: e.target.value }))}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") void commitRename();
-                if (e.key === "Escape") setRenameState({ nodeId: null, value: "", original: "" });
-              }}
-              autoFocus
-              className="h-6 text-xs px-1 py-0 w-full"
-              onClick={(e) => e.stopPropagation()}
-            />
-          ) : (
-            <div className="flex items-center gap-2 min-w-0 w-full">
-              <span className={cn(
-                "text-[13px] truncate leading-none",
-                 isDirty ? "text-yellow-600 dark:text-yellow-400" : ""
-              )}>
-                {node.name}
-              </span>
-              
-              {/* Optional: extension or size could be shown, but VS Code usually hides them in explorer unless spacious */}
-              {linkCount > 0 ? (
+            // Badge: Link Count
+             badge={linkCount > 0 ? (
                 <span className="text-[9px] px-1 rounded-sm bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 flex-shrink-0 font-mono">
                   {linkCount}
                 </span>
               ) : null}
-            </div>
-          )}
-        </div>
 
-        {/* Hover Actions */}
-        <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity ml-auto pl-2 bg-gradient-to-l from-white via-white to-transparent dark:from-zinc-900 dark:via-zinc-900 h-full">
-            <button
-              className="w-5 h-5 flex items-center justify-center rounded hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
-              onClick={(e) => {
-                e.stopPropagation();
-                toggleFavorite(projectId, node.id);
-              }}
-              title={isFav ? "Unfavorite" : "Favorite"}
-            >
-              {isFav ? <Star className="w-3 h-3 fill-yellow-400 text-yellow-400" /> : <Star className="w-3 h-3" />}
-            </button>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button
-                  className="w-5 h-5 flex items-center justify-center rounded hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
-                  onClick={(e) => e.stopPropagation()}
-                  disabled={!canEdit}
-                >
-                  <MoreVertical className="w-3 h-3" />
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
-                {effectiveMode === "trash" ? (
+            // Menu
+            menu={effectiveMode === "trash" ? (
                   <>
                     <DropdownMenuItem
                       onClick={async () => {
@@ -998,6 +976,23 @@ export default function FileExplorer({
                       <FolderOpen className="w-4 h-4 mr-2" />
                       Move…
                     </DropdownMenuItem>
+                     <DropdownMenuItem
+                        onClick={() => {
+                        toggleFavorite(projectId, node.id);
+                        }}
+                    >
+                        {isFav ? (
+                            <>
+                                <StarOff className="w-4 h-4 mr-2 text-yellow-500" />
+                                Unfavorite
+                            </>
+                        ) : (
+                            <>
+                                <Star className="w-4 h-4 mr-2" />
+                                Favorite
+                            </>
+                        )}
+                    </DropdownMenuItem>
                     {isFolder ? (
                       <>
                         <DropdownMenuItem
@@ -1020,19 +1015,26 @@ export default function FileExplorer({
                           <Plus className="w-4 h-4 mr-2" />
                           New folder
                         </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={() => {
+                            openUpload(node.id);
+                          }}
+                          disabled={!canEdit}
+                        >
+                          <Upload className="w-4 h-4 mr-2" />
+                          Upload
+                        </DropdownMenuItem>
                       </>
                     ) : null}
-                    <DropdownMenuItem onClick={() => openDelete(node)} disabled={!canEdit}>
+                    <DropdownMenuItem onClick={() => openDelete(node)} disabled={!canEdit} className="text-rose-600 focus:text-rose-600">
                       <Trash2 className="w-4 h-4 mr-2" />
                       Move to Trash
                     </DropdownMenuItem>
                   </>
                 )}
-              </DropdownMenuContent>
-            </DropdownMenu>
-        </div>
-      </div>
+        />
     );
+
   };
 
   return (
@@ -1084,33 +1086,7 @@ export default function FileExplorer({
                 selectedNode?.type === "folder"
                   ? selectedNode.id
                   : selectedNode?.parentId ?? selectedFolderId ?? null;
-              // Use hidden input to upload
-              const input = document.createElement("input");
-              input.type = "file";
-              input.onchange = async () => {
-                const file = input.files?.[0];
-                if (!file) return;
-                try {
-                  const supabase = getSupabase();
-                  const ext = file.name.split(".").pop();
-                  const fileName = `${Math.random().toString(36).substring(2)}.${ext}`;
-                  const filePath = `projects/${projectId}/${fileName}`;
-                  const { error } = await supabase.storage.from("project-files").upload(filePath, file);
-                  if (error) throw error;
-                  const node = await createFileNode(projectId, parentId, {
-                    name: file.name,
-                    s3Key: filePath,
-                    size: file.size,
-                    mimeType: file.type,
-                  });
-                  upsertNodes(projectId, [node as ProjectNode]);
-                  await loadChildren(parentId);
-                  showToast("Uploaded", "success");
-                } catch (e: any) {
-                  showToast(`Upload failed: ${e?.message || "Unknown error"}`, "error");
-                }
-              };
-              input.click();
+              openUpload(parentId);
             }}
             disabled={!canEdit}
             title="Upload file"
@@ -1129,6 +1105,16 @@ export default function FileExplorer({
           className="h-8"
         />
         <div className="flex items-center gap-2">
+          <select
+            className="h-8 rounded-md border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-xs px-2"
+            value={viewMode}
+            onChange={(e) => setViewMode(projectId, e.target.value as FilesViewMode)}
+            title="View mode"
+          >
+            <option value="code">View: Code</option>
+            <option value="assets">View: Assets</option>
+            <option value="all">View: All</option>
+          </select>
           <div className="flex items-center gap-1">
             <Button
               type="button"
@@ -1205,6 +1191,15 @@ export default function FileExplorer({
         ) : (
           <Virtuoso
             data={rowsToRender}
+            context={{
+                selectedNodeId,
+                selectedNodeIds,
+                expandedFolderIds,
+                favorites,
+                taskLinkCounts,
+                mode,
+                canEdit
+            }}
             itemContent={(_, row) => <div className="px-2">{nodeRow(row)}</div>}
             style={{ height: "100%" }}
           />
@@ -1558,4 +1553,3 @@ function FolderPicker({
     </div>
   );
 }
-

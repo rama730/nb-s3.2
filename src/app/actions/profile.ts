@@ -110,3 +110,7 @@ export async function updateProfileAction(data: UpdateProfileInput) {
         return { success: false, error: 'Failed to update profile' }
     }
 }
+
+export async function updateBioAction(bio: string) {
+    return updateProfileAction({ bio });
+}

@@ -106,14 +106,14 @@ export function EditProfileTabs({ profile, onChange }: EditProfileTabsProps) {
                     const urlParts = currentUrl.split('/avatars/');
                     if (urlParts[1]) {
                         const oldFilePath = urlParts[1];
-                        console.log('[Upload] Deleting old file:', oldFilePath);
+
                         const { error: deleteError } = await supabase.storage
                             .from('avatars')
                             .remove([oldFilePath]);
                         if (deleteError) {
                             console.warn('[Upload] Could not delete old file:', deleteError);
                         } else {
-                            console.log('[Upload] Old file deleted successfully');
+
                         }
                     }
                 } catch (delErr) {
@@ -126,7 +126,7 @@ export function EditProfileTabs({ profile, onChange }: EditProfileTabsProps) {
             const fileName = `${Date.now()}.${fileExt}`;
             const filePath = `${userId}/${fileName}`;
 
-            console.log(`[Upload] Starting upload: bucket=avatars, path=${filePath}, size=${file.size}`);
+
 
             // 3. Upload to Supabase Storage
             const { data: uploadData, error: uploadError } = await supabase.storage
@@ -142,13 +142,13 @@ export function EditProfileTabs({ profile, onChange }: EditProfileTabsProps) {
                 throw uploadError;
             }
 
-            console.log('[Upload] Upload successful:', uploadData);
+
 
             // 4. Get the public URL with cache buster
             const { data: { publicUrl } } = supabase.storage.from("avatars").getPublicUrl(filePath);
             // Add timestamp to bust any CDN/browser cache
             const cacheBustedUrl = `${publicUrl}?t=${Date.now()}`;
-            console.log('[Upload] Public URL:', cacheBustedUrl);
+
 
             // 5. Update the form state
             const key = type === 'avatar' ? 'avatar_url' : 'banner_url';

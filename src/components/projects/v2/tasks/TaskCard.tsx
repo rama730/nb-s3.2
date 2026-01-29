@@ -36,6 +36,7 @@ interface TaskCardProps {
 
 import TaskStatusBadge from "./badges/TaskStatusBadge";
 import TaskPriorityBadge from "./badges/TaskPriorityBadge";
+import { formatTaskId } from "@/lib/project-key";
 
 export const TaskCard = memo(function TaskCard({
     task,
@@ -94,38 +95,39 @@ export const TaskCard = memo(function TaskCard({
                     )}
                 </div>
 
-                {/* Footer: Assignee, Due Date */}
-                <div className="flex items-center justify-between pt-1">
-                    <div className="flex items-center gap-3">
-                        {task.assignee ? (
-                            <div className="flex items-center gap-1.5" title={task.assignee.full_name}>
-                                <Avatar className="w-5 h-5">
-                                    <AvatarImage src={task.assignee.avatarUrl || task.assignee.avatar_url} />
-                                    <AvatarFallback className="text-[9px]">{(task.assignee.fullName || task.assignee.full_name)?.substring(0, 2).toUpperCase()}</AvatarFallback>
-                                </Avatar>
-                                <span className="text-xs text-zinc-600 dark:text-zinc-400 max-w-[80px] truncate">
-                                    {task.assignee.fullName || task.assignee.full_name}
-                                </span>
+                {/* Footer: ID & Meta */}
+                <div className="flex items-center justify-between mt-3 pt-3 border-t border-zinc-100 dark:border-zinc-800">
+                    <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-mono text-zinc-400 group-hover:text-zinc-500 transition-colors">
+                            {/* @ts-ignore - project key may be populated by JOIN strategies */}
+                            {(task as any).taskNumber && (task as any).project?.key 
+                                ? formatTaskId((task as any).project.key, (task as any).taskNumber) 
+                                : `#${task.id.slice(0, 6)}`}
+                        </span>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                        {task.dueDate && (
+                            <div className={cn(
+                                "flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-md",
+                                new Date(task.dueDate) < new Date() ? "text-rose-600 bg-rose-50" : "text-zinc-500 bg-zinc-50"
+                            )}>
+                                <Calendar className="w-3 h-3" />
+                                {format(new Date(task.dueDate), "MMM d")}
                             </div>
+                        )}
+                        
+                        {task.assignee ? (
+                            <Avatar className="w-5 h-5" title={task.assignee.full_name}>
+                                <AvatarImage src={task.assignee.avatarUrl || task.assignee.avatar_url} />
+                                <AvatarFallback className="text-[9px]">{(task.assignee.fullName || task.assignee.full_name)?.substring(0, 2).toUpperCase()}</AvatarFallback>
+                            </Avatar>
                         ) : (
-                            <div className="flex items-center gap-1.5 text-zinc-400">
-                                <span className="w-5 h-5 rounded-full bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center border border-dashed border-zinc-300 dark:border-zinc-700">
-                                    <User className="w-3 h-3" />
-                                </span>
-                                <span className="text-xs italic">Unassigned</span>
+                            <div className="w-5 h-5 rounded-full bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center border border-dashed border-zinc-300 dark:border-zinc-700" title="Unassigned">
+                                <User className="w-3 h-3 text-zinc-400" />
                             </div>
                         )}
                     </div>
-
-                    {task.dueDate && (
-                        <div className={cn(
-                            "flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-md",
-                            new Date(task.dueDate) < new Date() ? "text-rose-600 bg-rose-50" : "text-zinc-500 bg-zinc-50"
-                        )}>
-                            <Calendar className="w-3 h-3" />
-                            {format(new Date(task.dueDate), "MMM d")}
-                        </div>
-                    )}
                 </div>
 
                 {/* Claim Action (Optional) */}

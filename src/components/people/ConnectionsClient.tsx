@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, forwardRef } from "react";
+import { useEffect, useState, forwardRef, useMemo } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { Search, Users, MessageSquare, X, Loader2, TrendingUp, UserCheck, SendHorizontal, CalendarDays } from "lucide-react";
@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils";
 import { profileHref } from "@/lib/routing/identifiers";
 import { useConnections, useConnectionStats, useConnectionMutations } from "@/hooks/useConnections";
 import { useRouter } from "next/navigation";
+import { useDebounce } from "use-debounce";
 
 interface ConnectionsClientProps {
     initialUser: any;
@@ -22,44 +23,32 @@ export default function ConnectionsClient({
     embedded = false
 }: ConnectionsClientProps) {
     const router = useRouter();
+    const [searchQuery, setSearchQuery] = useState("");
+    const [debouncedSearch] = useDebounce(searchQuery, 300); // We need a debounce hook here
 
-    const { data: connectionsData, isLoading: connectionsLoading } = useConnections(50);
+    const { 
+        data: connectionsData, 
+        isLoading: connectionsLoading,
+        fetchNextPage,
+        hasNextPage,
+        isFetchingNextPage
+    } = useConnections(50, debouncedSearch);
+    
     const { data: statsData, isLoading: statsLoading } = useConnectionStats();
     const { disconnect } = useConnectionMutations();
 
-    const connections = connectionsData?.connections || [];
-    const connectionsHasMore = connectionsData?.hasMore || false;
+    // Flatten all pages
+    const connections = useMemo(() => {
+        return connectionsData?.pages.flatMap(page => page.connections) || [];
+    }, [connectionsData]);
 
-    // Default stats if loading
     const stats = statsData || {
         totalConnections: 0,
         pendingSent: 0,
         connectionsThisMonth: 0,
         connectionsGained: 0,
-        pendingIncoming: 0 // Added missing prop
+        pendingIncoming: 0
     };
-
-    // Replaced processingRequestId with mutation status if needed, 
-    // but mutation hook handles loading state internally if we tracked it per item.
-    // For now simple disconnect is fine.
-
-    const [searchQuery, setSearchQuery] = useState("");
-
-    // Removed: manual initialization effect (React Query handles it)
-
-    // Filter connections by search
-    const filteredConnections = searchQuery.trim()
-        ? connections.filter((conn) => {
-            const user = conn.otherUser;
-            if (!user) return false;
-            const q = searchQuery.toLowerCase();
-            return (
-                (user.fullName && user.fullName.toLowerCase().includes(q)) ||
-                (user.username && user.username.toLowerCase().includes(q)) ||
-                (user.headline && user.headline.toLowerCase().includes(q))
-            );
-        })
-        : connections;
 
     const handleDisconnect = async (connectionId: string, userName: string) => {
         if (!confirm(`Are you sure you want to disconnect from ${userName}?`)) return;
@@ -75,10 +64,10 @@ export default function ConnectionsClient({
         router.push(`/messages?user=${userId}`);
     };
 
-    if (connectionsLoading && connections.length === 0) {
+    if (connectionsLoading && !connectionsData) {
         return (
             <div className={cn(!embedded && "max-w-7xl mx-auto")}>
-                <div className="animate-pulse space-y-4">
+                 <div className="animate-pulse space-y-4">
                     <div className="h-8 bg-zinc-200 dark:bg-zinc-800 rounded w-64" />
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                         {[1, 2, 3, 4].map(i => (
@@ -154,7 +143,7 @@ export default function ConnectionsClient({
             </div>
 
             {/* Connections Grid */}
-            {filteredConnections.length === 0 ? (
+            {connections.length === 0 ? (
                 <div className="text-center py-12 bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-200 dark:border-zinc-800">
                     <Users className="w-12 h-12 text-zinc-400 mx-auto mb-4" />
                     <p className="text-zinc-600 dark:text-zinc-400">
@@ -167,10 +156,15 @@ export default function ConnectionsClient({
                     )}
                 </div>
             ) : (
-                <div style={{ minHeight: '400px' }}>
+                <div style={{ height: '600px' }}>
                     <VirtuosoGrid
                         useWindowScroll
-                        data={filteredConnections}
+                        data={connections}
+                        endReached={() => {
+                            if (hasNextPage && !isFetchingNextPage) {
+                                fetchNextPage();
+                            }
+                        }}
                         components={{
                             List: forwardRef((props, ref) => (
                                 <div {...props} ref={ref} className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 pb-8" />
@@ -178,7 +172,11 @@ export default function ConnectionsClient({
                             Item: forwardRef((props, ref) => (
                                 <div {...props} ref={ref} className="h-full" />
                             )),
-                            Footer: () => null
+                            Footer: () => isFetchingNextPage ? (
+                                <div className="col-span-full flex justify-center py-4">
+                                    <Loader2 className="w-6 h-6 animate-spin text-zinc-400" />
+                                </div>
+                            ) : null
                         }}
                         itemContent={(_, conn) => {
                             const user = conn.otherUser;

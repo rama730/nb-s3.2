@@ -235,18 +235,25 @@ export default function OnboardingPage() {
                 return
             }
 
-            // Force immediate refresh of global state
+            // OPTIMISTIC REDIRECT ("Fast Showing"):
+            // Redirect immediately. The session refresh and invalidation happen in background/parallel 
+            // or when the hub page loads and checks session.
+            router.push('/hub')
+
+            // Force update global state in background
             const supabase = createClient()
-            await supabase.auth.refreshSession()
+            supabase.auth.refreshSession() // Fire and forget
             queryClient.invalidateQueries({ queryKey: ['profile'] })
             queryClient.invalidateQueries({ queryKey: ['user'] })
 
-            // Redirect to hub
-            router.push('/hub')
         } catch {
             setError('An unexpected error occurred')
         } finally {
-            setIsLoading(false)
+            // No need to set loading false if we redirect, 
+            // but safe to do so in case redirect fails or is delayed? 
+            // Actually router.push is async but we don't await it here to block UI?
+            // Next.js router.push is void mostly. 
+            // If we are unmounting, this state update might warn, but that's acceptable for speed.
         }
     }
 

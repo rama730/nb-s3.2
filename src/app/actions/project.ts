@@ -8,6 +8,7 @@ import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { CreateProjectInput } from '@/lib/validations/project';
 import { generateSlug } from '@/lib/utils/slug';
+import { generateProjectKey } from '@/lib/project-key';
 
 // --- Types ---
 interface CreateProjectResult {
@@ -36,6 +37,10 @@ export async function createProjectAction(input: CreateProjectInput & { slug?: s
             ownerId: user.id,
             title: input.title,
             slug: finalSlug,
+            // Generate Project Key
+            key: generateProjectKey(input.title),
+            currentTaskNumber: 0,
+
             description: input.description || null,
             shortDescription: input.short_description || null,
             category: input.project_type || null,
@@ -330,6 +335,15 @@ export async function createTaskAction(data: z.infer<typeof createTaskSchema>) {
 
         // 2. Insert Task & Attachments Transactionally
         const result = await db.transaction(async (tx) => {
+            // 2a. Increment Project Counter & Get New Number
+            const [updatedProject] = await tx
+                .update(projects)
+                .set({ currentTaskNumber: sql`${projects.currentTaskNumber} + 1` })
+                .where(eq(projects.id, validated.projectId))
+                .returning({ newNumber: projects.currentTaskNumber });
+
+            if (!updatedProject) throw new Error("Failed to generate task ID");
+
             const [newTask] = await tx.insert(tasks).values({
                 projectId: validated.projectId,
                 title: validated.title,
@@ -341,6 +355,8 @@ export async function createTaskAction(data: z.infer<typeof createTaskSchema>) {
                 creatorId: user.id,
                 storyPoints: validated.storyPoints,
                 dueDate: validated.dueDate ? new Date(validated.dueDate) : null,
+                // Assign Sequential Number
+                taskNumber: updatedProject.newNumber,
             }).returning();
 
             if (validated.attachmentNodeIds && validated.attachmentNodeIds.length > 0) {

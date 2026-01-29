@@ -6,6 +6,7 @@ import type { ProjectNode } from "@/lib/db/schema";
 
 export type ExplorerSort = "name" | "updated" | "type";
 export type ExplorerMode = "tree" | "search" | "favorites" | "recents" | "trash";
+export type FilesViewMode = "code" | "assets" | "all";
 
 export type EditorPreferences = {
   lineNumbers: boolean;
@@ -51,6 +52,7 @@ export type EditorSymbol = {
 type ProjectWorkspaceState = {
   // ---- Explorer ----
   explorerMode: ExplorerMode;
+  viewMode: FilesViewMode;
   selectedNodeId: string | null;
   selectedFolderId: string | null;
   expandedFolderIds: Record<string, boolean>;
@@ -95,6 +97,7 @@ type FilesWorkspaceState = {
 
   // explorer actions
   setExplorerMode: (projectId: string, mode: ExplorerMode) => void;
+  setViewMode: (projectId: string, mode: FilesViewMode) => void;
   setSelectedNode: (projectId: string, nodeId: string | null, parentId?: string | null) => void;
   toggleExpanded: (projectId: string, folderId: string, expanded?: boolean) => void;
   setSearchQuery: (projectId: string, query: string) => void;
@@ -151,6 +154,7 @@ const DEFAULT_PREFS: EditorPreferences = {
 function defaultWorkspace(): ProjectWorkspaceState {
   return {
     explorerMode: "tree",
+    viewMode: "code",
     selectedNodeId: null,
     selectedFolderId: null,
     expandedFolderIds: {},
@@ -215,6 +219,17 @@ export const useFilesWorkspaceStore = create<FilesWorkspaceState>()(
             [projectId]: {
               ...(state.byProjectId[projectId] ?? defaultWorkspace()),
               explorerMode: mode,
+            },
+          },
+        })),
+
+      setViewMode: (projectId, mode) =>
+        set((state) => ({
+          byProjectId: {
+            ...state.byProjectId,
+            [projectId]: {
+              ...(state.byProjectId[projectId] ?? defaultWorkspace()),
+              viewMode: mode,
             },
           },
         })),
@@ -752,6 +767,7 @@ export const useFilesWorkspaceStore = create<FilesWorkspaceState>()(
             {
               // persist UX prefs + workspace state; do not persist server caches
               explorerMode: ws.explorerMode,
+              viewMode: ws.viewMode,
               expandedFolderIds: ws.expandedFolderIds,
               sort: ws.sort,
               foldersFirst: ws.foldersFirst,

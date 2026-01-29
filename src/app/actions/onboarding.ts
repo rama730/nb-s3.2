@@ -21,15 +21,7 @@ export async function completeOnboarding(data: {
     try {
         const supabase = await createClient()
 
-        // First refresh session to ensure cookies are valid
-        const { data: { user }, error: authError } = await supabase.auth.getUser()
-
-        if (authError || !user) {
-            console.error('Auth error:', authError)
-            return { success: false, error: 'Session expired. Please login again.' }
-        }
-
-        // Validate username format
+        // Validate username format first (synchronous)
         if (!data.username || data.username.length < 3) {
             return { success: false, error: 'Username must be at least 3 characters' }
         }
@@ -42,15 +34,32 @@ export async function completeOnboarding(data: {
             return { success: false, error: 'Only lowercase letters, numbers, and underscores allowed' }
         }
 
-        // Check if username is already taken
-        const { data: existingUser } = await supabase
-            .from('profiles')
-            .select('id')
-            .eq('username', data.username)
-            .neq('id', user.id)
-            .maybeSingle()
+        // Parallelize Auth Check and Database Availability Check ("Fast Showing")
+        const [authResult, usernameResult] = await Promise.all([
+            supabase.auth.getUser(),
+            supabase
+                .from('profiles')
+                .select('id')
+                .eq('username', data.username)
+                .maybeSingle()
+        ]);
 
-        if (existingUser) {
+        const { data: { user }, error: authError } = authResult;
+
+        if (authError || !user) {
+            console.error('Auth error:', authError)
+            return { success: false, error: 'Session expired. Please login again.' }
+        }
+
+        // Check availability result
+        const { data: existingUser } = usernameResult;
+
+        // Ensure we don't block own user (though upsert handles it by ID, this check prevents claiming ANOTHER user's username)
+        // Note: existingUser finding might be OURSELVES if we already have a profile with this username? 
+        // Logic says: .neq('id', user.id) is hard because we don't have user.id in the parallel call yet.
+        // Optimization: We can check ID match after we get both.
+
+        if (existingUser && existingUser.id !== user.id) {
             return { success: false, error: 'Username is already taken' }
         }
 

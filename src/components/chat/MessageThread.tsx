@@ -6,6 +6,7 @@ import { useTypingChannel } from '@/hooks/useTypingChannel';
 import { MessageBubble } from './MessageBubble';
 import { TypingIndicator } from './TypingIndicator';
 import type { MessageWithSender } from '@/app/actions/messaging';
+import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import { Loader2 } from 'lucide-react';
 
 // ============================================================================
@@ -55,73 +56,83 @@ export function MessageThread({ messages, conversationId }: MessageThreadProps) 
         }
     };
 
-    // OPTIMIZED: Me moize date grouping computation (was recalculating on every render)
-    const groupedMessages = useMemo(() => {
-        return messages.reduce((groups, message) => {
+    // Flatten messages with date headers for virtualization
+    const items = useMemo(() => {
+        const result: Array<{ type: 'date'; date: string; id: string } | { type: 'message'; message: MessageWithSender; id: string }> = [];
+        
+        // Group first (or just iterate and detect change which is single pass, better for perf)
+        // Grouping logic existing is fine, we just need to output linear list
+        
+        const groups = messages.reduce((acc, message) => {
             const date = new Date(message.createdAt).toLocaleDateString();
-            if (!groups[date]) {
-                groups[date] = [];
+            if (!acc[date]) {
+                acc[date] = [];
             }
-            groups[date].push(message);
-            return groups;
+            acc[date].push(message);
+            return acc;
         }, {} as Record<string, MessageWithSender[]>);
+
+        Object.entries(groups).forEach(([date, dateMessages]) => {
+            result.push({ type: 'date', date, id: `date-${date}` });
+            dateMessages.forEach(msg => {
+                result.push({ type: 'message', message: msg, id: msg.id });
+            });
+        });
+
+        return result;
     }, [messages]);
 
     return (
-        <div
-            ref={containerRef}
-            onScroll={handleScroll}
-            className="flex-1 overflow-y-auto p-4 space-y-4"
-        >
-            {/* Load more indicator */}
-            {isLoading && (
-                <div className="flex justify-center py-2">
-                    <Loader2 className="w-5 h-5 animate-spin text-zinc-400" />
-                </div>
-            )}
+        <div className="flex-1 overflow-hidden h-full">
+            <Virtuoso
+                style={{ height: '100%' }}
+                data={items}
+                initialTopMostItemIndex={items.length - 1} // Start at bottom
+                followOutput="smooth" // Auto-scroll on new messages
+                alignToBottom // Stick to bottom on load
+                startReached={() => {
+                    if (!isLoading && hasMore) {
+                        loadMoreMessages(conversationId);
+                    }
+                }}
+                components={{
+                    Header: () => isLoading ? (
+                        <div className="flex justify-center py-2">
+                             <Loader2 className="w-5 h-5 animate-spin text-zinc-400" />
+                        </div>
+                    ) : null,
+                    Footer: () => (
+                        <div className="pb-4" /> // Spacer at bottom
+                    )
+                }}
+                itemContent={(index, item) => {
+                    if (item.type === 'date') {
+                         return (
+                            <div className="flex items-center justify-center my-4">
+                                <span className="px-3 py-1 bg-zinc-100 dark:bg-zinc-800 rounded-full text-xs text-zinc-500">
+                                    {formatDateLabel(item.date)}
+                                </span>
+                            </div>
+                        );
+                    }
 
-            {/* Messages grouped by date */}
-            {Object.entries(groupedMessages).map(([date, dateMessages]) => (
-                <div key={date}>
-                    {/* Date separator */}
-                    <div className="flex items-center justify-center my-4">
-                        <span className="px-3 py-1 bg-zinc-100 dark:bg-zinc-800 rounded-full text-xs text-zinc-500">
-                            {formatDateLabel(date)}
-                        </span>
-                    </div>
+                    // Message Item
+                    const prevItem = index > 0 ? items[index - 1] : null;
+                    const showAvatar = 
+                        !prevItem || 
+                        prevItem.type === 'date' || 
+                        (prevItem.type === 'message' && prevItem.message.senderId !== item.message.senderId);
 
-                    {/* Messages */}
-                    <div className="space-y-2">
-                        {dateMessages.map((message, index) => {
-                            const prevMessage = index > 0 ? dateMessages[index - 1] : null;
-                            const showAvatar = !prevMessage || prevMessage.senderId !== message.senderId;
-
-                            return (
-                                <MessageBubble
-                                    key={message.id}
-                                    message={message}
-                                    showAvatar={showAvatar}
-                                />
-                            );
-                        })}
-                    </div>
-                </div>
-            ))}
-
-            {/* Empty state */}
-            {messages.length === 0 && !isLoading && (
-                <div className="flex flex-col items-center justify-center h-full text-center">
-                    <p className="text-sm text-zinc-500 dark:text-zinc-400">
-                        No messages yet
-                    </p>
-                    <p className="text-xs text-zinc-400 dark:text-zinc-500 mt-1">
-                        Send a message to start the conversation
-                    </p>
-                </div>
-            )}
-
-            {/* Scroll anchor */}
-            <div ref={bottomRef} />
+                    return (
+                        <div className="px-4 py-1">
+                            <MessageBubble
+                                message={item.message}
+                                showAvatar={showAvatar}
+                            />
+                        </div>
+                    );
+                }}
+            />
         </div>
     );
 }

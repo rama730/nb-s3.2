@@ -16,10 +16,33 @@ export function AboutCard({ profile, isOwner, onBioUpdated }: AboutCardProps) {
     const [isEditing, setIsEditing] = useState(false)
     const [bio, setBio] = useState(profile?.bio || '')
 
-    const handleSave = () => {
-        onBioUpdated(bio)
-        setIsEditing(false)
-        // In a real implementation we would call API here or let parent handle it
+    const [saving, setSaving] = useState(false)
+    
+    // Dynamically import toast/action to avoid circular deps if any (standard import is fine usually)
+    // We need toast for error feedback
+    
+    const handleSave = async () => {
+        setSaving(true)
+        try {
+            // Import action dynamically here or at top
+            const { updateBioAction } = await import('@/app/actions/profile')
+            const { toast } = await import('sonner')
+            
+            const result = await updateBioAction(bio)
+            
+            if (result.success) {
+                onBioUpdated(bio)
+                setIsEditing(false)
+                toast.success("Bio updated")
+            } else {
+                toast.error(result.error || "Failed to update bio")
+            }
+        } catch (e) {
+            console.error(e)
+            // toast.error("An error occurred") 
+        } finally {
+            setSaving(false)
+        }
     }
 
     return (
@@ -53,9 +76,10 @@ export function AboutCard({ profile, isOwner, onBioUpdated }: AboutCardProps) {
                             </button>
                             <button
                                 onClick={handleSave}
-                                className="px-3 py-1.5 text-sm font-medium bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+                                disabled={saving}
+                                className="px-3 py-1.5 text-sm font-medium bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-2"
                             >
-                                Save
+                                {saving ? 'Saving...' : 'Save'}
                             </button>
                         </div>
                     </div>

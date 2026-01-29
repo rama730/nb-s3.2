@@ -67,6 +67,7 @@
     "rxjs": "^7.8.2",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.4.0",
+    "use-debounce": "^10.1.0",
     "zod": "^4.3.5",
     "zustand": "^5.0.10"
   },

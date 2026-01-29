@@ -50,7 +50,9 @@ export function useRealtimeTasks(projectId: string, initialTasks: Task[] = []) {
                     }
 
                     // Trigger a soft refresh to ensure consistency (background revalidation)
-                    router.refresh();
+                    // PERFORMANCE FIX: Removed router.refresh() to prevent massive server load on every event.
+                    // The local state update above is sufficient for "Smooth Working".
+                    // router.refresh();
                 }
             )
             .subscribe();
@@ -58,7 +60,7 @@ export function useRealtimeTasks(projectId: string, initialTasks: Task[] = []) {
         return () => {
             supabase.removeChannel(channel);
         };
-    }, [projectId, router, supabase]);
+    }, [projectId, supabase]); // Removed router dependence
 
     return { tasks, setTasks };
 }

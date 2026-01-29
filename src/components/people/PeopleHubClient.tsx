@@ -153,7 +153,7 @@ export default function PeopleHubClient({
                 )}
 
                 {activeTab === "requests" && (
-                    <RequestsTab initialUser={initialUser} />
+                    <RequestsTab initialUser={initialUser} initialRequests={initialRequests} />
                 )}
             </div>
         </div>

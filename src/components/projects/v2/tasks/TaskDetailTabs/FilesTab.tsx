@@ -5,6 +5,7 @@ import { Download, FileText, Link2, Loader2, Paperclip, Plus, Search, Trash2, Up
 import { createClient } from "@/lib/supabase/client";
 import type { ProjectNode } from "@/lib/db/schema";
 import { createFileNode, getProjectNodes, getTaskAttachments, linkNodeToTask, unlinkNodeFromTask } from "@/app/actions/files";
+import { TaskFilesExplorer } from "@/components/projects/v2/tasks/components/TaskFilesExplorer";
 
 interface FilesTabProps {
     taskId: string;
@@ -245,79 +246,15 @@ export default function FilesTab({ taskId, isOwnerOrMember, projectId, taskTitle
             ) : null}
 
             {/* List */}
-            {attachments.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-zinc-200 dark:border-zinc-800 p-8 text-center bg-zinc-50/50 dark:bg-zinc-900/40">
-                    <FileText className="w-10 h-10 mx-auto text-zinc-300 dark:text-zinc-700 mb-3" />
-                    <div className="text-sm font-medium text-zinc-900 dark:text-zinc-100">No attachments</div>
-                    <div className="text-xs text-zinc-500 mt-1">Upload a file or attach an existing project file.</div>
-                </div>
-            ) : (
-                <div className="space-y-2">
-                    {attachments.map((node) => (
-                        <div
-                            key={node.id}
-                            className="flex items-center justify-between gap-3 p-3 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:shadow-sm transition-shadow"
-                        >
-                            <div className="flex items-center gap-3 min-w-0">
-                                <div className="w-9 h-9 rounded-lg bg-indigo-50 dark:bg-indigo-900/20 flex items-center justify-center flex-shrink-0">
-                                    <FileText className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                                </div>
-                                <div className="min-w-0">
-                                    <div className="flex items-center gap-2 min-w-0">
-                                        <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100 truncate">
-                                            {node.name}
-                                        </div>
-                                        <span className="text-[10px] text-zinc-400 flex-shrink-0">
-                                            {extOf(node.name) ? `.${extOf(node.name)}` : ""}
-                                        </span>
-                                    </div>
-                                    <div className="text-xs text-zinc-500 flex items-center gap-2">
-                                        <span>{formatBytes(node.size)}</span>
-                                        {node.mimeType ? (
-                                            <>
-                                                <span>•</span>
-                                                <span className="truncate max-w-[220px]">{node.mimeType}</span>
-                                            </>
-                                        ) : null}
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div className="flex items-center gap-1 flex-shrink-0">
-                                <button
-                                    type="button"
-                                    onClick={() => void handleDownload(node)}
-                                    disabled={!canEdit}
-                                    className={[
-                                        "p-2 rounded-lg transition-colors",
-                                        canEdit
-                                            ? "text-zinc-400 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/20"
-                                            : "text-zinc-300 cursor-not-allowed dark:text-zinc-600",
-                                    ].join(" ")}
-                                    title={canEdit ? "Download" : "Preview only"}
-                                >
-                                    <Download className="w-4 h-4" />
-                                </button>
-
-                                <button
-                                    type="button"
-                                    onClick={() => void handleUnlink(node.id)}
-                                    disabled={!canEdit}
-                                    className={[
-                                        "p-2 rounded-lg transition-colors",
-                                        canEdit
-                                            ? "text-zinc-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-900/20"
-                                            : "text-zinc-300 cursor-not-allowed dark:text-zinc-600",
-                                    ].join(" ")}
-                                    title={canEdit ? "Unlink from task" : "No permission"}
-                                >
-                                    <Trash2 className="w-4 h-4" />
-                                </button>
-                            </div>
-                        </div>
-                    ))}
-                </div>
-            )}
+            <div className="flex-1 min-h-[300px] flex flex-col">
+                <TaskFilesExplorer 
+                    projectId={projectId}
+                    linkedNodes={attachments}
+                    canEdit={canEdit}
+                    onUnlink={handleUnlink}
+                    onOpenFile={(node) => void handleDownload(node)}
+                />
+            </div>
 
             {/* Attach existing picker */}
             {picker.open ? (

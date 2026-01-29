@@ -35,6 +35,20 @@ export function ProfileV2Client({
     const [showConnectionsModal, setShowConnectionsModal] = useState(false)
     const router = useRouter()
 
+    // OPTIMISTIC STATE ("Smooth Working"):
+    // Initialized from server prop, but updated locally for instant feedback
+    const [optimisticProfile, setOptimisticProfile] = useState(profile);
+
+    // Sync if server prop changes (e.g. navigation)
+    useEffect(() => {
+        setOptimisticProfile(profile);
+    }, [profile]);
+
+    // Handler for optimistic updates from children
+    const handleOptimisticUpdate = (updates: Partial<typeof profile>) => {
+        setOptimisticProfile(prev => ({ ...prev, ...updates }));
+    };
+
     // Use simplified hooks
     const { sendRequest } = useConnectionMutations();
 
@@ -84,7 +98,7 @@ export function ProfileV2Client({
     };
 
     // Helper to safely access missing schema fields
-    const safeProfile = profile as any
+    const safeProfile = optimisticProfile as any
 
     // Derived content based on tab
     const renderMainContent = () => {
@@ -93,9 +107,9 @@ export function ProfileV2Client({
                 return (
                     <div className="space-y-6">
                         <AboutCard
-                            profile={profile}
+                            profile={optimisticProfile}
                             isOwner={isOwner}
-                            onBioUpdated={(bio) => console.log('Update bio', bio)}
+                            onBioUpdated={(bio) => handleOptimisticUpdate({ bio })}
                         />
                         <FeaturedProjectsCard
                             projects={projects}
@@ -112,7 +126,7 @@ export function ProfileV2Client({
                             />
                         </div>
                         <SkillsCard
-                            skills={profile.skills || []}
+                            skills={optimisticProfile.skills || []}
                             isOwner={isOwner}
                         />
                     </div>
@@ -135,7 +149,7 @@ export function ProfileV2Client({
             <ProfileShell
                 header={
                     <ProfileHeader
-                        profile={profile}
+                        profile={optimisticProfile}
                         isOwner={isOwner}
                         isAuthenticated={!!currentUser}
                         connectionState={status}
@@ -143,8 +157,8 @@ export function ProfileV2Client({
                         onEdit={() => setIsEditModalOpen(true)}
                         onConnectPrimary={handleConnectPrimary}
                         onConnectSecondary={handleConnectSecondary}
-                        onMessage={() => router.push(`/messages?userId=${profile.id}`)}
-                        onInvite={() => console.log('Invite to project')}
+                        onMessage={() => router.push(`/messages?userId=${optimisticProfile.id}`)}
+                        onInvite={() => {}}
                     />
                 }
                 tabs={
@@ -156,11 +170,11 @@ export function ProfileV2Client({
                 main={renderMainContent()}
                 rail={
                     <ProfileRightRail
-                        profile={profile}
+                        profile={optimisticProfile}
                         stats={stats}
                         isOwner={isOwner}
-                        socialLinks={profile.socialLinks || []}
-                        onInvite={() => console.log('Invite to project')}
+                        socialLinks={optimisticProfile.socialLinks || []}
+                        onInvite={() => {}}
                         onConnectionsClick={() => setShowConnectionsModal(true)}
                     />
                 }
@@ -170,7 +184,8 @@ export function ProfileV2Client({
                 <EditProfileModal
                     open={isEditModalOpen}
                     onOpenChange={setIsEditModalOpen}
-                    profile={profile}
+                    profile={optimisticProfile}
+                    onOptimisticUpdate={handleOptimisticUpdate}
                 />
             )}
 

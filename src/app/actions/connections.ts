@@ -494,61 +494,94 @@ export async function getPendingRequests() {
 // GET ACCEPTED CONNECTIONS (Paginated)
 // ============================================================================
 
-export async function getAcceptedConnections(limit: number = 30, cursor?: string, targetUserId?: string) {
+export async function getAcceptedConnections(
+    limit: number = 30,
+    cursor?: string, // ISO Date string for cursor
+    search?: string,
+    targetUserId?: string
+) {
     const user = await getAuthUser();
-
-    // If targetUserId is provided, we fetch THEIR connections.
-    // If not, we fetch the authenticated user's connections.
     const userIdToFetch = targetUserId || user?.id;
 
-    if (!userIdToFetch) return { connections: [], hasMore: false };
+    if (!userIdToFetch) return { connections: [], hasMore: false, nextCursor: null };
 
-    // TODO: Privacy check - verify if we are allowed to see this user's connections.
-    // For now, assuming public visibility or minimal "logged in" check.
+    const searchPattern = search ? `%${search.trim().toLowerCase()}%` : undefined;
+    const cursorDate = cursor ? new Date(cursor) : undefined;
 
-    let query = db
+    const conditions = [
+        eq(connections.status, 'accepted'),
+        or(eq(connections.requesterId, userIdToFetch), eq(connections.addresseeId, userIdToFetch)),
+        // Ensure we join the "other" user (not self)
+        sql`${profiles.id} != ${userIdToFetch}`
+    ];
+
+    if (searchPattern) {
+        conditions.push(
+            or(
+                sql`${profiles.fullName} ILIKE ${searchPattern}`,
+                sql`${profiles.username} ILIKE ${searchPattern}`
+            )
+        );
+    }
+
+    if (cursorDate) {
+        conditions.push(sql`${connections.updatedAt} < ${cursorDate.toISOString()}`); // Cursor pagination
+    }
+
+    // Use a single optimized query with JOIN
+    const results = await db
         .select({
+            // Connection
             id: connections.id,
             requesterId: connections.requesterId,
             addresseeId: connections.addresseeId,
             status: connections.status,
             createdAt: connections.createdAt,
             updatedAt: connections.updatedAt,
+            // Profile (Other User)
+            profileId: profiles.id,
+            username: profiles.username,
+            fullName: profiles.fullName,
+            avatarUrl: profiles.avatarUrl,
+            headline: profiles.headline,
         })
         .from(connections)
-        .where(
-            and(
-                eq(connections.status, 'accepted'),
-                or(eq(connections.requesterId, userIdToFetch), eq(connections.addresseeId, userIdToFetch))
+        .innerJoin(
+            profiles,
+            or(
+                eq(connections.requesterId, profiles.id),
+                eq(connections.addresseeId, profiles.id)
             )
         )
+        .where(and(...conditions))
         .orderBy(desc(connections.updatedAt))
         .limit(limit + 1);
 
-    const results = await query;
     const hasMore = results.length > limit;
     const connectionList = results.slice(0, limit);
 
-    // Get profile details for the "other" user in each connection
-    const otherUserIds = connectionList.map(c =>
-        c.requesterId === userIdToFetch ? c.addresseeId : c.requesterId
-    );
+    const nextCursor = hasMore && connectionList.length > 0
+        ? connectionList[connectionList.length - 1].updatedAt.toISOString()
+        : null;
 
-    const profileDetails = otherUserIds.length > 0
-        ? await db
-            .select()
-            .from(profiles)
-            .where(inArray(profiles.id, otherUserIds))
-        : [];
-
-    const profileMap = new Map(profileDetails.map(p => [p.id, p]));
-
-    const enrichedConnections = connectionList.map(c => ({
-        ...c,
-        otherUser: profileMap.get(c.requesterId === userIdToFetch ? c.addresseeId : c.requesterId) || null,
+    // Map to expected structure
+    const enrichedConnections = connectionList.map(row => ({
+        id: row.id,
+        requesterId: row.requesterId,
+        addresseeId: row.addresseeId,
+        status: row.status as 'accepted' | 'pending' | 'blocked' | 'none',
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+        otherUser: {
+            id: row.profileId,
+            username: row.username,
+            fullName: row.fullName,
+            avatarUrl: row.avatarUrl,
+            headline: row.headline
+        }
     }));
 
-    return { connections: enrichedConnections, hasMore };
+    return { connections: enrichedConnections, hasMore, nextCursor };
 }
 
 // ============================================================================
