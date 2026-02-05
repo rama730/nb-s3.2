@@ -1,29 +1,107 @@
 import { notFound } from 'next/navigation';
 import { db } from '@/lib/db';
-import { projects, profiles, projectFollows, projectMembers, savedProjects, projectNodes } from '@/lib/db/schema';
+import { projects, profiles, projectFollows, projectMembers, savedProjects } from '@/lib/db/schema';
 import { eq, sql, and } from 'drizzle-orm';
 import { createClient } from '@/lib/supabase/server';
 import ProjectDashboardClient from '@/components/projects/dashboard/ProjectDashboardClient';
+import type { Project as HubProject } from '@/types/hub';
 
 export const dynamic = 'force-dynamic';
 
 async function getProject(slug: string, currentUserId?: string | null, searchTab?: string) {
     // Simple direct query - try slug first, then id
-    let project = null;
+    const isMissingColumnError = (e: unknown) => {
+        const msg = e instanceof Error ? e.message : String(e);
+        return msg.toLowerCase().includes('column') && msg.toLowerCase().includes('does not exist');
+    };
 
-    // Try by slug
-    const [bySlug] = await db.select().from(projects).where(eq(projects.slug, slug)).limit(1);
-    project = bySlug;
+    const selectProject = async (where: any) => {
+        try {
+            return await db
+                .select({
+                    id: projects.id,
+                    ownerId: projects.ownerId,
+                    conversationId: projects.conversationId,
+                    title: projects.title,
+                    slug: projects.slug,
+                    description: projects.description,
+                    shortDescription: projects.shortDescription,
+                    problemStatement: projects.problemStatement,
+                    solutionStatement: projects.solutionStatement,
+                    coverImage: projects.coverImage,
+                    category: projects.category,
+                    tags: projects.tags,
+                    skills: projects.skills,
+                    visibility: projects.visibility,
+                    status: projects.status,
+                    lifecycleStages: projects.lifecycleStages,
+                    currentStageIndex: projects.currentStageIndex,
+                    importSource: projects.importSource,
+                    syncStatus: projects.syncStatus,
+                    viewCount: projects.viewCount,
+                })
+                .from(projects)
+                .where(where)
+                .limit(1);
+        } catch (e) {
+            if (!isMissingColumnError(e)) throw e;
 
-    // Fallback: try by id if slug didn't match
+            // Fallback for older DBs missing newer columns (import_source, sync_status, conversation_id, etc.).
+            return await db
+                .select({
+                    id: projects.id,
+                    ownerId: projects.ownerId,
+                    conversationId: sql<string | null>`null`,
+                    title: projects.title,
+                    slug: sql<string | null>`null`,
+                    description: projects.description,
+                    shortDescription: projects.shortDescription,
+                    problemStatement: sql<string | null>`null`,
+                    solutionStatement: sql<string | null>`null`,
+                    coverImage: projects.coverImage,
+                    category: projects.category,
+                    tags: projects.tags,
+                    skills: projects.skills,
+                    visibility: projects.visibility,
+                    status: projects.status,
+                    lifecycleStages: sql<string[] | null>`null`,
+                    currentStageIndex: sql<number | null>`null`,
+                    importSource: sql<unknown>`null`,
+                    syncStatus: sql<string | null>`null`,
+                    viewCount: sql<number | null>`null`,
+                })
+                .from(projects)
+                .where(where)
+                .limit(1);
+        }
+    };
+
+    let project: Awaited<ReturnType<typeof selectProject>>[number] | null = null;
+
+    // Try by slug first (if the DB is missing `slug`, fall through to id)
+    try {
+        const [bySlug] = await selectProject(eq(projects.slug, slug));
+        project = bySlug ?? null;
+    } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (!(msg.toLowerCase().includes('column') && msg.toLowerCase().includes('slug') && msg.toLowerCase().includes('does not exist'))) {
+            throw e;
+        }
+    }
+
+    // Fallback: try by id if slug didn't match (or slug column doesn't exist)
     if (!project) {
-        const [byId] = await db.select().from(projects).where(eq(projects.id, slug)).limit(1);
-        project = byId;
+        // Only attempt to query by ID if the string is actually a UUID.
+        // This prevents Postgres "invalid input syntax for type uuid" errors when passing a non-existent slug.
+        const isUuid = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(slug);
+
+        if (isUuid) {
+            const [byId] = await selectProject(eq(projects.id, slug));
+            project = byId ?? null;
+        }
     }
 
     if (!project) return null;
-
-    console.log("[getProject] currentStageIndex from DB:", project.currentStageIndex, "lifecycleStages:", project.lifecycleStages);
 
     // Get owner
     const [owner] = await db.select().from(profiles).where(eq(profiles.id, project.ownerId)).limit(1);
@@ -66,8 +144,8 @@ async function getProject(slug: string, currentUserId?: string | null, searchTab
     
     let projectSprints: any[] = [];
     let projectTasks: any[] = [];
-    let projectRoles: any[] = [];
-    let projectCollaborators: any[] = [];
+    let openRoles: any[] = [];
+    let collaborators: any[] = [];
     let initialFileNodes: any[] = [];
 
     // Fetch ONLY critical shell data (Collaborators/Members) for access control
@@ -83,13 +161,22 @@ async function getProject(slug: string, currentUserId?: string | null, searchTab
             limit: 20
         });
 
-        projectCollaborators = membersResult.map(m => m.user);
+        collaborators = membersResult.map(m => ({
+            userId: m.userId,
+            membershipRole: m.role, // owner/admin/member/viewer
+            user: m.user ? {
+                id: m.user.id,
+                username: m.user.username,
+                fullName: m.user.fullName,
+                avatarUrl: m.user.avatarUrl,
+            } : null
+        })).filter((m: any) => !!m.user);
 
         // Fetch open roles (small dataset, needed for Dashboard OpenRolesCard)
         const rolesResult = await db.query.projectOpenRoles.findMany({
             where: (roles, { eq }) => eq(roles.projectId, project.id)
         });
-        projectRoles = rolesResult;
+        openRoles = rolesResult;
 
         // DO NOT FETCH: projectTasks, projectSprints here.
         // They remain empty arrays []
@@ -99,43 +186,74 @@ async function getProject(slug: string, currentUserId?: string | null, searchTab
         // Fallback to empty arrays so the UI still renders
     }
 
+    const ownerDto = owner ? {
+        id: owner.id,
+        username: owner.username,
+        fullName: owner.fullName,
+        avatarUrl: owner.avatarUrl
+    } : null;
+
+    const normalizedStatus: HubProject['status'] =
+        project.status === 'draft' ||
+            project.status === 'active' ||
+            project.status === 'completed' ||
+            project.status === 'archived'
+            ? project.status
+            : 'draft';
+
+    const normalizedSyncStatus: HubProject['syncStatus'] =
+        project.syncStatus === 'pending' ||
+            project.syncStatus === 'cloning' ||
+            project.syncStatus === 'indexing' ||
+            project.syncStatus === 'ready' ||
+            project.syncStatus === 'failed'
+            ? project.syncStatus
+            : 'ready';
+
     return {
-        ...project,
-        // Explicit lifecycle fields to ensure they're always present
-        current_stage_index: project.currentStageIndex ?? 0,
-        lifecycle_stages: project.lifecycleStages ?? [],
+        // Base identity
+        id: project.id,
+        ownerId: project.ownerId,
+        conversationId: project.conversationId,
+        title: project.title,
         slug: project.slug || undefined,
-        status: project.status || "draft",
+
+        // Core content
         description: project.description || null,
         shortDescription: project.shortDescription || null,
+        problemStatement: project.problemStatement || null,
+        solutionStatement: project.solutionStatement || null,
         coverImage: project.coverImage || null,
         category: project.category || null,
-        visibility: project.visibility || "private", // Fix visibility null -> string
-        tags: project.tags || [], // Fix null -> string[]
-        skills: project.skills || [], // Fix null -> string[]
-        view_count: project.viewCount ?? 0,
-        followers_count: followersCount,
-        is_followed: isFollowed,
-        is_saved: isSaved,
-        project_sprints: projectSprints,
-        project_tasks: projectTasks,
-        project_open_roles: projectRoles,
-        project_collaborators: projectCollaborators,
+        tags: project.tags || [],
+        skills: project.skills || [],
+
+        // Visibility/status
+        visibility: project.visibility || "private",
+        status: normalizedStatus,
+
+        // Lifecycle
+        lifecycleStages: project.lifecycleStages || [],
+        currentStageIndex: project.currentStageIndex ?? 0,
+
+        // Import/files sync
+        importSource: project.importSource || null,
+        syncStatus: normalizedSyncStatus,
+
+        // Stats + user interaction
+        viewCount: project.viewCount ?? 0,
+        followersCount,
+        isFollowed,
+        isSaved,
+
+        // Lightweight relations for shell UI
+        sprints: projectSprints,
+        tasks: projectTasks,
+        openRoles,
+        collaborators,
         initialFileNodes,
-        problem_statement: (project as any).problemStatement || null,
-        solution_statement: (project as any).solutionStatement || null,
-        owner: owner ? { // Pass as 'owner' for client consistency
-            id: owner.id,
-            username: owner.username,
-            full_name: owner.fullName,
-            avatar_url: owner.avatarUrl
-        } : undefined,
-        profiles: owner ? {
-            id: owner.id,
-            username: owner.username,
-            full_name: owner.fullName,
-            avatar_url: owner.avatarUrl
-        } : undefined
+
+        owner: ownerDto,
     };
 }
 

@@ -13,6 +13,8 @@ interface WizardFooterProps {
     isSavingDraft: boolean;
     saveStatus: 'idle' | 'saving' | 'saved' | 'error';
     lastSaved: Date | null;
+    nextLabel?: string;
+    nextDisabled?: boolean;
 }
 
 export default function WizardFooter({
@@ -25,6 +27,8 @@ export default function WizardFooter({
     isSavingDraft,
     saveStatus,
     lastSaved,
+    nextLabel,
+    nextDisabled,
 }: WizardFooterProps) {
     const isLastPhase = phase === totalPhases;
 
@@ -98,9 +102,10 @@ export default function WizardFooter({
                     <button
                         type="button"
                         onClick={onNext}
-                        className="flex items-center gap-2 px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-medium transition-colors"
+                        disabled={!!nextDisabled}
+                        className="flex items-center gap-2 px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 disabled:opacity-60 text-white rounded-xl font-medium transition-colors"
                     >
-                        Continue
+                        {nextLabel || 'Continue'}
                         <ChevronRight className="w-4 h-4" />
                     </button>
                 )}

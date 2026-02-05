@@ -28,7 +28,7 @@ export default async function HubPage() {
         includedIds: undefined
     };
 
-    const initialData = await fetchHubProjectsAction(initialFilters, 0, 24);
+    const initialData = await fetchHubProjectsAction(initialFilters, undefined, 24);
 
     return (
         <div className="h-[calc(100vh-var(--header-height,56px))] min-h-0 overflow-hidden bg-zinc-50 dark:bg-zinc-950">

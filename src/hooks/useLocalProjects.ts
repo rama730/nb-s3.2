@@ -69,7 +69,7 @@ export function useLocalProjects() {
                 skills: input.technologies_used,
                 category: input.project_type,
                 problem_statement: input.problem_statement,
-                solution_overview: input.solution_overview,
+                solution_statement: input.solution_statement,
                 target_audience: input.target_audience,
                 goals: input.goals,
                 external_links: input.external_links
@@ -97,7 +97,7 @@ export function useLocalProjects() {
                 category: input.project_type,
                 // Store other wizard fields
                 problem_statement: input.problem_statement,
-                solution_overview: input.solution_overview,
+                solution_statement: input.solution_statement,
                 target_audience: input.target_audience,
                 goals: input.goals,
                 external_links: input.external_links

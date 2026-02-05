@@ -54,10 +54,9 @@ import {
   searchProjectFileIndex,
   upsertProjectFileIndex,
   updateProjectFileStats,
-  getProjectFileContent,
   getProjectFileSignedUrl,
 } from "@/app/actions/files";
-import { getProjectSyncStatus } from "@/app/actions/project";
+import { getProjectSyncStatus, retryGithubImportAction } from "@/app/actions/project";
 import { useRouter } from "next/navigation";
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 import { BreadcrumbBar } from "./navigation/BreadcrumbBar";
@@ -74,7 +73,13 @@ interface ProjectFilesWorkspaceProps {
   currentUserId?: string;
   isOwnerOrMember: boolean;
   syncStatus?: 'pending' | 'cloning' | 'indexing' | 'ready' | 'failed';
+  importSourceType?: 'github' | 'upload' | 'scratch' | null;
 }
+
+const DEFAULT_PANES = { left: { openTabIds: [], activeTabId: null }, right: { openTabIds: [], activeTabId: null } };
+const DEFAULT_PREFS = { lineNumbers: true, wordWrap: false, fontSize: 14, minimap: true };
+const DEFAULT_NODES: Record<string, ProjectNode> = {};
+const DEFAULT_PINNED: Record<string, boolean> = {};
 
 type PaneId = "left" | "right";
 
@@ -110,6 +115,7 @@ export default function ProjectFilesWorkspace({
   isOwnerOrMember,
   initialFileNodes,
   syncStatus: initialSyncStatus = 'ready',
+  importSourceType,
 }: ProjectFilesWorkspaceProps & { initialFileNodes?: ProjectNode[] }) {
   const canEdit = isOwnerOrMember;
   const { showToast } = useToast();
@@ -118,22 +124,160 @@ export default function ProjectFilesWorkspace({
   // Sync Status Management
   const [syncState, setSyncState] = useState(initialSyncStatus);
   const showOverlay = syncState !== 'ready';
+  const [syncPollError, setSyncPollError] = useState<string | null>(null);
+  const [syncErrorReason, setSyncErrorReason] = useState<string | null>(null);
+  const [retryLoading, setRetryLoading] = useState(false);
+  const overlayStartedAtRef = useRef<number | null>(showOverlay ? Date.now() : null);
+  const pollDelayRef = useRef<number>(3000);
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [forceUpdate, setForceUpdate] = useState(0);
 
+  // Poll for sync status if not ready
   useEffect(() => {
-    if (!showOverlay || syncState === 'failed') return;
+    let cancelled = false;
 
-    const interval = setInterval(async () => {
+    const isVisible = () =>
+      typeof document === "undefined" ? true : document.visibilityState === "visible";
+
+    const clearTimer = () => {
+      if (pollTimerRef.current) {
+        clearTimeout(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
+    };
+
+    const schedule = (delayMs: number) => {
+      clearTimer();
+      pollTimerRef.current = setTimeout(async () => {
+        if (cancelled) return;
+        if (!isVisible()) {
+          // Back off more when tab isn't visible
+          pollDelayRef.current = Math.min(60_000, Math.max(5_000, pollDelayRef.current * 2));
+          schedule(pollDelayRef.current);
+          return;
+        }
+
+        try {
+          const res = await getProjectSyncStatus(projectId);
+          if (!res.success) {
+            setSyncPollError(res.error || "Unable to check sync status. Retrying...");
+            pollDelayRef.current = Math.min(30_000, Math.round(pollDelayRef.current * 1.5));
+            return;
+          }
+          if (res.success && res.status) {
+            if (res.status !== syncState) {
+              // Reset backoff on state change
+              pollDelayRef.current = 3000;
+              setSyncState(res.status);
+              if (res.status === "ready") {
+                router.refresh();
+              }
+            } else {
+              // Exponential-ish backoff while status is unchanged
+              pollDelayRef.current = Math.min(30_000, Math.round(pollDelayRef.current * 1.5));
+            }
+            if (res.lastError) setSyncErrorReason(res.lastError);
+            setSyncPollError(null);
+          }
+        } catch (e) {
+          // Back off on error
+          setSyncPollError("Unable to check sync status. Retrying...");
+          pollDelayRef.current = Math.min(30_000, Math.round(pollDelayRef.current * 1.5));
+        } finally {
+          if (!cancelled && syncState !== "ready" && syncState !== "failed") {
+            schedule(pollDelayRef.current);
+          }
+        }
+      }, delayMs);
+    };
+
+    if (syncState === "ready" || syncState === "failed") {
+      overlayStartedAtRef.current = null;
+      pollDelayRef.current = 3000;
+      clearTimer();
+      setSyncPollError(null);
+      // Fetch error reason once if failed
+      if (syncState === "failed" && !syncErrorReason) {
+        getProjectSyncStatus(projectId).then((res) => {
+          if (res.success && res.lastError) setSyncErrorReason(res.lastError);
+        });
+      }
+      return () => {
+        cancelled = true;
+        clearTimer();
+      };
+    }
+
+    if (!overlayStartedAtRef.current) overlayStartedAtRef.current = Date.now();
+    schedule(0);
+
+    const onVisibility = () => {
+      if (isVisible()) {
+        pollDelayRef.current = 3000;
+        schedule(0);
+      }
+    };
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", onVisibility);
+    }
+
+    return () => {
+      cancelled = true;
+      clearTimer();
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", onVisibility);
+      }
+    };
+  }, [projectId, syncState, router, syncErrorReason]);
+
+  // Manual refresh handler
+  const handleManualRefresh = useCallback(async () => {
+    setRetryLoading(true);
+    pollDelayRef.current = 3000;
+    try {
         const res = await getProjectSyncStatus(projectId);
         if (res.success && res.status) {
             setSyncState(res.status);
+            if (res.lastError) setSyncErrorReason(res.lastError);
             if (res.status === 'ready') {
-                router.refresh(); // Refresh server components to get new file list
+                router.refresh();
+                showToast("Project is ready!", "success");
+            } else {
+                showToast(`Current status: ${res.status}`, "info");
             }
         }
-    }, 3000);
+    } finally {
+        setRetryLoading(false);
+    }
+  }, [projectId, showToast, router]);
 
-    return () => clearInterval(interval);
-  }, [projectId, showOverlay, syncState, router]);
+  const elapsedMs = overlayStartedAtRef.current ? Date.now() - overlayStartedAtRef.current : 0;
+  const isSlow = elapsedMs > 90_000 && syncState !== 'ready' && syncState !== 'failed';
+  const canRetryImport = (importSourceType === 'github') && canEdit;
+
+  const handleRetryImport = useCallback(async () => {
+    if (!canRetryImport) return;
+    setRetryLoading(true);
+    pollDelayRef.current = 3000;
+    try {
+      // Fetch fresh token from client session to ensure we have access
+      const supabase = createClient();
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.provider_token;
+
+      const res = await retryGithubImportAction(projectId, token);
+      if (!res.success) {
+        showToast(res.error || "Retry failed", "error");
+        return;
+      }
+      setSyncState("pending");
+      setSyncPollError(null);
+      overlayStartedAtRef.current = Date.now();
+      showToast("Import retry started", "success");
+    } finally {
+      setRetryLoading(false);
+    }
+  }, [canRetryImport, projectId, showToast]);
   const ensureProjectWorkspace = useFilesWorkspaceStore((s) => s.ensureProjectWorkspace);
   const setNodes = useFilesWorkspaceStore((s) => s.setNodes);
 
@@ -160,12 +304,12 @@ export default function ProjectFilesWorkspace({
   const splitRatio = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.splitRatio ?? 0.5);
   const explorerMode = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.explorerMode || "tree");
   const viewMode = useFilesWorkspaceStore((s) => (s.byProjectId[projectId]?.viewMode as FilesViewMode) || "code");
-  const nodesById = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.nodesById || EMPTY_OBJECT);
+  const nodesById = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.nodesById || DEFAULT_NODES);
   
   // Specific objects we need (excluding fileStates which changes too often)
-  const panes = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.panes || { left: { openTabIds: [], activeTabId: null }, right: { openTabIds: [], activeTabId: null } });
-  const prefs = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.prefs || { lineNumbers: true, wordWrap: false, fontSize: 14, minimap: true });
-  const pinnedByTabId = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.pinnedByTabId || EMPTY_OBJECT);
+  const panes = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.panes || DEFAULT_PANES);
+  const prefs = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.prefs || DEFAULT_PREFS);
+  const pinnedByTabId = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.pinnedByTabId || DEFAULT_PINNED);
   
   const openTab = useFilesWorkspaceStore((s) => s.openTab);
   const closeTabStore = useFilesWorkspaceStore((s) => s.closeTab);
@@ -395,7 +539,13 @@ export default function ProjectFilesWorkspace({
       }
 
       try {
-        const text = await getProjectFileContent(projectId, node.id);
+        const url = await ensureSignedUrlForNode(node);
+        if (!url) throw new Error("Failed to fetch file URL");
+        const res = await fetch(url);
+        if (!res.ok) {
+          throw new Error(`Failed to load file (${res.status})`);
+        }
+        const text = await res.text();
         const latestToken = loadTokenRef.current.get(node.id);
         if (latestToken !== nextToken) return;
 
@@ -430,7 +580,7 @@ export default function ProjectFilesWorkspace({
         opsInProgressRef.current.delete(node.id);
       }
     },
-    [getSupabase, projectId, setFileState] // Removed "ws" dependency (implicit or explicit)
+    [ensureSignedUrlForNode, projectId, setFileState] // Removed "ws" dependency (implicit or explicit)
   );
 
   const signedUrlCacheRef = useRef<Map<string, { url: string; expiresAt: number }>>(new Map());
@@ -669,7 +819,74 @@ export default function ProjectFilesWorkspace({
         return false;
       }
     },
-    [canEdit, getSupabase, projectId, showToast]
+    [canEdit, getSupabase, projectId, recordProjectNodeEvent, setFileState, showToast, updateProjectFileStats, upsertNodes, upsertProjectFileIndex]
+  );
+
+  const saveContentDirect = useCallback(
+    async (
+      node: ProjectNode,
+      content: string,
+      opts?: { silent?: boolean; reason?: string }
+    ): Promise<boolean> => {
+      if (!canEdit) return false;
+      if (!node?.id || !node.s3Key) return false;
+
+      try {
+        const supabase = getSupabase();
+        const blob = new Blob([content], { type: node.mimeType || "text/plain" });
+        const { error } = await supabase.storage
+          .from("project-files")
+          .update(node.s3Key, blob, { upsert: true });
+        if (error) throw error;
+
+        const size = new TextEncoder().encode(content).length;
+        await updateProjectFileStats(projectId, node.id, size);
+        upsertNodes(projectId, [{ ...node, size }]);
+
+        try {
+          const ext = node.name.split(".").pop()?.toLowerCase();
+          const isText =
+            (node.mimeType || "").startsWith("text/") ||
+            ["ts", "tsx", "js", "jsx", "json", "md", "css", "html", "sql", "py", "txt"].includes(
+              ext || ""
+            );
+          if (isText) {
+            await upsertProjectFileIndex(projectId, node.id, content);
+          }
+        } catch {}
+
+        const savedAt = Date.now();
+        setFileState(projectId, node.id, { isDirty: false, lastSavedAt: savedAt });
+        setTabById((prev) => {
+          if (!prev[node.id]) return prev;
+          return {
+            ...prev,
+            [node.id]: {
+              ...prev[node.id],
+              content,
+              savedSnapshot: content,
+              isDirty: false,
+              isSaving: false,
+              offlineQueued: false,
+              lastSavedAt: savedAt,
+            },
+          };
+        });
+
+        try {
+          await recordProjectNodeEvent(projectId, node.id, "save", {
+            bytes: content.length,
+          });
+        } catch {}
+
+        if (!opts?.silent) showToast("File saved", "success");
+        return true;
+      } catch (e: any) {
+        if (!opts?.silent) showToast(`Failed to save: ${e?.message || "Unknown error"}`, "error");
+        return false;
+      }
+    },
+    [canEdit, getSupabase, projectId, recordProjectNodeEvent, setFileState, showToast, updateProjectFileStats, upsertNodes, upsertProjectFileIndex]
   );
 
   const closeTab = useCallback(
@@ -723,6 +940,74 @@ export default function ProjectFilesWorkspace({
     },
     [canEdit, clearLock, projectId, releaseProjectNodeLock, removeNodeFromCaches, showToast]
   );
+
+  const flushOfflineQueue = useCallback(async () => {
+    if (!canEdit) return;
+    if (typeof navigator === "undefined" || !navigator.onLine) return;
+    const key = `files-offline-queue:${projectId}`;
+
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) return;
+      const queue = JSON.parse(raw) as Record<string, { content: string; ts: number }>;
+      const nodeIds = Object.keys(queue);
+      if (nodeIds.length === 0) return;
+
+      showToast(`Syncing ${nodeIds.length} offline changes...`, "info");
+
+      await ensureNodeMetadata(nodeIds);
+      const currentWs = useFilesWorkspaceStore.getState().byProjectId[projectId];
+      if (!currentWs) return;
+
+      let synced = 0;
+      const nextQueue: Record<string, { content: string; ts: number }> = { ...queue };
+
+      for (const nodeId of nodeIds) {
+        const node = currentWs.nodesById[nodeId];
+        if (!node?.s3Key) continue;
+
+        try {
+          const lockRes = await acquireProjectNodeLock(projectId, nodeId, 120);
+          if (!(lockRes as any)?.ok) continue;
+
+          const ok = await saveContentDirect(node, queue[nodeId].content, { silent: true, reason: "offline-flush" });
+          if (ok) {
+            delete nextQueue[nodeId];
+            synced++;
+          }
+        } catch (e) {
+          console.error("Offline sync failed for node", nodeId, e);
+        } finally {
+          try {
+            await releaseProjectNodeLock(projectId, nodeId);
+          } catch {}
+        }
+      }
+
+      if (Object.keys(nextQueue).length === 0) {
+        localStorage.removeItem(key);
+      } else {
+        localStorage.setItem(key, JSON.stringify(nextQueue));
+      }
+
+      if (synced > 0) {
+        showToast(`Synced ${synced} files from offline session`, "success");
+      }
+    } catch (e) {
+      console.error("Offline sync failed", e);
+    }
+  }, [canEdit, projectId, ensureNodeMetadata, showToast, saveContentDirect, acquireProjectNodeLock, releaseProjectNodeLock]);
+
+  useEffect(() => {
+    const onOnline = () => {
+      void flushOfflineQueue();
+    };
+
+    window.addEventListener("online", onOnline);
+    void flushOfflineQueue();
+
+    return () => window.removeEventListener("online", onOnline);
+  }, [flushOfflineQueue]);
 
   // Restore / ensure metadata + content for persisted tabs
   // Restore / ensure metadata + content for persisted tabs
@@ -853,59 +1138,6 @@ export default function ProjectFilesWorkspace({
     }, 45_000);
     return () => clearInterval(interval);
   }, [currentUserId, panesToRender, projectId, panes.left?.activeTabId, panes.right?.activeTabId]);
-
-  // Flush offline queue when back online
-  useEffect(() => {
-    const onOnline = () => {
-      try {
-        const key = `files-offline-queue:${projectId}`;
-        const raw = localStorage.getItem(key);
-        if (!raw) return;
-        const queue = JSON.parse(raw) as Record<string, { content: string; ts: number }>;
-        const ids = Object.keys(queue);
-        if (!ids.length) return;
-        void (async () => {
-          await ensureNodeMetadata(ids);
-          const currentWs = useFilesWorkspaceStore.getState().byProjectId[projectId];
-          if (!currentWs) return;
-
-          for (const id of ids) {
-            const node = currentWs.nodesById[id];
-            if (!node) continue;
-            // Ensure tab state exists / reflects queued content
-            setTabById((prev) => ({
-              ...prev,
-              [id]: {
-                ...(prev[id] ?? {
-                  id,
-                  node,
-                  content: queue[id].content,
-                  savedSnapshot: "",
-                  isDirty: true,
-                  isLoading: false,
-                  isSaving: false,
-                  isDeleting: false,
-                  hasLock: false,
-                  lockInfo: null,
-                  offlineQueued: true,
-                  error: null,
-                }),
-                node,
-                content: queue[id].content,
-                isDirty: true,
-                offlineQueued: true,
-              },
-            }));
-
-            await acquireLockForNode(node);
-            await saveTab(id, { silent: true, reason: "offline-flush" });
-          }
-        })();
-      } catch {}
-    };
-    window.addEventListener("online", onOnline);
-    return () => window.removeEventListener("online", onOnline);
-  }, [acquireLockForNode, ensureNodeMetadata, projectId, saveTab]);
 
   const startResize = (e: React.MouseEvent) => {
     if (!splitEnabled) return;
@@ -1223,23 +1455,54 @@ export default function ProjectFilesWorkspace({
                   
                   <div className="space-y-2">
                     <h3 className="text-xl font-semibold text-zinc-900 dark:text-zinc-100">
-                        {syncState === 'cloning' ? 'Cloning Repository...' :
-                         syncState === 'indexing' ? 'Processing Files...' :
+                        {syncState === 'cloning' ? 'Importing Repository...' :
+                         syncState === 'indexing' ? 'Indexing Files...' :
                          syncState === 'pending' ? 'Queued for Import...' :
                          'Import Failed'}
                     </h3>
                     <p className="text-zinc-500 dark:text-zinc-400">
                         {syncState === 'failed' 
-                            ? "We couldn't import your project. Please try again or check the repository URL."
-                            : "We're setting up your workspace in the background. This usually takes less than a minute."}
+                            ? (syncErrorReason || "We couldn't import your project. Please try again or check the repository URL.")
+                            : "We're setting up your workspace. This usually takes less than a minute."}
                     </p>
+                    {syncPollError && (
+                      <p className="text-xs text-red-600 dark:text-red-400">
+                        {syncPollError}
+                      </p>
+                    )}
+                    {isSlow && (
+                      <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                        Taking longer than usual? Try refreshing the status.
+                      </p>
+                    )}
                   </div>
 
-                  {syncState === 'failed' && (
-                      <Button onClick={() => window.location.reload()}>
-                          Retry
-                      </Button>
-                  )}
+                  <div className="flex flex-col gap-3 w-full max-w-xs">
+                     {syncState === 'failed' || isSlow ? (
+                        canRetryImport ? (
+                          <Button onClick={handleRetryImport} disabled={retryLoading} className="w-full">
+                            {retryLoading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <RefreshCw className="w-4 h-4 mr-2" />}
+                            Retry GitHub Import
+                          </Button>
+                        ) : (
+                          <Button onClick={() => window.location.reload()} variant="outline" className="w-full">
+                            Reload Page
+                          </Button>
+                        )
+                     ) : null}
+                     
+                     {syncState !== 'failed' && (
+                         <Button 
+                            variant="ghost" 
+                            size="sm"
+                            onClick={handleManualRefresh}
+                            disabled={retryLoading}
+                            className="text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+                        >
+                            {retryLoading ? 'Checking...' : 'Check Status Again'}
+                        </Button>
+                     )}
+                  </div>
               </div>
           </div>
       )}
@@ -1382,6 +1645,3 @@ function Pane({
     </div>
   );
 }
-
-
-

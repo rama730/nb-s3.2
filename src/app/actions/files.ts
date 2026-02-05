@@ -16,7 +16,13 @@ async function assertProjectAccess(projectId: string, userId: string) {
 
 async function getProjectAccess(projectId: string, userId: string | null) {
     const rows = await db
-        .select({ id: projects.id, ownerId: projects.ownerId, visibility: projects.visibility })
+        .select({
+            id: projects.id,
+            ownerId: projects.ownerId,
+            visibility: projects.visibility,
+            importSource: projects.importSource,
+            syncStatus: projects.syncStatus,
+        })
         .from(projects)
         .where(eq(projects.id, projectId))
         .limit(1);
@@ -155,7 +161,13 @@ export async function getProjectNodes(
     }
 
     // Auto-create default root folder if project is empty at root
-    if (access.canWrite && !!user && !parentId && nodes.length === 0 && !cursor) {
+    // IMPORTANT: Do NOT create system roots for imported projects (GitHub/Upload),
+    // otherwise you end up with a confusing extra folder beside the imported tree.
+    const importType = (access.project as any)?.importSource?.type as string | undefined;
+    const isScratchLike = !importType || importType === 'scratch';
+    const isReady = (access.project as any)?.syncStatus === 'ready';
+
+    if (access.canWrite && !!user && !parentId && nodes.length === 0 && !cursor && isScratchLike && isReady) {
         try {
             // Fetch project title
             const [project] = await db.select({ title: projects.title }).from(projects).where(eq(projects.id, projectId));
@@ -201,16 +213,6 @@ export async function getProjectBatchNodes(projectId: string, parentIds: (string
     // If a user has 50 expanded folders, we might still hit limits. 
     // Optimization: We could enforce max 20 expanded folders batch or just rely on the fact that 
     // restoring session is usually typically < 10 folders.
-
-    const nodes = await db.query.projectNodes.findMany({
-        where: and(
-            eq(projectNodes.projectId, projectId),
-            inArray(projectNodes.parentId, cleanParents as string[]), // dize can handle null in array? usually no
-            isNull(projectNodes.deletedAt)
-        ),
-        orderBy: (nodes, { asc }) => [asc(nodes.type), asc(nodes.name)],
-        limit: 2000 // Global safety limit for the batch
-    });
 
     // If any parent has null, `inArray` might fail for nulls in some SQL dialects or ORMs.
     // Drizzle `inArray` might not match NULL. We need to handle root separately if present.
@@ -596,11 +598,16 @@ export async function getProjectFileContent(projectId: string, nodeId: string) {
 
     const node = await db.query.projectNodes.findFirst({
         where: and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId)),
-        columns: { s3Key: true }
+        columns: { s3Key: true, size: true }
     });
 
     if (!node || !node.s3Key) {
         throw new Error("File not found");
+    }
+
+    const MAX_INLINE_BYTES = 2 * 1024 * 1024; // 2MB safety cap
+    if (node.size && node.size > MAX_INLINE_BYTES) {
+        throw new Error("File too large for inline download. Use a signed URL instead.");
     }
 
     // Use admin client to bypass RLS for public viewers

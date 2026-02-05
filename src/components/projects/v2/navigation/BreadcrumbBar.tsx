@@ -20,6 +20,8 @@ interface BreadcrumbBarProps {
   onNavigateNode: (node: ProjectNode) => void;
 }
 
+const EMPTY_OBJECT = {} as const;
+
 export function BreadcrumbBar({
   projectId,
   node,
@@ -30,8 +32,8 @@ export function BreadcrumbBar({
   const [isEditing, setIsEditing] = useState(false);
   const [pathInput, setPathInput] = useState("");
 
-  const childrenByParentId = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.childrenByParentId || {});
-  const nodesById = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.nodesById || {});
+  const childrenByParentId = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.childrenByParentId || EMPTY_OBJECT);
+  const nodesById = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.nodesById || EMPTY_OBJECT);
 
   useEffect(() => {
     const folderId = node?.type === "file" ? node.parentId ?? null : node?.id ?? null;

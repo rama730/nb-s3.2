@@ -73,23 +73,23 @@ export function toProjectCardViewModel(project: Project): ProjectCardViewModel {
     const status = statusConfig[statusKey] || statusConfig.open;
 
     // Tech Stack
-    const techStack = extendedProject.technologies_used || extendedProject.skills || [];
+    const techStack = extendedProject.skills || [];
 
     // Last Active
-    const lastActiveDate = extendedProject.updated_at || extendedProject.created_at || new Date().toISOString();
+    const lastActiveDate = extendedProject.updatedAt || extendedProject.createdAt || new Date().toISOString();
 
     // Collaborators
     const collaborators = [];
-    if (extendedProject.profiles) {
+    if (extendedProject.owner) {
         collaborators.push({
-            full_name: extendedProject.profiles.full_name,
-            avatar_url: extendedProject.profiles.avatar_url,
-            username: extendedProject.profiles.username,
+            full_name: extendedProject.owner.fullName,
+            avatar_url: extendedProject.owner.avatarUrl,
+            username: extendedProject.owner.username,
         });
     }
 
     // Open Roles
-    const rawRoles = extendedProject.project_open_roles || [];
+    const rawRoles = extendedProject.openRoles || [];
     let totalOpenRoles = 0;
     const openRoles = rawRoles.map((role: any) => {
         const available = Math.max(0, (role.count || 0) - (role.filled || 0));
@@ -108,12 +108,12 @@ export function toProjectCardViewModel(project: Project): ProjectCardViewModel {
         slug: project.slug || null,
         title: project.title,
         description: project.description || '',
-        shortDescription: project.short_description || null,
+        shortDescription: project.shortDescription || null,
         status,
         category: extendedProject.category || extendedProject.custom_project_type || extendedProject.project_type || 'Project',
         techStack,
         lastActive: lastActiveDate,
-        viewCount: project.view_count || 0,
+        viewCount: project.viewCount || 0,
         collaborators,
         totalOpenRoles,
         openRoles,

@@ -71,7 +71,7 @@ export const createProjectSchema = z.object({
     lifecycle_stages: z.array(z.string()).default([]),
     current_stage_index: z.number().default(0),
     problem_statement: z.string().optional(),
-    solution_overview: z.string().optional(),
+    solution_statement: z.string().optional(),
     target_audience: z.string().optional(),
     expected_start_date: z.string().optional(),
     expected_end_date: z.string().optional(),

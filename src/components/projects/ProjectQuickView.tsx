@@ -79,17 +79,17 @@ export default function ProjectQuickView({
                     {/* Content */}
                     <div className="p-6 overflow-y-auto max-h-[calc(80vh-140px)]">
                         <p className="text-zinc-600 dark:text-zinc-400 mb-6">
-                            {project.description || project.short_description || 'No description available.'}
+                            {project.description || project.shortDescription || 'No description available.'}
                         </p>
 
                         {/* Tech Stack */}
-                        {project.technologies_used && project.technologies_used.length > 0 && (
+                        {project.skills && project.skills.length > 0 && (
                             <div className="mb-6">
                                 <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">
                                     Technologies
                                 </h3>
                                 <div className="flex flex-wrap gap-2">
-                                    {project.technologies_used.map((tech) => (
+                                    {project.skills.map((tech) => (
                                         <span
                                             key={tech}
                                             className="px-3 py-1 bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 rounded-lg text-sm"

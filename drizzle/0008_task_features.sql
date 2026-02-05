@@ -168,33 +168,46 @@ ON task_comment_likes FOR DELETE
 USING (user_id = auth.uid());
 
 -- task_files policies
-ALTER TABLE task_files ENABLE ROW LEVEL SECURITY;
+DO $$
+BEGIN
+    -- This table was removed in later iterations. Make this migration safe on DBs where it no longer exists.
+    IF to_regclass('public.task_files') IS NOT NULL THEN
+        EXECUTE 'ALTER TABLE task_files ENABLE ROW LEVEL SECURITY';
 
-CREATE POLICY "Users can view files of tasks they can access"
-ON task_files FOR SELECT
-USING (
-    EXISTS (
-        SELECT 1 FROM tasks t
-        JOIN projects p ON t.project_id = p.id
-        LEFT JOIN project_members pm ON p.id = pm.project_id
-        WHERE t.id = task_files.task_id
-        AND (p.creator_id = auth.uid() OR pm.user_id = auth.uid())
-    )
-);
+        EXECUTE $policy$
+            CREATE POLICY "Users can view files of tasks they can access"
+            ON task_files FOR SELECT
+            USING (
+                EXISTS (
+                    SELECT 1 FROM tasks t
+                    JOIN projects p ON t.project_id = p.id
+                    LEFT JOIN project_members pm ON p.id = pm.project_id
+                    WHERE t.id = task_files.task_id
+                    AND (p.creator_id = auth.uid() OR pm.user_id = auth.uid())
+                )
+            );
+        $policy$;
 
-CREATE POLICY "Members can upload files"
-ON task_files FOR INSERT
-WITH CHECK (
-    uploaded_by = auth.uid() AND
-    EXISTS (
-        SELECT 1 FROM tasks t
-        JOIN projects p ON t.project_id = p.id
-        LEFT JOIN project_members pm ON p.id = pm.project_id
-        WHERE t.id = task_files.task_id
-        AND (p.creator_id = auth.uid() OR pm.user_id = auth.uid())
-    )
-);
+        EXECUTE $policy$
+            CREATE POLICY "Members can upload files"
+            ON task_files FOR INSERT
+            WITH CHECK (
+                uploaded_by = auth.uid() AND
+                EXISTS (
+                    SELECT 1 FROM tasks t
+                    JOIN projects p ON t.project_id = p.id
+                    LEFT JOIN project_members pm ON p.id = pm.project_id
+                    WHERE t.id = task_files.task_id
+                    AND (p.creator_id = auth.uid() OR pm.user_id = auth.uid())
+                )
+            );
+        $policy$;
 
-CREATE POLICY "Uploaders can delete their own files"
-ON task_files FOR DELETE
-USING (uploaded_by = auth.uid());
+        EXECUTE $policy$
+            CREATE POLICY "Uploaders can delete their own files"
+            ON task_files FOR DELETE
+            USING (uploaded_by = auth.uid());
+        $policy$;
+    END IF;
+END
+$$;

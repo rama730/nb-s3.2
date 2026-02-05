@@ -102,11 +102,11 @@ export default function ProjectLayout({
                                 <div className="hidden md:flex items-center gap-1 text-xs text-zinc-500 dark:text-zinc-400 min-w-0">
                                     <span className="shrink-0">Created by</span>
                                     <Link
-                                        href={profileHref({ id: (project as any)?.creator_id, username: (project as any)?.profiles?.username })}
+                                        href={profileHref({ id: (project as any)?.owner?.id, username: (project as any)?.owner?.username })}
                                         className="font-medium text-indigo-600 dark:text-indigo-400 hover:underline truncate max-w-[180px]"
-                                        title={(project as any)?.profiles?.full_name || (project as any)?.profiles?.username || "Creator"}
+                                        title={(project as any)?.owner?.fullName || (project as any)?.owner?.username || "Creator"}
                                     >
-                                        {(project as any)?.profiles?.full_name || (project as any)?.profiles?.username || "Creator"}
+                                        {(project as any)?.owner?.fullName || (project as any)?.owner?.username || "Creator"}
                                     </Link>
                                 </div>
                                 {project?.status === "active" && (
@@ -119,13 +119,13 @@ export default function ProjectLayout({
                                 <div className="flex items-center gap-1" title="Total Views">
                                     <Eye className="w-3.5 h-3.5" />
                                     <span className="font-semibold text-zinc-900 dark:text-zinc-200">
-                                        {(project as any)?.view_count ?? 0}
+                                        {(project as any)?.viewCount ?? 0}
                                     </span>
                                 </div>
                                 <div className="flex items-center gap-1" title="Followers">
                                     <Users className="w-3.5 h-3.5" />
                                     <span className="font-semibold text-zinc-900 dark:text-zinc-200">
-                                        {followersCount ?? 0}
+                                        {followersCount ?? (project as any)?.followersCount ?? 0}
                                     </span>
                                 </div>
                             </div>

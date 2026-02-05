@@ -9,8 +9,8 @@ const PAGE_SIZE = 24;
 export function useHubProjectsSimple(filters: HubFilters, initialProjectsPage?: any) {
     return useInfiniteQuery({
         queryKey: ['hub-projects-simple', filters],
-        queryFn: async ({ pageParam = 0 }) => {
-            const result = await fetchHubProjectsAction(filters, pageParam as number, PAGE_SIZE);
+        queryFn: async ({ pageParam = undefined as string | undefined }) => {
+            const result = await fetchHubProjectsAction(filters, pageParam, PAGE_SIZE);
 
             if (!result.success) {
                 throw new Error(result.error);
@@ -20,7 +20,7 @@ export function useHubProjectsSimple(filters: HubFilters, initialProjectsPage?: 
             const successResult = result as {
                 success: true;
                 projects: Project[];
-                nextCursor?: number;
+                nextCursor?: string;
                 hasMore: boolean;
             };
 
@@ -30,8 +30,8 @@ export function useHubProjectsSimple(filters: HubFilters, initialProjectsPage?: 
                 hasMore: successResult.hasMore,
             };
         },
-        initialPageParam: 0,
-        getNextPageParam: (lastPage) => lastPage.nextCursor,
+        initialPageParam: undefined as string | undefined,
+        getNextPageParam: (lastPage) => lastPage.hasMore ? lastPage.nextCursor : undefined,
         // Keep previous data when fetching new filters for smooth transition
         placeholderData: (previousData) => previousData,
         // Use initial data if provided and filters match default (empty/all)
@@ -42,7 +42,7 @@ export function useHubProjectsSimple(filters: HubFilters, initialProjectsPage?: 
                 nextCursor: initialProjectsPage.nextCursor,
                 hasMore: initialProjectsPage.hasMore
             }],
-            pageParams: [0]
+            pageParams: [undefined]
         } : undefined,
     });
 }

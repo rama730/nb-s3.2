@@ -10,8 +10,8 @@ import { CreateProjectInput } from '@/lib/validations/project';
 import { generateSlug } from '@/lib/utils/slug';
 import { generateProjectKey } from '@/lib/project-key';
 // Queue Imports
-import { importQueue } from '@/lib/queue/client';
-import { ImportJobData } from '@/lib/queue/config';
+import { inngest } from '@/inngest/client';
+import { getLifecycleStagesForProjectType } from '@/lib/projects/lifecycle-templates';
 
 // --- Types ---
 interface CreateProjectResult {
@@ -150,7 +150,8 @@ export async function createProjectAction(input: CreateProjectInput & { slug?: s
                     description: input.description || null,
                     shortDescription: input.short_description || null,
                     problemStatement: input.problem_statement || null,
-                    solutionStatement: input.solution_overview || null,
+                    // Backward-compatible: support older clients sending solution_overview
+                    solutionStatement: (input as any).solution_statement || (input as any).solution_overview || null,
                     category: input.project_type || null,
                     tags: input.tags || [],
                     skills: input.technologies_used || [],
@@ -159,10 +160,11 @@ export async function createProjectAction(input: CreateProjectInput & { slug?: s
                     lookingForCollaborators: true,
                     lifecycleStages: (input.lifecycle_stages && input.lifecycle_stages.length > 0)
                         ? input.lifecycle_stages
-                        : ["Concept", "Team Formation", "MVP", "Beta", "Launch"],
+                        : getLifecycleStagesForProjectType(input.project_type),
                     currentStageIndex: input.current_stage_index || 0,
                     importSource: input.import_source || null,
-                    syncStatus: (input.import_source?.type === 'github' ? 'cloning' :
+                    // For GitHub imports, start at `pending` until the worker actually begins cloning.
+                    syncStatus: (input.import_source?.type === 'github' ? 'pending' :
                         input.import_source?.type === 'upload' ? 'pending' : 'ready') as 'pending' | 'cloning' | 'indexing' | 'ready' | 'failed',
                 };
 
@@ -222,9 +224,9 @@ export async function createProjectAction(input: CreateProjectInput & { slug?: s
                 // Add to Import Queue if applicable
                 if (input.import_source?.type === 'github' && input.import_source.repoUrl) {
                     try {
-                        await importQueue.add(
-                            'github-import',
-                            {
+                        await inngest.send({
+                            name: "project/import",
+                            data: {
                                 projectId: result.id,
                                 importSource: {
                                     type: 'github',
@@ -232,12 +234,29 @@ export async function createProjectAction(input: CreateProjectInput & { slug?: s
                                     branch: input.import_source.branch,
                                     metadata: input.import_source.metadata
                                 },
-                                accessToken: gitHubToken || undefined, // Pass token for authenticated cloning
+                                accessToken: gitHubToken || undefined,
                                 userId: user.id
-                            } satisfies ImportJobData
-                        );
+                            }
+                        });
                     } catch (queueError) {
+                        // If we can't enqueue, mark the project as failed so the Files tab becomes actionable.
+                        const msg =
+                            queueError instanceof Error ? queueError.message : 'Failed to enqueue GitHub import';
                         console.error('[Action] Failed to add to queue', queueError);
+
+                        const currentImportSource = input.import_source!;
+                        const nextImportSource = {
+                            ...currentImportSource,
+                            metadata: {
+                                ...((currentImportSource as any)?.metadata || {}),
+                                lastError: msg,
+                            },
+                        };
+
+                        await db
+                            .update(projects)
+                            .set({ syncStatus: 'failed', importSource: nextImportSource as any, updatedAt: new Date() })
+                            .where(eq(projects.id, result.id));
                     }
                 }
 
@@ -304,20 +323,48 @@ export async function updateProject(projectId: string, data: any) {
         if (!project) throw new Error("Project not found");
         if (project.ownerId !== user.id) throw new Error("Unauthorized");
 
-        const { roles, deletedRoleIds, ...projectData } = data;
+        const { roles, deletedRoleIds, ...raw } = data || {};
 
-        // Update Project
-        await tx.update(projects)
-            .set({
-                ...projectData,
-                lifecycleStages: projectData.lifecycle_stages,
-                currentStageIndex: projectData.current_stage_index,
-                problemStatement: projectData.problem_statement,
-                solutionStatement: projectData.solution_statement,
-                shortDescription: projectData.short_description,
-                updatedAt: new Date(),
-            })
-            .where(eq(projects.id, projectId));
+        // Update Project (canonical camelCase payload; accepts snake_case for backward compatibility)
+        const updateValues: any = {
+            updatedAt: new Date(),
+        };
+
+        if (raw.title !== undefined) updateValues.title = raw.title;
+        if (raw.description !== undefined) updateValues.description = raw.description;
+        if (raw.visibility !== undefined) updateValues.visibility = raw.visibility;
+        if (raw.status !== undefined) updateValues.status = raw.status;
+
+        // Tagline
+        if (raw.shortDescription !== undefined) updateValues.shortDescription = raw.shortDescription;
+        else if (raw.short_description !== undefined) updateValues.shortDescription = raw.short_description;
+
+        // Problem / Solution
+        if (raw.problemStatement !== undefined) updateValues.problemStatement = raw.problemStatement;
+        else if (raw.problem_statement !== undefined) updateValues.problemStatement = raw.problem_statement;
+
+        if (raw.solutionStatement !== undefined) updateValues.solutionStatement = raw.solutionStatement;
+        else if (raw.solution_statement !== undefined) updateValues.solutionStatement = raw.solution_statement;
+        else if (raw.solution_overview !== undefined) updateValues.solutionStatement = raw.solution_overview; // legacy
+
+        // Category
+        if (raw.category !== undefined) updateValues.category = raw.category;
+        else if (raw.project_type !== undefined) updateValues.category = raw.project_type;
+        else if (raw.custom_project_type !== undefined) updateValues.category = raw.custom_project_type;
+
+        // Tags / Skills
+        if (raw.tags !== undefined) updateValues.tags = raw.tags;
+        if (raw.skills !== undefined) updateValues.skills = raw.skills;
+        else if (raw.technologies_used !== undefined) updateValues.skills = raw.technologies_used;
+
+        // Lifecycle
+        if (raw.lifecycleStages !== undefined) updateValues.lifecycleStages = raw.lifecycleStages;
+        else if (raw.lifecycle_stages !== undefined) updateValues.lifecycleStages = raw.lifecycle_stages;
+
+        if (raw.currentStageIndex !== undefined) updateValues.currentStageIndex = raw.currentStageIndex;
+        else if (raw.current_stage_index !== undefined) updateValues.currentStageIndex = raw.current_stage_index;
+
+        await tx.update(projects).set(updateValues).where(eq(projects.id, projectId));
 
         // Update Roles
         if (roles && Array.isArray(roles)) {
@@ -1242,13 +1289,96 @@ export async function getProjectSyncStatus(projectId: string) {
 
     try {
         const [project] = await db
-            .select({ syncStatus: projects.syncStatus })
+            .select({
+                syncStatus: projects.syncStatus,
+                importSource: projects.importSource
+            })
             .from(projects)
             .where(eq(projects.id, projectId));
 
-        return { success: true, status: project?.syncStatus || 'ready' };
+        const meta = (project?.importSource as any)?.metadata;
+        const lastError = meta?.lastError || null;
+
+        return {
+            success: true,
+            status: project?.syncStatus || 'ready',
+            lastError
+        };
     } catch (error) {
         console.error('Failed to get sync status', error);
         return { success: false, error: 'Failed' };
+    }
+}
+
+export async function retryGithubImportAction(projectId: string, clientToken?: string) {
+    const supabase = await createClient();
+    const { data: { session } } = await supabase.auth.getSession();
+    const user = session?.user;
+    if (!user) return { success: false, error: 'Unauthorized' };
+
+    try {
+        const [project] = await db
+            .select({ ownerId: projects.ownerId, importSource: projects.importSource })
+            .from(projects)
+            .where(eq(projects.id, projectId))
+            .limit(1);
+
+        if (!project) return { success: false, error: 'Project not found' };
+        if (project.ownerId !== user.id) return { success: false, error: 'Unauthorized' };
+
+        const src = project.importSource as any;
+        if (!src || src.type !== 'github' || !src.repoUrl) {
+            return { success: false, error: 'Not a GitHub import project' };
+        }
+
+        // Inngest handles concurrency/idempotency automatically via function settings.
+        // We just re-emit the event.
+
+        // Prioritize client-provided token (fresh from client session), fallback to server session
+        const gitHubToken = clientToken || session?.provider_token;
+
+        const nextImportSource = {
+            ...src,
+            metadata: {
+                ...(src.metadata || {}),
+                lastError: null,
+                lastRetryAt: new Date().toISOString(),
+            },
+        };
+
+        await db
+            .update(projects)
+            .set({ syncStatus: 'pending', importSource: nextImportSource as any, updatedAt: new Date() })
+            .where(eq(projects.id, projectId));
+
+        await inngest.send({
+            name: "project/import",
+            data: {
+                projectId,
+                importSource: {
+                    type: 'github',
+                    repoUrl: src.repoUrl,
+                    branch: src.branch,
+                    metadata: nextImportSource.metadata,
+                },
+                accessToken: gitHubToken || undefined,
+                userId: user.id,
+            }
+        });
+
+        return { success: true };
+    } catch (e: any) {
+        const msg = typeof e?.message === 'string' ? e.message : 'Retry failed';
+        try {
+            await db.update(projects)
+                .set({
+                    syncStatus: 'failed',
+                    updatedAt: new Date(),
+                    importSource: sql`jsonb_set(COALESCE(${projects.importSource}, '{}'::jsonb), '{metadata,lastError}', ${JSON.stringify(msg)}::jsonb)` as any,
+                })
+                .where(eq(projects.id, projectId));
+        } catch { }
+
+        return { success: false, error: msg };
     }
 }

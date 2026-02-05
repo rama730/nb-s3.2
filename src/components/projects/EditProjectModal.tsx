@@ -29,15 +29,15 @@ const projectSchema = z.object({
     status: z.enum(["draft", "active", "completed", "archived"]),
     visibility: z.enum(["public", "private", "unlisted"]),
     title: z.string().min(1, "Title is required").max(100),
-    short_description: z.string().max(200, "Tagline must be less than 200 characters").optional(),
+    shortDescription: z.string().max(200, "Tagline must be less than 200 characters").optional(),
     description: z.string().optional(),
-    problem_statement: z.string().optional(),
-    solution_statement: z.string().optional(),
-    technologies_used: z.array(z.string()),
+    problemStatement: z.string().optional(),
+    solutionStatement: z.string().optional(),
+    skills: z.array(z.string()),
     tags: z.array(z.string()),
     roles: z.array(roleSchema),
-    lifecycle_stages: z.array(z.string()),
-    current_stage_index: z.number(),
+    lifecycleStages: z.array(z.string()),
+    currentStageIndex: z.number(),
 });
 
 type ProjectFormValues = z.infer<typeof projectSchema>;
@@ -158,17 +158,17 @@ export default function EditProjectModal({ project, isOpen, onClose, onSaved }: 
             status: project.status || "draft",
             visibility: project.visibility || "public",
             title: project.title || "",
-            short_description: project.short_description || "",
+            shortDescription: project.shortDescription || "",
             description: project.description || "",
-            problem_statement: project.problem_statement || "",
-            solution_statement: project.solution_statement || "",
-            technologies_used: project.technologies_used || [], // Assuming column name matches logic or needs transformation
+            problemStatement: project.problemStatement || "",
+            solutionStatement: project.solutionStatement || "",
+            skills: project.skills || [],
             tags: project.tags || [],
             // Check camelCase (Drizzle default) then snake_case (Raw/Legacy)
             // Use defaults ONLY if both are null/undefined, effectively initializing new/legacy projects
-            lifecycle_stages: (project.lifecycleStages ?? project.lifecycle_stages) ?? ["Concept", "Team Formation", "MVP", "Beta", "Launch"],
-            current_stage_index: project.current_stage_index ?? 0,
-            roles: project.project_open_roles?.map((r: any) => ({
+            lifecycleStages: project.lifecycleStages ?? ["Concept", "Team Formation", "MVP", "Beta", "Launch"],
+            currentStageIndex: project.currentStageIndex ?? 0,
+            roles: project.openRoles?.map((r: any) => ({
                 id: r.id,
                 role: r.role,
                 count: r.count,
@@ -187,7 +187,7 @@ export default function EditProjectModal({ project, isOpen, onClose, onSaved }: 
 
     // Tech Stack Input State
     const [techInput, setTechInput] = useState("");
-    const technologies = watch("technologies_used");
+    const technologies = watch("skills");
     
     // Tag Input State
     const [tagInput, setTagInput] = useState("");
@@ -204,7 +204,7 @@ export default function EditProjectModal({ project, isOpen, onClose, onSaved }: 
         value: string, 
         setValueState: (v: string) => void,
         currentList: string[],
-        fieldName: "technologies_used" | "tags"
+        fieldName: "skills" | "tags"
     ) => {
         if (e.key === "Enter") {
             e.preventDefault();
@@ -220,15 +220,7 @@ export default function EditProjectModal({ project, isOpen, onClose, onSaved }: 
     const onSubmit = (data: ProjectFormValues) => {
         startTransition(async () => {
             try {
-                // Pass data + deletedRoleIds to action
-                const { technologies_used, ...rest } = data;
-                
-                const dbPayload = {
-                    ...rest,
-                    skills: technologies_used, // Map to DB 'skills' column
-                    deletedRoleIds,
-                    // Auto-include lifecycle fields from rest since they are in schema
-                };
+                const dbPayload = { ...data, deletedRoleIds };
 
                 await updateProject(project.id, dbPayload);
                 toast.success("Project updated successfully");
@@ -356,11 +348,11 @@ export default function EditProjectModal({ project, isOpen, onClose, onSaved }: 
                                                 <div>
                                                     <label className="block text-sm font-medium mb-1.5">Tagline</label>
                                                     <input
-                                                        {...register("short_description")}
+                                                        {...register("shortDescription")}
                                                         className="w-full px-4 py-3 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-transparent focus:ring-2 focus:ring-indigo-500/20 outline-none transition-all"
                                                         placeholder="A brief pitch for your project..."
                                                     />
-                                                    {errors.short_description && <p className="text-red-500 text-sm mt-1">{errors.short_description.message}</p>}
+                                                    {errors.shortDescription && <p className="text-red-500 text-sm mt-1">{errors.shortDescription.message}</p>}
                                                 </div>
                                             </div>
                                         </div>
@@ -382,7 +374,7 @@ export default function EditProjectModal({ project, isOpen, onClose, onSaved }: 
                                                 <div>
                                                     <label className="block text-sm font-medium mb-2">Problem Statement</label>
                                                     <textarea
-                                                        {...register("problem_statement")}
+                                                        {...register("problemStatement")}
                                                         onInput={(e: any) => adjustHeight(e)}
                                                         className="w-full px-4 py-3 min-h-[100px] rounded-xl border border-zinc-200 dark:border-zinc-700 bg-transparent focus:ring-2 focus:ring-indigo-500/20 outline-none transition-all resize-none"
                                                         placeholder="What problem are you solving?"
@@ -391,7 +383,7 @@ export default function EditProjectModal({ project, isOpen, onClose, onSaved }: 
                                                 <div>
                                                     <label className="block text-sm font-medium mb-2">Solution Overview</label>
                                                     <textarea
-                                                        {...register("solution_statement")}
+                                                        {...register("solutionStatement")}
                                                         onInput={(e: any) => adjustHeight(e)}
                                                         className="w-full px-4 py-3 min-h-[100px] rounded-xl border border-zinc-200 dark:border-zinc-700 bg-transparent focus:ring-2 focus:ring-indigo-500/20 outline-none transition-all resize-none"
                                                         placeholder="How does your project solve it?"
@@ -414,7 +406,7 @@ export default function EditProjectModal({ project, isOpen, onClose, onSaved }: 
                                                                 {tech}
                                                                 <button
                                                                     type="button"
-                                                                    onClick={() => setValue("technologies_used", technologies.filter(t => t !== tech))}
+                                                                    onClick={() => setValue("skills", technologies.filter(t => t !== tech))}
                                                                     className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
                                                                 >
                                                                     <X className="w-3.5 h-3.5" />
@@ -425,7 +417,7 @@ export default function EditProjectModal({ project, isOpen, onClose, onSaved }: 
                                                     <input
                                                         value={techInput}
                                                         onChange={(e) => setTechInput(e.target.value)}
-                                                        onKeyDown={(e) => handleKeyDown(e, techInput, setTechInput, technologies, "technologies_used")}
+                                                        onKeyDown={(e) => handleKeyDown(e, techInput, setTechInput, technologies, "skills")}
                                                         placeholder="Type technology (e.g. React) and press Enter..."
                                                         className="w-full bg-transparent outline-none text-sm placeholder:text-zinc-400"
                                                     />
@@ -471,9 +463,9 @@ export default function EditProjectModal({ project, isOpen, onClose, onSaved }: 
                                                 
                                                 <div className="bg-zinc-50 dark:bg-zinc-900/50 p-6 rounded-xl border border-zinc-200 dark:border-zinc-800">
                                                     <LifecycleEditor 
-                                                        stages={watch('lifecycle_stages')}
-                                                        onChange={(stages) => setValue('lifecycle_stages', stages)}
-                                                        currentStageIndex={watch('current_stage_index')}
+                                                        stages={watch('lifecycleStages')}
+                                                        onChange={(stages) => setValue('lifecycleStages', stages)}
+                                                        currentStageIndex={watch('currentStageIndex')}
                                                     />
                                                 </div>
 

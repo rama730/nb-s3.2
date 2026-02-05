@@ -4,37 +4,37 @@ export interface User {
     id: string;
     email?: string;
     username?: string;
-    full_name?: string;
-    avatar_url?: string;
+    fullName?: string;
+    avatarUrl?: string;
     user_metadata?: Record<string, unknown>;
 }
 
 export interface OpenRole {
     id: string;
-    project_id: string;
+    projectId: string;
     role: string;
     title?: string;
     description?: string | null;
     count: number;
-    filled?: number;
+    filled: number;
+    skills?: string[];
 }
 
 export interface ProjectProfile {
-    id?: string;
-    username?: string | null;
-    full_name?: string | null;
-    avatar_url?: string | null;
+    id: string;
+    username: string | null;
+    fullName: string | null;
+    avatarUrl: string | null;
 }
 
 export interface ProjectCollaborator {
-    user_id: string;
-    role?: string;
-    profiles?: ProjectProfile;
-    count?: number;
+    userId: string;
+    membershipRole: 'owner' | 'admin' | 'member' | 'viewer';
+    user: ProjectProfile;
 }
 
 export interface ProjectFollower {
-    user_id: string;
+    userId: string;
 }
 
 // Main Project type - adapted to match schema + extended fields for UI
@@ -42,30 +42,27 @@ export interface Project {
     id: string;
     title: string;
     description?: string | null;
-    short_description?: string | null;
-    slug?: string;
-    status: string; // 'draft' | 'active' | 'completed' | 'archived' -> maps to IDEA/IN_PROGRESS/LAUNCHED
-    sync_status?: 'pending' | 'cloning' | 'indexing' | 'ready' | 'failed'; // Background worker status
+    shortDescription?: string | null;
+    slug?: string | undefined;
+    status: 'draft' | 'active' | 'completed' | 'archived';
+    syncStatus?: 'pending' | 'cloning' | 'indexing' | 'ready' | 'failed';
     category?: string | null;
-    cover_image?: string | null;
-    technologies_used?: string[];
+    coverImage?: string | null;
     tags?: string[];
     skills?: string[];
     visibility?: string;
-    view_count?: number;
+    viewCount?: number;
 
     // Relations
-    creator_id?: string; // maps to owner_id
-    owner_id?: string;
-    profiles?: ProjectProfile; // Creator/owner profile
-    project_collaborators?: ProjectCollaborator[];
-    project_open_roles?: OpenRole[];
-    project_followers?: ProjectFollower[];
+    ownerId?: string;
+    owner?: ProjectProfile | null;
+    collaborators?: ProjectCollaborator[];
+    openRoles?: OpenRole[];
+    followers?: ProjectFollower[];
 
     // Timestamps
-    created_at?: string;
-    updated_at?: string;
-    last_activity_at?: string;
+    createdAt?: string;
+    updatedAt?: string;
 }
 
 // Collection types

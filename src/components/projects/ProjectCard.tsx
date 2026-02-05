@@ -146,7 +146,7 @@ export default memo(function ProjectCard({
                                 </span>
                             )}
                         </div>
-                        <p className="text-sm text-zinc-500 truncate">{project.short_description || project.description}</p>
+                        <p className="text-sm text-zinc-500 truncate">{project.shortDescription || project.description}</p>
                     </div>
                     
                     <div className="flex items-center gap-4 text-sm text-zinc-500 shrink-0">
@@ -154,7 +154,7 @@ export default memo(function ProjectCard({
                             <Users className="w-4 h-4" /> {collaborators.length}
                         </span>
                         <span className="flex items-center gap-1">
-                            <Eye className="w-4 h-4" /> {project.view_count || 0}
+                            <Eye className="w-4 h-4" /> {project.viewCount || 0}
                         </span>
                     </div>
                 </div>
@@ -236,7 +236,7 @@ export default memo(function ProjectCard({
                             {project.title}
                         </h3>
                         <p className="text-sm text-zinc-500 dark:text-zinc-400 line-clamp-3 mb-6">
-                            {project.short_description || project.description || 'No description provided.'}
+                            {project.shortDescription || project.description || 'No description provided.'}
                         </p>
 
                         {/* Tech Stack */}
@@ -288,7 +288,7 @@ export default memo(function ProjectCard({
                         <div className="flex items-center justify-between mb-4 text-xs font-medium text-zinc-500">
                             <div className="flex gap-4">
                                 <span className="flex items-center gap-1.5">
-                                    <Eye className="w-3 h-3" /> {project.view_count || 0}
+                                    <Eye className="w-3 h-3" /> {project.viewCount || 0}
                                 </span>
                                 <span className="flex items-center gap-1.5">
                                     <UserPlus className="w-3 h-3" /> {followersCount}

@@ -66,6 +66,9 @@ import { isAssetLike, isTextLike } from "../utils/fileKind";
 import OutlinePanel from "./OutlinePanel";
 import SourceControlPanel from "./SourceControlPanel";
 
+const EMPTY_OBJECT = {};
+const EMPTY_ARRAY: any[] = []; // Typed as any[] to satisfy generic array constraints
+
 export type VisibleRow =
   | { kind: "node"; nodeId: string; level: number; parentId: string | null; indentationGuides: boolean[] }
   | { kind: "loading"; parentId: string; level: number; indentationGuides: boolean[] }
@@ -212,21 +215,21 @@ export default function FileExplorer({
 
 
   // Granular selectors for performance (avoid re-rendering tree on file content changes)
-  const nodesById = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.nodesById || {});
-  const childrenByParentId = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.childrenByParentId || {});
-  const loadedChildren = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.loadedChildren || {});
-  const expandedFolderIds = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.expandedFolderIds || {});
-  const folderMeta = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.folderMeta || {}); // NEW
+  const nodesById = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.nodesById || EMPTY_OBJECT);
+  const childrenByParentId = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.childrenByParentId || EMPTY_OBJECT);
+  const loadedChildren = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.loadedChildren || EMPTY_OBJECT);
+  const expandedFolderIds = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.expandedFolderIds || EMPTY_OBJECT);
+  const folderMeta = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.folderMeta || EMPTY_OBJECT); // NEW
   const explorerMode = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.explorerMode || "tree");
   const searchQuery = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.searchQuery || "");
-  const favorites = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.favorites || {});
-  const recents = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.recents || []);
+  const favorites = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.favorites || EMPTY_OBJECT);
+  const recents = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.recents || EMPTY_ARRAY);
   const sort = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.sort || "name");
   const foldersFirst = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.foldersFirst || true);
   const selectedNodeId = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.selectedNodeId);
-  const storeSelectedNodeIds = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.selectedNodeIds || []);
+  const storeSelectedNodeIds = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.selectedNodeIds || EMPTY_ARRAY);
   const selectedFolderId = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.selectedFolderId);
-  const taskLinkCounts = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.taskLinkCounts || {});
+  const taskLinkCounts = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.taskLinkCounts || EMPTY_OBJECT);
 
   const upsertNodes = useFilesWorkspaceStore((s) => s.upsertNodes);
   const setChildren = useFilesWorkspaceStore((s) => s.setChildren);

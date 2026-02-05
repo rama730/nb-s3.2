@@ -196,6 +196,7 @@ export async function getConversations(
             FROM ${conversationParticipants} cp
             INNER JOIN ${conversations} c ON c.id = cp.conversation_id
             WHERE cp.user_id = ${user.id}
+            AND c.type != 'project_group'
             ${cursor ? sql`AND (cp.last_message_at < ${new Date(cursor).toISOString()} OR cp.last_message_at IS NULL)` : sql``}
             ORDER BY cp.last_message_at DESC NULLS LAST
             LIMIT ${limit + 1}
@@ -1134,8 +1135,8 @@ export async function getProjectGroups(
         const user = await getAuthUser();
         if (!user) return { success: false, error: 'Not authenticated' };
 
-        // OPTIMIZED: Single query with CTEs for last message and member count
-        // This replaces 4 separate queries with 1 main query + 1 unread query
+        // OPTIMIZED: Single query fetching project details, member counts, last message, AND unread counts
+        // Uses the denormalized 'unread_count' from conversation_participants for O(1) performance
         const projectGroupsResult = await db.execute<{
             conversation_id: string;
             project_id: string;
@@ -1149,6 +1150,7 @@ export async function getProjectGroups(
             last_message_created_at: Date | null;
             last_message_type: string | null;
             member_count: number;
+            unread_count: number;
         }>(sql`
             WITH user_projects AS (
                 SELECT 
@@ -1157,10 +1159,12 @@ export async function getProjectGroups(
                     p.title as project_title,
                     p.slug as project_slug,
                     p.cover_image as project_cover_image,
-                    c.updated_at
+                    c.updated_at,
+                    cp.unread_count -- Get denormalized unread count directly
                 FROM ${projects} p
                 INNER JOIN ${projectMembers} pm ON pm.project_id = p.id
                 INNER JOIN ${conversations} c ON c.id = p.conversation_id
+                INNER JOIN ${conversationParticipants} cp ON cp.conversation_id = p.conversation_id AND cp.user_id = ${user.id}
                 WHERE pm.user_id = ${user.id}
                 AND p.conversation_id IS NOT NULL
                 ORDER BY c.updated_at DESC
@@ -1186,7 +1190,8 @@ export async function getProjectGroups(
                 lm.sender_id as last_message_sender_id,
                 lm.created_at as last_message_created_at,
                 lm.type as last_message_type,
-                COALESCE(mc.member_count, 1) as member_count
+                COALESCE(mc.member_count, 1) as member_count,
+                COALESCE(up.unread_count, 0) as unread_count
             FROM user_projects up
             LEFT JOIN LATERAL (
                 SELECT id, content, sender_id, created_at, type
@@ -1204,37 +1209,7 @@ export async function getProjectGroups(
         const hasMore = projectArray.length > limit;
         const paginatedProjects = projectArray.slice(0, limit);
 
-        if (paginatedProjects.length === 0) {
-            return { success: true, projectGroups: [], hasMore: false };
-        }
-
-        // Single separate query for unread counts (requires user context)
-        const conversationIds = paginatedProjects.map(p => p.conversation_id);
-        const unreadCountsResult = await db.execute<{
-            conversation_id: string;
-            unread_count: number;
-        }>(sql`
-            SELECT 
-                m.conversation_id,
-                COUNT(*)::int as unread_count
-            FROM ${messages} m
-            INNER JOIN ${conversationParticipants} cp 
-                ON cp.conversation_id = m.conversation_id
-            WHERE 
-                m.conversation_id = ANY(${conversationIds})
-                AND m.deleted_at IS NULL
-                AND m.sender_id != ${user.id}
-                AND cp.user_id = ${user.id}
-                AND (
-                    cp.last_read_at IS NULL 
-                    OR m.created_at > cp.last_read_at
-                )
-            GROUP BY m.conversation_id
-        `);
-
-        const unreadMap = new Map(
-            Array.from(unreadCountsResult).map((row: any) => [row.conversation_id, row.unread_count])
-        );
+        // No separate unread count query needed anymore!
 
         // Build result
         const result: ProjectGroupConversation[] = paginatedProjects.map((proj: any) => ({
@@ -1251,7 +1226,7 @@ export async function getProjectGroups(
                 createdAt: proj.last_message_created_at!,
                 type: proj.last_message_type,
             } : null,
-            unreadCount: unreadMap.get(proj.conversation_id) || 0,
+            unreadCount: proj.unread_count || 0,
             memberCount: proj.member_count || 1,
         }));
 

@@ -75,9 +75,9 @@ export default function ProjectOverviewCard({
                     )}>
                         {statusLabels[project?.status?.toLowerCase()] || "Planning"}
                     </span>
-                    {(project?.project_type || project?.custom_project_type) && (
+                    {(project?.category || project?.project_type || project?.custom_project_type) && (
                         <span className="px-3 py-1 text-xs font-medium rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700">
-                            {project.custom_project_type || project.project_type}
+                            {project.category || project.custom_project_type || project.project_type}
                         </span>
                     )}
                     {project?.visibility === "private" && (
@@ -93,9 +93,9 @@ export default function ProjectOverviewCard({
                     <h1 className="text-4xl font-extrabold text-zinc-900 dark:text-zinc-50 mb-4 tracking-tight leading-tight">
                         {project?.title}
                     </h1>
-                    {project?.short_description && (
+                    {project?.shortDescription && (
                         <p className="text-xl text-zinc-500 dark:text-zinc-400 font-medium leading-relaxed max-w-3xl">
-                            {project.short_description}
+                            {project.shortDescription}
                         </p>
                     )}
                 </div>
@@ -188,21 +188,21 @@ export default function ProjectOverviewCard({
                     )}
 
                     {/* Problem & Solution Grid */}
-                    {(project?.problem_statement || project?.solution_statement) && (
+                    {(project?.problemStatement || project?.solutionStatement) && (
                         <div className="grid md:grid-cols-2 gap-6">
-                            {project.problem_statement && (
+                            {project.problemStatement && (
                                 <div className="h-full p-6 rounded-2xl bg-rose-50/50 dark:bg-rose-900/10 border border-rose-100 dark:border-rose-900/20">
                                     <h3 className="text-sm font-bold text-rose-900 dark:text-rose-100 mb-3">The Problem</h3>
                                     <p className="text-zinc-600 dark:text-zinc-300 text-sm leading-relaxed italic">
-                                        {project.problem_statement}
+                                        {project.problemStatement}
                                     </p>
                                 </div>
                             )}
-                            {project.solution_statement && (
+                            {project.solutionStatement && (
                                 <div className="h-full p-6 rounded-2xl bg-emerald-50/50 dark:bg-emerald-900/10 border border-emerald-100 dark:border-emerald-900/20">
                                     <h3 className="text-sm font-bold text-emerald-900 dark:text-emerald-100 mb-3">The Solution</h3>
                                     <p className="text-zinc-600 dark:text-zinc-300 text-sm leading-relaxed">
-                                        {project.solution_statement}
+                                        {project.solutionStatement}
                                     </p>
                                 </div>
                             )}

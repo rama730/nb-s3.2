@@ -18,14 +18,14 @@ export default function AnalyticsTab({ projectId, project }: AnalyticsTabProps) 
             inProgressTasks: 0,
             overdueTasks: 0,
             completionRate: 0,
-            membersCount: (project?.project_collaborators?.length || 0) + 1,
-            viewCount: project?.view_count || 0,
+            membersCount: (project?.collaborators?.length || 0),
+            viewCount: project?.viewCount || 0,
         };
 
         return {
             ...analytics,
-            membersCount: (project?.project_collaborators?.length || 0) + 1,
-            viewCount: project?.view_count || 0,
+            membersCount: (project?.collaborators?.length || 0),
+            viewCount: project?.viewCount || 0,
         };
     }, [analytics, project]);
 

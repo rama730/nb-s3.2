@@ -61,11 +61,11 @@ export default function ProjectDashboardClient({
     });
 
     // State management
-    const [isBookmarked, setIsBookmarked] = useState((project as any).is_saved || false);
-    const [isFollowing, setIsFollowing] = useState((project as any).is_followed || false);
+    const [isBookmarked, setIsBookmarked] = useState((project as any).isSaved || false);
+    const [isFollowing, setIsFollowing] = useState((project as any).isFollowed || false);
     const [bookmarkLoading, setBookmarkLoading] = useState(false);
     const [shareCopied, setShareCopied] = useState(false);
-    const [followersCount, setFollowersCount] = useState((project as any).followers_count || 0);
+    const [followersCount, setFollowersCount] = useState((project as any).followersCount || 0);
     const [bookmarkCount, setBookmarkCount] = useState(0); // View count is handled separately, Bookmark count usually private
     const [isEditModalOpen, setIsEditModalOpen] = useState(false);
     const [isApplyModalOpen, setIsApplyModalOpen] = useState(false);
@@ -93,11 +93,11 @@ export default function ProjectDashboardClient({
     }>({ status: 'none' });
 
     // Optimistic State for Project Journey
-    const [optimisticStageIndex, setOptimisticStageIndex] = useState((project as any).current_stage_index || 0);
+    const [optimisticStageIndex, setOptimisticStageIndex] = useState((project as any).currentStageIndex || 0);
 
     // Sync state with server updates (e.g. revalidation or external changes)
     // This ensures we don't get stuck in a detached state if the server updates
-    const serverStageIndex = (project as any).current_stage_index || 0;
+    const serverStageIndex = (project as any).currentStageIndex || 0;
     useEffect(() => {
         setOptimisticStageIndex(serverStageIndex);
     }, [serverStageIndex]);
@@ -116,10 +116,15 @@ export default function ProjectDashboardClient({
     const extendedProject = project as any;
 
     // OPTIMIZATION: Default to empty arrays as these are now fetched client-side or lazy loaded
-    const tasks = useMemo(() => extendedProject?.project_tasks || [], [extendedProject]);
-    const files = useMemo(() => extendedProject?.project_files || [], [extendedProject]);
+    const tasks = useMemo(() => extendedProject?.tasks || [], [extendedProject]);
+    const files = useMemo(() => extendedProject?.files || [], [extendedProject]);
     const initialFileNodes = useMemo(() => extendedProject?.initialFileNodes || [], [extendedProject]);
-    const sprints = useMemo(() => extendedProject?.project_sprints || [], [extendedProject]);
+    const sprints = useMemo(() => extendedProject?.sprints || [], [extendedProject]);
+
+    const collaboratorUsers = useMemo(() => {
+        const list = (extendedProject?.collaborators || []) as any[];
+        return list.map((c) => c?.user).filter(Boolean);
+    }, [extendedProject]);
 
     // Hook Integration: Scalable Member Loading
     const { 
@@ -127,36 +132,35 @@ export default function ProjectDashboardClient({
         isLoading: loadingMembers,
         fetchNextPage: fetchNextMembers,
         hasNextPage: hasNextMembers
-    } = useProjectMembers(project.id, project?.project_collaborators || []);
+    } = useProjectMembers(project.id, collaboratorUsers || []);
 
     // Flatten members and include owner
     const allMembers = useMemo(() => {
-        const collab = membersData?.pages.flatMap((p: any) => p.members) || project?.project_collaborators || [];
-        const owner = extendedProject?.owner || (project as any).owner;
+        const collab = membersData?.pages.flatMap((p: any) => p.members) || collaboratorUsers || [];
+        const owner = extendedProject?.owner || (project as any)?.owner;
         
         const list = [...collab];
         if (owner && !list.find(m => m.id === owner.id)) {
             list.unshift(owner);
         }
         return list;
-    }, [membersData, project, extendedProject]);
+    }, [membersData, collaboratorUsers, project, extendedProject]);
 
     // Current members
     const members = useMemo(() => {
-        return membersData?.pages.flatMap((p: any) => p.members) || project?.project_collaborators || [];
-    }, [membersData, project]);
+        return membersData?.pages.flatMap((p: any) => p.members) || collaboratorUsers || [];
+    }, [membersData, collaboratorUsers]);
 
     const rolesWithFilled = useMemo(() => {
-        const roles = project?.project_open_roles || [];
-        return roles.map((role: any) => {
-            const filledCount = members.filter((m: any) => m.role === role.role).length;
-            return { ...role, filled: filledCount };
-        });
-    }, [project?.project_open_roles, members]);
+        const roles = extendedProject?.openRoles || [];
+        return roles.map((role: any) => ({
+            ...role,
+            filled: role?.filled ?? 0,
+        }));
+    }, [extendedProject]);
 
     const lifecycleStages = useMemo(() => {
-        // Handle both camelCase (Drizzle) and snake_case (Legacy/Raw)
-        const stages = extendedProject?.lifecycleStages || extendedProject?.lifecycle_stages || [];
+        const stages = extendedProject?.lifecycleStages || [];
         const currentIndex = optimisticStageIndex;
         return stages.map((stageName: string, idx: number) => ({
             name: stageName,
@@ -276,7 +280,7 @@ export default function ProjectDashboardClient({
             return;
         }
 
-        const stages = extendedProject?.lifecycleStages || extendedProject?.lifecycle_stages || [];
+        const stages = extendedProject?.lifecycleStages || [];
         if (optimisticStageIndex >= stages.length - 1) {
             toast.info("Project is already at the final stage");
             return;
@@ -316,6 +320,9 @@ export default function ProjectDashboardClient({
         toast.info("Project finalization coming soon");
     }, []);
 
+    const filesSyncStatus = extendedProject?.syncStatus;
+    const filesImportSourceType = extendedProject?.importSource?.type || null;
+
     // Memoize the Files tab to prevent unmounting/remounting on parent re-renders (e.g. scroll)
     const filesTabContent = useMemo(() => (
         <TabErrorBoundary tabName="Files">
@@ -325,10 +332,11 @@ export default function ProjectDashboardClient({
                 currentUserId={currentUserId || undefined}
                 isOwnerOrMember={isOwnerOrMember}
                 initialFileNodes={initialFileNodes}
-                syncStatus={extendedProject.sync_status}
+                syncStatus={filesSyncStatus}
+                importSourceType={filesImportSourceType}
             />
         </TabErrorBoundary>
-    ), [project.id, project.title, currentUserId, isOwnerOrMember, initialFileNodes]);
+    ), [project.id, project.title, currentUserId, isOwnerOrMember, initialFileNodes, filesSyncStatus, filesImportSourceType]);
 
     // Render active tab content
     const renderTabContent = () => {
@@ -442,7 +450,7 @@ export default function ProjectDashboardClient({
                             currentUserId={currentUserId || undefined}
                             isOwner={isOwner}
                             isOwnerOrMember={isOwnerOrMember}
-                            projectCreatorId={project.owner_id}
+                            projectCreatorId={(project as any).ownerId}
                             initialTasks={tasks}
                             totalCount={tasks.length}
                             members={allMembers}

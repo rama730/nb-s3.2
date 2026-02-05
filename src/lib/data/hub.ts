@@ -65,11 +65,87 @@ export const getHubProjects = cache(async (
     }
 
     // 1. Fetch Projects (Raw)
-    const rawProjects = await db.select()
-        .from(projects)
-        .where(and(...conditions))
-        .orderBy(orderBy)
-        .limit(pageSize);
+    // IMPORTANT: Hub only needs a small subset of project fields.
+    // Selecting only what's needed prevents runtime failures when the DB is behind
+    // newer migrations (e.g. missing `import_source`, `sync_status`, `conversation_id`, etc.).
+    //
+    // We also keep this resilient to older DBs that might not yet have `slug` / `view_count`.
+    let rawProjects: Array<{
+        id: string;
+        ownerId: string;
+        title: string;
+        slug: string | null;
+        description: string | null;
+        shortDescription: string | null;
+        coverImage: string | null;
+        category: string | null;
+        viewCount: number | null;
+        tags: string[] | null;
+        skills: string[] | null;
+        visibility: string | null;
+        status: string | null;
+        createdAt: Date;
+        updatedAt: Date;
+    }>;
+
+    try {
+        rawProjects = await db
+            .select({
+                id: projects.id,
+                ownerId: projects.ownerId,
+                title: projects.title,
+                slug: projects.slug,
+                description: projects.description,
+                shortDescription: projects.shortDescription,
+                coverImage: projects.coverImage,
+                category: projects.category,
+                viewCount: projects.viewCount,
+                tags: projects.tags,
+                skills: projects.skills,
+                visibility: projects.visibility,
+                status: projects.status,
+                createdAt: projects.createdAt,
+                updatedAt: projects.updatedAt,
+            })
+            .from(projects)
+            .where(and(...conditions))
+            .orderBy(orderBy)
+            .limit(pageSize);
+    } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        const looksLikeMissingColumn =
+            msg.toLowerCase().includes('column') &&
+            (msg.toLowerCase().includes('slug') || msg.toLowerCase().includes('view_count'));
+
+        if (!looksLikeMissingColumn) throw e;
+
+        // Fallback: omit the missing columns and default them client-side.
+        const fallbackOrderBy =
+            filters.sort === SORT_OPTIONS.MOST_VIEWED ? desc(projects.createdAt) : orderBy;
+
+        rawProjects = await db
+            .select({
+                id: projects.id,
+                ownerId: projects.ownerId,
+                title: projects.title,
+                slug: sql<string | null>`null`,
+                description: projects.description,
+                shortDescription: projects.shortDescription,
+                coverImage: projects.coverImage,
+                category: projects.category,
+                viewCount: sql<number | null>`null`,
+                tags: projects.tags,
+                skills: projects.skills,
+                visibility: projects.visibility,
+                status: projects.status,
+                createdAt: projects.createdAt,
+                updatedAt: projects.updatedAt,
+            })
+            .from(projects)
+            .where(and(...conditions))
+            .orderBy(fallbackOrderBy)
+            .limit(pageSize);
+    }
 
     if (rawProjects.length === 0) {
         return {
@@ -93,7 +169,17 @@ export const getHubProjects = cache(async (
         }).from(profiles).where(inArray(profiles.id, ownerIds)),
 
         // Open Roles
-        db.select().from(projectOpenRoles).where(inArray(projectOpenRoles.projectId, projectIds)),
+        db.select()
+            .from(projectOpenRoles)
+            .where(inArray(projectOpenRoles.projectId, projectIds))
+            .catch((e) => {
+                const msg = e instanceof Error ? e.message : String(e);
+                // Allow Hub to render even if older DB doesn't have open roles yet.
+                if (msg.toLowerCase().includes('project_open_roles') && msg.toLowerCase().includes('does not exist')) {
+                    return [];
+                }
+                throw e;
+            }),
         // Members
         db.select({
             member: projectMembers,
@@ -108,8 +194,9 @@ export const getHubProjects = cache(async (
     const ownerMap = new Map(owners.map(o => [o.id, o]));
 
     // Group Roles by Project
-    const rolesMap = new Map<string, typeof roles>();
-    roles.forEach(r => {
+    type OpenRoleRow = typeof projectOpenRoles.$inferSelect;
+    const rolesMap = new Map<string, OpenRoleRow[]>();
+    (roles as OpenRoleRow[]).forEach((r) => {
         if (!rolesMap.has(r.projectId)) rolesMap.set(r.projectId, []);
         rolesMap.get(r.projectId)!.push(r);
     });
@@ -127,51 +214,60 @@ export const getHubProjects = cache(async (
         const pRoles = rolesMap.get(project.id) || [];
         const pMembers = membersMap.get(project.id) || [];
 
+        const normalizedStatus: Project['status'] =
+            project.status === 'draft' ||
+                project.status === 'active' ||
+                project.status === 'completed' ||
+                project.status === 'archived'
+                ? project.status
+                : 'draft';
+
         return {
             id: project.id,
             title: project.title,
             description: project.description,
-            short_description: project.shortDescription,
+            shortDescription: project.shortDescription,
             slug: project.slug || project.id,
-            status: project.status || 'draft',
+            status: normalizedStatus,
             category: project.category,
-            cover_image: project.coverImage,
-            technologies_used: project.tags || [],
+            coverImage: project.coverImage,
             tags: project.tags || [],
             skills: project.skills || [],
             visibility: project.visibility || 'public',
-            view_count: project.viewCount || 0,
-            creator_id: project.ownerId,
-            owner_id: project.ownerId,
-            profiles: owner ? {
+            viewCount: project.viewCount || 0,
+            ownerId: project.ownerId,
+            owner: owner ? {
                 id: owner.id,
                 username: owner.username,
-                full_name: owner.fullName,
-                avatar_url: owner.avatarUrl
-            } : undefined,
+                fullName: owner.fullName,
+                avatarUrl: owner.avatarUrl
+            } : null,
 
-            project_collaborators: pMembers.map(m => m.user ? ({
-                user_id: m.member.userId,
-                ...m.user
-            }) : null).filter(Boolean) as any[], // fallback cast
+            collaborators: pMembers.map(m => m.user ? ({
+                userId: m.member.userId,
+                membershipRole: m.member.role,
+                user: {
+                    id: m.user.id,
+                    username: m.user.username,
+                    fullName: m.user.fullName,
+                    avatarUrl: m.user.avatarUrl,
+                }
+            }) : null).filter(Boolean) as any[],
 
-            project_open_roles: pRoles.map(role => ({
+            openRoles: pRoles.map(role => ({
                 id: role.id,
                 role: role.role,
                 count: role.count,
                 filled: role.filled,
-                project_id: role.projectId,
+                projectId: role.projectId,
                 title: role.title || undefined,
                 description: role.description || undefined,
                 skills: role.skills || [],
-                created_at: role.createdAt.toISOString(),
-                updated_at: role.updatedAt.toISOString(),
             })),
 
-            project_followers: [],
-            created_at: project.createdAt.toISOString(),
-            updated_at: project.updatedAt.toISOString(),
-            last_activity_at: project.updatedAt.toISOString(),
+            followers: [],
+            createdAt: project.createdAt.toISOString(),
+            updatedAt: project.updatedAt.toISOString(),
         };
     });
 
@@ -179,7 +275,7 @@ export const getHubProjects = cache(async (
     return {
         projects: mappedProjects,
         nextCursor: mappedProjects.length === pageSize
-            ? `${mappedProjects[mappedProjects.length - 1].created_at}|${mappedProjects[mappedProjects.length - 1].id}`
+            ? `${mappedProjects[mappedProjects.length - 1].createdAt}|${mappedProjects[mappedProjects.length - 1].id}`
             : undefined,
         hasMore: mappedProjects.length === pageSize
     };

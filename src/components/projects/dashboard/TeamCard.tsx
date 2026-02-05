@@ -83,15 +83,15 @@ export default function TeamCard({
             <motion.div className="space-y-2 overflow-y-auto pr-1 max-h-[600px]">
                 <div className="grid grid-cols-1 gap-1.5">
                     {/* Creator / Owner */}
-                    {project?.profiles && (
+                    {project?.owner && (
                         <Link
-                            href={profileHref({ id: project.creator_id, username: project.profiles.username })}
+                            href={profileHref({ id: project.owner.id, username: project.owner.username || undefined })}
                             className="flex items-center gap-3 p-1.5 rounded-lg bg-indigo-50/50 dark:bg-indigo-900/10 border border-indigo-100 dark:border-indigo-900/20 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 transition-colors group"
                         >
                             <div className="relative">
                                 <AvatarWithFallback
-                                    src={project.profiles.avatar_url}
-                                    fallback={project.profiles.full_name || "C"}
+                                    src={project.owner.avatarUrl}
+                                    fallback={project.owner.fullName || project.owner.username || "C"}
                                     className="w-7 h-7"
                                 />
                                 <div className="absolute -top-1 -right-1 bg-yellow-400 text-white rounded-full p-[2px] border border-white dark:border-zinc-900">
@@ -100,7 +100,7 @@ export default function TeamCard({
                             </div>
                             <div className="flex-1 min-w-0">
                                 <p className="text-xs font-semibold text-zinc-900 dark:text-zinc-100 truncate group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
-                                    {project.profiles.full_name || project.profiles.username}
+                                    {project.owner.fullName || project.owner.username}
                                 </p>
                                 <p className="text-[9px] font-medium text-indigo-600 dark:text-indigo-400 uppercase tracking-wide">
                                     Project Lead
@@ -110,23 +110,23 @@ export default function TeamCard({
                     )}
 
                     {/* Collaborators */}
-                    {members.filter(m => m.user_id !== project.creator_id).map((member) => (
+                    {members.filter((m: any) => m?.id && m.id !== project?.owner?.id).map((member: any) => (
                         <Link
-                            key={member.user_id}
-                            href={profileHref({ id: member.user_id, username: member.profiles?.username })}
+                            key={member.id}
+                            href={profileHref({ id: member.id, username: member.username || undefined })}
                             className="flex items-center gap-3 p-1.5 rounded-lg hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors group"
                         >
                             <AvatarWithFallback
-                                src={member.profiles?.avatar_url}
-                                fallback={member.profiles?.full_name || "M"}
+                                src={member.avatarUrl}
+                                fallback={member.fullName || member.username || "M"}
                                 className="w-7 h-7"
                             />
                             <div className="flex-1 min-w-0">
                                 <p className="text-xs font-semibold text-zinc-900 dark:text-zinc-100 truncate group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
-                                    {member.profiles?.full_name || member.profiles?.username || "Member"}
+                                    {member.fullName || member.username || "Member"}
                                 </p>
                                 <p className="text-[9px] font-medium text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">
-                                    {member.role || "Team Member"}
+                                    {member.membershipRole || "Team Member"}
                                 </p>
                             </div>
                         </Link>

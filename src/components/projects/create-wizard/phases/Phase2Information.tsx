@@ -97,7 +97,7 @@ export default function Phase2Information() {
                         Solution Overview
                     </label>
                     <textarea
-                        {...register('solution_overview')}
+                        {...register('solution_statement')}
                         rows={3}
                         className="w-full px-4 py-3 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 focus:ring-2 focus:ring-indigo-500 focus:border-transparent resize-none"
                         placeholder="How does your project solve it?"

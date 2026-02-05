@@ -16,7 +16,7 @@ export function useHubTrendingQuery() {
                 sort: 'most_viewed', // Maps to updated_at desc in backend for now
                 search: undefined,
                 includedIds: undefined
-            }, 0, 20);
+            }, undefined, 20);
 
             if (!result.success) throw new Error(result.error);
 

@@ -41,12 +41,46 @@ interface Props {
 export default function CreateProjectWizard({ onClose, onSuccess, draftId }: Props) {
     const {
         phase, methods, wizardContext, isSubmitting, isSavingDraft,
+        uploadFiles, setUploadFiles, uploadProgress,
+        githubPreview, githubPreviewSkipped, githubFolderEntries, loadGithubFolder, startGithubRootPreview, skipGithubPreviewAndContinue,
         saveStatus, lastSaved, showExitConfirm, setShowExitConfirm,
         handleNext, handleBack, goToPhase, saveDraft, handleCloseAttempt,
         onSubmit, draftInfo, restoreDraft, deleteDraft
     } = useCreateProjectWizard({ onClose, onSuccess, draftId });
 
     const { handleSubmit } = methods;
+
+    const phase1NextLabel = (() => {
+        if (phase !== 1) return undefined;
+        const t = methods.getValues('import_source.type');
+        if (t !== 'github') return undefined;
+        const url = (methods.getValues('import_source.repoUrl') || '').trim();
+        if (!url) return 'Continue';
+
+        // Footer button is “next phase only” in GitHub flow.
+        // Preview is triggered by the inline Continue in Phase 1 UI.
+        const previewReady = githubPreview.status === 'ready' && githubPreview.repoUrl === url;
+        if (!previewReady && !githubPreviewSkipped) return 'Continue';
+        return 'Continue';
+    })();
+
+    const phase1NextDisabled = (() => {
+        if (phase !== 1) return false;
+        const t = methods.getValues('import_source.type');
+        if (t === 'github') {
+            const url = (methods.getValues('import_source.repoUrl') || '').trim();
+            if (!url) return true;
+
+            const previewReady = githubPreview.status === 'ready' && githubPreview.repoUrl === url;
+            return !previewReady && !githubPreviewSkipped;
+        }
+
+        if (t === 'upload') {
+            return !uploadFiles || uploadFiles.length === 0;
+        }
+
+        return false;
+    })();
 
     // OPTIMIZATION: Prefetch next phase component to eliminate loading delay
     useEffect(() => {
@@ -107,6 +141,29 @@ export default function CreateProjectWizard({ onClose, onSuccess, draftId }: Pro
 
                         {/* Content */}
                         <div className="flex-1 overflow-y-auto px-6 py-6 scrollbar-thin scrollbar-thumb-zinc-200 dark:scrollbar-thumb-zinc-800">
+                            {uploadProgress?.isUploading && (
+                                <div className="mb-4 rounded-xl border border-indigo-100 dark:border-indigo-900/40 bg-indigo-50/50 dark:bg-indigo-900/10 p-4">
+                                    <div className="flex items-center justify-between gap-4">
+                                        <div className="min-w-0">
+                                            <div className="text-sm font-semibold text-indigo-900 dark:text-indigo-100">
+                                                Importing files…
+                                            </div>
+                                            <div className="text-xs text-indigo-700/80 dark:text-indigo-300/80 truncate">
+                                                {uploadProgress.currentFile || 'Preparing uploads'}
+                                            </div>
+                                        </div>
+                                        <div className="text-sm font-bold text-indigo-700 dark:text-indigo-300 shrink-0 tabular-nums">
+                                            {uploadProgress.percent}%
+                                        </div>
+                                    </div>
+                                    <div className="mt-3 h-2 rounded-full bg-indigo-100 dark:bg-indigo-950/50 overflow-hidden">
+                                        <div
+                                            className="h-full bg-indigo-600 transition-all duration-200"
+                                            style={{ width: `${uploadProgress.percent}%` }}
+                                        />
+                                    </div>
+                                </div>
+                            )}
                             <form
                                 id="create-project-form"
                                 onSubmit={handleSubmit(onSubmit as any)}
@@ -120,7 +177,19 @@ export default function CreateProjectWizard({ onClose, onSuccess, draftId }: Pro
                                         exit={{ opacity: 0, x: -20 }}
                                         transition={{ duration: 0.2 }}
                                     >
-                                        {phase === 1 && <Phase1SourceSelection />}
+                                        {phase === 1 && (
+                                            <Phase1SourceSelection
+                                                uploadFiles={uploadFiles}
+                                                setUploadFiles={setUploadFiles}
+                                                uploadProgress={uploadProgress}
+                                                githubPreview={githubPreview}
+                                                githubPreviewSkipped={githubPreviewSkipped}
+                                                githubFolderEntries={githubFolderEntries}
+                                                loadGithubFolder={loadGithubFolder}
+                                                startGithubRootPreview={startGithubRootPreview}
+                                                skipGithubPreviewAndContinue={skipGithubPreviewAndContinue}
+                                            />
+                                        )}
                                         {phase === 2 && <Phase1TypeSelection />}
                                         {phase === 3 && <Phase2Information />}
                                         {phase === 4 && <Phase3TeamRoles wizardContext={wizardContext} />}
@@ -180,6 +249,8 @@ export default function CreateProjectWizard({ onClose, onSuccess, draftId }: Pro
                                 isSavingDraft={isSavingDraft}
                                 saveStatus={saveStatus}
                                 lastSaved={lastSaved}
+                                nextLabel={phase1NextLabel}
+                                nextDisabled={phase1NextDisabled}
                             />
                         </div>
                     </FormProvider>
