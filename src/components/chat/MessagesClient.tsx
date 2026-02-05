@@ -10,6 +10,11 @@ import { MessageSquare, Search, X, Loader2, PenSquare } from 'lucide-react';
 import { useDebounce } from '@/hooks/hub/useDebounce';
 import { NewChatModal } from './NewChatModal';
 import { Virtuoso } from 'react-virtuoso';
+import { useConversations, useTargetUser } from '@/hooks/useMessagesData';
+import { ConversationPreview } from './ConversationList';
+
+import { ApplicationList } from './ApplicationList';
+import { ProjectGroupList } from './ProjectGroupList';
 
 // ============================================================================
 // MESSAGES CLIENT
@@ -17,61 +22,62 @@ import { Virtuoso } from 'react-virtuoso';
 
 interface MessagesClientProps {
     initialConversations?: ConversationWithDetails[];
-    targetUser?: {
-        id: string;
-        fullName: string | null;
-        username: string | null;
-        avatarUrl: string | null;
-    } | null;
+    targetUserId?: string | null;  // Changed from full object to ID
 }
 
-export default function MessagesClient({ initialConversations = [], targetUser }: MessagesClientProps) {
+export default function MessagesClient({ initialConversations = [], targetUserId }: MessagesClientProps) {
     const { user, isLoading: authLoading } = useAuth();
+    
+    // React Query Hooks for Lazy Loading
+    const { data: fetchedConversations, isLoading: conversationsQueryLoading } = useConversations(initialConversations.length > 0 ? initialConversations : undefined);
+    const { data: fetchedTargetUser, isLoading: targetUserLoading } = useTargetUser(targetUserId || null);
+
     const activeConversationId = useChatStore(state => state.activeConversationId);
     const conversations = useChatStore(state => state.conversations);
     const messagesByConversation = useChatStore(state => state.messagesByConversation);
     const conversationsLoading = useChatStore(state => state.conversationsLoading);
     const unreadCounts = useChatStore(state => state.unreadCounts);
     const openConversation = useChatStore(state => state.openConversation);
-    const initialize = useChatStore(state => state.initialize);
-    const isInitialized = useChatStore(state => state.isInitialized);
     const setConversations = useChatStore(state => state.setConversations);
+    const upsertConversation = useChatStore(state => state.upsertConversation);
+    const isInitialized = useChatStore(state => state.isInitialized);
+
+    // Sync React Query data to Store
+    useEffect(() => {
+        if (fetchedConversations && fetchedConversations.length > 0) {
+            // Only update if different length or force sync? 
+            // Better to rely on Store for extensive logic, but hydrate it here.
+            // If store is empty, definitely set it.
+            if (conversations.length === 0) {
+                 setConversations(fetchedConversations);
+            }
+        }
+    }, [fetchedConversations, setConversations, conversations.length]);
+
+    // Target User Resolution
+    const targetUser = fetchedTargetUser;
 
     // Draft State
     const [isNewChatOpen, setIsNewChatOpen] = useState(false);
     
     // Check if we need to set up a draft conversation
-    // A draft exists if we have a targetUser but NO existing conversation in the store
     const existingConversationWithTarget = useMemo(() => {
         if (!targetUser) return null;
         return conversations.find(c => c.participants.some(p => p.id === targetUser.id));
     }, [conversations, targetUser]);
 
-    // Initialize store with server data immediately
-    useEffect(() => {
-         if (initialConversations.length > 0 && conversations.length === 0) {
-             setConversations(initialConversations);
-         }
-    }, [initialConversations, conversations.length, setConversations]);
-
-    // Handle Target User / URL params
+    // Handle Target User Navigation
     useEffect(() => {
         if (targetUser) {
             if (existingConversationWithTarget) {
-                // We found an existing chat, open it
                 if (activeConversationId !== existingConversationWithTarget.id) {
                     openConversation(existingConversationWithTarget.id);
                 }
-            } else {
-                // No existing chat - we are in "Draft Mode"
-                // We don't have a real activeConversationId yet. 
-                // We can use a special "draft" ID or just handle the UI gracefully.
-                // For simplicity, let's keep activeConversationId null, but show the Draft UI.
             }
         }
     }, [targetUser, existingConversationWithTarget, activeConversationId, openConversation]);
 
-    // Derive values with useMemo to maintain stable references
+    // Derive active conversation
     const activeConversation = useMemo(() => {
         if (!activeConversationId) return null;
         return conversations.find(c => c.id === activeConversationId) || null;
@@ -84,53 +90,55 @@ export default function MessagesClient({ initialConversations = [], targetUser }
 
     const [searchQuery, setSearchQuery] = useState('');
     const [isSearching, setIsSearching] = useState(false);
-    const [searchResults, setSearchResults] = useState<Array<{ message: MessageWithSender; conversationId: string }>>([]);
+    const [searchResults, setSearchResults] = useState<Array<{ 
+        message: MessageWithSender; 
+        conversationId: string;
+        conversation?: ConversationWithDetails; // Hydration data
+    }>>([]);
     const [showSearchResults, setShowSearchResults] = useState(false);
 
     const debouncedSearch = useDebounce(searchQuery, 300);
 
-    // Initialize chat on mount
-    useEffect(() => {
-        // Only valid to initialize if we have a user, no data, no initial data, and not loading, AND not initialized.
-        if (user && !conversationsLoading && !isInitialized && conversations.length === 0 && initialConversations.length === 0) {
-            initialize();
-        }
-    }, [user, conversationsLoading, conversations.length, initialize, initialConversations.length, isInitialized]);
-
+    // Initialize store with data from hook
+    // This replaces the old separate effects
+    
     // Full-text search effect
     useEffect(() => {
         async function performSearch() {
             if (!debouncedSearch.trim()) {
                 setSearchResults([]);
-                setShowSearchResults(false);
                 return;
             }
-
+            
             setIsSearching(true);
             setShowSearchResults(true);
-
+            
             try {
-                const result = await searchMessages(debouncedSearch.trim());
+                const result = await searchMessages(debouncedSearch);
                 if (result.success && result.results) {
                     setSearchResults(result.results);
                 }
             } catch (error) {
-                console.error('Search error:', error);
+                console.error('Search failed:', error);
             } finally {
                 setIsSearching(false);
             }
         }
-
         performSearch();
     }, [debouncedSearch]);
 
     // Handle search result click
-    const handleSearchResultClick = useCallback((conversationId: string) => {
+    const handleSearchResultClick = useCallback((conversationId: string, conversation?: ConversationWithDetails) => {
+        // Hydrate conversation if missing (Ghost Conversation Fix)
+        if (conversation) {
+            upsertConversation(conversation);
+        }
+        
         openConversation(conversationId);
         setSearchQuery('');
         setShowSearchResults(false);
         setSearchResults([]);
-    }, [openConversation]);
+    }, [openConversation, upsertConversation]);
 
     // Filter conversations for sidebar
     const filteredConversations = conversations.filter(conv => {
@@ -154,8 +162,8 @@ export default function MessagesClient({ initialConversations = [], targetUser }
     // Helper for participant
     const otherParticipant = activeConversation?.participants[0];
 
-    // Use initialConversations length to avoid loading spinner if we passed data
-    const showLoading = conversationsLoading && conversations.length === 0 && initialConversations.length === 0;
+    // Use hook loading state
+    const showLoading = (conversationsQueryLoading && conversations.length === 0);
 
     if (authLoading) {
         return (
@@ -177,51 +185,95 @@ export default function MessagesClient({ initialConversations = [], targetUser }
 
     const isDraftMode = !!targetUser && !existingConversationWithTarget;
 
+    const [activeTab, setActiveTab] = useState<'chats' | 'applications' | 'projects'>('chats');
+
     return (
         <div className="flex h-[calc(100vh-64px)] bg-white dark:bg-zinc-950">
             {/* Sidebar code remains same */}
             <div className="w-80 border-r border-zinc-200 dark:border-zinc-800 flex flex-col">
                 {/* Header, Search, List logic... */}
-                 <div className="p-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center gap-2">
-                    <h1 className="text-xl font-bold text-zinc-900 dark:text-white flex-1">Messages</h1>
-                    <button 
-                        onClick={() => setIsNewChatOpen(true)}
-                        className="p-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-full text-zinc-600 dark:text-zinc-400 transition-colors"
-                        title="New Message"
-                    >
-                        <PenSquare className="w-5 h-5" />
-                    </button>
-                </div>
+                 <div className="p-4 border-b border-zinc-200 dark:border-zinc-800 flex flex-col gap-4">
+                    <div className="flex items-center justify-between">
+                        <h1 className="text-xl font-bold text-zinc-900 dark:text-white">Messages</h1>
+                        <button 
+                            onClick={() => setIsNewChatOpen(true)}
+                            className="p-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-full text-zinc-600 dark:text-zinc-400 transition-colors"
+                            title="New Message"
+                        >
+                            <PenSquare className="w-5 h-5" />
+                        </button>
+                    </div>
 
-                {/* Search */}
-                <div className="px-4 py-2 border-b border-zinc-100 dark:border-zinc-800/50">
-                    <div className="relative">
-                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
-                        <input
-                            type="text"
-                            placeholder="Search messages..."
-                            value={searchQuery}
-                            onChange={(e) => setSearchQuery(e.target.value)}
-                            className="w-full pl-9 pr-8 py-2 text-sm bg-zinc-100 dark:bg-zinc-800 rounded-lg border-0 focus:ring-1 focus:ring-blue-500 placeholder-zinc-400"
-                        />
-                        {searchQuery && (
-                            <button
-                                onClick={() => {
-                                    setSearchQuery('');
-                                    setShowSearchResults(false);
-                                    setSearchResults([]);
-                                }}
-                                className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600"
-                            >
-                                <X className="w-3 h-3" />
-                            </button>
-                        )}
+                    {/* Inbox Zero Toggle */}
+                    <div className="flex p-1 bg-zinc-100 dark:bg-zinc-900 rounded-lg">
+                        <button
+                            onClick={() => setActiveTab('chats')}
+                            className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-all ${
+                                activeTab === 'chats'
+                                    ? 'bg-white dark:bg-zinc-800 text-zinc-900 dark:text-white shadow-sm'
+                                    : 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'
+                            }`}
+                        >
+                            Chats
+                        </button>
+                        <button
+                            onClick={() => setActiveTab('applications')}
+                            className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-all ${
+                                activeTab === 'applications'
+                                    ? 'bg-white dark:bg-zinc-800 text-zinc-900 dark:text-white shadow-sm'
+                                    : 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'
+                            }`}
+                        >
+                            Applications
+                        </button>
+                        <button
+                            onClick={() => setActiveTab('projects')}
+                            className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-all ${
+                                activeTab === 'projects'
+                                    ? 'bg-white dark:bg-zinc-800 text-zinc-900 dark:text-white shadow-sm'
+                                    : 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'
+                            }`}
+                        >
+                            Projects
+                        </button>
                     </div>
                 </div>
 
-                {/* Content: Search Results or Conversation List */}
+                {/* Search (Only for Chats) */}
+                {activeTab === 'chats' && (
+                    <div className="px-4 py-2 border-b border-zinc-100 dark:border-zinc-800/50">
+                        <div className="relative">
+                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+                            <input
+                                type="text"
+                                placeholder="Search messages..."
+                                value={searchQuery}
+                                onChange={(e) => setSearchQuery(e.target.value)}
+                                className="w-full pl-9 pr-8 py-2 text-sm bg-zinc-100 dark:bg-zinc-800 rounded-lg border-0 focus:ring-1 focus:ring-blue-500 placeholder-zinc-400"
+                            />
+                            {searchQuery && (
+                                <button
+                                    onClick={() => {
+                                        setSearchQuery('');
+                                        setShowSearchResults(false);
+                                        setSearchResults([]);
+                                    }}
+                                    className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600"
+                                >
+                                    <X className="w-3 h-3" />
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                )}
+
+                {/* Content: Search Results or Conversation List/Application List */}
                 <div className="flex-1 overflow-y-auto">
-                    {showSearchResults ? (
+                    {activeTab === 'applications' ? (
+                        <ApplicationList />
+                    ) : activeTab === 'projects' ? (
+                        <ProjectGroupList />
+                    ) : showSearchResults ? (
                         isSearching ? (
                             <div className="flex items-center justify-center p-8">
                                 <Loader2 className="w-6 h-6 animate-spin text-blue-600" />
@@ -233,14 +285,16 @@ export default function MessagesClient({ initialConversations = [], targetUser }
                             </div>
                         ) : (
                             <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
-                                {searchResults.map(({ message, conversationId }) => {
-                                    const conv = conversations.find(c => c.id === conversationId);
-                                    const participant = conv?.participants[0];
+                                {searchResults.map((item) => {
+                                    const { message, conversationId } = item;
+                                    // Use local or hydrated conversation
+                                    const conv = conversations.find(c => c.id === conversationId) || item.conversation;
+                                    const participant = conv?.participants.find(p => p.id !== user?.id) || conv?.participants[0];
 
                                     return (
                                         <button
                                             key={message.id}
-                                            onClick={() => handleSearchResultClick(conversationId)}
+                                            onClick={() => handleSearchResultClick(conversationId, (item as any).conversation)}
                                             className="w-full flex flex-col gap-1 p-4 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 text-left transition-colors"
                                         >
                                             <div className="flex items-center gap-2">
@@ -338,9 +392,11 @@ export default function MessagesClient({ initialConversations = [], targetUser }
                                                     </span>
                                                 )}
                                             </div>
-                                            <p className={`text-sm truncate ${unread > 0 ? 'text-zinc-700 dark:text-zinc-200 font-medium' : 'text-zinc-500 dark:text-zinc-400'}`}>
-                                                {conv.lastMessage?.content || 'No messages yet'}
-                                            </p>
+                                            <ConversationPreview
+                                                conversationId={conv.id}
+                                                lastMessage={conv.lastMessage}
+                                                unread={unread}
+                                            />
                                         </div>
                                     </button>
                                 );

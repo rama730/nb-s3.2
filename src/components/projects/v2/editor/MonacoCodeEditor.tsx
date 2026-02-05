@@ -86,99 +86,90 @@ export default function MonacoCodeEditor({
     }
   }, [scrollToLine]);
 
+  // Cleanup
+  useEffect(() => {
+      return () => {
+          if (debounceRef.current) clearTimeout(debounceRef.current);
+      }
+  }, []);
+
+  // Configure Compiler Options on Mount
+  const configureMonaco = async (monaco: any) => {
+      // TypeScript Config
+      const compilerOptions = {
+          target: monaco.languages.typescript.ScriptTarget.ES2020,
+          allowNonTsExtensions: true,
+          moduleResolution: monaco.languages.typescript.ModuleResolutionKind.NodeJs,
+          module: monaco.languages.typescript.ModuleKind.CommonJS,
+          noEmit: true,
+          esModuleInterop: true,
+          jsx: monaco.languages.typescript.JsxEmit.React,
+          reactNamespace: "React",
+          allowJs: true,
+          typeRoots: ["node_modules/@types"]
+      };
+
+      monaco.languages.typescript?.typescriptDefaults.setCompilerOptions(compilerOptions);
+      monaco.languages.typescript?.javascriptDefaults.setCompilerOptions(compilerOptions);
+      
+      // Eager sync
+      monaco.languages.typescript?.typescriptDefaults.setEagerModelSync(true);
+      monaco.languages.typescript?.javascriptDefaults.setEagerModelSync(true);
+  };
+
   const updateSymbols = async () => {
     if (!editorRef.current || !monacoRef.current || !onSymbolsChange) return;
     const model = editorRef.current.getModel();
     if (!model) return;
 
     try {
-      // getDocumentSymbols returns a ProviderResult. 
-      // We assume it returns DocumentSymbol[] (hierarchical) or SymbolInformation[] (flat).
-      // We prefer hierarchical. 
-      // NOTE: getDocumentSymbols is not exposed directly on 'monaco.languages' in all versions in a simple way 
-      // as it requires a provider. But we can use the internal 'get' or standard command.
-      // Actually, 'monaco.languages.getDocumentSymbols' is ONLY available if we import * from monaco-editor.
-      // But we are using @monaco-editor/react.
-      // We can use 'monaco.languages.getDocumentSymbols(model)' if available?
-      // No, usually it's 'getLanguages()...'.
-      // A better way is:
-      // const worker = await monaco.languages.typescript.getTypeScriptWorker();
-      // But that is language specific.
-      
-      // Generic way: Execute command? 
-      // 'vscode.executeDocumentSymbolProvider' equivalent?
-      // In Monaco:
-      // const symbols = await monaco.languages.getLanguages()... no.
-      
-      // Try accessing the providers directly?
-      // The easiest way in standalone Monaco is strictly bound to language features.
-      // Let's rely on a simpler approach:
-      // We can't easily invoke 'getDocumentSymbols' without the function being exported.
-      // However, we CAN listen to markers (errors).
-      // For Symbols, it is harder without standard API exposure.
-      
-      // WAIT! @monaco-editor/react gives us the 'monaco' instance.
-      // Does 'monaco.languages.getDocumentSymbols' exist?
-      // Checking docs: 'monaco.languages.getDocumentSymbols' does NOT exist in API.
-      // It exists as 'executeDocumentSymbolProvider(model)'.
-      // Let's try 'monaco.editor.tokenize' for basic tokens? No.
-      
-      // Let's check 'monaco.languages.getLanguages()' to see if we can find something?
-      // Actually, this might be too complex for "Phase 3".
-      // Let's try 'monaco.languages.getLanguages()' -> find provider?
-      
-      // Fallback: If we can't get symbols easily, we might skip or use basic regex for JS/TS.
-      // BUT, let's try a known hack/method:
-      // 'activeFileSymbols' was a user request "Monaco Symbols".
-      // Maybe I can leave it empty for now?
-      // No, let's try to find 'executeDocumentSymbolProvider'.
-      // Only available in VS Code API, not Monaco Standalone?
-      // Actually it IS available in monaco-editor standalone under specific 'actions' but maybe internal.
-      
-      // Alternative: Use 'monaco.worker'. 
-      // Let's Try:
-      // if (monacoRef.current.languages['typescript']) ...
-      
-      // Let's assume for now we cannot easily get them without language workers.
-      // Regex-based symbol extraction implemented below
-      // Or search "how to get document symbols monaco editor".
-      // Result: `monaco.languages.getDocumentSymbols` is removed/hidden.
-      // We must use:
-      // `monaco.languages.getDocumentSymbols` was deprecated.
-      // Use `(await import('monaco-editor/esm/vs/editor/contrib/documentSymbols/browser/documentSymbols')).getDocumentSymbols(model)`? No (CDN issues).
-      
-      // Better idea: The user wants "Outline".
-      // I will leave `onSymbolsChange` here.
-      // And I will try to implement a simple regex-based symbol extractor for TS/JS as a fallback
-      // inside `updateSymbols` if I can't find the API.
-      
-      // Actually, let's check if `monaco.languages.executeDocumentSymbolProvider` exists?
-      // No.
-      
-      // I will use a simple regex for now to prove the flow.
-      // Regex for function/class/const exports.
-      
-      const text = model.getValue();
-      const symbols: EditorSymbol[] = [];
-      const lines = text.split("\n");
-      
-      // Very naive regex for demo purposes
-      const regex = /^(export\s+)?(function|class|const|let|var)\s+([a-zA-Z0-9_]+)/;
-      
-      lines.forEach((line: string, i: number) => {
-          const match = line.match(regex);
-          if (match) {
-              symbols.push({
-                  name: match[3],
-                  kind: 12, // Variable/Function
-                  range: { startLineNumber: i+1, endLineNumber: i+1 },
-                  children: []
-              });
-          }
-      });
-      
-      onSymbolsChange(symbols);
-      
+       // Use Worker to extract symbols (AST based)
+       const resource = model.uri;
+       // Only for TS/JS files
+       const lang = model.getLanguageId();
+       if ((lang === "typescript" || lang === "javascript") && monacoRef.current.languages.typescript) {
+            const getWorker = await monacoRef.current.languages.typescript.getTypeScriptWorker();
+            const worker = await getWorker(resource);
+            const items = await worker.getNavigationTree(resource.toString());
+            
+            if (items) {
+                 const transform = (item: any): EditorSymbol => ({
+                     name: item.text,
+                     kind: mapScriptElementKind(item.kind),
+                     range: { 
+                         startLineNumber: item.spans[0].start.line,
+                         endLineNumber: item.spans[0].end.line 
+                     },
+                     children: item.childItems?.map(transform) || []
+                 });
+
+                 // Root might need check
+                 const symbols = items.childItems ? items.childItems.map(transform) : [transform(items)];
+                 onSymbolsChange(symbols);
+                 return;
+            }
+       } 
+       
+       // Fallback for other languages or failure: naive regex (kept for non-TS)
+       if (lang !== "typescript" && lang !== "javascript") {
+           const text = model.getValue();
+           const symbols: EditorSymbol[] = [];
+           const lines = text.split("\n");
+           const regex = /^(export\s+)?(function|class|const|let|var)\s+([a-zA-Z0-9_]+)/;
+           lines.forEach((line: string, i: number) => {
+               const match = line.match(regex);
+               if (match) {
+                   symbols.push({
+                       name: match[3],
+                       kind: 12,
+                       range: { startLineNumber: i+1, endLineNumber: i+1 },
+                       children: []
+                   });
+               }
+           });
+           onSymbolsChange(symbols);
+       }
+
     } catch (e) {
       console.error("Error fetching symbols", e);
     }
@@ -187,6 +178,10 @@ export default function MonacoCodeEditor({
   const handleEditorDidMount = (editor: any, monaco: any) => {
     editorRef.current = editor;
     monacoRef.current = monaco;
+    
+    // Config
+    configureMonaco(monaco);
+
     // Initial fetch
     updateSymbols();
   };
@@ -199,13 +194,6 @@ export default function MonacoCodeEditor({
         updateSymbols();
     }, 1000);
   };
-  
-  // Cleanup
-  useEffect(() => {
-      return () => {
-          if (debounceRef.current) clearTimeout(debounceRef.current);
-      }
-  }, []);
 
   // Dynamic Options
   const options = {
@@ -225,7 +213,8 @@ export default function MonacoCodeEditor({
         indentation: true,
         bracketPairs: true
     },
-    padding: { top: 16 }
+    padding: { top: 16 },
+    stickyScroll: { enabled: true }
   };
 
   return (
@@ -250,3 +239,21 @@ export default function MonacoCodeEditor({
     </div>
   );
 }
+
+// Helper to map TS Kinds to Monaco/VSCode Kinds
+const mapScriptElementKind = (kind: string): number => {
+    switch(kind) {
+        case "module": return 1; // File
+        case "class": return 5; // Class
+        case "enum": return 9; // Enum
+        case "interface": return 10; // Interface
+        case "method": return 11; // Method
+        case "function": return 11; // Function
+        case "var": return 12; // Variable
+        case "let": return 12;
+        case "const": return 13; // Constant
+        case "local function": return 11;
+        case "local var": return 12;
+        default: return 12; // Variable default
+    }
+};

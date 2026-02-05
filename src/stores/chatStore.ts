@@ -11,6 +11,8 @@ import {
     type MessageWithSender,
 } from '@/app/actions/messaging';
 import { checkConnectionStatus, sendConnectionRequest } from '@/app/actions/connections';
+import { getInboxApplicationsAction } from '@/app/actions/applications';
+import { getProjectGroups, type ProjectGroupConversation } from '@/app/actions/messaging';
 
 // ============================================================================
 // TYPES
@@ -25,6 +27,25 @@ interface MessageCache {
     cursor: string | null;
 }
 
+export interface InboxApplication {
+    id: string;
+    type: 'incoming' | 'outgoing';
+    projectId: string;
+    projectTitle: string;
+    projectSlug?: string;
+    roleTitle: string;
+    conversationId?: string | null;
+    status: 'pending' | 'accepted' | 'rejected';
+    createdAt: Date;
+    displayUser: {
+        id?: string;
+        username?: string | null;
+        fullName?: string | null;
+        avatarUrl?: string | null;
+        type: 'applicant' | 'creator';
+    };
+}
+
 interface ChatState {
     // Connection state
     isConnected: boolean;
@@ -34,18 +55,40 @@ interface ChatState {
     conversations: ConversationWithDetails[];
     conversationsLoading: boolean;
     conversationsError: string | null;
+    hasMoreConversations: boolean;
+    conversationsCursor: string | null;
 
     // Active conversation
     activeConversationId: string | null;
     activeConnectionStatus: 'none' | 'pending_sent' | 'pending_received' | 'connected' | 'blocked' | 'open' | 'loading' | null;
     isIncomingConnectionRequest: boolean;
     isPendingSent: boolean;
+    hasActiveApplication: boolean;
+    isApplicant: boolean; // New flag
+    isCreator: boolean; // New flag
+    activeApplicationId: string | null; // New field
+    activeApplicationStatus: 'pending' | 'accepted' | 'rejected' | null; // New field
+    activeProjectId: string | null; // New field for button link
 
     // Messages cache (by conversation)
     messagesByConversation: Record<string, MessageCache>;
 
     // Drafts (persists across popup/page)
     draftsByConversation: Record<string, string>;
+
+    // Applications Cache (Inbox Zero)
+    applications: InboxApplication[];
+    applicationsLoading: boolean;
+    applicationsError: string | null;
+    hasMoreApplications: boolean;
+    applicationsOffset: number;
+
+    // Project Groups Cache
+    projectGroups: ProjectGroupConversation[];
+    projectGroupsLoading: boolean;
+    projectGroupsError: string | null;
+    hasMoreProjectGroups: boolean;
+    projectGroupsOffset: number;
 
     // Typing indicators
 
@@ -70,8 +113,10 @@ interface ChatState {
     isInitialized: boolean;
 
     // Actions
+    // Actions
     initialize: () => Promise<void>;
     refreshConversations: () => Promise<void>;
+    loadMoreConversations: () => Promise<void>;
     openConversation: (conversationId: string) => Promise<void>;
     closeConversation: () => void;
     openPopup: () => void;
@@ -85,6 +130,8 @@ interface ChatState {
     markAsRead: (conversationId: string) => Promise<void>;
     setConnected: (connected: boolean, error?: string) => void;
     setConversations: (conversations: ConversationWithDetails[]) => void;
+    // Pure Optimization: Allow hydrating individual conversations from Search
+    upsertConversation: (conversation: ConversationWithDetails) => void;
 
     // Internal (called by realtime subscription)
     _handleNewMessage: (rawMessage: any) => void;
@@ -92,7 +139,14 @@ interface ChatState {
     _updateUnreadCount: () => Promise<void>;
     // Connection Actions
     checkActiveConnectionStatus: () => Promise<void>;
+    refreshMessages: (conversationId: string) => Promise<void>;
     sendConnectionRequest: () => Promise<boolean>;
+    _handleMessageUpdate: (rawMessage: any) => void;
+    setPartialStatus: (status: 'pending' | 'accepted' | 'rejected') => void;
+    fetchApplications: (refresh?: boolean) => Promise<void>;
+    loadMoreApplications: () => Promise<void>;
+    fetchProjectGroups: (refresh?: boolean) => Promise<void>;
+    loadMoreProjectGroups: () => Promise<void>;
 }
 
 
@@ -110,12 +164,34 @@ export const useChatStore = create<ChatState>()(
             conversations: [],
             conversationsLoading: false,
             conversationsError: null,
+            hasMoreConversations: false,
+            conversationsCursor: null,
             activeConversationId: null,
             activeConnectionStatus: null,
             isIncomingConnectionRequest: false,
             isPendingSent: false,
+            hasActiveApplication: false,
+            isApplicant: false,
+            isCreator: false,
+            activeApplicationId: null,
+            activeApplicationStatus: null,
+            activeProjectId: null,
             messagesByConversation: {},
             draftsByConversation: {},
+
+            // Applications
+            applications: [],
+            applicationsLoading: false,
+            applicationsError: null,
+            hasMoreApplications: false,
+            applicationsOffset: 0,
+
+            // Project Groups
+            projectGroups: [],
+            projectGroupsLoading: false,
+            projectGroupsError: null,
+            hasMoreProjectGroups: false,
+            projectGroupsOffset: 0,
 
             unreadCounts: {},
             totalUnread: 0,
@@ -134,7 +210,8 @@ export const useChatStore = create<ChatState>()(
                 set({ conversationsLoading: true, conversationsError: null });
 
                 try {
-                    const result = await getConversations();
+                    // Initial load: Page 1 (Limit 20)
+                    const result = await getConversations(20, undefined);
 
                     if (result.success && result.conversations) {
                         // Build unread counts map
@@ -152,12 +229,14 @@ export const useChatStore = create<ChatState>()(
                             totalUnread,
                             conversationsLoading: false,
                             isInitialized: true,
+                            hasMoreConversations: result.hasMore || false,
+                            conversationsCursor: result.nextCursor || null,
                         });
                     } else {
                         set({
                             conversationsError: result.error || 'Failed to load conversations',
                             conversationsLoading: false,
-                            isInitialized: true, // Mark initialized even on error to stop loop
+                            isInitialized: true,
                         });
                     }
                 } catch (error) {
@@ -171,11 +250,56 @@ export const useChatStore = create<ChatState>()(
             },
 
             // ================================================================
+            // LOAD MORE CONVERSATIONS
+            // ================================================================
+            loadMoreConversations: async () => {
+                const state = get();
+                if (state.conversationsLoading || !state.hasMoreConversations) return;
+
+                set({ conversationsLoading: true });
+
+                try {
+                    const result = await getConversations(20, state.conversationsCursor || undefined);
+
+                    if (result.success && result.conversations) {
+                        const newConversations = result.conversations;
+
+                        // Merge unread counts
+                        const unreadCounts = { ...state.unreadCounts };
+                        let totalUnread = state.totalUnread;
+
+                        for (const conv of newConversations) {
+                            // Only add if not already counted (deduplication check usually not needed if offset correct but good for safety)
+                            if (unreadCounts[conv.id] === undefined) {
+                                unreadCounts[conv.id] = conv.unreadCount;
+                                totalUnread += conv.unreadCount;
+                            }
+                        }
+
+                        set(prev => ({
+                            conversations: [...prev.conversations, ...newConversations],
+                            unreadCounts,
+                            totalUnread,
+                            conversationsLoading: false,
+                            hasMoreConversations: result.hasMore || false,
+                            conversationsCursor: result.nextCursor || null,
+                        }));
+                    } else {
+                        set({ conversationsLoading: false });
+                    }
+                } catch (error) {
+                    console.error('Error loading more conversations:', error);
+                    set({ conversationsLoading: false });
+                }
+            },
+
+            // ================================================================
             // REFRESH CONVERSATIONS
             // ================================================================
             refreshConversations: async () => {
                 try {
-                    const result = await getConversations();
+                    // Reset to Page 1
+                    const result = await getConversations(20, undefined);
 
                     if (result.success && result.conversations) {
                         const unreadCounts: Record<string, number> = {};
@@ -190,6 +314,8 @@ export const useChatStore = create<ChatState>()(
                             conversations: result.conversations,
                             unreadCounts,
                             totalUnread,
+                            hasMoreConversations: result.hasMore || false,
+                            conversationsCursor: result.nextCursor || null,
                         });
                     }
                 } catch (error) {
@@ -270,9 +396,14 @@ export const useChatStore = create<ChatState>()(
                 // Mark as read
                 await get().markAsRead(conversationId);
 
-                // Check connection status if DM
+                // Check connection status if DM, skip for groups and project_groups
                 const conversation = state.conversations.find(c => c.id === conversationId);
-                if (conversation && conversation.type === 'dm') {
+                const projectGroup = state.projectGroups.find(g => g.id === conversationId);
+
+                if (projectGroup) {
+                    // Project groups are always allowed (membership enforced at DB level)
+                    set({ activeConnectionStatus: 'connected' });
+                } else if (conversation && conversation.type === 'dm') {
                     get().checkActiveConnectionStatus();
                 } else {
                     set({ activeConnectionStatus: 'connected' }); // Groups always allowed
@@ -581,6 +712,33 @@ export const useChatStore = create<ChatState>()(
                 });
             },
 
+            // UPSERT CONVERSATION (Hydration)
+            // ================================================================
+            upsertConversation: (conversation: ConversationWithDetails) => {
+                set(prev => {
+                    const index = prev.conversations.findIndex(c => c.id === conversation.id);
+                    let newConversations;
+
+                    if (index >= 0) {
+                        newConversations = [...prev.conversations];
+                        newConversations[index] = conversation;
+                    } else {
+                        newConversations = [conversation, ...prev.conversations];
+                    }
+
+                    // Update unread count
+                    const newUnreadCounts = { ...prev.unreadCounts, [conversation.id]: conversation.unreadCount };
+                    // Recalculate total (safe way)
+                    const totalUnread = Object.values(newUnreadCounts).reduce((a, b) => a + b, 0);
+
+                    return {
+                        conversations: newConversations,
+                        unreadCounts: newUnreadCounts,
+                        totalUnread
+                    };
+                });
+            },
+
             // HANDLE NEW MESSAGE (from realtime) - OPTIMIZED
             // ================================================================
             _handleNewMessage: async (rawMessage: any) => {
@@ -638,7 +796,9 @@ export const useChatStore = create<ChatState>()(
                     senderId: rawMessage.sender_id,
                     content: rawMessage.content,
                     type: rawMessage.type,
-                    metadata: rawMessage.metadata || {},
+                    metadata: typeof rawMessage.metadata === 'string'
+                        ? JSON.parse(rawMessage.metadata)
+                        : (rawMessage.metadata || {}),
                     createdAt: new Date(rawMessage.created_at),
                     editedAt: rawMessage.edited_at ? new Date(rawMessage.edited_at) : null,
                     deletedAt: rawMessage.deleted_at ? new Date(rawMessage.deleted_at) : null,
@@ -702,9 +862,11 @@ export const useChatStore = create<ChatState>()(
                         };
                         // Move to top (sort by updatedAt)
                         conversations.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+                    } else {
+                        // NEW CONVERSATION DETECTED: Refresh entire list to get participants/metadata
+                        // We do this in the background to not block the message delivery
+                        get().refreshConversations();
                     }
-                    // Note: If conversation not in list, it will appear on next refresh
-                    // This is acceptable as it's a rare edge case (e.g., new group added to user)
 
                     return { conversations };
                 });
@@ -744,14 +906,63 @@ export const useChatStore = create<ChatState>()(
                         set({
                             activeConnectionStatus: result.status,
                             isIncomingConnectionRequest: result.isIncomingRequest || false,
-                            isPendingSent: result.isPendingSent || false
+                            isPendingSent: result.isPendingSent || false,
+                            hasActiveApplication: result.hasActiveApplication || false,
+                            isApplicant: result.isApplicant || false,
+                            isCreator: result.isCreator || false,
+                            activeApplicationId: result.activeApplicationId || null,
+                            activeApplicationStatus: result.activeApplicationStatus || null,
+                            activeProjectId: result.activeProjectId || null
                         });
                     } else {
-                        set({ activeConnectionStatus: 'none', isIncomingConnectionRequest: false, isPendingSent: false });
+                        set({
+                            activeConnectionStatus: 'none',
+                            isIncomingConnectionRequest: false,
+                            isPendingSent: false,
+                            hasActiveApplication: false,
+                            isApplicant: false,
+                            isCreator: false,
+                            activeApplicationId: null,
+                            activeApplicationStatus: null,
+                            activeProjectId: null
+                        });
                     }
                 } catch (error) {
                     console.error('Error checking connection status:', error);
-                    set({ activeConnectionStatus: 'none', isIncomingConnectionRequest: false, isPendingSent: false });
+                    set({
+                        activeConnectionStatus: 'none',
+                        isIncomingConnectionRequest: false,
+                        isPendingSent: false,
+                        hasActiveApplication: false,
+                        isApplicant: false,
+                        isCreator: false,
+                        activeApplicationId: null,
+                        activeApplicationStatus: null,
+                        activeProjectId: null
+                    });
+                }
+            },
+
+            // ================================================================
+            // REFRESH MESSAGES
+            // ================================================================
+            refreshMessages: async (conversationId: string) => {
+                try {
+                    const { messages: messageList, hasMore, nextCursor } = await getMessages(conversationId);
+
+                    set((state) => ({
+                        messagesByConversation: {
+                            ...state.messagesByConversation,
+                            [conversationId]: {
+                                messages: messageList || [],
+                                hasMore: hasMore || false,
+                                cursor: nextCursor || null,
+                                loading: false
+                            }
+                        }
+                    }));
+                } catch (error) {
+                    console.error('Error refreshing messages:', error);
                 }
             },
 
@@ -777,6 +988,209 @@ export const useChatStore = create<ChatState>()(
                 }
                 return false;
             },
+
+            // ================================================================
+            // HANDLE MESSAGE UPDATE (e.g. Status Banner Change)
+            // ================================================================
+            _handleMessageUpdate: (rawMessage: any) => {
+                const state = get();
+                const conversationId = rawMessage.conversation_id;
+
+                // 1. Update in Message Cache
+                if (state.messagesByConversation[conversationId]) {
+                    set(prev => ({
+                        messagesByConversation: {
+                            ...prev.messagesByConversation,
+                            [conversationId]: {
+                                ...prev.messagesByConversation[conversationId],
+                                messages: prev.messagesByConversation[conversationId].messages.map(msg =>
+                                    msg.id === rawMessage.id
+                                        ? {
+                                            ...msg,
+                                            content: rawMessage.content,
+                                            metadata: typeof rawMessage.metadata === 'string'
+                                                ? JSON.parse(rawMessage.metadata)
+                                                : (rawMessage.metadata || {}),
+                                            editedAt: rawMessage.edited_at ? new Date(rawMessage.edited_at) : null,
+                                            // Keep sender/attachments from existing message if not in payload
+                                            sender: msg.sender,
+                                            attachments: msg.attachments,
+                                            type: rawMessage.type // Ensure type update for system messages
+                                        }
+                                        : msg
+                                )
+                            }
+                        }
+                    }));
+                }
+
+                // 2. Update Status locally if it matches active application
+                const updateMetadata = typeof rawMessage.metadata === 'string' ? JSON.parse(rawMessage.metadata) : rawMessage.metadata;
+                if (updateMetadata && updateMetadata.applicationId === state.activeApplicationId && updateMetadata.status) {
+                    set({ activeApplicationStatus: updateMetadata.status });
+                }
+
+                // 2. Update in Conversation List (Last Message Preview)
+                const convIndex = state.conversations.findIndex(c => c.id === conversationId);
+                if (convIndex !== -1) {
+                    const lastMsg = state.conversations[convIndex].lastMessage;
+                    if (lastMsg && lastMsg.id === rawMessage.id) {
+                        set(prev => {
+                            const newConversations = [...prev.conversations];
+                            newConversations[convIndex] = {
+                                ...newConversations[convIndex],
+                                lastMessage: {
+                                    ...newConversations[convIndex].lastMessage!,
+                                    content: rawMessage.content
+                                }
+                            };
+                            return { conversations: newConversations };
+                        });
+                    }
+                }
+
+                // 3. Update Active Application Status (Real-time Banner)
+                const metadata = typeof rawMessage.metadata === 'string'
+                    ? JSON.parse(rawMessage.metadata)
+                    : (rawMessage.metadata || {});
+
+                if (
+                    state.activeConversationId === conversationId &&
+                    state.hasActiveApplication &&
+                    state.activeApplicationId &&
+                    metadata.isApplication &&
+                    metadata.applicationId === state.activeApplicationId
+                ) {
+                    set({ activeApplicationStatus: metadata.status });
+                }
+            },
+            setPartialStatus: (status) => {
+                set({ activeApplicationStatus: status });
+            },
+
+            // ================================================================
+            // FETCH APPLICATIONS (Inbox Zero Cache)
+            // ================================================================
+            fetchApplications: async (refresh = false) => {
+                const state = get();
+                // If we have data and not refreshing, return immediately (Cache First)
+                if (!refresh && state.applications.length > 0) return;
+
+                if (state.applicationsLoading) return;
+
+                set({ applicationsLoading: true, applicationsError: null });
+
+                try {
+                    const result = await getInboxApplicationsAction(20, 0);
+
+                    if (result.success && result.applications) {
+                        set({
+                            applications: result.applications as InboxApplication[],
+                            applicationsLoading: false,
+                            hasMoreApplications: result.hasMore || false,
+                            applicationsOffset: 20
+                        });
+                    } else {
+                        set({
+                            applicationsError: 'Failed to load applications',
+                            applicationsLoading: false
+                        });
+                    }
+                } catch (error) {
+                    console.error('Error fetching applications:', error);
+                    set({
+                        applicationsError: 'Failed to fetch applications',
+                        applicationsLoading: false
+                    });
+                }
+            },
+
+            loadMoreApplications: async () => {
+                const state = get();
+                if (state.applicationsLoading || !state.hasMoreApplications) return;
+
+                set({ applicationsLoading: true });
+
+                try {
+                    const result = await getInboxApplicationsAction(20, state.applicationsOffset);
+
+                    if (result.success && result.applications) {
+                        set(prev => ({
+                            applications: [...prev.applications, ...result.applications as InboxApplication[]],
+                            applicationsLoading: false,
+                            hasMoreApplications: result.hasMore || false,
+                            applicationsOffset: prev.applicationsOffset + 20
+                        }));
+                    } else {
+                        set({ applicationsLoading: false });
+                    }
+                } catch (error) {
+                    console.error('Error loading more applications:', error);
+                    set({ applicationsLoading: false });
+                }
+            },
+
+            // ================================================================
+            // PROJECT GROUPS (Phase 3: UI Integration)
+            // ================================================================
+            fetchProjectGroups: async (refresh = false) => {
+                const state = get();
+                // If we have data and not refreshing, return immediately (Cache First)
+                if (!refresh && state.projectGroups.length > 0) return;
+
+                if (state.projectGroupsLoading) return;
+
+                set({ projectGroupsLoading: true, projectGroupsError: null });
+
+                try {
+                    const result = await getProjectGroups(20, 0);
+
+                    if (result.success && result.projectGroups) {
+                        set({
+                            projectGroups: result.projectGroups,
+                            projectGroupsLoading: false,
+                            hasMoreProjectGroups: result.hasMore || false,
+                            projectGroupsOffset: 20
+                        });
+                    } else {
+                        set({
+                            projectGroupsError: 'Failed to load project groups',
+                            projectGroupsLoading: false
+                        });
+                    }
+                } catch (error) {
+                    console.error('Error fetching project groups:', error);
+                    set({
+                        projectGroupsError: 'Failed to fetch project groups',
+                        projectGroupsLoading: false
+                    });
+                }
+            },
+
+            loadMoreProjectGroups: async () => {
+                const state = get();
+                if (state.projectGroupsLoading || !state.hasMoreProjectGroups) return;
+
+                set({ projectGroupsLoading: true });
+
+                try {
+                    const result = await getProjectGroups(20, state.projectGroupsOffset);
+
+                    if (result.success && result.projectGroups) {
+                        set(prev => ({
+                            projectGroups: [...prev.projectGroups, ...result.projectGroups!],
+                            projectGroupsLoading: false,
+                            hasMoreProjectGroups: result.hasMore || false,
+                            projectGroupsOffset: prev.projectGroupsOffset + 20
+                        }));
+                    } else {
+                        set({ projectGroupsLoading: false });
+                    }
+                } catch (error) {
+                    console.error('Error loading more project groups:', error);
+                    set({ projectGroupsLoading: false });
+                }
+            }
         }),
         {
             name: 'chat-storage',

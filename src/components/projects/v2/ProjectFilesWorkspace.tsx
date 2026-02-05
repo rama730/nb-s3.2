@@ -39,6 +39,8 @@ import {
   PinOff,
   SplitSquareVertical,
   X,
+  Loader2,
+  RefreshCw,
 } from "lucide-react";
 import {
   recordProjectNodeEvent,
@@ -55,17 +57,23 @@ import {
   getProjectFileContent,
   getProjectFileSignedUrl,
 } from "@/app/actions/files";
+import { getProjectSyncStatus } from "@/app/actions/project";
+import { useRouter } from "next/navigation";
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 import { BreadcrumbBar } from "./navigation/BreadcrumbBar";
 import type { FilesViewMode } from "@/stores/filesWorkspaceStore";
 import { isAssetLike, isTextLike } from "./utils/fileKind";
 import AssetPreview from "./preview/AssetPreview";
 
+const EMPTY_ARRAY: any[] = [];
+const EMPTY_OBJECT: Record<string, any> = {};
+
 interface ProjectFilesWorkspaceProps {
   projectId: string;
   projectName?: string;
   currentUserId?: string;
   isOwnerOrMember: boolean;
+  syncStatus?: 'pending' | 'cloning' | 'indexing' | 'ready' | 'failed';
 }
 
 type PaneId = "left" | "right";
@@ -101,10 +109,31 @@ export default function ProjectFilesWorkspace({
   currentUserId,
   isOwnerOrMember,
   initialFileNodes,
+  syncStatus: initialSyncStatus = 'ready',
 }: ProjectFilesWorkspaceProps & { initialFileNodes?: ProjectNode[] }) {
   const canEdit = isOwnerOrMember;
   const { showToast } = useToast();
+  const router = useRouter();
 
+  // Sync Status Management
+  const [syncState, setSyncState] = useState(initialSyncStatus);
+  const showOverlay = syncState !== 'ready';
+
+  useEffect(() => {
+    if (!showOverlay || syncState === 'failed') return;
+
+    const interval = setInterval(async () => {
+        const res = await getProjectSyncStatus(projectId);
+        if (res.success && res.status) {
+            setSyncState(res.status);
+            if (res.status === 'ready') {
+                router.refresh(); // Refresh server components to get new file list
+            }
+        }
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, [projectId, showOverlay, syncState, router]);
   const ensureProjectWorkspace = useFilesWorkspaceStore((s) => s.ensureProjectWorkspace);
   const setNodes = useFilesWorkspaceStore((s) => s.setNodes);
 
@@ -123,20 +152,20 @@ export default function ProjectFilesWorkspace({
   }, [ensureProjectWorkspace, projectId, initialFileNodes, setNodes]);
 
   // Granular selectors to avoid re-renders on every store update (e.g. file content changes)
-  const leftOpenTabIds = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.panes.left.openTabIds || []);
-  const rightOpenTabIds = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.panes.right.openTabIds || []);
+  const leftOpenTabIds = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.panes.left.openTabIds || EMPTY_ARRAY);
+  const rightOpenTabIds = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.panes.right.openTabIds || EMPTY_ARRAY);
   const leftActiveTabId = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.panes.left.activeTabId);
   const rightActiveTabId = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.panes.right.activeTabId);
   const splitEnabled = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.splitEnabled);
   const splitRatio = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.splitRatio ?? 0.5);
   const explorerMode = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.explorerMode || "tree");
   const viewMode = useFilesWorkspaceStore((s) => (s.byProjectId[projectId]?.viewMode as FilesViewMode) || "code");
-  const nodesById = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.nodesById || {});
+  const nodesById = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.nodesById || EMPTY_OBJECT);
   
   // Specific objects we need (excluding fileStates which changes too often)
   const panes = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.panes || { left: { openTabIds: [], activeTabId: null }, right: { openTabIds: [], activeTabId: null } });
   const prefs = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.prefs || { lineNumbers: true, wordWrap: false, fontSize: 14, minimap: true });
-  const pinnedByTabId = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.pinnedByTabId || {});
+  const pinnedByTabId = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.pinnedByTabId || EMPTY_OBJECT);
   
   const openTab = useFilesWorkspaceStore((s) => s.openTab);
   const closeTabStore = useFilesWorkspaceStore((s) => s.closeTab);
@@ -912,6 +941,7 @@ export default function ProjectFilesWorkspace({
           viewMode={viewMode}
           onOpenFile={(node) => void openFileInPane(node)}
           onNodeDeleted={(nodeId) => removeNodeFromCaches(projectId, nodeId)}
+          syncStatus={syncState}
         />
       </div>
 
@@ -1176,6 +1206,43 @@ export default function ProjectFilesWorkspace({
           </div>
         ) : null}
       </div>
+      {/* Syncing Overlay */}
+      {showOverlay && (
+          <div className="absolute inset-0 z-50 bg-white/95 dark:bg-zinc-950/95 flex flex-col items-center justify-center p-8 backdrop-blur-sm animate-in fade-in duration-300">
+              <div className="flex flex-col items-center max-w-md text-center space-y-6">
+                  <div className="w-20 h-20 rounded-2xl bg-indigo-50 dark:bg-indigo-900/20 flex items-center justify-center relative">
+                      {syncState === 'failed' ? (
+                          <RefreshCw className="w-10 h-10 text-red-500" />
+                      ) : (
+                          <>
+                              <div className="absolute inset-0 rounded-2xl border-2 border-indigo-500/20 animate-ping" />
+                              <Loader2 className="w-10 h-10 text-indigo-600 dark:text-indigo-400 animate-spin" />
+                          </>
+                      )}
+                  </div>
+                  
+                  <div className="space-y-2">
+                    <h3 className="text-xl font-semibold text-zinc-900 dark:text-zinc-100">
+                        {syncState === 'cloning' ? 'Cloning Repository...' :
+                         syncState === 'indexing' ? 'Processing Files...' :
+                         syncState === 'pending' ? 'Queued for Import...' :
+                         'Import Failed'}
+                    </h3>
+                    <p className="text-zinc-500 dark:text-zinc-400">
+                        {syncState === 'failed' 
+                            ? "We couldn't import your project. Please try again or check the repository URL."
+                            : "We're setting up your workspace in the background. This usually takes less than a minute."}
+                    </p>
+                  </div>
+
+                  {syncState === 'failed' && (
+                      <Button onClick={() => window.location.reload()}>
+                          Retry
+                      </Button>
+                  )}
+              </div>
+          </div>
+      )}
     </div>
   );
 }

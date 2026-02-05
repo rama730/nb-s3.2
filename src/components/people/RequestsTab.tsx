@@ -7,10 +7,12 @@ import { profileHref } from "@/lib/routing/identifiers";
 import { usePendingRequests, useConnectionMutations } from "@/hooks/useConnections";
 import { toast } from "sonner";
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
+import ProjectApplicationsSection from "./ProjectApplicationsSection";
 
 interface RequestsTabProps {
     initialUser: any;
     initialRequests?: { incoming: any[], sent: any[] };
+    initialApplications?: { my: any[], incoming: any[] };
 }
 
 type RequestItem = 
@@ -19,7 +21,7 @@ type RequestItem =
     | { type: 'sent'; request: any }
     | { type: 'empty' };
 
-export default function RequestsTab({ initialUser, initialRequests }: RequestsTabProps) {
+export default function RequestsTab({ initialUser, initialRequests, initialApplications }: RequestsTabProps) {
     const { data: requestData, isLoading: requestsLoading } = usePendingRequests();
     const { acceptRequest, rejectRequest, cancelRequest } = useConnectionMutations();
 
@@ -96,23 +98,27 @@ export default function RequestsTab({ initialUser, initialRequests }: RequestsTa
         );
     }
 
-    if (!hasRequests) {
-        return (
-            <div className="text-center py-12 bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-200 dark:border-zinc-800">
-                <UserPlus className="w-12 h-12 text-zinc-400 mx-auto mb-4" />
-                <p className="text-zinc-600 dark:text-zinc-400">No pending requests.</p>
-                <Link href="/people?tab=discover" className="text-indigo-600 hover:underline mt-2 inline-block">
-                    Discover people to connect with
-                </Link>
-            </div>
-        );
-    }
+    // Removed duplicate isLoading check
 
     return (
-        <Virtuoso
-            useWindowScroll
-            data={items}
-            itemContent={(_, item) => {
+        <div>
+            {/* Project Applications Section - Always show application status */}
+            <ProjectApplicationsSection initialUser={initialUser} initialApplications={initialApplications} />
+            
+            {/* Connection Requests Section */}
+            {!hasRequests ? (
+                <div className="text-center py-12 bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-200 dark:border-zinc-800 mt-6">
+                    <UserPlus className="w-12 h-12 text-zinc-400 mx-auto mb-4" />
+                    <p className="text-zinc-600 dark:text-zinc-400">No pending connection requests.</p>
+                    <Link href="/people?tab=discover" className="text-indigo-600 hover:underline mt-2 inline-block">
+                        Discover people to connect with
+                    </Link>
+                </div>
+            ) : (
+                <Virtuoso
+                    useWindowScroll
+                    data={items}
+                    itemContent={(_, item) => {
                 if (item.type === 'header') {
                     return (
                         <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100 mb-4 mt-8 flex items-center gap-2">
@@ -275,6 +281,8 @@ export default function RequestsTab({ initialUser, initialRequests }: RequestsTa
 
                 return null;
             }}
-        />
+                />
+            )}
+        </div>
     );
 }

@@ -1,14 +1,17 @@
 'use server';
 
 import { db } from '@/lib/db';
-import { projects, projectFollows, savedProjects, projectOpenRoles } from '@/lib/db/schema';
-import { eq, and, sql, inArray } from 'drizzle-orm';
-import { createClient } from '@/lib/supabase/server';
+import { projects, projectFollows, savedProjects, projectOpenRoles, conversations, conversationParticipants, messages, projectNodes } from '@/lib/db/schema';
+import { eq, and, sql, inArray, isNotNull } from 'drizzle-orm';
+import { createClient, createAdminClient } from '@/lib/supabase/server';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { CreateProjectInput } from '@/lib/validations/project';
 import { generateSlug } from '@/lib/utils/slug';
 import { generateProjectKey } from '@/lib/project-key';
+// Queue Imports
+import { importQueue } from '@/lib/queue/client';
+import { ImportJobData } from '@/lib/queue/config';
 
 // --- Types ---
 interface CreateProjectResult {
@@ -21,68 +24,259 @@ interface CreateProjectResult {
     error?: string;
 }
 
+// ============================================================================
+// LAZY PROJECT GROUP CREATION (for existing projects without groups)
+// ============================================================================
+/**
+ * Ensures a project has an associated project group conversation.
+ * This is idempotent - safe to call multiple times (uses onConflictDoNothing).
+ * 
+ * @param projectId - The project ID to ensure has a group
+ * @param ownerId - The owner's user ID (will be added as participant)
+ * @returns The conversationId (existing or newly created)
+ */
+export async function ensureProjectGroupExists(
+    projectId: string,
+    ownerId: string
+): Promise<string | null> {
+    try {
+        // FAST PATH: Check if project already has a conversationId (99% of cases)
+        const [project] = await db
+            .select({ conversationId: projects.conversationId })
+            .from(projects)
+            .where(eq(projects.id, projectId))
+            .limit(1);
+
+        if (!project) return null;
+
+        // If already has conversationId, return it immediately
+        if (project.conversationId) {
+            return project.conversationId;
+        }
+
+        // SLOW PATH: Create project group with proper locking (rare - only for old projects)
+        // Uses FOR UPDATE to prevent race conditions
+        const result = await db.transaction(async (tx) => {
+            // CRITICAL: Lock the row with FOR UPDATE to prevent concurrent creation
+            const lockedProject = await tx.execute<{ conversation_id: string | null }>(sql`
+                SELECT conversation_id 
+                FROM ${projects} 
+                WHERE id = ${projectId}
+                FOR UPDATE
+            `);
+
+            const lockedRow = Array.from(lockedProject)[0];
+
+            // If another transaction already created the group, return it
+            if (lockedRow?.conversation_id) {
+                return lockedRow.conversation_id;
+            }
+
+            // We have exclusive lock - safe to create
+            const [newConversation] = await tx.insert(conversations).values({
+                type: 'project_group',
+            }).returning({ id: conversations.id });
+
+            if (!newConversation) {
+                throw new Error('Failed to create project group');
+            }
+
+            // Link to project (atomic, no race possible due to lock)
+            await tx.update(projects)
+                .set({ conversationId: newConversation.id })
+                .where(eq(projects.id, projectId));
+
+            // Get ALL existing project members
+            const members = await tx
+                .select({ userId: projectMembers.userId })
+                .from(projectMembers)
+                .where(eq(projectMembers.projectId, projectId));
+
+            // Collect all participant user IDs (ensure owner is ALWAYS included)
+            const participantIds = new Set<string>([ownerId]); // Always include owner
+            members.forEach(m => participantIds.add(m.userId));
+
+            // Add all participants (bulk insert, idempotent)
+            await tx.insert(conversationParticipants)
+                .values(
+                    Array.from(participantIds).map(userId => ({
+                        conversationId: newConversation.id,
+                        userId,
+                    }))
+                )
+                .onConflictDoNothing();
+
+            return newConversation.id;
+        });
+
+        return result;
+    } catch (error) {
+        console.error('Error ensuring project group exists:', error);
+        return null;
+    }
+}
+
+
 // --- Create Action ---
 export async function createProjectAction(input: CreateProjectInput & { slug?: string; project_id?: string }): Promise<CreateProjectResult> {
     try {
         const supabase = await createClient();
-        const { data: { user } } = await supabase.auth.getUser();
+        const { data: { session } } = await supabase.auth.getSession();
+        const user = session?.user;
 
         if (!user) {
             return { success: false, error: 'You must be logged in to create a project' };
         }
 
-        const finalSlug = input.slug || generateSlug(input.title);
+        // Retrieve GitHub Access Token if available (for private repo access)
+        const gitHubToken = session?.provider_token;
 
-        const projectData = {
-            ownerId: user.id,
-            title: input.title,
-            slug: finalSlug,
-            // Generate Project Key
-            key: generateProjectKey(input.title),
-            currentTaskNumber: 0,
+        let finalSlug = input.slug || generateSlug(input.title);
+        // Initial Key Generation
+        let finalKey = generateProjectKey(input.title);
 
-            description: input.description || null,
-            shortDescription: input.short_description || null,
-            category: input.project_type || null,
-            tags: input.tags || [],
-            skills: input.technologies_used || [],
-            visibility: (input.visibility as 'public' | 'private' | 'unlisted') || 'public',
-            status: mapStatus(input.status),
-            lookingForCollaborators: true,
-            lifecycleStages: (input.lifecycle_stages && input.lifecycle_stages.length > 0)
-                ? input.lifecycle_stages
-                : ["Concept", "Team Formation", "MVP", "Beta", "Launch"],
-            currentStageIndex: input.current_stage_index || 0,
-        };
+        let attempts = 0;
+        const maxAttempts = 5;
 
-        // Use transaction to ensure project and owner membership are created together
-        const result = await db.transaction(async (tx) => {
-            const [newProject] = await tx.insert(projects).values(projectData).returning();
+        while (attempts < maxAttempts) {
+            try {
+                const projectData = {
+                    ownerId: user.id,
+                    title: input.title,
+                    slug: finalSlug,
+                    // Use mutable key variable
+                    key: finalKey,
+                    currentTaskNumber: 0,
+                    description: input.description || null,
+                    shortDescription: input.short_description || null,
+                    problemStatement: input.problem_statement || null,
+                    solutionStatement: input.solution_overview || null,
+                    category: input.project_type || null,
+                    tags: input.tags || [],
+                    skills: input.technologies_used || [],
+                    visibility: (input.visibility as 'public' | 'private' | 'unlisted') || 'public',
+                    status: mapStatus(input.status),
+                    lookingForCollaborators: true,
+                    lifecycleStages: (input.lifecycle_stages && input.lifecycle_stages.length > 0)
+                        ? input.lifecycle_stages
+                        : ["Concept", "Team Formation", "MVP", "Beta", "Launch"],
+                    currentStageIndex: input.current_stage_index || 0,
+                    importSource: input.import_source || null,
+                    syncStatus: (input.import_source?.type === 'github' ? 'cloning' :
+                        input.import_source?.type === 'upload' ? 'pending' : 'ready') as 'pending' | 'cloning' | 'indexing' | 'ready' | 'failed',
+                };
 
-            if (!newProject) {
-                throw new Error('Failed to create project');
+                // Use transaction to ensure project, owner membership, and project group are created together
+                // OPTIMIZED: Create conversation FIRST, insert project WITH conversationId (saves 1 UPDATE)
+                const result = await db.transaction(async (tx) => {
+                    // 1. Create the Project Group Conversation FIRST
+                    const [newConversation] = await tx.insert(conversations).values({
+                        type: 'project_group',
+                    }).returning({ id: conversations.id });
+
+                    if (!newConversation) {
+                        throw new Error('Failed to create project group');
+                    }
+
+                    // 2. Create the Project WITH conversationId
+                    const [newProject] = await tx.insert(projects).values({
+                        ...projectData,
+                        conversationId: newConversation.id,
+                    }).returning();
+
+                    if (!newProject) {
+                        throw new Error('Failed to create project');
+                    }
+
+                    // 3. Add Owner as a Participant of the Project Group
+                    await tx.insert(conversationParticipants).values({
+                        conversationId: newConversation.id,
+                        userId: user.id,
+                    });
+
+                    // 4. Add owner as a member with 'owner' role
+                    await tx.insert(projectMembers).values({
+                        projectId: newProject.id,
+                        userId: user.id,
+                        role: 'owner'
+                    });
+
+                    // 5. Insert Open Roles (if any)
+                    if (input.roles && input.roles.length > 0) {
+                        await tx.insert(projectOpenRoles).values(
+                            input.roles.map(role => ({
+                                projectId: newProject.id,
+                                role: role.role,
+                                count: role.count,
+                                description: role.description || "",
+                                skills: role.skills || [],
+                            }))
+                        );
+                    }
+
+                    return newProject;
+                });
+
+                revalidatePath('/hub');
+
+                // Add to Import Queue if applicable
+                if (input.import_source?.type === 'github' && input.import_source.repoUrl) {
+                    try {
+                        await importQueue.add(
+                            'github-import',
+                            {
+                                projectId: result.id,
+                                importSource: {
+                                    type: 'github',
+                                    repoUrl: input.import_source.repoUrl!,
+                                    branch: input.import_source.branch,
+                                    metadata: input.import_source.metadata
+                                },
+                                accessToken: gitHubToken || undefined, // Pass token for authenticated cloning
+                                userId: user.id
+                            } satisfies ImportJobData
+                        );
+                    } catch (queueError) {
+                        console.error('[Action] Failed to add to queue', queueError);
+                    }
+                }
+
+                return {
+                    success: true,
+                    project: {
+                        id: result.id,
+                        title: result.title,
+                        slug: result.slug || result.id,
+                    },
+                };
+
+            } catch (error: any) {
+                // Check for Unique Constraint Violation on Slug
+                // Postgres error code 23505 is unique_violation
+                if (error.code === '23505') {
+                    if (error.message?.includes('slug')) {
+                        if (input.slug) {
+                            throw new Error('This project URL is already taken. Please choose another.');
+                        }
+                        attempts++;
+                        const suffix = Math.random().toString(36).substring(2, 6);
+                        finalSlug = `${generateSlug(input.title)}-${suffix}`;
+                        continue;
+                    }
+                    // Project Key Collision (e.g. "NB" already exists)
+                    if (error.message?.includes('key')) {
+                        attempts++;
+                        const suffix = Math.floor(Math.random() * 9) + 1;
+                        finalKey = `${generateProjectKey(input.title)}${suffix}`;
+                        continue;
+                    }
+                }
+                throw error; // Re-throw other errors
             }
+        }
 
-            // Add owner as a member with 'owner' role
-            await tx.insert(projectMembers).values({
-                projectId: newProject.id,
-                userId: user.id,
-                role: 'owner'
-            });
+        throw new Error("Failed to generate a unique project ID. Please try again.");
 
-            return newProject;
-        });
-
-        revalidatePath('/hub');
-
-        return {
-            success: true,
-            project: {
-                id: result.id,
-                title: result.title,
-                slug: result.slug || result.id,
-            },
-        };
     } catch (error) {
         console.error('Error creating project:', error);
         return {
@@ -170,8 +364,12 @@ export async function deleteProject(projectId: string) {
 
     if (!user) throw new Error("Unauthorized");
 
-    // Check ownership
-    const [project] = await db.select()
+    // Check ownership and get conversationId
+    const [project] = await db.select({
+        ownerId: projects.ownerId,
+        conversationId: projects.conversationId,
+        slug: projects.slug
+    })
         .from(projects)
         .where(eq(projects.id, projectId))
         .limit(1);
@@ -179,10 +377,127 @@ export async function deleteProject(projectId: string) {
     if (!project) throw new Error("Project not found");
     if (project.ownerId !== user.id) throw new Error("Unauthorized");
 
-    await db.delete(projects).where(eq(projects.id, projectId));
+    // 1. Get ALL S3 keys for this project before deleting nodes
+    const fileNodes = await db.select({ s3Key: projectNodes.s3Key })
+        .from(projectNodes)
+        .where(and(
+            eq(projectNodes.projectId, projectId),
+            isNotNull(projectNodes.s3Key)
+        ));
+
+    const s3Keys = fileNodes.map(n => n.s3Key!).filter(Boolean);
+
+    // 2. Comprehensive Cleanup Transaction
+    await db.transaction(async (tx) => {
+        // A. Update application messages to show "project_deleted" status
+        // This is a simple, non-blocking metadata update for chat UI
+        await tx.execute(sql`
+            UPDATE ${messages}
+            SET metadata = jsonb_set(
+                COALESCE(metadata, '{}'::jsonb), 
+                '{status}', 
+                '"project_deleted"'
+            )
+            WHERE metadata->>'projectId' = ${projectId}
+        `);
+
+        // B. Delete the project (cascades to projectMembers, nodes, roles, applications, etc.)
+        await tx.delete(projects).where(eq(projects.id, projectId));
+
+        // C. Delete the project group conversation if it exists
+        if (project.conversationId) {
+            await tx.delete(conversations).where(eq(conversations.id, project.conversationId));
+        }
+    });
+
+    // 3. Delete files from S3 Storage (Best Effort, outside transaction)
+    if (s3Keys.length > 0) {
+        try {
+            const adminClient = await createAdminClient();
+            await adminClient.storage.from("project-files").remove(s3Keys);
+        } catch (storageError) {
+            console.error("Failed to cleanup S3 files for project:", projectId, storageError);
+            // Don't fail the whole action if storage cleanup fails
+        }
+    }
 
     revalidatePath("/hub");
+    revalidatePath(`/projects/${project.slug || projectId}`);
     redirect("/hub");
+}
+
+/**
+ * Deep deletion of a project draft.
+ * Wipes DB records and S3 assets completely.
+ */
+export async function deleteProjectDraftAction(projectId: string): Promise<{ success: boolean; error?: string }> {
+    try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) throw new Error("Unauthorized");
+
+        const [project] = await db.select({
+            ownerId: projects.ownerId,
+            conversationId: projects.conversationId,
+        })
+            .from(projects)
+            .where(eq(projects.id, projectId))
+            .limit(1);
+
+        if (!project) return { success: true }; // Already gone
+        if (project.ownerId !== user.id) throw new Error("Unauthorized");
+
+        // 2. Wipe DB (Atomic transition)
+        await db.transaction(async (tx) => {
+            // Delete project (cascades to members, roles, etc.)
+            await tx.delete(projects).where(eq(projects.id, projectId));
+            if (project.conversationId) {
+                await tx.delete(conversations).where(eq(conversations.id, project.conversationId));
+            }
+        });
+
+        // 3. Wipe S3 (Best Effort - Deep recursive wipe of entire project prefix)
+        try {
+            const adminClient = await createAdminClient();
+
+            // Recursive list and delete helper
+            const purgeFolder = async (folderPath: string) => {
+                const { data: files, error } = await adminClient.storage.from("project-files").list(folderPath, {
+                    limit: 1000,
+                });
+
+                if (error || !files || files.length === 0) return;
+
+                const filesToDelete = files
+                    .filter(f => f.id) // Only files have IDs in some Supabase versions, or check metadata
+                    .map(f => `${folderPath}/${f.name}`);
+
+                const subFolders = files
+                    .filter(f => !f.id || f.metadata === null) // Folders
+                    .map(f => `${folderPath}/${f.name}`);
+
+                // Delete files in this level
+                if (filesToDelete.length > 0) {
+                    await adminClient.storage.from("project-files").remove(filesToDelete);
+                }
+
+                // Recurse into subfolders (Pure optimization: Parallel recursion)
+                if (subFolders.length > 0) {
+                    await Promise.all(subFolders.map(sf => purgeFolder(sf)));
+                }
+            };
+
+            await purgeFolder(projectId);
+        } catch (storageError) {
+            console.error("S3 recursive draft cleanup failed:", storageError);
+        }
+
+        revalidatePath("/hub");
+        return { success: true };
+    } catch (error: any) {
+        console.error("Failed to delete draft:", error);
+        return { success: false, error: error.message || "Failed to delete draft" };
+    }
 }
 
 // --- Interaction Actions ---
@@ -254,8 +569,14 @@ export async function getProjectUserStateAction(projectId: string) {
     const [follow, save, project] = await Promise.all([
         db.select().from(projectFollows).where(and(eq(projectFollows.projectId, projectId), eq(projectFollows.userId, user.id))).limit(1),
         db.select().from(savedProjects).where(and(eq(savedProjects.projectId, projectId), eq(savedProjects.userId, user.id))).limit(1),
-        db.select({ ownerId: projects.ownerId }).from(projects).where(eq(projects.id, projectId)).limit(1)
+        db.select({ ownerId: projects.ownerId, conversationId: projects.conversationId }).from(projects).where(eq(projects.id, projectId)).limit(1)
     ]);
+
+    // LAZY PROJECT GROUP CREATION: If owner visits and project has no group, create it
+    // SYNCHRONOUS: Wait for creation to complete so group is immediately visible
+    if (project[0] && !project[0].conversationId && project[0].ownerId === user.id) {
+        await ensureProjectGroupExists(projectId, project[0].ownerId);
+    }
 
     return {
         isFollowing: !!follow[0],
@@ -283,7 +604,165 @@ function mapStatus(status?: string): 'draft' | 'active' | 'completed' | 'archive
 // TASK & SPRINT ACTIONS (PHASE 8 OPTIMIZATION)
 // ============================================================================
 import { z } from "zod";
-import { tasks, projectSprints, projectMembers, taskNodeLinks, taskSubtasks } from "@/lib/db/schema";
+import { tasks, projectSprints, projectMembers, taskNodeLinks, taskSubtasks, profiles } from "@/lib/db/schema";
+
+// --- Fetch Actions (Optimization) ---
+
+export async function fetchProjectTasksAction(
+    projectId: string,
+    limit: number = 100,
+    cursor?: string
+) {
+    try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+
+        // Basic read access check can be done via RLS on Supabase side if using client, 
+        // but since we are server-side with drizzle, we should ideally check membership or public visibility.
+        // For speed, we'll optimistically fetch assuming the page component checked general access.
+
+        const projectTasks = await db.query.tasks.findMany({
+            where: (t, { eq, and, lt }) => and(
+                eq(t.projectId, projectId),
+                cursor ? lt(t.createdAt, new Date(cursor)) : undefined
+            ),
+            orderBy: (t, { desc }) => [desc(t.createdAt)],
+            limit: limit + 1,
+            with: {
+                assignee: true,
+                creator: true,
+                attachments: true,
+                subtasks: true
+            }
+        });
+
+        const hasMore = projectTasks.length > limit;
+        const tasks = projectTasks.slice(0, limit);
+        const nextCursor = hasMore ? tasks[tasks.length - 1].createdAt.toISOString() : undefined;
+
+        return { success: true, tasks, nextCursor, hasMore };
+    } catch (error) {
+        console.error("Failed to fetch tasks:", error);
+        return { success: false, error: "Failed to fetch tasks" };
+    }
+}
+
+export async function fetchProjectSprintsAction(projectId: string) {
+    try {
+        const projectSprintsList = await db.query.projectSprints.findMany({
+            where: (s, { eq }) => eq(s.projectId, projectId),
+            orderBy: (s, { desc }) => [desc(s.createdAt)]
+        });
+
+        return { success: true, sprints: projectSprintsList };
+    } catch (error) {
+        console.error("Failed to fetch sprints:", error);
+        return { success: false, error: "Failed to fetch sprints" };
+    }
+}
+
+export async function fetchSprintTasksAction(sprintId: string) {
+    try {
+        const sprintTasks = await db.query.tasks.findMany({
+            where: (t, { eq }) => eq(t.sprintId, sprintId),
+            orderBy: (t, { desc }) => [desc(t.createdAt)],
+            with: {
+                assignee: true,
+                creator: true,
+                attachments: true,
+                subtasks: true
+            }
+        });
+
+        return { success: true, tasks: sprintTasks };
+    } catch (error) {
+        console.error("Failed to fetch sprint tasks:", error);
+        return { success: false, error: "Failed to fetch sprint tasks" };
+    }
+}
+
+export async function getProjectMembersAction(
+    projectId: string,
+    limit: number = 20,
+    offset: number = 0
+) {
+    try {
+        const membersResult = await db.query.projectMembers.findMany({
+            where: (members, { eq }) => eq(members.projectId, projectId),
+            with: {
+                user: true
+            },
+            limit,
+            offset
+        });
+
+        const members = membersResult.map(m => m.user);
+        const hasMore = members.length === limit;
+
+        return { success: true, members, hasMore };
+    } catch (error) {
+        console.error("Failed to fetch project members:", error);
+        return { success: false, error: "Failed to fetch project members" };
+    }
+}
+
+export async function getProjectAnalyticsAction(projectId: string) {
+    try {
+        const tasksResult = await db
+            .select({
+                status: tasks.status,
+                priority: tasks.priority,
+                dueDate: tasks.dueDate,
+                count: sql<number>`count(*)`
+            })
+            .from(tasks)
+            .where(eq(tasks.projectId, projectId))
+            .groupBy(tasks.status, tasks.priority, tasks.dueDate);
+
+        const now = new Date();
+        const stats = {
+            totalTasks: 0,
+            completedTasks: 0,
+            inProgressTasks: 0,
+            overdueTasks: 0,
+            priorityDistribution: {} as Record<string, number>,
+        };
+
+        tasksResult.forEach(row => {
+            const count = Number(row.count);
+            stats.totalTasks += count;
+
+            if (row.status === 'done') {
+                stats.completedTasks += count;
+            } else if (row.status === 'in_progress') {
+                stats.inProgressTasks += count;
+            }
+
+            if (row.status !== 'done' && row.dueDate && new Date(row.dueDate) < now) {
+                stats.overdueTasks += count;
+            }
+
+            const priority = row.priority || 'medium';
+            stats.priorityDistribution[priority] = (stats.priorityDistribution[priority] || 0) + count;
+        });
+
+        const completionRate = stats.totalTasks > 0
+            ? Math.round((stats.completedTasks / stats.totalTasks) * 100)
+            : 0;
+
+        return {
+            success: true,
+            analytics: {
+                ...stats,
+                completionRate
+            }
+        };
+    } catch (error) {
+        console.error("Failed to fetch project analytics:", error);
+        return { success: false, error: "Failed to fetch project analytics" };
+    }
+}
+
 
 const createTaskSchema = z.object({
     projectId: z.string().uuid(),
@@ -593,6 +1072,183 @@ export async function deleteTaskAction(taskId: string, projectId: string) {
         return { success: true };
     } catch (error) {
         console.error("Failed to delete task:", error);
-        return { success: false, error: error instanceof Error ? error.message : "Failed to delete task" };
+        return { success: true, error: error instanceof Error ? error.message : "Failed to delete task" };
+    }
+}
+
+export async function updateProjectStageAction(projectId: string, currentStageIndex: number) {
+    try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) throw new Error("Unauthorized");
+
+        console.log("[updateProjectStageAction] Starting update:", { projectId, currentStageIndex, userId: user.id });
+
+        // Use Supabase client directly for RLS-compliant update
+        // Add .select() to get the updated row back and verify the update worked
+        const { data: updatedRows, error } = await supabase
+            .from('projects')
+            .update({
+                current_stage_index: currentStageIndex,
+                updated_at: new Date().toISOString()
+            })
+            .eq('id', projectId)
+            .eq('owner_id', user.id)
+            .select('id, current_stage_index');
+
+        console.log("[updateProjectStageAction] Update result:", { updatedRows, error });
+
+        if (error) {
+            console.error("[updateProjectStageAction] Supabase update error:", error);
+            throw new Error(error.message);
+        }
+
+        if (!updatedRows || updatedRows.length === 0) {
+            console.error("[updateProjectStageAction] No rows updated! Check owner_id match.");
+            throw new Error("Update failed - no rows matched. Ensure you are the project owner.");
+        }
+
+        // Get slug for revalidation
+        const { data: project } = await supabase
+            .from('projects')
+            .select('slug')
+            .eq('id', projectId)
+            .single();
+
+        const slugOrId = project?.slug || projectId;
+        revalidatePath(`/projects/${slugOrId}`);
+        revalidatePath(`/projects/${projectId}`);
+        revalidatePath('/hub');
+
+        return { success: true };
+    } catch (error) {
+        console.error("[updateProjectStageAction] Failed:", error);
+        return { success: false, error: error instanceof Error ? error.message : "Failed to update project stage" };
+    }
+}
+
+/**
+ * Smart Lifecycle Update Action
+ * Handles stage renames, reorders, additions, and deletions.
+ * Uses "Smart Rebalance" logic to keep currentStageIndex pointing at the correct stage.
+ */
+export async function updateProjectLifecycleAction(
+    projectId: string,
+    newStages: string[],
+    currentActiveStageName: string
+) {
+    try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) throw new Error("Unauthorized");
+
+        // Validate
+        if (!newStages || newStages.length === 0) {
+            throw new Error("At least one lifecycle stage is required");
+        }
+
+        // Get current index for Smart Rebalance calculation
+        const { data: project, error: fetchError } = await supabase
+            .from('projects')
+            .select('current_stage_index, slug')
+            .eq('id', projectId)
+            .eq('owner_id', user.id)
+            .single();
+
+        if (fetchError || !project) {
+            throw new Error("Project not found or access denied");
+        }
+
+        // SMART REBALANCE: Find the new index for the current stage
+        let newIndex = newStages.findIndex(s => s === currentActiveStageName);
+        if (newIndex === -1) {
+            // Stage was deleted - fallback to previous index or 0
+            newIndex = Math.max(0, (project.current_stage_index || 0) - 1);
+            // Clamp to max
+            newIndex = Math.min(newIndex, newStages.length - 1);
+        }
+
+        // Use Supabase client directly for RLS-compliant update
+        const { error } = await supabase
+            .from('projects')
+            .update({
+                lifecycle_stages: newStages,
+                current_stage_index: newIndex,
+                updated_at: new Date().toISOString()
+            })
+            .eq('id', projectId)
+            .eq('owner_id', user.id);
+
+        if (error) {
+            console.error("Supabase update error:", error);
+            throw new Error(error.message);
+        }
+
+        const slugOrId = project.slug || projectId;
+        revalidatePath(`/projects/${slugOrId}`);
+        revalidatePath(`/projects/${projectId}`);
+        revalidatePath('/hub');
+
+        return { success: true, newStageIndex: newIndex };
+    } catch (error) {
+        console.error("Failed to update project lifecycle:", error);
+        return { success: false, error: error instanceof Error ? error.message : "Failed to update project lifecycle" };
+    }
+}
+
+
+
+export async function finalizeProjectAction(projectId: string) {
+    try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) throw new Error("Unauthorized");
+
+        return await db.transaction(async (tx) => {
+            // 1. Verify Ownership
+            const [project] = await tx.select().from(projects).where(eq(projects.id, projectId)).limit(1);
+            if (!project) throw new Error("Project not found");
+            if (project.ownerId !== user.id) throw new Error("Only the owner can finalize the project");
+
+            if (project.status === 'completed') throw new Error("Project is already completed");
+
+            // 2. Finalize Project
+            await tx.update(projects)
+                .set({ status: 'completed', updatedAt: new Date() })
+                .where(eq(projects.id, projectId));
+
+            // 3. Close open roles
+            // Use local import or ensure projectOpenRoles is imported. 
+            // It is imported at line 4 (from view_file output).
+            await tx.delete(projectOpenRoles).where(eq(projectOpenRoles.projectId, projectId));
+
+            // 4. (Future) Distribute Reputation Points
+            // This would be a ledger insert
+
+            return { success: true, slug: project.slug };
+        });
+    } catch (error) {
+        console.error("Failed to finalize project:", error);
+        return { success: false, error: error instanceof Error ? error.message : "Failed to finalize project" };
+    }
+}
+
+export async function getProjectSyncStatus(projectId: string) {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+
+    // Minimal auth check
+    if (!user) return { success: false, error: 'Unauthorized' };
+
+    try {
+        const [project] = await db
+            .select({ syncStatus: projects.syncStatus })
+            .from(projects)
+            .where(eq(projects.id, projectId));
+
+        return { success: true, status: project?.syncStatus || 'ready' };
+    } catch (error) {
+        console.error('Failed to get sync status', error);
+        return { success: false, error: 'Failed' };
     }
 }

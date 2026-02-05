@@ -1,96 +1,49 @@
 'use client';
 
-import { motion } from 'framer-motion';
-import { Check } from 'lucide-react';
+import { WIZARD_PHASES } from '@/constants/project-wizard';
 
 interface WizardHeaderProps {
     currentPhase: number;
-    totalPhases: number;
 }
 
-const PHASE_LABELS = ['Type', 'Info', 'Team', 'Settings', 'Review'];
-
-export default function WizardHeader({ currentPhase, totalPhases }: WizardHeaderProps) {
+export default function WizardHeader({ currentPhase }: WizardHeaderProps) {
     return (
-        <div className="w-full py-4 mb-2">
-            <div className="flex items-start justify-between">
-                {Array.from({ length: totalPhases }, (_, i) => i + 1).map((step, index) => {
-                    const isCompleted = step < currentPhase;
-                    const isCurrent = step === currentPhase;
-                    const isLast = index === totalPhases - 1;
+        <div className="px-8 py-6 border-b border-zinc-100 dark:border-zinc-800 bg-white/50 dark:bg-zinc-900/50 backdrop-blur-xl">
+            <div className="flex items-center justify-between max-w-5xl mx-auto">
+                <div className="flex items-center gap-4 w-full justify-center">
+                    {WIZARD_PHASES.map((phase, index) => {
+                        const isCompleted = currentPhase > phase.id;
+                        const isCurrent = currentPhase === phase.id;
 
-                    return (
-                        <div key={step} className="flex items-start flex-1 last:flex-none">
-                            {/* Step with Label */}
-                            <div className="flex flex-col items-center">
-                                {/* Label on TOP */}
-                                <span className={`text-[11px] font-medium mb-2.5 whitespace-nowrap transition-colors duration-300 ${isCompleted
-                                        ? 'text-indigo-600 dark:text-indigo-400'
-                                        : isCurrent
-                                            ? 'text-indigo-600 dark:text-indigo-400 font-semibold'
-                                            : 'text-zinc-400 dark:text-zinc-500'
-                                    }`}>
-                                    {PHASE_LABELS[index]}
-                                </span>
-
-                                {/* Step Circle */}
-                                <motion.div
-                                    initial={false}
-                                    animate={{
-                                        scale: isCurrent ? 1 : 1,
-                                        boxShadow: isCurrent
-                                            ? '0 0 0 4px rgba(99, 102, 241, 0.2)'
-                                            : '0 0 0 0px rgba(99, 102, 241, 0)',
-                                    }}
-                                    transition={{
-                                        type: 'spring',
-                                        stiffness: 300,
-                                        damping: 20
-                                    }}
-                                    className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold transition-colors duration-300 ${isCompleted
-                                            ? 'bg-indigo-500 text-white'
-                                            : isCurrent
-                                                ? 'bg-indigo-500 text-white'
-                                                : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-400 dark:text-zinc-500 border-2 border-zinc-200 dark:border-zinc-700'
+                        return (
+                            <div key={phase.id} className="flex items-center">
+                                <div className="flex flex-col items-center gap-1.5 min-w-[60px]">
+                                    <div 
+                                        className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-all duration-300 ${
+                                            isCurrent
+                                                ? 'bg-indigo-600 text-white ring-4 ring-indigo-100 dark:ring-indigo-900/30 scale-110'
+                                                : isCompleted
+                                                ? 'bg-indigo-100 text-indigo-600 dark:bg-indigo-900/40 dark:text-indigo-400'
+                                                : 'bg-zinc-100 text-zinc-400 dark:bg-zinc-800 dark:text-zinc-500'
                                         }`}
-                                >
-                                    {isCompleted ? (
-                                        <motion.div
-                                            initial={{ scale: 0 }}
-                                            animate={{ scale: 1 }}
-                                            transition={{ type: 'spring', stiffness: 500, damping: 25 }}
-                                        >
-                                            <Check className="w-4 h-4" strokeWidth={3} />
-                                        </motion.div>
-                                    ) : (
-                                        step
-                                    )}
-                                </motion.div>
-                            </div>
-
-                            {/* Connector Line (not for last item) */}
-                            {!isLast && (
-                                <div className="flex-1 flex items-center h-9 mt-[34px]">
-                                    <div className="relative w-full h-[3px] mx-2 bg-zinc-200 dark:bg-zinc-700 rounded-full overflow-hidden">
-                                        <motion.div
-                                            className="absolute inset-y-0 left-0 bg-indigo-500 rounded-full"
-                                            initial={false}
-                                            animate={{
-                                                width: isCompleted ? '100%' : '0%',
-                                            }}
-                                            transition={{
-                                                type: 'spring',
-                                                stiffness: 150,
-                                                damping: 20,
-                                                mass: 0.8,
-                                            }}
-                                        />
+                                    >
+                                        {isCompleted ? '✓' : phase.id}
                                     </div>
+                                    <span className={`text-[10px] font-bold uppercase tracking-wider ${
+                                        isCurrent ? 'text-indigo-600 dark:text-indigo-400' : 'text-zinc-400'
+                                    }`}>
+                                        {phase.label}
+                                    </span>
                                 </div>
-                            )}
-                        </div>
-                    );
-                })}
+                                {index < WIZARD_PHASES.length - 1 && (
+                                    <div className={`w-8 h-[2px] mb-4 mx-2 transition-colors duration-500 ${
+                                        isCompleted ? 'bg-indigo-200 dark:bg-indigo-900' : 'bg-zinc-100 dark:bg-zinc-800'
+                                    }`} />
+                                )}
+                            </div>
+                        );
+                    })}
+                </div>
             </div>
         </div>
     );

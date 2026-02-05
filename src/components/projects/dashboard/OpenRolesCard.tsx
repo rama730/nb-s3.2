@@ -1,6 +1,6 @@
 "use client";
 
-import { Briefcase, CheckCircle, Plus } from "lucide-react";
+import { Briefcase, CheckCircle, Clock, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import DashboardCard from "./DashboardCard";
 import { motion } from "framer-motion";
@@ -9,7 +9,12 @@ interface OpenRolesCardProps {
     roles: any[];
     isCreator: boolean;
     isCollaborator: boolean;
-    hasPendingApplication: boolean;
+    applicationStatus: {
+        status: 'none' | 'pending' | 'accepted' | 'rejected';
+        roleTitle?: string;
+        canReapply?: boolean;
+        waitTime?: string;
+    };
     onApply: (roleId?: string) => void;
     onManageRoles: () => void;
 }
@@ -18,7 +23,7 @@ export default function OpenRolesCard({
     roles,
     isCreator,
     isCollaborator,
-    hasPendingApplication,
+    applicationStatus,
     onApply,
     onManageRoles,
 }: OpenRolesCardProps) {
@@ -26,6 +31,11 @@ export default function OpenRolesCard({
         const remaining = (r?.count || 0) - (r?.filled || 0);
         return remaining > 0;
     });
+
+    const isPending = applicationStatus.status === 'pending';
+    const isRejected = applicationStatus.status === 'rejected';
+    const canReapply = applicationStatus.canReapply ?? true;
+    const isBlocked = isPending || (isRejected && !canReapply);
 
     return (
         <DashboardCard
@@ -40,10 +50,15 @@ export default function OpenRolesCard({
                         <CheckCircle className="w-3.5 h-3.5 fill-current" />
                         <span className="text-xs font-medium">Team member</span>
                     </motion.div>
-                ) : hasPendingApplication ? (
+                ) : isPending ? (
                     <motion.div className="flex items-center gap-2 bg-amber-50 dark:bg-amber-900/10 text-amber-700 dark:text-amber-400 p-2 rounded-lg border border-amber-100 dark:border-amber-900/20">
                         <Clock className="w-3.5 h-3.5 fill-current" />
                         <span className="text-xs font-medium">Application pending review</span>
+                    </motion.div>
+                ) : isRejected && !canReapply ? (
+                    <motion.div className="flex items-center gap-2 bg-red-50 dark:bg-red-900/10 text-red-700 dark:text-red-400 p-2 rounded-lg border border-red-100 dark:border-red-900/20">
+                        <XCircle className="w-3.5 h-3.5 fill-current" />
+                        <span className="text-xs font-medium">Application details</span>
                     </motion.div>
                 ) : null}
 
@@ -75,9 +90,15 @@ export default function OpenRolesCard({
                                         {!isCreator && !isCollaborator && (
                                             <button
                                                 onClick={() => onApply(role.id)}
-                                                className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity text-[10px] px-2.5 py-1 rounded bg-indigo-600 text-white hover:bg-indigo-700 font-semibold shadow-sm"
+                                                disabled={isBlocked}
+                                                className={cn(
+                                                    "absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity text-[10px] px-2.5 py-1 rounded font-semibold shadow-sm",
+                                                    isBlocked
+                                                        ? "bg-zinc-100 text-zinc-400 cursor-not-allowed"
+                                                        : "bg-indigo-600 text-white hover:bg-indigo-700"
+                                                )}
                                             >
-                                                Apply
+                                                {isPending ? 'Pending' : (isRejected && !canReapply) ? 'Rejected' : 'Apply'}
                                             </button>
                                         )}
                                     </div>
@@ -100,15 +121,15 @@ export default function OpenRolesCard({
                 {!isCreator && !isCollaborator && (
                     <button
                         onClick={() => onApply()}
-                        disabled={hasPendingApplication}
+                        disabled={isBlocked}
                         className={cn(
                             "w-full py-2 flex items-center justify-center gap-1.5 text-xs font-semibold rounded-lg transition-all",
-                            hasPendingApplication
+                            isBlocked
                                 ? "bg-zinc-100 text-zinc-400 cursor-not-allowed"
                                 : "bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-50 dark:bg-zinc-800 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-700 shadow-sm"
                         )}
                     >
-                        {hasPendingApplication ? "Application Submitted" : "Apply General"}
+                        {isPending ? "Application Submitted" : (isRejected && !canReapply) ? `Reapply in ${applicationStatus.waitTime}` : "Apply General"}
                     </button>
                 )}
             </div>
@@ -116,5 +137,4 @@ export default function OpenRolesCard({
     );
 }
 
-// Needed for the Clock icon which was referenced but not imported in my paste above
-import { Clock } from "lucide-react";
+

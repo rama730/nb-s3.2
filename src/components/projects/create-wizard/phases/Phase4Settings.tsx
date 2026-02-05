@@ -3,7 +3,6 @@
 import { useFormContext } from 'react-hook-form';
 import { CreateProjectInput } from '@/lib/validations/project';
 import { Globe, Lock, Link2 } from 'lucide-react';
-import { LifecycleEditor } from '@/components/projects/LifecycleEditor';
 
 const DEFAULT_TERMS = {
     ip_agreement: 'discuss' as const,
@@ -166,21 +165,6 @@ export default function Phase4Settings() {
                             placeholder="https://figma.com/..."
                         />
                     </div>
-                </div>
-            </div>
-            {/* Lifecycle Stages */}
-            <div>
-                <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100 mb-2">
-                    Project Lifecycle
-                </h3>
-                <p className="text-sm text-zinc-500 dark:text-zinc-400 mb-4">
-                    Define the stages your project will go through
-                </p>
-                <div className="bg-zinc-50 dark:bg-zinc-900/50 p-4 rounded-xl border border-zinc-100 dark:border-zinc-800">
-                    <LifecycleEditor 
-                        stages={watch('lifecycle_stages') || []}
-                        onChange={(stages) => setValue('lifecycle_stages', stages)}
-                    />
                 </div>
             </div>
         </div>

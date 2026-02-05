@@ -78,7 +78,7 @@ export function AuthProvider({
         const supabase = createClient();
         
         const { data: { subscription } } = supabase.auth.onAuthStateChange(
-            async (event, session) => {
+            async (event: string, session: Session | null) => {
                 if (event === 'SIGNED_IN' && session) {
                      if (session.user.id !== state.user?.id) {
                          const { data: profile } = await supabase

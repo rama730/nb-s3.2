@@ -26,18 +26,22 @@ export function TypingIndicator({ users }: TypingIndicatorProps) {
             : `${displayName} and ${users.length - 1} others are typing`;
 
     return (
-        <div className="flex items-center gap-2 py-2">
-            {/* Animated dots */}
-            <div className="flex items-center gap-1 px-3 py-2 bg-zinc-100 dark:bg-zinc-800 rounded-2xl">
-                <span className="w-2 h-2 bg-zinc-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                <span className="w-2 h-2 bg-zinc-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                <span className="w-2 h-2 bg-zinc-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+        <div className="flex items-end gap-2 mb-2 animate-in fade-in slide-in-from-bottom-1 duration-200 pl-4">
+            {/* Avatar Placeholder for alignment with messages */}
+            {/* <div className="w-8 shrink-0" /> */}
+            
+            <div className="flex flex-col gap-1">
+                <div className="flex items-center gap-1.5 px-3 py-2 bg-zinc-100 dark:bg-zinc-800/80 rounded-2xl rounded-bl-sm w-fit border border-zinc-200 dark:border-zinc-700/50">
+                    <span className="w-1.5 h-1.5 bg-zinc-400 dark:bg-zinc-500 rounded-full animate-bounce [animation-duration:600ms]" style={{ animationDelay: '0ms' }} />
+                    <span className="w-1.5 h-1.5 bg-zinc-400 dark:bg-zinc-500 rounded-full animate-bounce [animation-duration:600ms]" style={{ animationDelay: '150ms' }} />
+                    <span className="w-1.5 h-1.5 bg-zinc-400 dark:bg-zinc-500 rounded-full animate-bounce [animation-duration:600ms]" style={{ animationDelay: '300ms' }} />
+                </div>
+                {users.length > 1 && (
+                     <span className="text-[10px] font-medium text-zinc-400 ml-1">
+                        {text}
+                    </span>
+                )}
             </div>
-
-            {/* Text */}
-            <span className="text-xs text-zinc-500 dark:text-zinc-400">
-                {text}
-            </span>
         </div>
     );
 }

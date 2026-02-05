@@ -27,7 +27,8 @@ export default async function ProfilePage({ searchParams }: PageProps) {
 
     let data;
     try {
-        data = await getProfileDetails()
+        // OPTIMIZATION: usage of "Instant Shell" pattern.
+        data = await getProfileDetails(undefined, { skipHeavyData: true })
     } catch (error) {
         console.error('Profile fetch error:', error)
         // If profile query fails (schema mismatch or missing profile), redirect to onboarding
@@ -40,11 +41,8 @@ export default async function ProfilePage({ searchParams }: PageProps) {
     }
 
     return (
-        <main className="min-h-screen bg-white dark:bg-zinc-950">
-            <ProfileShell
-                initialData={data}
-                profileId={data.profile.id}
-            />
-        </main>
+        <div className="h-[calc(100vh-var(--header-height,56px))] min-h-0 overflow-hidden bg-white dark:bg-zinc-950">
+            <ProfileShell initialData={data} profileId={data.profile.id} />
+        </div>
     )
 }

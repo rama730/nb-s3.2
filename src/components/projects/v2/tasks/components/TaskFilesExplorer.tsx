@@ -70,7 +70,8 @@ export function TaskFilesExplorer({
         if (!opts?.force && alreadyLoaded) return;
         
         try {
-            const nodes = (await getProjectNodes(projectId, parentId)) as ProjectNode[];
+            const res = await getProjectNodes(projectId, parentId);
+            const nodes = Array.isArray(res) ? res : res.nodes;
             upsertNodes(projectId, nodes);
             setChildren(projectId, parentId, nodes.map(n => n.id));
             markChildrenLoaded(projectId, parentId);

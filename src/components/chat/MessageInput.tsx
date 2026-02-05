@@ -5,9 +5,10 @@ import { useChatStore, selectActiveDraft } from '@/stores/chatStore';
 import { useTypingChannel } from '@/hooks/useTypingChannel';
 import { uploadAttachment, sendMessageWithAttachments, type UploadedAttachment } from '@/app/actions/messaging';
 import { checkConnectionStatus, acceptConnectionRequest } from '@/app/actions/connections';
+import { acceptApplicationAction, rejectApplicationAction } from '@/app/actions/applications';
 import { Send, Paperclip, Image, X, Loader2, UserPlus, Clock, Check } from 'lucide-react';
 import { toast } from 'sonner';
-import { TypingIndicator } from './TypingIndicator';
+import { ChatApplicationBanner } from './ChatApplicationBanner';
 
 // ============================================================================
 // MESSAGE INPUT
@@ -37,7 +38,7 @@ export function MessageInput({ conversationId, targetUserId }: MessageInputProps
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     // Typing indicator - Scalable Broadcast
-    const { sendTyping, typingUsers } = useTypingChannel(conversationId !== 'new' ? conversationId : null);
+    const { sendTyping } = useTypingChannel(conversationId !== 'new' ? conversationId : null, { listen: false });
 
     // Handle input change
     const handleChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -231,6 +232,12 @@ export function MessageInput({ conversationId, targetUserId }: MessageInputProps
     const connectionStatus = useChatStore(state => state.activeConnectionStatus);
     const isIncomingConnectionRequest = useChatStore(state => state.isIncomingConnectionRequest);
     const isPendingSent = useChatStore(state => state.isPendingSent);
+    const hasActiveApplication = useChatStore(state => state.hasActiveApplication);
+    const isApplicant = useChatStore(state => state.isApplicant);
+    const isCreator = useChatStore(state => state.isCreator);
+    const activeApplicationId = useChatStore(state => state.activeApplicationId);
+    const activeApplicationStatus = useChatStore(state => state.activeApplicationStatus);
+    const activeProjectId = useChatStore(state => state.activeProjectId);
 
     const sendConnectionRequest = useChatStore(state => state.sendConnectionRequest);
     const [requestLoading, setRequestLoading] = useState(false);
@@ -376,13 +383,18 @@ export function MessageInput({ conversationId, targetUserId }: MessageInputProps
 
     return (
         <div className="border-t border-zinc-200 dark:border-zinc-800">
-            {/* Typing Indicator - Shows ABOVE banners */}
-            {typingUsers.length > 0 && (
-                <div className="px-3 pt-2">
-                    <TypingIndicator users={typingUsers} />
-                </div>
-            )}
             
+            {/* Application Active Banner */}
+            {hasActiveApplication && activeApplicationId && (
+                <ChatApplicationBanner 
+                    isApplicant={isApplicant}
+                    isCreator={isCreator}
+                    activeApplicationId={activeApplicationId}
+                    activeApplicationStatus={activeApplicationStatus}
+                    activeProjectId={activeProjectId}
+                />
+            )}
+
             <div className="p-3">
              {/* Incoming Request Banner (Recipient) */}
             {isIncomingConnectionRequest && (

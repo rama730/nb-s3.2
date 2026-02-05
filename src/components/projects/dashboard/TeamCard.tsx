@@ -41,6 +41,9 @@ interface TeamCardProps {
     isCreator: boolean;
     onManageTeam: () => void;
     onInvite: () => void;
+    hasNextMembers?: boolean;
+    fetchNextMembers?: () => void;
+    loadingMembers?: boolean;
 }
 
 export default function TeamCard({
@@ -50,6 +53,9 @@ export default function TeamCard({
     isCreator,
     onManageTeam,
     onInvite,
+    hasNextMembers,
+    fetchNextMembers,
+    loadingMembers,
 }: TeamCardProps) {
 
     // Ghost slots logic
@@ -104,7 +110,7 @@ export default function TeamCard({
                     )}
 
                     {/* Collaborators */}
-                    {members.map((member) => (
+                    {members.filter(m => m.user_id !== project.creator_id).map((member) => (
                         <Link
                             key={member.user_id}
                             href={profileHref({ id: member.user_id, username: member.profiles?.username })}
@@ -125,6 +131,24 @@ export default function TeamCard({
                             </div>
                         </Link>
                     ))}
+
+                    {/* Infinite Loading: Load More Actions */}
+                    {hasNextMembers && (
+                        <button
+                            onClick={fetchNextMembers}
+                            disabled={loadingMembers}
+                            className="w-full mt-1 p-2 text-[10px] font-bold text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 rounded-lg transition-all border border-indigo-100 dark:border-indigo-900/20 flex items-center justify-center gap-2"
+                        >
+                            {loadingMembers ? (
+                                <>
+                                    <div className="w-3 h-3 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+                                    Loading...
+                                </>
+                            ) : (
+                                "Load More Members"
+                            )}
+                        </button>
+                    )}
 
                     {/* Ghost Slots for Open Roles - Compact */}
                     {openRoleSlots.map((role, idx) => (

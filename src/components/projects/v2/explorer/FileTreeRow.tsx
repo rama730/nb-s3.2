@@ -29,15 +29,43 @@ interface FileTreeRowProps {
     menu?: React.ReactNode;
 
     // Actions
-    onToggle: () => void;
-    onSelect: () => void;
+    onToggle: (node: ProjectNode) => void;
+    onSelect: (node: ProjectNode, e?: React.MouseEvent) => void;
     onContextMenu: (e: React.MouseEvent) => void;
-    onDragStart: () => void;
+    onDragStart: (nodeId: string) => void;
     onDragEnd: () => void;
-    onDrop: (draggedId: string) => void;
+    onDrop: (targetId: string, draggedId: string) => void;
 }
 
-export function FileTreeRow({
+function arePropsEqual(prev: FileTreeRowProps, next: FileTreeRowProps) {
+    if (
+        prev.node !== next.node || 
+        prev.isSelected !== next.isSelected ||
+        prev.isExpanded !== next.isExpanded ||
+        prev.isInSelectionMode !== next.isInSelectionMode ||
+        prev.isSelectedInMode !== next.isSelectedInMode ||
+        prev.canEdit !== next.canEdit ||
+        prev.badge !== next.badge || 
+        prev.menu !== next.menu ||
+        prev.onToggle !== next.onToggle ||
+        prev.onSelect !== next.onSelect ||
+        prev.onContextMenu !== next.onContextMenu ||
+        prev.onDragStart !== next.onDragStart ||
+        prev.onDragEnd !== next.onDragEnd ||
+        prev.onDrop !== next.onDrop
+    ) {
+        return false;
+    }
+
+    if (prev.indentationGuides.length !== next.indentationGuides.length) return false;
+    for (let i = 0; i < prev.indentationGuides.length; i++) {
+        if (prev.indentationGuides[i] !== next.indentationGuides[i]) return false;
+    }
+
+    return true;
+}
+
+export const FileTreeRow = React.memo(function FileTreeRow({
     node,
     indentationGuides,
     isSelected,
@@ -56,7 +84,6 @@ export function FileTreeRow({
 }: FileTreeRowProps) {
     const isFolder = node.type === "folder";
 
-    // Guides rendering
     const guides = indentationGuides.map((active, i) => (
         <div
             key={i}
@@ -78,17 +105,7 @@ export function FileTreeRow({
             style={{ paddingLeft: 0 }} 
             onClick={(e) => {
                 e.stopPropagation();
-                if (isInSelectionMode) {
-                   onSelect();
-                } else {
-                   // Folder toggles on click too? Standard VS Code behavior is click select, click chevron toggle.
-                   // But many web IDEs toggle on click. Let's keep existing logic: Toggle if folder?
-                   // No, legacy logic was: Single click SELECTS (and focused).
-                   // Only chevron toggled? 
-                   // Let's stick to: Click = Select. Chevron = Toggle. Double Click = Toggle?
-                   // For now: Click = Select.
-                   onSelect();
-                }
+                onSelect(node, e);
             }}
             onContextMenu={onContextMenu}
             draggable={canEdit}
@@ -96,102 +113,81 @@ export function FileTreeRow({
                 if (!canEdit) return;
                 e.dataTransfer.setData("application/x-nb-node", node.id);
                 e.dataTransfer.effectAllowed = "move";
-                onDragStart();
+                onDragStart(node.id);
             }}
             onDragEnd={onDragEnd}
             onDragOver={(e) => {
-                if (!canEdit) return;
-                if (isFolder) {
-                    e.preventDefault();
-                    e.currentTarget.classList.add("bg-indigo-100", "dark:bg-indigo-900/40");
-                }
-            }}
-            onDragLeave={(e) => {
-                if (!canEdit) return;
-                if (isFolder) {
-                    e.currentTarget.classList.remove("bg-indigo-100", "dark:bg-indigo-900/40");
-                }
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "move";
             }}
             onDrop={(e) => {
-                if (!canEdit) return;
                 e.preventDefault();
                 e.stopPropagation();
-                e.currentTarget.classList.remove("bg-indigo-100", "dark:bg-indigo-900/40");
                 const draggedId = e.dataTransfer.getData("application/x-nb-node");
                 if (draggedId) {
-                   onDrop(draggedId);
+                     onDrop(node.id, draggedId);
                 }
             }}
         >
-            {/* Guides + Chev */}
             {guides}
             
-            <div className="w-4 h-full flex items-center justify-center flex-shrink-0">
-                {isFolder && (
-                    <div 
-                        className="p-0.5 rounded-sm hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-colors"
-                        onClick={(e) => {
-                            e.stopPropagation();
-                            onToggle();
-                        }}
-                    >
-                        {isExpanded ? (
-                            <ChevronDown className="w-3 h-3 text-zinc-500" />
-                        ) : (
-                            <ChevronRight className="w-3 h-3 text-zinc-500" />
-                        )}
-                    </div>
+            <div 
+                className={cn(
+                    "w-5 h-full flex items-center justify-center shrink-0",
+                    isFolder ? "hover:text-zinc-900 dark:hover:text-zinc-100" : ""
                 )}
-            </div>
-
-            {/* Icon */}
-            <div className="flex-shrink-0 mr-1.5 ml-0.5">
-                <FileIcon 
-                    name={node.name} 
-                    isFolder={isFolder} 
-                    isOpen={isExpanded}
-                    size="w-4 h-4"
-                />
-            </div>
-
-            {/* Name */}
-            <span className={cn(
-                "truncate text-[13px] transition-colors flex-1 min-w-0",
-                isSelected ? "text-indigo-700 dark:text-indigo-300 font-medium" : "text-zinc-700 dark:text-zinc-300",
-                node.name.startsWith(".") && "opacity-60"
-            )}>
-                {node.name}
-            </span>
-
-            {/* Badge Slot */}
-            {badge && <div className="ml-2 flex-shrink-0">{badge}</div>}
-
-            {/* Selection Checkbox (Optional Mode) */}
-            {isInSelectionMode && (
-                <div className="ml-2 flex-shrink-0">
-                    {isSelectedInMode ? (
-                        <CheckSquare className="w-3.5 h-3.5 text-indigo-600" />
+                onClick={(e) => {
+                    if (isFolder) {
+                        e.stopPropagation();
+                        onToggle(node);
+                    }
+                }}
+            >
+                {isFolder ? (
+                    isExpanded ? (
+                        <ChevronDown className="w-3.5 h-3.5 text-zinc-500" />
                     ) : (
-                        <Square className="w-3.5 h-3.5 text-zinc-300" />
+                        <ChevronRight className="w-3.5 h-3.5 text-zinc-500" />
+                    )
+                ) : null}
+            </div>
+
+            {isInSelectionMode && (
+                <div className="mr-2">
+                    {isSelectedInMode ? (
+                        <CheckSquare className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                    ) : (
+                        <Square className="w-4 h-4 text-zinc-300 dark:text-zinc-600" />
                     )}
                 </div>
             )}
 
-            {/* Actions (Hover) */}
-            {!isInSelectionMode && menu && (
-                <div className="opacity-0 group-hover:opacity-100 flex items-center ml-2">
-                    <DropdownMenu>
-                         <DropdownMenuTrigger asChild>
-                            <button className="p-0.5 rounded hover:bg-zinc-200 dark:hover:bg-zinc-700" onClick={e => e.stopPropagation()}>
-                                <MoreVertical className="w-3.5 h-3.5 text-zinc-400" />
-                            </button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" className="w-48" onClick={e => e.stopPropagation()}>
-                            {menu}
-                        </DropdownMenuContent>
-                    </DropdownMenu>
-                </div>
-            )}
+            <FileIcon name={node.name} isFolder={isFolder} isOpen={isExpanded} className="w-4 h-4 mr-2 flex-shrink-0 text-zinc-500" />
+            
+            <span className={cn(
+                "text-sm whitespace-nowrap overflow-hidden text-ellipsis mr-auto",
+                isSelected ? "text-indigo-700 dark:text-indigo-300 font-medium" : "text-zinc-700 dark:text-zinc-300"
+            )}>
+                {node.name}
+            </span>
+
+            {badge}
+
+            <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center ml-2">
+                {menu ? (
+                     <DropdownMenu>
+                         <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
+                             <button className="h-5 w-5 flex items-center justify-center rounded-sm hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-500">
+                                 <MoreVertical className="w-3.5 h-3.5" />
+                             </button>
+                         </DropdownMenuTrigger>
+                         <DropdownMenuContent align="end" className="w-48">
+                             {menu}
+                         </DropdownMenuContent>
+                     </DropdownMenu>
+                ) : null}
+            </div>
         </div>
     );
-}
+}, arePropsEqual);
+

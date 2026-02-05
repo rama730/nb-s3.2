@@ -5,11 +5,11 @@ import { HubFilters } from '@/types/hub';
 
 export async function fetchHubProjectsAction(
     filters: HubFilters,
-    page: number = 0,
+    cursor?: string,
     limit: number = 24
 ) {
     try {
-        const result = await getHubProjects(filters, page, limit);
+        const result = await getHubProjects(filters, cursor, limit);
         return { success: true, ...result };
     } catch (error) {
         console.error('Error fetching hub projects:', error);

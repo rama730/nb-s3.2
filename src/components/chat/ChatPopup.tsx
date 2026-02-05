@@ -6,7 +6,10 @@ import { useChatStore } from '@/stores/chatStore';
 import { MessageThread } from './MessageThread';
 import { MessageInput } from './MessageInput';
 import { ConversationList } from './ConversationList';
-import { X, Minus, MessageSquare, ArrowLeft } from 'lucide-react';
+import { ApplicationList } from './ApplicationList';
+import { ProjectGroupList } from './ProjectGroupList';
+import { X, Minus, MessageSquare, ArrowLeft, PenSquare } from 'lucide-react';
+import { useState } from 'react';
 
 // ============================================================================
 // CHAT POPUP
@@ -15,6 +18,9 @@ import { X, Minus, MessageSquare, ArrowLeft } from 'lucide-react';
 
 export function ChatPopup() {
     const pathname = usePathname();
+
+    // State for Inbox Zero Toggle (Must be at top level)
+    const [activeTab, setActiveTab] = useState<'chats' | 'applications' | 'projects'>('chats');
 
     // Select primitive values and stable references
     const isPopupOpen = useChatStore(state => state.isPopupOpen);
@@ -69,66 +75,106 @@ export function ChatPopup() {
     return (
         <div className="fixed bottom-6 right-6 z-50 w-96 h-[520px] bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl border border-zinc-200 dark:border-zinc-800 flex flex-col overflow-hidden">
             {/* Header */}
-            <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-200 dark:border-zinc-800 bg-gradient-to-r from-blue-600 to-indigo-600 text-white">
-                {activeConversationId ? (
-                    <div className="flex items-center gap-3">
-                        <button
-                            onClick={closeConversation}
-                            className="p-1 hover:bg-white/20 rounded-lg transition-colors"
-                        >
-                            <ArrowLeft className="w-5 h-5" />
-                        </button>
-                        {otherParticipant && (
-                            <>
-                                <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center overflow-hidden">
-                                    {otherParticipant.avatarUrl ? (
-                                        <img
-                                            src={otherParticipant.avatarUrl}
-                                            alt={otherParticipant.fullName || ''}
-                                            className="w-full h-full object-cover"
-                                        />
-                                    ) : (
-                                        <span className="text-sm font-medium">
-                                            {(otherParticipant.fullName || otherParticipant.username || '?')[0].toUpperCase()}
+            <div className="flex flex-col bg-gradient-to-r from-blue-600 to-indigo-600 text-white">
+                <div className="flex items-center justify-between px-4 py-3">
+                    {activeConversationId ? (
+                        <div className="flex items-center gap-3">
+                            <button
+                                onClick={closeConversation}
+                                className="p-1 hover:bg-white/20 rounded-lg transition-colors"
+                            >
+                                <ArrowLeft className="w-5 h-5" />
+                            </button>
+                            {otherParticipant && (
+                                <>
+                                    <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center overflow-hidden">
+                                        {otherParticipant.avatarUrl ? (
+                                            <img
+                                                src={otherParticipant.avatarUrl}
+                                                alt={otherParticipant.fullName || ''}
+                                                className="w-full h-full object-cover"
+                                            />
+                                        ) : (
+                                            <span className="text-sm font-medium">
+                                                {(otherParticipant.fullName || otherParticipant.username || '?')[0].toUpperCase()}
+                                            </span>
+                                        )}
+                                    </div>
+                                    <div className="flex flex-col">
+                                        <span className="font-semibold text-sm">
+                                            {otherParticipant.fullName || otherParticipant.username || 'Unknown'}
                                         </span>
-                                    )}
-                                </div>
-                                <div className="flex flex-col">
-                                    <span className="font-semibold text-sm">
-                                        {otherParticipant.fullName || otherParticipant.username || 'Unknown'}
-                                    </span>
-                                    {otherParticipant.username && otherParticipant.fullName && (
-                                        <span className="text-xs text-white/70">@{otherParticipant.username}</span>
-                                    )}
-                                </div>
-                            </>
-                        )}
+                                        {otherParticipant.username && otherParticipant.fullName && (
+                                            <span className="text-xs text-white/70">@{otherParticipant.username}</span>
+                                        )}
+                                    </div>
+                                </>
+                            )}
+                        </div>
+                    ) : (
+                        <div className="flex items-center gap-2">
+                            <MessageSquare className="w-5 h-5" />
+                            <span className="font-semibold">Messages</span>
+                            {totalUnread > 0 && (
+                                <span className="px-2 py-0.5 bg-white/20 rounded-full text-xs font-medium">
+                                    {totalUnread}
+                                </span>
+                            )}
+                        </div>
+                    )}
+                    <div className="flex items-center gap-1">
+                        <button
+                            onClick={minimizePopup}
+                            className="p-1.5 hover:bg-white/20 rounded-lg transition-colors"
+                        >
+                            <Minus className="w-4 h-4" />
+                        </button>
+                        <button
+                            onClick={closePopup}
+                            className="p-1.5 hover:bg-white/20 rounded-lg transition-colors"
+                        >
+                            <X className="w-4 h-4" />
+                        </button>
                     </div>
-                ) : (
-                    <div className="flex items-center gap-2">
-                        <MessageSquare className="w-5 h-5" />
-                        <span className="font-semibold">Messages</span>
-                        {totalUnread > 0 && (
-                            <span className="px-2 py-0.5 bg-white/20 rounded-full text-xs font-medium">
-                                {totalUnread}
-                            </span>
-                        )}
+                </div>
+
+                {/* Inbox Zero Toggle (Only show on main list) */}
+                {!activeConversationId && (
+                    <div className="px-4 pb-3">
+                        <div className="flex p-1 bg-black/20 rounded-lg">
+                            <button
+                                onClick={() => setActiveTab('chats')}
+                                className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-all ${
+                                    activeTab === 'chats'
+                                        ? 'bg-white text-indigo-600 shadow-sm'
+                                        : 'text-white/70 hover:text-white'
+                                }`}
+                            >
+                                Chats
+                            </button>
+                            <button
+                                onClick={() => setActiveTab('applications')}
+                                className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-all ${
+                                    activeTab === 'applications'
+                                        ? 'bg-white text-indigo-600 shadow-sm'
+                                        : 'text-white/70 hover:text-white'
+                                }`}
+                            >
+                                Applications
+                            </button>
+                            <button
+                                onClick={() => setActiveTab('projects')}
+                                className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-all ${
+                                    activeTab === 'projects'
+                                        ? 'bg-white text-indigo-600 shadow-sm'
+                                        : 'text-white/70 hover:text-white'
+                                }`}
+                            >
+                                Projects
+                            </button>
+                        </div>
                     </div>
                 )}
-                <div className="flex items-center gap-1">
-                    <button
-                        onClick={minimizePopup}
-                        className="p-1.5 hover:bg-white/20 rounded-lg transition-colors"
-                    >
-                        <Minus className="w-4 h-4" />
-                    </button>
-                    <button
-                        onClick={closePopup}
-                        className="p-1.5 hover:bg-white/20 rounded-lg transition-colors"
-                    >
-                        <X className="w-4 h-4" />
-                    </button>
-                </div>
             </div>
 
             {/* Content */}
@@ -141,6 +187,10 @@ export function ChatPopup() {
                         />
                         <MessageInput conversationId={activeConversationId} />
                     </>
+                ) : activeTab === 'applications' ? (
+                    <ApplicationList />
+                ) : activeTab === 'projects' ? (
+                    <ProjectGroupList />
                 ) : (
                     <ConversationList />
                 )}

@@ -46,15 +46,17 @@ export default function FileTreePicker({
     const loadRootNodes = async () => {
         setIsLoading(true);
         try {
-            const nodes = await getProjectNodes(projectId, null);
-            setRootNodes(nodes as ProjectNode[]);
+            const res = await getProjectNodes(projectId, null);
+            const nodes = Array.isArray(res) ? res : res.nodes;
+            setRootNodes(nodes);
             
             // Auto-expand root folder if only one exists
             if (nodes.length === 1 && nodes[0].type === 'folder') {
                 const rootId = nodes[0].id;
                 setExpandedNodes(new Set([rootId]));
-                const children = await getProjectNodes(projectId, rootId);
-                setLoadedNodes(new Map([[rootId, children as ProjectNode[]]]));
+                const res = await getProjectNodes(projectId, rootId);
+                const children = Array.isArray(res) ? res : res.nodes;
+                setLoadedNodes(new Map([[rootId, children]]));
             }
         } catch (error) {
             console.error("Failed to load files:", error);
@@ -80,8 +82,9 @@ export default function FileTreePicker({
         } else {
             // Expand - load if not cached
             if (!loadedNodes.has(nodeId)) {
-                const children = await getProjectNodes(projectId, nodeId);
-                setLoadedNodes(prev => new Map(prev).set(nodeId, children as ProjectNode[]));
+                const res = await getProjectNodes(projectId, nodeId);
+                const children = Array.isArray(res) ? res : res.nodes;
+                setLoadedNodes(prev => new Map(prev).set(nodeId, children));
             }
             setExpandedNodes(prev => new Set(prev).add(nodeId));
         }

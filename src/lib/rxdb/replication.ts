@@ -30,7 +30,7 @@ export async function replicateSupabase(
 
                 // Return format expected by RxDB
                 return {
-                    documents: data.map(doc => ({
+                    documents: data.map((doc: any) => ({
                         id: doc.id,
                         title: doc.title,
                         description: doc.description,
@@ -113,7 +113,7 @@ export async function replicateSupabaseProfiles(
                 if (error) throw error;
 
                 return {
-                    documents: data.map(doc => ({
+                    documents: data.map((doc: any) => ({
                         id: doc.id,
                         username: doc.username,
                         full_name: doc.full_name,

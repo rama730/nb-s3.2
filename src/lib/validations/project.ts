@@ -77,6 +77,7 @@ export const createProjectSchema = z.object({
     expected_end_date: z.string().optional(),
     goals: z.array(z.string()).default([]),
     creator_role: creatorRoleSchema.nullable().optional(),
+    roles: z.array(openRoleSchema).optional(),
     team_settings: z.any().nullable().optional(),
     application_settings: applicationSettingsSchema.optional(),
     terms: termsSchema.optional(),
@@ -84,6 +85,13 @@ export const createProjectSchema = z.object({
     notification_preferences: notificationPreferencesSchema.optional(),
     is_draft: z.boolean().default(false),
     metadata: z.record(z.string(), z.any()).default({}),
+    import_source: z.object({
+        type: z.enum(['github', 'upload', 'scratch']),
+        repoUrl: z.string().optional(),
+        branch: z.string().optional(),
+        s3Key: z.string().optional(),
+        metadata: z.record(z.string(), z.any()).optional(),
+    }).optional(),
 });
 
 export type CreateProjectInput = z.infer<typeof createProjectSchema>;

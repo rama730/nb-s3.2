@@ -110,7 +110,7 @@ export function DashboardTab({
                     roles={project.roles || []}
                     isCreator={isCreator}
                     isCollaborator={isOwnerOrMember}
-                    hasPendingApplication={false}
+                    applicationStatus={{ status: 'none' }}
                     onApply={() => { }}
                     onManageRoles={() => { }}
                 />

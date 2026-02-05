@@ -15,38 +15,42 @@ export const getProjectDetails = async (rawProjectId: string) => {
     try {
         const conditions = isUuid ? eq(projects.id, projectId) : eq(projects.slug, projectId);
 
-        // Optimized Query: Fetch Project + Owner + Members + Open Roles in one go
+        // Optimized: Fetch Project & Owner first
         const project = await db.query.projects.findFirst({
             where: conditions,
             with: {
                 owner: true,
-                openRoles: true,
-                members: {
-                    with: {
-                        user: true
-                    }
-                }
+                // Remove deep fetches from here
             }
         });
 
         if (!project) {
-            // If the input wasn't UUID and we tried slug first, it's failed.
-            // If it WAS UUID and failed, we might check if it's a slug that looks like UUID (rare edge case)
-            // But for now, assuming standard behavior:
             console.log(`[getProjectDetails] Not found for: ${projectId}`);
-            // One last fallback: if we assumed UUID but it didn't match, maybe it IS a slug? 
-            // Only relevant if a slug looks exactly like a UUID but isn't the primary ID, which is unlikely.
             return null;
         }
 
-        // Parallelize follower count fetch (separate query is cleaner for counts in Drizzle)
-        const followersCountPromise = db
-            .select({ count: sql<number>`count(*)` })
-            .from(projectFollows)
-            .where(eq(projectFollows.projectId, project.id))
-            .then(res => Number(res[0]?.count || 0));
+        // Parallelize fetching of relations with LIMITS
+        const [followersCount, openRoles, members] = await Promise.all([
+            // Followers Count
+            db.select({ count: sql<number>`count(*)` })
+                .from(projectFollows)
+                .where(eq(projectFollows.projectId, project.id))
+                .then(res => Number(res[0]?.count || 0)),
 
-        const followersCount = await followersCountPromise;
+            // Open Roles (usually small number, safe to fetch all)
+            db.select().from(projectOpenRoles).where(eq(projectOpenRoles.projectId, project.id)),
+
+            // Members (LIMIT to 20 to prevent bloat)
+            // Frontend should use dedicated "Team" tab or infinite scroll for full list
+            db.select({
+                member: projectMembers,
+                user: profiles
+            })
+                .from(projectMembers)
+                .leftJoin(profiles, eq(projectMembers.userId, profiles.id))
+                .where(eq(projectMembers.projectId, project.id))
+                .limit(20)
+        ]);
 
         // Transform to match expected frontend shape
         return {
@@ -63,25 +67,25 @@ export const getProjectDetails = async (rawProjectId: string) => {
             // Followers
             followers_count: followersCount,
 
-            // Roles & Collabs
-            // Map snake_case for frontend compatibility if needed
-            project_open_roles: project.openRoles.map(r => ({
+            // Roles
+            project_open_roles: openRoles.map(r => ({
                 ...r,
                 project_id: r.projectId,
                 created_at: r.createdAt.toISOString(),
                 updated_at: r.updatedAt.toISOString(),
-                // Fix potential null vs undefined
                 title: r.title || undefined,
                 description: r.description || undefined,
                 skills: r.skills || []
             })),
 
-            project_collaborators: project.members.map(m => ({
-                ...m,
-                profile: m.user ? {
-                    ...m.user,
-                    full_name: m.user.fullName,
-                    avatar_url: m.user.avatarUrl
+            // Collaborators (Limited)
+            project_collaborators: members.map(row => ({
+                ...row.member,
+                // Flatten structural profile
+                profile: row.user ? {
+                    ...row.user,
+                    full_name: row.user.fullName,
+                    avatar_url: row.user.avatarUrl
                 } : null
             })),
 

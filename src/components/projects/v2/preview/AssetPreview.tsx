@@ -1,10 +1,10 @@
 "use client";
 
-import React from "react";
+import { ExternalLink, FileText, ZoomIn, ZoomOut, RotateCcw } from "lucide-react";
+import { useState, useRef } from "react";
 import type { ProjectNode } from "@/lib/db/schema";
 import { fileKind } from "../utils/fileKind";
 import { Button } from "@/components/ui/button";
-import { ExternalLink, FileText } from "lucide-react";
 
 function formatBytes(bytes?: number | null) {
   const b = bytes ?? 0;
@@ -23,6 +23,41 @@ export default function AssetPreview({
   signedUrl: string;
 }) {
   const kind = fileKind(node);
+  const [scale, setScale] = useState(1);
+  const [position, setPosition] = useState({ x: 0, y: 0 });
+  const [isDragging, setIsDragging] = useState(false);
+  const dragStart = useRef({ x: 0, y: 0 });
+
+  const handleZoomIn = () => setScale((s) => Math.min(s + 0.5, 5));
+  const handleZoomOut = () => setScale((s) => Math.max(s - 0.5, 0.5));
+  const handleReset = () => {
+    setScale(1);
+    setPosition({ x: 0, y: 0 });
+  };
+
+  const onWheel = (e: React.WheelEvent) => {
+    if (e.ctrlKey || e.metaKey) {
+       e.preventDefault();
+       const delta = e.deltaY > 0 ? -0.1 : 0.1;
+       setScale(s => Math.min(Math.max(s + delta, 0.5), 5));
+    }
+  };
+
+  const onMouseDown = (e: React.MouseEvent) => {
+      e.preventDefault();
+      setIsDragging(true);
+      dragStart.current = { x: e.clientX - position.x, y: e.clientY - position.y };
+  };
+
+  const onMouseMove = (e: React.MouseEvent) => {
+      if (!isDragging) return;
+      setPosition({
+          x: e.clientX - dragStart.current.x,
+          y: e.clientY - dragStart.current.y
+      });
+  };
+
+  const onMouseUp = () => setIsDragging(false);
 
   if (!signedUrl) {
     return (
@@ -34,22 +69,45 @@ export default function AssetPreview({
 
   if (kind === "image") {
     return (
-      <div className="h-full w-full flex flex-col bg-white dark:bg-zinc-950">
-        <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-200 dark:border-zinc-800">
-          <div className="text-xs font-mono truncate">{node.name}</div>
-          <Button asChild size="sm" variant="outline" className="h-7">
-            <a href={signedUrl} target="_blank" rel="noreferrer">
-              <ExternalLink className="w-4 h-4 mr-2" />
-              Open
-            </a>
-          </Button>
+      <div className="h-full w-full flex flex-col bg-white dark:bg-zinc-950 overflow-hidden">
+        <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-200 dark:border-zinc-800 z-10 bg-white dark:bg-zinc-950">
+          <div className="text-xs font-mono truncate mr-2">{node.name}</div>
+          <div className="flex items-center gap-1">
+             <Button size="sm" variant="ghost" onClick={handleZoomOut} disabled={scale <= 0.5} className="h-7 w-7 p-0">
+                <ZoomOut className="w-4 h-4" />
+             </Button>
+             <span className="text-xs w-12 text-center text-zinc-500">{Math.round(scale * 100)}%</span>
+             <Button size="sm" variant="ghost" onClick={handleZoomIn} disabled={scale >= 5} className="h-7 w-7 p-0">
+                <ZoomIn className="w-4 h-4" />
+             </Button>
+             <Button size="sm" variant="ghost" onClick={handleReset} className="h-7 w-7 p-0" title="Reset">
+                <RotateCcw className="w-3 h-3" />
+             </Button>
+             <div className="w-px h-4 bg-zinc-200 dark:bg-zinc-800 mx-1" />
+            <Button asChild size="sm" variant="outline" className="h-7">
+                <a href={signedUrl} target="_blank" rel="noreferrer">
+                <ExternalLink className="w-4 h-4 mr-2" />
+                Open
+                </a>
+            </Button>
+          </div>
         </div>
-        <div className="flex-1 min-h-0 flex items-center justify-center p-4">
+        <div 
+            className="flex-1 min-h-0 flex items-center justify-center p-4 overflow-hidden relative bg-zinc-50/50 dark:bg-zinc-900/50 cursor-grab active:cursor-grabbing"
+            onWheel={onWheel}
+            onMouseDown={onMouseDown}
+            onMouseMove={onMouseMove}
+            onMouseUp={onMouseUp}
+            onMouseLeave={onMouseUp}
+        >
           <img
             src={signedUrl}
             alt={node.name}
-            className="max-h-full max-w-full object-contain rounded-md border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900"
-            loading="lazy"
+            className="max-h-full max-w-full object-contain transition-transform duration-75 ease-out select-none"
+            style={{
+                transform: `translate(${position.x}px, ${position.y}px) scale(${scale})`,
+            }}
+            draggable={false}
           />
         </div>
       </div>

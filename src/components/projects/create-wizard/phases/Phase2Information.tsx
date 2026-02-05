@@ -1,15 +1,11 @@
-'use client';
-
 import { useFormContext } from 'react-hook-form';
 import { CreateProjectInput } from '@/lib/validations/project';
 import { useState } from 'react';
-import { motion } from 'framer-motion';
-import { X, Plus, Check, Edit2 } from 'lucide-react';
+import { X, Plus } from 'lucide-react';
+import { LifecycleEditor } from '@/components/projects/LifecycleEditor';
 
 const POPULAR_TAGS = ['AI/ML', 'Web3', 'SaaS', 'Mobile', 'API', 'Fintech', 'EdTech', 'HealthTech', 'E-commerce', 'DevTools'];
 const POPULAR_TECH = ['React', 'Next.js', 'TypeScript', 'Node.js', 'Python', 'PostgreSQL', 'Tailwind', 'Supabase', 'Prisma', 'GraphQL'];
-const DEFAULT_STAGES = ['Idea', 'MVP', 'Testing', 'Launch', 'Growth'];
-const STAGE_COLORS = ['bg-yellow-500', 'bg-blue-500', 'bg-purple-500', 'bg-green-500', 'bg-indigo-500', 'bg-pink-500', 'bg-orange-500'];
 
 export default function Phase2Information() {
     const { register, setValue, watch, formState: { errors } } = useFormContext<CreateProjectInput>();
@@ -18,15 +14,6 @@ export default function Phase2Information() {
 
     const tags = watch('tags') || [];
     const technologies = watch('technologies_used') || [];
-    const lifecycleStages = watch('lifecycle_stages') || [];
-
-    // Initialize stages if empty
-    const [stages, setStages] = useState<string[]>(
-        lifecycleStages.length > 0 ? lifecycleStages : DEFAULT_STAGES
-    );
-    const [editingIndex, setEditingIndex] = useState<number | null>(null);
-    const [editValue, setEditValue] = useState('');
-    const [newStage, setNewStage] = useState('');
 
     const addTag = (tag: string) => {
         if (tag && !tags.includes(tag)) {
@@ -48,38 +35,6 @@ export default function Phase2Information() {
 
     const removeTech = (tech: string) => {
         setValue('technologies_used', technologies.filter(t => t !== tech));
-    };
-
-    // Stage management
-    const startEdit = (index: number) => {
-        setEditingIndex(index);
-        setEditValue(stages[index]);
-    };
-
-    const saveEdit = () => {
-        if (editingIndex !== null && editValue.trim()) {
-            const newStages = [...stages];
-            newStages[editingIndex] = editValue.trim();
-            setStages(newStages);
-            setValue('lifecycle_stages', newStages);
-        }
-        setEditingIndex(null);
-        setEditValue('');
-    };
-
-    const removeStage = (index: number) => {
-        const newStages = stages.filter((_, i) => i !== index);
-        setStages(newStages);
-        setValue('lifecycle_stages', newStages);
-    };
-
-    const addStage = () => {
-        if (newStage.trim() && stages.length < 7) {
-            const updated = [...stages, newStage.trim()];
-            setStages(updated);
-            setValue('lifecycle_stages', updated);
-            setNewStage('');
-        }
     };
 
     return (
@@ -122,6 +77,32 @@ export default function Phase2Information() {
                     placeholder="Describe your project in detail. What problem does it solve? What are your goals?"
                 />
                 {errors.description && <p className="mt-1 text-sm text-red-500">{errors.description.message}</p>}
+            </div>
+
+            {/* Problem & Solution (Added to match Edit Modal) */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                    <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">
+                        Problem Statement
+                    </label>
+                    <textarea
+                        {...register('problem_statement')}
+                        rows={3}
+                        className="w-full px-4 py-3 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 focus:ring-2 focus:ring-indigo-500 focus:border-transparent resize-none"
+                        placeholder="What problem are you solving?"
+                    />
+                </div>
+                <div>
+                    <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">
+                        Solution Overview
+                    </label>
+                    <textarea
+                        {...register('solution_overview')}
+                        rows={3}
+                        className="w-full px-4 py-3 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 focus:ring-2 focus:ring-indigo-500 focus:border-transparent resize-none"
+                        placeholder="How does your project solve it?"
+                    />
+                </div>
             </div>
 
             {/* Tags */}
@@ -224,88 +205,19 @@ export default function Phase2Information() {
                 </div>
             </div>
 
-            {/* Project Lifecycle Stages */}
-            <div className="pt-4 border-t border-zinc-200 dark:border-zinc-700">
-                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">
+            {/* Lifecycle Stages - Moved from Phase 4 */}
+            <div>
+                <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100 mb-2">
                     Project Lifecycle
-                </label>
-                <p className="text-xs text-zinc-500 dark:text-zinc-400 mb-4">
-                    Define the stages your project will go through. Click any stage to edit, or add new ones.
+                </h3>
+                <p className="text-sm text-zinc-500 dark:text-zinc-400 mb-4">
+                    Define the stages your project will go through
                 </p>
-
-                <div className="flex flex-wrap gap-2">
-                    {stages.map((stage, index) => (
-                        <motion.div
-                            key={index}
-                            initial={{ opacity: 0, scale: 0.8 }}
-                            animate={{ opacity: 1, scale: 1 }}
-                            transition={{ delay: index * 0.03 }}
-                            className="group relative"
-                        >
-                            {editingIndex === index ? (
-                                <div className="flex items-center gap-1">
-                                    <input
-                                        type="text"
-                                        value={editValue}
-                                        onChange={(e) => setEditValue(e.target.value)}
-                                        onKeyDown={(e) => {
-                                            if (e.key === 'Enter') saveEdit();
-                                            if (e.key === 'Escape') setEditingIndex(null);
-                                        }}
-                                        autoFocus
-                                        className="w-28 px-3 py-1.5 text-sm rounded-lg border border-indigo-300 bg-white dark:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                                    />
-                                    <button
-                                        type="button"
-                                        onClick={saveEdit}
-                                        className="p-1.5 text-green-600 hover:bg-green-50 dark:hover:bg-green-900/20 rounded-lg"
-                                    >
-                                        <Check className="w-4 h-4" />
-                                    </button>
-                                </div>
-                            ) : (
-                                <div className="flex items-center gap-2 px-3 py-1.5 bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg hover:border-indigo-300 dark:hover:border-indigo-600 transition-colors">
-                                    <div className={`w-2.5 h-2.5 rounded-full ${STAGE_COLORS[index % STAGE_COLORS.length]}`} />
-                                    <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                                        {stage}
-                                    </span>
-                                    <button
-                                        type="button"
-                                        onClick={() => startEdit(index)}
-                                        className="p-0.5 text-zinc-400 hover:text-indigo-500 opacity-0 group-hover:opacity-100 transition-opacity"
-                                    >
-                                        <Edit2 className="w-3 h-3" />
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => removeStage(index)}
-                                        className="p-0.5 text-zinc-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
-                                    >
-                                        <X className="w-3 h-3" />
-                                    </button>
-                                </div>
-                            )}
-                        </motion.div>
-                    ))}
-
-                    {/* Add Stage */}
-                    {stages.length < 7 && (
-                        <div className="flex items-center gap-1">
-                            <input
-                                type="text"
-                                value={newStage}
-                                onChange={(e) => setNewStage(e.target.value)}
-                                onKeyDown={(e) => {
-                                    if (e.key === 'Enter') {
-                                        e.preventDefault();
-                                        addStage();
-                                    }
-                                }}
-                                placeholder="+ Add stage"
-                                className="w-28 px-3 py-1.5 text-sm rounded-lg border border-dashed border-zinc-300 dark:border-zinc-600 bg-transparent text-zinc-600 dark:text-zinc-400 placeholder-zinc-400 focus:outline-none focus:border-indigo-400"
-                            />
-                        </div>
-                    )}
+                <div className="bg-zinc-50 dark:bg-zinc-900/50 p-4 rounded-xl border border-zinc-100 dark:border-zinc-800">
+                    <LifecycleEditor 
+                        stages={watch('lifecycle_stages') || []}
+                        onChange={(stages) => setValue('lifecycle_stages', stages)}
+                    />
                 </div>
             </div>
         </div>

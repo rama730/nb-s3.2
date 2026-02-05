@@ -3,6 +3,7 @@
 import { Star, ExternalLink } from 'lucide-react'
 import { Card } from './Card'
 import Image from 'next/image'
+import Link from 'next/link'
 
 interface FeaturedProjectsCardProps {
     projects: any[]
@@ -10,8 +11,8 @@ interface FeaturedProjectsCardProps {
 }
 
 export function FeaturedProjectsCard({ projects, isOwner }: FeaturedProjectsCardProps) {
-    // Filter featured projects if we had a featured flag, taking first 2 for now
-    const featured = projects.slice(0, 2)
+    // Heuristic (no DB changes): show the top 2 projects as provided by server ordering.
+    const featured = (projects || []).slice(0, 2)
 
     if (!featured.length && !isOwner) return null
 
@@ -25,17 +26,19 @@ export function FeaturedProjectsCard({ projects, isOwner }: FeaturedProjectsCard
                 {featured.length > 0 ? (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         {featured.map((project, idx) => (
-                            <div
-                                key={idx}
-                                className="group rounded-xl border border-zinc-200 dark:border-zinc-800 overflow-hidden hover:shadow-md transition-all bg-zinc-50 dark:bg-zinc-900/50"
+                            <Link
+                                key={project?.id ?? idx}
+                                href={project?.slug ? `/projects/${project.slug}` : `/projects/${project?.id ?? ''}`}
+                                className="group rounded-xl border border-zinc-200 dark:border-zinc-800 overflow-hidden hover:shadow-md transition-all bg-zinc-50 dark:bg-zinc-900/50 block"
                             >
-                                {project.image ? (
+                                {project?.coverImage ? (
                                     <div className="relative h-32 w-full">
                                         <Image
-                                            src={project.image}
+                                            src={project.coverImage}
                                             alt={project.title}
                                             fill
                                             className="object-cover"
+                                            sizes="(max-width: 768px) 100vw, 420px"
                                         />
                                     </div>
                                 ) : (
@@ -44,24 +47,17 @@ export function FeaturedProjectsCard({ projects, isOwner }: FeaturedProjectsCard
                                     </div>
                                 )}
                                 <div className="p-4">
-                                    <h4 className="font-semibold text-zinc-900 dark:text-zinc-100 mb-1 line-clamp-1">{project.title}</h4>
+                                    <h4 className="font-semibold text-zinc-900 dark:text-zinc-100 mb-1 line-clamp-1">{project?.title}</h4>
                                     <p className="text-sm text-zinc-500 dark:text-zinc-400 line-clamp-2 mb-3">
-                                        {project.description || 'No description provided'}
+                                        {project?.shortDescription || project?.description || 'No description provided'}
                                     </p>
                                     <div className="flex items-center gap-2">
-                                        {project.url && (
-                                            <a
-                                                href={project.url}
-                                                target="_blank"
-                                                rel="noopener noreferrer"
-                                                className="text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1"
-                                            >
-                                                View <ExternalLink className="w-3 h-3" />
-                                            </a>
-                                        )}
+                                        <span className="text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1">
+                                            Open <ExternalLink className="w-3 h-3" />
+                                        </span>
                                     </div>
                                 </div>
-                            </div>
+                            </Link>
                         ))}
                     </div>
                 ) : (

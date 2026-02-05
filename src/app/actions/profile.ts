@@ -2,8 +2,8 @@
 
 import { createClient } from '@/lib/supabase/server'
 import { db } from '@/lib/db'
-import { profiles } from '@/lib/db/schema'
-import { eq, and, ne } from 'drizzle-orm'
+import { profiles, projects, connections } from '@/lib/db/schema'
+import { eq, and, ne, desc, sql, or } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
 
@@ -113,4 +113,75 @@ export async function updateProfileAction(data: UpdateProfileInput) {
 
 export async function updateBioAction(bio: string) {
     return updateProfileAction({ bio });
+}
+
+export async function getProfileBasic(userId: string) {
+    if (!userId) return null;
+    try {
+        const [profile] = await db
+            .select({
+                id: profiles.id,
+                fullName: profiles.fullName,
+                username: profiles.username,
+                avatarUrl: profiles.avatarUrl,
+            })
+            .from(profiles)
+            .where(eq(profiles.id, userId))
+            .limit(1);
+
+        return profile || null;
+    } catch (error) {
+        console.error('Error fetching profile basic:', error);
+        return null;
+    }
+}
+
+export async function getProfileProjectsAction(userId: string) {
+    if (!userId) return [];
+    try {
+        const userProjects = await db.query.projects.findMany({
+            where: eq(projects.ownerId, userId),
+            orderBy: [desc(projects.viewCount), desc(projects.updatedAt), desc(projects.createdAt)],
+            limit: 12
+        });
+        return userProjects;
+    } catch (error) {
+        console.error('Error fetching profile projects:', error);
+        return [];
+    }
+}
+
+export async function getProfileStatsAction(userId: string) {
+    if (!userId) return { connectionsCount: 0, projectsCount: 0, followersCount: 0 };
+    try {
+        // Parallel fetch for stats
+        const [connectionsCount, projectsCount] = await Promise.all([
+            db.select({ count: sql<number>`count(*)` })
+                .from(connections)
+                .where(
+                    and(
+                        eq(connections.status, 'accepted'),
+                        or(
+                            eq(connections.requesterId, userId),
+                            eq(connections.addresseeId, userId)
+                        )
+                    )
+                )
+                .then(res => Number(res[0]?.count || 0)),
+
+            db.select({ count: sql<number>`count(*)` })
+                .from(projects)
+                .where(eq(projects.ownerId, userId))
+                .then(res => Number(res[0]?.count || 0))
+        ]);
+
+        return {
+            connectionsCount,
+            projectsCount,
+            followersCount: 0 // Placeholder if not implemented yet
+        };
+    } catch (error) {
+        console.error('Error fetching profile stats:', error);
+        return { connectionsCount: 0, projectsCount: 0, followersCount: 0 };
+    }
 }

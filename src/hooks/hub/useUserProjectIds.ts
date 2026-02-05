@@ -18,7 +18,7 @@ export function useUserProjectIds(userId: string | null) {
 
             if (error) throw error;
 
-            return (data || []).map(p => p.id);
+            return (data || []).map((p: { id: string }) => p.id);
         },
         enabled: !!userId,
     });

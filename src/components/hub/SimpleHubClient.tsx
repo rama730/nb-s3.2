@@ -20,7 +20,6 @@ import ProjectQuickView from '@/components/projects/ProjectQuickView';
 import CollectionsSidebar from '@/components/hub/CollectionsSidebar';
 import HubHeader from '@/components/hub/HubHeader';
 import BulkActionBar from '@/components/hub/BulkActionBar';
-import MobileSidebarDrawer from '@/components/hub/MobileSidebarDrawer';
 import { HubErrorBoundary } from '@/components/hub/HubErrorBoundary';
 
 // Constants & Types
@@ -43,6 +42,10 @@ const CreateProjectWizard = dynamic(() => import('@/components/projects/create-w
 const ProjectComparisonModal = dynamic(() => import('@/components/hub/ProjectComparisonModal'), { ssr: false });
 const AddToCollectionModal = dynamic(() => import('@/components/hub/AddToCollectionModal'), { ssr: false });
 const NotificationSettingsModal = dynamic(() => import('@/components/hub/NotificationSettingsModal'), { ssr: false });
+// Optimization: Defer mobile sidebar code until interaction
+const MobileSidebarDrawer = dynamic(() => import('@/components/hub/MobileSidebarDrawer'), { ssr: false });
+
+import { toProjectCardViewModel, ProjectCardViewModel } from '@/lib/view-models/project-card';
 
 interface SimpleHubClientProps {
     returnUserData: any; // Passed from server to avoid double fetch if possible, or we rely on useAuth
@@ -125,6 +128,13 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
     const allProjects = useMemo(() => {
         return data?.pages?.flatMap((p) => p.projects) || [];
     }, [data]);
+
+    const projectViewModels = useMemo(() => {
+        return allProjects.reduce((acc, p) => {
+            acc[p.id] = toProjectCardViewModel(p);
+            return acc;
+        }, {} as Record<string, ProjectCardViewModel>);
+    }, [allProjects]);
 
     // --- Handlers ---
 
@@ -210,16 +220,16 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
 
     return (
         <HubErrorBoundary>
-            <div className="h-full overflow-hidden bg-zinc-50 dark:bg-zinc-950">
+            <div className="h-full min-h-0 overflow-hidden bg-zinc-50 dark:bg-zinc-950">
                 {projectsError && (
                     <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-50 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-800 dark:text-red-200 px-4 py-2 rounded-lg shadow-sm">
                         Error loading projects: {projectsError.message}
                     </div>
                 )}
 
-                <div className="max-w-[1600px] mx-auto flex h-full w-full">
+                <div className="max-w-[1600px] mx-auto flex h-full w-full min-h-0">
                     {/* Sidebar */}
-                    <div className="hidden lg:block w-64 flex-shrink-0 border-r border-zinc-200 dark:border-zinc-800 h-full overflow-y-auto py-8 pl-8 pr-8">
+                    <div className="hidden lg:block w-64 flex-shrink-0 h-full overflow-y-auto py-8 pl-8 pr-8">
                         <CollectionsSidebar
                             currentUser={currentUser}
                             onSelectCollection={handleSelectCollection}
@@ -334,6 +344,7 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
                                                 <ProjectCard
                                                     key={project.id}
                                                     project={project}
+                                                    viewModel={projectViewModels[project.id]}
                                                     viewMode={viewMode}
                                                     selectionMode={selectionMode}
                                                     isSelected={selectedProjectIds.has(project.id)}

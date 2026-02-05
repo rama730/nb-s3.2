@@ -17,129 +17,92 @@ export const getUserProfile = cache(async (userId: string) => {
     }
 });
 
-export const getProfileDetails = cache(async (username?: string) => {
+interface ProfileDetailsOptions {
+    skipHeavyData?: boolean;
+}
+
+/**
+ * normalizeProfile - Architectural Purity: Single point of truth for field defaults.
+ */
+function normalizeProfile(p: any) {
+    if (!p) return null;
+    return {
+        ...p,
+        socialLinks: p.socialLinks || {},
+        openTo: p.openTo || [],
+        experience: p.experience || [],
+        education: p.education || [],
+        // CamelCase ensuring for Drizzle if needed, though Drizzle handles it usually
+        connectionsCount: p.connectionsCount || 0,
+        projectsCount: p.projectsCount || 0,
+        followersCount: p.followersCount || 0,
+    };
+}
+
+export const getProfileDetails = cache(async (username?: string, options: ProfileDetailsOptions = {}) => {
     const supabase = await createClient()
-    const { data: { user } } = await supabase.auth.getUser()
 
-    let profileData = null
+    // 1. Initial Authorization Check
+    const { data: { user } } = await supabase.auth.getUser();
 
-    // 1. Fetch Profile via Drizzle
-    if (username) {
-        profileData = await db.query.profiles.findFirst({
-            where: eq(profiles.username, username)
-        })
-    } else if (user) {
-        profileData = await db.query.profiles.findFirst({
-            where: eq(profiles.id, user.id)
-        })
-    }
+    // 2. Fetch Target Profile (Optimized Parallel approach)
+    let profileData = await (username
+        ? db.query.profiles.findFirst({ where: eq(profiles.username, username) })
+        : user ? db.query.profiles.findFirst({ where: eq(profiles.id, user.id) }) : Promise.resolve(null)
+    );
 
-    if (!profileData) return null
+    if (!profileData) return null;
 
-    // 2. Fetch related data (Projects, Counts) in parallel
-    // Projects
-    const projectsPromise = db.query.projects.findMany({
-        where: eq(projects.ownerId, profileData.id),
-        orderBy: [desc(projects.createdAt)],
-        limit: 6
-    });
+    // 3. PURE OPTIMIZATION: Parallelize everything else
+    // Fetch Projects, Connection Status, and Mutual Counts in one go
+    const [userProjects, conn, mutualCount] = await Promise.all([
+        // Projects (Keep limited for initial shell)
+        options.skipHeavyData ? Promise.resolve([]) : db.query.projects.findMany({
+            where: eq(projects.ownerId, profileData.id),
+            orderBy: [desc(projects.viewCount), desc(projects.updatedAt), desc(projects.createdAt)],
+            limit: 12
+        }),
 
-    // Connections Count
-    const connectionsCountPromise = db
-        .select({ count: sql<number>`count(*)` })
-        .from(connections)
-        .where(
-            and(
-                eq(connections.status, 'accepted'),
-                or(
-                    eq(connections.requesterId, profileData.id),
-                    eq(connections.addresseeId, profileData.id)
-                )
-            )
-        )
-        .then(res => Number(res[0]?.count || 0));
-
-    // Projects Count
-    const projectsCountPromise = db
-        .select({ count: sql<number>`count(*)` })
-        .from(projects)
-        .where(eq(projects.ownerId, profileData.id))
-        .then(res => Number(res[0]?.count || 0));
-
-    const [
-        userProjects,
-        connectionsCount,
-        projectsCount
-    ] = await Promise.all([
-        projectsPromise,
-        connectionsCountPromise,
-        projectsCountPromise
-    ])
-
-    // 3. Determine Connection Status
-    let connectionStatus: ConnectionState = 'none'
-
-    if (user && user.id !== profileData.id) {
-        const conn = await db.query.connections.findFirst({
+        // Connection Status
+        (user && user.id !== profileData.id) ? db.query.connections.findFirst({
             where: or(
                 and(eq(connections.requesterId, user.id), eq(connections.addresseeId, profileData.id)),
                 and(eq(connections.requesterId, profileData.id), eq(connections.addresseeId, user.id))
             ),
-            columns: {
-                status: true,
-                requesterId: true
-            }
-        });
+            columns: { status: true, requesterId: true }
+        }) : Promise.resolve(null),
 
-        if (conn) {
-            if (conn.status === 'accepted') {
-                connectionStatus = 'accepted'
-            } else if (conn.status === 'pending') {
-                connectionStatus = conn.requesterId === user.id ? 'pending_outgoing' : 'pending_incoming'
-            } else if (conn.status === 'rejected') {
-                connectionStatus = 'rejected'
-            } else if (conn.status === 'blocked') {
-                connectionStatus = 'rejected' // Treat blocked as rejected for public view generally
-            }
-        }
-    }
+        // Mutual Connection Count (Batching into server fetch to avoid client waterfalls)
+        (user && user.id !== profileData.id) ? supabase.rpc('get_mutual_connections', {
+            p_viewer_id: user.id,
+            p_profile_id: profileData.id
+        }).then(res => (res.data as any)?.count || 0) : Promise.resolve(0)
+    ]);
 
-    // 4. Map Drizzle (CamelCase) to Component Props
-    // Drizzle already provides camelCase for columns defined that way.
-    // We just need to ensure fields like socialLinks are handled if they are JSON.
-
-    // Note: The UI components might still expect some 'snake_case' props if they haven't been fully typed with Drizzle inferred types?
-    // Based on previous file, 'mappedProfile' was creating camelCase properties.
-    // Drizzle returns camelCase properties directly (e.g. fullName, avatarUrl).
-
-    const mappedProfile = {
-        ...profileData,
-        // Ensure strictly required fields match what components expect
-        // If components use `fullName` and `avatarUrl`, we are good.
-        // If they use legacy snake_case, we might need to alias, but we are moving to standard.
-        // Let's keep the object spread, which includes fullName/avatarUrl.
-        // Add JSON defaults if Drizzle didn't (it should with default([])).
-
-        socialLinks: profileData.socialLinks || {},
-        openTo: profileData.openTo || [],
-        experience: profileData.experience || [],
-        education: profileData.education || [],
+    // Map Connection Status
+    let connectionStatus: ConnectionState = 'none';
+    if (conn) {
+        if (conn.status === 'accepted') connectionStatus = 'accepted';
+        else if (conn.status === 'pending') {
+            connectionStatus = conn.requesterId === user?.id ? 'pending_outgoing' : 'pending_incoming';
+        } else connectionStatus = 'rejected';
     }
 
     return {
-        profile: mappedProfile,
+        profile: normalizeProfile(profileData),
         projects: userProjects,
         posts: [],
         stats: {
-            connectionsCount,
-            projectsCount,
-            followersCount: 0
+            connectionsCount: profileData.connectionsCount || 0, // Using denormalized column
+            projectsCount: profileData.projectsCount || 0,       // Using denormalized column
+            followersCount: profileData.followersCount || 0,
+            mutualCount, // New: Batched mutual count
         },
         connectionStatus,
         isOwner: user?.id === profileData.id,
         currentUser: user,
-    }
-})
+    };
+});
 
 // For generateStaticParams
 export const getPopularUsernames = cache(async (limit = 100) => {

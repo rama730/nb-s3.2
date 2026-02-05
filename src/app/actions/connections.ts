@@ -1,9 +1,9 @@
 'use server';
 
 import { db } from '@/lib/db';
-import { connections, profiles, projects } from '@/lib/db/schema';
+import { connections, profiles, projects, roleApplications } from '@/lib/db/schema';
 import { createClient } from '@/lib/supabase/server';
-import { eq, and, or, desc, count, sql, gte, inArray } from 'drizzle-orm';
+import { eq, and, or, desc, count, sql, gte, inArray, ne } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 
 // ============================================================================
@@ -283,47 +283,57 @@ export async function getConnectionStats(
         const now = new Date();
         const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 
-        const [totalRes, pendingInRes, pendingOutRes, thisMonthRes, gainedRes] = await Promise.all([
-            // Total accepted connections
-            db.select({ count: count() }).from(connections).where(
-                and(
-                    eq(connections.status, 'accepted'),
-                    or(eq(connections.requesterId, targetId), eq(connections.addresseeId, targetId))
+        // Optimized: Single query with FILTER clauses to get all stats
+        // This reduces DB roundtrips from 5 to 1
+        const [stats] = await db.select({
+            totalConnections: sql<number>`count(*) FILTER (
+                WHERE ${connections.status} = 'accepted' 
+                AND (${connections.requesterId} = ${targetId} OR ${connections.addresseeId} = ${targetId})
+            )`,
+            pendingIncoming: sql<number>`count(*) FILTER (
+                WHERE ${connections.addresseeId} = ${targetId} 
+                AND ${connections.status} = 'pending'
+            )`,
+            pendingSent: sql<number>`count(*) FILTER (
+                WHERE ${connections.requesterId} = ${targetId} 
+                AND ${connections.status} = 'pending'
+            )`,
+            connectionsThisMonth: sql<number>`count(*) FILTER (
+                WHERE ${connections.status} = 'accepted' 
+                AND (${connections.requesterId} = ${targetId} OR ${connections.addresseeId} = ${targetId})
+                AND ${connections.updatedAt} >= ${startOfMonth}
+            )`,
+            connectionsGained: sql<number>`count(*) FILTER (
+                WHERE ${connections.addresseeId} = ${targetId} 
+                AND ${connections.status} = 'accepted'
+                AND ${connections.updatedAt} >= ${startOfMonth}
+            )`
+        })
+            .from(connections)
+            .where(
+                or(
+                    eq(connections.requesterId, targetId),
+                    eq(connections.addresseeId, targetId)
                 )
-            ),
-            // Pending incoming
-            db.select({ count: count() }).from(connections).where(
-                and(eq(connections.addresseeId, targetId), eq(connections.status, 'pending'))
-            ),
-            // Pending outgoing
-            db.select({ count: count() }).from(connections).where(
-                and(eq(connections.requesterId, targetId), eq(connections.status, 'pending'))
-            ),
-            // Connections this month (accepted this month)
-            db.select({ count: count() }).from(connections).where(
-                and(
-                    eq(connections.status, 'accepted'),
-                    or(eq(connections.requesterId, targetId), eq(connections.addresseeId, targetId)),
-                    gte(connections.updatedAt, startOfMonth)
-                )
-            ),
-            // Gained (user was addressee - someone connected TO them)
-            db.select({ count: count() }).from(connections).where(
-                and(
-                    eq(connections.addresseeId, targetId),
-                    eq(connections.status, 'accepted'),
-                    gte(connections.updatedAt, startOfMonth)
-                )
-            ),
-        ]);
+            );
 
         return {
-            totalConnections: totalRes[0]?.count || 0,
-            pendingIncoming: pendingInRes[0]?.count || 0,
-            pendingSent: pendingOutRes[0]?.count || 0,
-            connectionsThisMonth: thisMonthRes[0]?.count || 0,
-            connectionsGained: gainedRes[0]?.count || 0,
+            // OPTIMIZATION: Use denormalized count from profile if possible, fallback to count(*)
+            // For now, we use the specific filters. In future, we can inject the profile's connectionsCount here.
+            // But for "My Connections", we want the accurate count.
+            // Actually, for specific "Connections This Month", we must filter.
+            // But "Total Connections" is now O(1) via the profile count if we fetched it.
+            // Since we don't have the profile here easily without another query, we stick to the optimized index scan.
+            // With the new composite index (requesterId, status, updatedAt), this is fast.
+
+            totalConnections: Number(stats?.totalConnections || 0),
+            pendingIncoming: Number(stats?.pendingIncoming || 0),
+            pendingSent: Number(stats?.pendingSent || 0),
+            connectionsThisMonth: Number(stats?.connectionsThisMonth || 0),
+            connectionsGained: Number(stats?.connectionsGained || 0),
         };
+
+
     } catch (error) {
         console.error('Error fetching connection stats:', error);
         // Return zeros if table doesn't exist or query fails
@@ -401,7 +411,10 @@ export async function getSuggestedPeople(
             })
             .from(projects)
             .where(inArray(projects.ownerId, profileIds))
-            .limit(50),
+            // FIX: Removed .limit(50) which was an aggregate limit causing data starvation.
+            // Since we only fetch for ~20 users, and most have <10 public projects, this is safe.
+            // Payload reduction: fetching only needed fields.
+            .orderBy(desc(projects.createdAt)),
     ]);
 
     // Build connection status map
@@ -446,9 +459,12 @@ export async function getSuggestedPeople(
 // GET PENDING REQUESTS (Incoming + Sent)
 // ============================================================================
 
-export async function getPendingRequests() {
+export async function getPendingRequests(
+    limit: number = 20,
+    offset: number = 0
+) {
     const user = await getAuthUser();
-    if (!user) return { incoming: [], sent: [] };
+    if (!user) return { incoming: [], sent: [], hasMoreIncoming: false, hasMoreSent: false };
 
     const [incoming, sent] = await Promise.all([
         // Incoming requests
@@ -467,7 +483,9 @@ export async function getPendingRequests() {
             .from(connections)
             .innerJoin(profiles, eq(profiles.id, connections.requesterId))
             .where(and(eq(connections.addresseeId, user.id), eq(connections.status, 'pending')))
-            .orderBy(desc(connections.createdAt)),
+            .orderBy(desc(connections.createdAt))
+            .limit(limit + 1)
+            .offset(offset),
         // Sent requests
         db
             .select({
@@ -484,10 +502,20 @@ export async function getPendingRequests() {
             .from(connections)
             .innerJoin(profiles, eq(profiles.id, connections.addresseeId))
             .where(and(eq(connections.requesterId, user.id), eq(connections.status, 'pending')))
-            .orderBy(desc(connections.createdAt)),
+            .orderBy(desc(connections.createdAt))
+            .limit(limit + 1)
+            .offset(offset),
     ]);
 
-    return { incoming, sent };
+    const hasMoreIncoming = incoming.length > limit;
+    const hasMoreSent = sent.length > limit;
+
+    return {
+        incoming: incoming.slice(0, limit),
+        sent: sent.slice(0, limit),
+        hasMoreIncoming,
+        hasMoreSent
+    };
 }
 
 // ============================================================================
@@ -649,16 +677,22 @@ export async function checkConnectionStatus(
     success: boolean;
     status?: 'none' | 'pending_sent' | 'pending_received' | 'connected' | 'blocked' | 'open';
     connectionId?: string;
-    isIncomingRequest?: boolean; // New flag to indicating if there is a pending request for the user
-    isPendingSent?: boolean; // New flag indicating validation valid request sent
+    isIncomingRequest?: boolean;
+    isPendingSent?: boolean;
+    hasActiveApplication?: boolean;
+    isApplicant?: boolean;
+    isCreator?: boolean;
+    activeApplicationId?: string;
+    activeApplicationStatus?: 'pending' | 'accepted' | 'rejected';
+    activeProjectId?: string;
     error?: string;
 }> {
     try {
         const user = await getAuthUser();
         if (!user) return { success: false, error: 'Not authenticated' };
 
-        // 1. Fetch Connection AND Target Privacy in parallel (optimization)
-        const [existing, targetProfileRes] = await Promise.all([
+        // 1. Fetch Connection, Target Privacy, AND Role Applications in parallel
+        const [existing, targetProfileRes, activeApplications] = await Promise.all([
             db
                 .select()
                 .from(connections)
@@ -673,10 +707,48 @@ export async function checkConnectionStatus(
                 .select({ messagePrivacy: profiles.messagePrivacy })
                 .from(profiles)
                 .where(eq(profiles.id, otherUserId))
+                .limit(1),
+            db
+                .select({
+                    id: roleApplications.id,
+                    applicantId: roleApplications.applicantId,
+                    creatorId: roleApplications.creatorId,
+                    status: roleApplications.status,
+                    projectId: roleApplications.projectId
+                })
+                .from(roleApplications)
+                .where(
+                    and(
+                        or(
+                            and(eq(roleApplications.applicantId, user.id), eq(roleApplications.creatorId, otherUserId)),
+                            and(eq(roleApplications.applicantId, otherUserId), eq(roleApplications.creatorId, user.id))
+                        )
+                    )
+                )
+                .orderBy(desc(roleApplications.createdAt))
                 .limit(1)
         ]);
 
         const targetPrivacy = targetProfileRes[0]?.messagePrivacy || 'connections';
+        const activeApp = activeApplications[0];
+
+        // RULE: If there is an active application, the gate is OPEN
+        if (activeApp) {
+            let connectionId: string | undefined;
+            if (existing.length > 0) connectionId = existing[0].id;
+
+            return {
+                success: true,
+                status: 'open',
+                connectionId,
+                hasActiveApplication: true,
+                activeApplicationId: activeApp.id,
+                activeApplicationStatus: activeApp.status as 'pending' | 'accepted' | 'rejected',
+                activeProjectId: activeApp.projectId, // Mapped correctly by Drizzle
+                isApplicant: activeApp.applicantId === user.id,
+                isCreator: activeApp.creatorId === user.id
+            };
+        }
 
         if (existing.length > 0) {
             const conn = existing[0];
@@ -696,8 +768,6 @@ export async function checkConnectionStatus(
                 const isRequester = conn.requesterId === user.id;
 
                 if (isRequester) {
-                    // I sent the request.
-                    // If target allows "Everyone", I should be able to message regardless of pending status.
                     if (targetPrivacy === 'everyone') {
                         return {
                             success: true,
@@ -708,12 +778,9 @@ export async function checkConnectionStatus(
                     }
                     return { success: true, status: 'pending_sent', connectionId: conn.id };
                 } else {
-                    // I received the request.
-                    // User Rule: "received user... can start messaging without accepting".
-                    // So we return 'open' (allowing input) BUT mark isIncomingRequest=true (to show Accept option).
                     return {
                         success: true,
-                        status: 'open', // Allows messaging
+                        status: 'open',
                         connectionId: conn.id,
                         isIncomingRequest: true
                     };

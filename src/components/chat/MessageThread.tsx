@@ -41,6 +41,13 @@ export function MessageThread({ messages, conversationId }: MessageThreadProps) 
         prevMessagesLengthRef.current = messages.length;
     }, [messages.length]);
 
+    // Scroll when typing users change (if near bottom)
+    useEffect(() => {
+        if (typingUsers.length > 0) {
+           bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+        }
+    }, [typingUsers.length]);
+
     // Initial scroll to bottom
     useEffect(() => {
         bottomRef.current?.scrollIntoView();
@@ -102,7 +109,10 @@ export function MessageThread({ messages, conversationId }: MessageThreadProps) 
                         </div>
                     ) : null,
                     Footer: () => (
-                        <div className="pb-4" /> // Spacer at bottom
+                        <div className="pb-2 px-4" ref={bottomRef}>
+                            {typingUsers.length > 0 && <TypingIndicator users={typingUsers} />}
+                            <div className="pb-2" />
+                        </div>
                     )
                 }}
                 itemContent={(index, item) => {

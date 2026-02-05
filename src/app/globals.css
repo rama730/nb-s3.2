@@ -48,6 +48,7 @@
 
 :root {
   --radius: 0.625rem;
+  color-scheme: light dark;
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
@@ -122,6 +123,25 @@
 
   body {
     @apply bg-background text-foreground;
+  }
+}
+
+/* Theme transition: root-only, short-lived.
+   During theme switch we transition just root colors, and disable all other transitions
+   to avoid animating the entire DOM. */
+html.theme-transition,
+html.theme-transition body {
+  transition: background-color 200ms ease, color 200ms ease, border-color 200ms ease;
+}
+
+html.theme-transition * {
+  transition: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html.theme-transition,
+  html.theme-transition body {
+    transition: none !important;
   }
 }
 

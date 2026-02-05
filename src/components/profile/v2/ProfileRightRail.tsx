@@ -2,8 +2,9 @@
 
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
-import { Briefcase, Users, FolderKanban, Link2, Sparkles } from 'lucide-react'
+import { Briefcase, Users, FolderKanban, Link2, Sparkles, MessageSquare, Pencil, Github, Linkedin, Globe } from 'lucide-react'
 import type { ProfileStats } from './types'
+import { normalizeProfileVM } from './utils/normalizeProfileVM'
 
 function RailCard({
     title,
@@ -99,10 +100,23 @@ export function ProfileRightRail({
     onInvite: () => void
     onConnectionsClick: () => void
 }) {
-    // CamelCase props
-    const openTo: string[] = profile?.openTo || profile?.open_to || (profile?.skills ? profile.skills.slice(0, 5) : [])
-    const availability = profile?.availabilityStatus || profile?.availability_status || 'available'
-    const links = normalizeSocialLinks(profile, socialLinks)
+    const vm = normalizeProfileVM(profile)
+    const openTo = vm.openTo
+    const availability = vm.availabilityStatus
+    const links = normalizeSocialLinks({ ...profile, socialLinks: vm.socialLinks }, socialLinks)
+
+    const availabilityTone =
+        availability === 'available' ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300 border-emerald-200 dark:border-emerald-900/40'
+        : availability === 'busy' ? 'bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-300 border-amber-200 dark:border-amber-900/40'
+        : availability === 'focusing' ? 'bg-indigo-50 text-indigo-700 dark:bg-indigo-900/20 dark:text-indigo-300 border-indigo-200 dark:border-indigo-900/40'
+        : 'bg-zinc-50 text-zinc-700 dark:bg-zinc-900/30 dark:text-zinc-300 border-zinc-200 dark:border-zinc-800'
+
+    const linkIconFor = (url: string) => {
+        const u = (url || '').toLowerCase()
+        if (u.includes('github.com')) return <Github className="w-4 h-4" />
+        if (u.includes('linkedin.com')) return <Linkedin className="w-4 h-4" />
+        return <Globe className="w-4 h-4" />
+    }
 
     return (
         <>
@@ -110,7 +124,7 @@ export function ProfileRightRail({
                 <div className="space-y-3">
                     <div className="flex items-center justify-between">
                         <div className="text-sm text-zinc-700 dark:text-zinc-300">Availability</div>
-                        <span className="text-xs font-medium px-2.5 py-1 rounded-full border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300">
+                        <span className={cn("text-xs font-medium px-2.5 py-1 rounded-full border", availabilityTone)}>
                             {String(availability).replace(/_/g, ' ')}
                         </span>
                     </div>
@@ -169,7 +183,10 @@ export function ProfileRightRail({
                                 rel="noopener noreferrer"
                                 className="flex items-center justify-between gap-3 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-800 px-3 py-2 hover:bg-zinc-50 dark:hover:bg-zinc-700"
                             >
-                                <span className="text-sm text-zinc-700 dark:text-zinc-200">{l.label}</span>
+                                <span className="text-sm text-zinc-700 dark:text-zinc-200 flex items-center gap-2 min-w-0">
+                                    <span className="text-zinc-400">{linkIconFor(l.url)}</span>
+                                    <span className="truncate">{l.label}</span>
+                                </span>
                                 <span className="text-xs text-zinc-500 dark:text-zinc-400 truncate max-w-[140px]">{l.url}</span>
                             </a>
                         ))}
@@ -181,18 +198,39 @@ export function ProfileRightRail({
 
             <RailCard title="Shortcuts" icon={<FolderKanban className="w-4 h-4" />}>
                 <div className="grid grid-cols-2 gap-2">
-                    <Link
-                        href="/projects"
-                        className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-800 px-3 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700"
-                    >
-                        Browse projects
-                    </Link>
-                    <Link
-                        href="/explorer"
-                        className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-800 px-3 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700"
-                    >
-                        Explore feed
-                    </Link>
+                    {isOwner ? (
+                        <>
+                            <Link
+                                href="/settings/profile"
+                                className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-800 px-3 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700 flex items-center gap-2"
+                            >
+                                <Pencil className="w-4 h-4 text-zinc-400" />
+                                Edit profile
+                            </Link>
+                            <Link
+                                href="/projects"
+                                className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-800 px-3 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700"
+                            >
+                                My projects
+                            </Link>
+                        </>
+                    ) : (
+                        <>
+                            <Link
+                                href={vm?.id ? `/messages?userId=${vm.id}` : '/messages'}
+                                className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-800 px-3 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700 flex items-center gap-2"
+                            >
+                                <MessageSquare className="w-4 h-4 text-zinc-400" />
+                                Message
+                            </Link>
+                            <Link
+                                href="/projects"
+                                className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-800 px-3 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700"
+                            >
+                                Browse projects
+                            </Link>
+                        </>
+                    )}
                 </div>
             </RailCard>
         </>

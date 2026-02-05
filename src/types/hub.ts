@@ -45,6 +45,7 @@ export interface Project {
     short_description?: string | null;
     slug?: string;
     status: string; // 'draft' | 'active' | 'completed' | 'archived' -> maps to IDEA/IN_PROGRESS/LAUNCHED
+    sync_status?: 'pending' | 'cloning' | 'indexing' | 'ready' | 'failed'; // Background worker status
     category?: string | null;
     cover_image?: string | null;
     technologies_used?: string[];

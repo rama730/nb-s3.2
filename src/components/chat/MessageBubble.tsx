@@ -3,7 +3,9 @@
 import { useAuth } from '@/hooks/useAuth';
 import type { MessageWithSender } from '@/app/actions/messaging';
 import { format } from 'date-fns';
-import { Check, CheckCheck, Image as ImageIcon, File, Video } from 'lucide-react';
+import { Badge } from "@/components/ui/badge";
+import { Check, CheckCheck, Image as ImageIcon, File, Video, X } from 'lucide-react';
+import { useState } from 'react';
 
 // ============================================================================
 // MESSAGE BUBBLE
@@ -19,6 +21,18 @@ export function MessageBubble({ message, showAvatar = true }: MessageBubbleProps
     const { user } = useAuth();
     const isOwn = message.senderId === user?.id;
     const isDeleted = !!message.deletedAt;
+    const metadata = message.metadata as any;
+
+    // Handle System Messages (Timeline Events)
+    if (message.type === 'system') {
+        return (
+            <div className="flex justify-center my-4 w-full">
+                <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800/50 px-3 py-1 rounded-full flex items-center gap-2 border border-zinc-200 dark:border-zinc-800">
+                   {message.content} <span className="text-[10px] opacity-60">• {format(new Date(message.createdAt), 'p')}</span>
+                </span>
+            </div>
+        );
+    }
 
     // Handle deleted messages
     if (isDeleted) {
@@ -70,6 +84,18 @@ export function MessageBubble({ message, showAvatar = true }: MessageBubbleProps
                                 : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-white rounded-bl-md'
                             }`}
                     >
+                        {/* Application Status (Simple Text) */}
+                        {metadata?.isApplication && (
+                            <div className={`mb-1 text-[10px] uppercase font-bold opacity-70 ${!isOwn ? 'text-zinc-500' : 'text-white'}`}>
+                                Application Status: {
+                                    metadata.status === 'accepted' ? 'Accepted' :
+                                        metadata.status === 'rejected' ? 'Rejected' :
+                                            metadata.status === 'project_deleted' ? 'Project Has Been Deleted' :
+                                                'Pending'
+                                }
+                            </div>
+                        )}
+                        
                         <p className="whitespace-pre-wrap break-words">{message.content}</p>
                     </div>
                 )}

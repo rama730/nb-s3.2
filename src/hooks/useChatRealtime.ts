@@ -34,7 +34,13 @@ export function useChatRealtime(userId: string | null) {
             .on(
                 'postgres_changes',
                 { event: 'INSERT', schema: 'public', table: 'messages' },
-                (payload) => _handleNewMessage(payload.new)
+                (payload: any) => _handleNewMessage(payload.new)
+            )
+            // 1.5 Message Updates (for Status Banners)
+            .on(
+                'postgres_changes',
+                { event: 'UPDATE', schema: 'public', table: 'messages' },
+                (payload: any) => useChatStore.getState()._handleMessageUpdate(payload.new)
             )
             // 2. Connection Status
             .on(
@@ -47,7 +53,7 @@ export function useChatRealtime(userId: string | null) {
                 { event: 'UPDATE', schema: 'public', table: 'connections', filter: `addressee_id=eq.${userId}` },
                 () => checkActiveConnectionStatus()
             )
-            .subscribe((status) => {
+            .subscribe((status: string) => {
                 if (status === 'SUBSCRIBED') setConnected(true);
                 else if (status === 'CLOSED' || status === 'CHANNEL_ERROR') setConnected(false);
             });

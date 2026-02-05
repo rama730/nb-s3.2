@@ -104,12 +104,12 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
     }, [mobileOpen]);
 
     return (
-        <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950">
-            <div className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8 py-6">
-                <div className="flex gap-6">
+        <div className="h-full min-h-0 overflow-hidden bg-zinc-50 dark:bg-zinc-950">
+            <div className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8 py-6 h-full min-h-0">
+                <div className="flex gap-6 h-full min-h-0">
                     {/* Desktop sidebar */}
-                    <aside className="hidden lg:block w-72 flex-shrink-0">
-                        <div className="sticky top-[var(--header-height,64px)] rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white/80 dark:bg-zinc-950/60 backdrop-blur p-3">
+                    <aside className="hidden lg:block w-72 flex-shrink-0 h-full overflow-y-auto">
+                        <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white/80 dark:bg-zinc-950/60 backdrop-blur p-3">
                             <div className="px-2 py-2">
                                 <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
                                     Settings
@@ -182,7 +182,7 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
                     </aside>
 
                     {/* Main content */}
-                    <div className="flex-1 min-w-0">
+                    <div className="flex-1 min-w-0 h-full overflow-y-auto">
                         {/* Mobile section picker */}
                         <div className="lg:hidden mb-4">
                             <button
@@ -265,7 +265,7 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
                             initial={{ opacity: 0, y: 8 }}
                             animate={{ opacity: 1, y: 0 }}
                             transition={{ duration: 0.25, ease: "easeOut" }}
-                            className="space-y-6"
+                            className="space-y-6 pb-10"
                         >
                             {children}
                         </motion.div>

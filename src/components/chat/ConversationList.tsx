@@ -19,6 +19,8 @@ export function ConversationList() {
     const conversationsLoading = useChatStore(state => state.conversationsLoading);
     const unreadCounts = useChatStore(state => state.unreadCounts);
     const openConversation = useChatStore(state => state.openConversation);
+    const hasMoreConversations = useChatStore(state => state.hasMoreConversations);
+    const loadMoreConversations = useChatStore(state => state.loadMoreConversations);
     const [searchQuery, setSearchQuery] = useState('');
 
     // Filter conversations by search
@@ -33,7 +35,7 @@ export function ConversationList() {
         );
     });
 
-    if (conversationsLoading) {
+    if (conversationsLoading && conversations.length === 0) {
         return (
             <div className="flex-1 flex items-center justify-center">
                 <div className="animate-spin rounded-full h-8 w-8 border-2 border-blue-600 border-t-transparent" />
@@ -126,6 +128,19 @@ export function ConversationList() {
                                 </button>
                             );
                         })}
+                        
+                        {/* Load More Button */}
+                        {hasMoreConversations && !searchQuery && (
+                            <div className="p-4 flex justify-center">
+                                <button
+                                    onClick={() => loadMoreConversations()}
+                                    disabled={conversationsLoading}
+                                    className="text-sm text-blue-600 hover:text-blue-700 font-medium disabled:opacity-50"
+                                >
+                                    {conversationsLoading ? 'Loading...' : 'Load older conversations'}
+                                </button>
+                            </div>
+                        )}
                     </div>
                 )}
             </div>
@@ -137,7 +152,11 @@ export function ConversationList() {
 // CONVERSATION PREVIEW - Shows typing indicator or last message
 // ============================================================================
 
-function ConversationPreview({ 
+// ============================================================================
+// CONVERSATION PREVIEW - Shows typing indicator or last message
+// ============================================================================
+
+export function ConversationPreview({ 
     conversationId, 
     lastMessage, 
     unread 

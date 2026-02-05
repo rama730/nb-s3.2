@@ -69,18 +69,18 @@ function Scale(props: any) {
     return <FileText {...props} />; // Fallback since Scale isn't imported potentially or I missed it.
 }
 
-export function FileIcon({ name, isFolder, isOpen, size = "w-4 h-4" }: { name: string; isFolder: boolean; isOpen?: boolean; size?: string }) {
+export function FileIcon({ name, isFolder, isOpen, size = "w-4 h-4", className }: { name: string; isFolder: boolean; isOpen?: boolean; size?: string; className?: string }) {
   if (isFolder) {
     // Folder icons - can be customized further based on folder name (e.g. 'src', 'components')
     // For now standard blue folder
     return (
-      <div className={cn(size, "relative")}>
+      <div className={cn(size, className, "relative")}>
          {/* We can use an SVG or Lucide. Lucide Folder/FolderOpen are good. */}
          {/* VS Code uses a flat color. Let's use a nice blue. */}
          {isOpen ? (
-            <FolderOpenIcon className={cn(size, "text-blue-500 fill-blue-500/20")} />
+            <FolderOpenIcon className={cn(size, className, "text-blue-500 fill-blue-500/20")} />
          ) : (
-            <FolderIcon className={cn(size, "text-blue-500 fill-blue-500/20")} />
+            <FolderIcon className={cn(size, className, "text-blue-500 fill-blue-500/20")} />
          )}
       </div>
     );
@@ -89,7 +89,7 @@ export function FileIcon({ name, isFolder, isOpen, size = "w-4 h-4" }: { name: s
   const exact = FILE_ICONS[name];
   if (exact) {
     const Icon = exact.icon;
-    return <Icon className={cn(size, exact.color)} />;
+    return <Icon className={cn(size, className, exact.color)} />;
   }
 
   const parts = name.split(".");
@@ -98,11 +98,11 @@ export function FileIcon({ name, isFolder, isOpen, size = "w-4 h-4" }: { name: s
 
   if (match) {
     const Icon = match.icon;
-    return <Icon className={cn(size, match.color)} />;
+    return <Icon className={cn(size, className, match.color)} />;
   }
 
   // Default file
-  return <File className={cn(size, "text-zinc-400")} />;
+  return <File className={cn(size, className, "text-zinc-400")} />;
 }
 
 // Inline simple folder icons to avoid conflicts or use passed props

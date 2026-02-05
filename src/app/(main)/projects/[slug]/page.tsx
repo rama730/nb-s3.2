@@ -23,6 +23,8 @@ async function getProject(slug: string, currentUserId?: string | null, searchTab
 
     if (!project) return null;
 
+    console.log("[getProject] currentStageIndex from DB:", project.currentStageIndex, "lifecycleStages:", project.lifecycleStages);
+
     // Get owner
     const [owner] = await db.select().from(profiles).where(eq(profiles.id, project.ownerId)).limit(1);
 
@@ -57,56 +59,51 @@ async function getProject(slug: string, currentUserId?: string | null, searchTab
         isSaved = !!save;
     }
 
-    // Fetch Lists (Tasks, Sprints, Open Roles) - Simple/Naive fetching for now to support the UI
+    // OPTIMIZATION: High-Scale Architecture (Shell + Lazy Hydration)
+    // We intentionally DO NOT fetch potentially large lists (tasks, sprints, files) on the server.
+    // These are fetched client-side by the respective tabs using React Query.
+    // This ensures TTFB is O(1) and largely independent of project size.
+    
     let projectSprints: any[] = [];
     let projectTasks: any[] = [];
     let projectRoles: any[] = [];
     let projectCollaborators: any[] = [];
     let initialFileNodes: any[] = [];
 
+    // Fetch ONLY critical shell data (Collaborators/Members) for access control
     try {
-        projectSprints = await db.query.projectSprints.findMany({
-            where: (sprints, { eq }) => eq(sprints.projectId, project.id),
-            orderBy: (sprints, { desc }) => [desc(sprints.createdAt)]
-        });
-
-        // Fetch members with profiles
+         // We still need members to determine if user is a member (for "isMember" prop)
+         // But we can limit this or optimize it if the team size is massive (10k+).
+         // For now, assuming team size is < 100, fetching members is O(1) relative to Task count.
         const membersResult = await db.query.projectMembers.findMany({
             where: (members, { eq }) => eq(members.projectId, project.id),
             with: {
-                user: true // user is the relation to profiles table (aliased usually or direct)
-            }
+                user: true
+            },
+            limit: 20
         });
-        
-        // Map to flat profile structure
+
         projectCollaborators = membersResult.map(m => m.user);
 
-        projectTasks = await db.query.tasks.findMany({
-            where: (tasks, { eq }) => eq(tasks.projectId, project.id),
-            orderBy: (tasks, { desc }) => [desc(tasks.createdAt)],
-            with: {
-                assignee: true,
-                creator: true,
-                attachments: true
-            }
+        // Fetch open roles (small dataset, needed for Dashboard OpenRolesCard)
+        const rolesResult = await db.query.projectOpenRoles.findMany({
+            where: (roles, { eq }) => eq(roles.projectId, project.id)
         });
+        projectRoles = rolesResult;
 
-        projectRoles = await db.query.projectOpenRoles.findMany({
-            where: (roles, { eq }) => eq(roles.projectId, project.id),
-            orderBy: (roles, { desc }) => [desc(roles.createdAt)]
-        });
+        // DO NOT FETCH: projectTasks, projectSprints here.
+        // They remain empty arrays []
 
-        // Pre-fetch files if on files tab
-        if (searchTab === 'files') {
-             initialFileNodes = await db.select().from(projectNodes).where(eq(projectNodes.projectId, project.id));
-        }
     } catch (e) {
-        console.warn("Failed to fetch sprints/tasks/roles/files. Schema might not be pushed.", e);
+        console.warn("Failed to fetch project members or roles.", e);
         // Fallback to empty arrays so the UI still renders
     }
 
     return {
         ...project,
+        // Explicit lifecycle fields to ensure they're always present
+        current_stage_index: project.currentStageIndex ?? 0,
+        lifecycle_stages: project.lifecycleStages ?? [],
         slug: project.slug || undefined,
         status: project.status || "draft",
         description: project.description || null,

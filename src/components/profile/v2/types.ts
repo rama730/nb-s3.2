@@ -9,6 +9,7 @@ export interface ProfileStats {
     connectionsCount: number
     projectsCount: number
     followersCount: number
+    mutualCount?: number
 }
 
 // Defines what the Client Component expects

@@ -3,6 +3,7 @@
 import { db } from '@/lib/db';
 import {
     conversations,
+    dmPairs,
     conversationParticipants,
     messages,
     messageAttachments,
@@ -96,43 +97,61 @@ export async function getOrCreateDMConversation(
             return { success: false, error: 'Cannot message yourself' };
         }
 
-        // OPTIMIZED: Find existing DM conversation in a single query
-        // Uses a JOIN to check if both users are participants in the same DM conversation
-        const existingConversation = await db.execute<{
-            conversation_id: string;
-        }>(sql`
-            SELECT DISTINCT cp1.conversation_id
-            FROM ${conversationParticipants} cp1
-            INNER JOIN ${conversationParticipants} cp2 
-                ON cp1.conversation_id = cp2.conversation_id
-            INNER JOIN ${conversations} c 
-                ON c.id = cp1.conversation_id
-            WHERE 
-                cp1.user_id = ${user.id}
-                AND cp2.user_id = ${otherUserId}
-                AND c.type = 'dm'
-            LIMIT 1
-        `);
+        const [low, high] = user.id < otherUserId ? [user.id, otherUserId] : [otherUserId, user.id];
 
-        const existingConvArray = Array.from(existingConversation);
-        if (existingConvArray.length > 0) {
-            // Found existing conversation
-            return { success: true, conversationId: (existingConvArray[0] as any).conversation_id };
-        }
+        const conversationId = await db.transaction(async (tx) => {
+            // Serialize DM creation per pair to prevent duplicates.
+            await tx.execute(sql`
+                SELECT pg_advisory_xact_lock(
+                    hashtext(CAST(${low} AS text)),
+                    hashtext(CAST(${high} AS text))
+                )
+            `);
 
-        // No existing conversation, create new one
-        const [newConversation] = await db
-            .insert(conversations)
-            .values({ type: 'dm' })
-            .returning({ id: conversations.id });
+            const existing = await tx
+                .select({ conversationId: dmPairs.conversationId })
+                .from(dmPairs)
+                .where(and(eq(dmPairs.userLow, low), eq(dmPairs.userHigh, high)))
+                .limit(1);
 
-        // Add both participants
-        await db.insert(conversationParticipants).values([
-            { conversationId: newConversation.id, userId: user.id },
-            { conversationId: newConversation.id, userId: otherUserId },
-        ]);
+            if (existing[0]?.conversationId) {
+                // Ensure both participants exist (repair if needed).
+                await tx.insert(conversationParticipants)
+                    .values([
+                        { conversationId: existing[0].conversationId, userId: user.id },
+                        { conversationId: existing[0].conversationId, userId: otherUserId },
+                    ])
+                    .onConflictDoNothing({
+                        target: [conversationParticipants.conversationId, conversationParticipants.userId],
+                    });
 
-        return { success: true, conversationId: newConversation.id };
+                return existing[0].conversationId;
+            }
+
+            const [newConversation] = await tx
+                .insert(conversations)
+                .values({ type: 'dm' })
+                .returning({ id: conversations.id });
+
+            await tx.insert(conversationParticipants)
+                .values([
+                    { conversationId: newConversation.id, userId: user.id },
+                    { conversationId: newConversation.id, userId: otherUserId },
+                ])
+                .onConflictDoNothing({
+                    target: [conversationParticipants.conversationId, conversationParticipants.userId],
+                });
+
+            await tx.insert(dmPairs).values({
+                userLow: low,
+                userHigh: high,
+                conversationId: newConversation.id,
+            });
+
+            return newConversation.id;
+        });
+
+        return { success: true, conversationId };
     } catch (error) {
         console.error('Error getting/creating conversation:', error);
         return { success: false, error: 'Failed to create conversation' };
@@ -143,35 +162,56 @@ export async function getOrCreateDMConversation(
 // GET USER'S CONVERSATIONS (OPTIMIZED - No N+1 queries)
 // ============================================================================
 
-export async function getConversations(): Promise<{
+export async function getConversations(
+    limit: number = 20,
+    cursor?: string
+): Promise<{
     success: boolean;
     error?: string;
     conversations?: ConversationWithDetails[];
+    hasMore?: boolean;
+    nextCursor?: string;
 }> {
     try {
         const user = await getAuthUser();
         if (!user) return { success: false, error: 'Not authenticated' };
 
-        // QUERY 1: Get all conversation IDs and last read times for this user
-        const userConversations = await db
-            .select({
-                conversationId: conversationParticipants.conversationId,
-                lastReadAt: conversationParticipants.lastReadAt,
-            })
-            .from(conversationParticipants)
-            .where(eq(conversationParticipants.userId, user.id));
+        // QUERY 1: Get filtered/paginated conversation IDs for this user
+        // We order by lastReadAt vaguely or we need a proper join to order by updated_at?
+        // Ideally conversations are ordered by 'updated_at' descending.
+        // The previous implementation selected from `conversationParticipants` which doesn't have `updated_at`.
+        // To properly sort by most recent, we need to join with `conversations`.
 
-        if (userConversations.length === 0) {
-            return { success: true, conversations: [] };
+        const userConversations = await db.execute<{
+            conversation_id: string;
+            unread_count: number;
+            last_message_at: Date | null;
+            updated_at: Date;
+        }>(sql`
+            SELECT 
+                cp.conversation_id,
+                cp.unread_count,
+                cp.last_message_at,
+                c.updated_at
+            FROM ${conversationParticipants} cp
+            INNER JOIN ${conversations} c ON c.id = cp.conversation_id
+            WHERE cp.user_id = ${user.id}
+            ${cursor ? sql`AND (cp.last_message_at < ${new Date(cursor).toISOString()} OR cp.last_message_at IS NULL)` : sql``}
+            ORDER BY cp.last_message_at DESC NULLS LAST
+            LIMIT ${limit + 1}
+        `);
+
+        const userConvArray = Array.from(userConversations);
+        const hasMore = userConvArray.length > limit;
+        const paginatedConvs = userConvArray.slice(0, limit);
+
+        if (paginatedConvs.length === 0) {
+            return { success: true, conversations: [], hasMore: false };
         }
 
-        const conversationIds = userConversations.map(c => c.conversationId);
-        const lastReadMap = new Map(
-            userConversations.map(c => [c.conversationId, c.lastReadAt])
-        );
+        const conversationIds = paginatedConvs.map((c: any) => c.conversation_id);
 
         // QUERY 2: Get conversation details + last message using window function
-        // This eliminates the N+1 query pattern for last messages
         const conversationsWithLastMessage = await db.execute<{
             id: string;
             type: string;
@@ -201,10 +241,12 @@ export async function getConversations(): Promise<{
                 LIMIT 1
             ) lm ON true
             WHERE c.id IN ${conversationIds}
-            ORDER BY c.updated_at DESC
         `);
 
-        // QUERY 3: Get all participants for these conversations in one query
+        // Map for fast lookup of conversation details (type, last message)
+        const detailsMap = new Map(Array.from(conversationsWithLastMessage).map((c: any) => [c.id, c]));
+
+        // QUERY 3: Get all participants for these conversations
         const allParticipants = await db
             .select({
                 conversationId: conversationParticipants.conversationId,
@@ -217,68 +259,52 @@ export async function getConversations(): Promise<{
             .innerJoin(profiles, eq(profiles.id, conversationParticipants.userId))
             .where(inArray(conversationParticipants.conversationId, conversationIds));
 
-        // QUERY 4: Get unread counts for all conversations in one aggregated query
-        // This eliminates the N+1 query pattern for unread counts
-        const unreadCountsResult = await db.execute<{
-            conversation_id: string;
-            unread_count: number;
-        }>(sql`
-            SELECT 
-                m.conversation_id,
-                COUNT(*)::int as unread_count
-            FROM ${messages} m
-            INNER JOIN ${conversationParticipants} cp 
-                ON cp.conversation_id = m.conversation_id
-            WHERE 
-                m.conversation_id IN ${conversationIds}
-                AND m.deleted_at IS NULL
-                AND m.sender_id != ${user.id}
-                AND cp.user_id = ${user.id}
-                AND (
-                    cp.last_read_at IS NULL 
-                    OR m.created_at > cp.last_read_at
-                )
-            GROUP BY m.conversation_id
-        `);
-
-        const unreadMap = new Map(
-            Array.from(unreadCountsResult).map((row: any) => [row.conversation_id, row.unread_count])
-        );
-
-        // Build participant map (excluding current user)
+        // Build participant map
         const participantMap = new Map<string, typeof allParticipants>();
         for (const p of allParticipants) {
             if (!participantMap.has(p.conversationId)) {
                 participantMap.set(p.conversationId, []);
             }
-            // Exclude current user from participant list
             if (p.userId !== user.id) {
                 participantMap.get(p.conversationId)!.push(p);
             }
         }
 
         // Build final result
-        const result: ConversationWithDetails[] = Array.from(conversationsWithLastMessage).map((conv: any) => ({
-            id: conv.id,
-            type: conv.type as 'dm' | 'group',
-            updatedAt: conv.updated_at,
-            participants: (participantMap.get(conv.id) || []).map(p => ({
-                id: p.userId,
-                username: p.username,
-                fullName: p.fullName,
-                avatarUrl: p.avatarUrl,
-            })),
-            lastMessage: conv.last_message_id ? {
-                id: conv.last_message_id,
-                content: conv.last_message_content,
-                senderId: conv.last_message_sender_id,
-                createdAt: conv.last_message_created_at!,
-                type: conv.last_message_type,
-            } : null,
-            unreadCount: unreadMap.get(conv.id) || 0,
-        }));
+        const result: ConversationWithDetails[] = paginatedConvs.map((userConv: any) => {
+            const details = detailsMap.get(userConv.conversation_id);
+            if (!details) return null; // Should not happen due to FK
 
-        return { success: true, conversations: result };
+            return {
+                id: details.id,
+                type: details.type as 'dm' | 'group',
+                updatedAt: userConv.last_message_at || userConv.updated_at || new Date(),
+                participants: (participantMap.get(details.id) || []).map(p => ({
+                    id: p.userId,
+                    username: p.username,
+                    fullName: p.fullName,
+                    avatarUrl: p.avatarUrl,
+                })),
+                lastMessage: details.last_message_id ? {
+                    id: details.last_message_id,
+                    content: details.last_message_content,
+                    senderId: details.last_message_sender_id,
+                    createdAt: details.last_message_created_at!,
+                    type: details.last_message_type,
+                } : null,
+                unreadCount: userConv.unread_count || 0, // O(1) Read from denormalized column
+            };
+        }).filter(Boolean) as ConversationWithDetails[];
+
+        // Re-sort client side just in case mapping shuffled, though map preservation usually works
+        // The initial query defined the order.
+
+        return {
+            success: true,
+            conversations: result,
+            hasMore,
+            nextCursor: hasMore ? result[result.length - 1].updatedAt.toISOString() : undefined
+        };
     } catch (error) {
         console.error('Error fetching conversations:', error);
         return { success: false, error: 'Failed to fetch conversations' };
@@ -456,45 +482,67 @@ export async function sendMessage(
             return { success: false, error: 'Message cannot be empty' };
         }
 
-        // Insert message
-        const [newMessage] = await db
-            .insert(messages)
-            .values({
-                conversationId,
-                senderId: user.id,
-                content: content?.trim() || null,
-                type,
-            })
-            .returning();
+        // Use transaction for atomic message send + count update
+        const { newMessage, senderProfile } = await db.transaction(async (tx) => {
+            // 1. Insert message
+            const [msg] = await tx
+                .insert(messages)
+                .values({
+                    conversationId,
+                    senderId: user.id,
+                    content: content?.trim() || null,
+                    type,
+                })
+                .returning();
 
-        // Get sender profile
-        const [senderProfile] = await db
-            .select({
-                id: profiles.id,
-                username: profiles.username,
-                fullName: profiles.fullName,
-                avatarUrl: profiles.avatarUrl,
-            })
-            .from(profiles)
-            .where(eq(profiles.id, user.id))
-            .limit(1);
+            // 2. Get sender profile
+            const [profile] = await tx
+                .select({
+                    id: profiles.id,
+                    username: profiles.username,
+                    fullName: profiles.fullName,
+                    avatarUrl: profiles.avatarUrl,
+                })
+                .from(profiles)
+                .where(eq(profiles.id, user.id))
+                .limit(1);
 
-        // Update conversation timestamp (trigger handles this, but explicit is faster)
-        await db
-            .update(conversations)
-            .set({ updatedAt: new Date() })
-            .where(eq(conversations.id, conversationId));
+            // 3. Update conversation timestamp
+            const now = new Date();
+            await tx
+                .update(conversations)
+                .set({ updatedAt: now })
+                .where(eq(conversations.id, conversationId));
 
-        // Mark as read for sender
-        await db
-            .update(conversationParticipants)
-            .set({ lastReadAt: new Date() })
-            .where(
-                and(
-                    eq(conversationParticipants.conversationId, conversationId),
-                    eq(conversationParticipants.userId, user.id)
-                )
-            );
+            // 4. Update Recipient(s) counter
+            await tx.update(conversationParticipants)
+                .set({
+                    unreadCount: sql`unread_count + 1`,
+                    lastMessageAt: now
+                })
+                .where(
+                    and(
+                        eq(conversationParticipants.conversationId, conversationId),
+                        ne(conversationParticipants.userId, user.id)
+                    )
+                );
+
+            // 5. Update Sender state
+            await tx.update(conversationParticipants)
+                .set({
+                    lastMessageAt: now,
+                    unreadCount: 0,
+                    lastReadAt: now
+                })
+                .where(
+                    and(
+                        eq(conversationParticipants.conversationId, conversationId),
+                        eq(conversationParticipants.userId, user.id)
+                    )
+                );
+
+            return { newMessage: msg, senderProfile: profile };
+        });
 
         revalidatePath('/messages');
 
@@ -533,7 +581,10 @@ export async function markConversationAsRead(
 
         await db
             .update(conversationParticipants)
-            .set({ lastReadAt: new Date() })
+            .set({
+                lastReadAt: new Date(),
+                unreadCount: 0 // Reset denormalized counter
+            })
             .where(
                 and(
                     eq(conversationParticipants.conversationId, conversationId),
@@ -561,6 +612,8 @@ export async function searchMessages(
     results?: Array<{
         message: MessageWithSender;
         conversationId: string;
+        // Pure Optimization: Return full details to hydrate ghost conversations
+        conversation: ConversationWithDetails;
     }>;
 }> {
     try {
@@ -627,22 +680,117 @@ export async function searchMessages(
 
         const senderMap = new Map(senderProfiles.map(s => [s.id, s]));
 
-        const results = searchResults.map(m => ({
-            conversationId: m.conversationId,
-            message: {
-                id: m.id,
+        // Pure Optimization: Hydrate conversation details for found messages
+        // This prevents "Ghost Conversation" crashes in the client
+        const resultConversationIds = [...new Set(searchResults.map(m => m.conversationId))];
+
+        // 1. Get conversation details + last message
+        const conversationsWithLastMessage = await db.execute<{
+            id: string;
+            type: string;
+            updated_at: Date;
+            last_message_id: string | null;
+            last_message_content: string | null;
+            last_message_sender_id: string | null;
+            last_message_created_at: Date | null;
+            last_message_type: string | null;
+        }>(sql`
+            SELECT 
+                c.id,
+                c.type,
+                c.updated_at,
+                lm.id as last_message_id,
+                lm.content as last_message_content,
+                lm.sender_id as last_message_sender_id,
+                lm.created_at as last_message_created_at,
+                lm.type as last_message_type
+            FROM ${conversations} c
+            LEFT JOIN LATERAL (
+                SELECT id, content, sender_id, created_at, type
+                FROM ${messages}
+                WHERE conversation_id = c.id 
+                AND deleted_at IS NULL
+                ORDER BY created_at DESC
+                LIMIT 1
+            ) lm ON true
+            WHERE c.id IN ${resultConversationIds}
+        `);
+
+        // 2. Get participants
+        const allParticipants = await db
+            .select({
+                conversationId: conversationParticipants.conversationId,
+                userId: conversationParticipants.userId,
+                username: profiles.username,
+                fullName: profiles.fullName,
+                avatarUrl: profiles.avatarUrl,
+                unreadCount: conversationParticipants.unreadCount, // Get denormalized count
+            })
+            .from(conversationParticipants)
+            .innerJoin(profiles, eq(profiles.id, conversationParticipants.userId))
+            .where(inArray(conversationParticipants.conversationId, resultConversationIds));
+
+        // 3. Build Maps
+        const detailsMap = new Map(Array.from(conversationsWithLastMessage).map((c: any) => [c.id, c]));
+        const participantMap = new Map<string, typeof allParticipants>();
+
+        let selfUnreadMap = new Map<string, number>();
+
+        for (const p of allParticipants) {
+            if (!participantMap.has(p.conversationId)) {
+                participantMap.set(p.conversationId, []);
+            }
+            if (p.userId !== user.id) {
+                participantMap.get(p.conversationId)!.push(p);
+            } else {
+                // Capture my unread count for this conversation
+                selfUnreadMap.set(p.conversationId, p.unreadCount || 0);
+            }
+        }
+
+        const results = searchResults.map(m => {
+            const details = detailsMap.get(m.conversationId);
+            const participants = participantMap.get(m.conversationId) || [];
+
+            // Build full conversation object
+            const conversation: ConversationWithDetails = {
+                id: m.conversationId,
+                type: details?.type as 'dm' | 'group' || 'dm',
+                updatedAt: details?.updated_at || new Date(),
+                participants: participants.map(p => ({
+                    id: p.userId,
+                    username: p.username,
+                    fullName: p.fullName,
+                    avatarUrl: p.avatarUrl,
+                })),
+                lastMessage: details?.last_message_id ? {
+                    id: details.last_message_id,
+                    content: details.last_message_content,
+                    senderId: details.last_message_sender_id,
+                    createdAt: details.last_message_created_at!,
+                    type: details.last_message_type,
+                } : null,
+                unreadCount: selfUnreadMap.get(m.conversationId) || 0
+            };
+
+            return {
                 conversationId: m.conversationId,
-                senderId: m.senderId,
-                content: m.content,
-                type: m.type as MessageWithSender['type'],
-                metadata: m.metadata || {},
-                createdAt: m.createdAt,
-                editedAt: m.editedAt,
-                deletedAt: m.deletedAt,
-                sender: m.senderId ? senderMap.get(m.senderId) || null : null,
-                attachments: [],
-            },
-        }));
+                message: {
+                    id: m.id,
+                    conversationId: m.conversationId,
+                    senderId: m.senderId,
+                    content: m.content,
+                    type: m.type as MessageWithSender['type'],
+                    metadata: m.metadata || {},
+                    createdAt: m.createdAt,
+                    editedAt: m.editedAt,
+                    deletedAt: m.deletedAt,
+                    sender: m.senderId ? senderMap.get(m.senderId) || null : null,
+                    attachments: [],
+                },
+                conversation
+            };
+        });
 
         return { success: true, results };
     } catch (error) {
@@ -704,37 +852,14 @@ export async function getUnreadCount(): Promise<{
         const user = await getAuthUser();
         if (!user) return { success: false, error: 'Not authenticated' };
 
-        // Get all user's conversations with their last read times
-        const participants = await db
-            .select({
-                conversationId: conversationParticipants.conversationId,
-                lastReadAt: conversationParticipants.lastReadAt,
-            })
+        // Optimized: O(1) Sum of denormalized columns
+        // No loop, no joins with messages table
+        const [result] = await db
+            .select({ count: sql<number>`SUM(unread_count)::int` })
             .from(conversationParticipants)
             .where(eq(conversationParticipants.userId, user.id));
 
-        if (participants.length === 0) {
-            return { success: true, count: 0 };
-        }
-
-        // Count unread messages across all conversations
-        let totalUnread = 0;
-        for (const p of participants) {
-            const [result] = await db
-                .select({ count: sql<number>`count(*)::int` })
-                .from(messages)
-                .where(
-                    and(
-                        eq(messages.conversationId, p.conversationId),
-                        isNull(messages.deletedAt),
-                        ne(messages.senderId, user.id),
-                        p.lastReadAt ? gt(messages.createdAt, p.lastReadAt) : undefined
-                    )
-                );
-            totalUnread += result?.count || 0;
-        }
-
-        return { success: true, count: totalUnread };
+        return { success: true, count: result?.count || 0 };
     } catch (error) {
         console.error('Error getting unread count:', error);
         return { success: false, error: 'Failed to get unread count' };
@@ -971,3 +1096,168 @@ export async function sendMessageWithAttachments(
     }
 }
 
+
+// ============================================================================
+// GET PROJECT GROUPS (User's Projects with Chat)
+// ============================================================================
+
+import { projects, projectMembers } from '@/lib/db/schema';
+
+export interface ProjectGroupConversation {
+    id: string; // conversationId
+    projectId: string;
+    projectTitle: string;
+    projectSlug: string | null;
+    projectCoverImage: string | null;
+    updatedAt: Date;
+    lastMessage: {
+        id: string;
+        content: string | null;
+        senderId: string | null;
+        createdAt: Date;
+        type: string | null;
+    } | null;
+    unreadCount: number;
+    memberCount: number;
+}
+
+export async function getProjectGroups(
+    limit: number = 20,
+    offset: number = 0
+): Promise<{
+    success: boolean;
+    error?: string;
+    projectGroups?: ProjectGroupConversation[];
+    hasMore?: boolean;
+}> {
+    try {
+        const user = await getAuthUser();
+        if (!user) return { success: false, error: 'Not authenticated' };
+
+        // OPTIMIZED: Single query with CTEs for last message and member count
+        // This replaces 4 separate queries with 1 main query + 1 unread query
+        const projectGroupsResult = await db.execute<{
+            conversation_id: string;
+            project_id: string;
+            project_title: string;
+            project_slug: string | null;
+            project_cover_image: string | null;
+            updated_at: Date;
+            last_message_id: string | null;
+            last_message_content: string | null;
+            last_message_sender_id: string | null;
+            last_message_created_at: Date | null;
+            last_message_type: string | null;
+            member_count: number;
+        }>(sql`
+            WITH user_projects AS (
+                SELECT 
+                    p.id as project_id,
+                    p.conversation_id,
+                    p.title as project_title,
+                    p.slug as project_slug,
+                    p.cover_image as project_cover_image,
+                    c.updated_at
+                FROM ${projects} p
+                INNER JOIN ${projectMembers} pm ON pm.project_id = p.id
+                INNER JOIN ${conversations} c ON c.id = p.conversation_id
+                WHERE pm.user_id = ${user.id}
+                AND p.conversation_id IS NOT NULL
+                ORDER BY c.updated_at DESC
+                LIMIT ${limit + 1} OFFSET ${offset}
+            ),
+            member_counts AS (
+                SELECT 
+                    pm.project_id,
+                    COUNT(*)::int as member_count
+                FROM ${projectMembers} pm
+                WHERE pm.project_id IN (SELECT project_id FROM user_projects)
+                GROUP BY pm.project_id
+            )
+            SELECT 
+                up.conversation_id,
+                up.project_id,
+                up.project_title,
+                up.project_slug,
+                up.project_cover_image,
+                up.updated_at,
+                lm.id as last_message_id,
+                lm.content as last_message_content,
+                lm.sender_id as last_message_sender_id,
+                lm.created_at as last_message_created_at,
+                lm.type as last_message_type,
+                COALESCE(mc.member_count, 1) as member_count
+            FROM user_projects up
+            LEFT JOIN LATERAL (
+                SELECT id, content, sender_id, created_at, type
+                FROM ${messages}
+                WHERE conversation_id = up.conversation_id 
+                AND deleted_at IS NULL
+                ORDER BY created_at DESC
+                LIMIT 1
+            ) lm ON true
+            LEFT JOIN member_counts mc ON mc.project_id = up.project_id
+            ORDER BY up.updated_at DESC
+        `);
+
+        const projectArray = Array.from(projectGroupsResult);
+        const hasMore = projectArray.length > limit;
+        const paginatedProjects = projectArray.slice(0, limit);
+
+        if (paginatedProjects.length === 0) {
+            return { success: true, projectGroups: [], hasMore: false };
+        }
+
+        // Single separate query for unread counts (requires user context)
+        const conversationIds = paginatedProjects.map(p => p.conversation_id);
+        const unreadCountsResult = await db.execute<{
+            conversation_id: string;
+            unread_count: number;
+        }>(sql`
+            SELECT 
+                m.conversation_id,
+                COUNT(*)::int as unread_count
+            FROM ${messages} m
+            INNER JOIN ${conversationParticipants} cp 
+                ON cp.conversation_id = m.conversation_id
+            WHERE 
+                m.conversation_id = ANY(${conversationIds})
+                AND m.deleted_at IS NULL
+                AND m.sender_id != ${user.id}
+                AND cp.user_id = ${user.id}
+                AND (
+                    cp.last_read_at IS NULL 
+                    OR m.created_at > cp.last_read_at
+                )
+            GROUP BY m.conversation_id
+        `);
+
+        const unreadMap = new Map(
+            Array.from(unreadCountsResult).map((row: any) => [row.conversation_id, row.unread_count])
+        );
+
+        // Build result
+        const result: ProjectGroupConversation[] = paginatedProjects.map((proj: any) => ({
+            id: proj.conversation_id,
+            projectId: proj.project_id,
+            projectTitle: proj.project_title,
+            projectSlug: proj.project_slug,
+            projectCoverImage: proj.project_cover_image,
+            updatedAt: proj.updated_at,
+            lastMessage: proj.last_message_id ? {
+                id: proj.last_message_id,
+                content: proj.last_message_content,
+                senderId: proj.last_message_sender_id,
+                createdAt: proj.last_message_created_at!,
+                type: proj.last_message_type,
+            } : null,
+            unreadCount: unreadMap.get(proj.conversation_id) || 0,
+            memberCount: proj.member_count || 1,
+        }));
+
+        return { success: true, projectGroups: result, hasMore };
+    } catch (error) {
+        console.error('Error fetching project groups:', error);
+        return { success: false, error: 'Failed to fetch project groups' };
+    }
+}

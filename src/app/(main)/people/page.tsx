@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import PeopleHubClient from '@/components/people/PeopleHubClient'
-import { getSuggestedPeople, getConnectionStats, getPendingRequests } from '@/app/actions/connections'
+import { getMyApplicationsAction, getIncomingApplicationsAction } from '@/app/actions/applications'
 
 export const dynamic = 'force-dynamic';
 
@@ -8,19 +8,23 @@ export default async function PeoplePage() {
     const supabase = await createClient()
     const { data: { user } } = await supabase.auth.getUser()
 
-    // Parallel data fetching for speed
-    const [suggestedData, stats, requests] = await Promise.all([
-        getSuggestedPeople(20, 0),
-        getConnectionStats(user?.id),
-        getPendingRequests()
-    ]);
+    // OPTIMIZATION: Fetch lightweight application data server-side to avoid "Requests" tab spinners
+    // This satisfies "Pure Fast Showing" requirement
+    const [myAppRes, incomingAppRes] = user ? await Promise.all([
+        getMyApplicationsAction(),
+        getIncomingApplicationsAction(20, 0)
+    ]) : [{ applications: [] }, { applications: [] }];
+    
+    const initialApplications = {
+        my: myAppRes.applications || [],
+        incoming: incomingAppRes.applications || []
+    };
 
     return (
         <PeopleHubClient 
             initialUser={user}
-            initialProfiles={suggestedData.profiles}
-            connectionStats={stats}
-            initialRequests={requests}
+            initialApplications={initialApplications}
+            // Other heavy lists (profiles, connections) remain lazy loaded for TTFB
         />
     )
 }

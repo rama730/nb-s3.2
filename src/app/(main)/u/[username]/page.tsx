@@ -5,12 +5,12 @@ import { Metadata } from 'next';
 
 export const revalidate = 60; // ISR: Revalidate every minute
 export const dynamicParams = true; // Allow new profiles to be generated on demand
+export const dynamic = 'force-dynamic'; // Avoid build-time DB fanout (SSG) and connection pool exhaustion
 
 export async function generateStaticParams() {
-    const usernames = await getPopularUsernames(50);
-    return usernames.map((username) => ({
-        username,
-    }));
+    // Intentionally disabled for scalability: we don't prebuild profiles at build time.
+    // Keeping the function to satisfy Next expectations if referenced, but returning empty avoids DB load.
+    return [];
 }
 
 export async function generateMetadata({ params }: { params: Promise<{ username: string }> }): Promise<Metadata> {
@@ -36,7 +36,11 @@ export default async function PublicProfilePage({ params }: { params: Promise<{ 
     const { username } = await params;
     // Decode username just in case
     const decodedUsername = decodeURIComponent(username);
-    const data = await getProfileDetails(decodedUsername);
+    
+    // OPTIMIZATION: usage of "Instant Shell" pattern.
+    // Fetch only the profile identity and essential connection status.
+    // Heavy data (projects, stats) is lazy loaded by the client.
+    const data = await getProfileDetails(decodedUsername, { skipHeavyData: true });
 
     if (!data || !data.profile) {
         notFound();
@@ -45,13 +49,15 @@ export default async function PublicProfilePage({ params }: { params: Promise<{ 
     // Pass data to the Client Component
     // connectionStatus, isOwner, stats etc are all calculated by getProfileDetails
     return (
-        <ProfileV2Client
-            profile={data.profile}
-            stats={data.stats}
-            isOwner={data.isOwner}
-            currentUser={data.currentUser}
-            connectionStatus={data.connectionStatus}
-            projects={data.projects}
-        />
+        <div className="h-[calc(100vh-var(--header-height,56px))] min-h-0 overflow-hidden bg-zinc-50 dark:bg-black">
+            <ProfileV2Client
+                profile={data.profile}
+                stats={data.stats}
+                isOwner={data.isOwner}
+                currentUser={data.currentUser}
+                connectionStatus={data.connectionStatus}
+                projects={data.projects}
+            />
+        </div>
     );
 }

@@ -9,10 +9,10 @@ import type { Profile } from '@/lib/db/schema';
 const transformProfile = (data: any): Profile | null => {
     if (!data) return null;
     const isSnake = 'full_name' in data || 'avatar_url' in data;
-    
+
     if (isSnake) {
         return {
-             ...data,
+            ...data,
             avatarUrl: data.avatar_url,
             fullName: data.full_name,
             bannerUrl: data.banner_url,
@@ -24,7 +24,7 @@ const transformProfile = (data: any): Profile | null => {
     return data as Profile;
 };
 
-export const useProfile = (usernameOrId?: string) => {
+export const useProfile = (usernameOrId?: string, initialData?: Profile | null) => {
     const queryClient = useQueryClient();
     const { user, profile: authProfile } = useAuth();
     const supabase = createClient();
@@ -37,6 +37,7 @@ export const useProfile = (usernameOrId?: string) => {
 
     const { data: fetchedProfile, isLoading, error } = useQuery({
         queryKey: ['profile', targetKey],
+        initialData: initialData,
         queryFn: async () => {
             if (!targetKey) return null;
 
@@ -72,7 +73,7 @@ export const useProfile = (usernameOrId?: string) => {
                     table: 'profiles',
                     filter: `id=eq.${activeProfile.id}`
                 },
-                (payload) => {
+                (payload: any) => {
                     console.log('Realtime profile update (other):', payload);
                     queryClient.invalidateQueries({ queryKey: ['profile', targetKey] });
                 }

@@ -46,7 +46,7 @@ export function useTaskComments(taskId: string, currentUserId?: string) {
                 .order("created_at", { ascending: false });
 
             if (!error && data) {
-                setComments(data.map(comment => ({
+                setComments(data.map((comment: any) => ({
                     ...comment,
                     like_count: comment.likes?.length || 0
                 })));
@@ -67,7 +67,7 @@ export function useTaskComments(taskId: string, currentUserId?: string) {
                     table: "task_comments",
                     filter: `task_id=eq.${taskId}`
                 },
-                async (payload) => {
+                async (payload: any) => {
                     if (payload.eventType === "INSERT") {
                         // Fetch the full comment with user profile
                         const { data } = await supabase
@@ -105,7 +105,7 @@ export function useTaskComments(taskId: string, currentUserId?: string) {
                     schema: "public",
                     table: "task_comment_likes"
                 },
-                (payload) => {
+                (payload: any) => {
                     if (payload.eventType === "INSERT") {
                         setComments((prev) =>
                             prev.map((c) => {

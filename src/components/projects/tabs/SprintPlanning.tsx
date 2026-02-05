@@ -6,6 +6,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { toast } from "sonner";
 import CreateSprintModal from "@/components/projects/v2/sprints/CreateSprintModal";
 import { createSprintAction } from "@/app/actions/project";
+import { useProjectSprints, useSprintTasks } from "@/hooks/hub/useProjectData";
 
 export interface Sprint {
     id: string;
@@ -35,7 +36,7 @@ interface SprintPlanningProps {
     projectId: string;
     isOwnerOrMember: boolean;
     sprints: Sprint[];
-    tasks: SprintTask[];
+    tasks: SprintTask[]; // Still passed but might be ignored or used as fallback
     onCreateSprint: () => void;
     onStartSprint: (sprintId: string) => void;
     onCompleteSprint: (sprintId: string) => void;
@@ -46,7 +47,6 @@ export default function SprintPlanning({
     projectId,
     isOwnerOrMember,
     sprints,
-    tasks,
     onCreateSprint,
     onStartSprint,
     onCompleteSprint,
@@ -54,35 +54,64 @@ export default function SprintPlanning({
     const [selectedSprintId, setSelectedSprintId] = useState<string | null>(null);
     const [showCreateModal, setShowCreateModal] = useState(false);
 
+    // Data Fetching
+    const { data: fetchedSprints, isLoading: loadingSprints } = useProjectSprints(projectId, sprints);
+
+    const activeSprints = fetchedSprints || [];
+
     // Sort sprints: Active first, then by creation date
     const sortedSprints = useMemo(() => {
-        return [...sprints].sort((a, b) => {
+        return [...activeSprints].sort((a, b) => {
             if (a.status === 'active' && b.status !== 'active') return -1;
             if (a.status !== 'active' && b.status === 'active') return 1;
             return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
         });
-    }, [sprints]);
+    }, [activeSprints]);
 
     // Auto-select first sprint
-    const activeSprint = sprints.find(s => s.status === 'active');
+    const activeSprint = activeSprints.find(s => s.status === 'active');
     const displaySprintId = selectedSprintId || activeSprint?.id || sortedSprints[0]?.id;
-    const currentSprint = sprints.find(s => s.id === displaySprintId);
+    const currentSprint = activeSprints.find(s => s.id === displaySprintId);
 
-    // Filter tasks for selected sprint
-    const sprintTasks = useMemo(() => {
-        if (!displaySprintId) return [];
-        return tasks.filter(t => t.sprintId === displaySprintId);
-    }, [tasks, displaySprintId]);
+    // Filtered tasks for selected sprint (Fetched from server now!)
+    const { data: sprintTasks = [], isLoading: loadingTasks } = useSprintTasks(displaySprintId || "");
+    const safeSprintTasks = sprintTasks as unknown as SprintTask[];
 
     // Calculate Progress
     const progress = useMemo(() => {
-        if (sprintTasks.length === 0) return 0;
-        const done = sprintTasks.filter(t => t.status === 'done').length;
-        return Math.round((done / sprintTasks.length) * 100);
-    }, [sprintTasks]);
+        if (safeSprintTasks.length === 0) return 0;
+        const done = safeSprintTasks.filter(t => t.status === 'done').length;
+        return Math.round((done / safeSprintTasks.length) * 100);
+    }, [safeSprintTasks]);
+
+    // Loading State
+    if (loadingSprints && !activeSprints.length) {
+        return (
+            <div className="flex gap-6 h-[calc(100vh-200px)] overflow-hidden">
+                <div className="w-[320px] flex-shrink-0 flex flex-col gap-4">
+                     <div className="h-4 w-24 bg-zinc-100 dark:bg-zinc-800 rounded animate-pulse" />
+                     <div className="h-10 w-full bg-zinc-100 dark:bg-zinc-800 rounded animate-pulse" />
+                     <div className="space-y-3">
+                         {[1, 2, 3].map(i => (
+                             <div key={i} className="h-24 w-full bg-zinc-100 dark:bg-zinc-800 rounded-xl animate-pulse" />
+                         ))}
+                     </div>
+                </div>
+                <div className="flex-1 bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-200 dark:border-zinc-800 p-6">
+                    <div className="h-8 w-1/3 bg-zinc-100 dark:bg-zinc-800 rounded animate-pulse mb-6" />
+                    <div className="h-32 w-full bg-zinc-100 dark:bg-zinc-800 rounded animate-pulse mb-6" />
+                    <div className="space-y-4">
+                        {[1, 2, 3, 4].map(i => (
+                            <div key={i} className="h-16 w-full bg-zinc-100 dark:bg-zinc-800 rounded animate-pulse" />
+                        ))}
+                    </div>
+                </div>
+            </div>
+        );
+    }
 
     // Empty state
-    if (sprints.length === 0) {
+    if (activeSprints.length === 0 && !loadingSprints) {
         return (
             <div className="flex flex-col items-center justify-center h-[500px] bg-zinc-50 dark:bg-zinc-900/50 rounded-xl border-2 border-dashed border-zinc-200 dark:border-zinc-800">
                 <div className="text-center space-y-4 max-w-md px-6">
@@ -257,12 +286,12 @@ export default function SprintPlanning({
                                     </div>
                                     <div className="w-px h-4 bg-zinc-300 dark:bg-zinc-700" />
                                     <div>
-                                        <span className="font-semibold text-zinc-900 dark:text-zinc-100 mr-1">{sprintTasks.length}</span> Tasks
+                                        <span className="font-semibold text-zinc-900 dark:text-zinc-100 mr-1">{safeSprintTasks.length}</span> Tasks
                                     </div>
                                     <div className="w-px h-4 bg-zinc-300 dark:bg-zinc-700" />
                                     <div>
                                         <span className="font-semibold text-zinc-900 dark:text-zinc-100 mr-1">
-                                            {sprintTasks.reduce((acc, t) => acc + (t.storyPoints || 0), 0)}
+                                            {safeSprintTasks.reduce((acc, t) => acc + (t.storyPoints || 0), 0)}
                                         </span> 
                                         Points
                                     </div>
@@ -271,7 +300,13 @@ export default function SprintPlanning({
 
                             {/* Tasks List - Architectural View */}
                             <div className="flex-1 overflow-y-auto p-0 bg-zinc-50/30 dark:bg-black/20">
-                                {sprintTasks.length === 0 ? (
+                                {loadingTasks ? (
+                                    <div className="p-6 space-y-4">
+                                        {[1, 2, 3].map(i => (
+                                            <div key={i} className="h-16 w-full bg-zinc-100 dark:bg-zinc-800 rounded animate-pulse" />
+                                        ))}
+                                    </div>
+                                ) : safeSprintTasks.length === 0 ? (
                                     <div className="h-full flex flex-col items-center justify-center text-center p-10">
                                         <div className="w-16 h-16 bg-zinc-100 dark:bg-zinc-800 rounded-full flex items-center justify-center mb-4">
                                             <CheckCircle className="w-8 h-8 text-zinc-300 dark:text-zinc-600" />
@@ -281,7 +316,7 @@ export default function SprintPlanning({
                                     </div>
                                 ) : (
                                     <div className="divide-y divide-zinc-100 dark:divide-zinc-800/50">
-                                        {sprintTasks.map(task => (
+                                        {safeSprintTasks.map(task => (
                                             <div
                                                 key={task.id}
                                                 className="group flex items-center gap-4 p-4 hover:bg-white dark:hover:bg-zinc-900 transition-all border-l-2 border-transparent hover:border-indigo-500"

@@ -10,6 +10,7 @@ import PeopleClient from "@/components/people/PeopleClient";
 import ConnectionsClient from "@/components/people/ConnectionsClient";
 import RequestsTab from "@/components/people/RequestsTab";
 import { usePeopleNotifications } from "@/hooks/usePeopleNotifications";
+import { useSuggestedPeople, useConnectionStats, usePendingRequests } from "@/hooks/useConnectionsData";
 import { InboxData } from "@/types/people";
 
 type TabKey = "discover" | "network" | "requests";
@@ -17,10 +18,11 @@ type TabKey = "discover" | "network" | "requests";
 interface PeopleHubClientProps {
     initialUser: any;
     activeTabOverride?: string;
-    // Data props
+    // Data props - Made optional/legacy
     initialProfiles?: any[];
     connectionStats?: any;
     initialRequests?: { incoming: any[], sent: any[] };
+    initialApplications?: { my: any[], incoming: any[] };
 }
 
 const TAB_CONFIG: Array<{
@@ -40,7 +42,8 @@ export default function PeopleHubClient({
     activeTabOverride,
     initialProfiles,
     connectionStats,
-    initialRequests
+    initialRequests,
+    initialApplications
 }: PeopleHubClientProps) {
     const router = useRouter();
     const searchParams = useSearchParams();
@@ -70,14 +73,21 @@ export default function PeopleHubClient({
         }
     }, [tabParam, activeTabOverride]);
 
-    // We can use the passed prop for initial count if hook hasn't loaded? 
-    // But usePeopleNotifications hook manages the store. 
-    // Ideally we'd hydrate the store. For now, let's trust the prop for initial render if we passed it.
+    // Data Fetching (Client-Side Parallelism)
+    // 1. Pending Requests (Fast, needed for badges)
+    const { data: requestsData, isLoading: requestsLoading } = usePendingRequests(20, initialRequests);
+    
+    // 2. Suggestions (Heavier)
+    const { data: profilesData, isLoading: profilesLoading } = useSuggestedPeople(20, initialProfiles);
+
+    // 3. Stats (Fast)
+    const { data: statsData, isLoading: statsLoading } = useConnectionStats(initialUser?.id, connectionStats);
+
     const { totalPending: hookTotalPending } = usePeopleNotifications();
     
-    const propTotalPending = initialRequests ? (initialRequests.incoming.length) : 0;
-    // Prefer hook if hydration happened, else prop
-    const totalPending = hookTotalPending > 0 ? hookTotalPending : propTotalPending;
+    const fetchedTotalPending = requestsData ? (requestsData.incoming.length) : 0;
+    // Prefer hook if realtime updates happened, otherwise use fetched data
+    const totalPending = hookTotalPending > 0 ? hookTotalPending : fetchedTotalPending;
 
     const visibleTabs = useMemo(
         () => TAB_CONFIG.filter((t) => (t.requiresAuth ? isAuthed : true)),
@@ -92,7 +102,7 @@ export default function PeopleHubClient({
     }
 
     return (
-        <div className="bg-zinc-50 dark:bg-black">
+        <div className="bg-zinc-50 dark:bg-black min-h-screen">
             {/* Sticky Tabs Bar - Minimal */}
             <div className="sticky top-16 z-30 bg-zinc-50 dark:bg-black border-b border-zinc-200 dark:border-zinc-800">
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-1.5">
@@ -145,15 +155,29 @@ export default function PeopleHubClient({
             {/* Main Content */}
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
                 {activeTab === "discover" && (
-                    <PeopleClient embedded initialUser={initialUser} initialProfiles={initialProfiles} />
+                    <>
+                        {profilesLoading ? (
+                             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                                {[1, 2, 3, 4, 5, 6].map(i => (
+                                    <div key={i} className="h-64 rounded-2xl bg-zinc-100 dark:bg-zinc-900 animate-pulse" />
+                                ))}
+                             </div>
+                        ) : (
+                            <PeopleClient embedded initialUser={initialUser} initialProfiles={profilesData} />
+                        )}
+                    </>
                 )}
 
                 {activeTab === "network" && (
-                    <ConnectionsClient embedded initialUser={initialUser} />
+                     <ConnectionsClient embedded initialUser={initialUser} />
                 )}
 
                 {activeTab === "requests" && (
-                    <RequestsTab initialUser={initialUser} initialRequests={initialRequests} />
+                    <RequestsTab 
+                        initialUser={initialUser} 
+                        initialRequests={requestsData || { incoming: [], sent: [] }} 
+                        initialApplications={initialApplications}
+                    />
                 )}
             </div>
         </div>

@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { Loader2, FileText, Clock, CheckCircle, XCircle } from "lucide-react";
 import Link from "next/link";
-import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { getMyApplicationsAction } from "@/app/actions/applications";
 
 interface ApplicationsTabProps {
     initialUser: any;
@@ -21,22 +21,11 @@ export default function ApplicationsTab({ initialUser }: ApplicationsTabProps) {
             }
 
             try {
-                const supabase = createSupabaseBrowserClient();
-                // Fetch project applications where user is the applicant
-                const { data, error } = await supabase
-                    .from("project_applications")
-                    .select(`
-            id,
-            status,
-            created_at,
-            project:projects(id, title, slug)
-          `)
-                    .eq("applicant_id", initialUser.id)
-                    .order("created_at", { ascending: false })
-                    .limit(50);
-
-                if (!error && data) {
-                    setApplications(data);
+                const res = await getMyApplicationsAction();
+                if (res?.success) {
+                    setApplications(res.applications || []);
+                } else {
+                    setApplications([]);
                 }
             } catch (error) {
                 console.error("Error fetching applications:", error);
@@ -89,13 +78,13 @@ export default function ApplicationsTab({ initialUser }: ApplicationsTabProps) {
                 >
                     <div className="flex-1">
                         <Link
-                            href={`/projects/${app.project?.slug || app.project?.id}`}
+                            href={`/projects/${app.projectSlug || app.projectId}`}
                             className="font-medium text-zinc-900 dark:text-zinc-100 hover:text-indigo-600 dark:hover:text-indigo-400"
                         >
-                            {app.project?.title || "Unknown Project"}
+                            {app.projectTitle || "Unknown Project"}
                         </Link>
                         <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-1">
-                            Applied {new Date(app.created_at).toLocaleDateString()}
+                            Applied {new Date(app.createdAt).toLocaleDateString()}
                         </p>
                     </div>
                     <div className="flex items-center gap-2">

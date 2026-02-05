@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Users, UserPlus } from "lucide-react";
 import { AnimatePresence } from "framer-motion";
 import { useRealtimeTasks } from "@/hooks/useRealtimeTasks";
@@ -15,6 +15,7 @@ import { Task } from "@/components/projects/v2/tasks/TaskCard";
 
 import FocusStrip from "./tasks/components/FocusStrip";
 import { useTaskFilters } from "./tasks/hooks/useTaskFilters";
+import { useProjectInfiniteTasks } from "@/hooks/hub/useProjectData"; // Changed import
 
 interface TasksTabProps {
     projectId: string;
@@ -51,8 +52,22 @@ export default function TasksTab({
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [editingTask, setEditingTask] = useState<Task | null>(null);
 
-    // Expose setTasks for optimistic updates
-    const { tasks: allTasks, setTasks } = useRealtimeTasks(projectId, initialTasks as Task[]);
+    // Hook Integration: Smart Fetching (Infinite Loading)
+    const { 
+        data: infiniteData, 
+        isLoading, 
+        fetchNextPage, 
+        hasNextPage, 
+        isFetchingNextPage 
+    } = useProjectInfiniteTasks(projectId, initialTasks);
+    
+    // Flatten pages for filtering and focus strips
+    const fetchedTasks = useMemo(() => {
+        return (infiniteData?.pages.flatMap(page => page.tasks) || []) as Task[];
+    }, [infiniteData]);
+    
+    // Combine realtime updates with fetched data
+    const { tasks: allTasks, setTasks } = useRealtimeTasks(projectId, fetchedTasks.length > 0 ? fetchedTasks : undefined); 
 
     // Optimized Filters Hook
     const { filteredTasks, myFocusTasks, needsOwnerTasks } = useTaskFilters({
@@ -121,13 +136,27 @@ export default function TasksTab({
                  setTasks(prev => prev.filter(t => t.id !== tempId));
                  alert(result.error || "Failed to create task");
              }
-        }).catch(err => {
+         }).catch(err => {
              console.error("Exception creating task", err);
              setTasks(prev => prev.filter(t => t.id !== tempId));
              alert("An error occurred while creating the task");
-        });
+         });
     };
 
+    // Loading State
+    if (isLoading && !initialTasks?.length) {
+        return (
+            <div className="space-y-4">
+                 <div className="h-10 bg-zinc-100 dark:bg-zinc-800 rounded w-full animate-pulse" />
+                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                     <div className="h-64 bg-zinc-100 dark:bg-zinc-800 rounded animate-pulse" />
+                     <div className="h-64 bg-zinc-100 dark:bg-zinc-800 rounded animate-pulse" />
+                     <div className="h-64 bg-zinc-100 dark:bg-zinc-800 rounded animate-pulse" />
+                 </div>
+            </div>
+        );
+    }
+    
     return (
         <div className="space-y-4 relative">
             {/* Sticky Header */}
@@ -198,6 +227,9 @@ export default function TasksTab({
                     selectedTaskIds={selectedTaskIds}
                     toggleTaskSelection={toggleTaskSelection}
                     isBulkMode={isBulkMode}
+                    fetchNextPage={fetchNextPage}
+                    hasNextPage={hasNextPage}
+                    isFetchingNextPage={isFetchingNextPage}
                 />
             ) : (
                 <TasksTable
@@ -206,6 +238,9 @@ export default function TasksTab({
                     selectedTaskIds={selectedTaskIds}
                     toggleTaskSelection={toggleTaskSelection}
                     isBulkMode={isBulkMode}
+                    fetchNextPage={fetchNextPage}
+                    hasNextPage={hasNextPage}
+                    isFetchingNextPage={isFetchingNextPage}
                 />
             )}
 

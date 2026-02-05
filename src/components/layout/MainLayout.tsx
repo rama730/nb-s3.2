@@ -15,7 +15,7 @@ export function MainLayout({ children }: MainLayoutProps) {
             <WorkspaceProvider>
                 <div className="min-h-screen bg-background flex flex-col">
                     <TopNav />
-                    <main className="flex-1">
+                    <main className="flex-1 min-h-0">
                         {children}
                     </main>
                     <WorkspaceDock />

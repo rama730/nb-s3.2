@@ -146,7 +146,8 @@ export default function FilesTab({ taskId, isOwnerOrMember, projectId, taskTitle
         async (query: string) => {
             setPicker((p) => (p.open ? { ...p, query, loading: true } : p));
             try {
-                const nodes = (await getProjectNodes(projectId, null, query)) as ProjectNode[];
+                const res = await getProjectNodes(projectId, null, query);
+                const nodes = Array.isArray(res) ? res : res.nodes;
                 const files = (nodes || []).filter((n) => n.type === "file");
                 setPicker((p) => (p.open ? { ...p, loading: false, results: files } : p));
             } catch {

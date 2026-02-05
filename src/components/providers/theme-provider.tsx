@@ -46,30 +46,36 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
         setMounted(true);
     }, []);
 
-    // Apply accent color CSS variable
+    // Apply appearance attributes in one DOM write batch
     useEffect(() => {
         if (!mounted) return;
         const root = document.documentElement;
         root.setAttribute("data-accent", accentColor);
-    }, [accentColor, mounted]);
-
-    // Apply density CSS variable
-    useEffect(() => {
-        if (!mounted) return;
-        const root = document.documentElement;
         root.setAttribute("data-density", density);
-    }, [density, mounted]);
+        if (reduceMotion) root.setAttribute("data-reduce-motion", "true");
+        else root.removeAttribute("data-reduce-motion");
+    }, [accentColor, density, mounted, reduceMotion]);
 
-    // Apply reduce motion
-    useEffect(() => {
-        if (!mounted) return;
-        const root = document.documentElement;
-        if (reduceMotion) {
-            root.setAttribute("data-reduce-motion", "true");
-        } else {
-            root.removeAttribute("data-reduce-motion");
-        }
-    }, [reduceMotion, mounted]);
+    function ThemeChromeSync() {
+        const { resolvedTheme } = useNextTheme();
+
+        useEffect(() => {
+            const t = resolvedTheme === "dark" ? "dark" : "light";
+            const root = document.documentElement;
+            root.style.colorScheme = t;
+
+            const desired = t === "dark" ? "#0a0a0a" : "#ffffff";
+            let meta = document.querySelector('meta[name="theme-color"]') as HTMLMetaElement | null;
+            if (!meta) {
+                meta = document.createElement("meta");
+                meta.name = "theme-color";
+                document.head.appendChild(meta);
+            }
+            if (meta.content !== desired) meta.content = desired;
+        }, [resolvedTheme]);
+
+        return null;
+    }
 
     const setAccentColor = useCallback((color: AccentColor) => {
         setAccentColorState(color);
@@ -103,8 +109,8 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
             attribute="class"
             defaultTheme="system"
             enableSystem
-            disableTransitionOnChange
         >
+            <ThemeChromeSync />
             <AppearanceContext.Provider value={appearanceValue}>
                 {children}
             </AppearanceContext.Provider>

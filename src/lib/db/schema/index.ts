@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, timestamp, boolean, jsonb, index, integer, bigint, foreignKey } from 'drizzle-orm/pg-core'
+import { pgTable, uuid, text, timestamp, boolean, jsonb, index, uniqueIndex, integer, bigint, foreignKey } from 'drizzle-orm/pg-core'
 import { relations, sql } from 'drizzle-orm'
 
 
@@ -27,6 +27,10 @@ export const profiles = pgTable('profiles', {
     messagePrivacy: text('message_privacy', { enum: ['everyone', 'connections'] }).default('connections'),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+    // Pure Optimization: Denormalized counts for 1M+ Users Scalability
+    connectionsCount: integer('connections_count').default(0).notNull(),
+    projectsCount: integer('projects_count').default(0).notNull(),
+    followersCount: integer('followers_count').default(0).notNull(),
 }, (t) => ({
     // Optimize lookups by username (common in URLs) and email (auth)
     usernameIdx: index('profiles_username_idx').on(t.username),
@@ -40,6 +44,9 @@ export const profiles = pgTable('profiles', {
     // Optimization: GIN Index for fast user search (Connections Optimization)
     usernameSearchIdx: index('profiles_username_search_idx').using('gin', sql`${t.username} gin_trgm_ops`),
     fullNameSearchIdx: index('profiles_full_name_search_idx').using('gin', sql`${t.fullName} gin_trgm_ops`),
+    // Optimization: Performance indices for stats sorting (Leaderboards/Popularity)
+    connectionsCountIdx: index('profiles_connections_count_idx').on(t.connectionsCount),
+    projectsCountIdx: index('profiles_projects_count_idx').on(t.projectsCount),
 }))
 
 // ============================================================================
@@ -59,7 +66,25 @@ export const connections = pgTable('connections', {
     // Composite index for common "my accepted connections" query
     statusRequesterIdx: index('connections_status_requester_idx').on(t.status, t.requesterId),
     statusAddresseeIdx: index('connections_status_addressee_idx').on(t.status, t.addresseeId),
+
+    // Pure Optimization: Composite Indices for Stats & Requests (1M+ Users)
+    // 1. "Connections This Month" Stats (Fast Aggregation)
+    requesterStatsIdx: index('connections_requester_stats_idx').on(t.requesterId, t.status, t.updatedAt),
+    addresseeStatsIdx: index('connections_addressee_stats_idx').on(t.addresseeId, t.status, t.updatedAt),
+
+    // 2. "Pending Requests" Sorting (Fast List)
+    pendingRequestsIdx: index('connections_pending_idx').on(t.status, t.createdAt),
 }))
+
+// ============================================================================
+// CONVERSATIONS TABLE (Moved up for Project reference)
+// ============================================================================
+export const conversations = pgTable('conversations', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    type: text('type', { enum: ['dm', 'group', 'project_group'] }).default('dm').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+})
 
 // ============================================================================
 // PROJECTS TABLE
@@ -67,6 +92,8 @@ export const connections = pgTable('connections', {
 export const projects = pgTable('projects', {
     id: uuid('id').primaryKey().defaultRandom(),
     ownerId: uuid('owner_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
+    // Optimization: O(1) Chat Lookup (1M Users)
+    conversationId: uuid('conversation_id').references(() => conversations.id, { onDelete: 'set null' }),
     title: text('title').notNull(),
     slug: text('slug').unique(),
     description: text('description'),
@@ -89,10 +116,19 @@ export const projects = pgTable('projects', {
     maxCollaborators: text('max_collaborators'),
     lifecycleStages: jsonb('lifecycle_stages').$type<string[]>().default([]),
     currentStageIndex: integer('current_stage_index').default(0),
+    importSource: jsonb('import_source').$type<{
+        type: 'github' | 'upload' | 'scratch';
+        repoUrl?: string;
+        branch?: string;
+        s3Key?: string;
+        metadata?: Record<string, any>;
+    }>(),
+    syncStatus: text('sync_status', { enum: ['pending', 'cloning', 'indexing', 'ready', 'failed'] }).default('ready').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
     ownerIdx: index('projects_owner_idx').on(t.ownerId),
+    conversationIdx: index('projects_conversation_idx').on(t.conversationId),
     createdAtIdx: index('projects_created_at_idx').on(t.createdAt),
     // Multi-column indexes for filtering (critical for 1M users)
     statusVisibilityIdx: index('projects_status_visibility_idx').on(t.status, t.visibility),
@@ -101,8 +137,19 @@ export const projects = pgTable('projects', {
     createdAtStatusIdx: index('projects_created_at_status_idx').on(t.createdAt, t.status),
     keyIdx: index('projects_key_idx').on(t.key),
     // Optimization: GIN Index for fast project search (Hub Optimization)
+    // Note: Requires pg_trgm extension. If fails, fallback to b-tree on title is suboptimal but works.
     titleSearchIdx: index('projects_title_search_idx').using('gin', sql`${t.title} gin_trgm_ops`),
     descriptionSearchIdx: index('projects_description_search_idx').using('gin', sql`${t.description} gin_trgm_ops`),
+
+    // Pure Optimization: Composite Indices for Sorted Feeds (Avoids Sorting after Filtering)
+    // 1. "Newest Projects": Filter by Public Visibility + Status -> Sort by CreatedAt
+    feedNewestIdx: index('projects_feed_newest_idx').on(t.visibility, t.status, t.createdAt),
+
+    // 2. "Most Viewed Projects": Filter by Public Visibility + Status -> Sort by ViewCount
+    feedMostViewedIdx: index('projects_feed_most_viewed_idx').on(t.visibility, t.status, t.viewCount),
+
+    // 3. "My Projects": Filter by Owner -> Sort by CreatedAt
+    myProjectsIdx: index('projects_my_projects_idx').on(t.ownerId, t.createdAt),
 }))
 
 // ============================================================================
@@ -135,6 +182,31 @@ export const projectOpenRoles = pgTable('project_open_roles', {
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
     projectIdx: index('project_open_roles_project_idx').on(t.projectId),
+}))
+
+// ============================================================================
+// ROLE APPLICATIONS TABLE
+// ============================================================================
+export const roleApplications = pgTable('role_applications', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+    roleId: uuid('role_id').notNull().references(() => projectOpenRoles.id, { onDelete: 'cascade' }),
+    applicantId: uuid('applicant_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
+    creatorId: uuid('creator_id').notNull(), // Denormalized for O(1) creator queries
+    message: text('message'), // Application message from user
+    conversationId: uuid('conversation_id'), // Link to message thread (nullable)
+    status: text('status', { enum: ['pending', 'accepted', 'rejected'] }).default('pending').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+    // O(1) lookups for user's applications
+    applicantIdx: index('role_applications_applicant_idx').on(t.applicantId, t.status),
+    // O(1) lookups for creator's pending applications
+    creatorPendingIdx: index('role_applications_creator_pending_idx').on(t.creatorId, t.status),
+    // O(1) cooldown check (project + applicant + updated_at)
+    cooldownIdx: index('role_applications_cooldown_idx').on(t.projectId, t.applicantId, t.updatedAt),
+    // Unique constraint: one active application per user per project
+    uniqueAppIdx: uniqueIndex('role_applications_unique_idx').on(t.projectId, t.applicantId),
 }))
 
 // ============================================================================
@@ -214,6 +286,8 @@ export const tasks = pgTable('tasks', {
     projectAssigneeIdx: index('tasks_project_assignee_idx').on(t.projectId, t.assigneeId),
     // Optimization: GIN Index for fast title search (Tasks Search Optimization)
     titleSearchIdx: index('tasks_title_search_idx').using('gin', sql`${t.title} gin_trgm_ops`),
+    // Optimization: Creator Index for "My Tasks"
+    creatorIdx: index('tasks_creator_idx').on(t.creatorId),
     // Optimization: Ordering Index (Tasks Sorting Optimization)
     // Optimized for "ORDER BY task_number DESC" which is default view
     projectNumberIdx: index('tasks_project_number_idx').on(t.projectId, t.taskNumber),
@@ -371,13 +445,36 @@ export const projectsRelations = relations(projects, ({ one, many }) => ({
     tasks: many(tasks),
     openRoles: many(projectOpenRoles),
     nodes: many(projectNodes),
+    applications: many(roleApplications),
 }))
 
 
-export const projectOpenRolesRelations = relations(projectOpenRoles, ({ one }) => ({
+export const projectOpenRolesRelations = relations(projectOpenRoles, ({ one, many }) => ({
     project: one(projects, {
         fields: [projectOpenRoles.projectId],
         references: [projects.id],
+    }),
+    applications: many(roleApplications),
+}))
+
+export const roleApplicationsRelations = relations(roleApplications, ({ one }) => ({
+    project: one(projects, {
+        fields: [roleApplications.projectId],
+        references: [projects.id],
+    }),
+    role: one(projectOpenRoles, {
+        fields: [roleApplications.roleId],
+        references: [projectOpenRoles.id],
+    }),
+    applicant: one(profiles, {
+        fields: [roleApplications.applicantId],
+        references: [profiles.id],
+        relationName: 'applicant',
+    }),
+    creator: one(profiles, {
+        fields: [roleApplications.creatorId],
+        references: [profiles.id],
+        relationName: 'applicationCreator',
     }),
 }))
 
@@ -526,15 +623,24 @@ export const projectNodeEventsRelations = relations(projectNodeEvents, ({ one })
 
 
 
+// Conversations table moved to top
 // ============================================================================
-// CONVERSATIONS TABLE
+
 // ============================================================================
-export const conversations = pgTable('conversations', {
-    id: uuid('id').primaryKey().defaultRandom(),
-    type: text('type', { enum: ['dm', 'group'] }).default('dm').notNull(),
+// DM PAIRS TABLE
+// Ensures a single DM conversation per (user_low, user_high) pair.
+// ============================================================================
+export const dmPairs = pgTable('dm_pairs', {
+    userLow: uuid('user_low').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
+    userHigh: uuid('user_high').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
+    conversationId: uuid('conversation_id').notNull().references(() => conversations.id, { onDelete: 'cascade' }),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
-    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
-})
+}, (t) => ({
+    pairUnique: uniqueIndex('dm_pairs_user_low_high_unique').on(t.userLow, t.userHigh),
+    conversationUnique: uniqueIndex('dm_pairs_conversation_unique').on(t.conversationId),
+    userLowIdx: index('dm_pairs_user_low_idx').on(t.userLow),
+    userHighIdx: index('dm_pairs_user_high_idx').on(t.userHigh),
+}))
 
 // ============================================================================
 // CONVERSATION PARTICIPANTS TABLE
@@ -546,10 +652,15 @@ export const conversationParticipants = pgTable('conversation_participants', {
     joinedAt: timestamp('joined_at', { withTimezone: true }).defaultNow().notNull(),
     lastReadAt: timestamp('last_read_at', { withTimezone: true }).defaultNow(),
     muted: boolean('muted').default(false),
+    // Pure Optimization: Denormalized counts for O(1) badges (1M+ Users)
+    unreadCount: integer('unread_count').default(0).notNull(),
+    lastMessageAt: timestamp('last_message_at', { withTimezone: true }),
 }, (t) => ({
-    conversationUserUnique: index('conversation_participants_unique').on(t.conversationId, t.userId),
+    conversationUserUnique: uniqueIndex('conversation_participants_unique').on(t.conversationId, t.userId),
     userIdx: index('conversation_participants_user_idx').on(t.userId),
     conversationIdx: index('conversation_participants_conversation_idx').on(t.conversationId),
+    // Optimization: O(1) sorted list for "My Conversations" and "Global Badge"
+    myConversationsIdx: index('conversation_participants_my_conversations_idx').on(t.userId, t.lastMessageAt),
 }))
 
 // ============================================================================
@@ -601,6 +712,23 @@ export const conversationsRelations = relations(conversations, ({ many }) => ({
     messages: many(messages),
 }))
 
+export const dmPairsRelations = relations(dmPairs, ({ one }) => ({
+    conversation: one(conversations, {
+        fields: [dmPairs.conversationId],
+        references: [conversations.id],
+    }),
+    userLow: one(profiles, {
+        fields: [dmPairs.userLow],
+        references: [profiles.id],
+        relationName: 'dmPairUserLow',
+    }),
+    userHigh: one(profiles, {
+        fields: [dmPairs.userHigh],
+        references: [profiles.id],
+        relationName: 'dmPairUserHigh',
+    }),
+}))
+
 export const conversationParticipantsRelations = relations(conversationParticipants, ({ one }) => ({
     conversation: one(conversations, {
         fields: [conversationParticipants.conversationId],
@@ -648,6 +776,8 @@ export type SavedProject = typeof savedProjects.$inferSelect
 export type NewSavedProject = typeof savedProjects.$inferInsert
 export type Conversation = typeof conversations.$inferSelect
 export type NewConversation = typeof conversations.$inferInsert
+export type DmPair = typeof dmPairs.$inferSelect
+export type NewDmPair = typeof dmPairs.$inferInsert
 export type ConversationParticipant = typeof conversationParticipants.$inferSelect
 export type NewConversationParticipant = typeof conversationParticipants.$inferInsert
 export type Message = typeof messages.$inferSelect

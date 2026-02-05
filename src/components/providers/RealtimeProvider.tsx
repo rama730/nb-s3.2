@@ -46,7 +46,7 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
                 table: 'profiles',
                 filter: `id=eq.${userId}`
             },
-            (payload) => {
+            (payload: any) => {
                 console.log('[Realtime] Profile updated:', payload);
                 refreshProfile();
                 // We could optimise by passing payload, but refreshProfile is safer/cleaner source of truth
@@ -62,7 +62,7 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
                 schema: 'public',
                 table: 'messages',
             },
-            async (payload) => {
+            async (payload: any) => {
                 const newMessage = payload.new as any;
                 
                 // Skip own messages (handled optimistically or by active chat)
@@ -135,7 +135,7 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
             }
         );
 
-        channel.subscribe((status) => {
+        channel.subscribe((status: string) => {
             if (status === 'SUBSCRIBED') {
                 console.log('[Realtime] Connected');
                 setConnected(true);

@@ -54,6 +54,7 @@ type ProjectWorkspaceState = {
   explorerMode: ExplorerMode;
   viewMode: FilesViewMode;
   selectedNodeId: string | null;
+  selectedNodeIds: string[]; // NEW for Multi-Select
   selectedFolderId: string | null;
   expandedFolderIds: Record<string, boolean>;
   searchQuery: string;
@@ -66,6 +67,7 @@ type ProjectWorkspaceState = {
   nodesById: Record<string, ProjectNode>;
   childrenByParentId: Record<string, string[]>; // parentId key; root uses "__root__"
   loadedChildren: Record<string, boolean>;
+  folderMeta: Record<string, { nextCursor: string | null; hasMore: boolean }>; // NEW: Pagination state
   taskLinkCounts: Record<string, number>; // nodeId -> count
   activeFileSymbols: EditorSymbol[];
 
@@ -99,6 +101,7 @@ type FilesWorkspaceState = {
   setExplorerMode: (projectId: string, mode: ExplorerMode) => void;
   setViewMode: (projectId: string, mode: FilesViewMode) => void;
   setSelectedNode: (projectId: string, nodeId: string | null, parentId?: string | null) => void;
+  setSelectedNodeIds: (projectId: string, nodeIds: string[]) => void; // NEW
   toggleExpanded: (projectId: string, folderId: string, expanded?: boolean) => void;
   setSearchQuery: (projectId: string, query: string) => void;
   setSort: (projectId: string, sort: ExplorerSort) => void;
@@ -110,6 +113,7 @@ type FilesWorkspaceState = {
   upsertNodes: (projectId: string, nodes: ProjectNode[]) => void;
   setChildren: (projectId: string, parentId: string | null, childIds: string[]) => void;
   markChildrenLoaded: (projectId: string, parentId: string | null) => void;
+  setFolderMeta: (projectId: string, folderId: string | null, meta: { nextCursor: string | null; hasMore: boolean }) => void; // NEW
   removeNodeFromCaches: (projectId: string, nodeId: string) => void;
   setTaskLinkCounts: (projectId: string, counts: Record<string, number>) => void;
 
@@ -156,6 +160,7 @@ function defaultWorkspace(): ProjectWorkspaceState {
     explorerMode: "tree",
     viewMode: "code",
     selectedNodeId: null,
+    selectedNodeIds: [],
     selectedFolderId: null,
     expandedFolderIds: {},
     searchQuery: "",
@@ -167,6 +172,7 @@ function defaultWorkspace(): ProjectWorkspaceState {
     nodesById: {},
     childrenByParentId: {},
     loadedChildren: {},
+    folderMeta: {}, // NEW
     taskLinkCounts: {},
 
     splitEnabled: false,
@@ -247,6 +253,21 @@ export const useFilesWorkspaceStore = create<FilesWorkspaceState>()(
                   parentId !== undefined ? parentId : ws.selectedFolderId,
               },
             },
+          };
+        }),
+
+      setSelectedNodeIds: (projectId, nodeIds) =>
+        set((state) => {
+          const ws = state.byProjectId[projectId] ?? defaultWorkspace();
+          return {
+            byProjectId: {
+              ...state.byProjectId,
+              [projectId]: {
+                ...ws,
+                selectedNodeIds: nodeIds,
+                selectedNodeId: nodeIds.length === 1 ? nodeIds[0] : (nodeIds.length === 0 ? null : ws.selectedNodeId)
+              }
+            }
           };
         }),
 
@@ -369,6 +390,21 @@ export const useFilesWorkspaceStore = create<FilesWorkspaceState>()(
               [projectId]: {
                 ...ws,
                 loadedChildren: { ...ws.loadedChildren, [key]: true },
+              },
+            },
+          };
+        }),
+
+      setFolderMeta: (projectId, folderId, meta) =>
+        set((state) => {
+          const ws = state.byProjectId[projectId] ?? defaultWorkspace();
+          const key = parentKey(folderId); // Use same key helper
+          return {
+            byProjectId: {
+              ...state.byProjectId,
+              [projectId]: {
+                ...ws,
+                folderMeta: { ...ws.folderMeta, [key]: meta },
               },
             },
           };

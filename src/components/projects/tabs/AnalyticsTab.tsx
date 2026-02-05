@@ -1,7 +1,6 @@
-"use client";
-
 import { useMemo } from "react";
 import { BarChart3, TrendingUp, CheckCircle2, Clock, Users, Activity } from "lucide-react";
+import { useProjectAnalytics } from "@/hooks/hub/useProjectData";
 
 interface AnalyticsTabProps {
     projectId: string;
@@ -9,31 +8,38 @@ interface AnalyticsTabProps {
 }
 
 export default function AnalyticsTab({ projectId, project }: AnalyticsTabProps) {
-    // Calculate stats from project data
+    const { data: analytics, isLoading } = useProjectAnalytics(projectId);
+
+    // Final stats to display
     const stats = useMemo(() => {
-        const tasks = project?.project_tasks || [];
-        const members = project?.project_collaborators || [];
-
-        const totalTasks = tasks.length;
-        const completedTasks = tasks.filter((t: any) => t.status === "done").length;
-        const inProgressTasks = tasks.filter((t: any) => t.status === "in_progress").length;
-        const overdueTasks = tasks.filter((t: any) => {
-            if (t.status === "done" || !t.due_date) return false;
-            return new Date(t.due_date) < new Date();
-        }).length;
-
-        const completionRate = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
-
-        return {
-            totalTasks,
-            completedTasks,
-            inProgressTasks,
-            overdueTasks,
-            completionRate,
-            membersCount: members.length + 1,
+        if (!analytics) return {
+            totalTasks: 0,
+            completedTasks: 0,
+            inProgressTasks: 0,
+            overdueTasks: 0,
+            completionRate: 0,
+            membersCount: (project?.project_collaborators?.length || 0) + 1,
             viewCount: project?.view_count || 0,
         };
-    }, [project]);
+
+        return {
+            ...analytics,
+            membersCount: (project?.project_collaborators?.length || 0) + 1,
+            viewCount: project?.view_count || 0,
+        };
+    }, [analytics, project]);
+
+    if (isLoading) {
+        return (
+            <div className="space-y-6 animate-pulse">
+                <div className="h-8 w-48 bg-zinc-100 dark:bg-zinc-800 rounded" />
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    {[1, 2, 3, 4].map(i => <div key={i} className="h-24 bg-zinc-100 dark:bg-zinc-800 rounded-xl" />)}
+                </div>
+                <div className="h-40 bg-zinc-100 dark:bg-zinc-800 rounded-xl" />
+            </div>
+        );
+    }
 
     const statCards = [
         {

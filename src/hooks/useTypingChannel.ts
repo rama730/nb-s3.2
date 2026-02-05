@@ -5,10 +5,7 @@ import { createClient } from '@/lib/supabase/client';
 import { type RealtimeChannel } from '@supabase/supabase-js';
 
 // ============================================================================
-// TYPING CHANNEL HOOK (Scalable Broadcast)
-// ============================================================================
-// Uses Supabase Broadcast (WebSocket) to send ephemeral typing events.
-// No Database writes. O(1) complexity (only listens to active room).
+// TYPING CHANNEL HOOK (Scalable Broadcast + Singleton Subscription)
 // ============================================================================
 
 interface TypingUser {
@@ -23,143 +20,221 @@ interface UseTypingChannelReturn {
     sendTyping: (isTyping: boolean) => Promise<void>;
 }
 
-export function useTypingChannel(conversationId: string | null): UseTypingChannelReturn {
-    const [typingUsers, setTypingUsers] = useState<TypingUser[]>([]);
-    const channelRef = useRef<RealtimeChannel | null>(null);
-    const typingTimersRef = useRef<Map<string, NodeJS.Timeout>>(new Map());
-    const lastSentRef = useRef<number>(0);
-    const supabase = createClient();
+// ----------------------------------------------------------------------------
+// SINGLETON REGISTRY
+// Manages one connection per conversation, preventing duplicate subscriptions
+// ----------------------------------------------------------------------------
 
-    // User info cache
-    const currentUserRef = useRef<TypingUser | null>(null);
+interface ChannelEntry {
+    channel: RealtimeChannel;
+    refCount: number;
+    typingUsers: TypingUser[]; // Current state
+    listeners: Set<(users: TypingUser[]) => void>; // Local state setters
+    timers: Map<string, NodeJS.Timeout>; // Debounce timers
+    lastSent: number; // For throttling sends
+}
 
-    // Fetch current user once
-    useEffect(() => {
-        supabase.auth.getUser().then(async ({ data: { user } }) => {
-            if (user) {
-                // We need profile info to send with the event
+// Map<ConversationID, ChannelEntry>
+const channelRegistry = new Map<string, ChannelEntry>();
+
+// Singleton promise to fetch user once across all instances
+let currentUserPromise: Promise<TypingUser | null> | null = null;
+
+function getCurrentUser(supabase: any) {
+    if (!currentUserPromise) {
+        currentUserPromise = (async () => {
+            try {
+                const { data: { user } } = await supabase.auth.getUser();
+                if (!user) return null;
+
                 const { data: profile } = await supabase
                     .from('profiles')
-                    .select('username, full_name, avatar_url')
+                    .select('id, username, full_name, avatar_url')
                     .eq('id', user.id)
                     .single();
 
-                currentUserRef.current = {
-                    id: user.id,
-                    username: profile?.username || null,
-                    fullName: profile?.full_name || null,
-                    avatarUrl: profile?.avatar_url || null
-                };
+                if (profile) {
+                    return {
+                        id: profile.id,
+                        username: profile.username || null,
+                        fullName: profile.full_name || null,
+                        avatarUrl: profile.avatar_url || null
+                    };
+                }
+                return null;
+            } catch (error) {
+                console.error('Failed to fetch current user for typing:', error);
+                return null;
             }
-        });
-    }, []);
+        })();
+    }
+    return currentUserPromise;
+}
 
-    // Subscribe to Broadcast Channel
+export function useTypingChannel(conversationId: string | null, options: { listen?: boolean } = { listen: true }): UseTypingChannelReturn {
+    const [typingUsers, setTypingUsers] = useState<TypingUser[]>([]);
+    const supabase = createClient();
+    const { listen } = options;
+
+    // Effect: Manage Subscription via Registry
     useEffect(() => {
         if (!conversationId || conversationId === 'new') {
             setTypingUsers([]);
             return;
         }
 
-        const channelId = `room:${conversationId}`;
-        const channel = supabase.channel(channelId);
+        // 1. Get or Create Entry
+        let entry = channelRegistry.get(conversationId);
 
-        channel
-            .on('broadcast', { event: 'typing' }, ({ payload }) => {
-                // Ignore our own events (though broadcast usually excludes self, good to be safe)
-                if (payload.user?.id === currentUserRef.current?.id) return;
+        if (!entry) {
+            const channelId = `typing:${conversationId}`;
+            const channel = supabase.channel(channelId);
 
-                handleTypingEvent(payload.user, payload.isTyping);
-            })
-            .subscribe((status) => {
-                if (status === 'SUBSCRIBED') {
-                    console.log(`[Typing] Subscribed to ${channelId}`);
-                }
-            });
+            entry = {
+                channel,
+                refCount: 0,
+                typingUsers: [],
+                listeners: new Set(),
+                timers: new Map(),
+                lastSent: 0
+            };
 
-        channelRef.current = channel;
+            channelRegistry.set(conversationId, entry);
 
-        return () => {
-            console.log(`[Typing] Unsubscribing from ${channelId}`);
-            supabase.removeChannel(channel);
-            channelRef.current = null;
-            // Clear all local typing state
-            setTypingUsers([]);
-            typingTimersRef.current.forEach(clearTimeout);
-            typingTimersRef.current.clear();
+            // Subscribe logic
+            channel
+                .on('broadcast', { event: 'typing' }, async ({ payload }: { payload: { user: TypingUser; isTyping: boolean } }) => {
+                    const currentEntry = channelRegistry.get(conversationId);
+                    if (!currentEntry) return;
+
+                    // Filter self
+                    const currentUser = await getCurrentUser(supabase);
+                    if (payload.user?.id === currentUser?.id) return;
+
+                    handleRegistryEvent(conversationId, payload.user, payload.isTyping);
+                })
+                .subscribe((status: string) => {
+                    // if (status === 'SUBSCRIBED') console.log(`[Typing] Connected ${channelId}`);
+                });
+        }
+
+        // 2. Register Listener
+        entry.refCount++;
+
+        // Listener callback updates LOCAL state
+        const listener = (users: TypingUser[]) => {
+            if (listen) {
+                setTypingUsers(users);
+            }
         };
-    }, [conversationId]);
 
-    // Handle incoming events
-    const handleTypingEvent = useCallback((user: TypingUser, isTyping: boolean) => {
-        if (!user || !user.id) return;
+        if (listen) {
+            entry.listeners.add(listener);
+            // Initialize with current state
+            setTypingUsers(entry.typingUsers);
+        }
 
-        setTypingUsers(prev => {
-            const exists = prev.some(u => u.id === user.id);
+        // 3. Cleanup
+        return () => {
+            const currentEntry = channelRegistry.get(conversationId);
+            if (!currentEntry) return;
 
-            // 1. If STOP typing
-            if (!isTyping) {
-                if (exists) {
-                    // Clear safety timer if exists
-                    const timer = typingTimersRef.current.get(user.id);
-                    if (timer) clearTimeout(timer);
-                    typingTimersRef.current.delete(user.id);
-                    return prev.filter(u => u.id !== user.id);
-                }
-                return prev;
+            currentEntry.refCount--;
+            if (listen) {
+                currentEntry.listeners.delete(listener);
             }
 
-            // 2. If START typing
+            // Only destroy channel if NO refs left
+            if (currentEntry.refCount <= 0) {
+                supabase.removeChannel(currentEntry.channel);
+                // Clear timers
+                currentEntry.timers.forEach(clearTimeout);
+                channelRegistry.delete(conversationId);
+            }
+        };
+    }, [conversationId, supabase, listen]);
 
-            // Allow refresh of existing user (to update timer)
-            // We set a safety timer to auto-remove if no 'stop' event comes (e.g. tab closed)
-            const existingTimer = typingTimersRef.current.get(user.id);
+    // Helper: Handle Event at Registry Level
+    const handleRegistryEvent = (convId: string, user: TypingUser, isTyping: boolean) => {
+        const entry = channelRegistry.get(convId);
+        if (!entry) return;
+
+        const exists = entry.typingUsers.some(u => u.id === user.id);
+
+        // Logic for timers/state
+        if (!isTyping) {
+            // STOP
+            if (exists) {
+                const timer = entry.timers.get(user.id);
+                if (timer) clearTimeout(timer);
+                entry.timers.delete(user.id);
+
+                entry.typingUsers = entry.typingUsers.filter(u => u.id !== user.id);
+                notifyListeners(entry);
+            }
+        } else {
+            // START
+            const existingTimer = entry.timers.get(user.id);
             if (existingTimer) clearTimeout(existingTimer);
 
             const newTimer = setTimeout(() => {
-                setTypingUsers(current => current.filter(u => u.id !== user.id));
-                typingTimersRef.current.delete(user.id);
-            }, 3500); // 3.5s safety timeout (sender pulses every 2s)
+                const e = channelRegistry.get(convId);
+                if (e) {
+                    e.typingUsers = e.typingUsers.filter(u => u.id !== user.id);
+                    e.timers.delete(user.id);
+                    notifyListeners(e);
+                }
+            }, 3500);
 
-            typingTimersRef.current.set(user.id, newTimer);
+            entry.timers.set(user.id, newTimer);
 
             if (!exists) {
-                return [...prev, user];
+                entry.typingUsers = [...entry.typingUsers, user];
+                notifyListeners(entry);
             }
-            return prev;
-        });
-    }, []);
+        }
+    };
 
-    // Send typing status
+    const notifyListeners = (entry: ChannelEntry) => {
+        entry.listeners.forEach(cb => cb(entry.typingUsers));
+    };
+
+    // Send Typing (Uses Registry Channel)
     const sendTyping = useCallback(async (isTyping: boolean) => {
-        if (!channelRef.current || !currentUserRef.current) return;
+        if (!conversationId || conversationId === 'new') return;
+
+        const entry = channelRegistry.get(conversationId);
+        // Note: Even if listen=false, the hook calls register() so an entry exists.
+        // However, if listen=false, refCount is incremented.
+        // If the channel is not ready?
+        // Wait, if options.listen=false, we still create/get the entry and refCount++.
+        // So an entry IS guaranteed.
+
+        if (!entry) return;
+
+        const currentUser = await getCurrentUser(supabase);
+        if (!currentUser) return;
 
         const now = Date.now();
-        // Throttle "isTyping=true" to every 2 seconds
-        if (isTyping && now - lastSentRef.current < 2000) {
-            return;
-        }
+        if (isTyping && now - entry.lastSent < 2000) return;
 
         try {
-            await channelRef.current.send({
+            await entry.channel.send({
                 type: 'broadcast',
                 event: 'typing',
                 payload: {
-                    user: currentUserRef.current,
+                    user: currentUser,
                     isTyping
                 }
             });
 
-            if (isTyping) {
-                lastSentRef.current = now;
-            } else {
-                // If stopping, reset throttler so next start is immediate
-                lastSentRef.current = 0;
-            }
+            if (isTyping) entry.lastSent = now;
+            else entry.lastSent = 0;
+
         } catch (error) {
-            console.error('[Typing] Failed to send event:', error);
+            // fail silently
         }
-    }, []);
+    }, [conversationId, supabase]);
 
     return { typingUsers, sendTyping };
 }

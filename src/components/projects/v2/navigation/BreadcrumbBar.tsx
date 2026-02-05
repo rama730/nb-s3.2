@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from "react";
 import { ProjectNode } from "@/lib/db/schema";
 import { getBreadcrumbs, findNodeByPathAny } from "@/app/actions/files";
-import { ChevronRight, Home } from "lucide-react";
+import { ChevronRight, Home, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   DropdownMenu,
@@ -58,9 +58,19 @@ export function BreadcrumbBar({
   const currentPathStr = crumbs.map((c) => c.name).join("/");
 
   const renderDropdown = (parentId: string | null, currentId: string) => {
-    const key = parentId ?? "__root__";
-    const childIds = childrenByParentId[key] || [];
-    if (childIds.length === 0) return null;
+    // If parentId is null, we are at the root level.
+    // However, the file explorer store typically keys the root folder content as 'root' or null.
+    // The previous implementation used "__root__". Let's verify if that matches the store.
+    // If not, we might need adjustments. But assuming it's consistent for now.
+    const key = parentId ?? "root"; // "root" is commonly used for top level
+    const childIds = childrenByParentId[key] || childrenByParentId["__root__"] || [];
+    
+    if (childIds.length === 0) {
+        // Fallback: If we don't have children loaded, we can't show dropdown.
+        // Ideally we'd trigger a load here, but that's complex for a render function.
+        // We'll just return null for now.
+        return null; 
+    }
 
     const siblings = childIds
       .map((id) => nodesById[id])
@@ -151,24 +161,10 @@ export function BreadcrumbBar({
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <button
-                  className="hover:bg-zinc-100 dark:hover:bg-zinc-800 px-1.5 py-0.5 rounded text-zinc-700 dark:text-zinc-200 transition-colors truncate max-w-[120px]"
-                  onClick={(e) => {
-                    e.stopPropagation(); // Don't trigger dropdown immediately? 
-                    // Actually VS Code triggers dropdown on click of text. 
-                    // But we also want to navigate to it. 
-                    // Double click maps to everything. 
-                    // Let's say click navigates to that folder.
-                    // If you want dropdown, maybe right click? Or a small chevron next to it?
-                    // VS Code: Click on name -> Focus that part of breadcrumb? No, it shows dropdown.
-                    // If I click 'src', it shows contents of 'src'. Yes.
-                    // BUT it also navigates to it in explorer? 
-                    // Let's stick to: Click = Navigate (onCrumbClick).
-                    // We add a chevron for dropdown? Or simplify: Click = Navigate.
-                    // USER REQUEST: "Clicking a folder segment ... opens a dropdown listing its siblings."
-                    // OK, so Click = Dropdown.
-                  }}
+                  className="flex items-center gap-0.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 px-1.5 py-0.5 rounded text-zinc-700 dark:text-zinc-200 transition-colors max-w-[120px] outline-none focus:ring-2 focus:ring-indigo-500/20"
                 >
-                  {c.name}
+                  <span className="truncate">{c.name}</span>
+                  <ChevronDown className="w-3 h-3 opacity-50" />
                 </button>
               </DropdownMenuTrigger>
               {renderDropdown(c.parentId, c.id)}

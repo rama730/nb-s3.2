@@ -45,7 +45,7 @@ export function useTaskSubtasks(taskId: string) {
                     table: "task_subtasks",
                     filter: `task_id=eq.${taskId}`
                 },
-                (payload) => {
+                (payload: any) => {
                     if (payload.eventType === "INSERT") {
                         setSubtasks((prev) => [...prev, payload.new as Subtask]);
                     } else if (payload.eventType === "UPDATE") {

@@ -11,7 +11,7 @@ interface UseHubProjectsQueryParams {
 
 interface ProjectsPage {
     projects: Project[];
-    nextCursor?: number;
+    nextCursor?: string;
     hasMore: boolean;
 }
 
@@ -20,8 +20,8 @@ const PAGE_SIZE = 24;
 export function useHubProjectsQuery({ filters, view }: UseHubProjectsQueryParams) {
     return useInfiniteQuery<ProjectsPage>({
         queryKey: ['hub-projects', filters, view],
-        queryFn: async ({ pageParam = 0 }) => {
-            const result = await fetchHubProjectsAction(filters, pageParam as number, PAGE_SIZE);
+        queryFn: async ({ pageParam }) => {
+            const result = await fetchHubProjectsAction(filters, pageParam as string | undefined, PAGE_SIZE);
 
             if (!result.success) {
                 throw new Error(result.error);
@@ -32,7 +32,7 @@ export function useHubProjectsQuery({ filters, view }: UseHubProjectsQueryParams
             const successResult = result as {
                 success: true;
                 projects: Project[];
-                nextCursor?: number;
+                nextCursor?: string;
                 hasMore: boolean;
             };
 
@@ -42,8 +42,8 @@ export function useHubProjectsQuery({ filters, view }: UseHubProjectsQueryParams
                 hasMore: successResult.hasMore,
             };
         },
-        initialPageParam: 0,
+        initialPageParam: undefined as string | undefined,
         getNextPageParam: (lastPage) => lastPage.nextCursor,
-        initialData: { pages: [{ projects: [], hasMore: false }], pageParams: [0] },
+        initialData: { pages: [{ projects: [], hasMore: false }], pageParams: [undefined] },
     });
 }

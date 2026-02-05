@@ -52,7 +52,8 @@ async function assertProjectReadAccess(projectId: string, userId: string | null)
     return access;
 }
 
-async function assertProjectWriteAccess(projectId: string, userId: string) {
+// Fixed: exported for use in other files if needed, though internal usage is preferred
+export async function assertProjectWriteAccess(projectId: string, userId: string) {
     const access = await getProjectAccess(projectId, userId);
     if (!access.canWrite) throw new Error("Forbidden");
     return access;
@@ -70,39 +71,91 @@ async function getTaskProjectId(taskId: string): Promise<string> {
     return projectId;
 }
 
-export async function getProjectNodes(projectId: string, parentId: string | null = null, query?: string) {
+export type GetProjectNodesResult = {
+    nodes: ProjectNode[];
+    nextCursor: string | null;
+};
+
+export async function getProjectNodes(
+    projectId: string,
+    parentId: string | null = null,
+    query?: string,
+    limit: number = 100,
+    cursor?: string // we'll use base64 encoded "{type}:{name}:{id}" as cursor for stable sort
+): Promise<GetProjectNodesResult | ProjectNode[]> {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
 
     if (!projectId) {
         console.error("getProjectNodes called with undefined projectId");
-        return [];
+        if (query !== undefined) return []; // backward compat return type
+        return { nodes: [], nextCursor: null };
     }
 
     const access = await assertProjectReadAccess(projectId, user?.id ?? null);
 
-    let whereClause;
+    // --- Search Mode (Flat) ---
     if (query && query.trim()) {
-        // Recursive/Flat search across entire project
-        whereClause = and(
+        const whereClause = and(
             eq(projectNodes.projectId, projectId),
             isNull(projectNodes.deletedAt),
             ilike(projectNodes.name, `%${query.trim()}%`)
         );
-    } else {
-        // Directory listing
-        whereClause = parentId
-            ? and(eq(projectNodes.projectId, projectId), eq(projectNodes.parentId, parentId), isNull(projectNodes.deletedAt))
-            : and(eq(projectNodes.projectId, projectId), isNull(projectNodes.parentId), isNull(projectNodes.deletedAt));
+
+        const nodes = await db.query.projectNodes.findMany({
+            where: whereClause,
+            orderBy: (nodes, { asc }) => [asc(nodes.type), asc(nodes.name)],
+            limit: 100 // Hard limit for search for now
+        });
+        return nodes; // Return plain array for search (backward compat for now)
     }
 
-    let nodes = await db.query.projectNodes.findMany({
-        where: whereClause,
-        orderBy: (nodes, { asc }) => [asc(nodes.type), asc(nodes.name)],
+    // --- Directory Listing Mode (Cursor Paginated) ---
+    const whereConditions = [
+        eq(projectNodes.projectId, projectId),
+        isNull(projectNodes.deletedAt),
+        parentId ? eq(projectNodes.parentId, parentId) : isNull(projectNodes.parentId)
+    ];
+
+    // Cursor decoding
+    if (cursor) {
+        try {
+            const decoded = Buffer.from(cursor, 'base64').toString('utf-8');
+            const [cType, cName, cId] = decoded.split(':::'); // use ::: separator
+            if (cType && cName && cId) {
+                // We want: (type > cType) OR (type = cType AND name > cName) OR (type = cType AND name = cName AND id > cId)
+                // Drizzle DSL:
+                whereConditions.push(
+                    sql`(${projectNodes.type} > ${cType} OR 
+                        (${projectNodes.type} = ${cType} AND ${projectNodes.name} > ${cName}) OR
+                        (${projectNodes.type} = ${cType} AND ${projectNodes.name} = ${cName} AND ${projectNodes.id} > ${cId}))`
+                );
+            }
+        } catch (e) {
+            // ignore invalid cursor
+        }
+    }
+
+    const LIMIT = Math.min(limit, 500); // safety cap
+
+    // Fetch one extra to check if there is a next page
+    const nodes = await db.query.projectNodes.findMany({
+        where: and(...whereConditions),
+        orderBy: (nodes, { asc }) => [asc(nodes.type), asc(nodes.name), asc(nodes.id)],
+        limit: LIMIT + 1,
     });
 
+    let nextCursor: string | null = null;
+    if (nodes.length > LIMIT) {
+        const nextItem = nodes.pop(); // remove the extra one
+        const lastItem = nodes[nodes.length - 1]; // the actual last valid item
+        if (lastItem) {
+            nextCursor = Buffer.from(`${lastItem.type}:::${lastItem.name}:::${lastItem.id}`).toString('base64');
+        }
+    }
+
     // Auto-create default root folder if project is empty at root
-    if (access.canWrite && !!user && !parentId && !query && nodes.length === 0) {
+    if (access.canWrite && !!user && !parentId && nodes.length === 0 && !cursor) {
         try {
             // Fetch project title
             const [project] = await db.select({ title: projects.title }).from(projects).where(eq(projects.id, projectId));
@@ -112,19 +165,80 @@ export async function getProjectNodes(projectId: string, parentId: string | null
                     projectId,
                     parentId: null,
                     type: 'folder',
-                    name: project.title, // Default folder name = Project Title
+                    name: project.title,
                     createdBy: user.id,
-                    metadata: { isSystem: true } // Mark as system folder
+                    metadata: { isSystem: true }
                 }).returning();
 
-                nodes = [rootNode];
+                return { nodes: [rootNode], nextCursor: null };
             }
         } catch (err) {
             console.error("Failed to auto-create root folder", err);
         }
     }
 
-    return nodes;
+    return { nodes, nextCursor };
+}
+
+export async function getProjectBatchNodes(projectId: string, parentIds: (string | null)[]) {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+
+    if (!parentIds.length) return [];
+
+    await assertProjectReadAccess(projectId, user?.id ?? null);
+
+    // De-dupe and sanitize
+    const uniqueParents = Array.from(new Set(parentIds));
+    const cleanParents = uniqueParents.map(id => id === 'root' ? null : id);
+
+    // We can't really do cursor pagination easily on a batch hierarchy fetch without complexity.
+    // For batch hydration (session restore), we assume we want "first N items" of each folder.
+    // However, a simple "WHERE parent_id IN (...)" doesn't limit per parent.
+    // For pure scalability, we should probably only fetch the first ~50 of each folder.
+    // Using LATERAL JOIN involves raw SQL.
+    // For now, to solve "N requests", we will just do a simpler IN query but cap strictly to avoid massive payloads.
+    // If a user has 50 expanded folders, we might still hit limits. 
+    // Optimization: We could enforce max 20 expanded folders batch or just rely on the fact that 
+    // restoring session is usually typically < 10 folders.
+
+    const nodes = await db.query.projectNodes.findMany({
+        where: and(
+            eq(projectNodes.projectId, projectId),
+            inArray(projectNodes.parentId, cleanParents as string[]), // dize can handle null in array? usually no
+            isNull(projectNodes.deletedAt)
+        ),
+        orderBy: (nodes, { asc }) => [asc(nodes.type), asc(nodes.name)],
+        limit: 2000 // Global safety limit for the batch
+    });
+
+    // If any parent has null, `inArray` might fail for nulls in some SQL dialects or ORMs.
+    // Drizzle `inArray` might not match NULL. We need to handle root separately if present.
+    // Let's refine the query if 'null' (root) is involved.
+
+    const hasRoot = cleanParents.includes(null);
+    const nonNullParents = cleanParents.filter(p => p !== null) as string[];
+
+    const conditions = [
+        eq(projectNodes.projectId, projectId),
+        isNull(projectNodes.deletedAt)
+    ];
+
+    if (hasRoot && nonNullParents.length > 0) {
+        conditions.push(sql`(${inArray(projectNodes.parentId, nonNullParents)} OR ${isNull(projectNodes.parentId)})`);
+    } else if (hasRoot) {
+        conditions.push(isNull(projectNodes.parentId));
+    } else {
+        conditions.push(inArray(projectNodes.parentId, nonNullParents));
+    }
+
+    const safeNodes = await db.query.projectNodes.findMany({
+        where: and(...conditions),
+        orderBy: (nodes, { asc }) => [asc(nodes.type), asc(nodes.name)],
+        limit: 2000
+    });
+
+    return safeNodes;
 }
 
 async function recordNodeEvent(projectId: string, actorId: string | null, nodeId: string | null, type: string, metadata: Record<string, unknown> = {}) {

@@ -14,6 +14,9 @@ interface TasksTableProps {
     selectedTaskIds: Set<string>;
     toggleTaskSelection: (taskId: string) => void;
     isBulkMode: boolean;
+    fetchNextPage: () => void;
+    hasNextPage: boolean;
+    isFetchingNextPage: boolean;
 }
 
 export default function TasksTable({
@@ -21,12 +24,20 @@ export default function TasksTable({
     onTaskClick,
     selectedTaskIds,
     toggleTaskSelection,
-    isBulkMode
+    isBulkMode,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage
 }: TasksTableProps) {
     return (
         <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 h-[600px] overflow-hidden flex flex-col shadow-sm">
             <TableVirtuoso
                 data={tasks}
+                endReached={() => {
+                    if (hasNextPage && !isFetchingNextPage) {
+                        fetchNextPage();
+                    }
+                }}
                 fixedHeaderContent={() => (
                     <tr className="bg-zinc-50 dark:bg-zinc-900/50 border-b border-zinc-200 dark:border-zinc-800">
                         <th className="px-4 py-3 text-left w-12">

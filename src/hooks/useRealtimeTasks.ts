@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
 import { Task } from "@/components/projects/v2/tasks/TaskCard"; // Import shared Task type
@@ -16,9 +16,16 @@ export function useRealtimeTasks(projectId: string, initialTasks: Task[] = []) {
     const router = useRouter();
     const supabase = createClient();
 
-    // Reset local state if initialTasks changes (e.g. server revalidation)
+    // REF STABILITY FIX: Prevent infinite loop if initialTasks is a new reference but same content
+    const prevInitialTasksJson = useRef(JSON.stringify(initialTasks));
+
+    // Reset local state ONLY if content actually changes (server revalidation)
     useEffect(() => {
-        setTasks(initialTasks);
+        const currentJson = JSON.stringify(initialTasks);
+        if (prevInitialTasksJson.current !== currentJson) {
+            setTasks(initialTasks);
+            prevInitialTasksJson.current = currentJson;
+        }
     }, [initialTasks]);
 
     useEffect(() => {
@@ -34,7 +41,7 @@ export function useRealtimeTasks(projectId: string, initialTasks: Task[] = []) {
                     table: 'tasks',
                     filter: `project_id=eq.${projectId}`
                 },
-                (payload) => {
+                (payload: any) => {
                     console.log("Realtime Task Event:", payload);
 
                     if (payload.eventType === 'INSERT') {

@@ -8,7 +8,6 @@ import {
     ProjectOverviewCard,
     TeamCard,
     OpenRolesCard,
-    ProjectPulseCard,
 } from "@/components/projects/dashboard";
 import { TabErrorBoundary } from "@/components/projects/TabErrorBoundary";
 
@@ -77,6 +76,16 @@ interface DashboardTabProps {
     onViewSettings: () => void;
     onTaskClick: (taskId: string) => void;
     lifecycleStages: any[];
+    currentStageIndex: number;
+    hasNextMembers?: boolean;
+    fetchNextMembers?: () => void;
+    loadingMembers?: boolean;
+    applicationStatus?: {
+        status: 'none' | 'pending' | 'accepted' | 'rejected';
+        roleTitle?: string;
+        canReapply?: boolean;
+        waitTime?: string;
+    };
 }
 
 export function DashboardTab({
@@ -105,6 +114,11 @@ export function DashboardTab({
     onViewSprints,
     onTaskClick,
     lifecycleStages,
+    currentStageIndex,
+    hasNextMembers,
+    fetchNextMembers,
+    loadingMembers,
+    applicationStatus = { status: 'none' },
 }: DashboardTabProps) {
     const tasksForPulse = dashboardTasks ?? tasks;
     const priorityRank: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3 };
@@ -141,7 +155,7 @@ export function DashboardTab({
         return list.sort((a: any, b: any) => new Date(a.due_date).getTime() - new Date(b.due_date).getTime()).slice(0, 6);
     }, [tasks]);
 
-    const pulseActivities = useMemo(() => [], []);
+
 
     const totalOpenPositions = useMemo(() => {
         return (rolesWithFilled || []).reduce((sum: number, role: any) => {
@@ -150,26 +164,7 @@ export function DashboardTab({
         }, 0);
     }, [rolesWithFilled]);
 
-    const pulseCard = (
-        <TabErrorBoundary tabName="Dashboard">
-            <Suspense fallback={<CardSkeleton />}>
-                <ProjectPulseCard
-                    projectId={project.id}
-                    activities={pulseActivities}
-                    tasks={tasksForPulse || []}
-                    isCollaborator={isOwnerOrMember}
-                    isCreator={isCreator}
-                    currentUserId={currentUserId}
-                    onViewBoard={onViewBoard}
-                    onUploadFile={() => { }}
-                    onViewAnalytics={() => { }}
-                    onViewSprints={onViewSprints}
-                    onViewSettings={() => { }}
-                    onTaskClick={onTaskClick}
-                />
-            </Suspense>
-        </TabErrorBoundary>
-    );
+
 
     const teamAndRoles = (
         <>
@@ -178,6 +173,9 @@ export function DashboardTab({
                     <TeamCard
                         project={project}
                         members={members}
+                        hasNextMembers={hasNextMembers}
+                        fetchNextMembers={fetchNextMembers}
+                        loadingMembers={loadingMembers}
                         openRoles={rolesWithFilled}
                         isCreator={isCreator}
                         onManageTeam={onManageTeam}
@@ -190,7 +188,7 @@ export function DashboardTab({
                     roles={rolesWithFilled}
                     isCreator={isCreator}
                     isCollaborator={isCollaborator}
-                    hasPendingApplication={false}
+                    applicationStatus={applicationStatus}
                     onApply={onApplyToRole}
                     onManageRoles={() => onEdit("roles")}
                 />
@@ -216,7 +214,7 @@ export function DashboardTab({
                     shareCopied={shareCopied}
                     bookmarkLoading={bookmarkLoading}
                     lifecycleStages={lifecycleStages}
-                    currentStageIndex={project.current_stage_index || 0}
+                    currentStageIndex={currentStageIndex}
                     onAdvanceStage={onAdvanceStage}
                 />
 
@@ -224,7 +222,6 @@ export function DashboardTab({
             </div>
 
             <div className="lg:col-span-5 space-y-6">
-                {pulseCard}
                 {teamAndRoles}
             </div>
         </div>

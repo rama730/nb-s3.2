@@ -2,11 +2,12 @@
 
 import React, { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Settings, Globe, Bell, Archive, Trash2, AlertTriangle, Download, Info, Check, Lock } from "lucide-react";
+import { Settings, Globe, Bell, Archive, Trash2, AlertTriangle, Download, Info, Check, Lock, Route } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
-import { deleteProject } from "@/app/actions/project";
+import { deleteProject, updateProjectLifecycleAction, finalizeProjectAction } from "@/app/actions/project";
+import LifecycleEditor from "@/components/projects/settings/LifecycleEditor";
 import {
     Tooltip,
     TooltipContent,
@@ -35,6 +36,7 @@ export default function ProjectSettingsTab({
     const [autoArchive, setAutoArchive] = useState(true);
     const [savingVisibility, setSavingVisibility] = useState(false);
     const [loadingExport, setLoadingExport] = useState(false);
+    const [savingLifecycle, setSavingLifecycle] = useState(false);
 
     // Access Restricted
     if (!isProjectOwner) {
@@ -51,6 +53,7 @@ export default function ProjectSettingsTab({
 
     const sections = [
         { id: "general", label: "General", icon: Settings },
+        { id: "lifecycle", label: "Lifecycle", icon: Route },
         { id: "visibility", label: "Visibility", icon: Globe },
         { id: "notifications", label: "Notifications", icon: Bell },
         { id: "export", label: "Export", icon: Download },
@@ -125,6 +128,39 @@ export default function ProjectSettingsTab({
                                     </label>
                                 </div>
                             </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* Lifecycle */}
+                {activeSection === "lifecycle" && (
+                    <div className="space-y-6">
+                        <div>
+                            <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 mb-2">Project Lifecycle</h3>
+                            <p className="text-sm text-zinc-500 mb-4">
+                                Define and manage your project journey stages. Drag to reorder, edit names inline, or add/remove stages.
+                            </p>
+                            <LifecycleEditor
+                                initialStages={project?.lifecycle_stages || project?.lifecycleStages || ["Concept", "MVP", "Launch"]}
+                                currentStageIndex={project?.current_stage_index ?? project?.currentStageIndex ?? 0}
+                                isSaving={savingLifecycle}
+                                onSave={async (stages, currentActiveStage) => {
+                                    setSavingLifecycle(true);
+                                    try {
+                                        const result = await updateProjectLifecycleAction(projectId, stages, currentActiveStage);
+                                        if (result.success) {
+                                            toast.success("Lifecycle updated successfully");
+                                            onProjectUpdated();
+                                        } else {
+                                            toast.error(result.error || "Failed to update lifecycle");
+                                        }
+                                    } catch (error) {
+                                        toast.error("Failed to update lifecycle");
+                                    } finally {
+                                        setSavingLifecycle(false);
+                                    }
+                                }}
+                            />
                         </div>
                     </div>
                 )}
@@ -238,6 +274,40 @@ export default function ProjectSettingsTab({
                         <div>
                             <h3 className="text-lg font-bold text-red-600 dark:text-red-400 mb-4">Danger Zone</h3>
                             <div className="space-y-4">
+                                <div className="p-4 rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950/30">
+                                    <div className="flex items-start justify-between gap-4">
+                                        <div>
+                                            <p className="font-semibold text-red-900 dark:text-red-100">Finalize Project</p>
+                                            <p className="text-sm text-red-800 dark:text-red-200 mt-1">Mark this project as successfully completed. This will freeze tasks and distribute reputation points.</p>
+                                        </div>
+                                        <Button
+                                            onClick={() => {
+                                                if (window.confirm("Are you sure you want to finalize this project? This will mark it as Completed.")) {
+                                                    startTransition(async () => {
+                                                        try {
+                                                            const result = await finalizeProjectAction(projectId);
+                                                            if (result.success) {
+                                                                toast.success("Project finalized successfully!");
+                                                                onProjectUpdated();
+                                                                router.refresh();
+                                                            } else {
+                                                                const errorMsg = 'error' in result ? result.error : "Failed to finalize";
+                                                                toast.error(errorMsg);
+                                                            }
+                                                        } catch (error) {
+                                                            toast.error("Failed to finalize project");
+                                                        }
+                                                    });
+                                                }
+                                            }}
+                                            disabled={project?.status === 'completed' || isPending}
+                                            className="whitespace-nowrap px-4 py-2 rounded-md bg-white border border-red-200 text-red-600 hover:bg-red-50 transition-colors text-sm font-medium"
+                                        >
+                                            {project?.status === 'completed' ? "Completed" : "Finalize"}
+                                        </Button>
+                                    </div>
+                                </div>
+
                                 <div className="p-4 rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950/30">
                                     <div className="flex items-start justify-between gap-4">
                                         <div>

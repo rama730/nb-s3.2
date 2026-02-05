@@ -12,6 +12,9 @@ interface KanbanBoardProps {
     selectedTaskIds: Set<string>;
     toggleTaskSelection: (taskId: string) => void;
     isBulkMode: boolean;
+    fetchNextPage: () => void;
+    hasNextPage: boolean;
+    isFetchingNextPage: boolean;
 }
 
 export default function KanbanBoard({
@@ -21,7 +24,10 @@ export default function KanbanBoard({
     claimLoading = {},
     selectedTaskIds,
     toggleTaskSelection,
-    isBulkMode
+    isBulkMode,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage
 }: KanbanBoardProps) {
     // Group tasks
     const columns = useMemo(() => {

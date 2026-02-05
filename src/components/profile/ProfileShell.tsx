@@ -13,8 +13,8 @@ interface ProfileShellProps {
 
 export default function ProfileShell({ initialData, profileId }: ProfileShellProps) {
     // OLD: const { profile, loading } = useLocalProfile(profileId);
-    // NEW: Use React Query hook
-    const { profile, loading } = useProfile(profileId);
+    // NEW: Use React Query hook force cache hydration
+    const { profile, loading } = useProfile(profileId, initialData?.profile);
 
     // Merge server fallback with client data
     const displayProfile = profile || initialData?.profile;
