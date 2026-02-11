@@ -1,6 +1,9 @@
 import { pgTable, uuid, text, timestamp, boolean, jsonb, index, uniqueIndex, integer, bigint, foreignKey } from 'drizzle-orm/pg-core'
 import { relations, sql } from 'drizzle-orm'
 
+type ProfileExperienceEntry = Record<string, unknown>;
+type ProfileEducationEntry = Record<string, unknown>;
+type ImportSourceMetadata = Record<string, unknown>;
 
 // ============================================================================
 // PROFILES TABLE
@@ -18,8 +21,8 @@ export const profiles = pgTable('profiles', {
     website: text('website'),
     skills: jsonb('skills').$type<string[]>().default([]),
     interests: jsonb('interests').$type<string[]>().default([]),
-    experience: jsonb('experience').$type<any[]>().default([]),
-    education: jsonb('education').$type<any[]>().default([]),
+    experience: jsonb('experience').$type<ProfileExperienceEntry[]>().default([]),
+    education: jsonb('education').$type<ProfileEducationEntry[]>().default([]),
     openTo: jsonb('open_to').$type<string[]>().default([]),
     availabilityStatus: text('availability_status', { enum: ['available', 'busy', 'offline', 'focusing'] }).default('available'),
     socialLinks: jsonb('social_links').$type<Record<string, string>>().default({}),
@@ -144,7 +147,7 @@ export const projects = pgTable('projects', {
         repoUrl?: string;
         branch?: string;
         s3Key?: string;
-        metadata?: Record<string, any>;
+        metadata?: ImportSourceMetadata;
     }>(),
     syncStatus: text('sync_status', { enum: ['pending', 'cloning', 'indexing', 'ready', 'failed'] }).default('ready').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
@@ -434,6 +437,75 @@ export const projectNodeEvents = pgTable('project_node_events', {
     projectIdx: index('project_node_events_project_idx').on(t.projectId, t.createdAt),
     nodeIdx: index('project_node_events_node_idx').on(t.nodeId, t.createdAt),
 }))
+
+// ============================================================================
+// PROJECT RUNNER PROFILES + SESSIONS
+// ============================================================================
+export const projectRunProfiles = pgTable('project_run_profiles', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    command: text('command').notNull(),
+    isDefault: boolean('is_default').default(false).notNull(),
+    createdBy: uuid('created_by').references(() => profiles.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+    projectIdx: index('project_run_profiles_project_idx').on(t.projectId),
+    uniqueNameIdx: uniqueIndex('project_run_profiles_project_name_uidx').on(t.projectId, t.name),
+}));
+
+export const projectRunSessions = pgTable('project_run_sessions', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+    profileId: uuid('profile_id').references(() => projectRunProfiles.id, { onDelete: 'set null' }),
+    startedBy: uuid('started_by').references(() => profiles.id, { onDelete: 'set null' }),
+    command: text('command').notNull(),
+    status: text('status', { enum: ['queued', 'running', 'success', 'failed', 'canceled'] }).default('queued').notNull(),
+    exitCode: integer('exit_code'),
+    durationMs: integer('duration_ms'),
+    errorCount: integer('error_count').default(0).notNull(),
+    warningCount: integer('warning_count').default(0).notNull(),
+    startedAt: timestamp('started_at', { withTimezone: true }).defaultNow().notNull(),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+    projectIdx: index('project_run_sessions_project_idx').on(t.projectId, t.startedAt),
+    profileIdx: index('project_run_sessions_profile_idx').on(t.profileId),
+    statusIdx: index('project_run_sessions_status_idx').on(t.status, t.startedAt),
+}));
+
+export const projectRunLogs = pgTable('project_run_logs', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    sessionId: uuid('session_id').notNull().references(() => projectRunSessions.id, { onDelete: 'cascade' }),
+    projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+    stream: text('stream', { enum: ['stdout', 'stderr', 'system'] }).default('stdout').notNull(),
+    lineNumber: integer('line_number').default(0).notNull(),
+    message: text('message').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+    sessionIdx: index('project_run_logs_session_idx').on(t.sessionId, t.lineNumber),
+    projectIdx: index('project_run_logs_project_idx').on(t.projectId, t.createdAt),
+}));
+
+export const projectRunDiagnostics = pgTable('project_run_diagnostics', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    sessionId: uuid('session_id').notNull().references(() => projectRunSessions.id, { onDelete: 'cascade' }),
+    projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+    nodeId: uuid('node_id').references(() => projectNodes.id, { onDelete: 'set null' }),
+    filePath: text('file_path'),
+    line: integer('line'),
+    column: integer('column'),
+    severity: text('severity', { enum: ['error', 'warning', 'info'] }).default('error').notNull(),
+    source: text('source'),
+    code: text('code'),
+    message: text('message').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+    sessionIdx: index('project_run_diagnostics_session_idx').on(t.sessionId, t.severity),
+    projectIdx: index('project_run_diagnostics_project_idx').on(t.projectId, t.createdAt),
+    nodeIdx: index('project_run_diagnostics_node_idx').on(t.nodeId),
+}));
 
 
 // ============================================================================
@@ -913,3 +985,11 @@ export type ProjectNode = typeof projectNodes.$inferSelect
 export type NewProjectNode = typeof projectNodes.$inferInsert
 export type TaskNodeLink = typeof taskNodeLinks.$inferSelect
 export type NewTaskNodeLink = typeof taskNodeLinks.$inferInsert
+export type ProjectRunProfile = typeof projectRunProfiles.$inferSelect
+export type NewProjectRunProfile = typeof projectRunProfiles.$inferInsert
+export type ProjectRunSession = typeof projectRunSessions.$inferSelect
+export type NewProjectRunSession = typeof projectRunSessions.$inferInsert
+export type ProjectRunLog = typeof projectRunLogs.$inferSelect
+export type NewProjectRunLog = typeof projectRunLogs.$inferInsert
+export type ProjectRunDiagnostic = typeof projectRunDiagnostics.$inferSelect
+export type NewProjectRunDiagnostic = typeof projectRunDiagnostics.$inferInsert

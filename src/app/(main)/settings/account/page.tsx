@@ -28,7 +28,7 @@ export default function AccountPage() {
             const data = await exportUserData();
             downloadUserData(data);
             showToast("Data exported successfully", "success");
-        } catch (e) {
+        } catch {
             showToast("Export failed. Please try again.", "error");
         } finally {
             setExporting(false);
@@ -46,7 +46,7 @@ export default function AccountPage() {
             } else {
                 showToast(result.message || "Failed to delete account", "error");
             }
-        } catch (e) {
+        } catch {
             showToast("Error deleting account. Please try again.", "error");
         } finally {
             setDeleting(false);

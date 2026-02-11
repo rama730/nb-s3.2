@@ -11,7 +11,7 @@ export default function SourceControlPanel({ projectId, className }: { projectId
   const openTab = useFilesWorkspaceStore((s) => s.openTab);
 
   const dirtyFiles = Object.entries(fileStates)
-    .filter(([_, state]) => state.isDirty)
+    .filter(([, state]) => state.isDirty)
     .map(([id]) => nodesById[id])
     .filter(Boolean);
 

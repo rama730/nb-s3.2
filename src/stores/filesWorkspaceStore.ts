@@ -922,15 +922,22 @@ export const useFilesWorkspaceStore = create<FilesWorkspaceState>()(
           ])
         ),
       }),
-      merge: (persistedState: any, currentState) => {
+      merge: (persistedState: unknown, currentState) => {
         // Custom merge to ensure non-persisted fields (caches) are initialized with defaults
-        if (!persistedState || !persistedState.byProjectId) {
+        if (
+          !persistedState ||
+          typeof persistedState !== "object" ||
+          !("byProjectId" in persistedState)
+        ) {
           return currentState;
         }
 
+        const persisted = persistedState as { byProjectId?: Record<string, Partial<ProjectWorkspaceState>> };
+        if (!persisted.byProjectId) return currentState;
+
         const mergedByProjectId: Record<string, ProjectWorkspaceState> = { ...currentState.byProjectId };
 
-        for (const [projectId, persistedProjectState] of Object.entries(persistedState.byProjectId)) {
+        for (const [projectId, persistedProjectState] of Object.entries(persisted.byProjectId)) {
           mergedByProjectId[projectId] = {
             ...defaultWorkspace(),
             ...(persistedProjectState as Partial<ProjectWorkspaceState>),
@@ -941,7 +948,7 @@ export const useFilesWorkspaceStore = create<FilesWorkspaceState>()(
 
         return {
           ...currentState,
-          ...persistedState,
+          ...persisted,
           byProjectId: mergedByProjectId,
         };
       },

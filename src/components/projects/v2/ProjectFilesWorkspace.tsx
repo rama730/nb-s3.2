@@ -9,14 +9,15 @@ import FileEditor from "./FileEditor";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import {
   DndContext,
-  DragOverlay,
   closestCenter,
   KeyboardSensor,
   PointerSensor,
@@ -35,9 +36,9 @@ import {
   FileCode,
   Layers,
   MoreVertical,
-  Pin,
-  PinOff,
-  SplitSquareVertical,
+  Play,
+  Search,
+  TerminalSquare,
   X,
   Loader2,
   RefreshCw,
@@ -47,25 +48,34 @@ import {
   trashNode,
   acquireProjectNodeLock,
   findNodeByPathAny,
-  getBreadcrumbs,
   getNodesByIds,
+  applyProjectSearchReplace,
   refreshProjectNodeLock,
+  rollbackProjectSearchReplace,
   releaseProjectNodeLock,
+  previewProjectSearchReplace,
   searchProjectFileIndex,
   upsertProjectFileIndex,
   updateProjectFileStats,
   getProjectFileSignedUrl,
 } from "@/app/actions/files";
 import { getProjectSyncStatus, retryGithubImportAction } from "@/app/actions/project";
+import {
+  getProjectRunProfilesAction,
+  getProjectRunSessionDetailAction,
+  listProjectRunSessionsAction,
+  runProjectProfileAction,
+} from "@/app/actions/runner";
 import { useRouter } from "next/navigation";
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 import { BreadcrumbBar } from "./navigation/BreadcrumbBar";
 import type { FilesViewMode } from "@/stores/filesWorkspaceStore";
 import { isAssetLike, isTextLike } from "./utils/fileKind";
 import AssetPreview from "./preview/AssetPreview";
+import RunnerPanel from "./runner/RunnerPanel";
+import type { PersistedRunSessionDetail, RunnerProfileRecord, RunnerSessionRecord } from "@/lib/runner/contracts";
 
-const EMPTY_ARRAY: any[] = [];
-const EMPTY_OBJECT: Record<string, any> = {};
+const EMPTY_ARRAY: string[] = [];
 
 interface ProjectFilesWorkspaceProps {
   projectId: string;
@@ -82,6 +92,19 @@ const DEFAULT_NODES: Record<string, ProjectNode> = {};
 const DEFAULT_PINNED: Record<string, boolean> = {};
 
 type PaneId = "left" | "right";
+
+function getErrorMessage(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback;
+}
+
+type NodeLockResult = {
+  ok: boolean;
+  lock?: {
+    lockedBy: string;
+    lockedByName?: string | null;
+    expiresAt: number;
+  };
+};
 
 type TabState = {
   id: string; // nodeId
@@ -179,7 +202,7 @@ export default function ProjectFilesWorkspace({
             if (res.lastError) setSyncErrorReason(res.lastError);
             setSyncPollError(null);
           }
-        } catch (e) {
+        } catch {
           // Back off on error
           setSyncPollError("Unable to check sync status. Retrying...");
           pollDelayRef.current = Math.min(30_000, Math.round(pollDelayRef.current * 1.5));
@@ -297,7 +320,6 @@ export default function ProjectFilesWorkspace({
   const rightActiveTabId = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.panes.right.activeTabId);
   const splitEnabled = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.splitEnabled);
   const splitRatio = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.splitRatio ?? 0.5);
-  const explorerMode = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.explorerMode || "tree");
   const viewMode = useFilesWorkspaceStore((s) => (s.byProjectId[projectId]?.viewMode as FilesViewMode) || "code");
   const nodesById = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.nodesById || DEFAULT_NODES);
   
@@ -305,6 +327,13 @@ export default function ProjectFilesWorkspace({
   const panes = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.panes || DEFAULT_PANES);
   const prefs = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.prefs || DEFAULT_PREFS);
   const pinnedByTabId = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.pinnedByTabId || DEFAULT_PINNED);
+  const activeTabIdByPane = useMemo<Record<PaneId, string | null>>(
+    () => ({
+      left: leftActiveTabId ?? null,
+      right: rightActiveTabId ?? null,
+    }),
+    [leftActiveTabId, rightActiveTabId]
+  );
   
   const openTab = useFilesWorkspaceStore((s) => s.openTab);
   const closeTabStore = useFilesWorkspaceStore((s) => s.closeTab);
@@ -377,21 +406,338 @@ export default function ProjectFilesWorkspace({
   }, []);
 
   const loadTokenRef = useRef<Map<string, number>>(new Map());
+  const lastServerVersionCheckRef = useRef<Map<string, number>>(new Map());
+  const runnerRefreshInFlightRef = useRef<Promise<boolean> | null>(null);
+  const lastRunnerRefreshAtRef = useRef(0);
+  const runnerDetailCacheRef = useRef<Map<string, PersistedRunSessionDetail>>(new Map());
+  const runSequenceRef = useRef(0);
   const autosaveTimerRef = useRef<Record<PaneId, ReturnType<typeof setTimeout> | null>>({
     left: null,
     right: null,
   });
   const prevActiveRef = useRef<Record<PaneId, string | null>>({ left: null, right: null });
 
-  const panesToRender: PaneId[] = splitEnabled ? ["left", "right"] : ["left"];
+  const panesToRender = useMemo<PaneId[]>(
+    () => (splitEnabled ? ["left", "right"] : ["left"]),
+    [splitEnabled]
+  );
+  const leftOpenTabIdsKey = useMemo(() => leftOpenTabIds.join(","), [leftOpenTabIds]);
+  const rightOpenTabIdsKey = useMemo(() => rightOpenTabIds.join(","), [rightOpenTabIds]);
 
   const [findOpen, setFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState("");
+  const [replaceQuery, setReplaceQuery] = useState("");
+  const [headerSearchOpen, setHeaderSearchOpen] = useState(false);
+  const [headerSearchQuery, setHeaderSearchQuery] = useState("");
   const [findLoading, setFindLoading] = useState(false);
   const [findResults, setFindResults] = useState<Array<{ nodeId: string; snippet: string }>>([]);
+  const [replacePreviewLoading, setReplacePreviewLoading] = useState(false);
+  const [replaceApplying, setReplaceApplying] = useState(false);
+  const [replacePreviewItems, setReplacePreviewItems] = useState<
+    Array<{
+      nodeId: string;
+      name: string;
+      parentId: string | null;
+      occurrenceCount: number;
+      beforeSnippet: string;
+      afterSnippet: string;
+    }>
+  >([]);
+  const [selectedReplaceNodeIds, setSelectedReplaceNodeIds] = useState<string[]>([]);
+  const [lastReplaceBackup, setLastReplaceBackup] = useState<Array<{ nodeId: string; content: string }>>([]);
+  const [quickOpenOpen, setQuickOpenOpen] = useState(false);
+  const [quickOpenQuery, setQuickOpenQuery] = useState("");
+  const [commandOpen, setCommandOpen] = useState(false);
+  const [commandQuery, setCommandQuery] = useState("");
+  const [recentFileIds, setRecentFileIds] = useState<string[]>([]);
+  const [runnerOpen, setRunnerOpen] = useState(false);
+  const [runnerLoading, setRunnerLoading] = useState(false);
+  const [runnerProfiles, setRunnerProfiles] = useState<RunnerProfileRecord[]>([]);
+  const [selectedRunnerProfileId, setSelectedRunnerProfileId] = useState<string | null>(null);
+  const [runnerSessions, setRunnerSessions] = useState<RunnerSessionRecord[]>([]);
+  const [activeRunnerSessionId, setActiveRunnerSessionId] = useState<string | null>(null);
+  const [activeRunnerDetail, setActiveRunnerDetail] = useState<PersistedRunSessionDetail | null>(null);
 
   const failedLookupsRef = useRef<Set<string>>(new Set());
   const opsInProgressRef = useRef<Set<string>>(new Set());
+
+  const fileNodes = useMemo(
+    () => Object.values(nodesById).filter((node) => node?.type === "file"),
+    [nodesById]
+  );
+
+  const nodePathById = useMemo(() => {
+    const cache = new Map<string, string>();
+    const resolve = (nodeId: string): string => {
+      const cached = cache.get(nodeId);
+      if (cached) return cached;
+      const node = nodesById[nodeId];
+      if (!node) return "";
+      if (!node.parentId) {
+        cache.set(nodeId, node.name);
+        return node.name;
+      }
+      const path = `${resolve(node.parentId)}/${node.name}`;
+      cache.set(nodeId, path);
+      return path;
+    };
+    for (const node of Object.values(nodesById)) {
+      if (node?.id) resolve(node.id);
+    }
+    return cache;
+  }, [nodesById]);
+
+  const quickOpenResults = useMemo(() => {
+    const rawQuery = quickOpenQuery.trim().toLowerCase();
+    if (!rawQuery) {
+      const recent = recentFileIds
+        .map((id) => nodesById[id])
+        .filter((node): node is ProjectNode => !!node && node.type === "file");
+      if (recent.length > 0) return recent.slice(0, 40);
+      return fileNodes.slice(0, 40);
+    }
+    const scored = fileNodes
+      .map((node) => {
+        const name = node.name.toLowerCase();
+        const path = (nodePathById.get(node.id) || node.name).toLowerCase();
+        let score = 0;
+        if (name === rawQuery) score += 500;
+        if (name.startsWith(rawQuery)) score += 300;
+        if (name.includes(rawQuery)) score += 180;
+        if (path.includes(rawQuery)) score += 120;
+        if (score === 0) return null;
+        return { node, score };
+      })
+      .filter((item): item is { node: ProjectNode; score: number } => !!item)
+      .sort((a, b) => b.score - a.score || a.node.name.localeCompare(b.node.name));
+    return scored.slice(0, 50).map((item) => item.node);
+  }, [fileNodes, nodesById, nodePathById, quickOpenQuery, recentFileIds]);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(`files-recent-open:${projectId}`);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        setRecentFileIds(parsed.filter((id): id is string => typeof id === "string").slice(0, 50));
+      }
+    } catch {}
+  }, [projectId]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(`files-recent-open:${projectId}`, JSON.stringify(recentFileIds.slice(0, 50)));
+    } catch {}
+  }, [projectId, recentFileIds]);
+
+  const refreshRunnerSessions = useCallback(
+    async (preferredSessionId?: string | null, opts?: { force?: boolean }) => {
+      const now = Date.now();
+      if (!opts?.force && runnerRefreshInFlightRef.current) {
+        return runnerRefreshInFlightRef.current;
+      }
+      if (!opts?.force && now - lastRunnerRefreshAtRef.current < 400) {
+        return true;
+      }
+
+      const task = (async () => {
+        const sessionsRes = await listProjectRunSessionsAction(projectId, 40);
+        if (!sessionsRes.success) return false;
+
+        lastRunnerRefreshAtRef.current = Date.now();
+        setRunnerSessions(sessionsRes.sessions);
+
+        const existingIds = new Set(sessionsRes.sessions.map((session) => session.id));
+        for (const key of Array.from(runnerDetailCacheRef.current.keys())) {
+          if (!existingIds.has(key)) runnerDetailCacheRef.current.delete(key);
+        }
+
+        setActiveRunnerSessionId((prev) => {
+          const persisted =
+            typeof window !== "undefined"
+              ? window.localStorage.getItem(`files-runner-active-session:${projectId}`)
+              : null;
+          const candidate = preferredSessionId ?? prev ?? persisted;
+          if (candidate && sessionsRes.sessions.some((session) => session.id === candidate)) {
+            return candidate;
+          }
+          return sessionsRes.sessions[0]?.id ?? null;
+        });
+        return true;
+      })();
+
+      runnerRefreshInFlightRef.current = task;
+      try {
+        return await task;
+      } finally {
+        runnerRefreshInFlightRef.current = null;
+      }
+    },
+    [projectId]
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadRunnerBootstrap = async () => {
+      const [profilesRes] = await Promise.all([
+        getProjectRunProfilesAction(projectId),
+      ]);
+      if (cancelled) return;
+      if (profilesRes.success) {
+        setRunnerProfiles(profilesRes.profiles);
+        setSelectedRunnerProfileId((prev) => {
+          if (prev && profilesRes.profiles.some((profile) => profile.id === prev)) return prev;
+          return profilesRes.profiles.find((profile) => profile.isDefault)?.id ?? profilesRes.profiles[0]?.id ?? null;
+        });
+      } else {
+        setRunnerProfiles([]);
+        setSelectedRunnerProfileId(null);
+      }
+
+      const persistedSessionId =
+        typeof window !== "undefined"
+          ? window.localStorage.getItem(`files-runner-active-session:${projectId}`)
+          : null;
+      await refreshRunnerSessions(persistedSessionId, { force: true });
+    };
+    void loadRunnerBootstrap();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, refreshRunnerSessions]);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(`files-runner-open:${projectId}`);
+      if (raw === "1") setRunnerOpen(true);
+      if (raw === "0") setRunnerOpen(false);
+    } catch {}
+  }, [projectId]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(`files-runner-open:${projectId}`, runnerOpen ? "1" : "0");
+    } catch {}
+  }, [projectId, runnerOpen]);
+
+  useEffect(() => {
+    if (!activeRunnerSessionId) return;
+    try {
+      localStorage.setItem(`files-runner-active-session:${projectId}`, activeRunnerSessionId);
+    } catch {}
+  }, [activeRunnerSessionId, projectId]);
+
+  useEffect(() => {
+    if (!activeRunnerSessionId) {
+      setActiveRunnerDetail(null);
+      return;
+    }
+
+    const cached = runnerDetailCacheRef.current.get(activeRunnerSessionId);
+    if (cached) {
+      setActiveRunnerDetail(cached);
+      return;
+    }
+
+    let cancelled = false;
+    const loadDetail = async () => {
+      const detailRes = await getProjectRunSessionDetailAction(projectId, activeRunnerSessionId);
+      if (cancelled) return;
+      if (detailRes.success) {
+        runnerDetailCacheRef.current.set(activeRunnerSessionId, detailRes.detail);
+        setActiveRunnerDetail(detailRes.detail);
+      } else {
+        setActiveRunnerDetail(null);
+      }
+    };
+    void loadDetail();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeRunnerSessionId, projectId]);
+
+  const runSelectedProfile = useCallback(async () => {
+    if (runnerLoading) return;
+    const runSequence = ++runSequenceRef.current;
+    setRunnerLoading(true);
+    setRunnerOpen(true);
+    try {
+      const runRes = await runProjectProfileAction(projectId, {
+        profileId: selectedRunnerProfileId || undefined,
+      });
+      if (runSequenceRef.current !== runSequence) return;
+      if (!runRes.success) {
+        showToast(runRes.error || "Run failed", "error");
+        return;
+      }
+      runnerDetailCacheRef.current.set(runRes.detail.session.id, runRes.detail);
+      setActiveRunnerDetail(runRes.detail);
+      setActiveRunnerSessionId(runRes.detail.session.id);
+      await refreshRunnerSessions(runRes.detail.session.id, { force: true });
+      showToast(
+        runRes.detail.session.status === "failed"
+          ? "Run completed with errors"
+          : "Run completed",
+        runRes.detail.session.status === "failed" ? "error" : "success"
+      );
+    } finally {
+      if (runSequenceRef.current === runSequence) {
+        setRunnerLoading(false);
+      }
+    }
+  }, [projectId, refreshRunnerSessions, runnerLoading, selectedRunnerProfileId, showToast]);
+
+  const commandActions = useMemo(
+    () =>
+      [
+        {
+          id: "find",
+          label: "Find in Project",
+          run: () => {
+            setFindOpen(true);
+          },
+        },
+        {
+          id: "view-code",
+          label: "Set View: Code",
+          run: () => setViewMode(projectId, "code"),
+        },
+        {
+          id: "view-assets",
+          label: "Set View: Assets",
+          run: () => setViewMode(projectId, "assets"),
+        },
+        {
+          id: "view-all",
+          label: "Set View: All",
+          run: () => setViewMode(projectId, "all"),
+        },
+        {
+          id: "toggle-split",
+          label: splitEnabled ? "Switch to Single Editor" : "Switch to Split Editor",
+          run: () => setSplitEnabled(projectId, !splitEnabled),
+        },
+        {
+          id: "toggle-runner",
+          label: runnerOpen ? "Hide Runner Panel" : "Show Runner Panel",
+          run: () => setRunnerOpen((prev) => !prev),
+        },
+        {
+          id: "run-profile",
+          label: "Run Selected Profile",
+          run: () => {
+            void runSelectedProfile();
+          },
+        },
+      ] as Array<{ id: string; label: string; run: () => void }>,
+    [projectId, runSelectedProfile, runnerOpen, setSplitEnabled, setViewMode, splitEnabled]
+  );
+
+  const filteredCommandActions = useMemo(() => {
+    const q = commandQuery.trim().toLowerCase();
+    if (!q) return commandActions;
+    return commandActions.filter((action) => action.label.toLowerCase().includes(q));
+  }, [commandActions, commandQuery]);
 
   const ensureNodeMetadata = useCallback(
     async (nodeIds: string[]) => {
@@ -447,6 +793,18 @@ export default function ProjectFilesWorkspace({
       ) {
         return;
       }
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "p") {
+        e.preventDefault();
+        setQuickOpenOpen(true);
+        setQuickOpenQuery("");
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "p") {
+        e.preventDefault();
+        setCommandOpen(true);
+        setCommandQuery("");
+        return;
+      }
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "f") {
         e.preventDefault();
         setFindOpen(true);
@@ -455,6 +813,16 @@ export default function ProjectFilesWorkspace({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
+
+  useEffect(() => {
+    const onEscape = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (quickOpenOpen) setQuickOpenOpen(false);
+      if (commandOpen) setCommandOpen(false);
+    };
+    window.addEventListener("keydown", onEscape);
+    return () => window.removeEventListener("keydown", onEscape);
+  }, [commandOpen, quickOpenOpen]);
 
   // Find-in-project query
   useEffect(() => {
@@ -468,14 +836,45 @@ export default function ProjectFilesWorkspace({
       setFindLoading(true);
       try {
         const results = await searchProjectFileIndex(projectId, q, 50);
-        setFindResults(results as any);
-        await ensureNodeMetadata((results as any).map((r: any) => r.nodeId));
+        setFindResults(results);
+        await ensureNodeMetadata(results.map((r) => r.nodeId));
       } finally {
         setFindLoading(false);
       }
     }, 200);
     return () => clearTimeout(t);
   }, [ensureNodeMetadata, findOpen, findQuery, projectId]);
+
+  useEffect(() => {
+    if (!findOpen) return;
+    const q = findQuery.trim();
+    if (!q || q.length < 2) {
+      setReplacePreviewItems([]);
+      setSelectedReplaceNodeIds([]);
+      return;
+    }
+    const t = setTimeout(async () => {
+      setReplacePreviewLoading(true);
+      try {
+        const res = await previewProjectSearchReplace(projectId, q, replaceQuery, 80);
+        if (res.success) {
+          setReplacePreviewItems(res.items);
+          const validIds = new Set(res.items.map((item) => item.nodeId));
+          setSelectedReplaceNodeIds((prev) => {
+            const kept = prev.filter((id) => validIds.has(id));
+            return kept.length > 0 ? kept : res.items.map((item) => item.nodeId);
+          });
+          await ensureNodeMetadata(res.items.map((item) => item.nodeId));
+        } else {
+          setReplacePreviewItems([]);
+          setSelectedReplaceNodeIds([]);
+        }
+      } finally {
+        setReplacePreviewLoading(false);
+      }
+    }, 250);
+    return () => clearTimeout(t);
+  }, [ensureNodeMetadata, findOpen, findQuery, projectId, replaceQuery]);
 
   const signedUrlCacheRef = useRef<Map<string, { url: string; expiresAt: number }>>(new Map());
 
@@ -580,7 +979,7 @@ export default function ProjectFilesWorkspace({
             error: null,
           },
         }));
-      } catch (e: any) {
+      } catch (e: unknown) {
         const latestToken = loadTokenRef.current.get(node.id);
         if (latestToken !== nextToken) return;
         setTabById((prev) => ({
@@ -589,7 +988,7 @@ export default function ProjectFilesWorkspace({
             ...prev[node.id],
             node,
             isLoading: false,
-            error: e?.message || "Failed to load file content",
+            error: getErrorMessage(e, "Failed to load file content"),
           },
         }));
       } finally {
@@ -599,23 +998,158 @@ export default function ProjectFilesWorkspace({
     [ensureSignedUrlForNode, projectId, setFileState] // Removed "ws" dependency (implicit or explicit)
   );
 
+  const refreshFindReplaceData = useCallback(
+    async (query: string, replacement: string) => {
+      const trimmed = query.trim();
+      if (!trimmed) {
+        setFindResults([]);
+        setReplacePreviewItems([]);
+        setSelectedReplaceNodeIds([]);
+        return;
+      }
+      const [findRows, previewRes] = await Promise.all([
+        searchProjectFileIndex(projectId, trimmed, 50),
+        previewProjectSearchReplace(projectId, trimmed, replacement, 80),
+      ]);
+      setFindResults(findRows as Array<{ nodeId: string; snippet: string }>);
+      await ensureNodeMetadata((findRows as Array<{ nodeId: string; snippet: string }>).map((row) => row.nodeId));
+      if (previewRes.success) {
+        setReplacePreviewItems(previewRes.items);
+        setSelectedReplaceNodeIds(previewRes.items.map((item) => item.nodeId));
+      } else {
+        setReplacePreviewItems([]);
+        setSelectedReplaceNodeIds([]);
+      }
+    },
+    [ensureNodeMetadata, projectId]
+  );
+
+  const handleApplyBatchReplace = useCallback(async () => {
+    if (!canEdit) {
+      showToast("Write access required", "error");
+      return;
+    }
+    const q = findQuery.trim();
+    if (q.length < 2) {
+      showToast("Search query must be at least 2 characters", "error");
+      return;
+    }
+    const nodeIds = Array.from(new Set(selectedReplaceNodeIds)).slice(0, 60);
+    if (nodeIds.length === 0) {
+      showToast("Select at least one file", "error");
+      return;
+    }
+
+    setReplaceApplying(true);
+    try {
+      const res = await applyProjectSearchReplace(projectId, {
+        query: q,
+        replacement: replaceQuery,
+        nodeIds,
+      });
+      if (!res.success) {
+        showToast(res.error || "Replace failed", "error");
+        return;
+      }
+
+      setLastReplaceBackup(res.backup || []);
+      if ((res.changedNodeIds || []).length === 0) {
+        showToast("No matches changed", "info");
+        return;
+      }
+
+      await ensureNodeMetadata(res.changedNodeIds);
+      for (const nodeId of res.changedNodeIds) {
+        const tab = tabByIdRef.current[nodeId];
+        if (tab?.isDirty) continue;
+        const node = useFilesWorkspaceStore.getState().byProjectId[projectId]?.nodesById?.[nodeId];
+        if (node && node.type === "file") {
+          await loadFileContent(node);
+        }
+      }
+
+      await refreshFindReplaceData(q, replaceQuery);
+      showToast(`Replaced text in ${res.changedNodeIds.length} files`, "success");
+    } finally {
+      setReplaceApplying(false);
+    }
+  }, [
+    canEdit,
+    ensureNodeMetadata,
+    findQuery,
+    loadFileContent,
+    projectId,
+    refreshFindReplaceData,
+    replaceQuery,
+    selectedReplaceNodeIds,
+    showToast,
+  ]);
+
+  const handleRollbackBatchReplace = useCallback(async () => {
+    if (!canEdit) {
+      showToast("Write access required", "error");
+      return;
+    }
+    if (lastReplaceBackup.length === 0) {
+      showToast("No replace operation to rollback", "info");
+      return;
+    }
+    setReplaceApplying(true);
+    try {
+      const res = await rollbackProjectSearchReplace(projectId, lastReplaceBackup);
+      if (!res.success) {
+        showToast(res.error || "Rollback failed", "error");
+        return;
+      }
+
+      await ensureNodeMetadata(res.restoredNodeIds || []);
+      for (const nodeId of res.restoredNodeIds || []) {
+        const tab = tabByIdRef.current[nodeId];
+        if (tab?.isDirty) continue;
+        const node = useFilesWorkspaceStore.getState().byProjectId[projectId]?.nodesById?.[nodeId];
+        if (node && node.type === "file") {
+          await loadFileContent(node);
+        }
+      }
+
+      setLastReplaceBackup([]);
+      await refreshFindReplaceData(findQuery, replaceQuery);
+      showToast(`Rollback completed for ${(res.restoredNodeIds || []).length} files`, "success");
+    } finally {
+      setReplaceApplying(false);
+    }
+  }, [
+    canEdit,
+    ensureNodeMetadata,
+    findQuery,
+    lastReplaceBackup,
+    loadFileContent,
+    projectId,
+    refreshFindReplaceData,
+    replaceQuery,
+    showToast,
+  ]);
+
   const acquireLockForNode = useCallback(
     async (node: ProjectNode) => {
       if (!currentUserId) return;
       try {
-        const res = await acquireProjectNodeLock(projectId, node.id, 120);
-        if ((res as any).ok) {
+        const res = (await acquireProjectNodeLock(projectId, node.id, 120)) as NodeLockResult;
+        if (res.ok) {
           setTabById((prev) => ({
             ...prev,
             [node.id]: { ...prev[node.id], hasLock: true, lockInfo: null },
           }));
           clearLock(projectId, node.id);
         } else {
-          const lock = (res as any).lock as {
-            lockedBy: string;
-            lockedByName?: string | null;
-            expiresAt: number;
-          };
+          const lock = res.lock;
+          if (!lock) {
+            setTabById((prev) => ({
+              ...prev,
+              [node.id]: { ...prev[node.id], hasLock: false },
+            }));
+            return;
+          }
           setTabById((prev) => ({
             ...prev,
             [node.id]: { ...prev[node.id], hasLock: false, lockInfo: lock },
@@ -634,7 +1168,7 @@ export default function ProjectFilesWorkspace({
         }));
       }
     },
-    [acquireProjectNodeLock, clearLock, currentUserId, projectId, setLock]
+    [clearLock, currentUserId, projectId, setLock]
   );
 
   const openFileInPane = useCallback(
@@ -645,6 +1179,10 @@ export default function ProjectFilesWorkspace({
       setActivePane(targetPane);
       openTab(projectId, targetPane, node.id);
       setSelectedNode(projectId, node.id, node.parentId ?? null);
+      setRecentFileIds((prev) => {
+        const without = prev.filter((id) => id !== node.id);
+        return [node.id, ...without].slice(0, 50);
+      });
 
       const wantsPreview =
         isAssetLike(node) && (viewMode === "assets" || viewMode === "all" || (viewMode === "code" && !isTextLike(node)));
@@ -695,14 +1233,14 @@ export default function ProjectFilesWorkspace({
                 assetUrlExpiresAt: exp,
               },
             }));
-          } catch (e: any) {
+          } catch (e: unknown) {
             setTabById((prev) => ({
               ...prev,
               [node.id]: {
                 ...prev[node.id],
                 node,
                 isLoading: false,
-                error: e?.message || "Failed to load preview",
+                error: getErrorMessage(e, "Failed to load preview"),
               },
             }));
           }
@@ -721,6 +1259,53 @@ export default function ProjectFilesWorkspace({
     [acquireLockForNode, activePane, canEdit, ensureSignedUrlForNode, loadFileContent, openTab, projectId, setSelectedNode, viewMode]
   );
 
+  const ensureSaveGuards = useCallback(
+    async (nodeId: string, reason?: string) => {
+      const tab = tabByIdRef.current[nodeId];
+      if (!tab) return { ok: false as const, error: "Tab not found" };
+      if (!tab.hasLock) return { ok: false as const, error: "File lock lost. Reopen the file and try again." };
+
+      const refreshed = await refreshProjectNodeLock(projectId, nodeId, 120);
+      if (!refreshed.ok) {
+        setTabById((prev) => ({
+          ...prev,
+          [nodeId]: { ...prev[nodeId], hasLock: false },
+        }));
+        clearLock(projectId, nodeId);
+        return { ok: false as const, error: "File lock expired. Reopen the file to continue." };
+      }
+
+      const now = Date.now();
+      const lastCheckedAt = lastServerVersionCheckRef.current.get(nodeId) || 0;
+      const shouldCheckVersion =
+        reason !== "autosave" || now - lastCheckedAt > 15000;
+
+      if (shouldCheckVersion) {
+        lastServerVersionCheckRef.current.set(nodeId, now);
+        const latest = (await getNodesByIds(projectId, [nodeId])) as ProjectNode[];
+        const latestNode = latest[0];
+        if (!latestNode) {
+          return { ok: false as const, error: "File no longer exists." };
+        }
+        const serverUpdatedAt = new Date(latestNode.updatedAt).getTime();
+        const localUpdatedAt = new Date(tab.node.updatedAt).getTime();
+        if (serverUpdatedAt > localUpdatedAt + 500) {
+          setTabById((prev) => ({
+            ...prev,
+            [nodeId]: { ...prev[nodeId], node: latestNode },
+          }));
+          return {
+            ok: false as const,
+            error: "File changed remotely. Reload and merge before saving.",
+          };
+        }
+      }
+
+      return { ok: true as const };
+    },
+    [clearLock, projectId]
+  );
+
   const saveTab = useCallback(
     async (nodeId: string, opts?: { silent?: boolean; reason?: string }): Promise<boolean> => {
       if (!canEdit) return false;
@@ -730,6 +1315,12 @@ export default function ProjectFilesWorkspace({
       if (!tab.isDirty) return true;
       if (tab.isSaving) return false;
       if (!tab.hasLock) return false;
+
+      const guard = await ensureSaveGuards(nodeId, opts?.reason);
+      if (!guard.ok) {
+        if (!opts?.silent) showToast(guard.error, "error");
+        return false;
+      }
 
       // Offline queue
       if (typeof navigator !== "undefined" && !navigator.onLine) {
@@ -762,10 +1353,10 @@ export default function ProjectFilesWorkspace({
         const size = new TextEncoder().encode(tab.content).length;
 
         // Update metadata in DB
-        await updateProjectFileStats(projectId, nodeId, size);
+        const updatedNode = (await updateProjectFileStats(projectId, nodeId, size)) as ProjectNode;
         
         // Update local node store immediately
-        upsertNodes(projectId, [{ ...tab.node, size }]);
+        upsertNodes(projectId, [updatedNode]);
 
         // Update search index for text-like files (best-effort)
         try {
@@ -786,7 +1377,14 @@ export default function ProjectFilesWorkspace({
         setFileState(projectId, nodeId, { isDirty: false, lastSavedAt: savedAt });
         setTabById((prev) => ({
           ...prev,
-          [nodeId]: { ...prev[nodeId], isSaving: false, isDirty: false, offlineQueued: false, lastSavedAt: savedAt },
+          [nodeId]: {
+            ...prev[nodeId],
+            node: updatedNode,
+            isSaving: false,
+            isDirty: false,
+            offlineQueued: false,
+            lastSavedAt: savedAt,
+          },
         }));
         setTabById((prev) => ({
           ...prev,
@@ -808,13 +1406,13 @@ export default function ProjectFilesWorkspace({
         } catch {}
         if (!opts?.silent) showToast("File saved", "success");
         return true;
-      } catch (e: any) {
+      } catch (e: unknown) {
         setTabById((prev) => ({ ...prev, [nodeId]: { ...prev[nodeId], isSaving: false } }));
-        if (!opts?.silent) showToast(`Failed to save: ${e?.message || "Unknown error"}`, "error");
+        if (!opts?.silent) showToast(`Failed to save: ${getErrorMessage(e, "Unknown error")}`, "error");
         return false;
       }
     },
-    [canEdit, getSupabase, projectId, recordProjectNodeEvent, setFileState, showToast, updateProjectFileStats, upsertNodes, upsertProjectFileIndex]
+    [canEdit, ensureSaveGuards, getSupabase, projectId, setFileState, showToast, upsertNodes]
   );
 
   const saveContentDirect = useCallback(
@@ -826,6 +1424,14 @@ export default function ProjectFilesWorkspace({
       if (!canEdit) return false;
       if (!node?.id || !node.s3Key) return false;
 
+      if (opts?.reason !== "offline-flush") {
+        const guard = await ensureSaveGuards(node.id, opts?.reason);
+        if (!guard.ok) {
+          if (!opts?.silent) showToast(guard.error, "error");
+          return false;
+        }
+      }
+
       try {
         const supabase = getSupabase();
         const blob = new Blob([content], { type: node.mimeType || "text/plain" });
@@ -835,8 +1441,8 @@ export default function ProjectFilesWorkspace({
         if (error) throw error;
 
         const size = new TextEncoder().encode(content).length;
-        await updateProjectFileStats(projectId, node.id, size);
-        upsertNodes(projectId, [{ ...node, size }]);
+        const updatedNode = (await updateProjectFileStats(projectId, node.id, size)) as ProjectNode;
+        upsertNodes(projectId, [updatedNode]);
 
         try {
           const ext = node.name.split(".").pop()?.toLowerCase();
@@ -858,6 +1464,7 @@ export default function ProjectFilesWorkspace({
             ...prev,
             [node.id]: {
               ...prev[node.id],
+              node: updatedNode,
               content,
               savedSnapshot: content,
               isDirty: false,
@@ -876,12 +1483,12 @@ export default function ProjectFilesWorkspace({
 
         if (!opts?.silent) showToast("File saved", "success");
         return true;
-      } catch (e: any) {
-        if (!opts?.silent) showToast(`Failed to save: ${e?.message || "Unknown error"}`, "error");
+      } catch (e: unknown) {
+        if (!opts?.silent) showToast(`Failed to save: ${getErrorMessage(e, "Unknown error")}`, "error");
         return false;
       }
     },
-    [canEdit, getSupabase, projectId, recordProjectNodeEvent, setFileState, showToast, updateProjectFileStats, upsertNodes, upsertProjectFileIndex]
+    [canEdit, ensureSaveGuards, getSupabase, projectId, setFileState, showToast, upsertNodes]
   );
 
   const closeTab = useCallback(
@@ -902,7 +1509,7 @@ export default function ProjectFilesWorkspace({
       }
       closeTabStore(projectId, paneId, nodeId);
     },
-    [canEdit, clearLock, closeTabStore, projectId, releaseProjectNodeLock, saveTab, showToast]
+    [canEdit, clearLock, closeTabStore, projectId, saveTab, showToast]
   );
 
   const deleteFile = useCallback(
@@ -928,12 +1535,12 @@ export default function ProjectFilesWorkspace({
           return next;
         });
         showToast("Moved to Trash", "success");
-      } catch (e: any) {
+      } catch (e: unknown) {
         setTabById((prev) => ({ ...prev, [nodeId]: { ...prev[nodeId], isDeleting: false } }));
-        showToast(`Failed to delete file: ${e?.message || "Unknown error"}`, "error");
+        showToast(`Failed to delete file: ${getErrorMessage(e, "Unknown error")}`, "error");
       }
     },
-    [canEdit, clearLock, projectId, releaseProjectNodeLock, removeNodeFromCaches, showToast]
+    [canEdit, clearLock, projectId, removeNodeFromCaches, showToast]
   );
 
   const flushOfflineQueue = useCallback(async () => {
@@ -962,8 +1569,8 @@ export default function ProjectFilesWorkspace({
         if (!node?.s3Key) continue;
 
         try {
-          const lockRes = await acquireProjectNodeLock(projectId, nodeId, 120);
-          if (!(lockRes as any)?.ok) continue;
+          const lockRes = (await acquireProjectNodeLock(projectId, nodeId, 120)) as NodeLockResult;
+          if (!lockRes.ok) continue;
 
           const ok = await saveContentDirect(node, queue[nodeId].content, { silent: true, reason: "offline-flush" });
           if (ok) {
@@ -991,7 +1598,7 @@ export default function ProjectFilesWorkspace({
     } catch (e) {
       console.error("Offline sync failed", e);
     }
-  }, [canEdit, projectId, ensureNodeMetadata, showToast, saveContentDirect, acquireProjectNodeLock, releaseProjectNodeLock]);
+  }, [canEdit, projectId, ensureNodeMetadata, showToast, saveContentDirect]);
 
   useEffect(() => {
     const onOnline = () => {
@@ -1055,10 +1662,10 @@ export default function ProjectFilesWorkspace({
                 ...prev,
                 [id]: { ...prev[id], isLoading: false, assetUrl: url, assetUrlExpiresAt: exp },
               }));
-            } catch (e: any) {
+            } catch (e: unknown) {
               setTabById((prev) => ({
                 ...prev,
-                [id]: { ...prev[id], isLoading: false, error: e?.message || "Failed to load preview" },
+                [id]: { ...prev[id], isLoading: false, error: getErrorMessage(e, "Failed to load preview") },
               }));
             }
           } else {
@@ -1069,27 +1676,37 @@ export default function ProjectFilesWorkspace({
     })();
     // Dependencies are now just the ID lists (strings). 
     // We intentionally exclude 'ensureNodeMetadata' and 'loadFileContent' if they are stable.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, leftOpenTabIds.join(","), rightOpenTabIds.join(","), viewMode]);
+     
+  }, [
+    ensureNodeMetadata,
+    ensureSignedUrlForNode,
+    leftOpenTabIds,
+    leftOpenTabIdsKey,
+    loadFileContent,
+    projectId,
+    rightOpenTabIds,
+    rightOpenTabIdsKey,
+    viewMode,
+  ]);
 
   // Save previous active tab on switch, per pane (best-effort)
   useEffect(() => {
     for (const paneId of panesToRender) {
       const prev = prevActiveRef.current[paneId];
-      const current = panes[paneId]?.activeTabId;
+      const current = activeTabIdByPane[paneId];
       if (prev && prev !== current) {
         const prevTab = tabByIdRef.current[prev];
         if (prevTab?.isDirty && canEdit) void saveTab(prev, { silent: true, reason: "switch" });
       }
       prevActiveRef.current[paneId] = current;
     }
-  }, [canEdit, panesToRender, saveTab, panes.left?.activeTabId, panes.right?.activeTabId]);
+  }, [activeTabIdByPane, canEdit, panesToRender, saveTab, leftActiveTabId, rightActiveTabId]);
 
   // Ensure active tabs attempt to acquire a lock
   useEffect(() => {
     if (!currentUserId) return;
     for (const paneId of panesToRender) {
-      const id = panes[paneId]?.activeTabId;
+      const id = activeTabIdByPane[paneId];
       if (!id) continue;
       const tab = tabById[id];
       if (!tab) continue;
@@ -1097,42 +1714,46 @@ export default function ProjectFilesWorkspace({
       if (!canEdit) continue;
       void acquireLockForNode(tab.node);
     }
-  }, [acquireLockForNode, canEdit, currentUserId, panesToRender, tabById, panes.left?.activeTabId, panes.right?.activeTabId]);
+  }, [acquireLockForNode, activeTabIdByPane, canEdit, currentUserId, panesToRender, tabById, leftActiveTabId, rightActiveTabId]);
 
   // Debounced autosave per pane active tab
   useEffect(() => {
+    const paneTimers = autosaveTimerRef.current;
     for (const paneId of panesToRender) {
-      if (autosaveTimerRef.current[paneId]) clearTimeout(autosaveTimerRef.current[paneId]!);
-      const id = panes[paneId]?.activeTabId;
+      if (paneTimers[paneId]) clearTimeout(paneTimers[paneId]!);
+      const id = activeTabIdByPane[paneId];
       if (!id || !canEdit) continue;
       const tab = tabById[id];
       if (!tab || !tab.isDirty || tab.isSaving) continue;
 
-      autosaveTimerRef.current[paneId] = setTimeout(() => {
+      paneTimers[paneId] = setTimeout(() => {
         void saveTab(id, { silent: true, reason: "autosave" });
-      }, 1000);
+      }, 2500);
     }
     return () => {
       for (const paneId of panesToRender) {
-        if (autosaveTimerRef.current[paneId]) clearTimeout(autosaveTimerRef.current[paneId]!);
+        if (paneTimers[paneId]) clearTimeout(paneTimers[paneId]!);
       }
     };
-  }, [canEdit, panesToRender, saveTab, tabById, panes.left?.activeTabId, panes.right?.activeTabId]);
+  }, [activeTabIdByPane, canEdit, panesToRender, saveTab, tabById, leftActiveTabId, rightActiveTabId]);
 
   // Keepalive for active locks
   useEffect(() => {
     if (!currentUserId) return;
     const interval = setInterval(() => {
+      const activeIds = new Set<string>();
       for (const paneId of panesToRender) {
-        const id = panes[paneId]?.activeTabId;
-        if (!id) continue;
+        const id = activeTabIdByPane[paneId];
+        if (id) activeIds.add(id);
+      }
+      for (const id of activeIds) {
         const tab = tabByIdRef.current[id];
         if (!tab?.hasLock) continue;
         void refreshProjectNodeLock(projectId, id, 120);
       }
-    }, 45_000);
+    }, 60_000);
     return () => clearInterval(interval);
-  }, [currentUserId, panesToRender, projectId, panes.left?.activeTabId, panes.right?.activeTabId]);
+  }, [activeTabIdByPane, currentUserId, panesToRender, projectId, leftActiveTabId, rightActiveTabId]);
 
   const startResize = (e: React.MouseEvent) => {
     if (!splitEnabled) return;
@@ -1157,10 +1778,36 @@ export default function ProjectFilesWorkspace({
   const nothingOpen =
     panes.left.openTabIds.length === 0 && (!splitEnabled || panes.right.openTabIds.length === 0);
 
+  const handleOpenRunnerDiagnostic = useCallback(
+    async (nodeId: string | null, filePath?: string | null) => {
+      let resolvedNodeId = nodeId;
+      if (!resolvedNodeId && filePath) {
+        const byPath = await findNodeByPathAny(
+          projectId,
+          filePath.split("/").filter(Boolean)
+        );
+        resolvedNodeId = byPath?.id ?? null;
+      }
+      if (!resolvedNodeId) return;
+
+      let node = useFilesWorkspaceStore.getState().byProjectId[projectId]?.nodesById?.[resolvedNodeId];
+      if (!node) {
+        await ensureNodeMetadata([resolvedNodeId]);
+        node = useFilesWorkspaceStore.getState().byProjectId[projectId]?.nodesById?.[resolvedNodeId];
+      }
+      if (!node || node.type !== "file") {
+        showToast("Diagnostic file is no longer available", "error");
+        return;
+      }
+      await openFileInPane(node, activePane);
+    },
+    [activePane, ensureNodeMetadata, openFileInPane, projectId, showToast]
+  );
+
   return (
     <div className="flex-1 w-full min-h-0 flex bg-white dark:bg-zinc-950 overflow-hidden rounded-lg border border-zinc-200 dark:border-zinc-800 shadow-sm relative isolate">
       {/* Explorer */}
-      <div className="w-[320px] flex-shrink-0 border-r border-zinc-200 dark:border-zinc-800 flex flex-col h-full bg-zinc-50/50 dark:bg-zinc-900/50 relative z-10">
+      <div className="w-[290px] flex-shrink-0 border-r border-zinc-200 dark:border-zinc-800 flex flex-col h-full bg-zinc-50/50 dark:bg-zinc-900/50 relative z-10">
         <FileExplorer
           projectId={projectId}
           projectName={projectName}
@@ -1182,16 +1829,40 @@ export default function ProjectFilesWorkspace({
           }}
         />
 
-        <div className="relative z-10 flex items-center justify-between px-3 py-2 border-b border-zinc-200 dark:border-zinc-800 bg-white/80 dark:bg-zinc-950/80 backdrop-blur">
-          <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-            Editor
+        <div className="relative z-10 flex items-center justify-between gap-2 px-2.5 py-1.5 border-b border-zinc-200 dark:border-zinc-800 bg-white/80 dark:bg-zinc-950/80 backdrop-blur">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100 shrink-0">
+              Editor
+            </div>
+            {headerSearchOpen ? (
+              <input
+                autoFocus
+                value={headerSearchQuery}
+                onChange={(e) => setHeaderSearchQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    setHeaderSearchOpen(false);
+                    setHeaderSearchQuery("");
+                    return;
+                  }
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    setQuickOpenOpen(true);
+                    setQuickOpenQuery(headerSearchQuery.trim());
+                  }
+                }}
+                placeholder="Search files..."
+                className="h-7 w-[180px] rounded-md border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 px-2 text-xs outline-none"
+              />
+            ) : null}
           </div>
-          <div className="flex items-center gap-2">
+
+          <div className="flex items-center gap-1.5">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button size="sm" variant="outline" className="h-8">
-                  <Layers className="w-4 h-4 mr-2" />
-                  View: {viewMode === "code" ? "Code" : viewMode === "assets" ? "Assets" : "All"}
+                <Button size="sm" variant="outline" className="h-7 px-2 text-xs">
+                  <Layers className="w-3.5 h-3.5 mr-1.5" />
+                  {viewMode === "code" ? "Code" : viewMode === "assets" ? "Assets" : "All"}
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
@@ -1200,60 +1871,117 @@ export default function ProjectFilesWorkspace({
                 <DropdownMenuItem onClick={() => setViewMode(projectId, "all")}>All</DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
+
             <Button
               size="sm"
               variant="outline"
-              className="h-8"
-              onClick={() => setFindOpen(true)}
-              title="Find in project (Ctrl/⌘+Shift+F)"
+              className="h-7 w-7 p-0"
+              onClick={() => {
+                setHeaderSearchOpen((prev) => !prev);
+                if (headerSearchOpen) setHeaderSearchQuery("");
+              }}
+              title="Search files"
             >
-              Find
+              <Search className="w-3.5 h-3.5" />
             </Button>
+
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button size="sm" variant="outline" className="h-8">
-                  <MoreVertical className="w-4 h-4 mr-2" />
-                  Settings
+                <Button size="sm" variant="outline" className="h-7 px-2 text-xs">
+                  <Play className="w-3.5 h-3.5 mr-1.5" />
+                  Run
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
+              <DropdownMenuContent align="end" className="w-56">
                 <DropdownMenuItem
-                  onClick={() => setPrefs(projectId, { lineNumbers: !prefs.lineNumbers })}
+                  disabled={!canEdit || runnerLoading || runnerProfiles.length === 0}
+                  onClick={() => void runSelectedProfile()}
                 >
-                  {prefs.lineNumbers ? "Hide" : "Show"} line numbers
+                  {runnerLoading ? "Running..." : "Run selected profile"}
                 </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={() => setPrefs(projectId, { wordWrap: !prefs.wordWrap })}
-                >
-                  {prefs.wordWrap ? "Disable" : "Enable"} word wrap
+                <DropdownMenuItem onClick={() => setRunnerOpen((prev) => !prev)}>
+                  {runnerOpen ? "Hide runner panel" : "Show runner panel"}
                 </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={() => setPrefs(projectId, { minimap: !prefs.minimap })}
-                >
-                  {prefs.minimap ? "Hide" : "Show"} minimap
+                <DropdownMenuItem onClick={() => void refreshRunnerSessions(activeRunnerSessionId, { force: true })}>
+                  Refresh run history
                 </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={() => setPrefs(projectId, { fontSize: Math.max(12, prefs.fontSize - 1) })}
-                >
-                  Font size: -
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={() => setPrefs(projectId, { fontSize: Math.min(20, prefs.fontSize + 1) })}
-                >
-                  Font size: +
-                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                {runnerProfiles.length === 0 ? (
+                  <DropdownMenuItem disabled>No profiles</DropdownMenuItem>
+                ) : (
+                  runnerProfiles.map((profile) => (
+                    <DropdownMenuCheckboxItem
+                      key={profile.id}
+                      checked={selectedRunnerProfileId === profile.id}
+                      onCheckedChange={(checked) => {
+                        if (checked) setSelectedRunnerProfileId(profile.id);
+                      }}
+                    >
+                      {profile.name}
+                    </DropdownMenuCheckboxItem>
+                  ))
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
 
             <Button
               size="sm"
-              variant="outline"
-              className="h-8"
-              onClick={() => setSplitEnabled(projectId, !splitEnabled)}
+              variant={runnerOpen ? "secondary" : "outline"}
+              className="h-7 px-2 text-xs"
+              onClick={() => setRunnerOpen((prev) => !prev)}
+              title={runnerOpen ? "Hide runner panel" : "Show runner panel"}
             >
-              <SplitSquareVertical className="w-4 h-4 mr-2" />
-              {splitEnabled ? "Single" : "Split"}
+              <TerminalSquare className="w-3.5 h-3.5 mr-1.5" />
+              Runner
             </Button>
+
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button size="sm" variant="outline" className="h-7 px-2 text-xs">
+                  <MoreVertical className="w-3.5 h-3.5 mr-1.5" />
+                  Workspace
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuItem
+                  onClick={() => {
+                    setQuickOpenOpen(true);
+                    setQuickOpenQuery("");
+                  }}
+                >
+                  Quick open
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setFindOpen(true)}>Find in project</DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => {
+                    setCommandOpen(true);
+                    setCommandQuery("");
+                  }}
+                >
+                  Command palette
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => setSplitEnabled(projectId, !splitEnabled)}>
+                  {splitEnabled ? "Single editor mode" : "Split editor mode"}
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => setPrefs(projectId, { lineNumbers: !prefs.lineNumbers })}>
+                  {prefs.lineNumbers ? "Hide" : "Show"} line numbers
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setPrefs(projectId, { wordWrap: !prefs.wordWrap })}>
+                  {prefs.wordWrap ? "Disable" : "Enable"} word wrap
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setPrefs(projectId, { minimap: !prefs.minimap })}>
+                  {prefs.minimap ? "Hide" : "Show"} minimap
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setPrefs(projectId, { fontSize: Math.max(12, prefs.fontSize - 1) })}>
+                  Font size -
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setPrefs(projectId, { fontSize: Math.min(20, prefs.fontSize + 1) })}>
+                  Font size +
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </div>
 
@@ -1366,6 +2094,103 @@ export default function ProjectFilesWorkspace({
           </div>
         ) : null}
 
+        {/* Quick Open */}
+        {quickOpenOpen ? (
+          <div className="absolute inset-0 z-20 bg-black/30 flex items-start justify-center p-4 pt-16">
+            <div className="w-full max-w-2xl rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 shadow-2xl overflow-hidden">
+              <div className="px-4 py-3 border-b border-zinc-200 dark:border-zinc-800">
+                <input
+                  autoFocus
+                  className="w-full h-9 px-3 rounded-md border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 text-sm outline-none"
+                  placeholder="Quick open files..."
+                  value={quickOpenQuery}
+                  onChange={(e) => setQuickOpenQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") {
+                      setQuickOpenOpen(false);
+                      return;
+                    }
+                    if (e.key === "Enter" && quickOpenResults[0]) {
+                      e.preventDefault();
+                      void openFileInPane(quickOpenResults[0], activePane);
+                      setQuickOpenOpen(false);
+                      setQuickOpenQuery("");
+                    }
+                  }}
+                />
+              </div>
+              <div className="max-h-[60vh] overflow-auto divide-y divide-zinc-200 dark:divide-zinc-800">
+                {quickOpenResults.length === 0 ? (
+                  <div className="px-4 py-3 text-sm text-zinc-500">No matching files</div>
+                ) : (
+                  quickOpenResults.map((node) => (
+                    <button
+                      key={node.id}
+                      className="w-full text-left px-4 py-2 hover:bg-zinc-50 dark:hover:bg-zinc-900"
+                      onClick={() => {
+                        void openFileInPane(node, activePane);
+                        setQuickOpenOpen(false);
+                        setQuickOpenQuery("");
+                      }}
+                    >
+                      <div className="text-sm font-medium text-zinc-900 dark:text-zinc-100 truncate">{node.name}</div>
+                      <div className="text-xs text-zinc-500 truncate">{nodePathById.get(node.id) || node.name}</div>
+                    </button>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {/* Command Palette */}
+        {commandOpen ? (
+          <div className="absolute inset-0 z-20 bg-black/30 flex items-start justify-center p-4 pt-16">
+            <div className="w-full max-w-xl rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 shadow-2xl overflow-hidden">
+              <div className="px-4 py-3 border-b border-zinc-200 dark:border-zinc-800">
+                <input
+                  autoFocus
+                  className="w-full h-9 px-3 rounded-md border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 text-sm outline-none"
+                  placeholder="Type a command..."
+                  value={commandQuery}
+                  onChange={(e) => setCommandQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") {
+                      setCommandOpen(false);
+                      return;
+                    }
+                    if (e.key === "Enter" && filteredCommandActions[0]) {
+                      e.preventDefault();
+                      filteredCommandActions[0].run();
+                      setCommandOpen(false);
+                      setCommandQuery("");
+                    }
+                  }}
+                />
+              </div>
+              <div className="max-h-[50vh] overflow-auto divide-y divide-zinc-200 dark:divide-zinc-800">
+                {filteredCommandActions.length === 0 ? (
+                  <div className="px-4 py-3 text-sm text-zinc-500">No command found</div>
+                ) : (
+                  filteredCommandActions.map((action) => (
+                    <button
+                      key={action.id}
+                      className="w-full text-left px-4 py-2 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-900"
+                      onClick={() => {
+                        action.run();
+                        setCommandOpen(false);
+                        setCommandQuery("");
+                      }}
+                    >
+                      {action.label}
+                    </button>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        ) : null}
+
         {/* Find in Project */}
         {findOpen ? (
           <div className="absolute inset-0 z-20 bg-black/30 flex items-center justify-center p-4">
@@ -1377,7 +2202,10 @@ export default function ProjectFilesWorkspace({
                   onClick={() => {
                     setFindOpen(false);
                     setFindQuery("");
+                    setReplaceQuery("");
                     setFindResults([]);
+                    setReplacePreviewItems([]);
+                    setSelectedReplaceNodeIds([]);
                   }}
                   aria-label="Close find"
                 >
@@ -1385,53 +2213,161 @@ export default function ProjectFilesWorkspace({
                 </button>
               </div>
               <div className="p-4 space-y-3">
-                <input
-                  autoFocus
-                  className="w-full h-9 px-3 rounded-md border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 text-sm outline-none"
-                  placeholder="Search text (indexed on save)…"
-                  value={findQuery}
-                  onChange={(e) => setFindQuery(e.target.value)}
-                />
-                <div className="max-h-[50vh] overflow-auto rounded-md border border-zinc-200 dark:border-zinc-800">
-                  {findLoading ? (
-                    <div className="p-3 text-sm text-zinc-500">Searching…</div>
-                  ) : findResults.length === 0 ? (
-                    <div className="p-3 text-sm text-zinc-500">No results</div>
-                  ) : (
-                    <div className="divide-y divide-zinc-200 dark:divide-zinc-800">
-                      {findResults.map((r) => {
-                        const node = nodesById[r.nodeId];
-                        return (
-                          <button
-                            key={r.nodeId}
-                            className="w-full text-left px-4 py-3 hover:bg-zinc-50 dark:hover:bg-zinc-900"
-                            onClick={() => {
-                              if (!node) return;
-                              setFindOpen(false);
-                              setFindQuery("");
-                              setFindResults([]);
-                              void openFileInPane(node, activePane);
-                            }}
-                          >
-                            <div className="text-xs font-semibold text-zinc-800 dark:text-zinc-200 truncate">
-                              {node?.name || r.nodeId}
-                            </div>
-                            <div className="text-xs text-zinc-500 font-mono whitespace-pre-wrap break-words mt-1">
-                              {r.snippet}
-                            </div>
-                          </button>
-                        );
-                      })}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                  <input
+                    autoFocus
+                    className="w-full h-9 px-3 rounded-md border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 text-sm outline-none"
+                    placeholder="Search text (indexed on save)…"
+                    value={findQuery}
+                    onChange={(e) => setFindQuery(e.target.value)}
+                  />
+                  <input
+                    className="w-full h-9 px-3 rounded-md border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 text-sm outline-none"
+                    placeholder="Replace with..."
+                    value={replaceQuery}
+                    onChange={(e) => setReplaceQuery(e.target.value)}
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      if (replacePreviewItems.length === 0) return;
+                      setSelectedReplaceNodeIds(replacePreviewItems.map((item) => item.nodeId));
+                    }}
+                    disabled={replacePreviewItems.length === 0}
+                  >
+                    Select all
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setSelectedReplaceNodeIds([])}
+                    disabled={selectedReplaceNodeIds.length === 0}
+                  >
+                    Clear
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={() => void handleApplyBatchReplace()}
+                    disabled={!canEdit || replaceApplying || selectedReplaceNodeIds.length === 0}
+                  >
+                    {replaceApplying ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+                    Apply Replace
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void handleRollbackBatchReplace()}
+                    disabled={!canEdit || replaceApplying || lastReplaceBackup.length === 0}
+                  >
+                    Rollback Last
+                  </Button>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div className="rounded-md border border-zinc-200 dark:border-zinc-800 overflow-hidden">
+                    <div className="px-3 py-2 text-xs font-semibold border-b border-zinc-200 dark:border-zinc-800">Search Results</div>
+                    <div className="max-h-[38vh] overflow-auto">
+                      {findLoading ? (
+                        <div className="p-3 text-sm text-zinc-500">Searching…</div>
+                      ) : findResults.length === 0 ? (
+                        <div className="p-3 text-sm text-zinc-500">No results</div>
+                      ) : (
+                        <div className="divide-y divide-zinc-200 dark:divide-zinc-800">
+                          {findResults.map((r) => {
+                            const node = nodesById[r.nodeId];
+                            return (
+                              <button
+                                key={r.nodeId}
+                                className="w-full text-left px-4 py-3 hover:bg-zinc-50 dark:hover:bg-zinc-900"
+                                onClick={() => {
+                                  if (!node) return;
+                                  void openFileInPane(node, activePane);
+                                }}
+                              >
+                                <div className="text-xs font-semibold text-zinc-800 dark:text-zinc-200 truncate">
+                                  {node?.name || r.nodeId}
+                                </div>
+                                <div className="text-xs text-zinc-500 font-mono whitespace-pre-wrap break-words mt-1">
+                                  {r.snippet}
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
-                  )}
+                  </div>
+
+                  <div className="rounded-md border border-zinc-200 dark:border-zinc-800 overflow-hidden">
+                    <div className="px-3 py-2 text-xs font-semibold border-b border-zinc-200 dark:border-zinc-800">
+                      Replace Preview ({selectedReplaceNodeIds.length} selected)
+                    </div>
+                    <div className="max-h-[38vh] overflow-auto">
+                      {replacePreviewLoading ? (
+                        <div className="p-3 text-sm text-zinc-500">Preparing preview…</div>
+                      ) : replacePreviewItems.length === 0 ? (
+                        <div className="p-3 text-sm text-zinc-500">No files to replace</div>
+                      ) : (
+                        <div className="divide-y divide-zinc-200 dark:divide-zinc-800">
+                          {replacePreviewItems.map((item) => {
+                            const checked = selectedReplaceNodeIds.includes(item.nodeId);
+                            const node = nodesById[item.nodeId];
+                            return (
+                              <div key={item.nodeId} className="px-3 py-2 space-y-1">
+                                <label className="flex items-center gap-2 text-xs text-zinc-800 dark:text-zinc-200">
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={(e) => {
+                                      setSelectedReplaceNodeIds((prev) => {
+                                        if (e.target.checked) return Array.from(new Set([...prev, item.nodeId]));
+                                        return prev.filter((id) => id !== item.nodeId);
+                                      });
+                                    }}
+                                  />
+                                  <span className="font-semibold truncate">{node?.name || item.name}</span>
+                                  <span className="text-zinc-500 ml-auto">{item.occurrenceCount} hits</span>
+                                </label>
+                                <div className="text-[11px] text-zinc-500 font-mono break-words">
+                                  {item.beforeSnippet}
+                                </div>
+                                <div className="text-[11px] text-emerald-600 dark:text-emerald-400 font-mono break-words">
+                                  {item.afterSnippet}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 </div>
                 <div className="text-xs text-zinc-400">
-                  Note: results include files that have been saved at least once (indexed on save).
+                  Indexed-search scope only. Batch replace is fenced to selected files and can rollback the latest operation.
                 </div>
               </div>
             </div>
           </div>
         ) : null}
+
+        <RunnerPanel
+          open={runnerOpen}
+          loading={runnerLoading}
+          sessions={runnerSessions}
+          detail={activeRunnerDetail}
+          storageKey={`files-runner-ui:${projectId}`}
+          onToggleOpen={() => setRunnerOpen((prev) => !prev)}
+          onSelectSession={(sessionId) => setActiveRunnerSessionId(sessionId)}
+          onOpenDiagnostic={(nodeId, filePath) => {
+            void handleOpenRunnerDiagnostic(nodeId, filePath);
+          }}
+          onRefreshRuns={() => {
+            void refreshRunnerSessions(activeRunnerSessionId, { force: true });
+          }}
+        />
       </div>
       {/* Syncing Overlay */}
       {showOverlay && (

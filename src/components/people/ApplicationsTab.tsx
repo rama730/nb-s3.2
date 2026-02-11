@@ -6,11 +6,18 @@ import Link from "next/link";
 import { getMyApplicationsAction } from "@/app/actions/applications";
 
 interface ApplicationsTabProps {
-    initialUser: any;
+    initialUser: { id?: string | null } | null;
 }
 
+type MyApplicationsResponse = Awaited<ReturnType<typeof getMyApplicationsAction>>;
+type MyApplication = MyApplicationsResponse extends { applications: infer T }
+    ? T extends Array<infer U>
+        ? U
+        : never
+    : never;
+
 export default function ApplicationsTab({ initialUser }: ApplicationsTabProps) {
-    const [applications, setApplications] = useState<any[]>([]);
+    const [applications, setApplications] = useState<MyApplication[]>([]);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {

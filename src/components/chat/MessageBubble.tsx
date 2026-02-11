@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import Image from 'next/image';
 import { useAuth } from '@/hooks/useAuth';
 import type { MessageWithSender } from '@/app/actions/messaging';
 import { editMessage, deleteMessage } from '@/app/actions/messaging';
@@ -57,8 +58,10 @@ export function MessageBubble({ message, showAvatar = true }: MessageBubbleProps
     const pinMessage = useChatStore((state) => state.pinMessage);
     const isOwn = message.senderId === user?.id;
     const isDeleted = !!message.deletedAt;
-    const metadata = message.metadata as any;
+    const metadata = (message.metadata ?? null) as Record<string, unknown> | null;
     const isPinned = Boolean(metadata?.pinned);
+    const isApplication = metadata?.isApplication === true;
+    const applicationStatus = typeof metadata?.status === 'string' ? metadata.status : null;
     const [activeMediaIndex, setActiveMediaIndex] = useState<number | null>(null);
     const [isEditing, setIsEditing] = useState(false);
     const [draftContent, setDraftContent] = useState(message.content || '');
@@ -67,7 +70,10 @@ export function MessageBubble({ message, showAvatar = true }: MessageBubbleProps
     const [isMenuOpen, setIsMenuOpen] = useState(false);
     const [isHovered, setIsHovered] = useState(false);
 
-    const attachments = (message.attachments || []) as ChatAttachment[];
+    const attachments = useMemo(
+        () => (message.attachments || []) as ChatAttachment[],
+        [message.attachments]
+    );
     const mediaAttachments = useMemo(
         () => attachments.filter((attachment) => attachment.type === 'image' || attachment.type === 'video'),
         [attachments]
@@ -224,9 +230,12 @@ export function MessageBubble({ message, showAvatar = true }: MessageBubbleProps
                 {!isOwn && showAvatar && (
                     <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center overflow-hidden">
                         {message.sender?.avatarUrl ? (
-                            <img
+                            <Image
                                 src={message.sender.avatarUrl}
                                 alt={message.sender.fullName || ''}
+                                width={32}
+                                height={32}
+                                unoptimized
                                 className="w-full h-full object-cover"
                             />
                         ) : (
@@ -317,19 +326,19 @@ export function MessageBubble({ message, showAvatar = true }: MessageBubbleProps
                                             </p>
                                         </button>
                                     )}
-                                    {(isPinned || metadata?.isApplication) && (
+                                    {(isPinned || isApplication) && (
                                         <div className="mb-1 flex items-center gap-2">
                                             {isPinned && (
                                                 <span className={`text-[10px] uppercase font-bold ${isOwn ? 'text-white/80' : 'text-amber-600 dark:text-amber-400'}`}>
                                                     Pinned
                                                 </span>
                                             )}
-                                            {metadata?.isApplication && (
+                                            {isApplication && (
                                                 <span className={`text-[10px] uppercase font-bold opacity-70 ${!isOwn ? 'text-zinc-500' : 'text-white'}`}>
                                                     Application Status: {
-                                                        metadata.status === 'accepted' ? 'Accepted' :
-                                                            metadata.status === 'rejected' ? 'Rejected' :
-                                                                metadata.status === 'project_deleted' ? 'Project Has Been Deleted' :
+                                                        applicationStatus === 'accepted' ? 'Accepted' :
+                                                            applicationStatus === 'rejected' ? 'Rejected' :
+                                                                applicationStatus === 'project_deleted' ? 'Project Has Been Deleted' :
                                                                     'Pending'
                                                     }
                                                 </span>
@@ -620,10 +629,12 @@ function MediaAttachmentTile({
             className={`relative rounded-lg overflow-hidden bg-zinc-100 dark:bg-zinc-800 ${isSingle ? 'h-auto' : 'h-36'} focus:outline-none focus:ring-2 focus:ring-blue-500/60`}
         >
             {!loaded && <div className="absolute inset-0 animate-pulse bg-zinc-200/80 dark:bg-zinc-700/70" />}
-            <img
+            <Image
                 src={previewUrl}
                 alt={attachment.filename}
-                loading="lazy"
+                width={640}
+                height={360}
+                unoptimized
                 onLoad={() => setLoaded(true)}
                 className={`w-full ${isSingle ? 'max-h-80 object-contain bg-zinc-900/40' : 'h-36 object-cover'} ${loaded ? 'opacity-100' : 'opacity-0'} transition-opacity duration-200`}
             />
@@ -790,10 +801,13 @@ function MediaViewerModal({
                             className="max-h-[82vh] w-auto rounded-lg bg-black"
                         />
                     ) : (
-                        <img
+                        <Image
                             key={currentAttachment.id}
                             src={currentAttachment.url}
                             alt={currentAttachment.filename}
+                            width={1200}
+                            height={900}
+                            unoptimized
                             className="max-h-[82vh] w-auto rounded-lg"
                             style={{ transform: `scale(${zoomLevel})`, transformOrigin: 'center center' }}
                         />

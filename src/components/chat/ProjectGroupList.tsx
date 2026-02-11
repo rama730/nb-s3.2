@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, memo, useCallback } from 'react';
+import Image from 'next/image';
 import { useChatStore } from '@/stores/chatStore';
 import type { ProjectGroupConversation } from '@/app/actions/messaging';
 import { formatDistanceToNow } from 'date-fns';
@@ -30,11 +31,13 @@ const ProjectGroupItem = memo(function ProjectGroupItem({
             <div className="relative flex-shrink-0">
                 <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center overflow-hidden ring-2 ring-white dark:ring-zinc-900">
                     {group.projectCoverImage ? (
-                        <img
+                        <Image
                             src={group.projectCoverImage}
                             alt={group.projectTitle}
+                            width={48}
+                            height={48}
+                            unoptimized
                             className="w-full h-full object-cover"
-                            loading="lazy"
                         />
                     ) : (
                         <Folder className="w-5 h-5 text-white" />

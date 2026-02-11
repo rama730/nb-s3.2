@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback, useMemo } from 'react';
+import Image from 'next/image';
 import { useChatStore } from '@/stores/chatStore';
 import { useAuth } from '@/lib/hooks/use-auth';
 import { MessageThread } from '@/components/chat/MessageThread';
@@ -319,15 +320,18 @@ export default function MessagesClient({ targetUserId, initialConversationId }: 
                                     return (
                                         <button
                                             key={message.id}
-                                            onClick={() => handleSearchResultClick(conversationId, (item as any).conversation)}
+                                            onClick={() => handleSearchResultClick(conversationId, item.conversation)}
                                             className="w-full flex flex-col gap-1 p-4 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 text-left transition-colors"
                                         >
                                             <div className="flex items-center gap-2">
                                                 <div className="w-6 h-6 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center overflow-hidden">
                                                     {participant?.avatarUrl ? (
-                                                        <img
+                                                        <Image
                                                             src={participant.avatarUrl}
                                                             alt=""
+                                                            width={24}
+                                                            height={24}
+                                                            unoptimized
                                                             className="w-full h-full object-cover"
                                                         />
                                                     ) : (
@@ -355,7 +359,7 @@ export default function MessagesClient({ targetUserId, initialConversationId }: 
                                     <div className="relative flex-shrink-0">
                                         <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center overflow-hidden">
                                             {targetUser.avatarUrl ? (
-                                                <img src={targetUser.avatarUrl} alt="" className="w-full h-full object-cover" />
+                                                <Image src={targetUser.avatarUrl} alt="" width={48} height={48} unoptimized className="w-full h-full object-cover" />
                                             ) : (
                                                 <span className="text-white font-medium">
                                                     {(targetUser.fullName || targetUser.username || '?')[0].toUpperCase()}
@@ -400,9 +404,12 @@ export default function MessagesClient({ targetUserId, initialConversationId }: 
                             <div className="flex items-center gap-3">
                                 <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center overflow-hidden">
                                     {otherParticipant.avatarUrl ? (
-                                        <img
+                                        <Image
                                             src={otherParticipant.avatarUrl}
                                             alt={otherParticipant.fullName || ''}
+                                            width={40}
+                                            height={40}
+                                            unoptimized
                                             className="w-full h-full object-cover"
                                         />
                                     ) : (
@@ -466,7 +473,7 @@ export default function MessagesClient({ targetUserId, initialConversationId }: 
                          <div className="flex items-center gap-3 px-6 py-4 border-b border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
                              <div className="w-10 h-10 rounded-full bg-zinc-200 dark:bg-zinc-800 flex items-center justify-center overflow-hidden">
                                 {targetUser.avatarUrl ? (
-                                    <img src={targetUser.avatarUrl} alt="" className="w-full h-full object-cover" />
+                                    <Image src={targetUser.avatarUrl} alt="" width={40} height={40} unoptimized className="w-full h-full object-cover" />
                                 ) : (
                                      <span className="text-zinc-500 font-medium">
                                         {(targetUser.fullName || targetUser.username || '?')[0].toUpperCase()}

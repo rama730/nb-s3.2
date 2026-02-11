@@ -1,11 +1,12 @@
 'use client';
 
 import { useState, useRef, useCallback, useEffect } from 'react';
+import NextImage from 'next/image';
 import { useChatStore } from '@/stores/chatStore';
 import { useTypingChannel } from '@/hooks/useTypingChannel';
 import { uploadAttachment, cancelAttachmentUpload, type UploadedAttachment } from '@/app/actions/messaging';
 import { checkConnectionStatus, acceptConnectionRequest } from '@/app/actions/connections';
-import { Send, Paperclip, Image, X, Loader2, UserPlus, Clock, Check, AlertTriangle, RotateCcw, Pause, Play } from 'lucide-react';
+import { Send, Paperclip, Image as ImageIcon, X, Loader2, UserPlus, Clock, Check, AlertTriangle, RotateCcw, Pause, Play } from 'lucide-react';
 import { toast } from 'sonner';
 import { ChatApplicationBanner } from './ChatApplicationBanner';
 import { useRouter } from 'next/navigation';
@@ -355,7 +356,7 @@ export function MessageInput({ conversationId, targetUserId }: MessageInputProps
         try {
             await sendConnectionRequest();
             toast.success('Connection request sent');
-        } catch (error) {
+        } catch {
             toast.error('Failed to send request');
         } finally {
             setRequestLoading(false);
@@ -569,13 +570,16 @@ export function MessageInput({ conversationId, targetUserId }: MessageInputProps
                                 <Loader2 className="w-4 h-4 text-blue-500 animate-spin" />
                             ) : att.file.type.startsWith('image/') ? (
                                 att.preview ? (
-                                    <img
+                                    <NextImage
                                         src={att.preview}
                                         alt={att.file.name}
+                                        width={32}
+                                        height={32}
+                                        unoptimized
                                         className="w-8 h-8 rounded object-cover"
                                     />
                                 ) : (
-                                    <Image className="w-4 h-4 text-blue-500" />
+                                    <ImageIcon className="w-4 h-4 text-blue-500" />
                                 )
                             ) : (
                                 <Paperclip className="w-4 h-4 text-zinc-500" />

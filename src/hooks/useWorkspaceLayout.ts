@@ -3,7 +3,7 @@
 import { useState, useCallback, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import type { WorkspaceLayout, WidgetPlacement } from '@/components/workspace/dashboard/types';
+import type { WorkspaceLayout } from '@/components/workspace/dashboard/types';
 import { DEFAULT_LAYOUT } from '@/components/workspace/dashboard/types';
 import { resolveLayout } from '@/components/workspace/dashboard/validation';
 import {

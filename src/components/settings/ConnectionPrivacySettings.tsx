@@ -1,9 +1,9 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useToast } from "@/components/ui-custom/Toast";
-import { Users, Lock, Globe, UserCheck } from "lucide-react";
+import { Lock, Globe, UserCheck } from "lucide-react";
 
 interface ConnectionPrivacySettingsProps {
     userId: string;
@@ -16,11 +16,7 @@ export default function ConnectionPrivacySettings({ userId }: ConnectionPrivacyS
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
 
-    useEffect(() => {
-        loadPrivacy();
-    }, [userId]);
-
-    async function loadPrivacy() {
+    const loadPrivacy = useCallback(async () => {
         try {
             const { data, error } = await supabase
                 .from("profiles")
@@ -35,13 +31,17 @@ export default function ConnectionPrivacySettings({ userId }: ConnectionPrivacyS
                 return;
             }
             setPrivacy((data?.connection_privacy || "public") as typeof privacy);
-        } catch (error: any) {
+        } catch {
             // Fallback to default on any error
             setPrivacy("public");
         } finally {
             setLoading(false);
         }
-    }
+    }, [supabase, userId]);
+
+    useEffect(() => {
+        void loadPrivacy();
+    }, [loadPrivacy]);
 
     async function updatePrivacy(newPrivacy: typeof privacy) {
         setSaving(true);
@@ -54,7 +54,7 @@ export default function ConnectionPrivacySettings({ userId }: ConnectionPrivacyS
             if (error) throw error;
             setPrivacy(newPrivacy);
             showToast("Privacy settings updated", "success");
-        } catch (error: any) {
+        } catch (error) {
             console.error("Error updating privacy:", error);
             showToast("Failed to update privacy settings", "error");
         } finally {

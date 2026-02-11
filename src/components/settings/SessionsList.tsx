@@ -35,8 +35,8 @@ export function SessionsList({ initialSessions }: SessionsListProps) {
             if (json.success) {
                 setSessions(json.data.sessions);
             }
-        } catch (e) {
-            console.error(e);
+        } catch (error) {
+            console.error(error);
         } finally {
             setLoading(false);
         }
@@ -47,7 +47,7 @@ export function SessionsList({ initialSessions }: SessionsListProps) {
         try {
             await fetch(`/api/v1/sessions/${id}`, { method: 'DELETE' });
             setSessions(prev => prev.filter(s => s.id !== id));
-        } catch (e) {
+        } catch {
             alert("Failed to revoke");
         } finally {
             setRevoking(null);

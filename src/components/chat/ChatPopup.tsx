@@ -2,6 +2,7 @@
 
 import { useMemo } from 'react';
 import { usePathname } from 'next/navigation';
+import Image from 'next/image';
 import { useChatStore } from '@/stores/chatStore';
 import { setConversationArchived, setConversationMuted } from '@/app/actions/messaging';
 import { MessageThread } from './MessageThread';
@@ -135,9 +136,12 @@ export function ChatPopup() {
                                 <>
                                     <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center overflow-hidden">
                                         {otherParticipant.avatarUrl ? (
-                                            <img
+                                            <Image
                                                 src={otherParticipant.avatarUrl}
                                                 alt={otherParticipant.fullName || ''}
+                                                width={32}
+                                                height={32}
+                                                unoptimized
                                                 className="w-full h-full object-cover"
                                             />
                                         ) : (

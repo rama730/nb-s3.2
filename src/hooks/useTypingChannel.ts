@@ -169,7 +169,7 @@ export function useTypingChannel(conversationId: string | null, options: { liste
 
                     handleRegistryEvent(conversationId, payload.user, payload.isTyping);
                 })
-                .subscribe((status: string) => {
+                .subscribe(() => {
                     // if (status === 'SUBSCRIBED') console.log(`[Typing] Connected ${channelId}`);
                 });
         }
@@ -242,7 +242,7 @@ export function useTypingChannel(conversationId: string | null, options: { liste
             if (isTyping) entry.lastSent = now;
             else entry.lastSent = 0;
 
-        } catch (error) {
+        } catch {
             // fail silently
         }
     }, [conversationId]);

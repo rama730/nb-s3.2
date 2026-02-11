@@ -49,7 +49,7 @@ export default function ApplicationReviewModal({
             onClose();
             setMessage("");
             setReason("");
-        } catch (error) {
+        } catch {
             toast.error("An error occurred");
         } finally {
             setIsSubmitting(false);

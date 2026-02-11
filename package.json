@@ -73,6 +73,7 @@
     "rxjs": "^7.8.2",
     "simple-git": "^3.30.0",
     "sonner": "^2.0.7",
+    "sql-formatter": "^15.6.10",
     "tailwind-merge": "^3.4.0",
     "use-debounce": "^10.1.0",
     "zod": "^4.3.5",

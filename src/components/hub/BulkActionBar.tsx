@@ -1,7 +1,7 @@
 'use client';
 
 import { memo } from 'react';
-import { Bookmark, FolderPlus, GitCompare, Share2, Download, X, CheckSquare } from 'lucide-react';
+import { Bookmark, FolderPlus, GitCompare, Share2, Download, X } from 'lucide-react';
 
 interface BulkActionBarProps {
     selectedCount: number;

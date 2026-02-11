@@ -2,6 +2,7 @@
 
 import { ExternalLink, FileText, ZoomIn, ZoomOut, RotateCcw } from "lucide-react";
 import { useState, useRef } from "react";
+import Image from "next/image";
 import type { ProjectNode } from "@/lib/db/schema";
 import { fileKind } from "../utils/fileKind";
 import { Button } from "@/components/ui/button";
@@ -100,9 +101,12 @@ export default function AssetPreview({
             onMouseUp={onMouseUp}
             onMouseLeave={onMouseUp}
         >
-          <img
+          <Image
             src={signedUrl}
             alt={node.name}
+            width={1600}
+            height={900}
+            unoptimized
             className="max-h-full max-w-full object-contain transition-transform duration-75 ease-out select-none"
             style={{
                 transform: `translate(${position.x}px, ${position.y}px) scale(${scale})`,
@@ -228,4 +232,3 @@ export default function AssetPreview({
     </div>
   );
 }
-

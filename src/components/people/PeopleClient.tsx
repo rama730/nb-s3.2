@@ -9,14 +9,7 @@ import { useConnectionMutations, useSuggestedPeople } from "@/hooks/useConnectio
 
 interface PeopleClientProps {
     embedded?: boolean;
-    initialProfiles?: any[];
-    initialUser: any;
-    initialFacetProjectTags?: any[];
-    initialFacetSkills?: any[];
-    initialFacetLocations?: any[];
-    profilesPromise?: Promise<any>;
-    connectionsPromise?: Promise<any>;
-    facetsPromise?: Promise<any>;
+    initialUser: { id?: string | null } | null;
 }
 
 export default function PeopleClient({ initialUser }: PeopleClientProps) {
@@ -98,7 +91,7 @@ export default function PeopleClient({ initialUser }: PeopleClientProps) {
             ) : (
                 <>
                     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                        {profiles.map((profile: any) => (
+                        {profiles.map((profile) => (
                             <PersonCard
                                 key={profile.id}
                                 profile={profile}

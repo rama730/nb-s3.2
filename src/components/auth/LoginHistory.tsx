@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Loader2, CheckCircle, XCircle, MapPin } from "lucide-react";
 import { parseUserAgent } from "@/lib/utils/device";
 import type { LoginHistoryEntry } from "@/lib/types/settingsTypes";
@@ -13,13 +13,7 @@ export default function LoginHistory({ initialHistory = [] }: LoginHistoryProps)
     const [history, setHistory] = useState<LoginHistoryEntry[]>(initialHistory);
     const [loading, setLoading] = useState(!initialHistory.length);
 
-    useEffect(() => {
-        if (!initialHistory.length) {
-            loadHistory();
-        }
-    }, []);
-
-    const loadHistory = async () => {
+    const loadHistory = useCallback(async () => {
         try {
             const res = await fetch("/api/v1/auth/login-history");
             const json = await res.json();
@@ -31,7 +25,13 @@ export default function LoginHistory({ initialHistory = [] }: LoginHistoryProps)
         } finally {
             setLoading(false);
         }
-    };
+    }, []);
+
+    useEffect(() => {
+        if (!initialHistory.length) {
+            void loadHistory();
+        }
+    }, [initialHistory.length, loadHistory]);
 
     if (loading) {
         return (

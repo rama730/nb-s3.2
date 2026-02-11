@@ -1,24 +1,25 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { getConversations } from "@/app/actions/messaging";
-import { getProfileBasic } from "@/app/actions/profile"; // Will create/verify this
+import { getConversations, type ConversationWithDetails } from "@/app/actions/messaging";
+import { getProfileBasic } from "@/app/actions/profile";
 
 export const MESSAGES_KEYS = {
     conversations: ['chat', 'conversations'],
     targetUser: (userId: string) => ['chat', 'targetUser', userId]
 };
 
-export function useConversations(initialData?: any[]) {
+type TargetUserProfile = Awaited<ReturnType<typeof getProfileBasic>>;
+
+export function useConversations(initialData?: ConversationWithDetails[]) {
     return useQuery({
         queryKey: MESSAGES_KEYS.conversations,
-        queryFn: async () => {
+        queryFn: async (): Promise<ConversationWithDetails[]> => {
             const result = await getConversations();
             if (!result.success) throw new Error(result.error);
             return result.conversations || [];
         },
-        initialData: initialData,
-        // Stale time handled by cache/invalidation mostly, but keep it freshish
+        initialData,
         staleTime: 1000 * 60,
     });
 }
@@ -26,12 +27,11 @@ export function useConversations(initialData?: any[]) {
 export function useTargetUser(userId: string | null) {
     return useQuery({
         queryKey: MESSAGES_KEYS.targetUser(userId || ''),
-        queryFn: async () => {
+        queryFn: async (): Promise<TargetUserProfile> => {
             if (!userId) return null;
-            const result = await getProfileBasic(userId);
-            return result;
+            return getProfileBasic(userId);
         },
         enabled: !!userId,
-        staleTime: 1000 * 60 * 5, // 5 min
+        staleTime: 1000 * 60 * 5,
     });
 }

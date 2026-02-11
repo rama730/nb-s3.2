@@ -1,13 +1,13 @@
 "use client";
 
-import { createContext, useContext, ReactNode, useState, useEffect, useMemo } from "react";
+import { createContext, useContext, ReactNode, useState, useEffect, useMemo, useCallback } from "react";
 
 // Types
 interface IntelligenceContextType {
     translate: (text: string) => string;
     isTranslating: boolean;
     locale: string;
-    summarize: (events: any[]) => Promise<string>;
+    summarize: (events: unknown[]) => Promise<string>;
 }
 
 const IntelligenceContext = createContext<IntelligenceContextType | undefined>(undefined);
@@ -27,7 +27,7 @@ interface ProjectIntelligenceProviderProps {
 
 export function ProjectIntelligenceProvider({ children, enableTranslation = false }: ProjectIntelligenceProviderProps) {
     const [locale, setLocale] = useState('en');
-    const [isTranslating, setIsTranslating] = useState(false);
+    const isTranslating = false;
 
     // Mock detection of browser locale
     useEffect(() => {
@@ -39,33 +39,28 @@ export function ProjectIntelligenceProvider({ children, enableTranslation = fals
 
     // Intelligent Translation Mock
     // In production, this would call an Edge Function with caching
-    const translate = (text: string) => {
+    const translate = useCallback((text: string) => {
         if (!enableTranslation || locale === 'en') return text;
         // Stub: Append [Translated] to show it works
         return `[${locale.toUpperCase()}] ${text}`;
-    };
+    }, [enableTranslation, locale]);
 
-    const summarize = async (events: any[]) => {
+    const summarize = useCallback(async (events: unknown[]) => {
+        void events;
         // Stub: AI Summary
         return "Project activity is healthy. Team has completed 5 tasks this week.";
-    };
+    }, []);
 
-    const contextValue = useContextMemo(() => ({
+    const contextValue = useMemo(() => ({
         translate,
         isTranslating,
         locale,
         summarize
-    }), [locale, isTranslating, enableTranslation]);
+    }), [locale, isTranslating, summarize, translate]);
 
     return (
         <IntelligenceContext.Provider value={contextValue}>
             {children}
         </IntelligenceContext.Provider>
     );
-}
-
-// Helper for cleaner memoization in providers
-function useContextMemo<T>(factory: () => T, deps: any[]): T {
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    return useMemo(factory, deps);
 }

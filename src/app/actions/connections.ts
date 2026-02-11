@@ -48,7 +48,52 @@ interface ConnectionsFeedStats {
     pendingSent: number;
 }
 
+type DiscoverFeedItem = {
+    id: string;
+    username: string | null;
+    fullName: string | null;
+    avatarUrl: string | null;
+    headline: string | null;
+    location: string | null;
+    connectionStatus: SuggestedProfile['connectionStatus'];
+    canConnect: boolean;
+    mutualConnections: number;
+    recommendationReason: string;
+    projects: SuggestedProfile['projects'];
+};
+
+type RequestFeedItem = {
+    id: string;
+    requesterId: string;
+    addresseeId: string;
+    status: string;
+    createdAt: Date;
+    user?: {
+        username?: string | null;
+        fullName?: string | null;
+        avatarUrl?: string | null;
+        headline?: string | null;
+    } | null;
+};
+
+type NetworkFeedItem = {
+    id: string;
+    requesterId: string;
+    addresseeId: string;
+    status: string;
+    createdAt: Date;
+    updatedAt: Date;
+    otherUser?: {
+        id?: string;
+        username?: string | null;
+        fullName?: string | null;
+        avatarUrl?: string | null;
+        headline?: string | null;
+    } | null;
+};
+
 const REJECT_REQUEST_COOLDOWN_MS = 2 * 24 * 60 * 60 * 1000;
+type DbTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 // ============================================================================
 // HELPER: Get authenticated user
@@ -64,7 +109,7 @@ function sortConnectionPair(a: string, b: string): [string, string] {
     return a < b ? [a, b] : [b, a];
 }
 
-async function lockConnectionPair(tx: any, a: string, b: string) {
+async function lockConnectionPair(tx: DbTransaction, a: string, b: string) {
     const [low, high] = sortConnectionPair(a, b);
     await tx.execute(sql`
         SELECT pg_advisory_xact_lock(
@@ -74,7 +119,7 @@ async function lockConnectionPair(tx: any, a: string, b: string) {
     `);
 }
 
-async function applyConnectionsCountDelta(tx: any, userIds: string[], delta: number) {
+async function applyConnectionsCountDelta(tx: DbTransaction, userIds: string[], delta: number) {
     if (userIds.length === 0 || delta === 0) return;
     await tx
         .update(profiles)
@@ -85,7 +130,7 @@ async function applyConnectionsCountDelta(tx: any, userIds: string[], delta: num
         .where(inArray(profiles.id, userIds));
 }
 
-async function applyConnectionsCountIncrements(tx: any, increments: Map<string, number>) {
+async function applyConnectionsCountIncrements(tx: DbTransaction, increments: Map<string, number>) {
     if (increments.size === 0) return;
     const entries = [...increments.entries()].filter(([, value]) => value !== 0);
     if (entries.length === 0) return;
@@ -1173,7 +1218,7 @@ export async function getSuggestedPeople(
         return { profiles: [], hasMore: false };
     }
 
-    const result: SuggestedProfile[] = feed.items.map((item: any) => ({
+    const result: SuggestedProfile[] = (feed.items as DiscoverFeedItem[]).map((item) => ({
         id: item.id,
         username: item.username,
         fullName: item.fullName,
@@ -1261,7 +1306,7 @@ export async function getPendingRequests(
 
     return {
         incoming: incomingFeed.success
-            ? incomingFeed.items.map((item: any) => ({
+            ? (incomingFeed.items as RequestFeedItem[]).map((item) => ({
                 id: item.id,
                 requesterId: item.requesterId,
                 addresseeId: item.addresseeId,
@@ -1274,7 +1319,7 @@ export async function getPendingRequests(
             }))
             : [],
         sent: sentFeed.success
-            ? sentFeed.items.map((item: any) => ({
+            ? (sentFeed.items as RequestFeedItem[]).map((item) => ({
                 id: item.id,
                 requesterId: item.requesterId,
                 addresseeId: item.addresseeId,
@@ -1328,7 +1373,7 @@ export async function getAcceptedConnections(
         }
 
         return {
-            connections: feed.items.map((item: any) => ({
+            connections: (feed.items as NetworkFeedItem[]).map((item) => ({
                 id: item.id,
                 requesterId: item.requesterId,
                 addresseeId: item.addresseeId,
@@ -1494,7 +1539,7 @@ export async function searchConnections(query: string, limit: number = 20) {
             return { success: false, error: feed.error || 'Failed to search connections' };
         }
 
-        const foundConnections = feed.items.map((item: any) => ({
+        const foundConnections = (feed.items as NetworkFeedItem[]).map((item) => ({
             connectionId: item.id,
             userId: item.otherUser?.id,
             username: item.otherUser?.username,

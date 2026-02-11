@@ -1,6 +1,6 @@
 "use client";
 
-import { Lock, Eye, StopCircle } from "lucide-react";
+import { StopCircle } from "lucide-react";
 import { useToast } from "@/components/ui-custom/Toast";
 import { useState, useEffect } from "react";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
@@ -24,7 +24,7 @@ export default function PrivacySettings() {
 
             if (user) {
                 try {
-                    const { data, error } = await supabase
+                    const { data } = await supabase
                         .from('profiles')
                         .select('is_private')
                         .eq('id', user.id)
@@ -33,7 +33,7 @@ export default function PrivacySettings() {
                     if (data) {
                         setIsPrivate(data.is_private || false);
                     }
-                } catch (e) {
+                } catch {
                     // Column may not exist - use default
                     setIsPrivate(false);
                 } finally {

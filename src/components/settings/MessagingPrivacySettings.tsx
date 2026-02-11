@@ -1,9 +1,9 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useToast } from "@/components/ui-custom/Toast";
-import { MessageSquare, Globe, Users } from "lucide-react";
+import { Globe, Users } from "lucide-react";
 
 interface MessagingPrivacySettingsProps {
     userId: string;
@@ -16,11 +16,7 @@ export default function MessagingPrivacySettings({ userId }: MessagingPrivacySet
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
 
-    useEffect(() => {
-        loadPrivacy();
-    }, [userId]);
-
-    async function loadPrivacy() {
+    const loadPrivacy = useCallback(async () => {
         try {
             const { data, error } = await supabase
                 .from("profiles")
@@ -34,12 +30,16 @@ export default function MessagingPrivacySettings({ userId }: MessagingPrivacySet
                 return;
             }
             setPrivacy((data?.message_privacy || "connections") as typeof privacy);
-        } catch (error) {
+        } catch {
             setPrivacy("connections");
         } finally {
             setLoading(false);
         }
-    }
+    }, [supabase, userId]);
+
+    useEffect(() => {
+        void loadPrivacy();
+    }, [loadPrivacy]);
 
     async function updatePrivacy(newPrivacy: typeof privacy) {
         setSaving(true);

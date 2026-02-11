@@ -27,6 +27,7 @@ const CollectionsSidebar = memo(function CollectionsSidebar({
     activeView,
     onSelectView,
 }: CollectionsSidebarProps) {
+    void onSelectCollection;
     return (
         <nav className="space-y-6">
             {/* Main Navigation */}

@@ -10,16 +10,15 @@ import PeopleClient from "@/components/people/PeopleClient";
 import ConnectionsClient from "@/components/people/ConnectionsClient";
 import RequestsTab from "@/components/people/RequestsTab";
 import { useConnectionStats, useConnectionsRealtimeInvalidation } from "@/hooks/useConnections";
+import type { IncomingApplication, MyApplication } from "@/components/people/ProjectApplicationsSection";
 
 type TabKey = "discover" | "network" | "requests";
+const VALID_TABS: TabKey[] = ["discover", "network", "requests"];
 
 interface PeopleHubClientProps {
-    initialUser: any;
-    activeTabOverride?: string;
-    // Data props - Made optional/legacy
-    initialProfiles?: any[];
-    connectionStats?: any;
-    initialApplications?: { my: any[], incoming: any[] };
+    initialUser: { id?: string | null } | null;
+    activeTabOverride?: TabKey;
+    initialApplications?: { my: MyApplication[]; incoming: IncomingApplication[] };
 }
 
 const TAB_CONFIG: Array<{
@@ -37,7 +36,6 @@ const TAB_CONFIG: Array<{
 export default function PeopleHubClient({
     initialUser,
     activeTabOverride,
-    initialProfiles,
     initialApplications,
 }: PeopleHubClientProps) {
     const router = useRouter();
@@ -48,10 +46,10 @@ export default function PeopleHubClient({
     const defaultTab: TabKey = "discover";
 
     const getInitialTab = (): TabKey => {
-        if (activeTabOverride && ["discover", "network", "requests"].includes(activeTabOverride)) {
-            return activeTabOverride as TabKey;
+        if (activeTabOverride && VALID_TABS.includes(activeTabOverride)) {
+            return activeTabOverride;
         }
-        if (["discover", "network", "requests"].includes(tabParam)) {
+        if (VALID_TABS.includes(tabParam as TabKey)) {
             return tabParam as TabKey;
         }
         return defaultTab;
@@ -61,11 +59,10 @@ export default function PeopleHubClient({
     useConnectionsRealtimeInvalidation();
 
     useEffect(() => {
-        const validTabs: TabKey[] = ["discover", "network", "requests"];
-        if (validTabs.includes(tabParam as TabKey)) {
+        if (VALID_TABS.includes(tabParam as TabKey)) {
             setActiveTab(tabParam as TabKey);
-        } else if (activeTabOverride && validTabs.includes(activeTabOverride as TabKey)) {
-            setActiveTab(activeTabOverride as TabKey);
+        } else if (activeTabOverride && VALID_TABS.includes(activeTabOverride)) {
+            setActiveTab(activeTabOverride);
         }
     }, [tabParam, activeTabOverride]);
 
@@ -138,7 +135,7 @@ export default function PeopleHubClient({
             {/* Main Content */}
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
                 {activeTab === "discover" && (
-                    <PeopleClient embedded initialUser={initialUser} initialProfiles={initialProfiles} />
+                    <PeopleClient embedded initialUser={initialUser} />
                 )}
 
                 {activeTab === "network" && (

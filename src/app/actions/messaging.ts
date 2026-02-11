@@ -582,7 +582,7 @@ async function normalizeUploadedAttachmentsForCommit(
 }
 
 async function markAttachmentUploadsCommitted(
-    tx: any,
+    tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
     userId: string,
     clientUploadIds: string[]
 ) {
@@ -798,7 +798,7 @@ export async function getConversations(
             return { success: true, conversations: [], hasMore: false };
         }
 
-        const conversationIds = paginatedConvs.map((c: any) => c.conversation_id);
+        const conversationIds = paginatedConvs.map((conversation) => conversation.conversation_id);
 
         // QUERY 2: Get conversation details + last message using window function
         const conversationsWithLastMessage = await db.execute<{
@@ -839,7 +839,7 @@ export async function getConversations(
         `);
 
         // Map for fast lookup of conversation details (type, last message)
-        const detailsMap = new Map(Array.from(conversationsWithLastMessage).map((c: any) => [c.id, c]));
+        const detailsMap = new Map(Array.from(conversationsWithLastMessage).map((conversation) => [conversation.id, conversation]));
 
         // QUERY 3: Get all participants for these conversations
         const allParticipants = await db
@@ -866,7 +866,7 @@ export async function getConversations(
         }
 
         // Build final result
-        const result: ConversationWithDetails[] = paginatedConvs.map((userConv: any) => {
+        const result: ConversationWithDetails[] = paginatedConvs.map((userConv) => {
             const details = detailsMap.get(userConv.conversation_id);
             if (!details) return null; // Should not happen due to FK
 
@@ -1817,7 +1817,7 @@ export async function searchMessages(
             .where(inArray(conversationParticipants.conversationId, resultConversationIds));
 
         // 3. Build Maps
-        const detailsMap = new Map(Array.from(conversationsWithLastMessage).map((c: any) => [c.id, c]));
+        const detailsMap = new Map(Array.from(conversationsWithLastMessage).map((conversation) => [conversation.id, conversation]));
         const participantMap = new Map<string, typeof allParticipants>();
 
         const selfUnreadMap = new Map<string, number>();
@@ -2413,7 +2413,7 @@ export async function uploadAttachment(
 
         // Upload with user-scoped client for RLS-compliant write.
         const supabase = await createClient();
-        const { data: uploadData, error: uploadError } = await supabase.storage
+        const { error: uploadError } = await supabase.storage
             .from(ATTACHMENTS_BUCKET)
             .upload(storagePath, file, {
                 contentType: mimeType || undefined,
@@ -2950,7 +2950,7 @@ export async function getProjectGroups(
         // No separate unread count query needed anymore!
 
         // Build result
-        const result: ProjectGroupConversation[] = paginatedProjects.map((proj: any) => ({
+        const result: ProjectGroupConversation[] = paginatedProjects.map((proj) => ({
             id: proj.conversation_id,
             projectId: proj.project_id,
             projectTitle: proj.project_title,

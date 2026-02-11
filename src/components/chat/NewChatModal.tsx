@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useMemo, useRef } from "react";
+import Image from "next/image";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Search, Loader2, UserPlus, MessageSquare } from "lucide-react";
 import { useDebounce } from "@/hooks/hub/useDebounce";
@@ -15,9 +16,29 @@ interface NewChatModalProps {
     onClose: () => void;
 }
 
+type ConnectionRow = {
+    id: string;
+    otherUser?: {
+        id?: string;
+        username?: string | null;
+        fullName?: string | null;
+        avatarUrl?: string | null;
+        headline?: string | null;
+    } | null;
+};
+
+type ConnectionSearchResult = {
+    connectionId: string;
+    userId: string;
+    username: string | null;
+    fullName: string | null;
+    avatarUrl: string | null;
+    headline: string | null;
+};
+
 export function NewChatModal({ isOpen, onClose }: NewChatModalProps) {
     const [query, setQuery] = useState("");
-    const [results, setResults] = useState<any[]>([]);
+    const [results, setResults] = useState<ConnectionSearchResult[]>([]);
     const [isSearching, setIsSearching] = useState(false);
     const [isLoadingMore, setIsLoadingMore] = useState(false);
     const [hasMore, setHasMore] = useState(false);
@@ -41,7 +62,7 @@ export function NewChatModal({ isOpen, onClose }: NewChatModalProps) {
         return ids;
     }, [conversations]);
 
-    const normalizeRows = useCallback((rows: any[]) => {
+    const normalizeRows = useCallback((rows: ConnectionRow[]) => {
         const next = rows
             .map((row) => {
                 const user = row?.otherUser;
@@ -55,14 +76,7 @@ export function NewChatModal({ isOpen, onClose }: NewChatModalProps) {
                     headline: user.headline as string | null,
                 };
             })
-            .filter(Boolean) as Array<{
-                connectionId: string;
-                userId: string;
-                username: string | null;
-                fullName: string | null;
-                avatarUrl: string | null;
-                headline: string | null;
-            }>;
+            .filter(Boolean) as ConnectionSearchResult[];
 
         return next;
     }, []);
@@ -195,37 +209,37 @@ export function NewChatModal({ isOpen, onClose }: NewChatModalProps) {
                         </div>
                     ) : (
                         <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
-                            {results.map((user) => (
+                    {results.map((result) => (
                                 <button
-                                    key={user.userId}
-                                    onClick={() => handleSelectUser(user.userId)}
-                                    disabled={openingUserId === user.userId}
+                                    key={result.userId}
+                                    onClick={() => handleSelectUser(result.userId)}
+                                    disabled={openingUserId === result.userId}
                                     className="w-full flex items-center gap-3 p-3 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 transition-colors text-left group"
                                 >
                                     <div className="w-10 h-10 rounded-full bg-zinc-200 dark:bg-zinc-800 overflow-hidden flex-shrink-0">
-                                        {user.avatarUrl ? (
-                                            <img src={user.avatarUrl} alt="" className="w-full h-full object-cover" />
+                                        {result.avatarUrl ? (
+                                            <Image src={result.avatarUrl} alt="" width={40} height={40} unoptimized className="w-full h-full object-cover" />
                                         ) : (
                                             <div className="w-full h-full flex items-center justify-center text-zinc-500 text-xs font-medium">
-                                                {user.fullName?.[0] || user.username?.[0] || '?'}
+                                                {result.fullName?.[0] || result.username?.[0] || '?'}
                                             </div>
                                         )}
                                     </div>
                                     <div className="flex-1 min-w-0">
                                         <div className="font-medium text-sm text-zinc-900 dark:text-zinc-100">
-                                            {user.fullName || user.username}
+                                            {result.fullName || result.username}
                                         </div>
-                                        {user.headline ? (
+                                        {result.headline ? (
                                             <div className="text-xs text-zinc-500 truncate">
-                                                {user.headline}
+                                                {result.headline}
                                             </div>
                                         ) : (
                                             <div className="text-xs text-zinc-500 truncate">
-                                                {existingConversationUserIds.has(user.userId) ? "Open existing conversation" : "Start a new conversation"}
+                                                {existingConversationUserIds.has(result.userId) ? "Open existing conversation" : "Start a new conversation"}
                                             </div>
                                         )}
                                     </div>
-                                    {openingUserId === user.userId ? (
+                                    {openingUserId === result.userId ? (
                                         <Loader2 className="w-4 h-4 animate-spin text-indigo-500" />
                                     ) : (
                                         <MessageSquare className="w-4 h-4 text-zinc-300 group-hover:text-indigo-500 transition-colors" />

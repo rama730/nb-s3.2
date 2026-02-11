@@ -74,8 +74,12 @@ export function useChatRealtime(userId: string | null) {
 
         const supabase = createClient();
         console.log('[REALTIME] Initializing Optimized Connection...');
+        type DbChangePayload = {
+            new?: Record<string, unknown>;
+            old?: Record<string, unknown>;
+        };
 
-        const handleParticipantUpdate = (payload: any) => {
+        const handleParticipantUpdate = (payload: DbChangePayload) => {
             const conversationId = (payload?.new?.conversation_id || payload?.old?.conversation_id) as string | undefined;
             scheduleConversationRefresh();
             scheduleMessageRefresh(conversationId);
@@ -88,7 +92,7 @@ export function useChatRealtime(userId: string | null) {
             }
         };
 
-        const handleMessageInsert = (payload: any) => {
+        const handleMessageInsert = (payload: DbChangePayload) => {
             const conversationId = payload?.new?.conversation_id as string | undefined;
             if (payload?.new) {
                 useChatStore.getState()._handleNewMessage(payload.new, userId);
@@ -96,7 +100,7 @@ export function useChatRealtime(userId: string | null) {
             scheduleMessageRefresh(conversationId);
         };
 
-        const handleMessageUpdate = (payload: any) => {
+        const handleMessageUpdate = (payload: DbChangePayload) => {
             const conversationId = (payload?.new?.conversation_id || payload?.old?.conversation_id) as string | undefined;
             if (payload?.new) {
                 useChatStore.getState()._handleMessageUpdate(payload.new);
@@ -104,13 +108,13 @@ export function useChatRealtime(userId: string | null) {
             scheduleMessageRefresh(conversationId);
         };
 
-        const handleAttachmentChange = (payload: any) => {
+        const handleAttachmentChange = (payload: DbChangePayload) => {
             const messageId = (payload?.new?.message_id || payload?.old?.message_id) as string | undefined;
             const conversationId = findConversationIdByMessageId(messageId);
             scheduleMessageRefresh(conversationId);
         };
 
-        const handleMessageVisibilityChange = (payload: any) => {
+        const handleMessageVisibilityChange = (payload: DbChangePayload) => {
             const messageId = (payload?.new?.message_id || payload?.old?.message_id) as string | undefined;
             const conversationId = findConversationIdByMessageId(messageId);
             scheduleMessageRefresh(conversationId);
@@ -172,10 +176,10 @@ export function useChatRealtime(userId: string | null) {
             });
 
         channelRef.current = channel;
+        const messageRefreshTimers = messageRefreshTimersRef.current;
 
         // Cleanup
         return () => {
-            const messageRefreshTimers = messageRefreshTimersRef.current;
             setConnected(false);
             if (refreshTimerRef.current) {
                 clearTimeout(refreshTimerRef.current);

@@ -4,21 +4,27 @@ import Image from "next/image";
 import Link from "next/link";
 import { formatDistanceToNow } from "date-fns";
 import { profileHref } from "@/lib/routing/identifiers";
-import { usePendingRequests, useConnectionMutations } from "@/hooks/useConnections";
+import {
+    usePendingRequests,
+    useConnectionMutations,
+    type PendingIncomingRequest,
+    type PendingSentRequest,
+} from "@/hooks/useConnections";
 import { toast } from "sonner";
 import { Virtuoso } from 'react-virtuoso';
 import ProjectApplicationsSection from "./ProjectApplicationsSection";
+import type { IncomingApplication, MyApplication } from "./ProjectApplicationsSection";
 
 interface RequestsTabProps {
-    initialUser: any;
-    initialRequests?: { incoming: any[], sent: any[] };
-    initialApplications?: { my: any[], incoming: any[] };
+    initialUser: { id?: string | null } | null;
+    initialRequests?: { incoming: PendingIncomingRequest[]; sent: PendingSentRequest[] };
+    initialApplications?: { my: MyApplication[]; incoming: IncomingApplication[] };
 }
 
 type RequestItem = 
     | { type: 'header'; title: string; count: number; icon: 'incoming' | 'sent' }
-    | { type: 'incoming'; request: any }
-    | { type: 'sent'; request: any }
+    | { type: 'incoming'; request: PendingIncomingRequest }
+    | { type: 'sent'; request: PendingSentRequest }
     | { type: 'empty' };
 
 export default function RequestsTab({ initialUser, initialRequests, initialApplications }: RequestsTabProps) {

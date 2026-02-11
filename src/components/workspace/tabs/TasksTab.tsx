@@ -2,7 +2,6 @@
 
 import { memo, useState, useCallback, useMemo, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import Link from 'next/link';
 import {
     CheckSquare,
     Filter,

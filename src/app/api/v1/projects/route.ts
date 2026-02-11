@@ -1,9 +1,7 @@
 export const runtime = 'edge';
 
 import { NextResponse } from 'next/server';
-import { getHubProjects } from '@/lib/data/hub'; // We'll need to make sure this is Edge compatible or refactor
-import { redis, cacheData, getCachedData } from '@/lib/redis';
-import { HubFilters } from '@/types/hub';
+import { cacheData, getCachedData } from '@/lib/redis';
 
 export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
@@ -58,7 +56,7 @@ export async function GET(request: Request) {
             data: data,
             source: 'database'
         });
-    } catch (error) {
+    } catch {
         return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
     }
 }

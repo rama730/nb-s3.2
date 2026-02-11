@@ -1,7 +1,7 @@
 'use client';
 
 import { memo } from 'react';
-import { Plus, Filter, Grid3X3, List, CheckSquare } from 'lucide-react';
+import { Plus, Grid3X3, List, CheckSquare } from 'lucide-react';
 import { FILTER_VIEWS, VIEW_MODES, FilterView, ViewMode } from '@/constants/hub';
 import { HubFilters } from '@/types/hub';
 

@@ -15,14 +15,14 @@ import {
 import ApplicationReviewModal from "./ApplicationReviewModal";
 
 interface ProjectApplicationsProps {
-    initialUser: any;
+    initialUser: { id?: string | null } | null;
     initialApplications?: {
         my: MyApplication[];
         incoming: IncomingApplication[];
     };
 }
 
-interface MyApplication {
+export interface MyApplication {
     id: string;
     projectId: string;
     projectTitle: string;
@@ -36,7 +36,7 @@ interface MyApplication {
     waitTime?: string;
 }
 
-interface IncomingApplication {
+export interface IncomingApplication {
     id: string;
     projectId: string;
     projectTitle: string;
@@ -129,7 +129,7 @@ export default function ProjectApplicationsSection({ initialUser, initialApplica
                 setIncomingApplications(prev => [...prev, ...result.applications]);
                 setHasMoreIncoming(!!result.hasMore);
             }
-        } catch (error) {
+        } catch {
             toast.error("Failed to load more applications");
         } finally {
             setIsLoadingMore(false);
@@ -175,7 +175,7 @@ export default function ProjectApplicationsSection({ initialUser, initialApplica
             } else {
                 toast.error(result.error || `Failed to ${mode}`);
             }
-        } catch (error) {
+        } catch {
             toast.error("Something went wrong");
         } finally {
             setProcessingId(null);

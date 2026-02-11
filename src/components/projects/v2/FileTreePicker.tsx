@@ -38,12 +38,7 @@ export default function FileTreePicker({
     const [loadedNodes, setLoadedNodes] = useState<Map<string, ProjectNode[]>>(new Map());
     const [isLoading, setIsLoading] = useState(true);
 
-    // Initial load
-    useEffect(() => {
-        loadRootNodes();
-    }, [projectId]);
-
-    const loadRootNodes = async () => {
+    const loadRootNodes = useCallback(async () => {
         setIsLoading(true);
         try {
             const res = await getProjectNodes(projectId, null);
@@ -54,8 +49,8 @@ export default function FileTreePicker({
             if (nodes.length === 1 && nodes[0].type === 'folder') {
                 const rootId = nodes[0].id;
                 setExpandedNodes(new Set([rootId]));
-                const res = await getProjectNodes(projectId, rootId);
-                const children = Array.isArray(res) ? res : res.nodes;
+                const childRes = await getProjectNodes(projectId, rootId);
+                const children = Array.isArray(childRes) ? childRes : childRes.nodes;
                 setLoadedNodes(new Map([[rootId, children]]));
             }
         } catch (error) {
@@ -63,7 +58,12 @@ export default function FileTreePicker({
         } finally {
             setIsLoading(false);
         }
-    };
+    }, [projectId]);
+
+    // Initial load
+    useEffect(() => {
+        void loadRootNodes();
+    }, [loadRootNodes]);
 
     // Lazy load children
     const handleToggle = useCallback(async (node: ProjectNode) => {

@@ -9,11 +9,16 @@ import { usePendingRequests, useConnectionMutations } from "@/hooks/useConnectio
 import { toast } from "sonner";
 
 interface PeopleInboxTabProps {
-    initialUser: any;
     inboxPromise?: Promise<InboxData>;
 }
 
-export default function PeopleInboxTab({ initialUser, inboxPromise }: PeopleInboxTabProps) {
+type ProjectInvite = {
+    id: string;
+    role?: string | null;
+    project?: { title?: string | null } | null;
+};
+
+export default function PeopleInboxTab({ inboxPromise }: PeopleInboxTabProps) {
     const { data: requestData, isLoading: requestsLoading } = usePendingRequests();
     const { acceptRequest, rejectRequest } = useConnectionMutations();
 
@@ -69,7 +74,8 @@ export default function PeopleInboxTab({ initialUser, inboxPromise }: PeopleInbo
     }
 
     const hasRequests = incomingRequests.length > 0;
-    const hasProjectInvites = (inboxData?.incomingProjectInvites?.length ?? 0) > 0;
+    const projectInvites = (inboxData?.incomingProjectInvites ?? []) as ProjectInvite[];
+    const hasProjectInvites = projectInvites.length > 0;
     const hasItems = hasRequests || hasProjectInvites;
 
     if (!hasItems) {
@@ -141,14 +147,14 @@ export default function PeopleInboxTab({ initialUser, inboxPromise }: PeopleInbo
             )}
 
             {/* Project Invites */}
-            {inboxData?.incomingProjectInvites && inboxData.incomingProjectInvites.length > 0 && (
+            {projectInvites.length > 0 && (
                 <div>
                     <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100 mb-4 flex items-center gap-2">
                         <Briefcase className="w-5 h-5" />
-                        Project Invites ({inboxData.incomingProjectInvites.length})
+                        Project Invites ({projectInvites.length})
                     </h2>
                     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                        {inboxData.incomingProjectInvites.map((inv: any) => (
+                        {projectInvites.map((inv) => (
                             <div
                                 key={inv.id}
                                 className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4"

@@ -4,13 +4,11 @@ import { useState, useEffect, useCallback, useRef, useMemo, memo } from 'react';
 import dynamic from 'next/dynamic';
 import { motion } from 'framer-motion';
 import { Search, Sparkles, Filter } from 'lucide-react';
-import { createClient } from '@/lib/supabase/client';
 import { useToast } from '@/components/ui-custom/Toast';
 import { VirtuosoGrid } from 'react-virtuoso';
 import { useHubProjectsQuery } from '@/hooks/hub/useHubProjectsQuery';
 import { useHubTrendingQuery } from '@/hooks/hub/useHubTrendingQuery';
 import { useUserBookmarks, useUserFollowedProjects } from '@/hooks/hub/useUserInteractions';
-import { useDebounce } from '@/hooks/hub/useDebounce';
 import { useHubPreferences } from '@/hooks/hub/useHubPreferences';
 import { useCollectionProjects } from '@/hooks/hub/useCollectionProjects';
 import { useUserProjectIds } from '@/hooks/hub/useUserProjectIds';
@@ -59,10 +57,9 @@ import { useQueryClient } from '@tanstack/react-query';
 // ...
 
 const HubClient = memo(function HubClient({ initialUser }: HubClientProps) {
-    const supabase = createClient();
     const queryClient = useQueryClient();
     const { showToast } = useToast();
-    const { user, isSignedIn } = useAuth();
+    const { user } = useAuth();
 
     // Current user - prefer from auth hook, fallback to initial
     const currentUser = useMemo(() => {
@@ -79,7 +76,7 @@ const HubClient = memo(function HubClient({ initialUser }: HubClientProps) {
     }, [user, initialUser]);
 
     // URL filters hook
-    const { urlFilters, updateUrlFilters, clearFilters: clearUrlFilters, hasActiveFilters } = useHubUrlFilters();
+    const { urlFilters, clearFilters: clearUrlFilters, hasActiveFilters } = useHubUrlFilters();
 
     // State
     const [filterView, setFilterView] = useState<FilterView>(urlFilters.view);
@@ -109,14 +106,9 @@ const HubClient = memo(function HubClient({ initialUser }: HubClientProps) {
         }
     }, []);
 
-    // Debounce filter changes
-    const debouncedStatusFilter = useDebounce(statusFilter, 300);
-    const debouncedTypeFilter = useDebounce(typeFilter, 300);
-    const debouncedSortBy = useDebounce(sortBy, 300);
-
     // Hooks - React Query
     const { data: trendingData } = useHubTrendingQuery();
-    const trendingScores = trendingData || {};
+    const trendingScores = useMemo(() => trendingData ?? {}, [trendingData]);
     const { projectIds: userProjectIds } = useUserProjectIds(currentUser?.id ?? null);
     const { data: myBookmarks } = useUserBookmarks(currentUser?.id);
     const { data: myFollowed } = useUserFollowedProjects(currentUser?.id);
@@ -169,10 +161,10 @@ const HubClient = memo(function HubClient({ initialUser }: HubClientProps) {
     }, [allProjects]);
 
     // Preferences
-    const { preferences } = useHubPreferences(currentUser?.id ?? null, currentFilters, viewMode, sortBy);
+    useHubPreferences(currentUser?.id ?? null, currentFilters, viewMode, sortBy);
 
     // Filter persistence
-    const { persistedState } = useFilterPersistence({ view: filterView, filters: currentFilters, viewMode }, true);
+    useFilterPersistence({ view: filterView, filters: currentFilters, viewMode }, true);
 
     // Sticky header
     useEffect(() => {

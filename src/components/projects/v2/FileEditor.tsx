@@ -3,7 +3,7 @@
 import React, { useEffect, useMemo, useState, useDeferredValue } from "react";
 import { ProjectNode } from "@/lib/db/schema";
 import { Button } from "@/components/ui/button";
-import { Diff, Loader2, Save, Trash2, Wand2, SplitSquareHorizontal, Map } from "lucide-react";
+import { Diff, Loader2, MoreVertical, Save, Trash2, Wand2, SplitSquareHorizontal } from "lucide-react";
 import { useTheme } from "next-themes";
 import dynamic from "next/dynamic";
 import {
@@ -13,6 +13,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { useToast } from "@/components/ui-custom/Toast";
 import MarkdownPreview from "./preview/MarkdownPreview";
 
 const CodeEditor = dynamic(() => import("./editor/MonacoCodeEditor"), {
@@ -51,6 +58,10 @@ interface FileEditorProps {
   lastSavedAt?: number;
 }
 
+function getErrorMessage(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback;
+}
+
 export default function FileEditor({
   file,
   content,
@@ -79,6 +90,7 @@ export default function FileEditor({
   const [isDiffOpen, setIsDiffOpen] = useState(false);
   const [isFormatting, setIsFormatting] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
+  const { showToast } = useToast();
 
   // Defer content for preview to avoid typing lag
   const deferredContent = useDeferredValue(content);
@@ -117,6 +129,11 @@ export default function FileEditor({
     return "Move to Trash";
   }, [isDirty]);
 
+  const formatParserSupported = useMemo(() => {
+    const ext = file.name.split(".").pop()?.toLowerCase() || "";
+    return ["ts", "tsx", "js", "jsx", "json", "md", "css", "html", "sql"].includes(ext);
+  }, [file.name]);
+
   const diffParts = useMemo(() => {
     if (!isDiffOpen) return [];
     return diffLines(savedSnapshot || "", content || "");
@@ -137,34 +154,56 @@ export default function FileEditor({
     };
   }, [file.id, file.projectId]);
 
+  const handleFormat = async () => {
+    if (!canEdit) return;
+    if (!formatParserSupported) {
+      showToast("Formatting is not supported for this file type yet", "info");
+      return;
+    }
+    setIsFormatting(true);
+    try {
+      const formatted = await formatProjectFileContent(file.projectId, file.name, content);
+      if (formatted === content) {
+        showToast("No formatting changes", "info");
+        return;
+      }
+      onChange(formatted);
+      showToast("Formatted", "success");
+    } catch (error: unknown) {
+      showToast(getErrorMessage(error, "Failed to format file"), "error");
+    } finally {
+      setIsFormatting(false);
+    }
+  };
+
   return (
     <div className="flex flex-col h-full bg-white dark:bg-[#1e1e1e]">
       {/* Header / Toolbar */}
-      <div className="flex items-center justify-between px-4 py-2 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-[#1e1e1e]">
-        <div className="flex items-center gap-2 min-w-0">
-          <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300 font-mono truncate">
+      <div className="flex items-center justify-between px-3 py-1.5 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-[#1e1e1e]">
+        <div className="flex items-center gap-2 min-w-0 overflow-hidden">
+          <span className="text-xs font-medium text-zinc-700 dark:text-zinc-300 font-mono truncate max-w-[180px]">
             {file.name}
           </span>
-          <span className="text-xs text-zinc-400 flex-shrink-0">
+          <span className="text-[11px] text-zinc-400 flex-shrink-0">
             {((file.size || 0) / 1024).toFixed(1)} KB
           </span>
           {isDirty && (
-            <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300 flex-shrink-0">
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300 flex-shrink-0">
               Unsaved
             </span>
           )}
           {!canEdit && (
-            <span className="text-[10px] px-2 py-0.5 rounded-full bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 flex-shrink-0">
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 flex-shrink-0">
               Read-only
             </span>
           )}
           {!canEdit && lockInfo ? (
-            <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300 flex-shrink-0">
-              Locked by {lockInfo.lockedByName || lockInfo.lockedBy}
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300 flex-shrink-0 truncate max-w-[160px]">
+              {lockInfo.lockedByName || lockInfo.lockedBy}
             </span>
           ) : null}
           {offlineQueued ? (
-            <span className="text-[10px] px-2 py-0.5 rounded-full bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300 flex-shrink-0">
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300 flex-shrink-0">
               Offline queued
             </span>
           ) : null}
@@ -174,98 +213,93 @@ export default function FileEditor({
             </span>
           ) : null}
           {lastEvent ? (
-            <span className="text-xs text-zinc-400 flex-shrink-0">
-              Last {lastEvent.type} {lastEvent.by ? `by ${lastEvent.by}` : ""} @{" "}
-              {new Date(lastEvent.at).toLocaleTimeString()}
+            <span className="text-[11px] text-zinc-400 flex-shrink-0 truncate max-w-[220px]">
+              {lastEvent.type} {lastEvent.by ? `· ${lastEvent.by}` : ""}
             </span>
           ) : null}
         </div>
 
-        <div className="flex items-center gap-2">
-          <Button
-            size="sm"
-            onClick={() => setIsDiffOpen(true)}
-            disabled={isLoading}
-            variant="outline"
-            className="h-8"
-            title="View local changes"
-          >
-            <Diff className="w-4 h-4 mr-2" />
-            Diff
-          </Button>
-
-          <Button
-            size="sm"
-            onClick={async () => {
-              if (!canEdit) return;
-              setIsFormatting(true);
-              try {
-                const formatted = await formatProjectFileContent(
-                  file.projectId,
-                  file.name,
-                  content
-                );
-                onChange(formatted);
-              } finally {
-                setIsFormatting(false);
-              }
-            }}
-            disabled={!canEdit || isFormatting || isLoading}
-            variant="outline"
-            className="h-8"
-            title={!canEdit ? "You don't have permission to edit" : "Format file"}
-          >
-            {isFormatting ? (
-              <Loader2 className="w-4 h-4 animate-spin mr-2" />
-            ) : (
-              <Wand2 className="w-4 h-4 mr-2" />
-            )}
-            Format
-          </Button>
-
-          <Button
-            size="sm"
-            onClick={() => setIsDeleteOpen(true)}
-            disabled={!canEdit || isDeleting}
-            variant="outline"
-            className="h-8"
-            title={!canEdit ? "You don't have permission to edit" : "Move to Trash"}
-          >
-            {isDeleting ? (
-              <Loader2 className="w-4 h-4 animate-spin mr-2" />
-            ) : (
-              <Trash2 className="w-4 h-4 mr-2" />
-            )}
-            Trash
-          </Button>
-
+        <div className="flex items-center gap-1.5">
           <Button
             size="sm"
             onClick={onSave}
             disabled={!canEdit || isSaving || !isDirty}
             variant="default"
-            className="h-8"
+            className="h-7 px-2"
             title={!canEdit ? "You don't have permission to edit" : undefined}
           >
             {isSaving ? (
-              <Loader2 className="w-4 h-4 animate-spin mr-2" />
+              <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" />
             ) : (
-              <Save className="w-4 h-4 mr-2" />
+              <Save className="w-3.5 h-3.5 mr-1.5" />
             )}
             Save
           </Button>
 
-          {isMarkdown ? (
-            <Button
-              variant={showPreview ? "default" : "ghost"}
-              size="sm"
-              className="h-8 w-8 p-0"
-              onClick={() => setShowPreview(!showPreview)}
-              title="Toggle Preview"
-            >
-              <SplitSquareHorizontal className="w-4 h-4" />
-            </Button>
-          ) : null}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 px-2"
+                title="Editor actions"
+              >
+                <MoreVertical className="w-3.5 h-3.5 mr-1.5" />
+                Actions
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-44">
+              <DropdownMenuItem
+                onSelect={(e) => {
+                  e.preventDefault();
+                  setIsDiffOpen(true);
+                }}
+                disabled={isLoading}
+              >
+                <Diff className="w-3.5 h-3.5 mr-2" />
+                Diff
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={(e) => {
+                  e.preventDefault();
+                  void handleFormat();
+                }}
+                disabled={!canEdit || isFormatting || isLoading}
+              >
+                {isFormatting ? (
+                  <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" />
+                ) : (
+                  <Wand2 className="w-3.5 h-3.5 mr-2" />
+                )}
+                Format
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={(e) => {
+                  e.preventDefault();
+                  setIsDeleteOpen(true);
+                }}
+                disabled={!canEdit || isDeleting}
+              >
+                {isDeleting ? (
+                  <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" />
+                ) : (
+                  <Trash2 className="w-3.5 h-3.5 mr-2" />
+                )}
+                Trash
+              </DropdownMenuItem>
+              {isMarkdown ? (
+                <DropdownMenuItem
+                  onSelect={(e) => {
+                    e.preventDefault();
+                    setShowPreview((prev) => !prev);
+                  }}
+                >
+                  <SplitSquareHorizontal className="w-3.5 h-3.5 mr-2" />
+                  {showPreview ? "Hide preview" : "Show preview"}
+                </DropdownMenuItem>
+              ) : null}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 

@@ -1,5 +1,6 @@
 import { useEffect } from "react";
-import { useChatStore, type InboxApplication } from "@/stores/chatStore";
+import Image from "next/image";
+import { useChatStore } from "@/stores/chatStore";
 import { formatDistanceToNow } from "date-fns";
 import { Briefcase, Loader2, ArrowRight, ArrowLeft } from "lucide-react";
 
@@ -52,9 +53,12 @@ export function ApplicationList() {
                     <div className="relative flex-shrink-0">
                         <div className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center overflow-hidden ring-2 ring-white dark:ring-zinc-900">
                             {app.displayUser.avatarUrl ? (
-                                <img
+                                <Image
                                     src={app.displayUser.avatarUrl}
                                     alt={app.displayUser.fullName || ''}
+                                    width={40}
+                                    height={40}
+                                    unoptimized
                                     className="w-full h-full object-cover"
                                 />
                             ) : (

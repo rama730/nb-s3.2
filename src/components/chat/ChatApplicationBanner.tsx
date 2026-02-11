@@ -74,7 +74,7 @@ export function ChatApplicationBanner({
         const optimisticStatus = action === 'accept' ? 'accepted' : 'rejected';
         useChatStore.getState().setPartialStatus(optimisticStatus); // Need to implement this helper or just set state directly?
         // Actually we can set the store directly
-        useChatStore.setState((state) => ({ activeApplicationStatus: optimisticStatus }));
+        useChatStore.setState({ activeApplicationStatus: optimisticStatus });
 
         setRequestLoading(true);
         try {
@@ -87,11 +87,11 @@ export function ChatApplicationBanner({
             } else {
                 toast.error(res.error || `Failed to ${action}`);
                 // Rollback on error
-                useChatStore.setState((state) => ({ activeApplicationStatus: 'pending' }));
+                useChatStore.setState({ activeApplicationStatus: 'pending' });
             }
-        } catch (e) {
+        } catch {
             toast.error(`Error processing request`);
-            useChatStore.setState((state) => ({ activeApplicationStatus: 'pending' }));
+            useChatStore.setState({ activeApplicationStatus: 'pending' });
         } finally {
             setRequestLoading(false);
         }

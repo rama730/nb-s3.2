@@ -14,7 +14,7 @@ import { useRouter } from "next/navigation";
 import { useDebounce } from "use-debounce";
 
 interface ConnectionsClientProps {
-    initialUser: any;
+    initialUser?: { id?: string | null } | null;
     embedded?: boolean;
 }
 

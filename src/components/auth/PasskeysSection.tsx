@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Button from "@/components/ui-custom/Button";
 import { Loader2, Key, Plus, Trash2 } from "lucide-react";
 import type { Passkey } from "@/lib/types/settingsTypes";
@@ -14,13 +14,7 @@ export default function PasskeysSection({ initialPasskeys = [] }: PasskeysSectio
     const [loading, setLoading] = useState(!initialPasskeys.length);
     const [registering, setRegistering] = useState(false);
 
-    useEffect(() => {
-        if (!initialPasskeys.length) {
-            loadPasskeys();
-        }
-    }, []);
-
-    const loadPasskeys = async () => {
+    const loadPasskeys = useCallback(async () => {
         try {
             const res = await fetch("/api/v1/auth/passkeys");
             const json = await res.json();
@@ -32,7 +26,13 @@ export default function PasskeysSection({ initialPasskeys = [] }: PasskeysSectio
         } finally {
             setLoading(false);
         }
-    };
+    }, []);
+
+    useEffect(() => {
+        if (!initialPasskeys.length) {
+            void loadPasskeys();
+        }
+    }, [initialPasskeys.length, loadPasskeys]);
 
     const handleRegister = async () => {
         setRegistering(true);

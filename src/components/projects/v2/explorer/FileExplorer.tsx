@@ -4,7 +4,6 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Virtuoso, VirtuosoGrid } from "react-virtuoso";
 import { FileGridItem } from "./FileGridItem";
 import {
-  BookmarkPlus,
   ChevronDown,
   ChevronRight,
   Clock,
@@ -14,13 +13,13 @@ import {
   List,
   Loader2,
   Link2,
+  MoreHorizontal,
+  Search,
   ShieldCheck,
   ShieldX,
-  Plus,
   Star,
   Trash2,
   Undo2,
-  Upload,
 } from "lucide-react";
 import { FileTreeItem } from "./FileTreeItem";
 import { Button } from "@/components/ui/button";
@@ -32,6 +31,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/components/ui-custom/Toast";
 import { createClient } from "@/lib/supabase/client";
@@ -59,7 +65,11 @@ import OutlinePanel from "./OutlinePanel";
 import SourceControlPanel from "./SourceControlPanel";
 
 const EMPTY_OBJECT = {};
-const EMPTY_ARRAY: any[] = []; // Typed as any[] to satisfy generic array constraints
+const EMPTY_ARRAY: string[] = [];
+
+function getErrorMessage(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback;
+}
 
 function areIdListsEqual(a: string[], b: string[]) {
   if (a.length !== b.length) return false;
@@ -350,6 +360,7 @@ export default function FileExplorer({
   const [selectedSavedViewId, setSelectedSavedViewId] = useState<string>("");
   const [operationsOpen, setOperationsOpen] = useState(false);
   const [operations, setOperations] = useState<ExplorerOperation[]>([]);
+  const [inlineSearchOpen, setInlineSearchOpen] = useState(false);
   const [isInsightsOpen, setIsInsightsOpen] = useState(false);
   const [linkedTasks, setLinkedTasks] = useState<
     Array<{
@@ -443,7 +454,7 @@ export default function FileExplorer({
               : entry
           )
         );
-      } catch (error: any) {
+      } catch (error: unknown) {
         setOperations((prev) =>
           prev.map((entry) =>
             entry.id === operationId
@@ -451,7 +462,7 @@ export default function FileExplorer({
               : entry
           )
         );
-        showToast(`Undo failed: ${error?.message || "Unknown error"}`, "error");
+        showToast(`Undo failed: ${getErrorMessage(error, "Unknown error")}`, "error");
       }
     },
     [operations, showToast]
@@ -523,10 +534,10 @@ export default function FileExplorer({
             const counts = await getTaskLinkCounts(projectId, fileIds);
             setTaskLinkCounts(projectId, counts);
           }
-        } catch (e: any) {
+        } catch (e: unknown) {
           console.error("Load folder failed", e);
           if (mode === "refresh") {
-            setAccessError(e?.message || "Failed to load files");
+            setAccessError(getErrorMessage(e, "Failed to load files"));
           } else {
             showToast("Failed to load more files", "error");
           }
@@ -571,7 +582,13 @@ export default function FileExplorer({
         if (rootChildren.length === 1) {
              const rootId = rootChildren[0];
              const rootNode = updatedWs.nodesById[rootId];
-             if (rootNode && (rootNode.metadata as any)?.isSystem && rootNode.type === "folder") {
+             if (
+               rootNode &&
+               typeof rootNode.metadata === "object" &&
+               rootNode.metadata !== null &&
+               (rootNode.metadata as Record<string, unknown>).isSystem === true &&
+               rootNode.type === "folder"
+             ) {
                   toggleExpanded(projectId, rootNode.id, true);
              }
         }
@@ -717,10 +734,10 @@ export default function FileExplorer({
         ]);
         setLinkedTasks(tasksData);
         setNodeActivity(activityData);
-      } catch (error: any) {
+      } catch (error: unknown) {
         setLinkedTasks([]);
         setNodeActivity([]);
-        setInsightsError(error?.message || "Failed to load node insights");
+        setInsightsError(getErrorMessage(error, "Failed to load node insights"));
       } finally {
         setInsightsLoading(false);
       }
@@ -840,8 +857,8 @@ export default function FileExplorer({
           : undefined,
       });
       setCreateDialog({ open: false });
-    } catch (e: any) {
-      showToast(`Create failed: ${e?.message || "Unknown error"}`, "error");
+    } catch (e: unknown) {
+      showToast(`Create failed: ${getErrorMessage(e, "Unknown error")}`, "error");
       recordOperation({
         label: `Create failed (${createDialog.kind})`,
         status: "error",
@@ -919,8 +936,8 @@ export default function FileExplorer({
             showToast("Upload failed", "error");
             recordOperation({ label: "Upload failed", status: "error" });
           }
-        } catch (e: any) {
-          showToast(`Upload failed: ${e?.message || "Unknown error"}`, "error");
+        } catch (e: unknown) {
+          showToast(`Upload failed: ${getErrorMessage(e, "Unknown error")}`, "error");
           recordOperation({ label: "Upload failed", status: "error" });
         }
     };
@@ -981,8 +998,8 @@ export default function FileExplorer({
           },
         },
       });
-    } catch (e: any) {
-      showToast(`Rename failed: ${e?.message || "Unknown error"}`, "error");
+    } catch (e: unknown) {
+      showToast(`Rename failed: ${getErrorMessage(e, "Unknown error")}`, "error");
       recordOperation({
         label: `Rename failed (${renameState.original})`,
         status: "error",
@@ -1112,8 +1129,8 @@ export default function FileExplorer({
           : undefined,
       });
       setMoveDialog({ open: false, nodes: [], targetFolderId: null });
-    } catch (e: any) {
-      showToast(`Move failed: ${e?.message || "Unknown error"}`, "error");
+    } catch (e: unknown) {
+      showToast(`Move failed: ${getErrorMessage(e, "Unknown error")}`, "error");
       recordOperation({
         label: "Move failed",
         status: "error",
@@ -1164,8 +1181,8 @@ export default function FileExplorer({
           : undefined,
       });
       setDeleteDialog({ open: false, nodes: [] });
-    } catch (e: any) {
-      showToast(`Delete failed: ${e?.message || "Unknown error"}`, "error");
+    } catch (e: unknown) {
+      showToast(`Delete failed: ${getErrorMessage(e, "Unknown error")}`, "error");
       recordOperation({
         label: "Move to trash failed",
         status: "error",
@@ -1181,6 +1198,12 @@ export default function FileExplorer({
   const [isSearching, setIsSearching] = useState(false);
   const [trashNodesState, setTrashNodesState] = useState<ProjectNode[]>([]);
   const [isTrashLoading, setIsTrashLoading] = useState(false);
+
+  useEffect(() => {
+    if (searchQuery.trim()) {
+      setInlineSearchOpen(true);
+    }
+  }, [searchQuery]);
 
   useEffect(() => {
     const q = searchQuery.trim();
@@ -1214,7 +1237,9 @@ export default function FileExplorer({
           return;
         }
 
-        const missing = orderedIds.filter((id) => !nodesById[id]);
+        const latestNodesByIdBeforeHydrate =
+          useFilesWorkspaceStore.getState().byProjectId[projectId]?.nodesById || {};
+        const missing = orderedIds.filter((id) => !latestNodesByIdBeforeHydrate[id]);
         if (missing.length > 0) {
           const hydrated = (await getNodesByIds(projectId, missing)) as ProjectNode[];
           if (requestId !== searchRequestIdRef.current) return;
@@ -1242,7 +1267,7 @@ export default function FileExplorer({
     }, 200);
 
     return () => clearTimeout(t);
-  }, [projectId, upsertNodes, searchQuery, setTaskLinkCounts, nodesById]);
+  }, [projectId, upsertNodes, searchQuery, setTaskLinkCounts]);
 
   // Trash listing
   useEffect(() => {
@@ -1417,6 +1442,21 @@ export default function FileExplorer({
 
   const selectedIndex = selectedNodeId ? rowIndexById.get(selectedNodeId) : undefined;
 
+  const getNodePath = useCallback((node: ProjectNode | null | undefined) => {
+    if (!node) return "";
+    const parts: string[] = [node.name];
+    let cursor = node.parentId;
+    let guard = 0;
+    while (cursor && guard < 256) {
+      const parent = nodesById[cursor];
+      if (!parent) break;
+      parts.unshift(parent.name);
+      cursor = parent.parentId;
+      guard += 1;
+    }
+    return parts.join("/");
+  }, [nodesById]);
+
   const focusRow = (index: number) => {
     const row = rowsToRender[index];
     if (row?.kind === "node") {
@@ -1445,6 +1485,29 @@ export default function FileExplorer({
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
       e.preventDefault();
       setCommandPalette({ open: true, query: "" });
+      return;
+    }
+    if ((e.metaKey || e.ctrlKey) && e.altKey && e.key.toLowerCase() === "n") {
+      if (!canEdit) return;
+      e.preventDefault();
+      openCreate("file");
+      return;
+    }
+    if ((e.metaKey || e.ctrlKey) && e.altKey && e.key.toLowerCase() === "f") {
+      if (!canEdit) return;
+      e.preventDefault();
+      openCreate("folder");
+      return;
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "m") {
+      if (!canEdit) return;
+      e.preventDefault();
+      if (storeSelectedNodeIds.length > 0) {
+        const nodes = storeSelectedNodeIds.map(id => nodesById[id]).filter(Boolean);
+        openMove(nodes);
+      } else if (selectedNode) {
+        openMove(selectedNode);
+      }
       return;
     }
 
@@ -1479,6 +1542,10 @@ export default function FileExplorer({
       e.preventDefault();
       if (selectedNode.type === "folder") await handleToggleFolder(selectedNode);
       else handleSelect(selectedNode);
+    } else if (e.key === " ") {
+      if (!selectedNode || selectedNode.type !== "folder") return;
+      e.preventDefault();
+      await handleToggleFolder(selectedNode);
     } else if (e.key === "F2") {
       if (!selectedNode) return;
       e.preventDefault();
@@ -1498,6 +1565,17 @@ export default function FileExplorer({
         openDelete(nodes);
       } else if (selectedNode) {
         openDelete(selectedNode);
+      }
+    } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "c") {
+      if (!selectedNode) return;
+      e.preventDefault();
+      const path = getNodePath(selectedNode);
+      if (!path) return;
+      try {
+        await navigator.clipboard.writeText(path);
+        showToast("Path copied", "success");
+      } catch {
+        showToast("Failed to copy path", "error");
       }
     }
   };
@@ -1545,8 +1623,8 @@ export default function FileExplorer({
         label: `Dragged ${result} item${result === 1 ? "" : "s"} to folder`,
         status: "success",
       });
-    } catch (e: any) {
-      showToast(`Move failed: ${e?.message || "Unknown error"}`, "error");
+    } catch (e: unknown) {
+      showToast(`Move failed: ${getErrorMessage(e, "Unknown error")}`, "error");
       recordOperation({
         label: "Drag move failed",
         status: "error",
@@ -1718,7 +1796,7 @@ export default function FileExplorer({
       className="h-full flex flex-col bg-white dark:bg-zinc-900 outline-none"
     >
       {/* Toolbar */}
-      <div className="flex items-center justify-between gap-2 p-3 border-b border-zinc-200 dark:border-zinc-800">
+      <div className="flex items-center justify-between gap-2 p-2 border-b border-zinc-200 dark:border-zinc-800">
         <div className="flex items-center gap-2 min-w-0">
           <select
             className="h-7 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 text-xs font-medium px-2 focus:ring-2 focus:ring-indigo-500/20 outline-none cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
@@ -1730,110 +1808,116 @@ export default function FileExplorer({
             <option value="assets">Assets</option>
             <option value="all">All Files</option>
           </select>
-          <select
-            className="h-7 max-w-[140px] rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 text-xs font-medium px-2 focus:ring-2 focus:ring-indigo-500/20 outline-none cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
-            value={selectedSavedViewId}
-            onChange={(e) => handleApplySavedView(e.target.value)}
-            title="Saved views"
-          >
-            <option value="">Saved views</option>
-            {savedViews.map((view) => (
-              <option key={view.id} value={view.id}>
-                {view.name}
-              </option>
-            ))}
-          </select>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 w-7 p-0"
-            onClick={handleSaveCurrentView}
-            title="Save current view"
-          >
-            <BookmarkPlus className="w-4 h-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 w-7 p-0"
-            onClick={handleDeleteSavedView}
-            disabled={!selectedSavedViewId}
-            title="Delete selected saved view"
-          >
-            <Trash2 className="w-4 h-4" />
-          </Button>
         </div>
 
-        <div className="flex items-center gap-1">
-          <Button
-            variant={operationsOpen ? "secondary" : "ghost"}
-            size="sm"
-            className="h-7 px-2 text-xs"
-            onClick={() => setOperationsOpen((open) => !open)}
-            title="Operations center"
-          >
-            {operationsOpen ? "Ops on" : "Ops"}
-          </Button>
-          <Button
-            variant={isInsightsOpen ? "secondary" : "ghost"}
-            size="sm"
-            className="h-7 px-2 text-xs"
-            onClick={() => setIsInsightsOpen((open) => !open)}
-            title="Node insights"
-          >
-            Insights
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 w-7 p-0"
-            onClick={() => openCreate("folder")}
-            disabled={!canEdit}
-            title="New folder"
-          >
-            <Plus className="w-4 h-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 w-7 p-0"
-            onClick={() => openCreate("file")}
-            disabled={!canEdit}
-            title="New file"
-          >
-            <FileText className="w-4 h-4" />
-          </Button>
-          {uploadEnabled ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 w-7 p-0"
-              onClick={() => {
-                if (!canEdit) return;
-                const parentId =
-                  selectedNode?.type === "folder"
-                    ? selectedNode.id
-                    : selectedNode?.parentId ?? selectedFolderId ?? null;
-                openUpload(parentId);
-              }}
-              disabled={!canEdit}
-              title="Upload file"
-            >
-              <Upload className="w-4 h-4" />
-            </Button>
-          ) : null}
+        <div className="flex items-center gap-1 shrink-0">
+          <DropdownMenu modal={false}>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 px-2 text-xs"
+                title="File actions"
+              >
+                Actions
+                <MoreHorizontal className="w-3.5 h-3.5 ml-1" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-52">
+              <DropdownMenuItem
+                onSelect={(e) => {
+                  e.preventDefault();
+                  setOperationsOpen((open) => !open);
+                }}
+              >
+                {operationsOpen ? "Hide operations center" : "Show operations center"}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={(e) => {
+                  e.preventDefault();
+                  setIsInsightsOpen((open) => !open);
+                }}
+              >
+                {isInsightsOpen ? "Hide insights" : "Show insights"}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onSelect={(e) => {
+                  e.preventDefault();
+                  handleSaveCurrentView();
+                }}
+              >
+                Save current view
+              </DropdownMenuItem>
+              {savedViews.length > 0 ? (
+                <>
+                  <DropdownMenuSeparator />
+                  {savedViews.map((view) => (
+                    <DropdownMenuItem
+                      key={view.id}
+                      onSelect={(e) => {
+                        e.preventDefault();
+                        handleApplySavedView(view.id);
+                      }}
+                    >
+                      {selectedSavedViewId === view.id ? "✓ " : ""}
+                      {view.name}
+                    </DropdownMenuItem>
+                  ))}
+                </>
+              ) : null}
+              <DropdownMenuItem
+                disabled={!selectedSavedViewId}
+                onSelect={(e) => {
+                  e.preventDefault();
+                  handleDeleteSavedView();
+                }}
+              >
+                Delete saved view
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                disabled={!canEdit}
+                onSelect={(e) => {
+                  e.preventDefault();
+                  openCreate("folder");
+                }}
+              >
+                New folder
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={!canEdit}
+                onSelect={(e) => {
+                  e.preventDefault();
+                  openCreate("file");
+                }}
+              >
+                New file
+              </DropdownMenuItem>
+              {uploadEnabled ? (
+                <DropdownMenuItem
+                  disabled={!canEdit}
+                  onSelect={(e) => {
+                    e.preventDefault();
+                    if (!canEdit) return;
+                    const parentId =
+                      selectedNode?.type === "folder"
+                        ? selectedNode.id
+                        : selectedNode?.parentId ?? selectedFolderId ?? null;
+                    openUpload(parentId);
+                  }}
+                >
+                  Upload file
+                </DropdownMenuItem>
+              ) : null}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 
       {/* Search & sort */}
-      <div className="p-3 border-b border-zinc-200 dark:border-zinc-800 space-y-2">
-        <Input
-          placeholder="Search files…"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(projectId, e.target.value)}
-          className="h-8 bg-zinc-50 dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800"
-        />
-        <div className="flex items-center gap-2">
+      <div className="px-2 py-2 border-b border-zinc-200 dark:border-zinc-800">
+        <div className="flex items-center gap-1.5">
           <div className="flex items-center gap-1 mr-auto">
             <Button
               type="button"
@@ -1877,10 +1961,43 @@ export default function FileExplorer({
               <Trash2 className="w-4 h-4" />
             </Button>
           </div>
+
+          <div className="flex items-center gap-1">
+            <div
+              className={cn(
+                "overflow-hidden transition-all duration-200 ease-out",
+                inlineSearchOpen ? "w-[136px] opacity-100" : "w-0 opacity-0"
+              )}
+            >
+              <Input
+                placeholder="Search"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(projectId, e.target.value)}
+                className="h-7 bg-zinc-50 dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 text-xs px-2"
+              />
+            </div>
+            <Button
+              type="button"
+              size="sm"
+              variant={inlineSearchOpen ? "secondary" : "ghost"}
+              className="h-7 w-7 p-0"
+              title="Search files"
+              onClick={() => {
+                setInlineSearchOpen((prev) => {
+                  const next = !prev;
+                  if (!next) setSearchQuery(projectId, "");
+                  return next;
+                });
+              }}
+            >
+              <Search className="w-4 h-4" />
+            </Button>
+          </div>
+
           <select
             className="h-7 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 text-xs px-2 cursor-pointer outline-none focus:ring-2 focus:ring-indigo-500/20"
             value={sort}
-            onChange={(e) => setSort(projectId, e.target.value as any)}
+            onChange={(e) => setSort(projectId, e.target.value as "name" | "updated" | "type")}
           >
             <option value="name">Name</option>
             <option value="updated">Updated</option>
@@ -2303,6 +2420,13 @@ export default function FileExplorer({
             />
             <div className="rounded-md border border-zinc-200 dark:border-zinc-800 overflow-hidden">
               {[
+                {
+                  id: "open",
+                  label: "Open selected",
+                  run: () => selectedNode && handleSelect(selectedNode),
+                  disabled: !selectedNode,
+                  requiresWrite: false,
+                },
                 { id: "newFile", label: "New file", run: () => openCreate("file") },
                 { id: "newFolder", label: "New folder", run: () => openCreate("folder") },
                 {
@@ -2330,6 +2454,31 @@ export default function FileExplorer({
                   run: () => selectedNode && toggleFavorite(projectId, selectedNode.id),
                   disabled: !selectedNode,
                 },
+                {
+                  id: "move",
+                  label: "Move selected",
+                  run: () => {
+                    if (storeSelectedNodeIds.length > 0) {
+                      const nodes = storeSelectedNodeIds.map(id => nodesById[id]).filter(Boolean);
+                      openMove(nodes);
+                    } else if (selectedNode) {
+                      openMove(selectedNode);
+                    }
+                  },
+                  disabled: !selectedNode && storeSelectedNodeIds.length === 0,
+                },
+                {
+                  id: "copyPath",
+                  label: "Copy selected path",
+                  run: async () => {
+                    if (!selectedNode) return;
+                    const path = getNodePath(selectedNode);
+                    if (!path) return;
+                    await navigator.clipboard.writeText(path);
+                  },
+                  disabled: !selectedNode,
+                  requiresWrite: false,
+                },
               ]
                 .filter((c) =>
                   c.label.toLowerCase().includes(commandPalette.query.trim().toLowerCase())
@@ -2341,11 +2490,11 @@ export default function FileExplorer({
                       "w-full text-left px-3 py-2 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-900",
                       c.disabled && "opacity-50 cursor-not-allowed"
                     )}
-                    disabled={!!c.disabled || !canEdit}
-                    onClick={() => {
-                      if (c.disabled || !canEdit) return;
+                    disabled={!!c.disabled || (c.requiresWrite !== false && !canEdit)}
+                    onClick={async () => {
+                      if (c.disabled || (c.requiresWrite !== false && !canEdit)) return;
                       setCommandPalette({ open: false, query: "" });
-                      c.run();
+                      await c.run();
                     }}
                   >
                     {c.label}

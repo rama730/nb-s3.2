@@ -8,6 +8,7 @@ import { eq, and, isNull, isNotNull, ilike, inArray, sql, desc, ne, type SQL } f
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import prettier from "prettier";
+import { format as sqlFormat } from "sql-formatter";
 
 async function assertProjectAccess(projectId: string, userId: string) {
     // Backward-compatible alias: write access
@@ -84,6 +85,12 @@ const MAX_BATCH_PARENT_FOLDERS = 50;
 const MAX_BULK_NODE_OPS = 200;
 const MAX_NODE_ACTIVITY_ITEMS = 100;
 const MAX_NODE_LINKED_TASKS = 100;
+const MAX_BATCH_REPLACE_FILES = 60;
+const MAX_BATCH_REPLACE_TOTAL_BYTES = 4 * 1024 * 1024;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const MAX_BATCH_FETCH_PER_PARENT = 200;
+const MAX_BATCH_FETCH_TOTAL = 3000;
+const BATCH_PARENT_QUERY_CONCURRENCY = 6;
 
 function normalizeNodeName(name: string) {
     return (name || "").trim();
@@ -109,11 +116,97 @@ function assertBulkLimit(nodeIds: string[]) {
     }
 }
 
+function countOccurrences(content: string, needle: string) {
+    if (!needle) return 0;
+    let count = 0;
+    let start = 0;
+    while (true) {
+        const index = content.indexOf(needle, start);
+        if (index === -1) break;
+        count += 1;
+        start = index + Math.max(1, needle.length);
+    }
+    return count;
+}
+
+function firstSnippet(content: string, needle: string, radius = 80) {
+    if (!content) return "";
+    const index = needle ? content.indexOf(needle) : -1;
+    if (index === -1) {
+        return content.slice(0, 180).replace(/\s+/g, " ");
+    }
+    const start = Math.max(0, index - radius);
+    const end = Math.min(content.length, index + needle.length + radius);
+    return content.slice(start, end).replace(/\s+/g, " ");
+}
+
+function formatSqlLight(content: string) {
+    const normalized = (content || "").replace(/\r\n/g, "\n");
+    try {
+        const formatted = sqlFormat(normalized, {
+            language: "postgresql",
+            keywordCase: "upper",
+            tabWidth: 2,
+            linesBetweenQueries: 1,
+            denseOperators: false,
+        });
+        const trimmed = formatted
+            .split("\n")
+            .map((line) => line.replace(/[ \t]+$/g, ""))
+            .join("\n")
+            .replace(/\n{3,}/g, "\n\n")
+            .trim();
+        return trimmed ? `${trimmed}\n` : "";
+    } catch {
+        // Safe fallback: normalize whitespace only without changing semantics.
+        const withStatementBreaks = normalized
+            .split("\n")
+            .map((line) => line.replace(/[ \t]+$/g, ""))
+            .join("\n")
+            .replace(/;[ \t]*(\n|$)/g, ";\n")
+            .replace(/\n{3,}/g, "\n\n")
+            .trim();
+        return withStatementBreaks ? `${withStatementBreaks}\n` : "";
+    }
+}
+
+async function ensureSystemRootFolder(projectId: string, userId: string, fallbackName: string) {
+    return await db.transaction(async (tx) => {
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`files-system-root:${projectId}`}))`);
+
+        const existing = await tx.query.projectNodes.findFirst({
+            where: and(
+                eq(projectNodes.projectId, projectId),
+                isNull(projectNodes.parentId),
+                eq(projectNodes.type, "folder"),
+                isNull(projectNodes.deletedAt),
+                sql`coalesce(${projectNodes.metadata}->>'isSystem', 'false') = 'true'`
+            ),
+        });
+        if (existing) return existing;
+
+        const [created] = await tx
+            .insert(projectNodes)
+            .values({
+                projectId,
+                parentId: null,
+                type: "folder",
+                name: fallbackName,
+                createdBy: userId,
+                metadata: { isSystem: true },
+                createdAt: new Date(),
+                updatedAt: new Date(),
+            })
+            .returning();
+        return created;
+    });
+}
+
 async function assertNodeNotLockedByAnotherUser(
     projectId: string,
     nodeId: string,
     userId: string,
-    tx: any = db
+    tx: { query: typeof db.query } = db
 ) {
     const now = new Date();
     const lock = await tx.query.projectNodeLocks.findFirst({
@@ -130,7 +223,7 @@ async function assertNodeNotLockedByAnotherUser(
     }
 }
 
-async function assertValidParentFolder(projectId: string, parentId: string | null, tx: any = db) {
+async function assertValidParentFolder(projectId: string, parentId: string | null, tx: { query: typeof db.query } = db) {
     if (!parentId) return null;
     const parent = await tx.query.projectNodes.findFirst({
         where: and(
@@ -149,7 +242,7 @@ async function assertUniqueSiblingName(
     projectId: string,
     parentId: string | null,
     name: string,
-    tx: any = db,
+    tx: { query: typeof db.query } = db,
     ignoreNodeId?: string
 ) {
     const conditions: SQL[] = [
@@ -176,7 +269,7 @@ async function assertNotMovingIntoDescendant(
     projectId: string,
     nodeId: string,
     targetParentId: string | null,
-    tx: any = db
+    tx: { query: typeof db.query } = db
 ) {
     let cursor = targetParentId;
     for (let depth = 0; cursor && depth < 256; depth++) {
@@ -280,27 +373,20 @@ export async function getProjectNodes(
     // Auto-create default root folder if project is empty at root
     // IMPORTANT: Do NOT create system roots for imported projects (GitHub/Upload),
     // otherwise you end up with a confusing extra folder beside the imported tree.
-    const importType = (access.project as any)?.importSource?.type as string | undefined;
+    const importType = access.project.importSource?.type;
     const isScratchLike = !importType || importType === 'scratch';
-    const isReady = (access.project as any)?.syncStatus === 'ready';
+    const isReady = access.project.syncStatus === 'ready';
 
     if (access.canWrite && !!user && !parentId && nodes.length === 0 && !cursor && isScratchLike && isReady) {
         try {
-            // Fetch project title
-            const [project] = await db.select({ title: projects.title }).from(projects).where(eq(projects.id, projectId));
-
-            if (project) {
-                const [rootNode] = await db.insert(projectNodes).values({
-                    projectId,
-                    parentId: null,
-                    type: 'folder',
-                    name: project.title,
-                    createdBy: user.id,
-                    metadata: { isSystem: true }
-                }).returning();
-
-                return { nodes: [rootNode], nextCursor: null };
-            }
+            // Race-safe: only one request per project can create/read the system root in this transaction.
+            const [project] = await db
+                .select({ title: projects.title })
+                .from(projects)
+                .where(eq(projects.id, projectId))
+                .limit(1);
+            const rootNode = await ensureSystemRootFolder(projectId, user.id, project?.title || "Project");
+            return { nodes: [rootNode], nextCursor: null };
         } catch (err) {
             console.error("Failed to auto-create root folder", err);
         }
@@ -317,50 +403,52 @@ export async function getProjectBatchNodes(projectId: string, parentIds: (string
 
     await assertProjectReadAccess(projectId, user?.id ?? null);
 
-    // De-dupe and sanitize
+    // De-dupe and sanitize. Ignore empty/invalid values so they never hit UUID SQL params.
     const uniqueParents = Array.from(new Set(parentIds));
-    if (uniqueParents.length > MAX_BATCH_PARENT_FOLDERS) {
+    const cleanParents = Array.from(
+        new Set(
+            uniqueParents.flatMap((parentId) => {
+                if (parentId === null || parentId === "root") return [null];
+                const normalized = String(parentId).trim();
+                if (!normalized) return [];
+                if (normalized === "root") return [null];
+                if (!UUID_RE.test(normalized)) return [];
+                return [normalized];
+            })
+        )
+    );
+
+    if (cleanParents.length > MAX_BATCH_PARENT_FOLDERS) {
         throw new Error(`Too many folders requested in one batch. Max: ${MAX_BATCH_PARENT_FOLDERS}`);
     }
-    const cleanParents = uniqueParents.map(id => id === 'root' ? null : id);
+    if (!cleanParents.length) return [];
 
-    // We can't really do cursor pagination easily on a batch hierarchy fetch without complexity.
-    // For batch hydration (session restore), we assume we want "first N items" of each folder.
-    // However, a simple "WHERE parent_id IN (...)" doesn't limit per parent.
-    // For pure scalability, we should probably only fetch the first ~50 of each folder.
-    // Using LATERAL JOIN involves raw SQL.
-    // For now, to solve "N requests", we will just do a simpler IN query but cap strictly to avoid massive payloads.
-    // If a user has 50 expanded folders, we might still hit limits. 
-    // Optimization: We could enforce max 20 expanded folders batch or just rely on the fact that 
-    // restoring session is usually typically < 10 folders.
+    // Fetch per parent to avoid starvation from a single global LIMIT when many folders are expanded.
+    const fetchByParent = async (parentId: string | null) => {
+        return await db.query.projectNodes.findMany({
+            where: and(
+                eq(projectNodes.projectId, projectId),
+                isNull(projectNodes.deletedAt),
+                parentId ? eq(projectNodes.parentId, parentId) : isNull(projectNodes.parentId)
+            ),
+            orderBy: (nodes, { asc }) => [asc(nodes.type), asc(nodes.name), asc(nodes.id)],
+            limit: MAX_BATCH_FETCH_PER_PARENT,
+        });
+    };
 
-    // If any parent has null, `inArray` might fail for nulls in some SQL dialects or ORMs.
-    // Drizzle `inArray` might not match NULL. We need to handle root separately if present.
-    // Let's refine the query if 'null' (root) is involved.
-
-    const hasRoot = cleanParents.includes(null);
-    const nonNullParents = cleanParents.filter(p => p !== null) as string[];
-
-    const conditions = [
-        eq(projectNodes.projectId, projectId),
-        isNull(projectNodes.deletedAt)
-    ];
-
-    if (hasRoot && nonNullParents.length > 0) {
-        conditions.push(sql`(${inArray(projectNodes.parentId, nonNullParents)} OR ${isNull(projectNodes.parentId)})`);
-    } else if (hasRoot) {
-        conditions.push(isNull(projectNodes.parentId));
-    } else {
-        conditions.push(inArray(projectNodes.parentId, nonNullParents));
+    const out: ProjectNode[] = [];
+    for (let i = 0; i < cleanParents.length; i += BATCH_PARENT_QUERY_CONCURRENCY) {
+        const chunk = cleanParents.slice(i, i + BATCH_PARENT_QUERY_CONCURRENCY);
+        const rowsByParent = await Promise.all(chunk.map((parentId) => fetchByParent(parentId)));
+        for (const rows of rowsByParent) {
+            for (const row of rows) {
+                out.push(row);
+                if (out.length >= MAX_BATCH_FETCH_TOTAL) return out;
+            }
+        }
     }
 
-    const safeNodes = await db.query.projectNodes.findMany({
-        where: and(...conditions),
-        orderBy: (nodes, { asc }) => [asc(nodes.parentId), asc(nodes.type), asc(nodes.name)],
-        limit: 2500
-    });
-
-    return safeNodes;
+    return out;
 }
 
 async function recordNodeEvent(projectId: string, actorId: string | null, nodeId: string | null, type: string, metadata: Record<string, unknown> = {}) {
@@ -611,6 +699,11 @@ export async function formatProjectFileContent(projectId: string, filename: stri
     await assertProjectWriteAccess(projectId, user.id);
 
     const ext = filename.split('.').pop()?.toLowerCase();
+
+    if (ext === "sql") {
+        return formatSqlLight(content);
+    }
+
     const parser =
         ext === 'ts' || ext === 'tsx' ? 'typescript' :
             ext === 'js' || ext === 'jsx' ? 'babel' :
@@ -622,7 +715,12 @@ export async function formatProjectFileContent(projectId: string, filename: stri
 
     if (!parser) return content;
 
-    return await prettier.format(content, { parser });
+    try {
+        return await prettier.format(content, { parser });
+    } catch {
+        // Keep content unchanged if parser fails to avoid destructive formatting.
+        return content;
+    }
 }
 
 export async function upsertProjectFileIndex(projectId: string, nodeId: string, content: string) {
@@ -670,6 +768,356 @@ export async function searchProjectFileIndex(projectId: string, query: string, l
         .limit(Math.min(200, Math.max(1, limit)));
 
     return rows.map(r => ({ nodeId: r.nodeId, snippet: r.snippet }));
+}
+
+export async function previewProjectSearchReplace(
+    projectId: string,
+    query: string,
+    replacement: string,
+    limit: number = 120
+) {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    await assertProjectReadAccess(projectId, user?.id ?? null);
+
+    const needle = normalizeSearchQuery(query);
+    if (!needle || needle.length < 2) {
+        return { success: true as const, items: [] as Array<{
+            nodeId: string;
+            name: string;
+            parentId: string | null;
+            occurrenceCount: number;
+            beforeSnippet: string;
+            afterSnippet: string;
+        }> };
+    }
+
+    const safeLimit = Math.max(1, Math.min(MAX_BATCH_REPLACE_FILES, limit));
+    const rows = await db
+        .select({
+            nodeId: projectNodes.id,
+            name: projectNodes.name,
+            parentId: projectNodes.parentId,
+            content: projectFileIndex.content,
+        })
+        .from(projectFileIndex)
+        .innerJoin(projectNodes, eq(projectNodes.id, projectFileIndex.nodeId))
+        .where(
+            and(
+                eq(projectFileIndex.projectId, projectId),
+                eq(projectNodes.projectId, projectId),
+                isNull(projectNodes.deletedAt),
+                ilike(projectFileIndex.content, `%${needle}%`)
+            )
+        )
+        .limit(safeLimit);
+
+    const items = rows
+        .map((row) => {
+            const occurrenceCount = countOccurrences(row.content || "", needle);
+            if (occurrenceCount <= 0) return null;
+            const beforeSnippet = firstSnippet(row.content || "", needle);
+            const afterSnippet = beforeSnippet.split(needle).join(replacement);
+            return {
+                nodeId: row.nodeId,
+                name: row.name,
+                parentId: row.parentId,
+                occurrenceCount,
+                beforeSnippet,
+                afterSnippet,
+            };
+        })
+        .filter((row): row is NonNullable<typeof row> => !!row);
+
+    return { success: true as const, items };
+}
+
+export async function applyProjectSearchReplace(
+    projectId: string,
+    input: { query: string; replacement: string; nodeIds: string[] }
+) {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error("Unauthorized");
+    await assertProjectWriteAccess(projectId, user.id);
+
+    const needle = normalizeSearchQuery(input.query);
+    if (!needle || needle.length < 2) {
+        return { success: false as const, error: "Search query must be at least 2 characters." };
+    }
+
+    const replacement = (input.replacement ?? "").slice(0, 5000);
+    const uniqueNodeIds = Array.from(new Set((input.nodeIds || []).filter(Boolean))).slice(0, MAX_BATCH_REPLACE_FILES);
+    if (uniqueNodeIds.length === 0) {
+        return { success: false as const, error: "Select at least one file." };
+    }
+
+    const nodes = await db
+        .select({
+            id: projectNodes.id,
+            name: projectNodes.name,
+            s3Key: projectNodes.s3Key,
+            type: projectNodes.type,
+            deletedAt: projectNodes.deletedAt,
+        })
+        .from(projectNodes)
+        .where(and(eq(projectNodes.projectId, projectId), inArray(projectNodes.id, uniqueNodeIds)));
+
+    const nodeById = new Map(nodes.map((node) => [node.id, node]));
+    const validNodeIds = uniqueNodeIds.filter((id) => {
+        const node = nodeById.get(id);
+        return !!node && node.type === "file" && !!node.s3Key && !node.deletedAt;
+    });
+    if (validNodeIds.length === 0) {
+        return { success: false as const, error: "No valid files selected." };
+    }
+
+    const indexRows = await db
+        .select({
+            nodeId: projectFileIndex.nodeId,
+            content: projectFileIndex.content,
+        })
+        .from(projectFileIndex)
+        .where(and(eq(projectFileIndex.projectId, projectId), inArray(projectFileIndex.nodeId, validNodeIds)));
+    const contentByNodeId = new Map(indexRows.map((row) => [row.nodeId, row.content]));
+
+    let totalBackupBytes = 0;
+    const admin = await createAdminClient();
+    const planned: Array<{
+        nodeId: string;
+        nodeName: string;
+        s3Key: string;
+        prevContent: string;
+        nextContent: string;
+        nextSize: number;
+    }> = [];
+
+    for (const nodeId of validNodeIds) {
+        const node = nodeById.get(nodeId);
+        if (!node?.s3Key) continue;
+        const current = contentByNodeId.get(nodeId);
+        if (typeof current !== "string" || !current.includes(needle)) continue;
+
+        await assertNodeNotLockedByAnotherUser(projectId, nodeId, user.id);
+
+        const next = current.split(needle).join(replacement);
+        if (next === current) continue;
+
+        totalBackupBytes += current.length;
+        if (totalBackupBytes > MAX_BATCH_REPLACE_TOTAL_BYTES) {
+            return {
+                success: false as const,
+                error: "Replace payload too large. Select fewer files.",
+            };
+        }
+
+        planned.push({
+            nodeId,
+            nodeName: node.name,
+            s3Key: node.s3Key,
+            prevContent: current,
+            nextContent: next,
+            nextSize: new TextEncoder().encode(next).length,
+        });
+    }
+
+    if (planned.length === 0) {
+        return { success: true as const, changedNodeIds: [] as string[], backup: [] as Array<{ nodeId: string; content: string }> };
+    }
+
+    const writeEntry = async (s3Key: string, content: string) => {
+        const blob = new Blob([content], { type: "text/plain" });
+        return await admin.storage.from("project-files").update(s3Key, blob, { upsert: true });
+    };
+
+    const appliedStorage: typeof planned = [];
+    for (const entry of planned) {
+        const { error } = await writeEntry(entry.s3Key, entry.nextContent);
+        if (error) {
+            for (const previous of appliedStorage.reverse()) {
+                await writeEntry(previous.s3Key, previous.prevContent);
+            }
+            return { success: false as const, error: `Failed writing ${entry.nodeName}` };
+        }
+        appliedStorage.push(entry);
+    }
+
+    try {
+        await db.transaction(async (tx) => {
+            const now = new Date();
+            for (const entry of planned) {
+                await tx
+                    .update(projectNodes)
+                    .set({ size: entry.nextSize, updatedAt: now })
+                    .where(and(eq(projectNodes.id, entry.nodeId), eq(projectNodes.projectId, projectId)));
+
+                await tx
+                    .insert(projectFileIndex)
+                    .values({
+                        projectId,
+                        nodeId: entry.nodeId,
+                        content: entry.nextContent,
+                        updatedAt: now,
+                    })
+                    .onConflictDoUpdate({
+                        target: projectFileIndex.nodeId,
+                        set: { content: entry.nextContent, updatedAt: now },
+                    });
+
+                await tx.insert(projectNodeEvents).values({
+                    projectId,
+                    nodeId: entry.nodeId,
+                    actorId: user.id,
+                    type: "replace_batch",
+                    metadata: { query: needle, replacementPreview: replacement.slice(0, 120) },
+                    createdAt: now,
+                });
+            }
+        });
+    } catch {
+        for (const entry of planned.reverse()) {
+            await writeEntry(entry.s3Key, entry.prevContent);
+        }
+        return { success: false as const, error: "Failed to persist replace operation." };
+    }
+
+    const changedNodeIds = planned.map((entry) => entry.nodeId);
+    const backup = planned.map((entry) => ({ nodeId: entry.nodeId, content: entry.prevContent }));
+    revalidatePath(`/projects/${projectId}`);
+    return { success: true as const, changedNodeIds, backup };
+}
+
+export async function rollbackProjectSearchReplace(
+    projectId: string,
+    backups: Array<{ nodeId: string; content: string }>
+) {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error("Unauthorized");
+    await assertProjectWriteAccess(projectId, user.id);
+
+    const entries = Array.from(new Map((backups || []).map((item) => [item.nodeId, item])).values())
+        .slice(0, MAX_BATCH_REPLACE_FILES);
+    if (entries.length === 0) {
+        return { success: false as const, error: "Nothing to rollback." };
+    }
+
+    let totalBytes = 0;
+    for (const entry of entries) totalBytes += entry.content?.length || 0;
+    if (totalBytes > MAX_BATCH_REPLACE_TOTAL_BYTES) {
+        return { success: false as const, error: "Rollback payload too large." };
+    }
+
+    const nodes = await db
+        .select({
+            id: projectNodes.id,
+            name: projectNodes.name,
+            s3Key: projectNodes.s3Key,
+            type: projectNodes.type,
+            deletedAt: projectNodes.deletedAt,
+        })
+        .from(projectNodes)
+        .where(and(eq(projectNodes.projectId, projectId), inArray(projectNodes.id, entries.map((entry) => entry.nodeId))));
+
+    const nodeById = new Map(nodes.map((node) => [node.id, node]));
+    const existingIndexRows = await db
+        .select({
+            nodeId: projectFileIndex.nodeId,
+            content: projectFileIndex.content,
+        })
+        .from(projectFileIndex)
+        .where(and(eq(projectFileIndex.projectId, projectId), inArray(projectFileIndex.nodeId, entries.map((entry) => entry.nodeId))));
+    const existingContentByNodeId = new Map(existingIndexRows.map((row) => [row.nodeId, row.content]));
+
+    const admin = await createAdminClient();
+    const planned: Array<{
+        nodeId: string;
+        nodeName: string;
+        s3Key: string;
+        prevContent: string;
+        nextContent: string;
+        nextSize: number;
+    }> = [];
+
+    for (const entry of entries) {
+        const node = nodeById.get(entry.nodeId);
+        if (!node || node.type !== "file" || !node.s3Key || node.deletedAt) continue;
+
+        await assertNodeNotLockedByAnotherUser(projectId, node.id, user.id);
+        const nextContent = entry.content ?? "";
+        planned.push({
+            nodeId: node.id,
+            nodeName: node.name,
+            s3Key: node.s3Key,
+            prevContent: existingContentByNodeId.get(node.id) ?? "",
+            nextContent,
+            nextSize: new TextEncoder().encode(nextContent).length,
+        });
+    }
+
+    if (planned.length === 0) {
+        return { success: true as const, restoredNodeIds: [] as string[] };
+    }
+
+    const writeEntry = async (s3Key: string, content: string) => {
+        const blob = new Blob([content], { type: "text/plain" });
+        return await admin.storage.from("project-files").update(s3Key, blob, { upsert: true });
+    };
+
+    const appliedStorage: typeof planned = [];
+    for (const entry of planned) {
+        const { error } = await writeEntry(entry.s3Key, entry.nextContent);
+        if (error) {
+            for (const previous of appliedStorage.reverse()) {
+                await writeEntry(previous.s3Key, previous.prevContent);
+            }
+            return { success: false as const, error: `Failed restoring ${entry.nodeName}` };
+        }
+        appliedStorage.push(entry);
+    }
+
+    try {
+        await db.transaction(async (tx) => {
+            const now = new Date();
+            for (const entry of planned) {
+                await tx
+                    .update(projectNodes)
+                    .set({ size: entry.nextSize, updatedAt: now })
+                    .where(and(eq(projectNodes.id, entry.nodeId), eq(projectNodes.projectId, projectId)));
+
+                await tx
+                    .insert(projectFileIndex)
+                    .values({
+                        projectId,
+                        nodeId: entry.nodeId,
+                        content: entry.nextContent,
+                        updatedAt: now,
+                    })
+                    .onConflictDoUpdate({
+                        target: projectFileIndex.nodeId,
+                        set: { content: entry.nextContent, updatedAt: now },
+                    });
+
+                await tx.insert(projectNodeEvents).values({
+                    projectId,
+                    nodeId: entry.nodeId,
+                    actorId: user.id,
+                    type: "replace_batch_rollback",
+                    metadata: {},
+                    createdAt: now,
+                });
+            }
+        });
+    } catch {
+        for (const entry of planned.reverse()) {
+            await writeEntry(entry.s3Key, entry.prevContent);
+        }
+        return { success: false as const, error: "Failed to persist rollback operation." };
+    }
+
+    const restoredNodeIds = planned.map((entry) => entry.nodeId);
+    revalidatePath(`/projects/${projectId}`);
+    return { success: true as const, restoredNodeIds };
 }
 
 export async function acquireProjectNodeLock(projectId: string, nodeId: string, ttlSeconds: number = 120) {

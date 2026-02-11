@@ -19,19 +19,66 @@ import {
     removeConnection,
     sendConnectionRequest,
     undoRejectConnectionRequest,
+    type ConnectionStats,
     type ConnectionsFeedInput,
     type ConnectionsFeedTab,
+    type SuggestedProfile,
 } from '@/app/actions/connections';
 import { createSupabaseBrowserClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 
-type FeedStats = {
-    totalConnections: number;
-    pendingIncoming: number;
-    pendingSent: number;
+export type FeedStats = Pick<ConnectionStats, 'totalConnections' | 'pendingIncoming' | 'pendingSent'>;
+
+export type NetworkConnectionItem = {
+    id: string;
+    type: 'network';
+    requesterId: string;
+    addresseeId: string;
+    status: string;
+    createdAt: Date;
+    updatedAt: Date;
+    otherUser: {
+        id: string;
+        username: string | null;
+        fullName: string | null;
+        avatarUrl: string | null;
+        headline: string | null;
+        location: string | null;
+    };
 };
 
-type FeedPage<T = any> = {
+export type DiscoverConnectionItem = SuggestedProfile & {
+    type: 'discover';
+};
+
+type RequestFeedUser = {
+    id: string;
+    username: string | null;
+    fullName: string | null;
+    avatarUrl: string | null;
+    headline: string | null;
+    location: string | null;
+};
+
+export type RequestConnectionItem = {
+    id: string;
+    type: 'requests_incoming' | 'requests_sent';
+    requesterId: string;
+    addresseeId: string;
+    status: string;
+    createdAt: Date;
+    updatedAt: Date;
+    user: RequestFeedUser;
+};
+
+type FeedItemByTab = {
+    network: NetworkConnectionItem;
+    discover: DiscoverConnectionItem;
+    requests_incoming: RequestConnectionItem;
+    requests_sent: RequestConnectionItem;
+};
+
+type FeedPage<T> = {
     success: true;
     items: T[];
     hasMore: boolean;
@@ -45,6 +92,38 @@ type FeedErrorPage = {
     items: [];
     hasMore: false;
     nextCursor: null;
+    stats: FeedStats;
+};
+
+export type PendingIncomingRequest = {
+    id: string;
+    requesterId: string;
+    addresseeId: string;
+    status: string;
+    createdAt: Date;
+    requesterUsername: string | null;
+    requesterFullName: string | null;
+    requesterAvatarUrl: string | null;
+    requesterHeadline: string | null;
+};
+
+export type PendingSentRequest = {
+    id: string;
+    requesterId: string;
+    addresseeId: string;
+    status: string;
+    createdAt: Date;
+    addresseeUsername: string | null;
+    addresseeFullName: string | null;
+    addresseeAvatarUrl: string | null;
+    addresseeHeadline: string | null;
+};
+
+export type PendingRequestsData = {
+    incoming: PendingIncomingRequest[];
+    sent: PendingSentRequest[];
+    hasMoreIncoming: boolean;
+    hasMoreSent: boolean;
     stats: FeedStats;
 };
 
@@ -63,7 +142,7 @@ export const CONNECTIONS_QUERY_KEYS = {
     stats: (userId: string) => ['connections', 'stats', userId] as const,
 };
 
-function normalizeFeedResult(result: FeedPage | FeedErrorPage): FeedPage {
+function normalizeFeedResult<T>(result: FeedPage<T> | FeedErrorPage): FeedPage<T> {
     if (!result.success) {
         throw new Error(result.error || 'Failed to load connections');
     }
@@ -90,18 +169,34 @@ function updateStatsQueries(
     queryClient: ReturnType<typeof useQueryClient>,
     updater: (stats: FeedStats) => FeedStats,
 ) {
-    const keys = queryClient
-        .getQueriesData<{ totalConnections: number; pendingIncoming: number; pendingSent: number }>({
-            queryKey: ['connections', 'stats'],
-        });
+    const keys = queryClient.getQueriesData<FeedStats>({
+        queryKey: ['connections', 'stats'],
+    });
+
     for (const [key, value] of keys) {
         if (!value) continue;
-        queryClient.setQueryData(key, updater({
-            totalConnections: Number(value.totalConnections || 0),
-            pendingIncoming: Number(value.pendingIncoming || 0),
-            pendingSent: Number(value.pendingSent || 0),
-        }));
+        queryClient.setQueryData(
+            key,
+            updater({
+                totalConnections: Number(value.totalConnections || 0),
+                pendingIncoming: Number(value.pendingIncoming || 0),
+                pendingSent: Number(value.pendingSent || 0),
+            }),
+        );
     }
+}
+
+function updatePendingRequestQueries(
+    queryClient: ReturnType<typeof useQueryClient>,
+    updater: (prev: PendingRequestsData) => PendingRequestsData,
+) {
+    queryClient.setQueriesData<PendingRequestsData>(
+        { queryKey: ['connections', 'pending-requests'] },
+        (prev) => {
+            if (!prev) return prev;
+            return updater(prev);
+        },
+    );
 }
 
 export function useConnectionsRealtimeInvalidation() {
@@ -112,6 +207,7 @@ export function useConnectionsRealtimeInvalidation() {
 
     useEffect(() => {
         if (!userId) return;
+
         const scheduleInvalidate = () => {
             if (invalidateTimerRef.current) return;
             invalidateTimerRef.current = setTimeout(() => {
@@ -155,8 +251,8 @@ export function useConnectionsRealtimeInvalidation() {
     }, [queryClient, userId]);
 }
 
-export function useConnectionsFeed(
-    tab: ConnectionsFeedTab,
+export function useConnectionsFeed<TTab extends ConnectionsFeedTab>(
+    tab: TTab,
     options?: {
         limit?: number;
         search?: string;
@@ -176,7 +272,8 @@ export function useConnectionsFeed(
                 search,
                 cursor: pageParam,
             } satisfies ConnectionsFeedInput);
-            return normalizeFeedResult(result as FeedPage | FeedErrorPage);
+
+            return normalizeFeedResult(result as FeedPage<FeedItemByTab[TTab]> | FeedErrorPage);
         },
         initialPageParam: undefined as string | undefined,
         getNextPageParam: (lastPage) => lastPage.nextCursor || undefined,
@@ -194,40 +291,53 @@ export function useSuggestedPeople(limit = 20, search?: string) {
     return useConnectionsFeed('discover', { limit, search });
 }
 
+function mapIncomingRequest(item: RequestConnectionItem): PendingIncomingRequest {
+    return {
+        id: item.id,
+        requesterId: item.requesterId,
+        addresseeId: item.addresseeId,
+        status: item.status,
+        createdAt: item.createdAt,
+        requesterUsername: item.user.username,
+        requesterFullName: item.user.fullName,
+        requesterAvatarUrl: item.user.avatarUrl,
+        requesterHeadline: item.user.headline,
+    };
+}
+
+function mapSentRequest(item: RequestConnectionItem): PendingSentRequest {
+    return {
+        id: item.id,
+        requesterId: item.requesterId,
+        addresseeId: item.addresseeId,
+        status: item.status,
+        createdAt: item.createdAt,
+        addresseeUsername: item.user.username,
+        addresseeFullName: item.user.fullName,
+        addresseeAvatarUrl: item.user.avatarUrl,
+        addresseeHeadline: item.user.headline,
+    };
+}
+
 export function usePendingRequests(limit = 20) {
     return useQuery({
         queryKey: CONNECTIONS_QUERY_KEYS.pendingRequests(limit),
-        queryFn: async () => {
+        queryFn: async (): Promise<PendingRequestsData> => {
             const [incoming, sent] = await Promise.all([
                 getConnectionsFeed({ tab: 'requests_incoming', limit }),
                 getConnectionsFeed({ tab: 'requests_sent', limit }),
             ]);
 
-            const incomingOk = incoming.success ? incoming : { items: [], hasMore: false, nextCursor: null, stats: EMPTY_STATS };
-            const sentOk = sent.success ? sent : { items: [], hasMore: false, nextCursor: null, stats: EMPTY_STATS };
+            const incomingOk = incoming.success
+                ? (incoming as FeedPage<RequestConnectionItem>)
+                : { items: [], hasMore: false, nextCursor: null, stats: EMPTY_STATS };
+            const sentOk = sent.success
+                ? (sent as FeedPage<RequestConnectionItem>)
+                : { items: [], hasMore: false, nextCursor: null, stats: EMPTY_STATS };
+
             return {
-                incoming: incomingOk.items.map((item: any) => ({
-                    id: item.id,
-                    requesterId: item.requesterId,
-                    addresseeId: item.addresseeId,
-                    status: item.status,
-                    createdAt: item.createdAt,
-                    requesterUsername: item.user?.username,
-                    requesterFullName: item.user?.fullName,
-                    requesterAvatarUrl: item.user?.avatarUrl,
-                    requesterHeadline: item.user?.headline,
-                })),
-                sent: sentOk.items.map((item: any) => ({
-                    id: item.id,
-                    requesterId: item.requesterId,
-                    addresseeId: item.addresseeId,
-                    status: item.status,
-                    createdAt: item.createdAt,
-                    addresseeUsername: item.user?.username,
-                    addresseeFullName: item.user?.fullName,
-                    addresseeAvatarUrl: item.user?.avatarUrl,
-                    addresseeHeadline: item.user?.headline,
-                })),
+                incoming: incomingOk.items.map(mapIncomingRequest),
+                sent: sentOk.items.map(mapSentRequest),
                 hasMoreIncoming: incomingOk.hasMore,
                 hasMoreSent: sentOk.hasMore,
                 stats: incomingOk.stats || sentOk.stats || EMPTY_STATS,
@@ -265,9 +375,9 @@ export function useConnectionMutations() {
         onMutate: async ({ userId }) => {
             await queryClient.cancelQueries({ queryKey: ['connections'] });
 
-            updateFeedQueries(queryClient, ['connections', 'feed', 'discover'], (page) => ({
+            updateFeedQueries<DiscoverConnectionItem>(queryClient, ['connections', 'feed', 'discover'], (page) => ({
                 ...page,
-                items: page.items.map((item: any) =>
+                items: page.items.map((item) =>
                     item.id === userId
                         ? { ...item, connectionStatus: 'pending_sent', canConnect: false }
                         : item,
@@ -279,12 +389,8 @@ export function useConnectionMutations() {
                 pendingSent: stats.pendingSent + 1,
             }));
         },
-        onError: () => {
-            invalidateAll();
-        },
-        onSettled: () => {
-            invalidateAll();
-        },
+        onError: invalidateAll,
+        onSettled: invalidateAll,
     });
 
     const cancelRequest = useMutation({
@@ -295,24 +401,18 @@ export function useConnectionMutations() {
         },
         onMutate: async (id) => {
             await queryClient.cancelQueries({ queryKey: ['connections'] });
-            queryClient.setQueriesData({ queryKey: ['connections', 'pending-requests'] }, (prev: any) => {
-                if (!prev) return prev;
-                return {
-                    ...prev,
-                    sent: prev.sent.filter((item: any) => item.id !== id),
-                };
-            });
+            updatePendingRequestQueries(queryClient, (prev) => ({
+                ...prev,
+                sent: prev.sent.filter((item) => item.id !== id),
+            }));
+
             updateStatsQueries(queryClient, (stats) => ({
                 ...stats,
                 pendingSent: Math.max(0, stats.pendingSent - 1),
             }));
         },
-        onError: () => {
-            invalidateAll();
-        },
-        onSettled: () => {
-            invalidateAll();
-        },
+        onError: invalidateAll,
+        onSettled: invalidateAll,
     });
 
     const acceptRequest = useMutation({
@@ -323,25 +423,19 @@ export function useConnectionMutations() {
         },
         onMutate: async (id) => {
             await queryClient.cancelQueries({ queryKey: ['connections'] });
-            queryClient.setQueriesData({ queryKey: ['connections', 'pending-requests'] }, (prev: any) => {
-                if (!prev) return prev;
-                return {
-                    ...prev,
-                    incoming: prev.incoming.filter((item: any) => item.id !== id),
-                };
-            });
+            updatePendingRequestQueries(queryClient, (prev) => ({
+                ...prev,
+                incoming: prev.incoming.filter((item) => item.id !== id),
+            }));
+
             updateStatsQueries(queryClient, (stats) => ({
                 ...stats,
                 totalConnections: stats.totalConnections + 1,
                 pendingIncoming: Math.max(0, stats.pendingIncoming - 1),
             }));
         },
-        onError: () => {
-            invalidateAll();
-        },
-        onSettled: () => {
-            invalidateAll();
-        },
+        onError: invalidateAll,
+        onSettled: invalidateAll,
     });
 
     const rejectRequest = useMutation({
@@ -352,24 +446,18 @@ export function useConnectionMutations() {
         },
         onMutate: async (id) => {
             await queryClient.cancelQueries({ queryKey: ['connections'] });
-            queryClient.setQueriesData({ queryKey: ['connections', 'pending-requests'] }, (prev: any) => {
-                if (!prev) return prev;
-                return {
-                    ...prev,
-                    incoming: prev.incoming.filter((item: any) => item.id !== id),
-                };
-            });
+            updatePendingRequestQueries(queryClient, (prev) => ({
+                ...prev,
+                incoming: prev.incoming.filter((item) => item.id !== id),
+            }));
+
             updateStatsQueries(queryClient, (stats) => ({
                 ...stats,
                 pendingIncoming: Math.max(0, stats.pendingIncoming - 1),
             }));
         },
-        onError: () => {
-            invalidateAll();
-        },
-        onSettled: () => {
-            invalidateAll();
-        },
+        onError: invalidateAll,
+        onSettled: invalidateAll,
     });
 
     const dismissSuggestion = useMutation({
@@ -380,17 +468,13 @@ export function useConnectionMutations() {
         },
         onMutate: async (profileId) => {
             await queryClient.cancelQueries({ queryKey: ['connections'] });
-            updateFeedQueries(queryClient, ['connections', 'feed', 'discover'], (page) => ({
+            updateFeedQueries<DiscoverConnectionItem>(queryClient, ['connections', 'feed', 'discover'], (page) => ({
                 ...page,
-                items: page.items.filter((item: any) => item.id !== profileId),
+                items: page.items.filter((item) => item.id !== profileId),
             }));
         },
-        onError: () => {
-            invalidateAll();
-        },
-        onSettled: () => {
-            invalidateAll();
-        },
+        onError: invalidateAll,
+        onSettled: invalidateAll,
     });
 
     const undoRejectRequest = useMutation({
@@ -399,9 +483,7 @@ export function useConnectionMutations() {
             if (!result.success) throw new Error(result.error || 'Failed to undo reject');
             return { id };
         },
-        onSettled: () => {
-            invalidateAll();
-        },
+        onSettled: invalidateAll,
     });
 
     const acceptAllIncoming = useMutation({
@@ -413,14 +495,15 @@ export function useConnectionMutations() {
         onMutate: async () => {
             await queryClient.cancelQueries({ queryKey: ['connections'] });
             let acceptedCount = 0;
-            queryClient.setQueriesData({ queryKey: ['connections', 'pending-requests'] }, (prev: any) => {
-                if (!prev) return prev;
-                acceptedCount = Math.max(acceptedCount, Array.isArray(prev.incoming) ? prev.incoming.length : 0);
+
+            updatePendingRequestQueries(queryClient, (prev) => {
+                acceptedCount = Math.max(acceptedCount, prev.incoming.length);
                 return {
                     ...prev,
                     incoming: [],
                 };
             });
+
             if (acceptedCount > 0) {
                 updateStatsQueries(queryClient, (stats) => ({
                     ...stats,
@@ -429,9 +512,7 @@ export function useConnectionMutations() {
                 }));
             }
         },
-        onSettled: () => {
-            invalidateAll();
-        },
+        onSettled: invalidateAll,
     });
 
     const rejectAllIncoming = useMutation({
@@ -443,14 +524,15 @@ export function useConnectionMutations() {
         onMutate: async () => {
             await queryClient.cancelQueries({ queryKey: ['connections'] });
             let rejectedCount = 0;
-            queryClient.setQueriesData({ queryKey: ['connections', 'pending-requests'] }, (prev: any) => {
-                if (!prev) return prev;
-                rejectedCount = Math.max(rejectedCount, Array.isArray(prev.incoming) ? prev.incoming.length : 0);
+
+            updatePendingRequestQueries(queryClient, (prev) => {
+                rejectedCount = Math.max(rejectedCount, prev.incoming.length);
                 return {
                     ...prev,
                     incoming: [],
                 };
             });
+
             if (rejectedCount > 0) {
                 updateStatsQueries(queryClient, (stats) => ({
                     ...stats,
@@ -458,9 +540,7 @@ export function useConnectionMutations() {
                 }));
             }
         },
-        onSettled: () => {
-            invalidateAll();
-        },
+        onSettled: invalidateAll,
     });
 
     const disconnect = useMutation({
@@ -471,21 +551,17 @@ export function useConnectionMutations() {
         },
         onMutate: async (id) => {
             await queryClient.cancelQueries({ queryKey: ['connections'] });
-            updateFeedQueries(queryClient, ['connections', 'feed', 'network'], (page) => ({
+            updateFeedQueries<NetworkConnectionItem>(queryClient, ['connections', 'feed', 'network'], (page) => ({
                 ...page,
-                items: page.items.filter((item: any) => item.id !== id),
+                items: page.items.filter((item) => item.id !== id),
             }));
             updateStatsQueries(queryClient, (stats) => ({
                 ...stats,
                 totalConnections: Math.max(0, stats.totalConnections - 1),
             }));
         },
-        onError: () => {
-            invalidateAll();
-        },
-        onSettled: () => {
-            invalidateAll();
-        },
+        onError: invalidateAll,
+        onSettled: invalidateAll,
     });
 
     return {

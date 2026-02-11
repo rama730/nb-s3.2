@@ -6,12 +6,7 @@ import { Moon, Sun, Monitor, Type, Zap } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { SettingsPageHeader } from "@/components/settings/ui/SettingsPageHeader";
 
-interface AppearanceSettingsProps {
-    user?: any;
-    onUserUpdate?: (user: any) => void;
-}
-
-export default function AppearanceSettings(_: AppearanceSettingsProps) {
+export default function AppearanceSettings() {
     const { theme, setTheme } = useTheme();
     const {
         accentColor, setAccentColor,
@@ -20,6 +15,8 @@ export default function AppearanceSettings(_: AppearanceSettingsProps) {
     } = useAppearance();
 
     const [mounted, setMounted] = useState(false);
+    type AccentColorValue = Parameters<typeof setAccentColor>[0];
+    type DensityValue = Parameters<typeof setDensity>[0];
 
     useEffect(() => {
         setMounted(true);
@@ -90,7 +87,7 @@ export default function AppearanceSettings(_: AppearanceSettingsProps) {
                     ].map((accent) => (
                         <button
                             key={accent.id}
-                            onClick={() => setAccentColor(accent.id as any)}
+                            onClick={() => setAccentColor(accent.id as AccentColorValue)}
                             className={`
                                 w-12 h-12 rounded-full flex items-center justify-center transition-all duration-200
                                 ${accentColor === accent.id
@@ -127,7 +124,7 @@ export default function AppearanceSettings(_: AppearanceSettingsProps) {
                     ].map((d) => (
                         <button
                             key={d.id}
-                            onClick={() => setDensity(d.id as any)}
+                            onClick={() => setDensity(d.id as DensityValue)}
                             className={`
                                 p-3 rounded-lg border text-left transition-all duration-200
                                 ${density === d.id

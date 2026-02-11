@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Button from "@/components/ui-custom/Button";
 import { Loader2, Shield, ShieldCheck, KeyRound, Trash2 } from "lucide-react";
 import type { MfaFactor } from "@/lib/types/settingsTypes";
@@ -14,13 +14,7 @@ export function MfaSetup({ initialFactors = [] }: MfaSetupProps) {
     const [loading, setLoading] = useState(!initialFactors.length);
     const [enrolling, setEnrolling] = useState(false);
 
-    useEffect(() => {
-        if (!initialFactors.length) {
-            loadFactors();
-        }
-    }, []);
-
-    const loadFactors = async () => {
+    const loadFactors = useCallback(async () => {
         try {
             const res = await fetch("/api/v1/auth/mfa/factors");
             const json = await res.json();
@@ -32,7 +26,13 @@ export function MfaSetup({ initialFactors = [] }: MfaSetupProps) {
         } finally {
             setLoading(false);
         }
-    };
+    }, []);
+
+    useEffect(() => {
+        if (!initialFactors.length) {
+            void loadFactors();
+        }
+    }, [initialFactors.length, loadFactors]);
 
     const handleEnroll = async () => {
         setEnrolling(true);

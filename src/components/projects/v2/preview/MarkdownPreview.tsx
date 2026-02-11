@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import Image from "next/image";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { cn } from "@/lib/utils";
@@ -17,16 +18,16 @@ export default function MarkdownPreview({ content, className }: MarkdownPreviewP
         remarkPlugins={[remarkGfm]}
         components={{
             // Typography styling using Tailwind
-            h1: ({node, ...props}) => <h1 className="text-2xl font-bold mb-4 border-b border-zinc-200 dark:border-zinc-800 pb-2" {...props} />,
-            h2: ({node, ...props}) => <h2 className="text-xl font-semibold mt-6 mb-3" {...props} />,
-            h3: ({node, ...props}) => <h3 className="text-lg font-medium mt-4 mb-2" {...props} />,
-            p: ({node, ...props}) => <p className="mb-4 leading-relaxed" {...props} />,
-            ul: ({node, ...props}) => <ul className="list-disc list-inside mb-4 pl-4" {...props} />,
-            ol: ({node, ...props}) => <ol className="list-decimal list-inside mb-4 pl-4" {...props} />,
-            li: ({node, ...props}) => <li className="mb-1" {...props} />,
-            blockquote: ({node, ...props}) => <blockquote className="border-l-4 border-zinc-300 dark:border-zinc-700 pl-4 py-1 my-4 italic text-zinc-600 dark:text-zinc-400" {...props} />,
-            a: ({node, ...props}) => <a className="text-blue-600 dark:text-blue-400 hover:underline" {...props} />,
-            code: ({node, className, children, ...props}) => {
+            h1: ({...props}) => <h1 className="text-2xl font-bold mb-4 border-b border-zinc-200 dark:border-zinc-800 pb-2" {...props} />,
+            h2: ({...props}) => <h2 className="text-xl font-semibold mt-6 mb-3" {...props} />,
+            h3: ({...props}) => <h3 className="text-lg font-medium mt-4 mb-2" {...props} />,
+            p: ({...props}) => <p className="mb-4 leading-relaxed" {...props} />,
+            ul: ({...props}) => <ul className="list-disc list-inside mb-4 pl-4" {...props} />,
+            ol: ({...props}) => <ol className="list-decimal list-inside mb-4 pl-4" {...props} />,
+            li: ({...props}) => <li className="mb-1" {...props} />,
+            blockquote: ({...props}) => <blockquote className="border-l-4 border-zinc-300 dark:border-zinc-700 pl-4 py-1 my-4 italic text-zinc-600 dark:text-zinc-400" {...props} />,
+            a: ({...props}) => <a className="text-blue-600 dark:text-blue-400 hover:underline" {...props} />,
+            code: ({className, children, ...props}) => {
                 const match = /language-(\w+)/.exec(className || "");
                 const isInline = !match;
                 if (isInline) {
@@ -40,11 +41,26 @@ export default function MarkdownPreview({ content, className }: MarkdownPreviewP
                     </div>
                 );
             },
-            table: ({node, ...props}) => <div className="overflow-x-auto my-4"><table className="w-full text-left border-collapse" {...props} /></div>,
-            th: ({node, ...props}) => <th className="border-b border-zinc-300 dark:border-zinc-700 font-semibold p-2" {...props} />,
-            td: ({node, ...props}) => <td className="border-b border-zinc-200 dark:border-zinc-800 p-2" {...props} />,
-            hr: ({node, ...props}) => <hr className="my-6 border-zinc-200 dark:border-zinc-800" {...props} />,
-            img: ({node, ...props}) => <img className="max-w-full h-auto rounded-md my-4" {...props} />,
+            table: ({...props}) => <div className="overflow-x-auto my-4"><table className="w-full text-left border-collapse" {...props} /></div>,
+            th: ({...props}) => <th className="border-b border-zinc-300 dark:border-zinc-700 font-semibold p-2" {...props} />,
+            td: ({...props}) => <td className="border-b border-zinc-200 dark:border-zinc-800 p-2" {...props} />,
+            hr: ({...props}) => <hr className="my-6 border-zinc-200 dark:border-zinc-800" {...props} />,
+            img: ({src, alt = "", title}) => {
+              const safeSrc = typeof src === "string" ? src : "";
+              if (!safeSrc) return null;
+              return (
+                <Image
+                  src={safeSrc}
+                  alt={alt}
+                  title={typeof title === "string" ? title : undefined}
+                  width={1200}
+                  height={800}
+                  unoptimized
+                  className="max-w-full h-auto rounded-md my-4"
+                  style={{ height: "auto" }}
+                />
+              );
+            },
         }}
       >
         {content}

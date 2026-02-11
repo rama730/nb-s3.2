@@ -1,5 +1,6 @@
 'use client';
 
+import Image from 'next/image';
 import { useChatStore } from '@/stores/chatStore';
 import { formatDistanceToNow } from 'date-fns';
 import { BellOff, MessageSquare, Search } from 'lucide-react';
@@ -131,9 +132,12 @@ export function ConversationList({
                                     <div className="relative flex-shrink-0">
                                         <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center overflow-hidden">
                                             {participant?.avatarUrl ? (
-                                                <img
+                                                <Image
                                                     src={participant.avatarUrl}
                                                     alt={participant.fullName || ''}
+                                                    width={48}
+                                                    height={48}
+                                                    unoptimized
                                                     className="w-full h-full object-cover"
                                                 />
                                             ) : (
@@ -191,7 +195,7 @@ export function ConversationPreview({
     unread 
 }: { 
     typingConversationId: string | null;
-    lastMessage: any; 
+    lastMessage: { content?: string | null; type?: string | null } | null | undefined; 
     unread: number;
 }) {
     const { typingUsers } = useTypingChannel(typingConversationId);

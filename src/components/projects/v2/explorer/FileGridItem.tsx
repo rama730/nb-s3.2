@@ -1,6 +1,6 @@
 import React from "react";
 import { ProjectNode } from "@/lib/db/schema";
-import { FileText, Folder, Film, Image as ImageIcon, Music, Code } from "lucide-react";
+import { FileText, Folder, Film, Image as ImageIcon, Music } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { isAssetLike } from "../utils/fileKind";
 

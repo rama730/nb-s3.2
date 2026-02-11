@@ -4,7 +4,6 @@ import React, { useEffect, useState } from "react";
 import { ProjectNode } from "@/lib/db/schema";
 import { getBreadcrumbs, findNodeByPathAny } from "@/app/actions/files";
 import { ChevronRight, Home, ChevronDown } from "lucide-react";
-import { cn } from "@/lib/utils";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -21,6 +20,7 @@ interface BreadcrumbBarProps {
 }
 
 const EMPTY_OBJECT = {} as const;
+type BreadcrumbNode = { id: string; name: string; parentId: string | null };
 
 export function BreadcrumbBar({
   projectId,
@@ -43,7 +43,7 @@ export function BreadcrumbBar({
     }
     let cancelled = false;
     void (async () => {
-      const data = (await getBreadcrumbs(projectId, folderId)) as any[];
+      const data = (await getBreadcrumbs(projectId, folderId)) as BreadcrumbNode[];
       if (!cancelled) {
         setCrumbs(
           (data || []).map((c) => ({

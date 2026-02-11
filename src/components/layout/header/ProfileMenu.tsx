@@ -20,7 +20,6 @@ export function ProfileAvatar({
     if (profile?.avatarUrl) {
         return (
             <div className="relative rounded-full overflow-hidden ring-2 ring-white dark:ring-zinc-950 group-hover:ring-blue-100 dark:group-hover:ring-blue-900/30 transition-all" style={{ width: size, height: size }}>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
                 <Image
                     src={profile.avatarUrl}
                     alt={profile.fullName || profile.username || "User"}

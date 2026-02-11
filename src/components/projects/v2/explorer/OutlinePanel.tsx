@@ -1,9 +1,9 @@
 "use client";
 
-import React, { useMemo } from "react";
+import React from "react";
 import { useFilesWorkspaceStore, type EditorSymbol } from "@/stores/filesWorkspaceStore";
 import { cn } from "@/lib/utils";
-import { ChevronRight, ChevronDown, Box, Braces, Code2, Variable, FunctionSquare } from "lucide-react";
+import { Box, Braces, Code2, Variable, FunctionSquare } from "lucide-react";
 
 interface OutlinePanelProps {
   projectId: string;

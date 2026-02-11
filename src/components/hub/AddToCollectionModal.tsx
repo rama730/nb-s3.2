@@ -13,6 +13,7 @@ export default function AddToCollectionModal({
     onClose,
     currentUser,
 }: AddToCollectionModalProps) {
+    void currentUser;
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <div className="fixed inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />

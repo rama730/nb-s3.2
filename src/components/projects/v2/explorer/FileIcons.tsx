@@ -6,22 +6,16 @@ import {
   FileImage,
   Box,
   Settings,
-  Terminal,
   File,
-  FileDigit,
-  FileType,
-  Layout,
-  Table,
   Database,
   Globe,
-  Lock,
   Package,
-  Cpu,
-  Coffee,
   Hash,
   Info,
   GitGraph,
   Code2,
+  Folder,
+  FolderOpen,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -65,7 +59,7 @@ const EXT_ICONS: Record<string, { icon: React.ElementType; color: string }> = {
   go: { icon: Box, color: "text-cyan-500" },
 };
 
-function Scale(props: any) {
+function Scale(props: React.ComponentProps<typeof FileText>) {
     return <FileText {...props} />; // Fallback since Scale isn't imported potentially or I missed it.
 }
 
@@ -104,8 +98,5 @@ export function FileIcon({ name, isFolder, isOpen, size = "w-4 h-4", className }
   // Default file
   return <File className={cn(size, className, "text-zinc-400")} />;
 }
-
-// Inline simple folder icons to avoid conflicts or use passed props
-import { Folder, FolderOpen } from "lucide-react";
 const FolderIcon = Folder;
 const FolderOpenIcon = FolderOpen;

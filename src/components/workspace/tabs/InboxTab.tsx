@@ -3,6 +3,7 @@
 import { memo, useState, useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
+import Image from 'next/image';
 import {
     UserPlus,
     FileText,
@@ -146,9 +147,12 @@ function InboxCard({ item, onAcceptConnection, onRejectConnection }: InboxCardPr
         <div className="flex items-start gap-3 p-4 bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 hover:shadow-sm transition-all">
             <div className="shrink-0">
                 {item.avatarUrl ? (
-                    <img
+                    <Image
                         src={item.avatarUrl}
                         alt={item.title}
+                        width={40}
+                        height={40}
+                        unoptimized
                         className="w-10 h-10 rounded-full object-cover"
                     />
                 ) : (
