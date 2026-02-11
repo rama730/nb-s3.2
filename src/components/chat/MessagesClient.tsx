@@ -5,60 +5,56 @@ import { useChatStore } from '@/stores/chatStore';
 import { useAuth } from '@/lib/hooks/use-auth';
 import { MessageThread } from '@/components/chat/MessageThread';
 import { MessageInput } from '@/components/chat/MessageInput';
-import { searchMessages, type MessageWithSender, type ConversationWithDetails } from '@/app/actions/messaging';
-import { MessageSquare, Search, X, Loader2, PenSquare } from 'lucide-react';
+import {
+    searchMessages,
+    setConversationArchived,
+    setConversationMuted,
+    type MessageWithSender,
+    type ConversationWithDetails
+} from '@/app/actions/messaging';
+import { MessageSquare, Search, X, Loader2, PenSquare, Archive, BellOff, Bell, MoreVertical } from 'lucide-react';
 import { useDebounce } from '@/hooks/hub/useDebounce';
 import { NewChatModal } from './NewChatModal';
-import { Virtuoso } from 'react-virtuoso';
-import { useConversations, useTargetUser } from '@/hooks/useMessagesData';
-import { ConversationPreview } from './ConversationList';
+import { useTargetUser } from '@/hooks/useMessagesData';
+import { ConversationList } from './ConversationList';
+import { toast } from 'sonner';
 
 import { ApplicationList } from './ApplicationList';
 import { ProjectGroupList } from './ProjectGroupList';
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 
 // ============================================================================
 // MESSAGES CLIENT
 // ============================================================================
 
 interface MessagesClientProps {
-    initialConversations?: ConversationWithDetails[];
     targetUserId?: string | null;  // Changed from full object to ID
+    initialConversationId?: string | null;
 }
 
-export default function MessagesClient({ initialConversations = [], targetUserId }: MessagesClientProps) {
+export default function MessagesClient({ targetUserId, initialConversationId }: MessagesClientProps) {
     const { user, isLoading: authLoading } = useAuth();
     
-    // React Query Hooks for Lazy Loading
-    const { data: fetchedConversations, isLoading: conversationsQueryLoading } = useConversations(initialConversations.length > 0 ? initialConversations : undefined);
-    const { data: fetchedTargetUser, isLoading: targetUserLoading } = useTargetUser(targetUserId || null);
+    // Resolve draft target profile when deep-linking with userId
+    const { data: fetchedTargetUser } = useTargetUser(targetUserId || null);
 
     const activeConversationId = useChatStore(state => state.activeConversationId);
     const conversations = useChatStore(state => state.conversations);
     const messagesByConversation = useChatStore(state => state.messagesByConversation);
-    const conversationsLoading = useChatStore(state => state.conversationsLoading);
-    const unreadCounts = useChatStore(state => state.unreadCounts);
     const openConversation = useChatStore(state => state.openConversation);
-    const setConversations = useChatStore(state => state.setConversations);
     const upsertConversation = useChatStore(state => state.upsertConversation);
-    const isInitialized = useChatStore(state => state.isInitialized);
-
-    // Sync React Query data to Store
-    useEffect(() => {
-        if (fetchedConversations && fetchedConversations.length > 0) {
-            // Only update if different length or force sync? 
-            // Better to rely on Store for extensive logic, but hydrate it here.
-            // If store is empty, definitely set it.
-            if (conversations.length === 0) {
-                 setConversations(fetchedConversations);
-            }
-        }
-    }, [fetchedConversations, setConversations, conversations.length]);
 
     // Target User Resolution
     const targetUser = fetchedTargetUser;
 
     // Draft State
     const [isNewChatOpen, setIsNewChatOpen] = useState(false);
+    const [activeTab, setActiveTab] = useState<'chats' | 'applications' | 'projects'>('chats');
     
     // Check if we need to set up a draft conversation
     const existingConversationWithTarget = useMemo(() => {
@@ -68,6 +64,7 @@ export default function MessagesClient({ initialConversations = [], targetUserId
 
     // Handle Target User Navigation
     useEffect(() => {
+        if (initialConversationId) return;
         if (targetUser) {
             if (existingConversationWithTarget) {
                 if (activeConversationId !== existingConversationWithTarget.id) {
@@ -75,7 +72,15 @@ export default function MessagesClient({ initialConversations = [], targetUserId
                 }
             }
         }
-    }, [targetUser, existingConversationWithTarget, activeConversationId, openConversation]);
+    }, [targetUser, existingConversationWithTarget, activeConversationId, openConversation, initialConversationId]);
+
+    useEffect(() => {
+        if (!initialConversationId) return;
+        const exists = conversations.some((conv) => conv.id === initialConversationId);
+        if (!exists) return;
+        if (activeConversationId === initialConversationId) return;
+        openConversation(initialConversationId);
+    }, [initialConversationId, conversations, activeConversationId, openConversation]);
 
     // Derive active conversation
     const activeConversation = useMemo(() => {
@@ -96,6 +101,7 @@ export default function MessagesClient({ initialConversations = [], targetUserId
         conversation?: ConversationWithDetails; // Hydration data
     }>>([]);
     const [showSearchResults, setShowSearchResults] = useState(false);
+    const [conversationActionLoading, setConversationActionLoading] = useState(false);
 
     const debouncedSearch = useDebounce(searchQuery, 300);
 
@@ -140,18 +146,42 @@ export default function MessagesClient({ initialConversations = [], targetUserId
         setSearchResults([]);
     }, [openConversation, upsertConversation]);
 
-    // Filter conversations for sidebar
-    const filteredConversations = conversations.filter(conv => {
-        if (showSearchResults) return true; // Show all when search results are displayed
-        if (!searchQuery.trim()) return true;
-        const participant = conv.participants[0];
-        if (!participant) return false;
-        const searchLower = searchQuery.toLowerCase();
-        return (
-            participant.fullName?.toLowerCase().includes(searchLower) ||
-            participant.username?.toLowerCase().includes(searchLower)
-        );
-    });
+    const handleToggleArchiveConversation = useCallback(async () => {
+        if (!activeConversation) return;
+        setConversationActionLoading(true);
+        try {
+            const nextArchived = activeConversation.lifecycleState !== 'archived';
+            const result = await setConversationArchived(activeConversation.id, nextArchived);
+            if (!result.success) {
+                toast.error(result.error || 'Failed to update conversation');
+                return;
+            }
+            await useChatStore.getState().refreshConversations();
+            if (nextArchived) {
+                useChatStore.getState().closeConversation();
+            } else {
+                await openConversation(activeConversation.id);
+            }
+        } finally {
+            setConversationActionLoading(false);
+        }
+    }, [activeConversation, openConversation]);
+
+    const handleToggleMuteConversation = useCallback(async () => {
+        if (!activeConversation) return;
+        setConversationActionLoading(true);
+        try {
+            const result = await setConversationMuted(activeConversation.id, !activeConversation.muted);
+            if (!result.success) {
+                toast.error(result.error || 'Failed to update mute state');
+                return;
+            }
+            await useChatStore.getState().refreshConversations();
+            await openConversation(activeConversation.id);
+        } finally {
+            setConversationActionLoading(false);
+        }
+    }, [activeConversation, openConversation]);
 
     // Determine what to show in the main pane
     // 1. Loading
@@ -161,9 +191,6 @@ export default function MessagesClient({ initialConversations = [], targetUserId
 
     // Helper for participant
     const otherParticipant = activeConversation?.participants[0];
-
-    // Use hook loading state
-    const showLoading = (conversationsQueryLoading && conversations.length === 0);
 
     if (authLoading) {
         return (
@@ -183,9 +210,7 @@ export default function MessagesClient({ initialConversations = [], targetUserId
         );
     }
 
-    const isDraftMode = !!targetUser && !existingConversationWithTarget;
-
-    const [activeTab, setActiveTab] = useState<'chats' | 'applications' | 'projects'>('chats');
+    const isDraftMode = !initialConversationId && !!targetUser && !existingConversationWithTarget;
 
     return (
         <div className="flex h-[calc(100vh-64px)] bg-white dark:bg-zinc-950">
@@ -323,119 +348,43 @@ export default function MessagesClient({ initialConversations = [], targetUserId
                                 })}
                             </div>
                         )
-                    ) : showLoading ? (
-                        <div className="flex items-center justify-center p-8">
-                            <div className="animate-spin rounded-full h-6 w-6 border-2 border-blue-600 border-t-transparent" />
-                        </div>
-                    ) : filteredConversations.length === 0 && !isDraftMode ? (
-                        <div className="flex flex-col items-center justify-center h-full p-6 text-center">
-                            <div className="w-16 h-16 bg-zinc-100 dark:bg-zinc-800 rounded-full flex items-center justify-center mb-4">
-                                <MessageSquare className="w-8 h-8 text-zinc-400" />
-                            </div>
-                            <p className="text-sm text-zinc-500 dark:text-zinc-400">
-                                No conversations yet
-                            </p>
-                            <button
-                                onClick={() => setIsNewChatOpen(true)}
-                                className="mt-4 text-sm font-medium text-blue-600 hover:text-blue-700 hover:underline"
-                            >
-                                Start a new chat
-                            </button>
-                        </div>
                     ) : (
-                        <Virtuoso
-                            style={{ height: '100%' }}
-                            data={filteredConversations}
-                            itemContent={(index, conv) => {
-                                const participant = conv.participants[0];
-                                const unread = unreadCounts[conv.id] || 0;
-                                const isActive = conv.id === activeConversationId && !isDraftMode;
-
-                                return (
-                                    <button
-                                        key={conv.id}
-                                        onClick={() => openConversation(conv.id)}
-                                        className={`w-full flex items-center gap-3 p-4 transition-colors text-left border-b border-zinc-50 dark:border-zinc-800/50 ${isActive
-                                            ? 'bg-blue-50 dark:bg-blue-950/30 border-l-2 border-l-blue-600'
-                                            : 'hover:bg-zinc-50 dark:hover:bg-zinc-800/50 border-l-2 border-l-transparent'
-                                            }`}
-                                    >
-                                        <div className="relative flex-shrink-0">
-                                            <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center overflow-hidden">
-                                                {participant?.avatarUrl ? (
-                                                    <img
-                                                        src={participant.avatarUrl}
-                                                        alt={participant.fullName || ''}
-                                                        className="w-full h-full object-cover"
-                                                    />
-                                                ) : (
-                                                    <span className="text-white font-medium">
-                                                        {(participant?.fullName || participant?.username || '?')[0].toUpperCase()}
-                                                    </span>
-                                                )}
-                                            </div>
-                                            {unread > 0 && (
-                                                <span className="absolute -top-1 -right-1 w-5 h-5 flex items-center justify-center bg-red-500 text-white text-xs font-bold rounded-full">
-                                                    {unread > 9 ? '9+' : unread}
+                        <div className="flex-1 min-h-0 overflow-hidden">
+                            {isDraftMode && targetUser && (
+                                <div className="w-full flex items-center gap-3 p-4 bg-blue-50 dark:bg-blue-950/30 border-l-2 border-blue-600 border-b border-zinc-100 dark:border-zinc-800">
+                                    <div className="relative flex-shrink-0">
+                                        <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center overflow-hidden">
+                                            {targetUser.avatarUrl ? (
+                                                <img src={targetUser.avatarUrl} alt="" className="w-full h-full object-cover" />
+                                            ) : (
+                                                <span className="text-white font-medium">
+                                                    {(targetUser.fullName || targetUser.username || '?')[0].toUpperCase()}
                                                 </span>
                                             )}
                                         </div>
-
-                                        <div className="flex-1 min-w-0">
-                                            <div className="flex items-center justify-between mb-0.5">
-                                                <span className={`font-medium text-sm truncate ${unread > 0 || isActive ? 'text-zinc-900 dark:text-white' : 'text-zinc-700 dark:text-zinc-300'}`}>
-                                                    {participant?.fullName || participant?.username || 'Unknown'}
-                                                </span>
-                                                {conv.lastMessage && (
-                                                    <span className="text-xs text-zinc-400 flex-shrink-0 ml-2">
-                                                        {formatTime(new Date(conv.lastMessage.createdAt))}
-                                                    </span>
-                                                )}
-                                            </div>
-                                            <ConversationPreview
-                                                conversationId={conv.id}
-                                                lastMessage={conv.lastMessage}
-                                                unread={unread}
-                                            />
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                        <div className="flex items-center justify-between mb-0.5">
+                                            <span className="font-medium text-sm text-zinc-900 dark:text-white truncate">
+                                                {targetUser.fullName || targetUser.username}
+                                            </span>
+                                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-600 dark:bg-blue-900/50 dark:text-blue-300 font-medium">
+                                                New
+                                            </span>
                                         </div>
-                                    </button>
-                                );
-                            }}
-                            components={{
-                                Header: () => (
-                                    <>
-                                        {isDraftMode && targetUser && (
-                                            <div className="w-full flex items-center gap-3 p-4 bg-blue-50 dark:bg-blue-950/30 border-l-2 border-blue-600 border-b border-zinc-100 dark:border-zinc-800">
-                                                <div className="relative flex-shrink-0">
-                                                    <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center overflow-hidden">
-                                                        {targetUser.avatarUrl ? (
-                                                            <img src={targetUser.avatarUrl} alt="" className="w-full h-full object-cover" />
-                                                        ) : (
-                                                            <span className="text-white font-medium">
-                                                                {(targetUser.fullName || targetUser.username || '?')[0].toUpperCase()}
-                                                            </span>
-                                                        )}
-                                                    </div>
-                                                </div>
-                                                <div className="flex-1 min-w-0">
-                                                    <div className="flex items-center justify-between mb-0.5">
-                                                        <span className="font-medium text-sm text-zinc-900 dark:text-white truncate">
-                                                            {targetUser.fullName || targetUser.username}
-                                                        </span>
-                                                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-600 dark:bg-blue-900/50 dark:text-blue-300 font-medium">
-                                                            New
-                                                        </span>
-                                                    </div>
-                                                    <p className="text-sm text-zinc-500 dark:text-zinc-400 truncate">
-                                                        Say hello 👋
-                                                    </p>
-                                                </div>
-                                            </div>
-                                        )}
-                                    </>
-                                )
-                            }}
-                        />
+                                        <p className="text-sm text-zinc-500 dark:text-zinc-400 truncate">
+                                            Say hello 👋
+                                        </p>
+                                    </div>
+                                </div>
+                            )}
+                            <ConversationList
+                                hideSearch
+                                searchQuery={searchQuery}
+                                activeConversationId={isDraftMode ? null : activeConversationId}
+                                onConversationSelect={(conversationId) => openConversation(conversationId)}
+                            />
+                        </div>
                     )}
                 </div>
 
@@ -447,29 +396,59 @@ export default function MessagesClient({ initialConversations = [], targetUserId
                     // Logic already handled for existing chat
                      <>
                         {/* Conversation Header */}
-                        <div className="flex items-center gap-3 px-6 py-4 border-b border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
-                             {/* ... Header content ... */}
-                             <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center overflow-hidden">
-                                {otherParticipant.avatarUrl ? (
-                                    <img
-                                        src={otherParticipant.avatarUrl}
-                                        alt={otherParticipant.fullName || ''}
-                                        className="w-full h-full object-cover"
-                                    />
-                                ) : (
-                                    <span className="text-white font-medium">
-                                        {(otherParticipant.fullName || otherParticipant.username || '?')[0].toUpperCase()}
-                                    </span>
-                                )}
+                        <div className="flex items-center justify-between gap-3 px-6 py-4 border-b border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
+                            <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center overflow-hidden">
+                                    {otherParticipant.avatarUrl ? (
+                                        <img
+                                            src={otherParticipant.avatarUrl}
+                                            alt={otherParticipant.fullName || ''}
+                                            className="w-full h-full object-cover"
+                                        />
+                                    ) : (
+                                        <span className="text-white font-medium">
+                                            {(otherParticipant.fullName || otherParticipant.username || '?')[0].toUpperCase()}
+                                        </span>
+                                    )}
+                                </div>
+                                <div>
+                                    <h2 className="font-semibold text-zinc-900 dark:text-white">
+                                        {otherParticipant.fullName || otherParticipant.username || 'Unknown'}
+                                    </h2>
+                                    {otherParticipant.username && (
+                                        <p className="text-sm text-zinc-500">@{otherParticipant.username}</p>
+                                    )}
+                                </div>
                             </div>
-                            <div>
-                                <h2 className="font-semibold text-zinc-900 dark:text-white">
-                                    {otherParticipant.fullName || otherParticipant.username || 'Unknown'}
-                                </h2>
-                                {otherParticipant.username && (
-                                    <p className="text-sm text-zinc-500">@{otherParticipant.username}</p>
-                                )}
-                            </div>
+
+                            <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                    <button
+                                        type="button"
+                                        className="p-2 rounded-md text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                                        disabled={conversationActionLoading}
+                                        aria-label="Conversation actions"
+                                    >
+                                        <MoreVertical className="w-4 h-4" />
+                                    </button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end">
+                                    <DropdownMenuItem
+                                        onClick={handleToggleMuteConversation}
+                                        disabled={conversationActionLoading}
+                                    >
+                                        {activeConversation?.muted ? <Bell className="w-4 h-4" /> : <BellOff className="w-4 h-4" />}
+                                        {activeConversation?.muted ? 'Unmute conversation' : 'Mute conversation'}
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem
+                                        onClick={handleToggleArchiveConversation}
+                                        disabled={conversationActionLoading}
+                                    >
+                                        <Archive className="w-4 h-4" />
+                                        {activeConversation?.lifecycleState === 'archived' ? 'Unarchive conversation' : 'Archive conversation'}
+                                    </DropdownMenuItem>
+                                </DropdownMenuContent>
+                            </DropdownMenu>
                         </div>
 
                         {/* Messages */}
@@ -535,23 +514,6 @@ export default function MessagesClient({ initialConversations = [], targetUserId
     );
 }
 
-// Helper function to format time
-function formatTime(date: Date): string {
-    const now = new Date();
-    const diff = now.getTime() - date.getTime();
-    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-
-    if (days === 0) {
-        return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-    } else if (days === 1) {
-        return 'Yesterday';
-    } else if (days < 7) {
-        return date.toLocaleDateString('en-US', { weekday: 'short' });
-    } else {
-        return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-    }
-}
-
 // Helper function to highlight search matches
 function highlightMatch(text: string, query: string): React.ReactNode {
     if (!query.trim()) return text;
@@ -563,4 +525,3 @@ function highlightMatch(text: string, query: string): React.ReactNode {
         ) : part
     );
 }
-

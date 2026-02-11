@@ -4,16 +4,23 @@ import { getMyApplicationsAction, getIncomingApplicationsAction } from '@/app/ac
 
 export const dynamic = 'force-dynamic';
 
-export default async function PeoplePage() {
+interface PeoplePageProps {
+    searchParams?: Promise<Record<string, string | string[] | undefined>>;
+}
+
+export default async function PeoplePage({ searchParams }: PeoplePageProps) {
     const supabase = await createClient()
     const { data: { user } } = await supabase.auth.getUser()
+    const resolvedSearchParams = searchParams ? await searchParams : undefined;
+    const tabParam = typeof resolvedSearchParams?.tab === 'string'
+        ? resolvedSearchParams.tab.toLowerCase()
+        : '';
 
-    // OPTIMIZATION: Fetch lightweight application data server-side to avoid "Requests" tab spinners
-    // This satisfies "Pure Fast Showing" requirement
-    const [myAppRes, incomingAppRes] = user ? await Promise.all([
-        getMyApplicationsAction(),
-        getIncomingApplicationsAction(20, 0)
-    ]) : [{ applications: [] }, { applications: [] }];
+    // Only prefetch heavy request/applications payload when Requests tab is explicitly requested.
+    const shouldPrefetchApplications = !!user && tabParam === 'requests';
+    const [myAppRes, incomingAppRes] = shouldPrefetchApplications
+        ? await Promise.all([getMyApplicationsAction(), getIncomingApplicationsAction(20, 0)])
+        : [{ applications: [] }, { applications: [] }];
     
     const initialApplications = {
         my: myAppRes.applications || [],

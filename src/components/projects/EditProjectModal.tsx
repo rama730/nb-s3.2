@@ -472,7 +472,7 @@ export default function EditProjectModal({ project, isOpen, onClose, onSaved }: 
                                                 <div className="mt-6 p-4 rounded-lg bg-blue-50 dark:bg-blue-900/10 border border-blue-100 dark:border-blue-900/20 flex gap-3 text-sm text-blue-700 dark:text-blue-300">
                                                     <Info className="w-5 h-5 shrink-0" />
                                                     <p>
-                                                        Use the dashboard "Advance" button to move between these stages. 
+                                                        Use the dashboard Advance button to move between these stages. 
                                                         Reordering stages here will update the roadmap immediately.
                                                     </p>
                                                 </div>

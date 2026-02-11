@@ -123,7 +123,7 @@ export default function FileTreePicker({
                             node={node}
                             level={0}
                             isExpanded={expandedNodes.has(node.id)}
-                            children={loadedNodes.get(node.id)}
+                            childNodes={loadedNodes.get(node.id)}
                             onToggle={handleToggle}
                             onFileSelect={onFileSelect}
                             selectedFileId={selectedFileId}
@@ -140,7 +140,7 @@ interface TreePickerNodeProps {
     node: ProjectNode;
     level: number;
     isExpanded: boolean;
-    children?: ProjectNode[];
+    childNodes?: ProjectNode[];
     onToggle: (node: ProjectNode) => void;
     onFileSelect: (node: ProjectNode) => void;
     selectedFileId?: string;
@@ -150,7 +150,7 @@ const TreePickerNode = memo(function TreePickerNode({
     node,
     level,
     isExpanded,
-    children,
+    childNodes,
     onToggle,
     onFileSelect,
     selectedFileId
@@ -233,9 +233,9 @@ const TreePickerNode = memo(function TreePickerNode({
             </div>
 
             {/* Children (Recursive) */}
-            {isFolder && isExpanded && children && (
+            {isFolder && isExpanded && childNodes && (
                 <div>
-                    {children.map((child) => (
+                    {childNodes.map((child) => (
                         <TreePickerNode
                             key={child.id}
                             node={child}

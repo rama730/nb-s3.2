@@ -11,6 +11,7 @@ import { Badge } from '@/components/ui/badge'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import UsernameInput from '@/components/onboarding/UsernameInput'
 import { completeOnboarding } from '@/app/actions/onboarding'
+import { useAuth } from '@/lib/hooks/use-auth'
 import {
     ArrowLeft,
     ArrowRight,
@@ -67,6 +68,7 @@ import { useQueryClient } from '@tanstack/react-query'
 export default function OnboardingPage() {
     const router = useRouter()
     const queryClient = useQueryClient()
+    const { refreshProfile } = useAuth()
     const [step, setStep] = useState(1)
     const [isLoading, setIsLoading] = useState(false)
     const [isInitializing, setIsInitializing] = useState(true)
@@ -173,7 +175,7 @@ export default function OnboardingPage() {
                             .getPublicUrl(fileName)
                         updateData({ avatarUrl: publicUrl })
                     }
-                } catch (uploadErr) {
+                } catch {
                     // Silently ignore upload errors - preview is already showing
                     console.log('Storage upload skipped, using preview')
                 }
@@ -235,16 +237,14 @@ export default function OnboardingPage() {
                 return
             }
 
-            // OPTIMISTIC REDIRECT ("Fast Showing"):
-            // Redirect immediately. The session refresh and invalidation happen in background/parallel 
-            // or when the hub page loads and checks session.
-            router.push('/hub')
-
-            // Force update global state in background
             const supabase = createClient()
-            supabase.auth.refreshSession() // Fire and forget
+            await Promise.allSettled([
+                supabase.auth.refreshSession(),
+                refreshProfile(),
+            ])
             queryClient.invalidateQueries({ queryKey: ['profile'] })
             queryClient.invalidateQueries({ queryKey: ['user'] })
+            router.push('/hub')
 
         } catch {
             setError('An unexpected error occurred')

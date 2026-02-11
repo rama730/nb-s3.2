@@ -13,7 +13,7 @@ export function ApplicationList() {
 
     // Fetch applications on mount (store handles caching)
     useEffect(() => {
-        fetchApplications();
+        fetchApplications(true);
     }, [fetchApplications]);
 
     if (applicationsLoading && applications.length === 0) {

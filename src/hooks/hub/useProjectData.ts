@@ -18,6 +18,24 @@ export const PROJECT_ANALYTICS_QUERY_KEY = (projectId: string) => ['project-anal
 export const PROJECT_MEMBERS_QUERY_KEY = (projectId: string) => ['project-members', projectId];
 
 export function useProjectInfiniteTasks(projectId: string, initialData?: any) {
+    const initialTasks = Array.isArray(initialData) ? initialData : undefined;
+    const lastCreatedAt = initialTasks?.length
+        ? (initialTasks[initialTasks.length - 1] as any)?.createdAt
+        : undefined;
+    const initialQueryData = initialTasks?.length
+        ? {
+            pages: [
+                {
+                    success: true,
+                    tasks: initialTasks,
+                    nextCursor: lastCreatedAt ? new Date(lastCreatedAt).toISOString() : undefined,
+                    hasMore: initialTasks.length >= 50,
+                },
+            ],
+            pageParams: [undefined],
+        }
+        : undefined;
+
     return useInfiniteQuery({
         queryKey: PROJECT_TASKS_QUERY_KEY(projectId),
         queryFn: async ({ pageParam }: { pageParam: string | undefined }) => {
@@ -27,6 +45,7 @@ export function useProjectInfiniteTasks(projectId: string, initialData?: any) {
         },
         initialPageParam: undefined as string | undefined, // Explicit type
         getNextPageParam: (lastPage) => lastPage.nextCursor,
+        initialData: initialQueryData,
         staleTime: 1000 * 60,
     });
 }
@@ -46,14 +65,16 @@ export function useProjectTasks(projectId: string, initialData?: any[]) {
     });
 }
 
-export function useSprintTasks(sprintId: string) {
-    return useQuery({
+export function useSprintTasks(sprintId: string, pageSize: number = 50) {
+    return useInfiniteQuery({
         queryKey: SPRINT_TASKS_QUERY_KEY(sprintId),
-        queryFn: async () => {
-            const result = await fetchSprintTasksAction(sprintId);
+        queryFn: async ({ pageParam }: { pageParam: string | undefined }) => {
+            const result = await fetchSprintTasksAction(sprintId, pageSize, pageParam);
             if (!result.success) throw new Error(result.error);
-            return result.tasks as unknown as Task[];
+            return result;
         },
+        initialPageParam: undefined as string | undefined,
+        getNextPageParam: (lastPage) => lastPage.nextCursor,
         staleTime: 1000 * 60 * 2, // 2 minutes
         enabled: !!sprintId,
     });
@@ -84,19 +105,52 @@ export function useProjectAnalytics(projectId: string) {
     });
 }
 
-export function useProjectMembers(projectId: string, initialData?: any[]) {
+export function useProjectMembers(
+    projectId: string,
+    initialMembers: any[] = [],
+    options?: {
+        enabled?: boolean;
+        initialHasMore?: boolean;
+        initialCursor?: string | null;
+        pageSize?: number;
+    }
+) {
+    const pageSize = options?.pageSize ?? 20;
+    const enabled = options?.enabled ?? true;
+
+    const initialHasMore = options?.initialHasMore ?? initialMembers.length >= pageSize;
+    const initialCursor = options?.initialCursor ?? undefined;
+
+    const initialData = initialMembers.length
+        ? {
+            pages: [
+                {
+                    success: true,
+                    members: initialMembers,
+                    hasMore: initialHasMore,
+                    nextCursor: initialCursor,
+                },
+            ],
+            pageParams: [undefined],
+        }
+        : undefined;
+
     return useInfiniteQuery({
         queryKey: PROJECT_MEMBERS_QUERY_KEY(projectId),
-        queryFn: async ({ pageParam = 0 }) => {
-            const result = await getProjectMembersAction(projectId, 20, pageParam as number);
+        queryFn: async ({ pageParam }) => {
+            const result = await getProjectMembersAction(projectId, pageSize, pageParam as string | undefined);
             if (!result.success) throw new Error(result.error);
-            return result;
+            return {
+                success: true as const,
+                members: result.members ?? [],
+                hasMore: result.hasMore ?? false,
+                nextCursor: result.nextCursor ?? undefined,
+            };
         },
-        initialPageParam: 0,
-        getNextPageParam: (lastPage, allPages) => {
-            if (!lastPage.hasMore) return undefined;
-            return allPages.length * 20;
-        },
+        initialPageParam: undefined as string | undefined,
+        getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+        initialData,
         staleTime: 1000 * 60 * 15,
+        enabled,
     });
 }

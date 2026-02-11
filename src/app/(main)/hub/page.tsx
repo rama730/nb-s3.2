@@ -7,6 +7,15 @@ import { createClient } from "@/lib/supabase/server";
 
 export const dynamic = 'force-dynamic'; // Real-time data fetching
 
+const INITIAL_HUB_FILTERS = {
+    status: PROJECT_STATUS.ALL,
+    type: PROJECT_TYPE.ALL,
+    sort: SORT_OPTIONS.NEWEST,
+    tech: [],
+    search: undefined,
+    includedIds: undefined
+};
+
 export async function generateMetadata() {
     return {
         title: 'Hub | Edge',
@@ -16,19 +25,10 @@ export async function generateMetadata() {
 
 export default async function HubPage() {
     const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-
-    // Prefetch initial data with default filters
-    const initialFilters = {
-        status: PROJECT_STATUS.ALL,
-        type: PROJECT_TYPE.ALL,
-        sort: SORT_OPTIONS.NEWEST,
-        tech: [],
-        search: undefined,
-        includedIds: undefined
-    };
-
-    const initialData = await fetchHubProjectsAction(initialFilters, undefined, 24);
+    const [{ data: { user } }, initialData] = await Promise.all([
+        supabase.auth.getUser(),
+        fetchHubProjectsAction(INITIAL_HUB_FILTERS, undefined, 24),
+    ]);
 
     return (
         <div className="h-[calc(100vh-var(--header-height,56px))] min-h-0 overflow-hidden bg-zinc-50 dark:bg-zinc-950">

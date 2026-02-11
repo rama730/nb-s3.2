@@ -11,16 +11,18 @@ export function useUserBookmarks(userId: string | null | undefined) {
         queryFn: async () => {
             if (!userId) return new Set();
 
-            // For now, return empty set - bookmarks table can be added later
-            // const { data } = await supabase
-            //   .from('bookmarks')
-            //   .select('entity_id')
-            //   .eq('user_id', userId)
-            //   .eq('entity_type', 'project');
+            const { data, error } = await supabase
+                .from('saved_projects')
+                .select('project_id')
+                .eq('user_id', userId);
 
-            return new Set();
+            if (error) throw error;
+
+            return new Set((data || []).map((row: { project_id: string }) => row.project_id));
         },
         enabled: !!userId,
+        staleTime: 60_000,
+        gcTime: 5 * 60_000,
     });
 }
 
@@ -32,9 +34,17 @@ export function useUserFollowedProjects(userId: string | null | undefined) {
         queryFn: async () => {
             if (!userId) return new Set();
 
-            // For now, return empty set - project_followers table can be added later
-            return new Set();
+            const { data, error } = await supabase
+                .from('project_follows')
+                .select('project_id')
+                .eq('user_id', userId);
+
+            if (error) throw error;
+
+            return new Set((data || []).map((row: { project_id: string }) => row.project_id));
         },
         enabled: !!userId,
+        staleTime: 60_000,
+        gcTime: 5 * 60_000,
     });
 }

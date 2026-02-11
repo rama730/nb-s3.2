@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useMemo, useEffect } from "react";
+import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { useRouter, useParams, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
@@ -9,7 +9,7 @@ import ProjectLayout from "@/components/projects/dashboard/ProjectLayout";
 import { TabErrorBoundary } from "@/components/projects/TabErrorBoundary";
 import { ProjectIntelligenceProvider } from "@/components/projects/intelligence/ProjectIntelligenceProvider";
 import type { Project } from "@/types/hub";
-import { toggleProjectBookmarkAction, toggleProjectFollowAction, startSprintAction, completeSprintAction, moveTaskToSprintAction, updateProjectStageAction } from "@/app/actions/project";
+import { toggleProjectBookmarkAction, toggleProjectFollowAction, startSprintAction, completeSprintAction, moveTaskToSprintAction, updateProjectStageAction, incrementProjectViewAction } from "@/app/actions/project";
 import { getApplicationStatusAction } from "@/app/actions/applications";
 import ApplicationStatusBanner from "@/components/projects/ApplicationStatusBanner";
 import { useProjectMembers } from "@/hooks/hub/useProjectData";
@@ -64,9 +64,10 @@ export default function ProjectDashboardClient({
     const [isBookmarked, setIsBookmarked] = useState((project as any).isSaved || false);
     const [isFollowing, setIsFollowing] = useState((project as any).isFollowed || false);
     const [bookmarkLoading, setBookmarkLoading] = useState(false);
-    const [shareCopied, setShareCopied] = useState(false);
+    const [followLoading, setFollowLoading] = useState(false);
     const [followersCount, setFollowersCount] = useState((project as any).followersCount || 0);
-    const [bookmarkCount, setBookmarkCount] = useState(0); // View count is handled separately, Bookmark count usually private
+    const [viewCount, setViewCount] = useState((project as any).viewCount || 0);
+    const [savesCount, setSavesCount] = useState((project as any).savesCount || 0);
     const [isEditModalOpen, setIsEditModalOpen] = useState(false);
     const [isApplyModalOpen, setIsApplyModalOpen] = useState(false);
     const [preselectedRoleId, setPreselectedRoleId] = useState<string | undefined>(undefined);
@@ -102,18 +103,29 @@ export default function ProjectDashboardClient({
         setOptimisticStageIndex(serverStageIndex);
     }, [serverStageIndex]);
 
-    // Fetch application status for non-owners (lightweight O(1) query)
-    useEffect(() => {
-        if (!currentUserId || isOwner || isMember) return;
-        
-        getApplicationStatusAction(project.id).then(setApplicationStatus);
-    }, [project.id, currentUserId, isOwner, isMember]);
-
     // Derived state
     const isOwnerOrMember = isOwner || isMember;
 
     // Extended project data (may come from joined queries, cast to any for flexibility)
-    const extendedProject = project as any;
+    const projectWithLiveStats = useMemo(() => ({
+        ...(project as any),
+        viewCount,
+        followersCount,
+        savesCount,
+    }), [project, viewCount, followersCount, savesCount]);
+    const extendedProject = projectWithLiveStats as any;
+
+    const lastProjectIdRef = useRef<string | null>(null);
+    useEffect(() => {
+        if (!project?.id) return;
+        if (lastProjectIdRef.current === project.id) return;
+        lastProjectIdRef.current = project.id;
+        setFollowersCount((project as any).followersCount || 0);
+        setViewCount((project as any).viewCount || 0);
+        setSavesCount((project as any).savesCount || 0);
+        setIsFollowing((project as any).isFollowed || false);
+        setIsBookmarked((project as any).isSaved || false);
+    }, [project?.id]);
 
     // OPTIMIZATION: Default to empty arrays as these are now fetched client-side or lazy loaded
     const tasks = useMemo(() => extendedProject?.tasks || [], [extendedProject]);
@@ -123,16 +135,44 @@ export default function ProjectDashboardClient({
 
     const collaboratorUsers = useMemo(() => {
         const list = (extendedProject?.collaborators || []) as any[];
-        return list.map((c) => c?.user).filter(Boolean);
+        return list
+            .map((c) => (c?.user ? { ...c.user, membershipRole: c.membershipRole } : null))
+            .filter(Boolean);
     }, [extendedProject]);
 
+    const rolesWithFilled = useMemo(() => {
+        const roles = extendedProject?.openRoles || [];
+        return roles.map((role: any) => ({
+            ...role,
+            filled: role?.filled ?? 0,
+        }));
+    }, [extendedProject]);
+
+    // Fetch application status for non-owners (lightweight O(1) query)
+    useEffect(() => {
+        if (!currentUserId || isOwner || isMember) return;
+        if (rolesWithFilled.length === 0) return;
+
+        getApplicationStatusAction(project.id).then(setApplicationStatus);
+    }, [project.id, currentUserId, isOwner, isMember, rolesWithFilled.length]);
+
     // Hook Integration: Scalable Member Loading
+    const shouldLoadMembers =
+        activeTab === "dashboard" ||
+        activeTab === "tasks" ||
+        activeTab === "sprints";
+
     const { 
         data: membersData, 
         isLoading: loadingMembers,
         fetchNextPage: fetchNextMembers,
         hasNextPage: hasNextMembers
-    } = useProjectMembers(project.id, collaboratorUsers || []);
+    } = useProjectMembers(project.id, collaboratorUsers || [], {
+        enabled: shouldLoadMembers,
+        initialHasMore: (project as any)?.membersHasMore,
+        initialCursor: (project as any)?.membersNextCursor,
+        pageSize: 20,
+    });
 
     // Flatten members and include owner
     const allMembers = useMemo(() => {
@@ -151,16 +191,14 @@ export default function ProjectDashboardClient({
         return membersData?.pages.flatMap((p: any) => p.members) || collaboratorUsers || [];
     }, [membersData, collaboratorUsers]);
 
-    const rolesWithFilled = useMemo(() => {
-        const roles = extendedProject?.openRoles || [];
-        return roles.map((role: any) => ({
-            ...role,
-            filled: role?.filled ?? 0,
-        }));
-    }, [extendedProject]);
-
     const lifecycleStages = useMemo(() => {
-        const stages = extendedProject?.lifecycleStages || [];
+        const stages = (
+            Array.isArray(extendedProject?.lifecycleStages) && extendedProject.lifecycleStages.length > 0
+                ? extendedProject.lifecycleStages
+                : Array.isArray((extendedProject as any)?.lifecycle_stages) && (extendedProject as any).lifecycle_stages.length > 0
+                    ? (extendedProject as any).lifecycle_stages
+                    : []
+        ) as string[];
         const currentIndex = optimisticStageIndex;
         return stages.map((stageName: string, idx: number) => ({
             name: stageName,
@@ -187,15 +225,14 @@ export default function ProjectDashboardClient({
     const handleShare = useCallback(async () => {
         try {
             await navigator.clipboard.writeText(window.location.href);
-            setShareCopied(true);
             toast.success("Link copied to clipboard");
-            setTimeout(() => setShareCopied(false), 2000);
         } catch {
             toast.error("Failed to copy link");
         }
     }, []);
 
     const handleBookmark = useCallback(async () => {
+        if (bookmarkLoading) return;
         if (!currentUserId) {
             toast.error("Please log in to save projects");
             return;
@@ -204,23 +241,27 @@ export default function ProjectDashboardClient({
         // Optimistic update
         const newIsBookmarked = !isBookmarked;
         setIsBookmarked(newIsBookmarked);
-        setBookmarkCount((c) => newIsBookmarked ? c + 1 : c - 1);
+        setSavesCount((c: number) => newIsBookmarked ? c + 1 : Math.max(0, c - 1));
         
         try {
             const result = await toggleProjectBookmarkAction(project.id, newIsBookmarked);
             if (!result.success) throw new Error(result.error);
+            if (result.savesCount !== undefined) {
+                setSavesCount(result.savesCount);
+            }
             toast.success(newIsBookmarked ? "Saved to collection" : "Removed from saved");
         } catch (error) {
             // Revert on failure
             setIsBookmarked(!newIsBookmarked);
-            setBookmarkCount((c) => !newIsBookmarked ? c + 1 : c - 1);
+            setSavesCount((c: number) => !newIsBookmarked ? c + 1 : Math.max(0, c - 1));
             toast.error("Failed to update bookmark");
         } finally {
             setBookmarkLoading(false);
         }
-    }, [currentUserId, isBookmarked, project.id]);
+    }, [bookmarkLoading, currentUserId, isBookmarked, project.id]);
 
     const handleFollow = useCallback(async () => {
+        if (followLoading) return;
         if (!currentUserId) {
             toast.error("Please log in to follow projects");
             return;
@@ -228,19 +269,38 @@ export default function ProjectDashboardClient({
         // Optimistic update
         const newIsFollowing = !isFollowing;
         setIsFollowing(newIsFollowing);
-        setFollowersCount((c: number) => newIsFollowing ? c + 1 : c - 1);
+        setFollowersCount((c: number) => newIsFollowing ? c + 1 : Math.max(0, c - 1));
 
         try {
+            setFollowLoading(true);
             const result = await toggleProjectFollowAction(project.id, newIsFollowing);
             if (!result.success) throw new Error(result.error);
+            if (result.followersCount !== undefined) {
+                setFollowersCount(result.followersCount);
+            }
             toast.success(newIsFollowing ? "Following project" : "Unfollowed project");
         } catch (error) {
             // Revert
             setIsFollowing(!newIsFollowing);
-            setFollowersCount((c: number) => !newIsFollowing ? c + 1 : c - 1);
+            setFollowersCount((c: number) => !newIsFollowing ? c + 1 : Math.max(0, c - 1));
             toast.error("Failed to update follow status");
+        } finally {
+            setFollowLoading(false);
         }
-    }, [currentUserId, isFollowing, project.id]);
+    }, [currentUserId, followLoading, isFollowing, project.id]);
+
+    useEffect(() => {
+        if (!project?.id) return;
+        if (typeof window === "undefined") return;
+        const viewKey = `project_viewed:${project.id}`;
+        if (sessionStorage.getItem(viewKey)) return;
+        sessionStorage.setItem(viewKey, "1");
+        incrementProjectViewAction(project.id).then((result) => {
+            if (result.success && typeof result.viewCount === "number") {
+                setViewCount(result.viewCount);
+            }
+        });
+    }, [project?.id]);
 
     const handleApplyToRole = useCallback((role: any) => {
         if (!currentUserId) {
@@ -315,11 +375,6 @@ export default function ProjectDashboardClient({
         }
     }, [isOwner, optimisticStageIndex, extendedProject, project.id, handleUndoStage]);
 
-    const handleFinalize = useCallback(() => {
-        // TODO: Implement project finalization
-        toast.info("Project finalization coming soon");
-    }, []);
-
     const filesSyncStatus = extendedProject?.syncStatus;
     const filesImportSourceType = extendedProject?.importSource?.type || null;
 
@@ -345,7 +400,7 @@ export default function ProjectDashboardClient({
                 return (
                     <TabErrorBoundary tabName="Dashboard">
                         <DashboardTab
-                            project={project}
+                            project={projectWithLiveStats}
                             isCreator={isOwner}
                             isOwnerOrMember={isOwnerOrMember}
                             isCollaborator={isMember}
@@ -359,15 +414,8 @@ export default function ProjectDashboardClient({
                             loadingMembers={loadingMembers}
                             rolesWithFilled={rolesWithFilled}
                             projectActivityEvents={[]}
-                            followersCount={followersCount}
-                            bookmarkCount={bookmarkCount}
-                            bookmarked={isBookmarked}
-                            bookmarkLoading={bookmarkLoading}
-                            shareCopied={shareCopied}
                             onEdit={handleEdit}
                             onShare={handleShare}
-                            onBookmark={handleBookmark}
-                            onFinalize={handleFinalize}
                             onAdvanceStage={handleAdvanceStage}
                             onApplyToRole={handleApplyToRole}
                             onManageTeam={() => handleEdit("team")}
@@ -462,7 +510,7 @@ export default function ProjectDashboardClient({
             case "analytics":
                 return (
                     <TabErrorBoundary tabName="Analytics">
-                        <AnalyticsTab projectId={project.id} project={project} />
+                        <AnalyticsTab projectId={project.id} project={projectWithLiveStats} />
                     </TabErrorBoundary>
                 );
 
@@ -498,16 +546,20 @@ export default function ProjectDashboardClient({
     return (
         <ProjectIntelligenceProvider>
             <ProjectLayout
-                project={project}
+                project={projectWithLiveStats}
                 isOwner={isOwner}
                 activeTab={activeTab}
                 onTabChange={handleTabChange}
                 followersCount={followersCount}
+                viewCount={viewCount}
+                savesCount={savesCount}
                 onEdit={() => handleEdit()}
                 isBookmarked={isBookmarked}
                 onBookmark={handleBookmark}
+                bookmarkLoading={bookmarkLoading}
                 isFollowing={isFollowing}
                 onFollow={handleFollow}
+                followLoading={followLoading}
                 onShare={handleShare}
             >
                 {/* Application Status Banner for visitors */}

@@ -31,7 +31,7 @@ export default async function ProfileSettingsPage() {
                 title="Public profile"
                 description="These details are visible to others on your profile."
             >
-                <ProfileFormShell initialData={profile} userId={user.id} />
+                <ProfileFormShell initialData={profile} />
             </SettingsSectionCard>
         </div>
     );

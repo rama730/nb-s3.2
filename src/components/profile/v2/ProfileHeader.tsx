@@ -1,12 +1,9 @@
 'use client'
 
-import { useEffect, useState, useMemo } from 'react'
 import Image from 'next/image'
 import { cn } from '@/lib/utils'
 import { MapPin, Link2, Pencil, MessageSquare, UserPlus, UserCheck, UserMinus, Clock, Shield, Users } from 'lucide-react'
 import type { ConnectionState } from './types'
-import { createClient } from '@/lib/supabase/client'
-import { useQuery } from '@tanstack/react-query'
 import { normalizeProfileVM } from './utils/normalizeProfileVM'
 
 function Chip({ children, className }: { children: React.ReactNode; className?: string }) {
@@ -78,7 +75,6 @@ export function ProfileHeader({
     isLoadingConnection?: boolean
     mutualCount?: number
 }) {
-    const supabase = useMemo(() => createClient(), [])
     // CamelCase accessors
     const vm = normalizeProfileVM(profile)
     const name = vm.fullName || vm.username || 'User'
@@ -87,30 +83,6 @@ export function ProfileHeader({
     const location = vm.location || ''
     const openTo = vm.openTo
     const avatarSrc = vm.avatarUrl || null
-
-    const { data: viewerData } = useQuery({
-        queryKey: ['authUserId'],
-        queryFn: async () => {
-            const { data: { user } } = await supabase.auth.getUser()
-            return user?.id ?? null
-        },
-        staleTime: 1000 * 60 * 10,
-    })
-
-    const { data: mutual, isLoading: mutualLoading } = useQuery({
-        queryKey: ['mutualConnections', viewerData, profile?.id],
-        queryFn: async () => {
-            if (!viewerData || !profile?.id) return null
-            const { data, error } = await supabase.rpc('get_mutual_connections', {
-                p_viewer_id: viewerData,
-                p_profile_id: profile.id,
-            })
-            if (error) throw error
-            return (data as any) ?? null
-        },
-        enabled: !!viewerData && !!profile?.id && isAuthenticated && !isOwner,
-        staleTime: 1000 * 60 * 5,
-    })
 
     const connectLabel =
         connectionState === 'accepted'
@@ -172,26 +144,10 @@ export function ProfileHeader({
                             </div>
                             {headline ? <p className="mt-1 text-sm sm:text-base text-zinc-700 dark:text-zinc-300">{headline}</p> : null}
 
-                {(mutualLoading && mutualCount && mutualCount > 0) ? (
-                    <div className="mt-2 flex items-center gap-2 text-sm text-zinc-500 dark:text-zinc-400 animate-pulse">
-                         <Users className="w-3 h-3 inline mr-1" />
-                         {mutualCount} mutual connections
-                    </div>
-                ) : mutual && mutual.count > 0 ? (
+                            {mutualCount > 0 ? (
                                 <div className="mt-2 flex items-center gap-2 text-sm text-zinc-500 dark:text-zinc-400">
-                                    <div className="flex -space-x-2">
-                                        {mutual.users.map((u: any) => (
-                                            <div key={u.id} className="w-6 h-6 rounded-full border-2 border-white dark:border-zinc-900 overflow-hidden bg-zinc-100 relative">
-                                                {u.avatar_url ? ( // Mutual users might be raw snake_case from RPC
-                                                    <Image src={u.avatar_url} alt={u.username || 'User'} fill className="object-cover" sizes="24px" />
-                                                ) : null}
-                                            </div>
-                                        ))}
-                                    </div>
-                                    <span className="ml-1 text-xs">
-                                        <Users className="w-3 h-3 inline mr-1" />
-                                        {mutual.count} mutual connections
-                                    </span>
+                                    <Users className="w-3 h-3 inline mr-1" />
+                                    <span className="text-xs">{mutualCount} mutual connections</span>
                                 </div>
                             ) : null}
 

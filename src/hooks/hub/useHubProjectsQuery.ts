@@ -3,10 +3,11 @@
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { Project, HubFilters } from '@/types/hub';
 import { fetchHubProjectsAction } from '@/app/actions/hub';
+import { type FilterView } from '@/constants/hub';
 
 interface UseHubProjectsQueryParams {
     filters: HubFilters;
-    view: string;
+    view: FilterView;
 }
 
 interface ProjectsPage {
@@ -21,7 +22,12 @@ export function useHubProjectsQuery({ filters, view }: UseHubProjectsQueryParams
     return useInfiniteQuery<ProjectsPage>({
         queryKey: ['hub-projects', filters, view],
         queryFn: async ({ pageParam }) => {
-            const result = await fetchHubProjectsAction(filters, pageParam as string | undefined, PAGE_SIZE);
+            const result = await fetchHubProjectsAction(
+                filters,
+                pageParam as string | undefined,
+                PAGE_SIZE,
+                view,
+            );
 
             if (!result.success) {
                 throw new Error(result.error);

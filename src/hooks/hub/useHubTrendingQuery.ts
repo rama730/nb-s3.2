@@ -2,6 +2,7 @@
 
 import { useQuery } from '@tanstack/react-query';
 import { fetchHubProjectsAction } from '@/app/actions/hub';
+import { FILTER_VIEWS } from '@/constants/hub';
 
 export function useHubTrendingQuery() {
     return useQuery<Record<string, number>>({
@@ -16,13 +17,13 @@ export function useHubTrendingQuery() {
                 sort: 'most_viewed', // Maps to updated_at desc in backend for now
                 search: undefined,
                 includedIds: undefined
-            }, undefined, 20);
+            }, undefined, 20, FILTER_VIEWS.TRENDING);
 
             if (!result.success) throw new Error(result.error);
 
             // Create a score map
             const scores: Record<string, number> = {};
-            (result.projects || []).forEach((p: any, index: number) => {
+            (result.projects || []).forEach((p: { id?: string }, index: number) => {
                 if (p.id) {
                     scores[p.id] = 20 - index;
                 }

@@ -3,6 +3,8 @@
  * Pure optimization: metadata-only fetches (no blobs), minimal parsing, client-safe.
  */
 
+import { normalizeGithubRepoUrl } from "@/lib/github/repo-validation";
+
 export type GitHubRepoRef = { owner: string; repo: string };
 
 export type GitHubContentEntry = {
@@ -13,25 +15,12 @@ export type GitHubContentEntry = {
 };
 
 export function parseGithubRepo(repoUrl: string): GitHubRepoRef | null {
-  const raw = (repoUrl || "").trim().replace(/\/+$/, ""); // Pre-strip trailing slashes
-  if (!raw) return null;
-
-  // STRICT Regex: github.com/owner/repo
-  // Must have two path segments after github.com.
-  const m = raw.match(/github\.com\/([^\/]+)\/([^\/]+)/i);
-  if (!m) {
-    // Check if it looks like a profile (github.com/owner)
-    if (/github\.com\/[^\/]+$/.test(raw)) {
-      throw new Error("This looks like a user profile. Please provide a full repository URL (e.g., github.com/owner/repo).");
-    }
-    return null;
-  }
-
-  const owner = m[1];
-  const repo = m[2].replace(/\.git$/i, "");
-
-  if (!owner || !repo) return null;
-  return { owner, repo };
+  const normalized = normalizeGithubRepoUrl(repoUrl);
+  if (!normalized) return null;
+  const url = new URL(normalized);
+  const parts = url.pathname.split("/").filter(Boolean);
+  if (parts.length < 2) return null;
+  return { owner: parts[0], repo: parts[1] };
 }
 
 function makeHeaders(token?: string): HeadersInit {
@@ -41,17 +30,46 @@ function makeHeaders(token?: string): HeadersInit {
   };
 }
 
+const DEFAULT_FETCH_TIMEOUT_MS = (() => {
+  const v = Number(process.env.GITHUB_API_TIMEOUT_MS || 12000);
+  return Number.isFinite(v) && v >= 1000 ? Math.floor(v) : 12000;
+})();
+
+function createTimeoutSignal(external?: AbortSignal, timeoutMs: number = DEFAULT_FETCH_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error("GitHub request timed out")), timeoutMs);
+
+  const abortFromExternal = () => controller.abort(external?.reason);
+  if (external) {
+    if (external.aborted) abortFromExternal();
+    else external.addEventListener("abort", abortFromExternal, { once: true });
+  }
+
+  const cleanup = () => {
+    clearTimeout(timer);
+    if (external) external.removeEventListener("abort", abortFromExternal);
+  };
+
+  return { signal: controller.signal, cleanup };
+}
+
 export async function fetchRepoMeta(args: {
   owner: string;
   repo: string;
   token?: string;
   signal?: AbortSignal;
-}): Promise<{ defaultBranch: string | null }> {
+}): Promise<{ defaultBranch: string | null; isPrivate: boolean | null }> {
   const { owner, repo, token, signal } = args;
-  const res = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
-    headers: makeHeaders(token),
-    signal,
-  });
+  const timeout = createTimeoutSignal(signal);
+  let res: Response;
+  try {
+    res = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
+      headers: makeHeaders(token),
+      signal: timeout.signal,
+    });
+  } finally {
+    timeout.cleanup();
+  }
 
   if (!res.ok) {
     if (res.status === 404) {
@@ -61,8 +79,8 @@ export async function fetchRepoMeta(args: {
     throw new Error(`GitHub repo lookup failed (${res.status})`);
   }
 
-  const json = (await res.json()) as { default_branch?: string };
-  return { defaultBranch: json.default_branch || null };
+  const json = (await res.json()) as { default_branch?: string; private?: boolean };
+  return { defaultBranch: json.default_branch || null, isPrivate: typeof json.private === "boolean" ? json.private : null };
 }
 
 export async function fetchContents(args: {
@@ -79,11 +97,16 @@ export async function fetchContents(args: {
     `https://api.github.com/repos/${owner}/${repo}/contents/${cleanPath}`
   );
   if (ref) url.searchParams.set("ref", ref);
-
-  const res = await fetch(url.toString(), {
-    headers: makeHeaders(token),
-    signal,
-  });
+  const timeout = createTimeoutSignal(signal);
+  let res: Response;
+  try {
+    res = await fetch(url.toString(), {
+      headers: makeHeaders(token),
+      signal: timeout.signal,
+    });
+  } finally {
+    timeout.cleanup();
+  }
 
   if (!res.ok) {
     throw new Error(`GitHub contents fetch failed (${res.status})`);
@@ -114,4 +137,3 @@ export async function fetchContents(args: {
 
   return entries;
 }
-

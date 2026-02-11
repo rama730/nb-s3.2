@@ -1,6 +1,6 @@
 import { db } from '@/lib/db'
 import { profiles, projects, connections } from '@/lib/db/schema'
-import { eq, or, and, desc, sql } from 'drizzle-orm'
+import { eq, or, and, desc, ne } from 'drizzle-orm'
 import { cache } from 'react'
 import type { ConnectionState } from '@/components/profile/v2/types'
 import { createClient } from '@/lib/supabase/server'
@@ -39,44 +39,84 @@ function normalizeProfile(p: any) {
     };
 }
 
-export const getProfileDetails = cache(async (username?: string, options: ProfileDetailsOptions = {}) => {
+export async function getProfileDetails(username?: string, options: ProfileDetailsOptions = {}) {
     const supabase = await createClient()
 
     // 1. Initial Authorization Check
     const { data: { user } } = await supabase.auth.getUser();
 
     // 2. Fetch Target Profile (Optimized Parallel approach)
-    let profileData = await (username
+    const profileData = await (username
         ? db.query.profiles.findFirst({ where: eq(profiles.username, username) })
         : user ? db.query.profiles.findFirst({ where: eq(profiles.id, user.id) }) : Promise.resolve(null)
     );
 
     if (!profileData) return null;
 
-    // 3. PURE OPTIMIZATION: Parallelize everything else
-    // Fetch Projects, Connection Status, and Mutual Counts in one go
+    const shouldResolveViewerState = !!user && user.id !== profileData.id;
+    const shouldLoadProjects = !options.skipHeavyData;
+    const shouldLoadMutualCount = shouldResolveViewerState && !options.skipHeavyData;
+    const canViewAllProjects = !!user && user.id === profileData.id;
+
+    const projectVisibilityFilter = canViewAllProjects
+        ? eq(projects.ownerId, profileData.id)
+        : and(
+            eq(projects.ownerId, profileData.id),
+            eq(projects.visibility, 'public'),
+            ne(projects.status, 'draft')
+        );
+
+    // 3. PURE OPTIMIZATION: Lightweight shell first, heavy data only on-demand.
     const [userProjects, conn, mutualCount] = await Promise.all([
-        // Projects (Keep limited for initial shell)
-        options.skipHeavyData ? Promise.resolve([]) : db.query.projects.findMany({
-            where: eq(projects.ownerId, profileData.id),
-            orderBy: [desc(projects.viewCount), desc(projects.updatedAt), desc(projects.createdAt)],
-            limit: 12
-        }),
-
-        // Connection Status
-        (user && user.id !== profileData.id) ? db.query.connections.findFirst({
-            where: or(
-                and(eq(connections.requesterId, user.id), eq(connections.addresseeId, profileData.id)),
-                and(eq(connections.requesterId, profileData.id), eq(connections.addresseeId, user.id))
-            ),
-            columns: { status: true, requesterId: true }
-        }) : Promise.resolve(null),
-
-        // Mutual Connection Count (Batching into server fetch to avoid client waterfalls)
-        (user && user.id !== profileData.id) ? supabase.rpc('get_mutual_connections', {
-            p_viewer_id: user.id,
-            p_profile_id: profileData.id
-        }).then(res => (res.data as any)?.count || 0) : Promise.resolve(0)
+        shouldLoadProjects
+            ? db.query.projects.findMany({
+                where: projectVisibilityFilter,
+                orderBy: [desc(projects.viewCount), desc(projects.updatedAt), desc(projects.createdAt)],
+                limit: 12,
+                columns: {
+                    id: true,
+                    ownerId: true,
+                    title: true,
+                    slug: true,
+                    description: true,
+                    shortDescription: true,
+                    coverImage: true,
+                    category: true,
+                    viewCount: true,
+                    followersCount: true,
+                    savesCount: true,
+                    tags: true,
+                    skills: true,
+                    visibility: true,
+                    status: true,
+                    createdAt: true,
+                    updatedAt: true,
+                }
+            })
+            : Promise.resolve([]),
+        shouldResolveViewerState
+            ? db.query.connections.findFirst({
+                where: or(
+                    and(eq(connections.requesterId, user!.id), eq(connections.addresseeId, profileData.id)),
+                    and(eq(connections.requesterId, profileData.id), eq(connections.addresseeId, user!.id))
+                ),
+                columns: { status: true, requesterId: true },
+                orderBy: [desc(connections.updatedAt)]
+            })
+            : Promise.resolve(null),
+        shouldLoadMutualCount
+            ? (async () => {
+                try {
+                    const res = await supabase.rpc('get_mutual_connections', {
+                        p_viewer_id: user!.id,
+                        p_profile_id: profileData.id
+                    });
+                    return (res.data as any)?.count || 0;
+                } catch {
+                    return 0;
+                }
+            })()
+            : Promise.resolve(0),
     ]);
 
     // Map Connection Status
@@ -93,15 +133,37 @@ export const getProfileDetails = cache(async (username?: string, options: Profil
         projects: userProjects,
         posts: [],
         stats: {
-            connectionsCount: profileData.connectionsCount || 0, // Using denormalized column
-            projectsCount: profileData.projectsCount || 0,       // Using denormalized column
+            connectionsCount: profileData.connectionsCount || 0,
+            projectsCount: profileData.projectsCount || 0,
             followersCount: profileData.followersCount || 0,
-            mutualCount, // New: Batched mutual count
+            mutualCount,
         },
         connectionStatus,
         isOwner: user?.id === profileData.id,
         currentUser: user,
     };
+}
+
+export const getPublicProfileMeta = cache(async (username: string) => {
+    if (!username) return null;
+    try {
+        const [profile] = await db
+            .select({
+                id: profiles.id,
+                username: profiles.username,
+                fullName: profiles.fullName,
+                bio: profiles.bio,
+                avatarUrl: profiles.avatarUrl,
+            })
+            .from(profiles)
+            .where(eq(profiles.username, username))
+            .limit(1);
+
+        return profile || null;
+    } catch (error) {
+        console.error('Error fetching public profile meta:', error);
+        return null;
+    }
 });
 
 // For generateStaticParams

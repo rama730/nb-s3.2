@@ -51,6 +51,7 @@ export default function TasksTab({
 
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [editingTask, setEditingTask] = useState<Task | null>(null);
+    const [createTaskError, setCreateTaskError] = useState<string | null>(null);
 
     // Hook Integration: Smart Fetching (Infinite Loading)
     const { 
@@ -84,63 +85,43 @@ export default function TasksTab({
         setSelectedTaskIds(newSet);
     };
 
-    const handleCreateTask = async (data: any) => {
-        // Optimistic UI: Create fake task and show immediately
-        const tempId = crypto.randomUUID();
-        const optimisticTask: Task = {
-            id: tempId,
-            projectId,
-            title: data.title,
-            description: data.description || null,
-            status: "todo",
-            priority: data.priority || "medium",
-            type: data.type || "task",
-            taskNumber: 0, // Pending
-            creatorId: currentUserId || null,
-            assigneeId: data.assigneeId || null,
-            sprintId: data.sprintId || null,
-            storyPoints: data.storyPoints || null,
-            dueDate: data.dueDate ? new Date(data.dueDate).toISOString() : null,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            // Ensure other required Task fields are present with defaults
-            subtasks: [],
-            attachmentCount: data.attachmentIds?.length || 0,
-            commentCount: 0,
-            // Any other fields from Task interface
-            tags: data.tags || [],
-        } as unknown as Task; // Cast if partial
+    const handleCreateTask = async (data: any): Promise<{ success: boolean; error?: string }> => {
+        setCreateTaskError(null);
+        try {
+            const result = await createTaskAction({
+                projectId,
+                title: data.title,
+                description: data.description || "",
+                priority: data.priority || "medium",
+                status: data.status || "todo",
+                assigneeId: data.assigneeId || null,
+                sprintId: data.sprintId || null,
+                storyPoints: data.storyPoints || undefined,
+                dueDate: data.dueDate || null,
+                subtasks: data.subtasks || [],
+                attachmentNodeIds: data.attachmentIds || [],
+            });
 
-        setTasks(prev => [optimisticTask, ...prev]);
-        setShowCreateModal(false); // Close immediately (0ms latency loop)
+            if (!result.success || !result.task) {
+                const error = result.error || "Failed to create task";
+                setCreateTaskError(error);
+                return { success: false, error };
+            }
 
-        // Run server action in background
-        createTaskAction({
-             projectId,
-             title: data.title,
-             description: data.description || "",
-             priority: data.priority || "medium",
-             status: "todo",
-             assigneeId: data.assigneeId || null,
-             sprintId: data.sprintId || null,
-             storyPoints: data.storyPoints || undefined,
-             dueDate: data.dueDate || null,
-             attachmentNodeIds: data.attachmentIds || [],
-        }).then(result => {
-             if (result.success && result.task) {
-                 // Replace optimistic with real
-                 setTasks(prev => prev.map(t => t.id === tempId ? (result.task as unknown as Task) : t));
-             } else {
-                 // Revert on error
-                 console.error("Failed to create task:", result.error);
-                 setTasks(prev => prev.filter(t => t.id !== tempId));
-                 alert(result.error || "Failed to create task");
-             }
-         }).catch(err => {
-             console.error("Exception creating task", err);
-             setTasks(prev => prev.filter(t => t.id !== tempId));
-             alert("An error occurred while creating the task");
-         });
+            const createdTask = result.task as unknown as Task;
+            setTasks((prev) => {
+                if (prev.some((task) => task.id === createdTask.id)) {
+                    return prev.map((task) => (task.id === createdTask.id ? createdTask : task));
+                }
+                return [createdTask, ...prev];
+            });
+            return { success: true };
+        } catch (err) {
+            console.error("Exception creating task", err);
+            const error = "An error occurred while creating the task";
+            setCreateTaskError(error);
+            return { success: false, error };
+        }
     };
 
     // Loading State
@@ -219,6 +200,12 @@ export default function TasksTab({
                  />
             </div>
 
+            {createTaskError ? (
+                <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:border-rose-900/40 dark:bg-rose-900/20 dark:text-rose-200">
+                    {createTaskError}
+                </div>
+            ) : null}
+
             {/* Main Content */}
             {viewMode === 'board' ? (
                 <KanbanBoard
@@ -265,6 +252,7 @@ export default function TasksTab({
                         isOwner={isOwner}
                         members={members}
                         sprints={sprints}
+                        currentUserId={currentUserId}
                     />
                 )}
             </AnimatePresence>

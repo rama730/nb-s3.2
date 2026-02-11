@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 
 export interface Subtask {
@@ -11,30 +11,41 @@ export interface Subtask {
     updated_at: string;
 }
 
+function sortByPosition(items: Subtask[]) {
+    return [...items].sort((a, b) => a.position - b.position || a.created_at.localeCompare(b.created_at));
+}
+
 export function useTaskSubtasks(taskId: string) {
     const [subtasks, setSubtasks] = useState<Subtask[]>([]);
     const [isLoading, setIsLoading] = useState(true);
+    const supabase = useMemo(() => createClient(), []);
+
+    const fetchSubtasks = useCallback(async () => {
+        if (!taskId) {
+            setSubtasks([]);
+            setIsLoading(false);
+            return;
+        }
+
+        const { data, error } = await supabase
+            .from("task_subtasks")
+            .select("*")
+            .eq("task_id", taskId)
+            .order("position", { ascending: true });
+
+        if (!error && data) {
+            setSubtasks(sortByPosition(data as Subtask[]));
+        }
+        setIsLoading(false);
+    }, [supabase, taskId]);
 
     useEffect(() => {
-        const supabase = createClient();
+        void fetchSubtasks();
+    }, [fetchSubtasks]);
 
-        // Initial fetch
-        const fetchSubtasks = async () => {
-            const { data, error } = await supabase
-                .from("task_subtasks")
-                .select("*")
-                .eq("task_id", taskId)
-                .order("position", { ascending: true });
+    useEffect(() => {
+        if (!taskId) return;
 
-            if (!error && data) {
-                setSubtasks(data);
-            }
-            setIsLoading(false);
-        };
-
-        fetchSubtasks();
-
-        // Real-time subscription
         const channel = supabase
             .channel(`task_subtasks:${taskId}`)
             .on(
@@ -43,17 +54,21 @@ export function useTaskSubtasks(taskId: string) {
                     event: "*",
                     schema: "public",
                     table: "task_subtasks",
-                    filter: `task_id=eq.${taskId}`
+                    filter: `task_id=eq.${taskId}`,
                 },
                 (payload: any) => {
                     if (payload.eventType === "INSERT") {
-                        setSubtasks((prev) => [...prev, payload.new as Subtask]);
+                        const inserted = payload.new as Subtask;
+                        setSubtasks((prev) => {
+                            if (prev.some((st) => st.id === inserted.id)) return prev;
+                            return sortByPosition([...prev, inserted]);
+                        });
                     } else if (payload.eventType === "UPDATE") {
-                        setSubtasks((prev) =>
-                            prev.map((st) =>
-                                st.id === payload.new.id ? (payload.new as Subtask) : st
-                            )
-                        );
+                        const updated = payload.new as Subtask;
+                        setSubtasks((prev) => {
+                            const next = prev.map((st) => (st.id === updated.id ? updated : st));
+                            return sortByPosition(next);
+                        });
                     } else if (payload.eventType === "DELETE") {
                         setSubtasks((prev) => prev.filter((st) => st.id !== payload.old.id));
                     }
@@ -64,7 +79,7 @@ export function useTaskSubtasks(taskId: string) {
         return () => {
             supabase.removeChannel(channel);
         };
-    }, [taskId]);
+    }, [supabase, taskId]);
 
     return { subtasks, isLoading };
 }

@@ -59,10 +59,20 @@ export default function TeamCard({
 }: TeamCardProps) {
 
     // Ghost slots logic
-    const openRoleSlots = openRoles.flatMap(role => {
+    const MAX_GHOST_SLOTS = 12;
+    const openRoleSlots: any[] = [];
+    let totalOpenSlots = 0;
+
+    openRoles.forEach((role) => {
         const remaining = Math.max(0, (role?.count || 0) - (role?.filled || 0));
-        return Array(remaining).fill(role);
+        totalOpenSlots += remaining;
+
+        for (let i = 0; i < remaining && openRoleSlots.length < MAX_GHOST_SLOTS; i += 1) {
+            openRoleSlots.push(role);
+        }
     });
+
+    const extraOpenSlots = Math.max(0, totalOpenSlots - openRoleSlots.length);
 
     return (
         <DashboardCard
@@ -126,7 +136,7 @@ export default function TeamCard({
                                     {member.fullName || member.username || "Member"}
                                 </p>
                                 <p className="text-[9px] font-medium text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">
-                                    {member.membershipRole || "Team Member"}
+                                    {member.projectRoleTitle || member.membershipRole || "Team Member"}
                                 </p>
                             </div>
                         </Link>
@@ -167,6 +177,17 @@ export default function TeamCard({
                             </div>
                         </div>
                     ))}
+
+                    {extraOpenSlots > 0 && (
+                        <div className="flex items-center gap-3 p-1.5 rounded-lg border border-dashed border-zinc-200 dark:border-zinc-800 text-zinc-400">
+                            <div className="w-7 h-7 rounded-full bg-zinc-50 dark:bg-zinc-800 border border-dashed border-zinc-300 dark:border-zinc-700 flex items-center justify-center text-[10px] font-semibold">
+                                +{extraOpenSlots}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                                <p className="text-xs font-medium truncate">More open slots</p>
+                            </div>
+                        </div>
+                    )}
                 </div>
 
                 {/* Invite Button (if creator and no open slots shown or just extra CTA) */}

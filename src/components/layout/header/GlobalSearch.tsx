@@ -1,7 +1,7 @@
 "use client";
 
 import { Search, X } from "lucide-react";
-import { useState, useEffect } from "react";
+import { useMemo } from "react";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
 
 interface GlobalSearchProps {
@@ -13,58 +13,50 @@ export default function GlobalSearch({ onOpenCommandPalette, condensed = false }
     const searchParams = useSearchParams();
     const router = useRouter();
     const pathname = usePathname();
-    const [query, setQuery] = useState("");
-    const [isMac, setIsMac] = useState(false);
-    const [placeholder, setPlaceholder] = useState("Search...");
-    const [context, setContext] = useState<"explorer" | "people" | "hub" | "project" | "messages" | "default">("default");
-
-    useEffect(() => {
+    const query = useMemo(() => {
         // Keep the pill text in sync with URL, per-page context.
         // - Hub/Explorer/People use `q` (or `tag`)
         // - Project uses `search` (Tasks tab filter)
         const isProject = (pathname || "").includes("/projects/");
         if (isProject) {
-            setQuery((searchParams?.get("search") || "").trim());
-            return;
+            return (searchParams?.get("search") || "").trim();
         }
 
         const q = searchParams?.get("q");
         const tag = searchParams?.get("tag");
-        setQuery((q || (tag ? `#${tag}` : "")).trim());
+        return (q || (tag ? `#${tag}` : "")).trim();
     }, [searchParams, pathname]);
 
-    useEffect(() => {
-        setIsMac(navigator.platform.toUpperCase().indexOf("MAC") >= 0);
+    const isMac = useMemo(() => {
+        if (typeof navigator === "undefined") return false;
+        return navigator.platform.toUpperCase().includes("MAC");
     }, []);
 
-    // Determine context and placeholder based on pathname
-    useEffect(() => {
-        if (!pathname) return;
+    const { context, placeholder } = useMemo(() => {
+        if (!pathname) {
+            return { context: "default", placeholder: "Search..." };
+        }
 
         if (pathname.includes("/explorer")) {
-            setContext("explorer");
-            setPlaceholder("Search for inspiration...");
-        } else if (pathname.includes("/people")) {
-            setContext("people");
-            setPlaceholder("Find builders & collaborators...");
-        } else if (pathname.includes("/hub")) {
-            setContext("hub");
-            setPlaceholder("Search projects...");
-        } else if (pathname.includes("/projects/")) {
-            setContext("project");
-            setPlaceholder("Search this project or type 'New Task'...");
-        } else if (pathname.includes("/messages")) {
-            setContext("messages");
-            setPlaceholder("Search messages...");
-        } else {
-            setContext("default");
-            setPlaceholder("Search...");
+            return { context: "explorer", placeholder: "Search for inspiration..." };
         }
+        if (pathname.includes("/people")) {
+            return { context: "people", placeholder: "Find builders & collaborators..." };
+        }
+        if (pathname.includes("/hub")) {
+            return { context: "hub", placeholder: "Search projects..." };
+        }
+        if (pathname.includes("/projects/")) {
+            return { context: "project", placeholder: "Search this project or type 'New Task'..." };
+        }
+        if (pathname.includes("/messages")) {
+            return { context: "messages", placeholder: "Search messages..." };
+        }
+        return { context: "default", placeholder: "Search..." };
     }, [pathname]);
 
     const handleClear = (e: React.MouseEvent) => {
         e.stopPropagation();
-        setQuery(""); // Optimistic update
         const targetPath = pathname || "/";
 
         // For project pages, clear the Tasks search param only.

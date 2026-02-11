@@ -1,51 +1,49 @@
 "use client";
 
-import { Edit, Share2, Bookmark, CheckCircle, ArrowRight, Lock, Github, ExternalLink, Zap } from "lucide-react";
+import { Share2, CheckCircle, ArrowRight, Lock, Github, ExternalLink, Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { motion } from "framer-motion";
 import Link from "next/link";
+import { memo } from "react";
 
 interface ProjectOverviewCardProps {
     project: any;
     isCreator: boolean;
-    bookmarked: boolean;
-    bookmarkCount: number;
-    followersCount: number;
     membersCount: number;
     hideActionBar?: boolean;
-    onEdit: () => void;
     onShare: () => void;
-    onBookmark: () => void;
-    onFinalize: () => void;
-    shareCopied: boolean;
-    bookmarkLoading: boolean;
     lifecycleStages: { name: string; status: string }[];
     currentStageIndex: number;
     onAdvanceStage: () => void;
 }
 
-export default function ProjectOverviewCard({
+const ProjectOverviewCard = memo(function ProjectOverviewCard({
     project,
     isCreator,
-    bookmarked,
-    bookmarkCount,
-    followersCount,
     membersCount,
     hideActionBar,
-    onEdit,
     onShare,
-    onBookmark,
-    onFinalize,
-    shareCopied,
-    bookmarkLoading,
     lifecycleStages,
     currentStageIndex,
     onAdvanceStage,
 }: ProjectOverviewCardProps) {
 
-    // Mock stages if empty
-    // Forced recompile
-    const stages = lifecycleStages ?? [];
+    const projectStages =
+        Array.isArray(project?.lifecycleStages) && project.lifecycleStages.length > 0
+            ? project.lifecycleStages
+            : Array.isArray(project?.lifecycle_stages) && project.lifecycle_stages.length > 0
+                ? project.lifecycle_stages
+                : null;
+
+    const stages: string[] = (lifecycleStages && lifecycleStages.length > 0)
+        ? lifecycleStages.map((s: any) => s?.name ?? s).filter(Boolean)
+        : (projectStages || [
+            "Discovery",
+            "Design",
+            "MVP Build",
+            "Beta",
+            "Launch & Iterate",
+        ]);
 
     const statusColors: Record<string, string> = {
         planning: "bg-zinc-100 text-zinc-700 border-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:border-zinc-700",
@@ -137,7 +135,7 @@ export default function ProjectOverviewCard({
                         <div className="relative">
                             <div className="absolute top-3 left-0 right-0 h-0.5 bg-zinc-200 dark:bg-zinc-800 hidden md:block" />
                             <div className="flex flex-col md:flex-row justify-between gap-4 md:gap-0">
-                                {stages.map((stage, index) => {
+                                {stages.map((stage: string, index: number) => {
                                     const isCompleted = index < currentStageIndex;
                                     const isCurrent = index === currentStageIndex;
 
@@ -163,7 +161,7 @@ export default function ProjectOverviewCard({
                                                     isCurrent ? "text-indigo-600 dark:text-indigo-400" :
                                                         "text-zinc-400 dark:text-zinc-600"
                                             )}>
-                                                {stage.name}
+                                                {stage}
                                             </p>
                                         </div>
                                     );
@@ -262,4 +260,6 @@ export default function ProjectOverviewCard({
             </div>
         </motion.div>
     );
-}
+});
+
+export default ProjectOverviewCard;

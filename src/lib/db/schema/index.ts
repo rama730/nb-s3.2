@@ -27,6 +27,17 @@ export const profiles = pgTable('profiles', {
     messagePrivacy: text('message_privacy', { enum: ['everyone', 'connections'] }).default('connections'),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+    // Workspace dashboard layout customization (JSONB, NULL = default layout)
+    workspaceLayout: jsonb('workspace_layout').$type<{
+        version: number;
+        widgets: Array<{
+            widgetId: string;
+            col: number;
+            row: number;
+            colSpan: number;
+            rowSpan: number;
+        }>;
+    } | null>().default(null),
     // Pure Optimization: Denormalized counts for 1M+ Users Scalability
     connectionsCount: integer('connections_count').default(0).notNull(),
     projectsCount: integer('projects_count').default(0).notNull(),
@@ -76,6 +87,16 @@ export const connections = pgTable('connections', {
     pendingRequestsIdx: index('connections_pending_idx').on(t.status, t.createdAt),
 }))
 
+export const connectionSuggestionDismissals = pgTable('connection_suggestion_dismissals', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
+    dismissedProfileId: uuid('dismissed_profile_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+    userDismissedUniqueIdx: uniqueIndex('connection_suggestion_dismissals_user_profile_uidx').on(t.userId, t.dismissedProfileId),
+    userCreatedIdx: index('connection_suggestion_dismissals_user_created_idx').on(t.userId, t.createdAt),
+}))
+
 // ============================================================================
 // CONVERSATIONS TABLE (Moved up for Project reference)
 // ============================================================================
@@ -103,6 +124,8 @@ export const projects = pgTable('projects', {
     coverImage: text('cover_image'),
     category: text('category'),
     viewCount: integer('view_count').default(0),
+    followersCount: integer('followers_count').default(0).notNull(),
+    savesCount: integer('saves_count').default(0).notNull(),
     tags: jsonb('tags').$type<string[]>().default([]),
     skills: jsonb('skills').$type<string[]>().default([]),
     visibility: text('visibility', { enum: ['public', 'private', 'unlisted'] }).default('public'),
@@ -162,6 +185,7 @@ export const projectMembers = pgTable('project_members', {
     role: text('role', { enum: ['owner', 'admin', 'member', 'viewer'] }).default('member').notNull(),
     joinedAt: timestamp('joined_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
+    projectUserUnique: uniqueIndex('project_members_project_user_unique').on(t.projectId, t.userId),
     projectIdx: index('project_members_project_idx').on(t.projectId),
     userIdx: index('project_members_user_idx').on(t.userId),
 }))
@@ -196,6 +220,9 @@ export const roleApplications = pgTable('role_applications', {
     message: text('message'), // Application message from user
     conversationId: uuid('conversation_id'), // Link to message thread (nullable)
     status: text('status', { enum: ['pending', 'accepted', 'rejected'] }).default('pending').notNull(),
+    acceptedRoleTitle: text('accepted_role_title'),
+    decisionAt: timestamp('decision_at', { withTimezone: true }),
+    decisionBy: uuid('decision_by').references(() => profiles.id, { onDelete: 'set null' }),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
@@ -205,6 +232,8 @@ export const roleApplications = pgTable('role_applications', {
     creatorPendingIdx: index('role_applications_creator_pending_idx').on(t.creatorId, t.status),
     // O(1) cooldown check (project + applicant + updated_at)
     cooldownIdx: index('role_applications_cooldown_idx').on(t.projectId, t.applicantId, t.updatedAt),
+    // O(1) lookups for project-member role title enrichment.
+    acceptedProjectMemberIdx: index('role_applications_accepted_member_idx').on(t.projectId, t.applicantId, t.status, t.updatedAt),
     // Unique constraint: one active application per user per project
     uniqueAppIdx: uniqueIndex('role_applications_unique_idx').on(t.projectId, t.applicantId),
 }))
@@ -220,7 +249,7 @@ export const projectFollows = pgTable('project_follows', {
 }, (t) => ({
     projectIdx: index('project_follows_project_idx').on(t.projectId),
     userIdx: index('project_follows_user_idx').on(t.userId),
-    uniqueFollow: index('project_follows_unique_idx').on(t.projectId, t.userId),
+    uniqueFollow: uniqueIndex('project_follows_unique_idx').on(t.projectId, t.userId),
 }))
 
 // ============================================================================
@@ -233,7 +262,7 @@ export const savedProjects = pgTable('saved_projects', {
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
     userIdx: index('saved_projects_user_idx').on(t.userId),
-    uniqueSave: index('saved_projects_unique_idx').on(t.userId, t.projectId),
+    uniqueSave: uniqueIndex('saved_projects_unique_idx').on(t.userId, t.projectId),
 }))
 
 // ============================================================================
@@ -358,7 +387,7 @@ export const taskNodeLinks = pgTable('task_node_links', {
 }, (t) => ({
     taskIdx: index('task_node_links_task_idx').on(t.taskId),
     nodeIdx: index('task_node_links_node_idx').on(t.nodeId),
-    uniqueLink: index('task_node_links_unique_idx').on(t.taskId, t.nodeId),
+    uniqueLink: uniqueIndex('task_node_links_unique_idx').on(t.taskId, t.nodeId),
 }))
 
 // ============================================================================
@@ -475,6 +504,11 @@ export const roleApplicationsRelations = relations(roleApplications, ({ one }) =
         fields: [roleApplications.creatorId],
         references: [profiles.id],
         relationName: 'applicationCreator',
+    }),
+    decisionMaker: one(profiles, {
+        fields: [roleApplications.decisionBy],
+        references: [profiles.id],
+        relationName: 'applicationDecisionMaker',
     }),
 }))
 
@@ -651,6 +685,8 @@ export const conversationParticipants = pgTable('conversation_participants', {
     userId: uuid('user_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
     joinedAt: timestamp('joined_at', { withTimezone: true }).defaultNow().notNull(),
     lastReadAt: timestamp('last_read_at', { withTimezone: true }).defaultNow(),
+    lastReadMessageId: uuid('last_read_message_id'),
+    archivedAt: timestamp('archived_at', { withTimezone: true }),
     muted: boolean('muted').default(false),
     // Pure Optimization: Denormalized counts for O(1) badges (1M+ Users)
     unreadCount: integer('unread_count').default(0).notNull(),
@@ -661,6 +697,7 @@ export const conversationParticipants = pgTable('conversation_participants', {
     conversationIdx: index('conversation_participants_conversation_idx').on(t.conversationId),
     // Optimization: O(1) sorted list for "My Conversations" and "Global Badge"
     myConversationsIdx: index('conversation_participants_my_conversations_idx').on(t.userId, t.lastMessageAt),
+    activeIdx: index('conversation_participants_active_idx').on(t.userId, t.archivedAt, t.lastMessageAt),
 }))
 
 // ============================================================================
@@ -670,6 +707,8 @@ export const messages = pgTable('messages', {
     id: uuid('id').primaryKey().defaultRandom(),
     conversationId: uuid('conversation_id').notNull().references(() => conversations.id, { onDelete: 'cascade' }),
     senderId: uuid('sender_id').references(() => profiles.id, { onDelete: 'set null' }),
+    replyToMessageId: uuid('reply_to_message_id'),
+    clientMessageId: text('client_message_id'),
     content: text('content'),
     type: text('type', { enum: ['text', 'image', 'video', 'file', 'system'] }).default('text'),
     metadata: jsonb('metadata').$type<Record<string, unknown>>().default({}),
@@ -680,8 +719,18 @@ export const messages = pgTable('messages', {
     conversationCreatedIdx: index('messages_conversation_created_idx').on(t.conversationId, t.createdAt),
     // Optimization: GIN Index for fast full-text search (Messages Search Optimization)
     contentSearchIdx: index('messages_content_search_idx').using('gin', sql`to_tsvector('english', coalesce(${t.content}, ''))`),
+    contentTrgmSearchIdx: index('messages_content_trgm_idx').using('gin', sql`${t.content} gin_trgm_ops`),
     // Optimization: Sender Index for lookups
     senderIdx: index('messages_sender_idx').on(t.senderId),
+    senderCreatedIdx: index('messages_sender_created_idx').on(t.senderId, t.createdAt),
+    replyIdx: index('messages_reply_idx').on(t.replyToMessageId),
+    conversationReplyCreatedIdx: index('messages_conversation_reply_created_idx').on(t.conversationId, t.replyToMessageId, t.createdAt),
+    idempotencyUnique: uniqueIndex('messages_conversation_sender_client_unique').on(t.conversationId, t.senderId, t.clientMessageId),
+    replyToFk: foreignKey({
+        columns: [t.replyToMessageId],
+        foreignColumns: [t.id],
+        name: 'messages_reply_to_message_id_fkey',
+    }).onDelete('set null'),
 }))
 
 // ============================================================================
@@ -691,6 +740,7 @@ export const messageAttachments = pgTable('message_attachments', {
     id: uuid('id').primaryKey().defaultRandom(),
     messageId: uuid('message_id').notNull().references(() => messages.id, { onDelete: 'cascade' }),
     type: text('type', { enum: ['image', 'video', 'file'] }).notNull(),
+    storagePath: text('storage_path'),
     url: text('url').notNull(),
     filename: text('filename').notNull(),
     sizeBytes: integer('size_bytes'),
@@ -702,6 +752,61 @@ export const messageAttachments = pgTable('message_attachments', {
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
     messageIdx: index('message_attachments_message_idx').on(t.messageId),
+}))
+
+// ============================================================================
+// MESSAGE USER HIDDEN STATE (Delete-for-me support)
+// ============================================================================
+export const messageHiddenForUsers = pgTable('message_hidden_for_users', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    messageId: uuid('message_id').notNull().references(() => messages.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
+    hiddenAt: timestamp('hidden_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+    messageUserUnique: uniqueIndex('message_hidden_for_users_unique').on(t.messageId, t.userId),
+    userIdx: index('message_hidden_for_users_user_idx').on(t.userId, t.hiddenAt),
+    messageIdx: index('message_hidden_for_users_message_idx').on(t.messageId),
+}))
+
+// ============================================================================
+// MESSAGE EDIT LOGS (Audit trail)
+// ============================================================================
+export const messageEditLogs = pgTable('message_edit_logs', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    messageId: uuid('message_id').notNull().references(() => messages.id, { onDelete: 'cascade' }),
+    editorId: uuid('editor_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
+    previousContent: text('previous_content'),
+    nextContent: text('next_content'),
+    editedAt: timestamp('edited_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+    messageEditedIdx: index('message_edit_logs_message_idx').on(t.messageId, t.editedAt),
+    editorIdx: index('message_edit_logs_editor_idx').on(t.editorId, t.editedAt),
+}))
+
+// ============================================================================
+// ATTACHMENT UPLOAD SESSIONS (Reliability / Resume-Aware Tracking)
+// ============================================================================
+export const attachmentUploads = pgTable('attachment_uploads', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
+    clientUploadId: text('client_upload_id').notNull(),
+    conversationId: uuid('conversation_id').references(() => conversations.id, { onDelete: 'set null' }),
+    storagePath: text('storage_path'),
+    filename: text('filename').notNull(),
+    mimeType: text('mime_type'),
+    sizeBytes: integer('size_bytes'),
+    status: text('status', {
+        enum: ['queued', 'uploading', 'uploaded', 'committed', 'failed', 'canceled'],
+    }).default('queued').notNull(),
+    error: text('error'),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
+}, (t) => ({
+    userClientUnique: uniqueIndex('attachment_uploads_user_client_unique').on(t.userId, t.clientUploadId),
+    userStatusIdx: index('attachment_uploads_user_status_idx').on(t.userId, t.status, t.updatedAt),
+    storagePathIdx: index('attachment_uploads_storage_path_idx').on(t.storagePath),
+    conversationIdx: index('attachment_uploads_conversation_idx').on(t.conversationId, t.updatedAt),
 }))
 
 // ============================================================================
@@ -749,6 +854,14 @@ export const messagesRelations = relations(messages, ({ one, many }) => ({
         fields: [messages.senderId],
         references: [profiles.id],
     }),
+    replyTo: one(messages, {
+        fields: [messages.replyToMessageId],
+        references: [messages.id],
+        relationName: 'message_reply_reference',
+    }),
+    replies: many(messages, {
+        relationName: 'message_reply_reference',
+    }),
     attachments: many(messageAttachments),
 }))
 
@@ -766,6 +879,8 @@ export type Profile = typeof profiles.$inferSelect
 export type NewProfile = typeof profiles.$inferInsert
 export type Connection = typeof connections.$inferSelect
 export type NewConnection = typeof connections.$inferInsert
+export type ConnectionSuggestionDismissal = typeof connectionSuggestionDismissals.$inferSelect
+export type NewConnectionSuggestionDismissal = typeof connectionSuggestionDismissals.$inferInsert
 export type Project = typeof projects.$inferSelect
 export type NewProject = typeof projects.$inferInsert
 export type ProjectMember = typeof projectMembers.$inferSelect
@@ -784,6 +899,12 @@ export type Message = typeof messages.$inferSelect
 export type NewMessage = typeof messages.$inferInsert
 export type MessageAttachment = typeof messageAttachments.$inferSelect
 export type NewMessageAttachment = typeof messageAttachments.$inferInsert
+export type MessageHiddenForUser = typeof messageHiddenForUsers.$inferSelect
+export type NewMessageHiddenForUser = typeof messageHiddenForUsers.$inferInsert
+export type MessageEditLog = typeof messageEditLogs.$inferSelect
+export type NewMessageEditLog = typeof messageEditLogs.$inferInsert
+export type AttachmentUpload = typeof attachmentUploads.$inferSelect
+export type NewAttachmentUpload = typeof attachmentUploads.$inferInsert
 
 export type TaskSubtask = typeof taskSubtasks.$inferSelect
 export type NewTaskSubtask = typeof taskSubtasks.$inferInsert
@@ -792,4 +913,3 @@ export type ProjectNode = typeof projectNodes.$inferSelect
 export type NewProjectNode = typeof projectNodes.$inferInsert
 export type TaskNodeLink = typeof taskNodeLinks.$inferSelect
 export type NewTaskNodeLink = typeof taskNodeLinks.$inferInsert
-

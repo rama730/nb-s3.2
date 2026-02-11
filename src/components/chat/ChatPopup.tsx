@@ -3,13 +3,21 @@
 import { useMemo } from 'react';
 import { usePathname } from 'next/navigation';
 import { useChatStore } from '@/stores/chatStore';
+import { setConversationArchived, setConversationMuted } from '@/app/actions/messaging';
 import { MessageThread } from './MessageThread';
 import { MessageInput } from './MessageInput';
 import { ConversationList } from './ConversationList';
 import { ApplicationList } from './ApplicationList';
 import { ProjectGroupList } from './ProjectGroupList';
-import { X, Minus, MessageSquare, ArrowLeft, PenSquare } from 'lucide-react';
+import { X, Minus, MessageSquare, ArrowLeft, MoreVertical, Archive, Bell, BellOff } from 'lucide-react';
 import { useState } from 'react';
+import { toast } from 'sonner';
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 
 // ============================================================================
 // CHAT POPUP
@@ -21,6 +29,7 @@ export function ChatPopup() {
 
     // State for Inbox Zero Toggle (Must be at top level)
     const [activeTab, setActiveTab] = useState<'chats' | 'applications' | 'projects'>('chats');
+    const [actionLoading, setActionLoading] = useState(false);
 
     // Select primitive values and stable references
     const isPopupOpen = useChatStore(state => state.isPopupOpen);
@@ -71,6 +80,43 @@ export function ChatPopup() {
 
     // Get other participant for DM
     const otherParticipant = activeConversation?.participants[0];
+
+    const handleToggleMuteConversation = async () => {
+        if (!activeConversation) return;
+        setActionLoading(true);
+        try {
+            const result = await setConversationMuted(activeConversation.id, !activeConversation.muted);
+            if (!result.success) {
+                toast.error(result.error || 'Failed to update mute state');
+                return;
+            }
+            await useChatStore.getState().refreshConversations();
+            await useChatStore.getState().openConversation(activeConversation.id);
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    const handleToggleArchiveConversation = async () => {
+        if (!activeConversation) return;
+        setActionLoading(true);
+        try {
+            const nextArchived = activeConversation.lifecycleState !== 'archived';
+            const result = await setConversationArchived(activeConversation.id, nextArchived);
+            if (!result.success) {
+                toast.error(result.error || 'Failed to update conversation');
+                return;
+            }
+            await useChatStore.getState().refreshConversations();
+            if (nextArchived) {
+                useChatStore.getState().closeConversation();
+            } else {
+                await useChatStore.getState().openConversation(activeConversation.id);
+            }
+        } finally {
+            setActionLoading(false);
+        }
+    };
 
     return (
         <div className="fixed bottom-6 right-6 z-50 w-96 h-[520px] bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl border border-zinc-200 dark:border-zinc-800 flex flex-col overflow-hidden">
@@ -123,6 +169,39 @@ export function ChatPopup() {
                         </div>
                     )}
                     <div className="flex items-center gap-1">
+                        {activeConversationId && (
+                            <DropdownMenu modal={false}>
+                                <DropdownMenuTrigger asChild>
+                                    <button
+                                        type="button"
+                                        disabled={actionLoading}
+                                        className="p-1.5 hover:bg-white/20 rounded-lg transition-colors"
+                                        aria-label="Conversation actions"
+                                    >
+                                        <MoreVertical className="w-4 h-4" />
+                                    </button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent
+                                    align="end"
+                                    className="data-[state=open]:animate-none data-[state=closed]:animate-none"
+                                >
+                                    <DropdownMenuItem
+                                        onClick={handleToggleMuteConversation}
+                                        disabled={actionLoading}
+                                    >
+                                        {activeConversation?.muted ? <Bell className="w-4 h-4" /> : <BellOff className="w-4 h-4" />}
+                                        {activeConversation?.muted ? 'Unmute conversation' : 'Mute conversation'}
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem
+                                        onClick={handleToggleArchiveConversation}
+                                        disabled={actionLoading}
+                                    >
+                                        <Archive className="w-4 h-4" />
+                                        {activeConversation?.lifecycleState === 'archived' ? 'Unarchive conversation' : 'Archive conversation'}
+                                    </DropdownMenuItem>
+                                </DropdownMenuContent>
+                            </DropdownMenu>
+                        )}
                         <button
                             onClick={minimizePopup}
                             className="p-1.5 hover:bg-white/20 rounded-lg transition-colors"

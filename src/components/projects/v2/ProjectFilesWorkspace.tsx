@@ -130,7 +130,7 @@ export default function ProjectFilesWorkspace({
   const overlayStartedAtRef = useRef<number | null>(showOverlay ? Date.now() : null);
   const pollDelayRef = useRef<number>(3000);
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [forceUpdate, setForceUpdate] = useState(0);
+  
 
   // Poll for sync status if not ready
   useEffect(() => {
@@ -260,12 +260,7 @@ export default function ProjectFilesWorkspace({
     setRetryLoading(true);
     pollDelayRef.current = 3000;
     try {
-      // Fetch fresh token from client session to ensure we have access
-      const supabase = createClient();
-      const { data: { session } } = await supabase.auth.getSession();
-      const token = session?.provider_token;
-
-      const res = await retryGithubImportAction(projectId, token);
+      const res = await retryGithubImportAction(projectId);
       if (!res.success) {
         showToast(res.error || "Retry failed", "error");
         return;
@@ -482,6 +477,27 @@ export default function ProjectFilesWorkspace({
     return () => clearTimeout(t);
   }, [ensureNodeMetadata, findOpen, findQuery, projectId]);
 
+  const signedUrlCacheRef = useRef<Map<string, { url: string; expiresAt: number }>>(new Map());
+
+  const ensureSignedUrlForNode = useCallback(
+    async (node: ProjectNode) => {
+      if (!node?.id) return null;
+
+      const cached = signedUrlCacheRef.current.get(node.id);
+      const now = Date.now();
+      if (cached && cached.expiresAt > now + 5_000) return cached.url;
+
+      const ttlSeconds = 300;
+      const res = (await getProjectFileSignedUrl(projectId, node.id, ttlSeconds)) as {
+        url: string;
+        expiresAt: number;
+      };
+      signedUrlCacheRef.current.set(node.id, { url: res.url, expiresAt: res.expiresAt });
+      return res.url;
+    },
+    [projectId]
+  );
+
   const loadFileContent = useCallback(
     async (node: ProjectNode) => {
       if (!node?.id || !node.s3Key) return;
@@ -532,7 +548,7 @@ export default function ProjectFilesWorkspace({
             isLoading: false,
           },
         }));
-        if (cached.content || cached.isDirty) {
+        if (cached.content !== undefined || cached.isDirty) {
              opsInProgressRef.current.delete(node.id);
              return; 
         }
@@ -581,27 +597,6 @@ export default function ProjectFilesWorkspace({
       }
     },
     [ensureSignedUrlForNode, projectId, setFileState] // Removed "ws" dependency (implicit or explicit)
-  );
-
-  const signedUrlCacheRef = useRef<Map<string, { url: string; expiresAt: number }>>(new Map());
-
-  const ensureSignedUrlForNode = useCallback(
-    async (node: ProjectNode) => {
-      if (!node?.id) return null;
-
-      const cached = signedUrlCacheRef.current.get(node.id);
-      const now = Date.now();
-      if (cached && cached.expiresAt > now + 5_000) return cached.url;
-
-      const ttlSeconds = 300;
-      const res = (await getProjectFileSignedUrl(projectId, node.id, ttlSeconds)) as {
-        url: string;
-        expiresAt: number;
-      };
-      signedUrlCacheRef.current.set(node.id, { url: res.url, expiresAt: res.expiresAt });
-      return res.url;
-    },
-    [projectId]
   );
 
   const acquireLockForNode = useCallback(

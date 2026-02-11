@@ -4,7 +4,6 @@ import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useEffect, useState, Suspense, useMemo, useCallback } from "react";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
-import { useQueryClient } from "@tanstack/react-query";
 import { Menu, LayoutGrid, Users, Settings, MessageSquare } from "lucide-react";
 import Logo from "./Logo";
 import NavLink from "./NavLink";
@@ -16,20 +15,14 @@ const CommandPalette = dynamic(() => import("./CommandPalette"), { ssr: false })
 
 import GlobalSearch from "./GlobalSearch";
 import WorkspaceIndicator from "./WorkspaceIndicator";
-import NotificationPreview from "./NotificationPreview"; // Need to create this one too! Checked list, missed it.
+import NotificationPreview from "./NotificationPreview";
 import { ProfileAvatar } from "./ProfileMenu";
 import { useScrollShadow } from "@/hooks/useScrollShadow";
 
-// Mocks & Adapters
 import { useAuth } from "@/lib/hooks/use-auth";
-import { useProfile } from "@/hooks/useProfile";
-import {
-    useNotifications,
-    useMessageNotifications,
-    usePeopleNotifications,
-    useWorkspace,
-    logger
-} from "@/hooks/use-mocks"; // Keeping minimal mocks for now
+import { useNotifications } from "@/hooks/useNotifications";
+import { useMessageNotifications } from "@/hooks/useMessageNotifications";
+import { usePeopleNotifications } from "@/hooks/usePeopleNotifications";
 
 import { ROUTES } from "@/constants/routes";
 import MessageIndicator from "./MessageIndicator";
@@ -37,12 +30,10 @@ import MessageIndicator from "./MessageIndicator";
 export default function TopNav() {
     const pathname = usePathname();
     const router = useRouter();
-    const supabase = createSupabaseBrowserClient();
-    const { user, isAuthenticated: isSignedIn, isLoading: authLoading, profile } = useAuth(); // Profile now comes from context
-    const queryClient = useQueryClient();
+    const supabase = useMemo(() => createSupabaseBrowserClient(), []);
+    const { isAuthenticated: isSignedIn, isLoading: authLoading, profile } = useAuth();
 
     const { unreadCount: unreadNotifications } = useNotifications();
-    const { isOpen, setOpen, setExpanded } = useWorkspace();
     const { hasUnread: hasUnreadMessages } = useMessageNotifications();
     const { totalPending } = usePeopleNotifications();
 
@@ -51,15 +42,6 @@ export default function TopNav() {
     useEffect(() => {
         setMounted(true);
     }, []);
-
-    const handleWorkspaceClick = useCallback(() => {
-        if (isOpen) {
-            setOpen(false);
-        } else {
-            setOpen(true);
-            setExpanded(true);
-        }
-    }, [isOpen, setOpen, setExpanded]);
 
     const [showMobileMenu, setShowMobileMenu] = useState(false);
     const [showCommandPalette, setShowCommandPalette] = useState(false);
@@ -120,7 +102,7 @@ export default function TopNav() {
             router.push(ROUTES.LOGIN);
             router.refresh();
         } catch (error) {
-            logger.error("Error signing out", { error });
+            console.error("Error signing out", { error });
         }
     }, [supabase, router]);
 
@@ -152,7 +134,7 @@ export default function TopNav() {
                     {mounted && isSignedIn && (
                         <>
                             <div className="hidden md:block h-6 w-px bg-gradient-to-b from-transparent via-zinc-200 dark:via-zinc-800 to-transparent" />
-                            <WorkspaceIndicator onClick={handleWorkspaceClick} />
+                            <WorkspaceIndicator />
                         </>
                     )}
                 </div>

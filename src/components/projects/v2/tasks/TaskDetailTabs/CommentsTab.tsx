@@ -21,7 +21,7 @@ export default function CommentsTab({
     projectId, 
     currentUserId
 }: CommentsTabProps) {
-    const { comments, isLoading, isLiked } = useTaskComments(taskId, currentUserId);
+    const { comments, isLoading, isLiked, refreshComments } = useTaskComments(taskId, currentUserId);
     const [newComment, setNewComment] = useState("");
     const [isAdding, setIsAdding] = useState(false);
 
@@ -45,7 +45,10 @@ export default function CommentsTab({
         if (!isOwnerOrMember) return;
         
         try {
-            await toggleCommentLikeAction(commentId, projectId);
+            const result = await toggleCommentLikeAction(commentId, projectId);
+            if (result.success) {
+                await refreshComments();
+            }
         } catch (error) {
             console.error("Error toggling like:", error);
         }

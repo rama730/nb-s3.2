@@ -1,5 +1,5 @@
 import { db } from '@/lib/db';
-import { projects, projectFollows, projectOpenRoles, profiles, projectMembers } from '@/lib/db/schema';
+import { projects, projectFollows, projectOpenRoles, profiles, projectMembers, savedProjects } from '@/lib/db/schema';
 import { eq, desc, sql } from 'drizzle-orm';
 import { cache } from 'react';
 
@@ -30,12 +30,24 @@ export const getProjectDetails = async (rawProjectId: string) => {
         }
 
         // Parallelize fetching of relations with LIMITS
-        const [followersCount, openRoles, members] = await Promise.all([
-            // Followers Count
-            db.select({ count: sql<number>`count(*)` })
-                .from(projectFollows)
-                .where(eq(projectFollows.projectId, project.id))
-                .then(res => Number(res[0]?.count || 0)),
+        const includeFollowersCount = (project as any).followersCount == null;
+        const includeSavesCount = (project as any).savesCount == null;
+
+        const [followersCount, savesCount, openRoles, members] = await Promise.all([
+            // Followers Count (fallback for older DBs)
+            includeFollowersCount
+                ? db.select({ count: sql<number>`count(*)` })
+                    .from(projectFollows)
+                    .where(eq(projectFollows.projectId, project.id))
+                    .then(res => Number(res[0]?.count || 0))
+                : Promise.resolve(Number((project as any).followersCount || 0)),
+            // Saves Count (fallback for older DBs)
+            includeSavesCount
+                ? db.select({ count: sql<number>`count(*)` })
+                    .from(savedProjects)
+                    .where(eq(savedProjects.projectId, project.id))
+                    .then(res => Number(res[0]?.count || 0))
+                : Promise.resolve(Number((project as any).savesCount || 0)),
 
             // Open Roles (usually small number, safe to fetch all)
             db.select().from(projectOpenRoles).where(eq(projectOpenRoles.projectId, project.id)),
@@ -66,6 +78,7 @@ export const getProjectDetails = async (rawProjectId: string) => {
 
             // Followers
             followers_count: followersCount,
+            saves_count: savesCount,
 
             // Roles
             project_open_roles: openRoles.map(r => ({

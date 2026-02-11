@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import Button from "@/components/ui-custom/Button";
 import Input from "@/components/ui-custom/Input";
 import { Label } from "@/components/ui-custom/Label";
@@ -8,7 +9,9 @@ import { Loader2, Camera } from "lucide-react";
 import { useToast } from "@/components/ui-custom/Toast";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import Image from "next/image";
-
+import { updateProfileAction } from "@/app/actions/profile";
+import { useAuth } from "@/lib/hooks/use-auth";
+import { useQueryClient } from "@tanstack/react-query";
 
 interface ProfileFormProps {
     initialData: {
@@ -25,7 +28,10 @@ interface ProfileFormProps {
 
 export function ProfileForm({ initialData, onOptimisticUpdate }: ProfileFormProps) {
     const { showToast } = useToast();
+    const router = useRouter();
+    const queryClient = useQueryClient();
     const supabase = createSupabaseBrowserClient();
+    const { refreshProfile } = useAuth();
 
     const [saving, setSaving] = useState(false);
     const [avatarUploading, setAvatarUploading] = useState(false);
@@ -82,53 +88,48 @@ export function ProfileForm({ initialData, onOptimisticUpdate }: ProfileFormProp
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
+        if (saving) return;
         setSaving(true);
 
-        // 1. Optimistic Update (Instant Feedback)
-        if (onOptimisticUpdate) {
-            // We fire and forget the optimistic update to UI, 
-            // but await it to ensure local DB write happens before we might navigate? 
-            // Actually, we stay on page.
-            await onOptimisticUpdate({
-                full_name: formData.full_name,
-                username: formData.username,
-                bio: formData.bio,
-                location: formData.location,
-                website: formData.website,
-                avatar_url: formData.avatar_url,
-                // updated_at will be handled by the hook/DB
-            });
-            showToast("Profile updated", "success"); // Instant success!
-            setSaving(false); // Stop spinner immediately
-        }
-
-        // 2. Background Sync (Server Source of Truth)
-        // We do this *after* or *parallel* to giving control back to user.
-        // If we want to be truly safe, we'd handle error reversion, but for MVP speed is key.
-
         try {
-            const { error } = await supabase
-                .from("profiles")
-                .update({
+            if (onOptimisticUpdate) {
+                await onOptimisticUpdate({
                     full_name: formData.full_name,
                     username: formData.username,
                     bio: formData.bio,
                     location: formData.location,
                     website: formData.website,
                     avatar_url: formData.avatar_url,
-                    updated_at: new Date().toISOString(),
-                })
-                .eq("id", initialData.id);
-
-            if (error) {
-                // Silent fail or toast error?
-                // If background sync fails, RxDB replication *might* catch it later, 
-                // but direct Supabase call here ensures we pushed.
-                console.error("Background sync failed", error);
-                // We could show toast here if we want to warn user.
+                });
             }
+
+            const result = await updateProfileAction({
+                fullName: formData.full_name || "",
+                username: formData.username || "",
+                bio: formData.bio || "",
+                location: formData.location || "",
+                website: formData.website || "",
+                avatarUrl: formData.avatar_url || "",
+            });
+
+            if (!result.success) {
+                showToast(result.error || "Failed to update profile", "error");
+                return;
+            }
+
+            await Promise.allSettled([
+                refreshProfile(),
+                queryClient.invalidateQueries({ queryKey: ["profile"] }),
+                queryClient.invalidateQueries({ queryKey: ["user"] }),
+            ]);
+
+            showToast("Profile updated", "success");
+            router.refresh();
         } catch (error) {
-            console.error("Error updating profile (background):", error);
+            console.error("Error updating profile:", error);
+            showToast("Failed to update profile", "error");
+        } finally {
+            setSaving(false);
         }
     };
 

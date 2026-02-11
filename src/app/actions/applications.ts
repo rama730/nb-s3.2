@@ -13,10 +13,9 @@ import {
     messages,
     profiles
 } from '@/lib/db/schema';
-import { eq, and, sql, or, inArray } from 'drizzle-orm';
+import { eq, and, sql, or, inArray, desc } from 'drizzle-orm';
 import { createClient } from '@/lib/supabase/server';
 import { revalidatePath } from 'next/cache';
-import { ensureProjectGroupExists } from './project';
 
 // ============================================================================
 // TYPES
@@ -37,6 +36,8 @@ interface ApplicationStatus {
     updatedAt?: Date;
 }
 
+type ApplicationDecisionStatus = 'accepted' | 'rejected';
+
 // ============================================================================
 // COOLDOWN HELPER (24 hours)
 // ============================================================================
@@ -54,6 +55,127 @@ function calculateCooldown(updatedAt: Date): { canApply: boolean; waitTime?: str
     const minutes = Math.floor((remaining % (60 * 60 * 1000)) / (60 * 1000));
 
     return { canApply: false, waitTime: `${hours}h ${minutes}m` };
+}
+
+function isMissingApplicationDecisionColumn(error: unknown): boolean {
+    const msg = error instanceof Error ? error.message : String(error);
+    const lowered = msg.toLowerCase();
+    return (
+        lowered.includes('accepted_role_title') ||
+        lowered.includes('decision_at') ||
+        lowered.includes('decision_by')
+    ) && lowered.includes('column');
+}
+
+function sortConnectionPair(a: string, b: string): [string, string] {
+    return a < b ? [a, b] : [b, a];
+}
+
+async function applyConnectionsCountDelta(tx: any, userIds: string[], delta: number) {
+    if (userIds.length === 0 || delta === 0) return;
+    await tx
+        .update(profiles)
+        .set({
+            connectionsCount: sql`GREATEST(0, ${profiles.connectionsCount} + ${delta})`,
+            updatedAt: new Date(),
+        })
+        .where(inArray(profiles.id, userIds));
+}
+
+async function ensureAcceptedConnectionInternal(tx: any, userA: string, userB: string) {
+    const [low, high] = sortConnectionPair(userA, userB);
+    await tx.execute(sql`
+        SELECT pg_advisory_xact_lock(
+            hashtext(CAST(${low} AS text)),
+            hashtext(CAST(${high} AS text))
+        )
+    `);
+
+    const existing = await tx
+        .select({
+            id: connections.id,
+            status: connections.status,
+        })
+        .from(connections)
+        .where(
+            or(
+                and(eq(connections.requesterId, userA), eq(connections.addresseeId, userB)),
+                and(eq(connections.requesterId, userB), eq(connections.addresseeId, userA))
+            )
+        )
+        .orderBy(desc(connections.updatedAt))
+        .limit(1);
+
+    if (existing.length > 0) {
+        const row = existing[0];
+        if (row.status === 'accepted') return;
+        if (row.status === 'blocked') return;
+
+        await tx
+            .update(connections)
+            .set({ status: 'accepted', updatedAt: new Date() })
+            .where(eq(connections.id, row.id));
+
+        await applyConnectionsCountDelta(tx, [userA, userB], 1);
+        return;
+    }
+
+    await tx.insert(connections).values({
+        requesterId: userA,
+        addresseeId: userB,
+        status: 'accepted',
+    });
+
+    await applyConnectionsCountDelta(tx, [userA, userB], 1);
+}
+
+async function ensureProjectGroupConversationIdInternal(
+    tx: any,
+    projectId: string,
+    ownerId: string
+): Promise<string> {
+    const locked = await tx.execute(sql`
+        SELECT conversation_id
+        FROM ${projects}
+        WHERE id = ${projectId}
+        FOR UPDATE
+    `);
+    const row = Array.from(locked)[0] as { conversation_id: string | null } | undefined;
+    if (row?.conversation_id) {
+        return row.conversation_id;
+    }
+
+    const [conversation] = await tx
+        .insert(conversations)
+        .values({ type: 'project_group' })
+        .returning({ id: conversations.id });
+
+    await tx
+        .update(projects)
+        .set({ conversationId: conversation.id, updatedAt: new Date() })
+        .where(eq(projects.id, projectId));
+
+    const members = await tx
+        .select({ userId: projectMembers.userId })
+        .from(projectMembers)
+        .where(eq(projectMembers.projectId, projectId));
+
+    const participantIds = new Set<string>([ownerId]);
+    members.forEach((member: { userId: string }) => participantIds.add(member.userId));
+
+    await tx
+        .insert(conversationParticipants)
+        .values(
+            Array.from(participantIds).map((userId) => ({
+                conversationId: conversation.id,
+                userId,
+            }))
+        )
+        .onConflictDoNothing({
+            target: [conversationParticipants.conversationId, conversationParticipants.userId],
+        });
+
+    return conversation.id;
 }
 
 // ============================================================================
@@ -214,7 +336,8 @@ async function sendApplicationStatusUpdateInternal(
     reason?: string
 ): Promise<void> {
     const statusText = status === 'accepted' ? 'Accepted' : 'Not Accepted';
-    let messageText = `Application ${statusText}`; // Short text for system message summary
+    const messageText = `Application ${statusText}`; // Short text for system message summary
+    const decisionAt = new Date().toISOString();
 
     // We can put detailed info in metadata for the UI if needed,
     // but the system message should be clean "Timeline Divider" style.
@@ -227,12 +350,15 @@ async function sendApplicationStatusUpdateInternal(
         metadata: {
             kind: 'application_update',
             isApplicationUpdate: true,
+            eventVersion: 1,
             applicationId,
             projectId,
             roleId,
             projectTitle,
             roleTitle,
             status,
+            decisionAt,
+            decisionBy: creatorId,
             reason,
             customMessage
         }
@@ -243,6 +369,47 @@ async function sendApplicationStatusUpdateInternal(
         .update(conversations)
         .set({ updatedAt: new Date() })
         .where(eq(conversations.id, conversationId));
+}
+
+async function transitionApplicationDecisionInternal(
+    tx: any,
+    params: {
+        applicationId: string;
+        status: ApplicationDecisionStatus;
+        decisionBy: string;
+        acceptedRoleTitle?: string | null;
+    }
+) {
+    const { applicationId, status, decisionBy, acceptedRoleTitle } = params;
+    const now = new Date();
+
+    const decisionSetWithMeta = {
+        status,
+        updatedAt: now,
+        decisionAt: now,
+        decisionBy,
+        acceptedRoleTitle: status === 'accepted' ? acceptedRoleTitle || null : null,
+    };
+
+    try {
+        const transitioned = await tx
+            .update(roleApplications)
+            .set(decisionSetWithMeta)
+            .where(and(eq(roleApplications.id, applicationId), eq(roleApplications.status, 'pending')))
+            .returning({ id: roleApplications.id });
+        return transitioned.length > 0;
+    } catch (error) {
+        if (!isMissingApplicationDecisionColumn(error)) throw error;
+        const transitioned = await tx
+            .update(roleApplications)
+            .set({
+                status,
+                updatedAt: now,
+            })
+            .where(and(eq(roleApplications.id, applicationId), eq(roleApplications.status, 'pending')))
+            .returning({ id: roleApplications.id });
+        return transitioned.length > 0;
+    }
 }
 
 // ============================================================================
@@ -323,7 +490,10 @@ export async function applyToRoleAction(
                 columns: { id: true, ownerId: true, slug: true, title: true }
             }),
             db.query.projectOpenRoles.findFirst({
-                where: eq(projectOpenRoles.id, roleId),
+                where: and(
+                    eq(projectOpenRoles.id, roleId),
+                    eq(projectOpenRoles.projectId, projectId)
+                ),
                 columns: { id: true, role: true, title: true, count: true, filled: true }
             }),
             db.query.projectMembers.findFirst({
@@ -479,7 +649,7 @@ export async function acceptApplicationAction(
             with: {
                 // OPTIMIZATION: Include conversationId to avoid N+1 query in transaction
                 project: { columns: { id: true, title: true, slug: true, ownerId: true, conversationId: true } },
-                role: { columns: { id: true, role: true, title: true, filled: true, count: true } }
+                role: { columns: { id: true, role: true, title: true, filled: true, count: true, projectId: true } }
             }
         });
 
@@ -491,8 +661,15 @@ export async function acceptApplicationAction(
             return { success: false, error: 'Only the project owner can accept applications' };
         }
 
-        if (application.status !== 'pending') {
-            return { success: false, error: 'This application has already been processed' };
+        if (application.status === 'accepted') {
+            return { success: true };
+        }
+        if (application.status === 'rejected') {
+            return { success: false, error: 'This application has already been rejected' };
+        }
+
+        if (!application.role || application.role.projectId !== application.projectId) {
+            return { success: false, error: 'Invalid application role mapping' };
         }
 
         // Check if role is still available
@@ -502,68 +679,102 @@ export async function acceptApplicationAction(
 
         // Transaction: accept app, add member, increment filled, auto-connect
         await db.transaction(async (tx) => {
-            // 1. Update application status
-            await tx.update(roleApplications)
-                .set({ status: 'accepted', updatedAt: new Date() })
-                .where(eq(roleApplications.id, applicationId));
+            // 1. Transition pending -> accepted atomically (prevents double processing/races).
+            const roleTitleForMember =
+                application.role?.title || application.role?.role || 'Team Member';
 
-            // 2. Add user as project member (use 'member' role for team membership)
-            await tx.insert(projectMembers)
-                .values({
-                    projectId: application.projectId,
-                    userId: application.applicantId,
-                    role: 'member' // Member role for application-based joins
-                })
-                .onConflictDoNothing();
-
-            // 3. Increment filled count on role
-            await tx.update(projectOpenRoles)
-                .set({
-                    filled: sql`${projectOpenRoles.filled} + 1`,
-                    updatedAt: new Date()
-                })
-                .where(eq(projectOpenRoles.id, application.roleId));
-
-            // 3.5 Add new member to Project Group Conversation (Data Fencing)
-            // OPTIMIZED: Use pre-fetched conversationId (no extra query)
-            if (application.project?.conversationId) {
-                await tx.insert(conversationParticipants)
-                    .values({
-                        conversationId: application.project.conversationId,
-                        userId: application.applicantId,
-                    })
-                    .onConflictDoNothing();
-            }
-
-            // 4. Auto-connect users (if not already connected)
-            const existingConnection = await tx.query.connections.findFirst({
-                where: sql`
-                    (${connections.requesterId} = ${user.id} AND ${connections.addresseeId} = ${application.applicantId})
-                    OR 
-                    (${connections.requesterId} = ${application.applicantId} AND ${connections.addresseeId} = ${user.id})
-                `
+            const transitioned = await transitionApplicationDecisionInternal(tx, {
+                applicationId,
+                status: 'accepted',
+                decisionBy: user.id,
+                acceptedRoleTitle: roleTitleForMember,
             });
 
-            if (!existingConnection) {
-                await tx.insert(connections)
-                    .values({
-                        requesterId: user.id,
-                        addresseeId: application.applicantId,
-                        status: 'accepted'
-                    })
-                    .onConflictDoNothing();
-            } else if (existingConnection.status !== 'accepted') {
-                await tx.update(connections)
-                    .set({ status: 'accepted', updatedAt: new Date() })
-                    .where(eq(connections.id, existingConnection.id));
+            if (!transitioned) {
+                throw new Error('Application already processed');
             }
+
+            // 2. Add user as project member (use 'member' role for team membership)
+            const existingMember = await tx.query.projectMembers.findFirst({
+                where: and(
+                    eq(projectMembers.projectId, application.projectId),
+                    eq(projectMembers.userId, application.applicantId)
+                ),
+                columns: { id: true }
+            });
+
+            if (!existingMember) {
+                // Lock role row and enforce capacity at commit time.
+                const roleCapacity = await tx
+                    .select({
+                        id: projectOpenRoles.id,
+                        filled: projectOpenRoles.filled,
+                        count: projectOpenRoles.count,
+                    })
+                    .from(projectOpenRoles)
+                    .where(eq(projectOpenRoles.id, application.roleId))
+                    .for('update')
+                    .limit(1);
+
+                const role = roleCapacity[0];
+                if (!role || role.filled >= role.count) {
+                    throw new Error('Role is full');
+                }
+
+                await tx.insert(projectMembers)
+                    .values({
+                        projectId: application.projectId,
+                        userId: application.applicantId,
+                        role: 'member' // Member role for application-based joins
+                    });
+
+                // 3. Increment filled count only when membership was actually created.
+                await tx.update(projectOpenRoles)
+                    .set({
+                        filled: sql`${projectOpenRoles.filled} + 1`,
+                        updatedAt: new Date()
+                    })
+                    .where(eq(projectOpenRoles.id, application.roleId));
+            }
+
+            // 3.5 Deterministic project-group enrollment in this transaction.
+            const projectConversationId = await ensureProjectGroupConversationIdInternal(
+                tx,
+                application.projectId,
+                application.project.ownerId
+            );
+            await tx
+                .insert(conversationParticipants)
+                .values([
+                    { conversationId: projectConversationId, userId: application.project.ownerId },
+                    { conversationId: projectConversationId, userId: application.applicantId },
+                ])
+                .onConflictDoNothing({
+                    target: [conversationParticipants.conversationId, conversationParticipants.userId],
+                });
+
+            // 4. Auto-connect users with pair-locking and count consistency.
+            // Never force-convert blocked relationships.
+            await ensureAcceptedConnectionInternal(tx, user.id, application.applicantId);
 
             // Send status update message to chat if conversation exists
             if (application.conversationId) {
                 // 1. UPDATE ORIGINAL APPLICATION MESSAGE (For Smart Banner)
                 await tx.execute(sql`
                     UPDATE ${messages}
-                    SET metadata = jsonb_set(metadata, '{status}', '"accepted"')
+                    SET metadata = jsonb_set(
+                        jsonb_set(
+                            jsonb_set(
+                                jsonb_set(metadata, '{status}', '"accepted"'),
+                                '{decisionBy}',
+                                to_jsonb(${user.id}::text)
+                            ),
+                            '{decisionAt}',
+                            to_jsonb(${new Date().toISOString()}::text)
+                        ),
+                        '{eventVersion}',
+                        '1'::jsonb
+                    )
                     WHERE conversation_id = ${application.conversationId}
                     AND metadata->>'applicationId' = ${applicationId}
                 `);
@@ -584,21 +795,20 @@ export async function acceptApplicationAction(
             }
         });
 
-        // LAZY PROJECT GROUP CREATION: For old projects without conversationId
-        // After transaction (member is already in projectMembers), trigger group creation
-        // ensureProjectGroupExists will include ALL current members including the new one
-        if (!application.project?.conversationId && application.project?.ownerId) {
-            ensureProjectGroupExists(application.projectId, application.project.ownerId).catch(() => { });
-        }
-
         const slugOrId = application.project?.slug || application.projectId;
         revalidatePath(`/projects/${slugOrId}`);
-        revalidatePath('/connections');
+        revalidatePath('/people');
         revalidatePath('/messages');
 
         return { success: true };
     } catch (error) {
         console.error('Failed to accept application:', error);
+        if (error instanceof Error && error.message === 'Application already processed') {
+            return { success: false, error: 'This application has already been processed' };
+        }
+        if (error instanceof Error && error.message === 'Role is full') {
+            return { success: false, error: 'This role is now full' };
+        }
         return { success: false, error: 'Failed to accept application' };
     }
 }
@@ -636,21 +846,42 @@ export async function rejectApplicationAction(
             return { success: false, error: 'Only the project owner can reject applications' };
         }
 
-        if (application.status !== 'pending') {
-            return { success: false, error: 'This application has already been processed' };
+        if (application.status === 'rejected') {
+            return { success: true };
+        }
+        if (application.status === 'accepted') {
+            return { success: false, error: 'This application has already been accepted' };
         }
 
         await db.transaction(async (tx) => {
-            await tx.update(roleApplications)
-                .set({ status: 'rejected', updatedAt: new Date() })
-                .where(eq(roleApplications.id, applicationId));
+            const transitioned = await transitionApplicationDecisionInternal(tx, {
+                applicationId,
+                status: 'rejected',
+                decisionBy: user.id,
+            });
+
+            if (!transitioned) {
+                throw new Error('Application already processed');
+            }
 
             // Send status update message to chat if conversation exists
             if (application.conversationId) {
                 // 1. UPDATE ORIGINAL APPLICATION MESSAGE (For Smart Banner)
                 await tx.execute(sql`
                     UPDATE ${messages}
-                    SET metadata = jsonb_set(metadata, '{status}', '"rejected"')
+                    SET metadata = jsonb_set(
+                        jsonb_set(
+                            jsonb_set(
+                                jsonb_set(metadata, '{status}', '"rejected"'),
+                                '{decisionBy}',
+                                to_jsonb(${user.id}::text)
+                            ),
+                            '{decisionAt}',
+                            to_jsonb(${new Date().toISOString()}::text)
+                        ),
+                        '{eventVersion}',
+                        '1'::jsonb
+                    )
                     WHERE conversation_id = ${application.conversationId}
                     AND metadata->>'applicationId' = ${applicationId}
                 `);
@@ -674,12 +905,15 @@ export async function rejectApplicationAction(
 
         const slugOrId = application.project?.slug || application.projectId;
         revalidatePath(`/projects/${slugOrId}`);
-        revalidatePath('/connections');
+        revalidatePath('/people');
         revalidatePath('/messages');
 
         return { success: true };
     } catch (error) {
         console.error('Failed to reject application:', error);
+        if (error instanceof Error && error.message === 'Application already processed') {
+            return { success: false, error: 'This application has already been processed' };
+        }
         return { success: false, error: 'Failed to reject application' };
     }
 }

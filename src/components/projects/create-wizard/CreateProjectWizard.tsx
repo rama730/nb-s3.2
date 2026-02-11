@@ -42,7 +42,7 @@ export default function CreateProjectWizard({ onClose, onSuccess, draftId }: Pro
     const {
         phase, methods, wizardContext, isSubmitting, isSavingDraft,
         uploadFiles, setUploadFiles, uploadProgress,
-        githubPreview, githubPreviewSkipped, githubFolderEntries, loadGithubFolder, startGithubRootPreview, skipGithubPreviewAndContinue,
+        githubPreview, githubFolderEntries, loadGithubFolder, startGithubRootPreview,
         saveStatus, lastSaved, showExitConfirm, setShowExitConfirm,
         handleNext, handleBack, goToPhase, saveDraft, handleCloseAttempt,
         onSubmit, draftInfo, restoreDraft, deleteDraft
@@ -60,7 +60,7 @@ export default function CreateProjectWizard({ onClose, onSuccess, draftId }: Pro
         // Footer button is “next phase only” in GitHub flow.
         // Preview is triggered by the inline Continue in Phase 1 UI.
         const previewReady = githubPreview.status === 'ready' && githubPreview.repoUrl === url;
-        if (!previewReady && !githubPreviewSkipped) return 'Continue';
+        if (!previewReady) return 'Continue';
         return 'Continue';
     })();
 
@@ -72,7 +72,7 @@ export default function CreateProjectWizard({ onClose, onSuccess, draftId }: Pro
             if (!url) return true;
 
             const previewReady = githubPreview.status === 'ready' && githubPreview.repoUrl === url;
-            return !previewReady && !githubPreviewSkipped;
+            return !previewReady;
         }
 
         if (t === 'upload') {
@@ -183,11 +183,9 @@ export default function CreateProjectWizard({ onClose, onSuccess, draftId }: Pro
                                                 setUploadFiles={setUploadFiles}
                                                 uploadProgress={uploadProgress}
                                                 githubPreview={githubPreview}
-                                                githubPreviewSkipped={githubPreviewSkipped}
                                                 githubFolderEntries={githubFolderEntries}
                                                 loadGithubFolder={loadGithubFolder}
                                                 startGithubRootPreview={startGithubRootPreview}
-                                                skipGithubPreviewAndContinue={skipGithubPreviewAndContinue}
                                             />
                                         )}
                                         {phase === 2 && <Phase1TypeSelection />}

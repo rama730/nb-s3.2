@@ -6,6 +6,7 @@ import { CreateProjectInput } from '@/lib/validations/project';
 import { Github, Upload, Code2, FolderUp, Check, Loader2, Link as LinkIcon, Sparkles } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { toast } from 'sonner';
+import { analyzeGithubRepoAction } from '@/app/actions/github';
 
 export default function Phase1SourceSelection({
     uploadFiles,
@@ -220,13 +221,12 @@ export default function Phase1SourceSelection({
         const timeout = setTimeout(async () => {
             setIsAnalyzing(true);
             try {
-                const { analyzeGitHubRepo } = await import('@/lib/github/analyze-repo');
-                const token = (await supabase.auth.getSession()).data.session?.provider_token;
-                
-                const result = await analyzeGitHubRepo(repoUrl, token || undefined, controller?.signal);
-                
+                const response = await analyzeGithubRepoAction(repoUrl);
+                if (!response.success || !response.result) return;
+                const result = response.result;
+
                 if (result.title || result.technologies.length > 0) {
-                    setAnalysisResult(result);
+                    setAnalysisResult(result as any);
                     
                     // Pre-fill form fields (Pure enhancements)
                     if (result.title) setValue('title', result.title, { shouldDirty: true });
@@ -246,7 +246,7 @@ export default function Phase1SourceSelection({
             clearTimeout(timeout);
             controller?.abort();
         };
-    }, [repoUrl, setValue, supabase, importSourceType]);
+    }, [repoUrl, setValue, importSourceType]);
 
     const rootEntries = githubFolderEntries[''] || githubPreview.rootEntries || [];
 
@@ -580,7 +580,7 @@ export default function Phase1SourceSelection({
                                                     </div>
 
                                                     <div className="text-[10px] text-zinc-500 dark:text-zinc-400">
-                                                        Preview applies import rules; ignored/oversized paths won’t be imported.
+                                                        Preview applies import rules; ignored/oversized paths will not be imported.
                                                     </div>
                                                 </div>
                                             )}
@@ -590,7 +590,7 @@ export default function Phase1SourceSelection({
                         </div>
                     ) : (
                         <p className="text-sm text-zinc-500 dark:text-zinc-400 text-center">
-                            Clone a public or private repository. We'll analyze your stack automatically.
+                            Clone a public or private repository. We will analyze your stack automatically.
                         </p>
                     )}
                     
@@ -627,7 +627,7 @@ export default function Phase1SourceSelection({
                                  ref={fileInputRef}
                                  type="file"
                                  className="hidden"
-                                 // @ts-ignore - webkitdirectory is a non-standard attribute
+                                 // @ts-expect-error - webkitdirectory is a non-standard attribute
                                  webkitdirectory=""
                                  multiple
                                  onChange={handleFileSelect}

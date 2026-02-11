@@ -34,6 +34,7 @@ export const useProfile = (usernameOrId?: string, initialData?: Profile | null) 
 
     // If requesting current user and we have it in context, use that
     const shouldUseContext = isMe && authProfile;
+    const hasInitialData = !!initialData;
 
     const { data: fetchedProfile, isLoading, error } = useQuery({
         queryKey: ['profile', targetKey],
@@ -55,6 +56,8 @@ export const useProfile = (usernameOrId?: string, initialData?: Profile | null) 
         },
         enabled: !!targetKey && !shouldUseContext, // Don't fetch if we have context
         staleTime: 1000 * 60 * 5,
+        refetchOnMount: hasInitialData ? false : true,
+        refetchOnWindowFocus: false,
     });
 
     const activeProfile = shouldUseContext ? authProfile : fetchedProfile;

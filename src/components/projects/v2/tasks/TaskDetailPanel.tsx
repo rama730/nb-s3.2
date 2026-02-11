@@ -36,17 +36,20 @@ export default function TaskDetailPanel({
     projectId,
     currentUserId
 }: TaskDetailPanelProps) {
-    // Early return if no task
-    if (!task) return null;
-
     const [activeTab, setActiveTab] = useState<"details" | "subtasks" | "comments" | "files" | "activity">("details");
     const [isDeleting, setIsDeleting] = useState(false);
+    const [deleteError, setDeleteError] = useState<string | null>(null);
+    const taskId = task?.id ?? "";
     
     // Optimized data hooks (Lazy loading logic)
     // We only fetch counts for the tabs header initially
-    const { counts, isLoading: countsLoading } = useTaskCounts(task.id);
+    const { counts } = useTaskCounts(taskId);
+
+    // Early return if no task
+    if (!task) return null;
 
     const handleDeleteTask = async () => {
+        setDeleteError(null);
         if (!confirm("Are you sure you want to delete this task? This action cannot be undone.")) {
             return;
         }
@@ -58,12 +61,12 @@ export default function TaskDetailPanel({
                 onClose(); // Close panel
                 // Task will be removed via realtime subscription
             } else {
-                alert(result.error || "Failed to delete task");
+                setDeleteError(result.error || "Failed to delete task");
                 setIsDeleting(false);
             }
         } catch (error) {
             console.error("Error deleting task:", error);
-            alert("An error occurred while deleting the task");
+            setDeleteError("An error occurred while deleting the task");
             setIsDeleting(false);
         }
     };
@@ -89,6 +92,11 @@ export default function TaskDetailPanel({
             >
                 {/* Header */}
                 <div className="flex-shrink-0 border-b border-zinc-200 dark:border-zinc-800">
+                    {deleteError ? (
+                        <div className="mx-6 mt-4 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:border-rose-900/40 dark:bg-rose-900/20 dark:text-rose-200">
+                            {deleteError}
+                        </div>
+                    ) : null}
                     <div className="flex items-center justify-between px-6 py-4">
                         <div className="flex items-center gap-3">
                             <button onClick={onClose} className="p-1 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-full transition-colors">

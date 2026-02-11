@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Virtuoso, VirtuosoGrid } from "react-virtuoso";
 import { FileGridItem } from "./FileGridItem";
 import {
-  CheckSquare,
+  BookmarkPlus,
   ChevronDown,
   ChevronRight,
   Clock,
@@ -13,28 +13,18 @@ import {
   FolderOpen,
   List,
   Loader2,
-  MoreVertical,
-  Pencil,
+  Link2,
+  ShieldCheck,
+  ShieldX,
   Plus,
-  RotateCcw,
-  Search,
-  Square,
   Star,
-  StarOff,
   Trash2,
+  Undo2,
   Upload,
 } from "lucide-react";
-import { FileIcon } from "./FileIcons";
-import { FileTreeRow } from "./FileTreeRow";
 import { FileTreeItem } from "./FileTreeItem";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import {
   Dialog,
   DialogContent,
@@ -46,18 +36,20 @@ import { cn } from "@/lib/utils";
 import { useToast } from "@/components/ui-custom/Toast";
 import { createClient } from "@/lib/supabase/client";
 import type { ProjectNode } from "@/lib/db/schema"; // Fixed
-import { useQuery, useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  bulkMoveNodes,
+  bulkRestoreNodes,
+  bulkTrashNodes,
   createFolder,
   createFileNode,
+  getNodeActivity,
+  getNodeLinkedTasks,
+  getNodesByIds,
   getProjectNodes,
   getProjectBatchNodes, // NEW
   getTrashNodes,
-  moveNode,
-  purgeNode,
   renameNode,
-  restoreNode,
-  trashNode,
+  searchProjectNodesFederated,
   getTaskLinkCounts,
 } from "@/app/actions/files";
 import { filesParentKey, useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
@@ -69,11 +61,60 @@ import SourceControlPanel from "./SourceControlPanel";
 const EMPTY_OBJECT = {};
 const EMPTY_ARRAY: any[] = []; // Typed as any[] to satisfy generic array constraints
 
+function areIdListsEqual(a: string[], b: string[]) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+type AssetGridListProps = React.HTMLAttributes<HTMLDivElement> & { style?: React.CSSProperties };
+
+const AssetGridList = React.forwardRef<HTMLDivElement, AssetGridListProps>(function AssetGridList(
+  { style, children, ...props },
+  ref
+) {
+  return (
+    <div
+      ref={ref}
+      {...props}
+      style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(auto-fill, minmax(100px, 1fr))",
+        gap: "8px",
+        padding: "8px",
+        ...style,
+      }}
+    >
+      {children}
+    </div>
+  );
+});
+
+AssetGridList.displayName = "AssetGridList";
+
+const AssetGridItem = ({ children, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
+  <div {...props} style={{ padding: 0 }}>
+    {children}
+  </div>
+);
+
+AssetGridItem.displayName = "AssetGridItem";
+
 export type VisibleRow =
   | { kind: "node"; nodeId: string; level: number; parentId: string | null; indentationGuides: boolean[] }
   | { kind: "loading"; parentId: string; level: number; indentationGuides: boolean[] }
   | { kind: "load-more"; parentId: string; level: number; indentationGuides: boolean[] } // NEW
   | { kind: "empty"; level: number };
+
+type ExplorerOperation = {
+  id: string;
+  label: string;
+  status: "success" | "error" | "running";
+  at: number;
+  undo?: { label: string; run: () => Promise<void> };
+};
 
 function formatBytes(bytes?: number | null) {
   const b = bytes ?? 0;
@@ -82,11 +123,6 @@ function formatBytes(bytes?: number | null) {
   if (kb < 1024) return `${kb.toFixed(1)} KB`;
   const mb = kb / 1024;
   return `${mb.toFixed(1)} MB`;
-}
-
-function extOf(name: string) {
-  const parts = name.split(".");
-  return parts.length > 1 ? parts[parts.length - 1].toLowerCase() : "";
 }
 
 function buildVisibleRows(args: {
@@ -224,6 +260,7 @@ export default function FileExplorer({
   const searchQuery = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.searchQuery || "");
   const favorites = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.favorites || EMPTY_OBJECT);
   const recents = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.recents || EMPTY_ARRAY);
+  const savedViews = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.savedViews || EMPTY_ARRAY);
   const sort = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.sort || "name");
   const foldersFirst = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.foldersFirst || true);
   const selectedNodeId = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.selectedNodeId);
@@ -240,12 +277,32 @@ export default function FileExplorer({
   const toggleExpanded = useFilesWorkspaceStore((s) => s.toggleExpanded);
   const setSearchQuery = useFilesWorkspaceStore((s) => s.setSearchQuery);
   const setSort = useFilesWorkspaceStore((s) => s.setSort);
-  const setFoldersFirst = useFilesWorkspaceStore((s) => s.setFoldersFirst);
   const addRecent = useFilesWorkspaceStore((s) => s.addRecent);
   const toggleFavorite = useFilesWorkspaceStore((s) => s.toggleFavorite);
+  const saveCurrentView = useFilesWorkspaceStore((s) => s.saveCurrentView);
+  const applySavedView = useFilesWorkspaceStore((s) => s.applySavedView);
+  const deleteSavedView = useFilesWorkspaceStore((s) => s.deleteSavedView);
   const setTaskLinkCounts = useFilesWorkspaceStore((s) => s.setTaskLinkCounts);
   const setExplorerMode = useFilesWorkspaceStore((s) => s.setExplorerMode);
   const setViewMode = useFilesWorkspaceStore((s) => s.setViewMode);
+
+  const isSelectionMode = mode === "select";
+  const controlledSelectedNodeIds = useMemo(
+    () => Array.from(new Set(selectedNodeIds)),
+    [selectedNodeIds]
+  );
+  const effectiveSelectedNodeIds = isSelectionMode ? controlledSelectedNodeIds : storeSelectedNodeIds;
+  const uploadEnabled = !isSelectionMode;
+  const nestedDialogClassName = isSelectionMode ? "z-[360]" : undefined;
+  const nestedDialogOverlayClassName = isSelectionMode ? "z-[350]" : undefined;
+
+  useEffect(() => {
+    if (!isSelectionMode) return;
+    const currentSelected =
+      useFilesWorkspaceStore.getState().byProjectId[projectId]?.selectedNodeIds || [];
+    if (areIdListsEqual(currentSelected, controlledSelectedNodeIds)) return;
+    setSelectedNodeIds(projectId, controlledSelectedNodeIds);
+  }, [isSelectionMode, projectId, controlledSelectedNodeIds, setSelectedNodeIds]);
 
   // ... (existing state) ...
 
@@ -279,9 +336,6 @@ export default function FileExplorer({
     original: string;
   }>({ nodeId: null, value: "", original: "" });
 
-  const [draggingId, setDraggingId] = useState<string | null>(null);
-  const expandHoverTimer = useRef<Record<string, ReturnType<typeof setTimeout> | null>>({});
-
   const [quickOpen, setQuickOpen] = useState<{ open: boolean; query: string }>({
     open: false,
     query: "",
@@ -293,14 +347,46 @@ export default function FileExplorer({
     open: false,
     query: "",
   });
+  const [selectedSavedViewId, setSelectedSavedViewId] = useState<string>("");
+  const [operationsOpen, setOperationsOpen] = useState(false);
+  const [operations, setOperations] = useState<ExplorerOperation[]>([]);
+  const [isInsightsOpen, setIsInsightsOpen] = useState(false);
+  const [linkedTasks, setLinkedTasks] = useState<
+    Array<{
+      id: string;
+      title: string;
+      status: string;
+      priority: string;
+      taskNumber: number | null;
+      dueDate: number | null;
+      linkedAt: number;
+    }>
+  >([]);
+  const [nodeActivity, setNodeActivity] = useState<
+    Array<{
+      id: string;
+      type: string;
+      at: number;
+      by: string | null;
+      metadata: Record<string, unknown> | null;
+    }>
+  >([]);
+  const [insightsLoading, setInsightsLoading] = useState(false);
+  const [insightsError, setInsightsError] = useState<string | null>(null);
   
   const [isOutlineOpen, setIsOutlineOpen] = useState(false);
   const [isSourceControlOpen, setIsSourceControlOpen] = useState(false);
   // Removed duplicate accessError
 
   const bootedRef = useRef(false);
-  const autoExpandedSystemRootRef = useRef(false);
   const batchLoadedRef = useRef(false);
+  const folderLoadInFlightRef = useRef<Map<string, Promise<void>>>(new Map());
+  const searchRequestIdRef = useRef(0);
+  const quickOpenRequestIdRef = useRef(0);
+  const mutationQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const mutationInFlightKeysRef = useRef<Set<string>>(new Set());
+  const prefetchedFolderKeysRef = useRef<Set<string>>(new Set());
+  const searchSnippetsRef = useRef<Record<string, string | null>>({});
 
   const supabaseRef = useRef<ReturnType<typeof createClient> | null>(null);
   const getSupabase = useCallback(() => {
@@ -308,64 +394,159 @@ export default function FileExplorer({
     return supabaseRef.current;
   }, []);
 
+  const runInMutationQueue = useCallback(async <T,>(fn: () => Promise<T>): Promise<T> => {
+    const run = mutationQueueRef.current.then(fn, fn);
+    mutationQueueRef.current = run.then(
+      () => undefined,
+      () => undefined
+    );
+    return run;
+  }, []);
+
+  const runUniqueMutation = useCallback(
+    async <T,>(key: string, fn: () => Promise<T>): Promise<T | null> => {
+      if (mutationInFlightKeysRef.current.has(key)) return null;
+      mutationInFlightKeysRef.current.add(key);
+      try {
+        return await runInMutationQueue(fn);
+      } finally {
+        mutationInFlightKeysRef.current.delete(key);
+      }
+    },
+    [runInMutationQueue]
+  );
+
+  const recordOperation = useCallback((operation: Omit<ExplorerOperation, "id" | "at">) => {
+    const entry: ExplorerOperation = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      at: Date.now(),
+      ...operation,
+    };
+    setOperations((prev) => [entry, ...prev].slice(0, 30));
+  }, []);
+
+  const executeUndo = useCallback(
+    async (operationId: string) => {
+      const operation = operations.find((entry) => entry.id === operationId);
+      if (!operation?.undo) return;
+      setOperations((prev) =>
+        prev.map((entry) =>
+          entry.id === operationId ? { ...entry, status: "running" } : entry
+        )
+      );
+      try {
+        await operation.undo.run();
+        setOperations((prev) =>
+          prev.map((entry) =>
+            entry.id === operationId
+              ? { ...entry, status: "success", undo: undefined, label: `${entry.label} (undone)` }
+              : entry
+          )
+        );
+      } catch (error: any) {
+        setOperations((prev) =>
+          prev.map((entry) =>
+            entry.id === operationId
+              ? { ...entry, status: "error", label: `${entry.label} (undo failed)` }
+              : entry
+          )
+        );
+        showToast(`Undo failed: ${error?.message || "Unknown error"}`, "error");
+      }
+    },
+    [operations, showToast]
+  );
+
   // --- Scalable Data Fetching Logic ---
 
   // Unified Folder Loader (Refresh or Append)
   const loadFolderContent = useCallback(async (parentId: string | null, mode: 'refresh' | 'append' = 'append') => {
-      try {
+      const requestKey = `${filesParentKey(parentId)}::${mode}`;
+      const inFlight = folderLoadInFlightRef.current.get(requestKey);
+      if (inFlight) {
+        await inFlight;
+        return;
+      }
+
+      const task = (async () => {
+        const startedAt = performance.now();
+        try {
           const key = filesParentKey(parentId);
           const currentWs = useFilesWorkspaceStore.getState().byProjectId[projectId];
-          
-          let cursor: string | undefined = undefined;
-          let limit = 100;
 
-          if (mode === 'append') {
-              // Check if already fully loaded?
-              // Actually, we just trust the cursor.
-              const meta = currentWs?.folderMeta?.[key];
-              cursor = meta?.nextCursor || undefined;
+          let cursor: string | undefined = undefined;
+          const limit = 100;
+
+          if (mode === "append") {
+            const meta = currentWs?.folderMeta?.[key];
+            cursor = meta?.nextCursor || undefined;
+            if (!cursor) return;
           }
 
           setAccessError(null);
-          
-          const res = await getProjectNodes(projectId, parentId, undefined, limit, cursor) as { nodes: ProjectNode[], nextCursor: string | null };
+
+          const res = await getProjectNodes(projectId, parentId, undefined, limit, cursor) as {
+            nodes: ProjectNode[];
+            nextCursor: string | null;
+          };
           const newNodes = Array.isArray(res) ? res : res.nodes;
           const nextCursor = !Array.isArray(res) ? res.nextCursor : null;
-          
+
           if (newNodes.length > 0) {
-              upsertNodes(projectId, newNodes);
+            upsertNodes(projectId, newNodes);
           }
 
-          if (mode === 'refresh') {
-              // Replace children
-              setChildren(projectId, parentId, newNodes.map(n => n.id));
-              setFolderMeta(projectId, parentId, { nextCursor, hasMore: !!nextCursor });
+          if (mode === "refresh") {
+            setChildren(projectId, parentId, newNodes.map((n) => n.id));
           } else {
-              // Append children
-              const currentChildrenIds = currentWs?.childrenByParentId?.[key] || [];
-              const nextIds = Array.from(new Set([...currentChildrenIds, ...newNodes.map(n => n.id)]));
-              setChildren(projectId, parentId, nextIds);
-              setFolderMeta(projectId, parentId, { nextCursor, hasMore: !!nextCursor });
+            const latestWs = useFilesWorkspaceStore.getState().byProjectId[projectId];
+            const currentChildrenIds = latestWs?.childrenByParentId?.[key] || [];
+            const nextIds = Array.from(new Set([...currentChildrenIds, ...newNodes.map((n) => n.id)]));
+            setChildren(projectId, parentId, nextIds);
           }
-          
+          setFolderMeta(projectId, parentId, { nextCursor, hasMore: !!nextCursor });
           markChildrenLoaded(projectId, parentId);
 
-          // Fetch counts for new files
+          // One-page prefetch for hot folders to reduce first scroll latency.
+          if (mode === "refresh" && nextCursor && parentId && expandedFolderIds[parentId]) {
+            const prefetchKey = filesParentKey(parentId);
+            if (!prefetchedFolderKeysRef.current.has(prefetchKey)) {
+              prefetchedFolderKeysRef.current.add(prefetchKey);
+              queueMicrotask(() => {
+                void loadFolderContent(parentId, "append");
+              });
+            }
+          }
+
           const fileIds = newNodes.filter((n) => n.type === "file").map((n) => n.id);
-          if (fileIds.length) {
+          if (fileIds.length > 0) {
             const counts = await getTaskLinkCounts(projectId, fileIds);
             setTaskLinkCounts(projectId, counts);
           }
-          
-      } catch (e: any) {
+        } catch (e: any) {
           console.error("Load folder failed", e);
-          if (mode === 'refresh') {
-              setAccessError(e?.message || "Failed to load files");
+          if (mode === "refresh") {
+            setAccessError(e?.message || "Failed to load files");
           } else {
-              showToast("Failed to load more files", "error");
+            showToast("Failed to load more files", "error");
           }
-      }
-  }, [projectId, upsertNodes, setChildren, markChildrenLoaded, setFolderMeta, setTaskLinkCounts]);
+        } finally {
+          if (process.env.NODE_ENV !== "production") {
+            const elapsedMs = Math.round(performance.now() - startedAt);
+            console.debug("[files] loadFolderContent", {
+              projectId,
+              parentId: parentId ?? "root",
+              mode,
+              elapsedMs,
+            });
+          }
+          folderLoadInFlightRef.current.delete(requestKey);
+        }
+      })();
+
+      folderLoadInFlightRef.current.set(requestKey, task);
+      await task;
+  }, [projectId, upsertNodes, setChildren, markChildrenLoaded, setFolderMeta, setTaskLinkCounts, showToast, expandedFolderIds]);
 
   // 1. Root Boot (Initial Load - Light O(1))
   const boot = useCallback(async () => {
@@ -467,26 +648,24 @@ export default function FileExplorer({
 
 
   // 3. User Interaction Expansion (Lazy Load - O(1))
-  const handleToggleFolder = async (node: ProjectNode) => {
+  const handleToggleFolder = useCallback(async (node: ProjectNode) => {
     if (node.type !== "folder") return;
     const next = !expandedFolderIds[node.id];
     toggleExpanded(projectId, node.id, next);
     
     if (next) {
-        // Check if loaded
-        const key = filesParentKey(node.id);
-        const loaded = loadedChildren[key];
-        if (!loaded) {
-            // Fetch first page
-            await loadFolderContent(node.id, 'refresh');
-        }
+      const key = filesParentKey(node.id);
+      const loaded = loadedChildren[key];
+      if (!loaded) {
+        await loadFolderContent(node.id, "refresh");
+      }
     }
-  };
+  }, [expandedFolderIds, toggleExpanded, projectId, loadedChildren, loadFolderContent]);
 
   // Helper for load more button
-  const handleLoadMore = (folderId: string | null) => {
+  const handleLoadMore = useCallback((folderId: string | null) => {
       void loadFolderContent(folderId, 'append');
-  };
+  }, [loadFolderContent]);
 
   // --- End Data Fetching ---
 
@@ -527,16 +706,72 @@ export default function FileExplorer({
 
   const selectedNode = selectedNodeId ? nodesById[selectedNodeId] : null;
 
+  const loadNodeInsights = useCallback(
+    async (nodeId: string) => {
+      setInsightsLoading(true);
+      setInsightsError(null);
+      try {
+        const [tasksData, activityData] = await Promise.all([
+          getNodeLinkedTasks(projectId, nodeId, 30),
+          getNodeActivity(projectId, nodeId, 30),
+        ]);
+        setLinkedTasks(tasksData);
+        setNodeActivity(activityData);
+      } catch (error: any) {
+        setLinkedTasks([]);
+        setNodeActivity([]);
+        setInsightsError(error?.message || "Failed to load node insights");
+      } finally {
+        setInsightsLoading(false);
+      }
+    },
+    [projectId]
+  );
+
+  useEffect(() => {
+    if (!isInsightsOpen || !selectedNodeId) {
+      if (!selectedNodeId) {
+        setLinkedTasks([]);
+        setNodeActivity([]);
+        setInsightsError(null);
+      }
+      return;
+    }
+    void loadNodeInsights(selectedNodeId);
+  }, [selectedNodeId, isInsightsOpen, loadNodeInsights]);
+
+  const handleTaskLinksClick = useCallback(
+    (node: ProjectNode) => {
+      setSelectedNode(projectId, node.id, node.type === "folder" ? node.id : node.parentId ?? null);
+      setSelectedNodeIds(projectId, [node.id]);
+      setIsInsightsOpen(true);
+      void loadNodeInsights(node.id);
+    },
+    [loadNodeInsights, projectId, setSelectedNode, setSelectedNodeIds]
+  );
 
 
-  const openCreate = (kind: "file" | "folder") => {
+
+  const openCreate = useCallback((kind: "file" | "folder") => {
     if (!canEdit) return;
     const parentId =
       selectedNode?.type === "folder"
         ? selectedNode.id
         : selectedNode?.parentId ?? selectedFolderId ?? null;
     setCreateDialog({ open: true, kind, parentId, name: "" });
-  };
+  }, [canEdit, selectedNode, selectedFolderId]);
+
+  const openCreateInFolder = useCallback(
+    (folderId: string | null, kind: "file" | "folder") => {
+      if (!canEdit) return;
+      if (folderId) {
+        setSelectedNode(projectId, folderId, folderId);
+        setSelectedNodeIds(projectId, [folderId]);
+      }
+      setCreateDialog({ open: true, kind, parentId: folderId, name: "" });
+    },
+    [canEdit, projectId, setSelectedNode, setSelectedNodeIds]
+  );
 
   const confirmCreate = async () => {
     if (!createDialog.open) return;
@@ -544,35 +779,25 @@ export default function FileExplorer({
     if (!name) return;
     if (!canEdit) return;
 
+    const parentId = createDialog.parentId ?? null;
+    const mutationKey = `create:${projectId}:${createDialog.kind}:${parentId ?? "root"}:${name.toLowerCase()}`;
+
     try {
-      // Duplicate validation within parent
-      const parentId = createDialog.parentId ?? null;
-      if (!loadedChildren[filesParentKey(parentId)]) {
-        // Load siblings for accurate validation (one-time)
-        await loadFolderContent(parentId, 'refresh');
-      }
-      const siblingIds = childrenByParentId[filesParentKey(parentId)] || [];
-      const siblings = siblingIds.map((id) => nodesById[id]).filter(Boolean);
-      const dup = siblings.some((s) => s.name.toLowerCase() === name.toLowerCase());
-      if (dup) {
-        showToast("A file/folder with that name already exists here.", "error");
-        return;
-      }
-
-
-      if (createDialog.kind === "folder") {
-        const node = await createFolder(projectId, parentId, name);
-        // Optimistic update: cache node
-        upsertNodes(projectId, [node as ProjectNode]);
-        
-        // Optimistic update: append to parent's child list
-        const parentKey = filesParentKey(parentId);
-        const currentChildren = childrenByParentId[parentKey] || [];
-        // prevent duplicate id entry if server returns same id for some reason (rare)
-        if (!currentChildren.includes(node.id)) {
-             setChildren(projectId, parentId, [...currentChildren, node.id]);
+      const createdNode = await runUniqueMutation(mutationKey, async () => {
+        if (!loadedChildren[filesParentKey(parentId)]) {
+          await loadFolderContent(parentId, "refresh");
         }
-      } else {
+        const siblingIds = childrenByParentId[filesParentKey(parentId)] || [];
+        const siblings = siblingIds.map((id) => nodesById[id]).filter(Boolean);
+        const dup = siblings.some((s) => s.name.toLowerCase() === name.toLowerCase());
+        if (dup) {
+          throw new Error("A file/folder with that name already exists here.");
+        }
+
+        if (createDialog.kind === "folder") {
+          return (await createFolder(projectId, parentId, name)) as ProjectNode;
+        }
+
         const fileExt = name.includes(".") ? name.split(".").pop() : "txt";
         const storagePath = `projects/${projectId}/${Math.random().toString(36).substring(2)}.${fileExt}`;
         const supabase = getSupabase();
@@ -582,93 +807,225 @@ export default function FileExplorer({
           .upload(storagePath, emptyBlob);
         if (uploadError) throw uploadError;
 
-        const node = await createFileNode(projectId, parentId, {
+        return (await createFileNode(projectId, parentId, {
           name,
           s3Key: storagePath,
           size: 0,
           mimeType: "text/plain",
-        });
-        
-        // Optimistic update
-        upsertNodes(projectId, [node as ProjectNode]);
-        const parentKey = filesParentKey(parentId);
-        const currentChildren = childrenByParentId[parentKey] || [];
-        if (!currentChildren.includes(node.id)) {
-             setChildren(projectId, parentId, [...currentChildren, node.id]);
-        }
+        })) as ProjectNode;
+      });
+
+      if (!createdNode) return;
+      upsertNodes(projectId, [createdNode]);
+      const parentKey = filesParentKey(parentId);
+      const currentChildren = childrenByParentId[parentKey] || [];
+      if (!currentChildren.includes(createdNode.id)) {
+        setChildren(projectId, parentId, [...currentChildren, createdNode.id]);
       }
 
-      // No need to await loadChildren(parentId, { force: true }); -> instant show
       if (parentId) toggleExpanded(projectId, parentId, true);
       showToast("Created", "success");
+      recordOperation({
+        label: `Created ${createDialog.kind} ${createdNode.name}`,
+        status: "success",
+        undo: canEdit
+          ? {
+              label: "Undo",
+              run: async () => {
+                await bulkTrashNodes([createdNode.id], projectId);
+                useFilesWorkspaceStore.getState().removeNodeFromCaches(projectId, createdNode.id);
+                await loadFolderContent(parentId, "refresh");
+              },
+            }
+          : undefined,
+      });
       setCreateDialog({ open: false });
     } catch (e: any) {
       showToast(`Create failed: ${e?.message || "Unknown error"}`, "error");
+      recordOperation({
+        label: `Create failed (${createDialog.kind})`,
+        status: "error",
+      });
     }
   };
 
-  const openUpload = (parentId: string | null) => {
+  const openUpload = useCallback((parentId: string | null) => {
     if (!canEdit) return;
     const input = document.createElement("input");
     input.type = "file";
+    input.multiple = true;
     input.onchange = async () => {
-        const file = input.files?.[0];
-        if (!file) return;
+        const files = Array.from(input.files || []);
+        if (files.length === 0) return;
+
+        const mutationKey = `upload:${projectId}:${parentId ?? "root"}:${files.map((f) => f.name).sort().join(",")}`;
         try {
+          const result = await runUniqueMutation(mutationKey, async () => {
             const supabase = getSupabase();
-            const ext = file.name.split(".").pop();
-            const fileName = `${Math.random().toString(36).substring(2)}.${ext}`;
-            const filePath = `projects/${projectId}/${fileName}`;
-            const { error } = await supabase.storage.from("project-files").upload(filePath, file);
-            if (error) throw error;
-            const node = await createFileNode(projectId, parentId, {
-                name: file.name,
-                s3Key: filePath,
-                size: file.size,
-                mimeType: file.type,
-            });
-            upsertNodes(projectId, [node as ProjectNode]);
-            
-            // Optimistic update
-            const parentKey = filesParentKey(parentId);
-            const currentChildren = childrenByParentId[parentKey] || [];
-            if (!currentChildren.includes(node.id)) {
-                 setChildren(projectId, parentId, [...currentChildren, node.id]);
+            const createdNodes: ProjectNode[] = [];
+            let failed = 0;
+
+            for (const file of files) {
+              try {
+                const ext = file.name.split(".").pop() || "bin";
+                const fileName = `${Math.random().toString(36).slice(2)}.${ext}`;
+                const filePath = `projects/${projectId}/${fileName}`;
+                const { error } = await supabase.storage.from("project-files").upload(filePath, file);
+                if (error) throw error;
+
+                const node = (await createFileNode(projectId, parentId, {
+                  name: file.name,
+                  s3Key: filePath,
+                  size: file.size,
+                  mimeType: file.type,
+                })) as ProjectNode;
+                createdNodes.push(node);
+              } catch {
+                failed += 1;
+              }
             }
-            
-            // await loadChildren(parentId); // REMOVED for speed
-            
-            if (parentId) toggleExpanded(projectId, parentId, true);
-            
-            // Auto-open logic
-            onOpenFile(node as ProjectNode);
-            
-            showToast("Uploaded", "success");
+
+            if (createdNodes.length > 0) {
+              upsertNodes(projectId, createdNodes);
+              const parentKey = filesParentKey(parentId);
+              const currentChildren = childrenByParentId[parentKey] || [];
+              const nextChildren = [...currentChildren];
+              for (const node of createdNodes) {
+                if (!nextChildren.includes(node.id)) nextChildren.push(node.id);
+              }
+              setChildren(projectId, parentId, nextChildren);
+
+              if (parentId) toggleExpanded(projectId, parentId, true);
+              await loadFolderContent(parentId, "refresh");
+            }
+
+            return { createdNodes, failed };
+          });
+
+          if (!result) return;
+          const { createdNodes, failed } = result;
+          if (createdNodes.length > 0) {
+            onOpenFile(createdNodes[0]);
+            const msg =
+              failed > 0
+                ? `Uploaded ${createdNodes.length} file(s), ${failed} failed`
+                : `Uploaded ${createdNodes.length} file(s)`;
+            showToast(msg, failed > 0 ? "info" : "success");
+            recordOperation({
+              label: msg,
+              status: failed > 0 ? "error" : "success",
+            });
+          } else {
+            showToast("Upload failed", "error");
+            recordOperation({ label: "Upload failed", status: "error" });
+          }
         } catch (e: any) {
-            showToast(`Upload failed: ${e?.message || "Unknown error"}`, "error");
+          showToast(`Upload failed: ${e?.message || "Unknown error"}`, "error");
+          recordOperation({ label: "Upload failed", status: "error" });
         }
     };
     input.click();
-  };
+  }, [canEdit, projectId, runUniqueMutation, getSupabase, upsertNodes, childrenByParentId, setChildren, toggleExpanded, loadFolderContent, onOpenFile, showToast, recordOperation]);
 
-  const openRename = (node: ProjectNode) => {
+  const openRename = useCallback((node: ProjectNode) => {
     if (!canEdit) return;
     setRenameState({ nodeId: node.id, value: node.name, original: node.name });
-  };
+  }, [canEdit]);
+
+  const confirmRename = useCallback(async () => {
+    if (!renameState.nodeId) return;
+    if (!canEdit) return;
+    const node = nodesById[renameState.nodeId];
+    if (!node) {
+      setRenameState({ nodeId: null, value: "", original: "" });
+      return;
+    }
+
+    const nextName = renameState.value.trim();
+    if (!nextName) {
+      showToast("Name is required", "error");
+      return;
+    }
+    if (nextName === renameState.original) {
+      setRenameState({ nodeId: null, value: "", original: "" });
+      return;
+    }
+
+    const siblingIds = childrenByParentId[filesParentKey(node.parentId ?? null)] || [];
+    const duplicateSibling = siblingIds
+      .map((id) => nodesById[id])
+      .filter(Boolean)
+      .some((s) => s.id !== node.id && s.name.toLowerCase() === nextName.toLowerCase());
+    if (duplicateSibling) {
+      showToast("A file/folder with that name already exists here.", "error");
+      return;
+    }
+
+    const mutationKey = `rename:${projectId}:${node.id}:${nextName.toLowerCase()}`;
+    try {
+      const updated = await runUniqueMutation(mutationKey, async () => {
+        return (await renameNode(node.id, nextName, projectId)) as ProjectNode;
+      });
+      if (!updated) return;
+      upsertNodes(projectId, [updated]);
+      setRenameState({ nodeId: null, value: "", original: "" });
+      showToast("Renamed", "success");
+      recordOperation({
+        label: `Renamed ${renameState.original} -> ${nextName}`,
+        status: "success",
+        undo: {
+          label: "Undo",
+          run: async () => {
+            const reverted = (await renameNode(node.id, renameState.original, projectId)) as ProjectNode;
+            upsertNodes(projectId, [reverted]);
+          },
+        },
+      });
+    } catch (e: any) {
+      showToast(`Rename failed: ${e?.message || "Unknown error"}`, "error");
+      recordOperation({
+        label: `Rename failed (${renameState.original})`,
+        status: "error",
+      });
+    }
+  }, [
+    renameState.nodeId,
+    renameState.value,
+    renameState.original,
+    canEdit,
+    nodesById,
+    childrenByParentId,
+    projectId,
+    upsertNodes,
+    showToast,
+    runUniqueMutation,
+    recordOperation,
+  ]);
+
+  const resolveActionNodes = useCallback(
+    (node: ProjectNode) => {
+      const currentSelected = useFilesWorkspaceStore.getState().byProjectId[projectId]?.selectedNodeIds || [];
+      if (currentSelected.length > 1 && currentSelected.includes(node.id)) {
+        return currentSelected.map((id) => nodesById[id]).filter(Boolean) as ProjectNode[];
+      }
+      return [node];
+    },
+    [projectId, nodesById]
+  );
 
 
 
-  const openDelete = (nodeOrNodes: ProjectNode | ProjectNode[]) => {
+  const openDelete = useCallback((nodeOrNodes: ProjectNode | ProjectNode[]) => {
     if (!canEdit) return;
     const nodes = Array.isArray(nodeOrNodes) ? nodeOrNodes : [nodeOrNodes];
     setDeleteDialog({ open: true, nodes });
-  };
+  }, [canEdit]);
 
-  const openMove = (nodeOrNodes: ProjectNode | ProjectNode[]) => {
+  const openMove = useCallback((nodeOrNodes: ProjectNode | ProjectNode[]) => {
     if (!canEdit) return;
     const nodes = Array.isArray(nodeOrNodes) ? nodeOrNodes : [nodeOrNodes];
     setMoveDialog({ open: true, nodes, targetFolderId: null });
-  };
+  }, [canEdit]);
 
   const confirmMove = async () => {
     const nodes = moveDialog.nodes;
@@ -697,24 +1054,70 @@ export default function FileExplorer({
         }
     }
 
-    try {
-        await Promise.all(nodes.map(async (node) => {
-            const oldParentId = node.parentId ?? null;
-            const updated = await moveNode(node.id, target, projectId);
-            upsertNodes(projectId, [updated as ProjectNode]);
-            // refresh old parent (inefficient if many, but safe)
-            if (oldParentId !== target) {
-               await loadFolderContent(oldParentId, 'refresh');
-            }
-        }));
+    const nodeIds = nodes.map((n) => n.id).sort();
+    const originalParentByNode = new Map<string, string | null>(
+      nodes.map((node) => [node.id, node.parentId ?? null])
+    );
+    const mutationKey = `move:${projectId}:${target ?? "root"}:${nodeIds.join(",")}`;
 
-        await loadFolderContent(target ?? null, 'refresh');
+    try {
+      const result = await runUniqueMutation(mutationKey, async () => {
+        const staleParents = new Set<string | null>();
+        for (const node of nodes) {
+          const oldParentId = node.parentId ?? null;
+          if (oldParentId !== target) staleParents.add(oldParentId);
+        }
+
+        const updatedNodes = (await bulkMoveNodes(nodeIds, target, projectId)) as ProjectNode[];
+        if (updatedNodes.length > 0) {
+          upsertNodes(projectId, updatedNodes);
+        }
+
+        await Promise.all(Array.from(staleParents).map((pid) => loadFolderContent(pid, "refresh")));
+        await loadFolderContent(target ?? null, "refresh");
         if (target) toggleExpanded(projectId, target, true);
-        
-        showToast(`Moved ${nodes.length} item${nodes.length > 1 ? 's' : ''}`, "success");
-        setMoveDialog({ open: false, nodes: [], targetFolderId: null });
+        return updatedNodes;
+      });
+
+      if (result === null) return;
+      const movedCount = result.length;
+      showToast(`Moved ${movedCount} item${movedCount === 1 ? "" : "s"}`, "success");
+      recordOperation({
+        label: `Moved ${movedCount} item${movedCount === 1 ? "" : "s"}`,
+        status: "success",
+        undo: movedCount
+          ? {
+              label: "Undo",
+              run: async () => {
+                const groupedByParent: Record<string, string[]> = {};
+                for (const [id, parentId] of originalParentByNode.entries()) {
+                  const key = parentId ?? "__root__";
+                  if (!groupedByParent[key]) groupedByParent[key] = [];
+                  groupedByParent[key].push(id);
+                }
+                for (const [parentKey, ids] of Object.entries(groupedByParent)) {
+                  const parentId = parentKey === "__root__" ? null : parentKey;
+                  if (ids.length > 0) {
+                    await bulkMoveNodes(ids, parentId, projectId);
+                    await loadFolderContent(parentId, "refresh");
+                  }
+                }
+                if (target !== null) {
+                  await loadFolderContent(target, "refresh");
+                } else {
+                  await loadFolderContent(null, "refresh");
+                }
+              },
+            }
+          : undefined,
+      });
+      setMoveDialog({ open: false, nodes: [], targetFolderId: null });
     } catch (e: any) {
-        showToast(`Move failed: ${e?.message || "Unknown error"}`, "error");
+      showToast(`Move failed: ${e?.message || "Unknown error"}`, "error");
+      recordOperation({
+        label: "Move failed",
+        status: "error",
+      });
     }
   };
 
@@ -723,19 +1126,50 @@ export default function FileExplorer({
     if (!nodes.length) return;
     if (!canEdit) return;
 
-    try {
-      await Promise.all(nodes.map(async (node) => {
-          await trashNode(node.id, projectId);
-          useFilesWorkspaceStore.getState().removeNodeFromCaches(projectId, node.id);
-          onNodeDeleted?.(node.id);
-          // reload parent listing
-          await loadFolderContent(node.parentId ?? null, 'refresh');
-      }));
+    const nodeIds = nodes.map((n) => n.id).sort();
+    const mutationKey = `trash:${projectId}:${nodeIds.join(",")}`;
 
-      showToast(`Moved ${nodes.length} item${nodes.length > 1 ? 's' : ''} to Trash`, "success");
+    try {
+      const result = await runUniqueMutation(mutationKey, async () => {
+        const staleParents = new Set<string | null>();
+        for (const node of nodes) staleParents.add(node.parentId ?? null);
+
+        const response = await bulkTrashNodes(nodeIds, projectId);
+        const trashedIds: string[] = response.trashedIds || [];
+
+        for (const nodeId of trashedIds) {
+          useFilesWorkspaceStore.getState().removeNodeFromCaches(projectId, nodeId);
+          onNodeDeleted?.(nodeId);
+        }
+
+        await Promise.all(Array.from(staleParents).map((pid) => loadFolderContent(pid, "refresh")));
+        return trashedIds.length;
+      });
+
+      if (result === null) return;
+      showToast(`Moved ${result} item${result === 1 ? "" : "s"} to Trash`, "success");
+      recordOperation({
+        label: `Moved ${result} item${result === 1 ? "" : "s"} to trash`,
+        status: "success",
+        undo: result
+          ? {
+              label: "Undo",
+              run: async () => {
+                await bulkRestoreNodes(nodeIds, projectId);
+                const staleParents = new Set<string | null>();
+                for (const node of nodes) staleParents.add(node.parentId ?? null);
+                await Promise.all(Array.from(staleParents).map((pid) => loadFolderContent(pid, "refresh")));
+              },
+            }
+          : undefined,
+      });
       setDeleteDialog({ open: false, nodes: [] });
     } catch (e: any) {
       showToast(`Delete failed: ${e?.message || "Unknown error"}`, "error");
+      recordOperation({
+        label: "Move to trash failed",
+        status: "error",
+      });
     }
   };
 
@@ -752,28 +1186,63 @@ export default function FileExplorer({
     const q = searchQuery.trim();
     if (!q) {
       setSearchResults([]);
+      setIsSearching(false);
+      searchSnippetsRef.current = {};
+      searchRequestIdRef.current += 1;
+      return;
+    }
+    if (q.length < 2) {
+      setSearchResults([]);
+      setIsSearching(false);
+      searchSnippetsRef.current = {};
+      searchRequestIdRef.current += 1;
       return;
     }
 
+    const requestId = ++searchRequestIdRef.current;
     const t = setTimeout(async () => {
       setIsSearching(true);
       try {
-        const nodes = (await getProjectNodes(projectId, null, q)) as ProjectNode[];
-        upsertNodes(projectId, nodes);
-        setSearchResults(nodes);
+        const federated = await searchProjectNodesFederated(projectId, q, 80);
+        if (requestId !== searchRequestIdRef.current) return;
+        const orderedIds = federated.map((item) => item.nodeId);
+        searchSnippetsRef.current = Object.fromEntries(
+          federated.map((item) => [item.nodeId, item.snippet])
+        );
+        if (orderedIds.length === 0) {
+          setSearchResults([]);
+          return;
+        }
 
-        const fileIds = nodes.filter((n) => n.type === "file").map((n) => n.id);
+        const missing = orderedIds.filter((id) => !nodesById[id]);
+        if (missing.length > 0) {
+          const hydrated = (await getNodesByIds(projectId, missing)) as ProjectNode[];
+          if (requestId !== searchRequestIdRef.current) return;
+          if (hydrated.length > 0) upsertNodes(projectId, hydrated);
+        }
+
+        const latestNodesById =
+          useFilesWorkspaceStore.getState().byProjectId[projectId]?.nodesById || {};
+        const orderedNodes = orderedIds
+          .map((id) => latestNodesById[id])
+          .filter((node): node is ProjectNode => !!node);
+        setSearchResults(orderedNodes);
+
+        const fileIds = orderedNodes.filter((n) => n.type === "file").map((n) => n.id);
         if (fileIds.length) {
           const counts = await getTaskLinkCounts(projectId, fileIds);
+          if (requestId !== searchRequestIdRef.current) return;
           setTaskLinkCounts(projectId, counts);
         }
       } finally {
-        setIsSearching(false);
+        if (requestId === searchRequestIdRef.current) {
+          setIsSearching(false);
+        }
       }
     }, 200);
 
     return () => clearTimeout(t);
-  }, [projectId, upsertNodes, searchQuery]);
+  }, [projectId, upsertNodes, searchQuery, setTaskLinkCounts, nodesById]);
 
   // Trash listing
   useEffect(() => {
@@ -803,16 +1272,26 @@ export default function FileExplorer({
       setQuickOpenResults(recentNodes);
       return;
     }
+    if (q.length < 2) {
+      setQuickOpenResults([]);
+      setQuickOpenLoading(false);
+      quickOpenRequestIdRef.current += 1;
+      return;
+    }
 
+    const requestId = ++quickOpenRequestIdRef.current;
     const t = setTimeout(async () => {
       setQuickOpenLoading(true);
       try {
         const nodes = (await getProjectNodes(projectId, null, q)) as ProjectNode[];
+        if (requestId !== quickOpenRequestIdRef.current) return;
         const files = nodes.filter((n) => n.type === "file").slice(0, 50);
         upsertNodes(projectId, files);
         setQuickOpenResults(files);
       } finally {
-        setQuickOpenLoading(false);
+        if (requestId === quickOpenRequestIdRef.current) {
+          setQuickOpenLoading(false);
+        }
       }
     }, 150);
 
@@ -858,6 +1337,19 @@ export default function FileExplorer({
   }, [effectiveMode, includeFileByMode, searchResults, trashNodesState, visibleRows, favorites, nodesById, recents]);
 
   const handleSelect = useCallback((node: ProjectNode, e?: React.MouseEvent) => {
+    if (mode === "select") {
+      const currentSelected =
+        useFilesWorkspaceStore.getState().byProjectId[projectId]?.selectedNodeIds || controlledSelectedNodeIds;
+      const exists = currentSelected.includes(node.id);
+      const newSelection = exists
+        ? currentSelected.filter((id) => id !== node.id)
+        : [...currentSelected, node.id];
+      const normalizedSelection = Array.from(new Set(newSelection));
+      setSelectedNodeIds(projectId, normalizedSelection);
+      onSelectionChange?.(normalizedSelection);
+      return;
+    }
+
     // Multi-Select Logic
     if (e && (e.metaKey || e.ctrlKey)) {
         // Toggle selection
@@ -905,25 +1397,13 @@ export default function FileExplorer({
         }
     }
 
-    if (mode === "select") {
-        if (!onSelectionChange) return;
-        // Use prop directly, assuming it's stable or we accept dependency.
-        const currentSelected = useFilesWorkspaceStore.getState().byProjectId[projectId]?.selectedNodeIds || [];
-        const exists = currentSelected.includes(node.id);
-        const newSelection = exists
-            ? currentSelected.filter(id => id !== node.id)
-            : [...currentSelected, node.id];
-        onSelectionChange(newSelection);
-        return;
-    }
-
     setSelectedNodeIds(projectId, [node.id]);
     setSelectedNode(projectId, node.id, node.type === "folder" ? node.id : node.parentId ?? null);
     if (node.type === "file") {
       addRecent(projectId, node.id);
       onOpenFile(node);
     }
-  }, [projectId, rowsToRender, mode, onSelectionChange, selectedNodeId, upsertNodes, setSelectedNode, setSelectedNodeIds, addRecent, onOpenFile]);
+  }, [projectId, rowsToRender, mode, selectedNodeId, setSelectedNode, setSelectedNodeIds, addRecent, onOpenFile, controlledSelectedNodeIds, onSelectionChange]);
 
   // Keyboard navigation: arrows operate on the currently rendered list.
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -1022,12 +1502,7 @@ export default function FileExplorer({
     }
   };
 
-  const beginDrag = (nodeId: string) => {
-    setDraggingId(nodeId);
-  };
-  const endDrag = () => setDraggingId(null);
-
-  const handleDropOnFolder = async (folderId: string, draggedId: string) => {
+  const handleDropOnFolder = useCallback(async (folderId: string, draggedId: string) => {
     if (!canEdit) return;
     if (folderId === draggedId) return;
 
@@ -1042,32 +1517,74 @@ export default function FileExplorer({
     nodesToMove = nodesToMove.filter(id => id !== folderId);
     if (nodesToMove.length === 0) return;
 
+    const sortedIds = [...nodesToMove].sort();
+    const mutationKey = `drop-move:${projectId}:${folderId}:${sortedIds.join(",")}`;
+
     try {
-      let movedCount = 0;
-      await Promise.all(nodesToMove.map(async (id) => {
+      const result = await runUniqueMutation(mutationKey, async () => {
+        const staleParents = new Set<string | null>();
+        for (const id of nodesToMove) {
           const oldParentId = nodesById[id]?.parentId ?? null;
-          // Prevent moving into self or descendant (simple check)
-          if (id === folderId) return; 
-          
-          const updated = await moveNode(id, folderId, projectId);
-          upsertNodes(projectId, [updated as ProjectNode]);
-          movedCount++;
+          if (oldParentId !== folderId) staleParents.add(oldParentId);
+        }
 
-          // refresh old parent
-          if (oldParentId && oldParentId !== folderId) {
-             await loadFolderContent(oldParentId, 'refresh');
-          }
-      }));
+        const updatedNodes = (await bulkMoveNodes(sortedIds, folderId, projectId)) as ProjectNode[];
+        if (updatedNodes.length > 0) upsertNodes(projectId, updatedNodes);
 
-      if (movedCount > 0) {
-        showToast(`Moved ${movedCount} item${movedCount > 1 ? 's' : ''}`, "success");
-        await loadFolderContent(folderId, 'refresh');
-        toggleExpanded(projectId, folderId, true);
-      }
+        if (updatedNodes.length > 0) {
+          await Promise.all(Array.from(staleParents).map((pid) => loadFolderContent(pid, "refresh")));
+          await loadFolderContent(folderId, "refresh");
+          toggleExpanded(projectId, folderId, true);
+        }
+        return updatedNodes.length;
+      });
+
+      if (result === null || result === 0) return;
+      showToast(`Moved ${result} item${result === 1 ? "" : "s"}`, "success");
+      recordOperation({
+        label: `Dragged ${result} item${result === 1 ? "" : "s"} to folder`,
+        status: "success",
+      });
     } catch (e: any) {
       showToast(`Move failed: ${e?.message || "Unknown error"}`, "error");
+      recordOperation({
+        label: "Drag move failed",
+        status: "error",
+      });
     }
-  };
+  }, [canEdit, storeSelectedNodeIds, nodesById, projectId, runUniqueMutation, upsertNodes, loadFolderContent, toggleExpanded, showToast, recordOperation]);
+
+  const handleOpenNodeFromMenu = useCallback(
+    (node: ProjectNode) => {
+      handleSelect(node);
+      if (node.type === "folder" && !expandedFolderIds[node.id]) {
+        void handleToggleFolder(node);
+      }
+    },
+    [expandedFolderIds, handleSelect, handleToggleFolder]
+  );
+
+  const handleMoveFromMenu = useCallback(
+    (node: ProjectNode) => {
+      openMove(resolveActionNodes(node));
+    },
+    [openMove, resolveActionNodes]
+  );
+
+  const handleDeleteFromMenu = useCallback(
+    (node: ProjectNode) => {
+      openDelete(resolveActionNodes(node));
+    },
+    [openDelete, resolveActionNodes]
+  );
+
+  const handleUploadToFolder = useCallback(
+    (folderId: string | null) => {
+      if (!canEdit) return;
+      openUpload(folderId);
+    },
+    [canEdit, openUpload]
+  );
 
 
 
@@ -1081,7 +1598,7 @@ export default function FileExplorer({
     // State
     nodesById,
     selectedNodeId,
-    selectedNodeIds: storeSelectedNodeIds,
+    selectedNodeIds: effectiveSelectedNodeIds,
     expandedFolderIds,
     favorites,
     taskLinkCounts,
@@ -1093,23 +1610,49 @@ export default function FileExplorer({
     // Actions
     onToggle: (node: ProjectNode) => void handleToggleFolder(node),
     onSelect: (node: ProjectNode, e?: React.MouseEvent) => handleSelect(node, e),
-    onDragStart: (nodeId: string) => beginDrag(nodeId),
-    onDragEnd: () => endDrag(),
+    onDragStart: () => {},
+    onDragEnd: () => {},
     onDrop: (targetId: string, draggedId: string) => void handleDropOnFolder(targetId, draggedId),
     onLoadMore: (pid: string | null) => handleLoadMore(pid),
     openCreate: (kind: "file" | "folder") => openCreate(kind),
+    createInFolder: (folderId: string | null, kind: "file" | "folder") =>
+      openCreateInFolder(folderId, kind),
+    uploadToFolder: (folderId: string | null) => handleUploadToFolder(folderId),
+    openNode: (node: ProjectNode) => handleOpenNodeFromMenu(node),
+    renameNode: (node: ProjectNode) => openRename(node),
+    moveNode: (node: ProjectNode) => handleMoveFromMenu(node),
+    deleteNode: (node: ProjectNode) => handleDeleteFromMenu(node),
+    toggleFavorite: (nodeId: string) => toggleFavorite(projectId, nodeId),
+    onTaskLinksClick: (node: ProjectNode) => handleTaskLinksClick(node),
     restoreNode: async (id: string) => {
-        await restoreNode(id, projectId);
+        const mutationKey = `restore:${projectId}:${id}`;
+        const result = await runUniqueMutation(mutationKey, async () => {
+          await bulkRestoreNodes([id], projectId);
+          const nodes = (await getTrashNodes(projectId)) as ProjectNode[];
+          setTrashNodesState(nodes);
+          const node = nodesById[id];
+          if (node?.parentId) await loadFolderContent(node.parentId, "refresh");
+          return true;
+        });
+        if (result === null) return;
         showToast("Restored", "success");
-        const nodes = (await getTrashNodes(projectId)) as ProjectNode[];
-        setTrashNodesState(nodes);
-        const node = nodesById[id];
-        if (node?.parentId) await loadFolderContent(node.parentId, 'refresh');
+        recordOperation({
+          label: "Restored item",
+          status: "success",
+          undo: {
+            label: "Undo",
+            run: async () => {
+              await bulkTrashNodes([id], projectId);
+              const nodes = (await getTrashNodes(projectId)) as ProjectNode[];
+              setTrashNodesState(nodes);
+            },
+          },
+        });
     }
   }), [
     nodesById,
     selectedNodeId,
-    storeSelectedNodeIds,
+    effectiveSelectedNodeIds,
     expandedFolderIds,
     favorites,
     taskLinkCounts,
@@ -1117,8 +1660,55 @@ export default function FileExplorer({
     canEdit,
     projectName,
     effectiveMode,
-    handleSelect // added dep
+    projectId,
+    handleSelect,
+    handleToggleFolder,
+    handleDropOnFolder,
+    handleLoadMore,
+    openCreate,
+    openCreateInFolder,
+    handleUploadToFolder,
+    handleOpenNodeFromMenu,
+    openRename,
+    handleMoveFromMenu,
+    handleDeleteFromMenu,
+    handleTaskLinksClick,
+    toggleFavorite,
+    runUniqueMutation,
+    recordOperation,
+    showToast,
+    loadFolderContent
   ]);
+
+  const handleSaveCurrentView = useCallback(() => {
+    const defaultName = `View ${new Date().toLocaleDateString()}`;
+    const name = window.prompt("Save current view as:", defaultName);
+    if (!name) return;
+    saveCurrentView(projectId, name);
+    const latestViews = useFilesWorkspaceStore.getState().byProjectId[projectId]?.savedViews || [];
+    const saved = latestViews.find(
+      (view) => view.name.toLowerCase() === name.trim().toLowerCase()
+    );
+    if (saved) setSelectedSavedViewId(saved.id);
+    showToast("View saved", "success");
+  }, [projectId, saveCurrentView, showToast]);
+
+  const handleApplySavedView = useCallback(
+    (viewId: string) => {
+      if (!viewId) return;
+      applySavedView(projectId, viewId);
+      setSelectedSavedViewId(viewId);
+      showToast("View applied", "success");
+    },
+    [applySavedView, projectId, showToast]
+  );
+
+  const handleDeleteSavedView = useCallback(() => {
+    if (!selectedSavedViewId) return;
+    deleteSavedView(projectId, selectedSavedViewId);
+    setSelectedSavedViewId("");
+    showToast("View removed", "success");
+  }, [deleteSavedView, projectId, selectedSavedViewId, showToast]);
 
   return (
     <div
@@ -1140,9 +1730,59 @@ export default function FileExplorer({
             <option value="assets">Assets</option>
             <option value="all">All Files</option>
           </select>
+          <select
+            className="h-7 max-w-[140px] rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 text-xs font-medium px-2 focus:ring-2 focus:ring-indigo-500/20 outline-none cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+            value={selectedSavedViewId}
+            onChange={(e) => handleApplySavedView(e.target.value)}
+            title="Saved views"
+          >
+            <option value="">Saved views</option>
+            {savedViews.map((view) => (
+              <option key={view.id} value={view.id}>
+                {view.name}
+              </option>
+            ))}
+          </select>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 w-7 p-0"
+            onClick={handleSaveCurrentView}
+            title="Save current view"
+          >
+            <BookmarkPlus className="w-4 h-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 w-7 p-0"
+            onClick={handleDeleteSavedView}
+            disabled={!selectedSavedViewId}
+            title="Delete selected saved view"
+          >
+            <Trash2 className="w-4 h-4" />
+          </Button>
         </div>
 
         <div className="flex items-center gap-1">
+          <Button
+            variant={operationsOpen ? "secondary" : "ghost"}
+            size="sm"
+            className="h-7 px-2 text-xs"
+            onClick={() => setOperationsOpen((open) => !open)}
+            title="Operations center"
+          >
+            {operationsOpen ? "Ops on" : "Ops"}
+          </Button>
+          <Button
+            variant={isInsightsOpen ? "secondary" : "ghost"}
+            size="sm"
+            className="h-7 px-2 text-xs"
+            onClick={() => setIsInsightsOpen((open) => !open)}
+            title="Node insights"
+          >
+            Insights
+          </Button>
           <Button
             variant="ghost"
             size="sm"
@@ -1163,23 +1803,25 @@ export default function FileExplorer({
           >
             <FileText className="w-4 h-4" />
           </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 w-7 p-0"
-            onClick={() => {
-              if (!canEdit) return;
-              const parentId =
-                selectedNode?.type === "folder"
-                  ? selectedNode.id
-                  : selectedNode?.parentId ?? selectedFolderId ?? null;
-              openUpload(parentId);
-            }}
-            disabled={!canEdit}
-            title="Upload file"
-          >
-            <Upload className="w-4 h-4" />
-          </Button>
+          {uploadEnabled ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 w-7 p-0"
+              onClick={() => {
+                if (!canEdit) return;
+                const parentId =
+                  selectedNode?.type === "folder"
+                    ? selectedNode.id
+                    : selectedNode?.parentId ?? selectedFolderId ?? null;
+                openUpload(parentId);
+              }}
+              disabled={!canEdit}
+              title="Upload file"
+            >
+              <Upload className="w-4 h-4" />
+            </Button>
+          ) : null}
         </div>
       </div>
 
@@ -1265,28 +1907,12 @@ export default function FileExplorer({
             Loading…
           </div>
         ) : viewMode === "assets" ? (
-             <VirtuosoGrid
+          <VirtuosoGrid
                 style={{ height: "100%" }}
                 totalCount={rowsToRender.length}
                 components={{
-                    List: React.forwardRef(({ style, children, ...props }: any, ref) => (
-                        <div
-                        ref={ref}
-                        {...props}
-                        style={{
-                            display: "grid",
-                            gridTemplateColumns: "repeat(auto-fill, minmax(100px, 1fr))",
-                            gap: "8px",
-                            padding: "8px",
-                            ...style,
-                        }}
-                        >
-                        {children}
-                        </div>
-                    )),
-                    Item: ({ children, ...props }: any) => (
-                        <div {...props} style={{ padding: 0 }}>{children}</div>
-                    )
+                    List: AssetGridList,
+                    Item: AssetGridItem,
                 }}
                 itemContent={(index) => {
                     const row = rowsToRender[index];
@@ -1297,7 +1923,7 @@ export default function FileExplorer({
                     return (
                         <FileGridItem
                             node={node}
-                            selected={storeSelectedNodeIds.includes(node.id) || selectedNodeId === node.id}
+                            selected={effectiveSelectedNodeIds.includes(node.id) || selectedNodeId === node.id}
                             onSelect={(e) => handleSelect(node, e)}
                             onDoubleClick={() => {
                                 if (node.type === 'folder') void handleToggleFolder(node);
@@ -1317,6 +1943,122 @@ export default function FileExplorer({
           )
         }
       </div>
+
+      {operationsOpen ? (
+        <div className="flex-none border-t border-zinc-200 dark:border-zinc-800 bg-zinc-50/70 dark:bg-zinc-900/60">
+          <div className="px-3 py-2 flex items-center justify-between">
+            <div className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">Operation Center</div>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-[11px]"
+              onClick={() => setOperations([])}
+              disabled={operations.length === 0}
+            >
+              Clear
+            </Button>
+          </div>
+          <div className="max-h-28 overflow-auto px-2 pb-2 space-y-1">
+            {operations.length === 0 ? (
+              <div className="text-[11px] text-zinc-500 px-1 py-1">No recent operations.</div>
+            ) : (
+              operations.map((op) => (
+                <div
+                  key={op.id}
+                  className="rounded-md border border-zinc-200 dark:border-zinc-800 px-2 py-1 text-[11px] flex items-center gap-2"
+                >
+                  {op.status === "success" ? (
+                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
+                  ) : op.status === "error" ? (
+                    <ShieldX className="w-3.5 h-3.5 text-red-500" />
+                  ) : (
+                    <Loader2 className="w-3.5 h-3.5 text-zinc-500 animate-spin" />
+                  )}
+                  <span className="truncate text-zinc-700 dark:text-zinc-300">{op.label}</span>
+                  {op.undo ? (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-5 px-1.5 ml-auto text-[10px]"
+                      onClick={() => void executeUndo(op.id)}
+                    >
+                      <Undo2 className="w-3 h-3 mr-1" />
+                      {op.undo.label}
+                    </Button>
+                  ) : null}
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      ) : null}
+
+      {isInsightsOpen ? (
+        <div className="flex-none border-t border-zinc-200 dark:border-zinc-800 bg-zinc-50/70 dark:bg-zinc-900/60">
+          <div className="px-3 py-2 text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+            Node Insights
+            {selectedNode ? (
+              <span className="ml-2 font-normal text-zinc-500 truncate">{selectedNode.name}</span>
+            ) : null}
+          </div>
+          <div className="max-h-44 overflow-auto px-2 pb-2 space-y-2">
+            {!selectedNode ? (
+              <div className="text-[11px] text-zinc-500 px-1 py-1">
+                Select a file or folder to inspect linked tasks and activity.
+              </div>
+            ) : insightsLoading ? (
+              <div className="text-[11px] text-zinc-500 px-1 py-1 flex items-center gap-2">
+                <Loader2 className="w-3 h-3 animate-spin" />
+                Loading insights...
+              </div>
+            ) : insightsError ? (
+              <div className="text-[11px] text-red-500 px-1 py-1">{insightsError}</div>
+            ) : (
+              <>
+                <div className="rounded-md border border-zinc-200 dark:border-zinc-800 p-2">
+                  <div className="text-[11px] font-semibold mb-1 flex items-center gap-1">
+                    <Link2 className="w-3 h-3" />
+                    Linked Tasks ({linkedTasks.length})
+                  </div>
+                  {linkedTasks.length === 0 ? (
+                    <div className="text-[11px] text-zinc-500">No task links for this node.</div>
+                  ) : (
+                    <div className="space-y-1">
+                      {linkedTasks.slice(0, 6).map((task) => (
+                        <div key={task.id} className="text-[11px] rounded-sm bg-zinc-100/70 dark:bg-zinc-800/70 px-1.5 py-1">
+                          <div className="font-medium truncate">
+                            {task.taskNumber ? `#${task.taskNumber} ` : ""}{task.title}
+                          </div>
+                          <div className="text-zinc-500 uppercase tracking-wide">
+                            {task.status} • {task.priority}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div className="rounded-md border border-zinc-200 dark:border-zinc-800 p-2">
+                  <div className="text-[11px] font-semibold mb-1">Recent Activity</div>
+                  {nodeActivity.length === 0 ? (
+                    <div className="text-[11px] text-zinc-500">No activity recorded yet.</div>
+                  ) : (
+                    <div className="space-y-1">
+                      {nodeActivity.slice(0, 6).map((entry) => (
+                        <div key={entry.id} className="text-[11px] rounded-sm bg-zinc-100/70 dark:bg-zinc-800/70 px-1.5 py-1">
+                          <div className="font-medium truncate">{entry.type.replaceAll("_", " ")}</div>
+                          <div className="text-zinc-500 truncate">
+                            {entry.by || "system"} • {new Date(entry.at).toLocaleString()}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      ) : null}
       
       
       {/* Source Control Section */}
@@ -1362,7 +2104,7 @@ export default function FileExplorer({
         onOpenChange={(open) => setCreateDialog(open ? createDialog : { open: false })}
       >
         {createDialog.open ? (
-          <DialogContent>
+          <DialogContent className={nestedDialogClassName} overlayClassName={nestedDialogOverlayClassName}>
             <DialogHeader>
               <DialogTitle>
                 {createDialog.kind === "folder" ? "Create folder" : "Create file"}
@@ -1393,9 +2135,47 @@ export default function FileExplorer({
         ) : null}
       </Dialog>
 
+      {/* Rename dialog */}
+      <Dialog
+        open={!!renameState.nodeId}
+        onOpenChange={(open) => {
+          if (!open) setRenameState({ nodeId: null, value: "", original: "" });
+        }}
+      >
+        {renameState.nodeId ? (
+          <DialogContent className={nestedDialogClassName} overlayClassName={nestedDialogOverlayClassName}>
+            <DialogHeader>
+              <DialogTitle>Rename</DialogTitle>
+            </DialogHeader>
+            <div className="py-2">
+              <Input
+                placeholder="New name"
+                value={renameState.value}
+                onChange={(e) => setRenameState((s) => ({ ...s, value: e.target.value }))}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void confirmRename();
+                }}
+                autoFocus
+              />
+            </div>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setRenameState({ nodeId: null, value: "", original: "" })}
+              >
+                Cancel
+              </Button>
+              <Button onClick={() => void confirmRename()} disabled={!canEdit}>
+                Save
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        ) : null}
+      </Dialog>
+
       {/* Delete dialog */}
       <Dialog open={deleteDialog.open} onOpenChange={(open) => setDeleteDialog((d) => ({ ...d, open, nodes: open ? d.nodes : [] }))}>
-        <DialogContent>
+        <DialogContent className={nestedDialogClassName} overlayClassName={nestedDialogOverlayClassName}>
           <DialogHeader>
             <DialogTitle>Move to Trash</DialogTitle>
           </DialogHeader>
@@ -1424,7 +2204,7 @@ export default function FileExplorer({
           setMoveDialog((d) => ({ ...d, open, nodes: open ? d.nodes : [] }))
         }
       >
-        <DialogContent>
+        <DialogContent className={nestedDialogClassName} overlayClassName={nestedDialogOverlayClassName}>
           <DialogHeader>
             <DialogTitle>Move</DialogTitle>
           </DialogHeader>
@@ -1458,7 +2238,7 @@ export default function FileExplorer({
         open={quickOpen.open}
         onOpenChange={(open) => setQuickOpen((s) => ({ ...s, open }))}
       >
-        <DialogContent>
+        <DialogContent className={nestedDialogClassName} overlayClassName={nestedDialogOverlayClassName}>
           <DialogHeader>
             <DialogTitle>Quick Open</DialogTitle>
           </DialogHeader>
@@ -1510,7 +2290,7 @@ export default function FileExplorer({
         open={commandPalette.open}
         onOpenChange={(open) => setCommandPalette((s) => ({ ...s, open }))}
       >
-        <DialogContent>
+        <DialogContent className={nestedDialogClassName} overlayClassName={nestedDialogOverlayClassName}>
           <DialogHeader>
             <DialogTitle>Commands</DialogTitle>
           </DialogHeader>
@@ -1600,7 +2380,8 @@ function FolderPicker({
 
   useEffect(() => {
     const run = async () => {
-      const nodes = (await getProjectNodes(projectId, null)) as ProjectNode[];
+      const res = await getProjectNodes(projectId, null);
+      const nodes = Array.isArray(res) ? res : res.nodes;
       setRootFolders(nodes.filter((n) => n.type === "folder"));
     };
     void run();
@@ -1616,7 +2397,8 @@ function FolderPicker({
     if (children[node.id]) return;
     setLoading((p) => ({ ...p, [node.id]: true }));
     try {
-      const nodes = (await getProjectNodes(projectId, node.id)) as ProjectNode[];
+      const res = await getProjectNodes(projectId, node.id);
+      const nodes = Array.isArray(res) ? res : res.nodes;
       setChildren((p) => ({ ...p, [node.id]: nodes.filter((n) => n.type === "folder") }));
     } finally {
       setLoading((p) => ({ ...p, [node.id]: false }));

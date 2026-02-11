@@ -1,0 +1,95 @@
+import type { WidgetConfig, WidgetId } from './types';
+
+// ============================================================================
+// Widget Registry — static config for all available widgets
+// ============================================================================
+
+export const WIDGET_REGISTRY: Record<WidgetId, WidgetConfig> = {
+    todays_focus: {
+        id: 'todays_focus',
+        label: "Today's Focus",
+        iconName: 'Target',
+        iconBg: 'bg-blue-50 dark:bg-blue-900/20',
+        iconColor: 'text-blue-600 dark:text-blue-400',
+        minColSpan: 1,
+        minRowSpan: 1,
+        maxColSpan: 3,
+        maxRowSpan: 3,
+        description: 'Active tasks assigned to you',
+    },
+    recent_activity: {
+        id: 'recent_activity',
+        label: 'Recent Activity',
+        iconName: 'Activity',
+        iconBg: 'bg-violet-50 dark:bg-violet-900/20',
+        iconColor: 'text-violet-600 dark:text-violet-400',
+        minColSpan: 1,
+        minRowSpan: 1,
+        maxColSpan: 3,
+        maxRowSpan: 3,
+        description: 'Timeline of actions in your world',
+    },
+    my_projects: {
+        id: 'my_projects',
+        label: 'My Projects',
+        iconName: 'FolderKanban',
+        iconBg: 'bg-indigo-50 dark:bg-indigo-900/20',
+        iconColor: 'text-indigo-600 dark:text-indigo-400',
+        minColSpan: 1,
+        minRowSpan: 1,
+        maxColSpan: 3,
+        maxRowSpan: 2,
+        description: 'Quick-access project list',
+    },
+    urgent_items: {
+        id: 'urgent_items',
+        label: 'Urgent Items',
+        iconName: 'AlertTriangle',
+        iconBg: 'bg-rose-50 dark:bg-rose-900/20',
+        iconColor: 'text-rose-600 dark:text-rose-400',
+        minColSpan: 1,
+        minRowSpan: 1,
+        maxColSpan: 2,
+        maxRowSpan: 2,
+        description: 'Overdue and high-priority tasks',
+    },
+    quick_notes: {
+        id: 'quick_notes',
+        label: 'Quick Notes',
+        iconName: 'StickyNote',
+        iconBg: 'bg-amber-50 dark:bg-amber-900/20',
+        iconColor: 'text-amber-600 dark:text-amber-400',
+        minColSpan: 1,
+        minRowSpan: 1,
+        maxColSpan: 3,
+        maxRowSpan: 3,
+        description: 'Scratchpad for quick ideas and notes',
+    },
+    recent_messages: {
+        id: 'recent_messages',
+        label: 'Recent Messages',
+        iconName: 'MessageSquare',
+        iconBg: 'bg-violet-50 dark:bg-violet-900/20',
+        iconColor: 'text-violet-600 dark:text-violet-400',
+        minColSpan: 1,
+        minRowSpan: 1,
+        maxColSpan: 2,
+        maxRowSpan: 2,
+        description: 'Latest conversations',
+    },
+    shortcuts: {
+        id: 'shortcuts',
+        label: 'Shortcuts',
+        iconName: 'Zap',
+        iconBg: 'bg-emerald-50 dark:bg-emerald-900/20',
+        iconColor: 'text-emerald-600 dark:text-emerald-400',
+        minColSpan: 1,
+        minRowSpan: 1,
+        maxColSpan: 3,
+        maxRowSpan: 1,
+        description: 'Quick-action buttons for common tasks',
+    },
+};
+
+/** All widget IDs in the registry */
+export const ALL_WIDGET_IDS = Object.keys(WIDGET_REGISTRY) as WidgetId[];

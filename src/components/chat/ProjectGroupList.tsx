@@ -5,6 +5,7 @@ import { useChatStore } from '@/stores/chatStore';
 import type { ProjectGroupConversation } from '@/app/actions/messaging';
 import { formatDistanceToNow } from 'date-fns';
 import { Folder, Loader2, Users } from 'lucide-react';
+import { Virtuoso } from 'react-virtuoso';
 
 // ============================================================================
 // PROJECT GROUP LIST
@@ -62,7 +63,7 @@ const ProjectGroupItem = memo(function ProjectGroupItem({
 
                 {/* Last Message Preview */}
                 <p className="text-xs text-zinc-500 dark:text-zinc-400 truncate mt-0.5">
-                    {group.lastMessage?.content || 'No messages yet'}
+                    {formatProjectPreview(group.lastMessage)}
                 </p>
 
                 {/* Member Count */}
@@ -119,14 +120,39 @@ export function ProjectGroupList() {
     }
 
     return (
-        <div className="flex-1 overflow-y-auto divide-y divide-zinc-100 dark:divide-zinc-800">
-            {projectGroups.map((group) => (
+        <Virtuoso
+            style={{ height: '100%' }}
+            data={projectGroups}
+            itemContent={(_, group) => (
                 <ProjectGroupItem
                     key={group.id}
                     group={group}
                     onOpen={handleOpenConversation}
                 />
-            ))}
-        </div>
+            )}
+        />
     );
+}
+
+function formatProjectPreview(
+    lastMessage: ProjectGroupConversation['lastMessage'] | null | undefined
+): string {
+    if (!lastMessage) return 'No messages yet';
+    const text = (lastMessage.content || '').trim();
+    if (text.length > 0) {
+        if (text.includes('```')) return 'Code snippet';
+        return text;
+    }
+    switch (lastMessage.type) {
+        case 'image':
+            return 'Photo';
+        case 'video':
+            return 'Video';
+        case 'file':
+            return 'Attachment';
+        case 'system':
+            return 'System update';
+        default:
+            return 'Message';
+    }
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, forwardRef, useMemo } from "react";
+import { useState, forwardRef, useMemo } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { Search, Users, MessageSquare, X, Loader2, TrendingUp, UserCheck, SendHorizontal, CalendarDays } from "lucide-react";
@@ -19,7 +19,6 @@ interface ConnectionsClientProps {
 }
 
 export default function ConnectionsClient({
-    initialUser,
     embedded = false
 }: ConnectionsClientProps) {
     const router = useRouter();
@@ -37,9 +36,25 @@ export default function ConnectionsClient({
     const { data: statsData, isLoading: statsLoading } = useConnectionStats();
     const { disconnect } = useConnectionMutations();
 
+    const GridList = useMemo(() => {
+        const Component = forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>((props, ref) => (
+            <div {...props} ref={ref} className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 pb-8" />
+        ));
+        Component.displayName = "ConnectionsGridList";
+        return Component;
+    }, []);
+
+    const GridItem = useMemo(() => {
+        const Component = forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>((props, ref) => (
+            <div {...props} ref={ref} className="h-full" />
+        ));
+        Component.displayName = "ConnectionsGridItem";
+        return Component;
+    }, []);
+
     // Flatten all pages
     const connections = useMemo(() => {
-        return connectionsData?.pages.flatMap(page => page.connections) || [];
+        return connectionsData?.pages.flatMap(page => page.items) || [];
     }, [connectionsData]);
 
     const stats = statsData || {
@@ -61,7 +76,7 @@ export default function ConnectionsClient({
     };
 
     const handleMessage = (userId: string) => {
-        router.push(`/messages?user=${userId}`);
+        router.push(`/messages?userId=${userId}`);
     };
 
     if (connectionsLoading && !connectionsData) {
@@ -166,12 +181,8 @@ export default function ConnectionsClient({
                             }
                         }}
                         components={{
-                            List: forwardRef((props, ref) => (
-                                <div {...props} ref={ref} className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 pb-8" />
-                            )),
-                            Item: forwardRef((props, ref) => (
-                                <div {...props} ref={ref} className="h-full" />
-                            )),
+                            List: GridList,
+                            Item: GridItem,
                             Footer: () => isFetchingNextPage ? (
                                 <div className="col-span-full flex justify-center py-4">
                                     <Loader2 className="w-6 h-6 animate-spin text-zinc-400" />

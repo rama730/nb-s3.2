@@ -74,8 +74,19 @@ export default function SprintPlanning({
     const currentSprint = activeSprints.find(s => s.id === displaySprintId);
 
     // Filtered tasks for selected sprint (Fetched from server now!)
-    const { data: sprintTasks = [], isLoading: loadingTasks } = useSprintTasks(displaySprintId || "");
-    const safeSprintTasks = sprintTasks as unknown as SprintTask[];
+    const {
+        data: sprintTasksData,
+        isLoading: loadingTasks,
+        fetchNextPage: fetchNextSprintTasks,
+        hasNextPage: hasNextSprintTasks,
+        isFetchingNextPage: isFetchingNextSprintTasks,
+    } = useSprintTasks(displaySprintId || "");
+
+    const safeSprintTasks = useMemo(() => {
+        return (sprintTasksData?.pages.flatMap((p: any) => p.tasks) || []) as SprintTask[];
+    }, [sprintTasksData]);
+
+    const goalText = currentSprint?.goal || "Focus on delivering value.";
 
     // Calculate Progress
     const progress = useMemo(() => {
@@ -265,7 +276,7 @@ export default function SprintPlanning({
                                             </span>
                                          </div>
                                         <p className="text-lg text-zinc-600 dark:text-zinc-400 font-serif italic">
-                                            "{currentSprint.goal || "Focus on delivering value."}"
+                                            {`"${goalText}"`}
                                         </p>
                                     </div>
                                     <div className="flex flex-col items-end gap-1">
@@ -312,7 +323,7 @@ export default function SprintPlanning({
                                             <CheckCircle className="w-8 h-8 text-zinc-300 dark:text-zinc-600" />
                                         </div>
                                         <p className="text-zinc-900 dark:text-zinc-100 font-medium">No tasks in this sprint</p>
-                                        <p className="text-zinc-500 text-sm mt-1">Assign tasks from the "Tasks" tab to see them here.</p>
+                                        <p className="text-zinc-500 text-sm mt-1">Assign tasks from the Tasks tab to see them here.</p>
                                     </div>
                                 ) : (
                                     <div className="divide-y divide-zinc-100 dark:divide-zinc-800/50">
@@ -430,6 +441,17 @@ export default function SprintPlanning({
                                                 </div>
                                             </div>
                                         ))}
+                                        {hasNextSprintTasks && (
+                                            <div className="p-4">
+                                                <button
+                                                    onClick={() => fetchNextSprintTasks()}
+                                                    disabled={isFetchingNextSprintTasks}
+                                                    className="w-full py-2 text-xs font-semibold text-indigo-600 dark:text-indigo-400 border border-dashed border-indigo-200 dark:border-indigo-800 rounded-lg hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-colors disabled:opacity-60"
+                                                >
+                                                    {isFetchingNextSprintTasks ? "Loading more tasks..." : "Load more tasks"}
+                                                </button>
+                                            </div>
+                                        )}
                                     </div>
                                 )}
                             </div>

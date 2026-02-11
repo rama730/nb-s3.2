@@ -11,7 +11,6 @@ type ProjectImportEvent = {
             metadata?: any;
         };
         userId: string;
-        accessToken?: string;
     };
 };
 

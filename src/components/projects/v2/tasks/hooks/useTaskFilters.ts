@@ -10,16 +10,12 @@ interface UseTaskFiltersProps {
 export function useTaskFilters({ tasks, currentUserId, scope }: UseTaskFiltersProps) {
 
     const filteredTasks = useMemo(() => {
-        // Basic scope filtering can be expanded here
-        // For now, it passes through all tasks as in the original code
-        // or implements the backlog filter if logic exists
-        let result = [...tasks];
-
+        // Basic scope filtering can be expanded here.
         if (scope === 'backlog') {
-            // Example: result = result.filter(t => !t.sprintId);
+            return tasks.filter((t) => !t.sprintId);
         }
 
-        return result;
+        return tasks;
     }, [tasks, scope]);
 
     const myFocusTasks = useMemo(() => {

@@ -2,17 +2,23 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import {
     getConversations,
+    getConversationById,
     getMessages,
     sendMessage as sendMessageAction,
+    sendMessageWithAttachments,
     markConversationAsRead,
     getOrCreateDMConversation,
     getUnreadCount,
+    getPinnedMessages,
+    setMessagePinned,
     type ConversationWithDetails,
     type MessageWithSender,
+    type UploadedAttachment,
 } from '@/app/actions/messaging';
 import { checkConnectionStatus, sendConnectionRequest } from '@/app/actions/connections';
 import { getInboxApplicationsAction } from '@/app/actions/applications';
 import { getProjectGroups, type ProjectGroupConversation } from '@/app/actions/messaging';
+import { validateSingleOutboxKey, validateUniqueConversationIds } from '@/lib/chat/contracts';
 
 // ============================================================================
 // TYPES
@@ -25,6 +31,38 @@ interface MessageCache {
     hasMore: boolean;
     loading: boolean;
     cursor: string | null;
+}
+
+interface OutboxMessage {
+    clientMessageId: string;
+    conversationId: string;
+    content: string;
+    attachments: UploadedAttachment[];
+    replyToMessageId?: string | null;
+    createdAt: number;
+    attempts: number;
+    nextRetryAt: number;
+    lastError?: string;
+}
+
+interface ReplyTargetDraft {
+    id: string;
+    content: string | null;
+    senderId: string | null;
+    senderName: string | null;
+    type: MessageWithSender['type'];
+}
+
+type MessageDeliveryState = 'sending' | 'queued' | 'sent' | 'delivered' | 'read' | 'failed';
+
+function withDeliveryMetadata(
+    metadata: Record<string, unknown> | null | undefined,
+    state: MessageDeliveryState
+): Record<string, unknown> {
+    return {
+        ...(metadata || {}),
+        deliveryState: state,
+    };
 }
 
 export interface InboxApplication {
@@ -72,9 +110,13 @@ interface ChatState {
 
     // Messages cache (by conversation)
     messagesByConversation: Record<string, MessageCache>;
+    pinnedMessagesByConversation: Record<string, MessageWithSender[]>;
 
     // Drafts (persists across popup/page)
     draftsByConversation: Record<string, string>;
+    replyTargetByConversation: Record<string, ReplyTargetDraft | null>;
+    outboxByConversation: Record<string, OutboxMessage[]>;
+    outboxFlushing: boolean;
 
     // Applications Cache (Inbox Zero)
     applications: InboxApplication[];
@@ -124,9 +166,16 @@ interface ChatState {
     minimizePopup: () => void;
     maximizePopup: () => void;
     startConversationWithUser: (userId: string) => Promise<string | null>;
-    sendMessage: (conversationId: string, content: string) => Promise<boolean>;
+    sendMessage: (
+        conversationId: string,
+        content: string,
+        options?: { attachments?: UploadedAttachment[]; clientMessageId?: string; replyToMessageId?: string | null }
+    ) => Promise<{ ok: boolean; queued?: boolean }>;
+    flushOutbox: () => Promise<void>;
     loadMoreMessages: (conversationId: string) => Promise<void>;
     setDraft: (conversationId: string, text: string) => void;
+    setReplyTarget: (conversationId: string, target: ReplyTargetDraft | null) => void;
+    clearReplyTarget: (conversationId: string) => void;
     markAsRead: (conversationId: string) => Promise<void>;
     setConnected: (connected: boolean, error?: string) => void;
     setConversations: (conversations: ConversationWithDetails[]) => void;
@@ -134,12 +183,14 @@ interface ChatState {
     upsertConversation: (conversation: ConversationWithDetails) => void;
 
     // Internal (called by realtime subscription)
-    _handleNewMessage: (rawMessage: any) => void;
+    _handleNewMessage: (rawMessage: any, viewerId?: string | null) => void;
 
     _updateUnreadCount: () => Promise<void>;
     // Connection Actions
     checkActiveConnectionStatus: () => Promise<void>;
     refreshMessages: (conversationId: string) => Promise<void>;
+    fetchPinnedMessages: (conversationId: string) => Promise<void>;
+    pinMessage: (messageId: string, conversationId: string, pinned: boolean) => Promise<boolean>;
     sendConnectionRequest: () => Promise<boolean>;
     _handleMessageUpdate: (rawMessage: any) => void;
     setPartialStatus: (status: 'pending' | 'accepted' | 'rejected') => void;
@@ -177,7 +228,11 @@ export const useChatStore = create<ChatState>()(
             activeApplicationStatus: null,
             activeProjectId: null,
             messagesByConversation: {},
+            pinnedMessagesByConversation: {},
             draftsByConversation: {},
+            replyTargetByConversation: {},
+            outboxByConversation: {},
+            outboxFlushing: false,
 
             // Applications
             applications: [],
@@ -214,6 +269,10 @@ export const useChatStore = create<ChatState>()(
                     const result = await getConversations(20, undefined);
 
                     if (result.success && result.conversations) {
+                        validateUniqueConversationIds(
+                            result.conversations.map((conversation) => conversation.id),
+                            'initialize'
+                        );
                         // Build unread counts map
                         const unreadCounts: Record<string, number> = {};
                         let totalUnread = 0;
@@ -232,6 +291,7 @@ export const useChatStore = create<ChatState>()(
                             hasMoreConversations: result.hasMore || false,
                             conversationsCursor: result.nextCursor || null,
                         });
+                        void get().flushOutbox();
                     } else {
                         set({
                             conversationsError: result.error || 'Failed to load conversations',
@@ -264,26 +324,33 @@ export const useChatStore = create<ChatState>()(
                     if (result.success && result.conversations) {
                         const newConversations = result.conversations;
 
-                        // Merge unread counts
-                        const unreadCounts = { ...state.unreadCounts };
-                        let totalUnread = state.totalUnread;
+                        set(prev => {
+                            const existingIds = new Set(prev.conversations.map((conv) => conv.id));
+                            const dedupedConversations = newConversations.filter((conv) => !existingIds.has(conv.id));
+                            const mergedConversations = [...prev.conversations, ...dedupedConversations];
+                            validateUniqueConversationIds(
+                                mergedConversations.map((conversation) => conversation.id),
+                                'loadMoreConversations'
+                            );
 
-                        for (const conv of newConversations) {
-                            // Only add if not already counted (deduplication check usually not needed if offset correct but good for safety)
-                            if (unreadCounts[conv.id] === undefined) {
+                            const unreadCounts = { ...prev.unreadCounts };
+                            for (const conv of dedupedConversations) {
                                 unreadCounts[conv.id] = conv.unreadCount;
-                                totalUnread += conv.unreadCount;
                             }
-                        }
+                            const totalUnread = Object.values(unreadCounts).reduce((sum, count) => sum + count, 0);
 
-                        set(prev => ({
-                            conversations: [...prev.conversations, ...newConversations],
-                            unreadCounts,
-                            totalUnread,
-                            conversationsLoading: false,
-                            hasMoreConversations: result.hasMore || false,
-                            conversationsCursor: result.nextCursor || null,
-                        }));
+                            const nextCursor = result.nextCursor || null;
+                            const hasMoreConversations = !!result.hasMore && nextCursor !== prev.conversationsCursor;
+
+                            return {
+                                conversations: mergedConversations,
+                                unreadCounts,
+                                totalUnread,
+                                conversationsLoading: false,
+                                hasMoreConversations,
+                                conversationsCursor: nextCursor,
+                            };
+                        });
                     } else {
                         set({ conversationsLoading: false });
                     }
@@ -302,6 +369,10 @@ export const useChatStore = create<ChatState>()(
                     const result = await getConversations(20, undefined);
 
                     if (result.success && result.conversations) {
+                        validateUniqueConversationIds(
+                            result.conversations.map((conversation) => conversation.id),
+                            'refreshConversations'
+                        );
                         const unreadCounts: Record<string, number> = {};
                         let totalUnread = 0;
 
@@ -393,6 +464,8 @@ export const useChatStore = create<ChatState>()(
                     }
                 }
 
+                void get().fetchPinnedMessages(conversationId);
+
                 // Mark as read
                 await get().markAsRead(conversationId);
 
@@ -441,11 +514,28 @@ export const useChatStore = create<ChatState>()(
             // ================================================================
             startConversationWithUser: async (userId: string) => {
                 try {
+                    const state = get();
+                    const existingConversation = state.conversations.find(
+                        (conversation) =>
+                            conversation.type === 'dm' &&
+                            conversation.participants.some((participant) => participant.id === userId)
+                    );
+
+                    if (existingConversation) {
+                        await get().openConversation(existingConversation.id);
+                        return existingConversation.id;
+                    }
+
                     const result = await getOrCreateDMConversation(userId);
 
                     if (result.success && result.conversationId) {
-                        // Refresh conversations to include new one
-                        await get().refreshConversations();
+                        const hydrated = await getConversationById(result.conversationId);
+                        if (hydrated.success && hydrated.conversation) {
+                            get().upsertConversation(hydrated.conversation);
+                        } else {
+                            // Fallback if hydration query fails for any reason.
+                            await get().refreshConversations();
+                        }
 
                         // Open the conversation
                         await get().openConversation(result.conversationId);
@@ -463,118 +553,380 @@ export const useChatStore = create<ChatState>()(
             // ================================================================
             // SEND MESSAGE
             // ================================================================
-            sendMessage: async (conversationId: string, content: string) => {
-                if (!content.trim()) return false;
-
+            sendMessage: async (conversationId: string, content: string, options) => {
                 const state = get();
-                const tempId = `temp-${Date.now()}`;
+                const normalized = content.trim();
+                const attachments = options?.attachments || [];
+	                const replyTarget =
+	                    options?.replyToMessageId
+	                        ? (state.messagesByConversation[conversationId]?.messages || []).find(
+	                            (message) => message.id === options.replyToMessageId
+	                        ) || null
+	                        : state.replyTargetByConversation[conversationId] || null;
+	                const replyToMessageId = options?.replyToMessageId || replyTarget?.id || null;
+	                const replySenderName =
+	                    replyTarget && 'senderName' in replyTarget
+	                        ? (replyTarget.senderName || null)
+	                        : (replyTarget?.sender?.fullName || replyTarget?.sender?.username || null);
+	                if (!normalized && attachments.length === 0) return { ok: false };
 
-                // Optimistic update - add message immediately
+                const generatedClientId =
+                    options?.clientMessageId ||
+                    (typeof crypto !== 'undefined' && 'randomUUID' in crypto
+                        ? crypto.randomUUID()
+                        : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+
+                const tempId = `temp-${generatedClientId}`;
+                const queueMessage = (errorText: string) => {
+                    set(prev => {
+                        const existingQueue = prev.outboxByConversation[conversationId] || [];
+                        const alreadyQueued = existingQueue.some(
+                            item => item.clientMessageId === generatedClientId
+                        );
+
+                        const nextOutbox = alreadyQueued
+                            ? existingQueue.map(item => item.clientMessageId === generatedClientId
+                                ? { ...item, lastError: errorText }
+                                : item
+                            )
+                            : [
+                                ...existingQueue,
+                                {
+                                    clientMessageId: generatedClientId,
+                                    conversationId,
+                                    content: normalized,
+                                    attachments,
+                                    replyToMessageId,
+                                    createdAt: Date.now(),
+                                    attempts: 0,
+                                    nextRetryAt: Date.now(),
+                                    lastError: errorText,
+                                },
+                            ];
+
+                        const nextMessages = (prev.messagesByConversation[conversationId]?.messages || []).map((message) => {
+                            if (
+                                message.id === tempId ||
+                                message.clientMessageId === generatedClientId
+                            ) {
+                                return {
+                                    ...message,
+                                    metadata: withDeliveryMetadata({
+                                        ...(message.metadata || {}),
+                                        queued: true,
+                                        clientMessageId: generatedClientId,
+                                    }, 'queued'),
+                                };
+                            }
+                            return message;
+                        });
+
+                        const nextOutboxByConversation = {
+                            ...prev.outboxByConversation,
+                            [conversationId]: nextOutbox,
+                        };
+                        validateSingleOutboxKey(nextOutboxByConversation, 'sendMessage.queue');
+
+                        return {
+                            outboxByConversation: nextOutboxByConversation,
+                            messagesByConversation: {
+                                ...prev.messagesByConversation,
+                                [conversationId]: {
+                                    ...(prev.messagesByConversation[conversationId] || {
+                                        messages: [],
+                                        hasMore: true,
+                                        loading: false,
+                                        cursor: null,
+                                    }),
+                                    messages: nextMessages,
+                                },
+                            },
+                        };
+                    });
+                };
+
+                // Optimistic update
                 const optimisticMessage: MessageWithSender = {
                     id: tempId,
                     conversationId,
-                    senderId: null, // Will be filled by server
-                    content: content.trim(),
-                    type: 'text',
-                    metadata: {},
+                    senderId: null,
+                    clientMessageId: generatedClientId,
+                    content: normalized || null,
+                    type: attachments[0]?.type || 'text',
+                    metadata: withDeliveryMetadata({
+                        clientMessageId: generatedClientId,
+                        queued: false,
+                    }, 'sending'),
+	                    replyTo: replyTarget
+	                        ? {
+	                            id: replyTarget.id,
+	                            content: replyTarget.content || null,
+	                            type: replyTarget.type || 'text',
+	                            senderId: replyTarget.senderId || null,
+	                            senderName: replySenderName,
+	                            deletedAt: null,
+	                        }
+	                        : null,
                     createdAt: new Date(),
                     editedAt: null,
                     deletedAt: null,
                     sender: null,
-                    attachments: [],
+                    attachments: attachments.map((att) => ({
+                        id: att.id,
+                        type: att.type,
+                        url: att.url,
+                        filename: att.filename,
+                        sizeBytes: att.sizeBytes,
+                        mimeType: att.mimeType,
+                        thumbnailUrl: att.thumbnailUrl,
+                        width: att.width,
+                        height: att.height,
+                    })),
                 };
 
                 set(prev => ({
                     messagesByConversation: {
                         ...prev.messagesByConversation,
                         [conversationId]: {
-                            ...prev.messagesByConversation[conversationId],
+                            ...(prev.messagesByConversation[conversationId] || {
+                                messages: [],
+                                hasMore: true,
+                                loading: false,
+                                cursor: null,
+                            }),
                             messages: [
-                                ...(prev.messagesByConversation[conversationId]?.messages || []),
+                                ...(prev.messagesByConversation[conversationId]?.messages || []).filter(
+                                    message => message.clientMessageId !== generatedClientId
+                                ),
                                 optimisticMessage,
                             ],
                         },
                     },
-                    // Clear draft
                     draftsByConversation: {
                         ...prev.draftsByConversation,
                         [conversationId]: '',
                     },
+                    replyTargetByConversation: {
+                        ...prev.replyTargetByConversation,
+                        [conversationId]: null,
+                    },
                 }));
 
+                const isOnline = typeof navigator === 'undefined' ? true : navigator.onLine;
+                if (!isOnline) {
+                    queueMessage('offline');
+                    return { ok: true, queued: true };
+                }
+
                 try {
-                    const result = await sendMessageAction(conversationId, content.trim());
+                    const result = attachments.length > 0
+                        ? await sendMessageWithAttachments(conversationId, normalized, attachments, {
+                            clientMessageId: generatedClientId,
+                            replyToMessageId,
+                        })
+                        : await sendMessageAction(conversationId, normalized, 'text', undefined, {
+                            clientMessageId: generatedClientId,
+                            replyToMessageId,
+                        });
 
                     if (result.success && result.message) {
-                        // Replace optimistic message with real one
                         set(prev => {
                             const currentMessages = prev.messagesByConversation[conversationId]?.messages || [];
+                            const alreadyExists = currentMessages.some(message => message.id === result.message!.id);
+                            const filteredQueue = (prev.outboxByConversation[conversationId] || []).filter(
+                                item => item.clientMessageId !== generatedClientId
+                            );
 
-                            // Check if the real message was already added via realtime (race condition)
-                            const alreadyExists = currentMessages.some(m => m.id === result.message!.id);
+                            const nextMessages = alreadyExists
+                                ? currentMessages.filter(
+                                    message =>
+                                        message.id !== tempId &&
+                                        message.clientMessageId !== generatedClientId
+                                )
+                                : currentMessages.map((message) => {
+                                    if (
+                                        message.id === tempId ||
+                                        message.clientMessageId === generatedClientId
+                                    ) {
+                                        return result.message!;
+                                    }
+                                    return message;
+                                });
 
-                            if (alreadyExists) {
-                                // If it already exists, just remove the optimistic temp message
-                                return {
-                                    messagesByConversation: {
-                                        ...prev.messagesByConversation,
-                                        [conversationId]: {
-                                            ...prev.messagesByConversation[conversationId],
-                                            messages: currentMessages.filter(m => m.id !== tempId),
-                                        },
-                                    },
-                                };
-                            }
+                            const nextOutboxByConversation = {
+                                ...prev.outboxByConversation,
+                                [conversationId]: filteredQueue,
+                            };
+                            validateSingleOutboxKey(nextOutboxByConversation, 'sendMessage.success');
 
-                            // Otherwise, swap temp for real
                             return {
+                                outboxByConversation: nextOutboxByConversation,
                                 messagesByConversation: {
                                     ...prev.messagesByConversation,
                                     [conversationId]: {
-                                        ...prev.messagesByConversation[conversationId],
-                                        messages: currentMessages.map(
-                                            m => m.id === tempId ? result.message! : m
-                                        ),
+                                        ...(prev.messagesByConversation[conversationId] || {
+                                            messages: [],
+                                            hasMore: true,
+                                            loading: false,
+                                            cursor: null,
+                                        }),
+                                        messages: nextMessages,
                                     },
                                 },
                             };
                         });
 
-                        // Refresh conversations to update last message
-                        get().refreshConversations();
+                        void get().refreshConversations();
+                        return { ok: true };
+                    }
 
-                        return true;
-                    } else {
-                        // Remove failed message
-                        set(prev => ({
-                            messagesByConversation: {
-                                ...prev.messagesByConversation,
-                                [conversationId]: {
-                                    ...prev.messagesByConversation[conversationId],
-                                    messages: prev.messagesByConversation[conversationId]?.messages.filter(
-                                        m => m.id !== tempId
-                                    ) || [],
+                    queueMessage(result.error || 'send_failed');
+                    void get().flushOutbox();
+                    return { ok: true, queued: true };
+                } catch (error) {
+                    console.error('Error sending message:', error);
+                    queueMessage('send_exception');
+                    void get().flushOutbox();
+                    return { ok: true, queued: true };
+                }
+            },
+
+            // ================================================================
+            // FLUSH OUTBOX
+            // ================================================================
+            flushOutbox: async () => {
+                const state = get();
+                if (state.outboxFlushing) return;
+                if (typeof navigator !== 'undefined' && !navigator.onLine) return;
+
+                const allQueue = Object.values(state.outboxByConversation).flat();
+                if (allQueue.length === 0) return;
+
+                set({ outboxFlushing: true });
+                let anySuccess = false;
+
+                try {
+                    const now = Date.now();
+                    const eligible = allQueue
+                        .filter(item => item.nextRetryAt <= now)
+                        .sort((a, b) => a.createdAt - b.createdAt);
+
+                    for (const queued of eligible) {
+                        const sendResult = queued.attachments.length > 0
+                            ? await sendMessageWithAttachments(
+                                queued.conversationId,
+                                queued.content,
+                                queued.attachments,
+                                {
+                                    clientMessageId: queued.clientMessageId,
+                                    replyToMessageId: queued.replyToMessageId || null,
+                                }
+                            )
+                            : await sendMessageAction(
+                                queued.conversationId,
+                                queued.content,
+                                'text',
+                                undefined,
+                                {
+                                    clientMessageId: queued.clientMessageId,
+                                    replyToMessageId: queued.replyToMessageId || null,
+                                }
+                            );
+
+                        if (sendResult.success && sendResult.message) {
+                            anySuccess = true;
+                            set(prev => {
+                                const queue = (prev.outboxByConversation[queued.conversationId] || []).filter(
+                                    item => item.clientMessageId !== queued.clientMessageId
+                                );
+                                const currentMessages = prev.messagesByConversation[queued.conversationId]?.messages || [];
+                                const alreadyExists = currentMessages.some(m => m.id === sendResult.message!.id);
+                                const replacedMessages = alreadyExists
+                                    ? currentMessages.filter(
+                                        message => message.clientMessageId !== queued.clientMessageId
+                                    )
+                                    : currentMessages.map((message) => {
+                                        if (message.clientMessageId === queued.clientMessageId) {
+                                            return sendResult.message!;
+                                        }
+                                        return message;
+                                    });
+                                const nextOutboxByConversation = {
+                                    ...prev.outboxByConversation,
+                                    [queued.conversationId]: queue,
+                                };
+                                validateSingleOutboxKey(nextOutboxByConversation, 'flushOutbox.success');
+
+                                return {
+                                    outboxByConversation: nextOutboxByConversation,
+                                    messagesByConversation: {
+                                        ...prev.messagesByConversation,
+                                        [queued.conversationId]: {
+                                            ...(prev.messagesByConversation[queued.conversationId] || {
+                                                messages: [],
+                                                hasMore: true,
+                                                loading: false,
+                                                cursor: null,
+                                            }),
+                                            messages: replacedMessages,
+                                        },
+                                    },
+                                };
+                            });
+                            continue;
+                        }
+
+                        set(prev => {
+                            const nextRetryMs = Math.min(60_000, 1000 * (2 ** Math.min(6, queued.attempts + 1)));
+                            const isFinalFailure = queued.attempts + 1 >= 8;
+                            const nextOutboxByConversation = {
+                                ...prev.outboxByConversation,
+                                [queued.conversationId]: (prev.outboxByConversation[queued.conversationId] || []).map(
+                                    item => item.clientMessageId === queued.clientMessageId
+                                        ? {
+                                            ...item,
+                                            attempts: item.attempts + 1,
+                                            nextRetryAt: isFinalFailure ? Date.now() : (Date.now() + nextRetryMs),
+                                            lastError: sendResult.error || 'retry_failed',
+                                        }
+                                        : item
+                                ),
+                            };
+                            validateSingleOutboxKey(nextOutboxByConversation, 'flushOutbox.retry');
+                            return {
+                                outboxByConversation: nextOutboxByConversation,
+                                messagesByConversation: {
+                                    ...prev.messagesByConversation,
+                                    [queued.conversationId]: {
+                                        ...(prev.messagesByConversation[queued.conversationId] || {
+                                            messages: [],
+                                            hasMore: true,
+                                            loading: false,
+                                            cursor: null,
+                                        }),
+                                        messages: (prev.messagesByConversation[queued.conversationId]?.messages || []).map((message) => {
+                                            if (message.clientMessageId !== queued.clientMessageId) return message;
+                                            return {
+                                                ...message,
+                                                metadata: withDeliveryMetadata({
+                                                    ...(message.metadata || {}),
+                                                    queued: !isFinalFailure,
+                                                    lastError: sendResult.error || 'retry_failed',
+                                                }, isFinalFailure ? 'failed' : 'queued'),
+                                            };
+                                        }),
+                                    },
                                 },
-                            },
-                        }));
-                        console.error('Failed to send message:', result.error);
-                        return false;
+                            };
+                        });
                     }
                 } catch (error) {
-                    // Remove failed message
-                    set(prev => ({
-                        messagesByConversation: {
-                            ...prev.messagesByConversation,
-                            [conversationId]: {
-                                ...prev.messagesByConversation[conversationId],
-                                messages: prev.messagesByConversation[conversationId]?.messages.filter(
-                                    m => m.id !== tempId
-                                ) || [],
-                            },
-                        },
-                    }));
-                    console.error('Error sending message:', error);
-                    return false;
+                    console.error('Error flushing outbox:', error);
+                } finally {
+                    set({ outboxFlushing: false });
+                    if (anySuccess) {
+                        void get().refreshConversations();
+                    }
                 }
             },
 
@@ -649,12 +1001,34 @@ export const useChatStore = create<ChatState>()(
                 }));
             },
 
+            setReplyTarget: (conversationId: string, target: ReplyTargetDraft | null) => {
+                set(prev => ({
+                    replyTargetByConversation: {
+                        ...prev.replyTargetByConversation,
+                        [conversationId]: target,
+                    },
+                }));
+            },
+
+            clearReplyTarget: (conversationId: string) => {
+                set(prev => ({
+                    replyTargetByConversation: {
+                        ...prev.replyTargetByConversation,
+                        [conversationId]: null,
+                    },
+                }));
+            },
+
             // ================================================================
             // MARK AS READ
             // ================================================================
             markAsRead: async (conversationId: string) => {
                 const state = get();
                 const previousUnread = state.unreadCounts[conversationId] || 0;
+                const latestMessageId =
+                    state.messagesByConversation[conversationId]?.messages[
+                        (state.messagesByConversation[conversationId]?.messages.length || 1) - 1
+                    ]?.id;
 
                 if (previousUnread === 0) return;
 
@@ -668,7 +1042,7 @@ export const useChatStore = create<ChatState>()(
                 }));
 
                 try {
-                    await markConversationAsRead(conversationId);
+                    await markConversationAsRead(conversationId, latestMessageId);
                 } catch (error) {
                     console.error('Error marking as read:', error);
                     // Revert on error
@@ -696,6 +1070,7 @@ export const useChatStore = create<ChatState>()(
             // SET CONVERSATIONS (Hydration)
             // ================================================================
             setConversations: (conversations: ConversationWithDetails[]) => {
+                validateUniqueConversationIds(conversations.map((conversation) => conversation.id), 'setConversations');
                 const unreadCounts: Record<string, number> = {};
                 let totalUnread = 0;
 
@@ -725,6 +1100,7 @@ export const useChatStore = create<ChatState>()(
                     } else {
                         newConversations = [conversation, ...prev.conversations];
                     }
+                    validateUniqueConversationIds(newConversations.map((conv) => conv.id), 'upsertConversation');
 
                     // Update unread count
                     const newUnreadCounts = { ...prev.unreadCounts, [conversation.id]: conversation.unreadCount };
@@ -741,15 +1117,24 @@ export const useChatStore = create<ChatState>()(
 
             // HANDLE NEW MESSAGE (from realtime) - OPTIMIZED
             // ================================================================
-            _handleNewMessage: async (rawMessage: any) => {
+            _handleNewMessage: async (rawMessage: any, viewerId?: string | null) => {
                 const state = get();
+                const conversationId = rawMessage.conversation_id || rawMessage.conversationId;
+                const senderId = rawMessage.sender_id || rawMessage.senderId;
+                const clientMessageId =
+                    rawMessage.client_message_id ||
+                    rawMessage.clientMessageId ||
+                    rawMessage.metadata?.clientMessageId ||
+                    null;
+
+                if (!conversationId || !rawMessage.id) return;
 
                 // OPTIMIZED: Use cached profile or fetch only if missing
-                let sender = null;
-                if (rawMessage.sender_id) {
+                let sender = rawMessage.sender || null;
+                if (!sender && senderId) {
                     // Check cache first
-                    if (state.profileCache[rawMessage.sender_id]) {
-                        sender = state.profileCache[rawMessage.sender_id];
+                    if (state.profileCache[senderId]) {
+                        sender = state.profileCache[senderId];
                     } else {
                         // Fetch from database only if not in cache
                         try {
@@ -758,7 +1143,7 @@ export const useChatStore = create<ChatState>()(
                             const { data } = await supabase
                                 .from('profiles')
                                 .select('id, username, full_name, avatar_url')
-                                .eq('id', rawMessage.sender_id)
+                                .eq('id', senderId)
                                 .single();
 
                             if (data) {
@@ -780,7 +1165,7 @@ export const useChatStore = create<ChatState>()(
                             console.error('Error fetching profile:', error);
                             // Use placeholder if fetch fails
                             sender = {
-                                id: rawMessage.sender_id,
+                                id: senderId,
                                 username: null,
                                 fullName: null,
                                 avatarUrl: null,
@@ -789,28 +1174,72 @@ export const useChatStore = create<ChatState>()(
                     }
                 }
 
+                const attachments = Array.isArray(rawMessage.attachments)
+                    ? rawMessage.attachments.map((att: any) => ({
+                        id: att.id,
+                        type: att.type,
+                        url: att.url,
+                        filename: att.filename,
+                        sizeBytes: att.sizeBytes ?? att.size_bytes ?? null,
+                        mimeType: att.mimeType ?? att.mime_type ?? null,
+                        thumbnailUrl: att.thumbnailUrl ?? att.thumbnail_url ?? null,
+                        width: att.width ?? null,
+                        height: att.height ?? null,
+                    }))
+                    : [];
+
+                const rawReply = rawMessage.replyTo || rawMessage.reply_to || null;
+                let parsedMetadata: Record<string, unknown> = {};
+                try {
+                    parsedMetadata = typeof rawMessage.metadata === 'string'
+                        ? JSON.parse(rawMessage.metadata)
+                        : (rawMessage.metadata || {});
+                } catch {
+                    parsedMetadata = {};
+                }
+                const normalizedMetadata = withDeliveryMetadata(
+                    parsedMetadata,
+                    senderId === viewerId ? 'sent' : (parsedMetadata?.deliveryState as MessageDeliveryState || 'delivered')
+                );
+
                 // Build complete message object
                 const completeMessage: MessageWithSender = {
                     id: rawMessage.id,
-                    conversationId: rawMessage.conversation_id,
-                    senderId: rawMessage.sender_id,
+                    conversationId,
+                    senderId,
+                    clientMessageId,
                     content: rawMessage.content,
                     type: rawMessage.type,
-                    metadata: typeof rawMessage.metadata === 'string'
-                        ? JSON.parse(rawMessage.metadata)
-                        : (rawMessage.metadata || {}),
-                    createdAt: new Date(rawMessage.created_at),
-                    editedAt: rawMessage.edited_at ? new Date(rawMessage.edited_at) : null,
-                    deletedAt: rawMessage.deleted_at ? new Date(rawMessage.deleted_at) : null,
+                    metadata: normalizedMetadata,
+                    replyTo: rawReply
+                        ? {
+                            id: rawReply.id,
+                            content: rawReply.content ?? null,
+                            type: rawReply.type ?? 'text',
+                            senderId: rawReply.senderId ?? rawReply.sender_id ?? null,
+                            senderName: rawReply.senderName ?? rawReply.sender_name ?? null,
+                            deletedAt: rawReply.deletedAt
+                                ? new Date(rawReply.deletedAt)
+                                : (rawReply.deleted_at ? new Date(rawReply.deleted_at) : null),
+                        }
+                        : null,
+                    createdAt: new Date(rawMessage.created_at || rawMessage.createdAt),
+                    editedAt: rawMessage.edited_at
+                        ? new Date(rawMessage.edited_at)
+                        : (rawMessage.editedAt ? new Date(rawMessage.editedAt) : null),
+                    deletedAt: rawMessage.deleted_at
+                        ? new Date(rawMessage.deleted_at)
+                        : (rawMessage.deletedAt ? new Date(rawMessage.deletedAt) : null),
                     sender,
-                    attachments: [], // Attachments would need separate fetch if needed
+                    attachments,
                 };
 
                 // Add to message cache if conversation is cached
                 if (state.messagesByConversation[completeMessage.conversationId]) {
                     // Check if message already exists (avoid duplicates)
                     const exists = state.messagesByConversation[completeMessage.conversationId].messages.some(
-                        m => m.id === completeMessage.id
+                        m => m.id === completeMessage.id ||
+                            (!!completeMessage.clientMessageId && m.clientMessageId === completeMessage.clientMessageId)
                     );
 
                     if (!exists) {
@@ -830,13 +1259,27 @@ export const useChatStore = create<ChatState>()(
                 }
 
                 // Update unread count if not active conversation
-                if (state.activeConversationId !== completeMessage.conversationId) {
+                if (
+                    state.activeConversationId !== completeMessage.conversationId &&
+                    (!viewerId || completeMessage.senderId !== viewerId)
+                ) {
                     set(prev => ({
                         unreadCounts: {
                             ...prev.unreadCounts,
                             [completeMessage.conversationId]: (prev.unreadCounts[completeMessage.conversationId] || 0) + 1,
                         },
                         totalUnread: prev.totalUnread + 1,
+                    }));
+                }
+
+                if (completeMessage.clientMessageId) {
+                    set(prev => ({
+                        outboxByConversation: {
+                            ...prev.outboxByConversation,
+                            [completeMessage.conversationId]: (prev.outboxByConversation[completeMessage.conversationId] || []).filter(
+                                item => item.clientMessageId !== completeMessage.clientMessageId
+                            ),
+                        },
                     }));
                 }
 
@@ -870,6 +1313,41 @@ export const useChatStore = create<ChatState>()(
 
                     return { conversations };
                 });
+
+                set((prev) => {
+                    const groupIndex = prev.projectGroups.findIndex(
+                        (group) => group.id === completeMessage.conversationId
+                    );
+                    if (groupIndex === -1) return {};
+
+                    const nextGroups = [...prev.projectGroups];
+                    const current = nextGroups[groupIndex];
+                    const unreadInc =
+                        state.activeConversationId !== completeMessage.conversationId &&
+                        (!viewerId || completeMessage.senderId !== viewerId)
+                            ? 1
+                            : 0;
+
+                    nextGroups[groupIndex] = {
+                        ...current,
+                        unreadCount: Math.max(0, current.unreadCount + unreadInc),
+                        lastMessage: {
+                            id: completeMessage.id,
+                            content: completeMessage.content,
+                            senderId: completeMessage.senderId,
+                            createdAt: completeMessage.createdAt,
+                            type: completeMessage.type,
+                        },
+                        updatedAt: completeMessage.createdAt,
+                    };
+                    nextGroups.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+                    return { projectGroups: nextGroups };
+                });
+
+                const messageMetadata = completeMessage.metadata as Record<string, unknown>;
+                if (messageMetadata?.isApplication || messageMetadata?.isApplicationUpdate) {
+                    void get().fetchApplications(true);
+                }
             },
 
             // ================================================================
@@ -949,12 +1427,32 @@ export const useChatStore = create<ChatState>()(
             refreshMessages: async (conversationId: string) => {
                 try {
                     const { messages: messageList, hasMore, nextCursor } = await getMessages(conversationId);
+                    const serverMessages = messageList || [];
 
                     set((state) => ({
                         messagesByConversation: {
                             ...state.messagesByConversation,
                             [conversationId]: {
-                                messages: messageList || [],
+                                messages: [
+                                    ...serverMessages,
+                                    ...(state.messagesByConversation[conversationId]?.messages || []).filter((localMessage) => {
+                                        const hasServerTwin = serverMessages.some((serverMessage) =>
+                                            serverMessage.id === localMessage.id ||
+                                            (
+                                                !!localMessage.clientMessageId &&
+                                                serverMessage.clientMessageId === localMessage.clientMessageId
+                                            )
+                                        );
+                                        if (hasServerTwin) return false;
+                                        const deliveryState = (localMessage.metadata as Record<string, unknown> | undefined)?.deliveryState;
+                                        return (
+                                            localMessage.id.startsWith('temp-') ||
+                                            deliveryState === 'sending' ||
+                                            deliveryState === 'queued' ||
+                                            deliveryState === 'failed'
+                                        );
+                                    }),
+                                ],
                                 hasMore: hasMore || false,
                                 cursor: nextCursor || null,
                                 loading: false
@@ -963,6 +1461,37 @@ export const useChatStore = create<ChatState>()(
                     }));
                 } catch (error) {
                     console.error('Error refreshing messages:', error);
+                }
+            },
+
+            fetchPinnedMessages: async (conversationId: string) => {
+                try {
+                    const result = await getPinnedMessages(conversationId, 3);
+                    if (!result.success) return;
+                    set((prev) => ({
+                        pinnedMessagesByConversation: {
+                            ...prev.pinnedMessagesByConversation,
+                            [conversationId]: result.messages || [],
+                        },
+                    }));
+                } catch (error) {
+                    console.error('Error fetching pinned messages:', error);
+                }
+            },
+
+            pinMessage: async (messageId: string, conversationId: string, pinned: boolean) => {
+                try {
+                    const result = await setMessagePinned(messageId, pinned);
+                    if (!result.success) return false;
+                    await Promise.all([
+                        get().refreshMessages(conversationId),
+                        get().fetchPinnedMessages(conversationId),
+                        get().refreshConversations(),
+                    ]);
+                    return true;
+                } catch (error) {
+                    console.error('Error pinning message:', error);
+                    return false;
                 }
             },
 
@@ -995,9 +1524,18 @@ export const useChatStore = create<ChatState>()(
             _handleMessageUpdate: (rawMessage: any) => {
                 const state = get();
                 const conversationId = rawMessage.conversation_id;
+                let parsedMetadata: Record<string, unknown> = {};
+                try {
+                    parsedMetadata = typeof rawMessage.metadata === 'string'
+                        ? JSON.parse(rawMessage.metadata)
+                        : (rawMessage.metadata || {});
+                } catch {
+                    parsedMetadata = {};
+                }
 
                 // 1. Update in Message Cache
                 if (state.messagesByConversation[conversationId]) {
+                    const rawReply = rawMessage.replyTo || rawMessage.reply_to || null;
                     set(prev => ({
                         messagesByConversation: {
                             ...prev.messagesByConversation,
@@ -1008,9 +1546,22 @@ export const useChatStore = create<ChatState>()(
                                         ? {
                                             ...msg,
                                             content: rawMessage.content,
-                                            metadata: typeof rawMessage.metadata === 'string'
-                                                ? JSON.parse(rawMessage.metadata)
-                                                : (rawMessage.metadata || {}),
+                                            metadata: withDeliveryMetadata(
+                                                parsedMetadata,
+                                                (parsedMetadata?.deliveryState as MessageDeliveryState) || 'sent'
+                                            ),
+                                            replyTo: rawReply
+                                                ? {
+                                                    id: rawReply.id,
+                                                    content: rawReply.content ?? null,
+                                                    type: rawReply.type ?? 'text',
+                                                    senderId: rawReply.senderId ?? rawReply.sender_id ?? null,
+                                                    senderName: rawReply.senderName ?? rawReply.sender_name ?? null,
+                                                    deletedAt: rawReply.deletedAt
+                                                        ? new Date(rawReply.deletedAt)
+                                                        : (rawReply.deleted_at ? new Date(rawReply.deleted_at) : null),
+                                                }
+                                                : msg.replyTo || null,
                                             editedAt: rawMessage.edited_at ? new Date(rawMessage.edited_at) : null,
                                             // Keep sender/attachments from existing message if not in payload
                                             sender: msg.sender,
@@ -1025,9 +1576,18 @@ export const useChatStore = create<ChatState>()(
                 }
 
                 // 2. Update Status locally if it matches active application
-                const updateMetadata = typeof rawMessage.metadata === 'string' ? JSON.parse(rawMessage.metadata) : rawMessage.metadata;
-                if (updateMetadata && updateMetadata.applicationId === state.activeApplicationId && updateMetadata.status) {
-                    set({ activeApplicationStatus: updateMetadata.status });
+                const updateMetadata = parsedMetadata;
+                const statusValue = updateMetadata?.status;
+                if (
+                    updateMetadata &&
+                    updateMetadata.applicationId === state.activeApplicationId &&
+                    (statusValue === 'pending' || statusValue === 'accepted' || statusValue === 'rejected')
+                ) {
+                    set({ activeApplicationStatus: statusValue });
+                }
+
+                if (updateMetadata?.isApplication || updateMetadata?.isApplicationUpdate) {
+                    void get().fetchApplications(true);
                 }
 
                 // 2. Update in Conversation List (Last Message Preview)
@@ -1041,12 +1601,36 @@ export const useChatStore = create<ChatState>()(
                                 ...newConversations[convIndex],
                                 lastMessage: {
                                     ...newConversations[convIndex].lastMessage!,
-                                    content: rawMessage.content
+                                    content: rawMessage.content,
+                                    type: rawMessage.type,
                                 }
                             };
                             return { conversations: newConversations };
                         });
                     }
+                }
+
+                const projectGroupIndex = state.projectGroups.findIndex((group) => group.id === conversationId);
+                if (projectGroupIndex !== -1) {
+                    const current = state.projectGroups[projectGroupIndex];
+                    if (current.lastMessage?.id === rawMessage.id) {
+                        set((prev) => {
+                            const next = [...prev.projectGroups];
+                            next[projectGroupIndex] = {
+                                ...next[projectGroupIndex],
+                                lastMessage: {
+                                    ...next[projectGroupIndex].lastMessage!,
+                                    content: rawMessage.content,
+                                    type: rawMessage.type,
+                                },
+                            };
+                            return { projectGroups: next };
+                        });
+                    }
+                }
+
+                if (updateMetadata?.pinned === true || updateMetadata?.pinned === false) {
+                    void get().fetchPinnedMessages(conversationId);
                 }
 
                 // 3. Update Active Application Status (Real-time Banner)
@@ -1059,7 +1643,8 @@ export const useChatStore = create<ChatState>()(
                     state.hasActiveApplication &&
                     state.activeApplicationId &&
                     metadata.isApplication &&
-                    metadata.applicationId === state.activeApplicationId
+                    metadata.applicationId === state.activeApplicationId &&
+                    (metadata.status === 'pending' || metadata.status === 'accepted' || metadata.status === 'rejected')
                 ) {
                     set({ activeApplicationStatus: metadata.status });
                 }
@@ -1195,8 +1780,10 @@ export const useChatStore = create<ChatState>()(
         {
             name: 'chat-storage',
             partialize: (state) => ({
-                // OPTIMIZED: Only persist drafts (removed UI state to simplify hydration)
+                // Persist only user input state and pending outbox.
                 draftsByConversation: state.draftsByConversation,
+                replyTargetByConversation: state.replyTargetByConversation,
+                outboxByConversation: state.outboxByConversation,
             }),
         }
     )
@@ -1223,5 +1810,3 @@ export const selectActiveDraft = (state: ChatState) => {
     if (!state.activeConversationId) return '';
     return state.draftsByConversation[state.activeConversationId] || '';
 };
-
-

@@ -81,7 +81,7 @@ export default function ApplicationStatusBanner({
                 </div>
                 <div>
                     <p className="font-medium text-zinc-900 dark:text-zinc-100">
-                        You're a Team Member!
+                        You are a Team Member!
                     </p>
                     <p className="text-sm text-zinc-500">
                         Role: <span className="font-medium">{roleTitle}</span>

@@ -1,14 +1,14 @@
 'use client';
 
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { useChatStore, selectActiveDraft } from '@/stores/chatStore';
+import { useChatStore } from '@/stores/chatStore';
 import { useTypingChannel } from '@/hooks/useTypingChannel';
-import { uploadAttachment, sendMessageWithAttachments, type UploadedAttachment } from '@/app/actions/messaging';
+import { uploadAttachment, cancelAttachmentUpload, type UploadedAttachment } from '@/app/actions/messaging';
 import { checkConnectionStatus, acceptConnectionRequest } from '@/app/actions/connections';
-import { acceptApplicationAction, rejectApplicationAction } from '@/app/actions/applications';
-import { Send, Paperclip, Image, X, Loader2, UserPlus, Clock, Check } from 'lucide-react';
+import { Send, Paperclip, Image, X, Loader2, UserPlus, Clock, Check, AlertTriangle, RotateCcw, Pause, Play } from 'lucide-react';
 import { toast } from 'sonner';
 import { ChatApplicationBanner } from './ChatApplicationBanner';
+import { useRouter } from 'next/navigation';
 
 // ============================================================================
 // MESSAGE INPUT
@@ -20,22 +20,52 @@ interface MessageInputProps {
     targetUserId?: string;
 }
 
+type UploadStatus = 'queued' | 'uploading' | 'uploaded' | 'failed';
+
 interface PendingAttachment {
+    id: string;
     file: File;
     preview?: string;
-    uploading: boolean;
+    status: UploadStatus;
+    attempts: number;
     uploaded?: UploadedAttachment;
     error?: string;
 }
 
+const MAX_ATTACHMENTS = 12;
+const UPLOAD_CONCURRENCY = 3;
+const MAX_UPLOAD_RETRIES = 3;
+
 export function MessageInput({ conversationId, targetUserId }: MessageInputProps) {
     const draft = useChatStore(state => state.draftsByConversation[conversationId] || '');
     const setDraft = useChatStore(state => state.setDraft);
-    const sendMessage = useChatStore(state => state.sendMessage); // Store version
+    const replyTarget = useChatStore(state => state.replyTargetByConversation[conversationId] || null);
+    const clearReplyTarget = useChatStore(state => state.clearReplyTarget);
+    const sendMessage = useChatStore(state => state.sendMessage);
+    const refreshConversations = useChatStore(state => state.refreshConversations);
+    const openConversation = useChatStore(state => state.openConversation);
     const [isSending, setIsSending] = useState(false);
     const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
+    const [uploadsPaused, setUploadsPaused] = useState(false);
     const inputRef = useRef<HTMLTextAreaElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const attachmentsRef = useRef<PendingAttachment[]>([]);
+    const activeUploadIdsRef = useRef<Set<string>>(new Set());
+    const router = useRouter();
+
+    useEffect(() => {
+        attachmentsRef.current = attachments;
+    }, [attachments]);
+
+    useEffect(() => {
+        return () => {
+            attachmentsRef.current.forEach((attachment) => {
+                if (attachment.preview) {
+                    URL.revokeObjectURL(attachment.preview);
+                }
+            });
+        };
+    }, []);
 
     // Typing indicator - Scalable Broadcast
     const { sendTyping } = useTypingChannel(conversationId !== 'new' ? conversationId : null, { listen: false });
@@ -54,90 +84,155 @@ export function MessageInput({ conversationId, targetUserId }: MessageInputProps
         }
     }, [conversationId, setDraft, sendTyping]);
 
-    // Upload a single file
-    const uploadFile = async (file: File, index: number) => {
-        setAttachments(prev => prev.map((att, i) =>
-            i === index ? { ...att, uploading: true, error: undefined } : att
-        ));
+    const startQueuedUploads = useCallback(() => {
+        if (uploadsPaused) return;
+        const available = Math.max(0, UPLOAD_CONCURRENCY - activeUploadIdsRef.current.size);
+        if (available === 0) return;
 
-        const formData = new FormData();
-        formData.append('file', file);
+        const queued = attachmentsRef.current
+            .filter((attachment) => attachment.status === 'queued')
+            .slice(0, available);
 
-        const result = await uploadAttachment(formData);
+        queued.forEach((attachment) => {
+            activeUploadIdsRef.current.add(attachment.id);
+            const formData = new FormData();
+            formData.append('file', attachment.file);
+            formData.append('clientUploadId', attachment.id);
+            if (conversationId) {
+                formData.append('conversationId', conversationId);
+            }
 
-        setAttachments(prev => prev.map((att, i) =>
-            i === index
-                ? {
-                    ...att,
-                    uploading: false,
-                    uploaded: result.attachment,
-                    error: result.error
-                }
-                : att
-        ));
+            setAttachments((prev) =>
+                prev.map((item) =>
+                    item.id === attachment.id
+                        ? { ...item, status: 'uploading', error: undefined }
+                        : item
+                )
+            );
 
-        if (result.error) {
-            toast.error(`Failed to upload ${file.name}: ${result.error}`);
-        }
-    };
+            void uploadAttachment(formData)
+                .then((result) => {
+                    setAttachments((prev) =>
+                        prev.map((item) => {
+                            if (item.id !== attachment.id) return item;
+                            if (!result.success || !result.attachment) {
+                                return {
+                                    ...item,
+                                    status: 'failed',
+                                    attempts: item.attempts + 1,
+                                    error: result.error || 'Upload failed',
+                                };
+                            }
+                            return {
+                                ...item,
+                                status: 'uploaded',
+                                uploaded: result.attachment,
+                                error: undefined,
+                            };
+                        })
+                    );
+
+                    if (!result.success) {
+                        toast.error(`Failed to upload ${attachment.file.name}: ${result.error || 'Upload failed'}`);
+                    }
+                })
+                .catch((error) => {
+                    console.error(error);
+                    setAttachments((prev) =>
+                        prev.map((item) =>
+                            item.id === attachment.id
+                                ? {
+                                    ...item,
+                                    status: 'failed',
+                                    attempts: item.attempts + 1,
+                                    error: 'Upload failed',
+                                }
+                                : item
+                        )
+                    );
+                    toast.error(`Failed to upload ${attachment.file.name}`);
+                })
+                .finally(() => {
+                    activeUploadIdsRef.current.delete(attachment.id);
+                    startQueuedUploads();
+                });
+        });
+    }, [conversationId, uploadsPaused]);
+
+    useEffect(() => {
+        startQueuedUploads();
+    }, [attachments, startQueuedUploads]);
+
+    const makeUploadId = () =>
+        typeof crypto !== 'undefined' && 'randomUUID' in crypto
+            ? crypto.randomUUID()
+            : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
     // Handle file selection
-    const handleFileSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
         const files = Array.from(e.target.files || []);
         if (files.length === 0) return;
 
-        // Limit to 5 attachments total
-        const availableSlots = 5 - attachments.length;
+        const availableSlots = Math.max(0, MAX_ATTACHMENTS - attachmentsRef.current.length);
         const filesToAdd = files.slice(0, availableSlots);
 
         if (files.length > availableSlots) {
-            toast.warning(`Maximum 5 attachments. Only ${availableSlots} files added.`);
+            toast.warning(`Maximum ${MAX_ATTACHMENTS} attachments. Only ${availableSlots} files added.`);
         }
 
-        // Create pending attachments with previews
-        const newAttachments: PendingAttachment[] = filesToAdd.map(file => ({
+        const newAttachments: PendingAttachment[] = filesToAdd.map((file) => ({
+            id: makeUploadId(),
             file,
             preview: file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined,
-            uploading: true,
+            status: 'queued',
+            attempts: 0,
         }));
 
-        const startIndex = attachments.length;
-        setAttachments(prev => [...prev, ...newAttachments]);
-
-        // Upload each file in parallel
-        await Promise.all(
-            filesToAdd.map((file, i) => uploadFile(file, startIndex + i))
-        );
+        setAttachments((prev) => [...prev, ...newAttachments]);
 
         if (fileInputRef.current) {
             fileInputRef.current.value = '';
         }
-    }, [attachments.length]);
+    }, []);
 
-    // Remove attachment
-    const removeAttachment = useCallback((index: number) => {
-        setAttachments(prev => {
-            const att = prev[index];
-            // Revoke blob URL to free memory
-            if (att.preview) {
-                URL.revokeObjectURL(att.preview);
-            }
-            return prev.filter((_, i) => i !== index);
-        });
+    const removeAttachment = useCallback((attachmentId: string) => {
+        const target = attachmentsRef.current.find((attachment) => attachment.id === attachmentId);
+        if (target?.preview) {
+            URL.revokeObjectURL(target.preview);
+        }
+        activeUploadIdsRef.current.delete(attachmentId);
+        setAttachments((prev) => prev.filter((attachment) => attachment.id !== attachmentId));
+        void cancelAttachmentUpload(attachmentId);
+    }, []);
+
+    const retryAttachment = useCallback((attachmentId: string) => {
+        setAttachments((prev) =>
+            prev.map((attachment) => {
+                if (attachment.id !== attachmentId) return attachment;
+                if (attachment.attempts >= MAX_UPLOAD_RETRIES) {
+                    return attachment;
+                }
+                return {
+                    ...attachment,
+                    status: 'queued',
+                    error: undefined,
+                };
+            })
+        );
     }, []);
 
     // Handle send
     const handleSend = useCallback(async () => {
         const text = draft.trim();
         const uploadedAttachments = attachments
-            .filter(att => att.uploaded && !att.error)
+            .filter(att => att.status === 'uploaded' && att.uploaded && !att.error)
             .map(att => att.uploaded!);
 
         if (!text && uploadedAttachments.length === 0) return;
         if (isSending) return;
 
         // Check if any attachments are still uploading
-        if (attachments.some(att => att.uploading)) {
+        if (attachments.some(att => att.status === 'queued' || att.status === 'uploading')) {
             toast.info('Please wait for attachments to finish uploading');
             return;
         }
@@ -170,23 +265,11 @@ export function MessageInput({ conversationId, targetUserId }: MessageInputProps
                 actualConversationId = result.conversationId;
             }
 
-            let success = false;
-            // Native import for action to ensure we use the explicit ID (Store's sendMessage might use state ID)
-            const { sendMessage, sendMessageWithAttachments } = await import('@/app/actions/messaging');
-
-            if (uploadedAttachments.length > 0) {
-                const result = await sendMessageWithAttachments(
-                    actualConversationId,
-                    text,
-                    uploadedAttachments
-                );
-                success = result.success;
-                if (!result.success) toast.error(result.error || 'Failed to send message');
-            } else {
-                const result = await sendMessage(actualConversationId, text);
-                success = result.success;
-                if (!result.success) toast.error(result.error || 'Failed to send message');
-            }
+            const result = await sendMessage(actualConversationId, text, {
+                attachments: uploadedAttachments,
+                replyToMessageId: replyTarget?.id || null,
+            });
+            const success = result.ok;
 
             if (success) {
                 // Clear attachments
@@ -202,10 +285,19 @@ export function MessageInput({ conversationId, targetUserId }: MessageInputProps
 
                 // If we created a new chat, we MUST redirect to the real URL now
                 if (conversationId === 'new') {
-                     // Force hard redirect or router push to the new ID
-                     window.history.pushState(null, '', `/messages?conversationId=${actualConversationId}`);
-                     window.location.href = `/messages?conversationId=${actualConversationId}`;
+                     await refreshConversations();
+                     await openConversation(actualConversationId);
+                     setDraft(actualConversationId, '');
+                     router.replace(`/messages?conversationId=${actualConversationId}`);
                 }
+
+                clearReplyTarget(conversationId);
+
+                if (result.queued) {
+                    toast.info('Message queued. It will send automatically when connection is stable.');
+                }
+            } else {
+                toast.error('Failed to queue/send message');
             }
         } catch (e) {
             console.error(e);
@@ -216,7 +308,7 @@ export function MessageInput({ conversationId, targetUserId }: MessageInputProps
 
         // Focus back on input
         inputRef.current?.focus();
-    }, [conversationId, targetUserId, draft, attachments, isSending, sendTyping, setDraft]);
+    }, [conversationId, targetUserId, draft, attachments, isSending, sendTyping, setDraft, sendMessage, refreshConversations, openConversation, router, replyTarget, clearReplyTarget]);
 
     // Handle key press
     const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -226,8 +318,8 @@ export function MessageInput({ conversationId, targetUserId }: MessageInputProps
         }
     };
 
-    const hasUploadingAttachments = attachments.some(att => att.uploading);
-    const hasValidAttachments = attachments.some(att => att.uploaded && !att.error);
+    const hasUploadingAttachments = attachments.some(att => att.status === 'queued' || att.status === 'uploading');
+    const hasValidAttachments = attachments.some(att => att.status === 'uploaded' && att.uploaded && !att.error);
 
     const connectionStatus = useChatStore(state => state.activeConnectionStatus);
     const isIncomingConnectionRequest = useChatStore(state => state.isIncomingConnectionRequest);
@@ -425,17 +517,55 @@ export function MessageInput({ conversationId, targetUserId }: MessageInputProps
             )}
 
             {/* Attachment previews */}
+            {replyTarget && (
+                <div className="mb-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/70 px-3 py-2 flex items-start gap-2">
+                    <div className="w-1 self-stretch rounded-full bg-blue-500" />
+                    <div className="min-w-0 flex-1">
+                        <p className="text-[11px] font-semibold text-blue-600 dark:text-blue-400 truncate">
+                            Replying to {replyTarget.senderName || 'message'}
+                        </p>
+                        <p className="text-xs text-zinc-600 dark:text-zinc-300 truncate">
+                            {replyTarget.content?.trim() || `[${replyTarget.type || 'message'}]`}
+                        </p>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => clearReplyTarget(conversationId)}
+                        className="p-1 text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200"
+                        aria-label="Cancel reply"
+                    >
+                        <X className="w-3.5 h-3.5" />
+                    </button>
+                </div>
+            )}
+
+            {attachments.length > 0 && (
+                <div className="mb-2 flex items-center justify-between">
+                    <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                        {attachments.filter((attachment) => attachment.status === 'uploaded').length}/{attachments.length} uploaded
+                    </span>
+                    <button
+                        type="button"
+                        onClick={() => setUploadsPaused((prev) => !prev)}
+                        className="inline-flex items-center gap-1 rounded-md border border-zinc-200 dark:border-zinc-700 px-2 py-1 text-[11px] text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                    >
+                        {uploadsPaused ? <Play className="w-3 h-3" /> : <Pause className="w-3 h-3" />}
+                        {uploadsPaused ? 'Resume uploads' : 'Pause uploads'}
+                    </button>
+                </div>
+            )}
+
             {attachments.length > 0 && (
                 <div className="flex flex-wrap gap-2 mb-2">
-                    {attachments.map((att, index) => (
+                    {attachments.map((att) => (
                         <div
-                            key={index}
+                            key={att.id}
                             className={`relative group flex items-center gap-2 px-3 py-2 rounded-lg ${att.error
                                     ? 'bg-red-100 dark:bg-red-900/30'
                                     : 'bg-zinc-100 dark:bg-zinc-800'
                                 }`}
                         >
-                            {att.uploading ? (
+                            {(att.status === 'queued' || att.status === 'uploading') ? (
                                 <Loader2 className="w-4 h-4 text-blue-500 animate-spin" />
                             ) : att.file.type.startsWith('image/') ? (
                                 att.preview ? (
@@ -456,11 +586,25 @@ export function MessageInput({ conversationId, targetUserId }: MessageInputProps
                                 }`}>
                                 {att.file.name}
                             </span>
-                            {att.uploaded && (
-                                <span className="text-xs text-green-500">✓</span>
+                            {att.status === 'uploaded' && (
+                                <span className="text-xs text-green-500" title="Uploaded">✓</span>
+                            )}
+                            {att.status === 'failed' && (
+                                <button
+                                    onClick={() => retryAttachment(att.id)}
+                                    disabled={att.attempts >= MAX_UPLOAD_RETRIES}
+                                    className="p-1 rounded hover:bg-zinc-200 dark:hover:bg-zinc-700 disabled:opacity-40"
+                                    title={att.attempts >= MAX_UPLOAD_RETRIES ? 'Retry limit reached' : 'Retry upload'}
+                                >
+                                    {att.attempts >= MAX_UPLOAD_RETRIES ? (
+                                        <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
+                                    ) : (
+                                        <RotateCcw className="w-3.5 h-3.5 text-blue-500" />
+                                    )}
+                                </button>
                             )}
                             <button
-                                onClick={() => removeAttachment(index)}
+                                onClick={() => removeAttachment(att.id)}
                                 className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
                             >
                                 <X className="w-3 h-3 text-white" />
@@ -475,7 +619,7 @@ export function MessageInput({ conversationId, targetUserId }: MessageInputProps
                 {/* Attachment button */}
                 <button
                     onClick={() => fileInputRef.current?.click()}
-                    disabled={attachments.length >= 5}
+                    disabled={attachments.length >= MAX_ATTACHMENTS}
                     className="p-2 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors disabled:opacity-50"
                     title="Attach file"
                 >

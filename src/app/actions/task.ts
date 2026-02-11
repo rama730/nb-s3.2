@@ -1,7 +1,41 @@
 "use server";
 
-import { createClient } from "@/lib/supabase/server";
+import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { db } from "@/lib/db";
+import { projectMembers, projectSprints, tasks } from "@/lib/db/schema";
+import { getProjectAccessById } from "@/lib/data/project-access";
+import { createClient } from "@/lib/supabase/server";
+
+type MutableTaskField = "title" | "description" | "priority" | "sprintId" | "dueDate";
+
+const ALLOWED_FIELDS: ReadonlySet<MutableTaskField> = new Set([
+    "title",
+    "description",
+    "priority",
+    "sprintId",
+    "dueDate",
+]);
+
+type Priority = "low" | "medium" | "high" | "urgent";
+type Status = "todo" | "in_progress" | "done";
+
+async function assertTaskWriteAccess(taskId: string, userId: string) {
+    const existingTask = await db.query.tasks.findFirst({
+        where: eq(tasks.id, taskId),
+        columns: { id: true, projectId: true },
+    });
+    if (!existingTask) {
+        throw new Error("Task not found");
+    }
+
+    const access = await getProjectAccessById(existingTask.projectId, userId);
+    if (!access.project || !access.canWrite) {
+        throw new Error("Forbidden");
+    }
+
+    return existingTask.projectId;
+}
 
 /**
  * Update task field
@@ -9,36 +43,72 @@ import { revalidatePath } from "next/cache";
 export async function updateTaskFieldAction(
     taskId: string,
     field: string,
-    value: any,
+    value: unknown,
     projectId: string
 ) {
     try {
         const supabase = await createClient();
-
         const { data: { user }, error: authError } = await supabase.auth.getUser();
         if (authError || !user) {
             return { success: false, error: "Unauthorized" };
         }
 
-        // Update the task
-        const { error } = await supabase
-            .from("tasks")
-            .update({
-                [field]: value,
-                updated_at: new Date().toISOString()
-            })
-            .eq("id", taskId);
-
-        if (error) {
-            console.error("Error updating task:", error);
-            return { success: false, error: error.message };
+        if (!ALLOWED_FIELDS.has(field as MutableTaskField)) {
+            return { success: false, error: "Invalid field" };
         }
 
-        revalidatePath(`/projects/${projectId}`);
+        const canonicalProjectId = await assertTaskWriteAccess(taskId, user.id);
+        if (canonicalProjectId !== projectId) {
+            return { success: false, error: "Task does not belong to this project" };
+        }
+
+        const updates: Partial<typeof tasks.$inferInsert> = {
+            updatedAt: new Date(),
+        };
+
+        if (field === "title") {
+            const title = typeof value === "string" ? value.trim() : "";
+            if (!title) return { success: false, error: "Title is required" };
+            updates.title = title;
+        } else if (field === "description") {
+            updates.description = typeof value === "string" && value.trim() ? value : null;
+        } else if (field === "priority") {
+            const priority = typeof value === "string" ? value : "";
+            if (!["low", "medium", "high", "urgent"].includes(priority)) {
+                return { success: false, error: "Invalid priority" };
+            }
+            updates.priority = priority as Priority;
+        } else if (field === "sprintId") {
+            const sprintId = typeof value === "string" && value ? value : null;
+            if (sprintId) {
+                const sprint = await db.query.projectSprints.findFirst({
+                    where: and(eq(projectSprints.id, sprintId), eq(projectSprints.projectId, canonicalProjectId)),
+                    columns: { id: true },
+                });
+                if (!sprint) {
+                    return { success: false, error: "Sprint must belong to this project" };
+                }
+            }
+            updates.sprintId = sprintId;
+        } else if (field === "dueDate") {
+            if (typeof value === "string" && value) {
+                const parsed = new Date(value);
+                if (Number.isNaN(parsed.getTime())) {
+                    return { success: false, error: "Invalid due date" };
+                }
+                updates.dueDate = parsed;
+            } else {
+                updates.dueDate = null;
+            }
+        }
+
+        await db.update(tasks).set(updates).where(eq(tasks.id, taskId));
+
+        revalidatePath(`/projects/${canonicalProjectId}`);
         return { success: true };
     } catch (error: any) {
         console.error("Unexpected error:", error);
-        return { success: false, error: error.message || "Failed to update task" };
+        return { success: false, error: error?.message || "Failed to update task" };
     }
 }
 
@@ -47,44 +117,35 @@ export async function updateTaskFieldAction(
  */
 export async function updateTaskStatusAction(
     taskId: string,
-    status: "todo" | "in_progress" | "done",
+    status: Status,
     projectId: string
 ) {
     try {
         const supabase = await createClient();
-
         const { data: { user }, error: authError } = await supabase.auth.getUser();
         if (authError || !user) {
             return { success: false, error: "Unauthorized" };
         }
 
-        const updateData: any = {
+        if (!["todo", "in_progress", "done"].includes(status)) {
+            return { success: false, error: "Invalid status" };
+        }
+
+        const canonicalProjectId = await assertTaskWriteAccess(taskId, user.id);
+        if (canonicalProjectId !== projectId) {
+            return { success: false, error: "Task does not belong to this project" };
+        }
+
+        await db.update(tasks).set({
             status,
-            updated_at: new Date().toISOString()
-        };
+            updatedAt: new Date(),
+        }).where(eq(tasks.id, taskId));
 
-        // Set timestamps based on status
-        if (status === "in_progress") {
-            updateData.started_at = new Date().toISOString();
-        } else if (status === "done") {
-            updateData.completed_at = new Date().toISOString();
-        }
-
-        const { error } = await supabase
-            .from("tasks")
-            .update(updateData)
-            .eq("id", taskId);
-
-        if (error) {
-            console.error("Error updating task status:", error);
-            return { success: false, error: error.message };
-        }
-
-        revalidatePath(`/projects/${projectId}`);
+        revalidatePath(`/projects/${canonicalProjectId}`);
         return { success: true };
     } catch (error: any) {
         console.error("Unexpected error:", error);
-        return { success: false, error: error.message || "Failed to update task status" };
+        return { success: false, error: error?.message || "Failed to update task status" };
     }
 }
 
@@ -98,29 +159,35 @@ export async function assignTaskAction(
 ) {
     try {
         const supabase = await createClient();
-
         const { data: { user }, error: authError } = await supabase.auth.getUser();
         if (authError || !user) {
             return { success: false, error: "Unauthorized" };
         }
 
-        const { error } = await supabase
-            .from("tasks")
-            .update({
-                assigned_to: assigneeId,
-                updated_at: new Date().toISOString()
-            })
-            .eq("id", taskId);
-
-        if (error) {
-            console.error("Error assigning task:", error);
-            return { success: false, error: error.message };
+        const canonicalProjectId = await assertTaskWriteAccess(taskId, user.id);
+        if (canonicalProjectId !== projectId) {
+            return { success: false, error: "Task does not belong to this project" };
         }
 
-        revalidatePath(`/projects/${projectId}`);
+        if (assigneeId) {
+            const isProjectMember = await db.query.projectMembers.findFirst({
+                where: and(eq(projectMembers.projectId, canonicalProjectId), eq(projectMembers.userId, assigneeId)),
+                columns: { id: true },
+            });
+            if (!isProjectMember) {
+                return { success: false, error: "Assignee must be a project member" };
+            }
+        }
+
+        await db.update(tasks).set({
+            assigneeId: assigneeId || null,
+            updatedAt: new Date(),
+        }).where(eq(tasks.id, taskId));
+
+        revalidatePath(`/projects/${canonicalProjectId}`);
         return { success: true };
     } catch (error: any) {
         console.error("Unexpected error:", error);
-        return { success: false, error: error.message || "Failed to assign task" };
+        return { success: false, error: error?.message || "Failed to assign task" };
     }
 }

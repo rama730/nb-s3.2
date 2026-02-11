@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
-import { createClient } from '@/lib/supabase/client';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { createProjectSchema, type CreateProjectInput, type OpenRoleInput } from '@/lib/validations/project';
@@ -9,9 +8,10 @@ import { generateSlug, generateProjectId } from '@/lib/utils/project-ids';
 import { toast } from 'sonner';
 import { TOTAL_PHASES, WizardPhaseId } from '@/constants/project-wizard';
 import { createProjectAction } from '@/app/actions/project';
-import { fetchContents, fetchRepoMeta, parseGithubRepo, type GitHubContentEntry } from '@/lib/github/repo-preview';
-import { isTooLarge, shouldIgnorePath } from '@/lib/import/import-filters';
+import { parseGithubRepo } from '@/lib/github/repo-preview';
+import { shouldIgnorePath } from '@/lib/import/import-filters';
 import { getLifecycleStagesForProjectType } from '@/lib/projects/lifecycle-templates';
+import { previewGithubFolderAction, previewGithubRepoRootAction } from '@/app/actions/github';
 
 export interface WizardContextType {
     openRoles: OpenRoleInput[];
@@ -32,7 +32,6 @@ interface UseCreateProjectWizardProps {
  * Pure Optimization: Unified constants, reactive draft management, and scalable logic.
  */
 export function useCreateProjectWizard({ onClose, onSuccess, draftId }: UseCreateProjectWizardProps) {
-    const supabase = createClient();
     const [phase, setPhase] = useState<WizardPhaseId>(1);
     const [openRoles, setOpenRoles] = useState<OpenRoleInput[]>([]);
     const [uploadFiles, setUploadFiles] = useState<FileList | null>(null);
@@ -137,7 +136,13 @@ export function useCreateProjectWizard({ onClose, onSuccess, draftId }: UseCreat
     // --- GitHub Preview (Phase 1) ---
     type GithubPreviewStatus = 'idle' | 'loading' | 'ready' | 'error';
     type GithubExcludedReason = 'ignored' | 'tooLarge';
-    type GithubPreviewEntry = GitHubContentEntry & { excludedReason?: GithubExcludedReason };
+    type GithubPreviewEntry = {
+        name: string;
+        path: string;
+        type: 'file' | 'dir';
+        size?: number | null;
+        excludedReason?: GithubExcludedReason;
+    };
 
     const [githubPreview, setGithubPreview] = useState<{
         status: GithubPreviewStatus;
@@ -188,13 +193,6 @@ export function useCreateProjectWizard({ onClose, onSuccess, draftId }: UseCreat
         }
     }, [importSourceType, watchedRepoUrl, githubPreview.status, githubPreview.repoUrl, resetGithubPreview]);
 
-    const decorateEntry = useCallback((e: GitHubContentEntry): GithubPreviewEntry => {
-        const ignored = shouldIgnorePath(e.path);
-        if (ignored) return { ...e, excludedReason: 'ignored' };
-        if (e.type === 'file' && isTooLarge(e.size)) return { ...e, excludedReason: 'tooLarge' };
-        return e;
-    }, []);
-
     const startGithubRootPreview = useCallback(async (repoUrl: string) => {
         const url = (repoUrl || '').trim();
         if (!url) return;
@@ -212,26 +210,37 @@ export function useCreateProjectWizard({ onClose, onSuccess, draftId }: UseCreat
                 return;
             }
 
-            const token = (await supabase.auth.getSession()).data.session?.provider_token || undefined;
-            const meta = await fetchRepoMeta({ ...parsed, token });
-            const branch = watchedBranch || meta.defaultBranch || 'main';
+            const res = await previewGithubRepoRootAction(url, watchedBranch || null);
+            if (!res.success) {
+                setGithubPreview((prev) => ({
+                    ...prev,
+                    status: 'error',
+                    repoUrl: url,
+                    errorMessage: res.error || 'Failed to preview repository.',
+                    rootEntries: [],
+                }));
+                return;
+            }
+            const branch = res.branch || 'main';
 
             // Store branch in form so the import worker uses the same ref.
             if (!watchedBranch && branch) {
                 setValue('import_source.branch', branch, { shouldDirty: true });
             }
-
-            const root = await fetchContents({ ...parsed, token, ref: branch, path: '' });
-            const rootEntries = root.map(decorateEntry);
+            const normalizedUrl = res.normalizedRepoUrl || url;
+            const rootEntries = res.rootEntries;
 
             setGithubFolderEntries({ '': rootEntries });
             setGithubPreview({
                 status: 'ready',
-                repoUrl: url,
+                repoUrl: normalizedUrl,
                 branch,
                 rootEntries,
                 errorMessage: null,
             });
+            if (normalizedUrl !== url) {
+                setValue('import_source.repoUrl', normalizedUrl, { shouldDirty: true });
+            }
         } catch (e: any) {
             const message = typeof e?.message === 'string' ? e.message : 'Failed to preview repository.';
             setGithubPreview((prev) => ({
@@ -242,7 +251,7 @@ export function useCreateProjectWizard({ onClose, onSuccess, draftId }: UseCreat
                 rootEntries: [],
             }));
         }
-    }, [decorateEntry, setValue, supabase, watchedBranch]);
+    }, [setValue, watchedBranch]);
 
     const loadGithubFolder = useCallback(async (folderPath: string) => {
         const baseUrl = (githubPreview.repoUrl || '').trim();
@@ -262,15 +271,18 @@ export function useCreateProjectWizard({ onClose, onSuccess, draftId }: UseCreat
         if (!parsed) return;
 
         try {
-            const token = (await supabase.auth.getSession()).data.session?.provider_token || undefined;
-            const contents = await fetchContents({ ...parsed, token, ref: branch, path: key });
-            const entries = contents.map(decorateEntry);
+            const res = await previewGithubFolderAction(`https://github.com/${parsed.owner}/${parsed.repo}`, branch, key);
+            if (!res.success) {
+                setGithubFolderEntries((prev) => ({ ...prev, [key]: [] }));
+                return;
+            }
+            const entries = res.entries;
             setGithubFolderEntries((prev) => ({ ...prev, [key]: entries }));
         } catch {
             // Non-blocking: folder expansion can fail silently; keep UX smooth.
             setGithubFolderEntries((prev) => ({ ...prev, [key]: [] }));
         }
-    }, [decorateEntry, githubFolderEntries, githubPreview.branch, githubPreview.repoUrl, supabase, watchedBranch]);
+    }, [githubFolderEntries, githubPreview.branch, githubPreview.repoUrl, watchedBranch]);
 
     // --- Draft Management ---
 

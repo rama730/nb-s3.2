@@ -1,5 +1,5 @@
 import { notFound } from 'next/navigation';
-import { getProfileDetails, getPopularUsernames } from '@/lib/data/profile';
+import { getProfileDetails, getPublicProfileMeta } from '@/lib/data/profile';
 import { ProfileV2Client } from '@/components/profile/v2/ProfileV2Client';
 import { Metadata } from 'next';
 
@@ -15,19 +15,19 @@ export async function generateStaticParams() {
 
 export async function generateMetadata({ params }: { params: Promise<{ username: string }> }): Promise<Metadata> {
     const { username } = await params;
-    const data = await getProfileDetails(username);
+    const data = await getPublicProfileMeta(username);
 
-    if (!data?.profile) {
+    if (!data) {
         return {
             title: 'Profile Not Found',
         };
     }
 
     return {
-        title: `${data.profile.fullName || data.profile.username} (@${data.profile.username}) | Edge`,
-        description: data.profile.bio || `Check out ${data.profile.username}'s profile on Edge.`,
+        title: `${data.fullName || data.username} (@${data.username}) | Edge`,
+        description: data.bio || `Check out ${data.username}'s profile on Edge.`,
         openGraph: {
-            images: data.profile.avatarUrl ? [data.profile.avatarUrl] : [],
+            images: data.avatarUrl ? [data.avatarUrl] : [],
         },
     };
 }

@@ -1,12 +1,12 @@
-import { useState, useMemo } from "react";
-import { Loader2, UserPlus, X, Check, Clock } from "lucide-react";
+import { useMemo } from "react";
+import { Loader2, UserPlus, X, Check, Clock, CheckCheck } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { formatDistanceToNow } from "date-fns";
 import { profileHref } from "@/lib/routing/identifiers";
 import { usePendingRequests, useConnectionMutations } from "@/hooks/useConnections";
 import { toast } from "sonner";
-import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
+import { Virtuoso } from 'react-virtuoso';
 import ProjectApplicationsSection from "./ProjectApplicationsSection";
 
 interface RequestsTabProps {
@@ -23,11 +23,17 @@ type RequestItem =
 
 export default function RequestsTab({ initialUser, initialRequests, initialApplications }: RequestsTabProps) {
     const { data: requestData, isLoading: requestsLoading } = usePendingRequests();
-    const { acceptRequest, rejectRequest, cancelRequest } = useConnectionMutations();
+    const { acceptRequest, rejectRequest, undoRejectRequest, cancelRequest, acceptAllIncoming, rejectAllIncoming } = useConnectionMutations();
 
     // Use initial data if available, or fallback to hook data
-    const incomingRequests = requestData?.incoming || initialRequests?.incoming || [];
-    const sentRequests = requestData?.sent || initialRequests?.sent || [];
+    const incomingRequests = useMemo(
+        () => requestData?.incoming || initialRequests?.incoming || [],
+        [requestData?.incoming, initialRequests?.incoming],
+    );
+    const sentRequests = useMemo(
+        () => requestData?.sent || initialRequests?.sent || [],
+        [requestData?.sent, initialRequests?.sent],
+    );
     
     // Check loading only if we have NO data at all
     const isLoading = requestsLoading && !initialRequests && incomingRequests.length === 0 && sentRequests.length === 0;
@@ -43,11 +49,31 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
     };
 
     const handleReject = async (id: string) => {
-        toast.promise(rejectRequest.mutateAsync(id), {
-            loading: 'Rejecting...',
-            success: 'Request declined',
-            error: 'Failed to decline'
-        });
+        const pendingToast = toast.loading('Rejecting...');
+        try {
+            const result = await rejectRequest.mutateAsync(id);
+            toast.dismiss(pendingToast);
+            toast.success('Request declined');
+
+            if (result?.undoUntil) {
+                toast('Request declined', {
+                    description: 'Undo available for 15 seconds.',
+                    action: {
+                        label: 'Undo',
+                        onClick: () => {
+                            void toast.promise(undoRejectRequest.mutateAsync(id), {
+                                loading: 'Restoring...',
+                                success: 'Request restored',
+                                error: 'Failed to restore request',
+                            });
+                        },
+                    },
+                });
+            }
+        } catch {
+            toast.dismiss(pendingToast);
+            toast.error('Failed to decline');
+        }
     };
 
     const handleCancel = async (id: string) => {
@@ -56,6 +82,38 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
             success: 'Request cancelled',
             error: 'Failed to cancel'
         });
+    };
+
+    const handleAcceptAll = async () => {
+        if (incomingRequests.length === 0) return;
+        const confirmed = confirm(`Accept all ${incomingRequests.length} incoming requests?`);
+        if (!confirmed) return;
+
+        const pendingToast = toast.loading('Accepting all requests...');
+        try {
+            const result = await acceptAllIncoming.mutateAsync(incomingRequests.length);
+            toast.dismiss(pendingToast);
+            toast.success(`Accepted ${result.acceptedCount || 0} request${result.acceptedCount === 1 ? '' : 's'}.`);
+        } catch {
+            toast.dismiss(pendingToast);
+            toast.error('Failed to accept all requests');
+        }
+    };
+
+    const handleRejectAll = async () => {
+        if (incomingRequests.length === 0) return;
+        const confirmed = confirm(`Reject all ${incomingRequests.length} incoming requests? This cannot be undone in bulk.`);
+        if (!confirmed) return;
+
+        const pendingToast = toast.loading('Rejecting all requests...');
+        try {
+            const result = await rejectAllIncoming.mutateAsync(incomingRequests.length);
+            toast.dismiss(pendingToast);
+            toast.success(`Rejected ${result.rejectedCount || 0} request${result.rejectedCount === 1 ? '' : 's'}.`);
+        } catch {
+            toast.dismiss(pendingToast);
+            toast.error('Failed to reject all requests');
+        }
     };
 
     const items = useMemo<RequestItem[]>(() => {
@@ -121,21 +179,45 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
                     itemContent={(_, item) => {
                 if (item.type === 'header') {
                     return (
-                        <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100 mb-4 mt-8 flex items-center gap-2">
-                            {item.icon === 'incoming' ? (
-                                <UserPlus className="w-5 h-5 text-indigo-500" />
-                            ) : (
-                                <Clock className="w-5 h-5 text-yellow-500" />
+                        <div className="mb-4 mt-8 flex items-center justify-between gap-3">
+                            <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
+                                {item.icon === 'incoming' ? (
+                                    <UserPlus className="w-5 h-5 text-indigo-500" />
+                                ) : (
+                                    <Clock className="w-5 h-5 text-yellow-500" />
+                                )}
+                                {item.title}
+                                <span className={`ml-1 px-2 py-0.5 text-xs font-medium rounded-full ${
+                                    item.icon === 'incoming'
+                                        ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400'
+                                        : 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400'
+                                }`}>
+                                    {item.count}
+                                </span>
+                            </h2>
+                            {item.icon === 'incoming' && item.count > 1 && (
+                                <div className="flex items-center gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={handleAcceptAll}
+                                        disabled={acceptAllIncoming.isPending || rejectAllIncoming.isPending}
+                                        className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-300/60 bg-emerald-500/10 px-2.5 py-1.5 text-xs font-medium text-emerald-600 hover:bg-emerald-500/20 dark:text-emerald-300 transition-colors disabled:opacity-50"
+                                    >
+                                        <CheckCheck className="w-3.5 h-3.5" />
+                                        Accept all
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={handleRejectAll}
+                                        disabled={acceptAllIncoming.isPending || rejectAllIncoming.isPending}
+                                        className="inline-flex items-center gap-1.5 rounded-lg border border-red-300/60 bg-red-500/10 px-2.5 py-1.5 text-xs font-medium text-red-600 hover:bg-red-500/20 dark:text-red-300 transition-colors disabled:opacity-50"
+                                    >
+                                        <X className="w-3.5 h-3.5" />
+                                        Reject all
+                                    </button>
+                                </div>
                             )}
-                            {item.title}
-                            <span className={`ml-1 px-2 py-0.5 text-xs font-medium rounded-full ${
-                                item.icon === 'incoming' 
-                                    ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400'
-                                    : 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400'
-                            }`}>
-                                {item.count}
-                            </span>
-                        </h2>
+                        </div>
                     );
                 }
 

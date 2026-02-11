@@ -9,6 +9,7 @@ export const PROFILE_KEYS = {
 };
 
 export function useProfileProjects(userId: string, initialData?: any[]) {
+    const hasInitialData = Array.isArray(initialData);
     return useQuery({
         queryKey: PROFILE_KEYS.projects(userId),
         queryFn: async () => {
@@ -18,10 +19,13 @@ export function useProfileProjects(userId: string, initialData?: any[]) {
         enabled: !!userId,
         initialData: initialData,
         staleTime: 1000 * 60 * 5, // 5 min
+        refetchOnMount: hasInitialData ? false : true,
+        refetchOnWindowFocus: false,
     });
 }
 
 export function useProfileStats(userId: string, initialData?: any) {
+    const hasInitialData = !!initialData;
     return useQuery({
         queryKey: PROFILE_KEYS.stats(userId),
         queryFn: async () => {
@@ -31,5 +35,7 @@ export function useProfileStats(userId: string, initialData?: any) {
         enabled: !!userId,
         initialData: initialData,
         staleTime: 1000 * 60 * 2, // 2 min
+        refetchOnMount: hasInitialData ? false : true,
+        refetchOnWindowFocus: false,
     });
 }

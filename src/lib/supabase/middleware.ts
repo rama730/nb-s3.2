@@ -40,7 +40,7 @@ export async function updateSession(request: NextRequest) {
     const url = request.nextUrl.clone()
 
     // Route definitions
-    const protectedPaths = ['/hub', '/settings', '/messages', '/profile', '/monitor']
+    const protectedPaths = ['/hub', '/settings', '/messages', '/profile', '/people', '/workspace', '/monitor']
     const authPaths = ['/login', '/signup'] // Paths only for unauthenticated users
     const onboardingPath = '/onboarding'
 

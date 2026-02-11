@@ -5,9 +5,10 @@ import { motion } from "framer-motion";
 import Link from "next/link";
 import {
     LayoutDashboard, ListTodo, FolderOpen,
-    Settings, Share2, ChevronLeft, Bookmark, Bell, Timer, BarChart3, Eye, Users, Edit
+    Settings, Share2, ChevronLeft, Bookmark, Bell, Timer, BarChart3, Edit, Loader2
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import ProjectStatsBar from "@/components/projects/ProjectStatsBar";
 
 const TABS = [
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -25,11 +26,15 @@ interface ProjectLayoutProps {
     activeTab: string;
     onTabChange: (tabId: string) => void;
     followersCount?: number;
+    viewCount?: number;
+    savesCount?: number;
     onEdit?: () => void;
     isBookmarked?: boolean;
     onBookmark?: () => void;
+    bookmarkLoading?: boolean;
     isFollowing?: boolean;
     onFollow?: () => void;
+    followLoading?: boolean;
     onShare?: () => void;
     onTabHover?: (tabId: string) => void;
 }
@@ -37,8 +42,10 @@ interface ProjectLayoutProps {
 export default function ProjectLayout({
     children, project, isOwner, activeTab, onTabChange,
     followersCount,
+    viewCount,
+    savesCount,
     onEdit,
-    isBookmarked, onBookmark, isFollowing, onFollow, onShare,
+    isBookmarked, onBookmark, bookmarkLoading, isFollowing, onFollow, followLoading, onShare,
     onTabHover,
 }: ProjectLayoutProps) {
     const [isScrolled, setIsScrolled] = useState(false);
@@ -87,19 +94,12 @@ export default function ProjectLayout({
                             </div>
 
                             {/* Inline project meta */}
-                            <div className="hidden lg:flex items-center gap-3 text-xs text-zinc-500 dark:text-zinc-400 min-w-0">
-                                <div className="flex items-center gap-1" title="Total Views">
-                                    <Eye className="w-3.5 h-3.5" />
-                                    <span className="font-semibold text-zinc-900 dark:text-zinc-200">
-                                        {project?.view_count ?? 0}
-                                    </span>
-                                </div>
-                                <div className="flex items-center gap-1" title="Followers">
-                                    <Users className="w-3.5 h-3.5" />
-                                    <span className="font-semibold text-zinc-900 dark:text-zinc-200">
-                                        {followersCount ?? 0}
-                                    </span>
-                                </div>
+                            <div className="hidden lg:flex items-center min-w-0">
+                                <ProjectStatsBar
+                                    viewCount={viewCount ?? project?.viewCount ?? project?.view_count ?? 0}
+                                    followersCount={followersCount ?? 0}
+                                    savesCount={savesCount}
+                                />
                             </div>
                         </div>
 
@@ -121,14 +121,20 @@ export default function ProjectLayout({
                             <button
                                 onClick={onBookmark}
                                 className={cn(
-                                    "p-2 rounded-md transition-all flex items-center gap-1.5 text-sm font-medium",
+                                    "p-2 rounded-md transition-all flex items-center gap-1.5 text-sm font-medium disabled:opacity-60 disabled:cursor-not-allowed",
                                     isBookmarked
                                         ? "text-amber-600 bg-amber-50 dark:bg-amber-900/20"
                                         : "text-zinc-500 hover:text-amber-600 hover:bg-zinc-50 dark:bg-zinc-900 dark:hover:bg-zinc-800"
                                 )}
                                 title={isBookmarked ? "Unsave Project" : "Save Project"}
+                                disabled={bookmarkLoading}
+                                aria-busy={bookmarkLoading}
                             >
-                                <Bookmark className={cn("w-4 h-4", isBookmarked && "fill-current")} />
+                                {bookmarkLoading ? (
+                                    <Loader2 className="w-4 h-4 animate-spin" />
+                                ) : (
+                                    <Bookmark className={cn("w-4 h-4", isBookmarked && "fill-current")} />
+                                )}
                                 <span className="hidden sm:inline-block">{isBookmarked ? "Saved" : "Save"}</span>
                             </button>
 
@@ -136,14 +142,21 @@ export default function ProjectLayout({
                             <button
                                 onClick={onFollow}
                                 className={cn(
-                                    "p-2 rounded-md transition-all flex items-center gap-1.5 text-sm font-medium",
+                                    "p-2 rounded-md transition-all flex items-center gap-1.5 text-sm font-medium disabled:opacity-60 disabled:cursor-not-allowed",
                                     isFollowing
                                         ? "text-indigo-600 bg-indigo-50 dark:bg-indigo-900/20"
                                         : "text-zinc-500 hover:text-indigo-600 hover:bg-zinc-50 dark:bg-zinc-900 dark:hover:bg-zinc-800"
                                 )}
                                 title={isFollowing ? "Unfollow Project" : "Follow Project"}
+                                data-testid="project-follow-toggle"
+                                disabled={followLoading}
+                                aria-busy={followLoading}
                             >
-                                <Bell className={cn("w-4 h-4", isFollowing && "fill-current")} />
+                                {followLoading ? (
+                                    <Loader2 className="w-4 h-4 animate-spin" />
+                                ) : (
+                                    <Bell className={cn("w-4 h-4", isFollowing && "fill-current")} />
+                                )}
                                 <span className="hidden sm:inline-block">{isFollowing ? "Following" : "Follow"}</span>
                             </button>
 

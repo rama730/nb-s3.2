@@ -13,11 +13,11 @@ export interface OpenRole {
     id: string;
     projectId: string;
     role: string;
-    title?: string;
+    title?: string | null;
     description?: string | null;
     count: number;
     filled: number;
-    skills?: string[];
+    skills?: string[] | null;
 }
 
 export interface ProjectProfile {
@@ -30,7 +30,7 @@ export interface ProjectProfile {
 export interface ProjectCollaborator {
     userId: string;
     membershipRole: 'owner' | 'admin' | 'member' | 'viewer';
-    user: ProjectProfile;
+    user: ProjectProfile | null;
 }
 
 export interface ProjectFollower {
@@ -52,6 +52,9 @@ export interface Project {
     skills?: string[];
     visibility?: string;
     viewCount?: number;
+    followersCount?: number;
+    savesCount?: number;
+    rankingReasons?: string[];
 
     // Relations
     ownerId?: string;

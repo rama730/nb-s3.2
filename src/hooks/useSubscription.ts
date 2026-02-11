@@ -59,5 +59,5 @@ export function useSubscription({
         };
     }, [table, filter, event, enabled, onData]);
 
-    return channelRef.current;
+    return channelRef;
 }

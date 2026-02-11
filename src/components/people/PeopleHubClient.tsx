@@ -2,16 +2,14 @@
 
 import { useMemo, useState, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Inbox, Sparkles, Share2, SendHorizontal } from "lucide-react";
+import { Sparkles, Share2, SendHorizontal } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { motion } from "framer-motion";
 
 import PeopleClient from "@/components/people/PeopleClient";
 import ConnectionsClient from "@/components/people/ConnectionsClient";
 import RequestsTab from "@/components/people/RequestsTab";
-import { usePeopleNotifications } from "@/hooks/usePeopleNotifications";
-import { useSuggestedPeople, useConnectionStats, usePendingRequests } from "@/hooks/useConnectionsData";
-import { InboxData } from "@/types/people";
+import { useConnectionStats, useConnectionsRealtimeInvalidation } from "@/hooks/useConnections";
 
 type TabKey = "discover" | "network" | "requests";
 
@@ -21,7 +19,6 @@ interface PeopleHubClientProps {
     // Data props - Made optional/legacy
     initialProfiles?: any[];
     connectionStats?: any;
-    initialRequests?: { incoming: any[], sent: any[] };
     initialApplications?: { my: any[], incoming: any[] };
 }
 
@@ -41,9 +38,7 @@ export default function PeopleHubClient({
     initialUser,
     activeTabOverride,
     initialProfiles,
-    connectionStats,
-    initialRequests,
-    initialApplications
+    initialApplications,
 }: PeopleHubClientProps) {
     const router = useRouter();
     const searchParams = useSearchParams();
@@ -63,6 +58,7 @@ export default function PeopleHubClient({
     };
 
     const [activeTab, setActiveTab] = useState<TabKey>(getInitialTab);
+    useConnectionsRealtimeInvalidation();
 
     useEffect(() => {
         const validTabs: TabKey[] = ["discover", "network", "requests"];
@@ -73,21 +69,8 @@ export default function PeopleHubClient({
         }
     }, [tabParam, activeTabOverride]);
 
-    // Data Fetching (Client-Side Parallelism)
-    // 1. Pending Requests (Fast, needed for badges)
-    const { data: requestsData, isLoading: requestsLoading } = usePendingRequests(20, initialRequests);
-    
-    // 2. Suggestions (Heavier)
-    const { data: profilesData, isLoading: profilesLoading } = useSuggestedPeople(20, initialProfiles);
-
-    // 3. Stats (Fast)
-    const { data: statsData, isLoading: statsLoading } = useConnectionStats(initialUser?.id, connectionStats);
-
-    const { totalPending: hookTotalPending } = usePeopleNotifications();
-    
-    const fetchedTotalPending = requestsData ? (requestsData.incoming.length) : 0;
-    // Prefer hook if realtime updates happened, otherwise use fetched data
-    const totalPending = hookTotalPending > 0 ? hookTotalPending : fetchedTotalPending;
+    const { data: connectionStats } = useConnectionStats();
+    const totalPending = Number(connectionStats?.pendingIncoming || 0);
 
     const visibleTabs = useMemo(
         () => TAB_CONFIG.filter((t) => (t.requiresAuth ? isAuthed : true)),
@@ -155,17 +138,7 @@ export default function PeopleHubClient({
             {/* Main Content */}
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
                 {activeTab === "discover" && (
-                    <>
-                        {profilesLoading ? (
-                             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                                {[1, 2, 3, 4, 5, 6].map(i => (
-                                    <div key={i} className="h-64 rounded-2xl bg-zinc-100 dark:bg-zinc-900 animate-pulse" />
-                                ))}
-                             </div>
-                        ) : (
-                            <PeopleClient embedded initialUser={initialUser} initialProfiles={profilesData} />
-                        )}
-                    </>
+                    <PeopleClient embedded initialUser={initialUser} initialProfiles={initialProfiles} />
                 )}
 
                 {activeTab === "network" && (
@@ -175,7 +148,6 @@ export default function PeopleHubClient({
                 {activeTab === "requests" && (
                     <RequestsTab 
                         initialUser={initialUser} 
-                        initialRequests={requestsData || { incoming: [], sent: [] }} 
                         initialApplications={initialApplications}
                     />
                 )}

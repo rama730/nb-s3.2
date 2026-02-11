@@ -1,17 +1,57 @@
 'use server';
 
 import { db } from '@/lib/db';
-import { projects, projectFollows, savedProjects, projectOpenRoles, conversations, conversationParticipants, messages, projectNodes } from '@/lib/db/schema';
-import { eq, and, sql, inArray, isNotNull } from 'drizzle-orm';
+import { projects, projectFollows, savedProjects, projectOpenRoles, roleApplications, conversations, conversationParticipants, messages, projectNodes } from '@/lib/db/schema';
+import { eq, and, sql, inArray, isNotNull, isNull, desc } from 'drizzle-orm';
 import { createClient, createAdminClient } from '@/lib/supabase/server';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { CreateProjectInput } from '@/lib/validations/project';
 import { generateSlug } from '@/lib/utils/slug';
 import { generateProjectKey } from '@/lib/project-key';
+import { getProjectAccessById } from '@/lib/data/project-access';
+import { normalizeGithubBranch, normalizeGithubRepoUrl } from '@/lib/github/repo-validation';
+import { clearSealedGithubTokenFromImportSource, sanitizeGitErrorMessage, sealGithubImportToken } from '@/lib/github/repo-security';
+import { fetchRepoMeta, parseGithubRepo } from '@/lib/github/repo-preview';
+import { consumeRateLimit } from '@/lib/security/rate-limit';
 // Queue Imports
 import { inngest } from '@/inngest/client';
 import { getLifecycleStagesForProjectType } from '@/lib/projects/lifecycle-templates';
+
+const isMissingCounterColumn = (error: unknown, column: string) => {
+    const msg = error instanceof Error ? error.message : String(error);
+    const lowered = msg.toLowerCase();
+    return (
+        lowered.includes(column.toLowerCase()) &&
+        (lowered.includes('column') || lowered.includes('failed query') || lowered.includes('does not exist'))
+    );
+};
+
+const revalidateProjectPaths = async (projectId: string) => {
+    revalidatePath(`/projects/${projectId}`);
+    revalidatePath('/hub');
+    try {
+        const [project] = await db
+            .select({ slug: projects.slug })
+            .from(projects)
+            .where(eq(projects.id, projectId))
+            .limit(1);
+        if (project?.slug) {
+            revalidatePath(`/projects/${project.slug}`);
+        }
+    } catch {
+        // Ignore slug revalidation errors on legacy schemas.
+    }
+};
+
+async function lockProjectUserPair(tx: any, projectId: string, userId: string) {
+    await tx.execute(sql`
+        SELECT pg_advisory_xact_lock(
+            hashtext(CAST(${projectId} AS text)),
+            hashtext(CAST(${userId} AS text))
+        )
+    `);
+}
 
 // --- Types ---
 interface CreateProjectResult {
@@ -22,6 +62,81 @@ interface CreateProjectResult {
         slug?: string;
     };
     error?: string;
+}
+
+type ImportSourcePayload = {
+    type: 'github' | 'upload' | 'scratch';
+    repoUrl?: string;
+    branch?: string;
+    s3Key?: string;
+    metadata?: Record<string, any>;
+};
+
+function normalizeImportSourceForPersist(
+    importSource: CreateProjectInput['import_source'] | undefined,
+    gitHubToken?: string | null
+): { ok: true; value: ImportSourcePayload | null } | { ok: false; error: string } {
+    if (!importSource) return { ok: true, value: null };
+    if (importSource.type !== 'github') {
+        return { ok: true, value: importSource as ImportSourcePayload };
+    }
+
+    const repoUrl = normalizeGithubRepoUrl(importSource.repoUrl || '');
+    if (!repoUrl) {
+        return { ok: false, error: 'Invalid GitHub repository URL. Use https://github.com/owner/repo' };
+    }
+
+    const branch = normalizeGithubBranch(importSource.branch);
+    if (importSource.branch && !branch) {
+        return { ok: false, error: 'Invalid GitHub branch name.' };
+    }
+
+    const metadata = { ...(((clearSealedGithubTokenFromImportSource(importSource) as any)?.metadata || {}) as Record<string, any>) };
+    if (gitHubToken) {
+        const sealed = sealGithubImportToken(gitHubToken);
+        if (sealed) metadata.importAuth = sealed;
+    }
+
+    const normalized: ImportSourcePayload = {
+        ...importSource,
+        type: 'github',
+        repoUrl,
+        branch,
+        metadata,
+    };
+    return { ok: true, value: normalized };
+}
+
+async function ensureGithubImportAccess(repoUrl: string, gitHubToken?: string | null): Promise<{ ok: true } | { ok: false; error: string }> {
+    const parsed = parseGithubRepo(repoUrl);
+    if (!parsed) {
+        return { ok: false, error: 'Invalid GitHub repository URL. Use https://github.com/owner/repo' };
+    }
+
+    try {
+        const meta = await fetchRepoMeta({ ...parsed, token: gitHubToken || undefined });
+        const isPrivate = meta.isPrivate === true;
+        if (isPrivate && !gitHubToken) {
+            return { ok: false, error: 'GitHub access expired. Reconnect GitHub and retry import.' };
+        }
+        if (isPrivate && !process.env.GITHUB_IMPORT_TOKEN_ENCRYPTION_KEY) {
+            return { ok: false, error: 'Server is missing GITHUB_IMPORT_TOKEN_ENCRYPTION_KEY for private repository imports.' };
+        }
+        return { ok: true };
+    } catch (e: any) {
+        const msg = typeof e?.message === 'string' ? e.message : '';
+        if (!gitHubToken && msg.includes('404')) {
+            return { ok: false, error: 'Repository not found or private. Connect GitHub and verify repository access.' };
+        }
+        return { ok: false, error: sanitizeGitErrorMessage(msg || 'Unable to validate repository access') };
+    }
+}
+
+async function assertProjectReadAccess(projectId: string, userId: string | null) {
+    const access = await getProjectAccessById(projectId, userId);
+    if (!access.project) throw new Error("Project not found");
+    if (!access.canRead) throw new Error("Forbidden");
+    return access;
 }
 
 // ============================================================================
@@ -131,6 +246,18 @@ export async function createProjectAction(input: CreateProjectInput & { slug?: s
         // Retrieve GitHub Access Token if available (for private repo access)
         const gitHubToken = session?.provider_token;
 
+        const importSourceResult = normalizeImportSourceForPersist(input.import_source, gitHubToken || null);
+        if (!importSourceResult.ok) {
+            return { success: false, error: importSourceResult.error };
+        }
+        const normalizedImportSource = importSourceResult.value;
+        if (normalizedImportSource?.type === 'github' && normalizedImportSource.repoUrl) {
+            const accessCheck = await ensureGithubImportAccess(normalizedImportSource.repoUrl, gitHubToken || null);
+            if (!accessCheck.ok) {
+                return { success: false, error: accessCheck.error };
+            }
+        }
+
         let finalSlug = input.slug || generateSlug(input.title);
         // Initial Key Generation
         let finalKey = generateProjectKey(input.title);
@@ -162,10 +289,10 @@ export async function createProjectAction(input: CreateProjectInput & { slug?: s
                         ? input.lifecycle_stages
                         : getLifecycleStagesForProjectType(input.project_type),
                     currentStageIndex: input.current_stage_index || 0,
-                    importSource: input.import_source || null,
+                    importSource: normalizedImportSource,
                     // For GitHub imports, start at `pending` until the worker actually begins cloning.
-                    syncStatus: (input.import_source?.type === 'github' ? 'pending' :
-                        input.import_source?.type === 'upload' ? 'pending' : 'ready') as 'pending' | 'cloning' | 'indexing' | 'ready' | 'failed',
+                    syncStatus: (normalizedImportSource?.type === 'github' ? 'pending' :
+                        normalizedImportSource?.type === 'upload' ? 'pending' : 'ready') as 'pending' | 'cloning' | 'indexing' | 'ready' | 'failed',
                 };
 
                 // Use transaction to ensure project, owner membership, and project group are created together
@@ -203,6 +330,11 @@ export async function createProjectAction(input: CreateProjectInput & { slug?: s
                         role: 'owner'
                     });
 
+                    // Keep denormalized profile stats in sync.
+                    await tx.update(profiles)
+                        .set({ projectsCount: sql`GREATEST(0, ${profiles.projectsCount} + 1)` })
+                        .where(eq(profiles.id, user.id));
+
                     // 5. Insert Open Roles (if any)
                     if (input.roles && input.roles.length > 0) {
                         await tx.insert(projectOpenRoles).values(
@@ -222,33 +354,35 @@ export async function createProjectAction(input: CreateProjectInput & { slug?: s
                 revalidatePath('/hub');
 
                 // Add to Import Queue if applicable
-                if (input.import_source?.type === 'github' && input.import_source.repoUrl) {
+                if (normalizedImportSource?.type === 'github' && normalizedImportSource.repoUrl) {
                     try {
+                        const queueImportSource = clearSealedGithubTokenFromImportSource(normalizedImportSource) as ImportSourcePayload;
                         await inngest.send({
                             name: "project/import",
                             data: {
                                 projectId: result.id,
                                 importSource: {
                                     type: 'github',
-                                    repoUrl: input.import_source.repoUrl!,
-                                    branch: input.import_source.branch,
-                                    metadata: input.import_source.metadata
+                                    repoUrl: queueImportSource.repoUrl!,
+                                    branch: queueImportSource.branch,
+                                    metadata: queueImportSource.metadata
                                 },
-                                accessToken: gitHubToken || undefined,
                                 userId: user.id
                             }
                         });
                     } catch (queueError) {
                         // If we can't enqueue, mark the project as failed so the Files tab becomes actionable.
-                        const msg =
-                            queueError instanceof Error ? queueError.message : 'Failed to enqueue GitHub import';
-                        console.error('[Action] Failed to add to queue', queueError);
+                        const msg = sanitizeGitErrorMessage(
+                            queueError instanceof Error ? queueError.message : 'Failed to enqueue GitHub import'
+                        );
+                        console.error('[Action] Failed to add to queue', msg);
 
-                        const currentImportSource = input.import_source!;
+                        const currentImportSource = normalizedImportSource!;
+                        const clearedImportSource = clearSealedGithubTokenFromImportSource(currentImportSource) as Record<string, any>;
                         const nextImportSource = {
-                            ...currentImportSource,
+                            ...clearedImportSource,
                             metadata: {
-                                ...((currentImportSource as any)?.metadata || {}),
+                                ...((clearedImportSource as any)?.metadata || {}),
                                 lastError: msg,
                             },
                         };
@@ -451,6 +585,11 @@ export async function deleteProject(projectId: string) {
         // B. Delete the project (cascades to projectMembers, nodes, roles, applications, etc.)
         await tx.delete(projects).where(eq(projects.id, projectId));
 
+        // Keep denormalized profile stats in sync.
+        await tx.update(profiles)
+            .set({ projectsCount: sql`GREATEST(0, ${profiles.projectsCount} - 1)` })
+            .where(eq(profiles.id, user.id));
+
         // C. Delete the project group conversation if it exists
         if (project.conversationId) {
             await tx.delete(conversations).where(eq(conversations.id, project.conversationId));
@@ -498,6 +637,9 @@ export async function deleteProjectDraftAction(projectId: string): Promise<{ suc
         await db.transaction(async (tx) => {
             // Delete project (cascades to members, roles, etc.)
             await tx.delete(projects).where(eq(projects.id, projectId));
+            await tx.update(profiles)
+                .set({ projectsCount: sql`GREATEST(0, ${profiles.projectsCount} - 1)` })
+                .where(eq(profiles.id, user.id));
             if (project.conversationId) {
                 await tx.delete(conversations).where(eq(conversations.id, project.conversationId));
             }
@@ -550,58 +692,193 @@ export async function deleteProjectDraftAction(projectId: string): Promise<{ suc
 // --- Interaction Actions ---
 
 export async function toggleProjectBookmarkAction(projectId: string, shouldBookmark: boolean) {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return { success: false, error: 'Not authenticated' };
     try {
-        const supabase = await createClient();
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) return { success: false, error: 'Not authenticated' };
-
-        if (shouldBookmark) {
-            await db.insert(savedProjects)
-                .values({ userId: user.id, projectId })
-                .onConflictDoNothing();
-        } else {
-            await db.delete(savedProjects)
-                .where(and(eq(savedProjects.userId, user.id), eq(savedProjects.projectId, projectId)));
+        const bookmarkRate = await consumeRateLimit(`project-bookmark:${user.id}`, 80, 60);
+        if (!bookmarkRate.allowed) {
+            return { success: false, error: 'Too many bookmark actions. Please wait and try again.' };
         }
 
-        revalidatePath(`/projects/${projectId}`);
-        return { success: true };
+        const savesCount = await db.transaction(async (tx) => {
+            await lockProjectUserPair(tx, projectId, user.id);
+
+            if (shouldBookmark) {
+                const [existing] = await tx
+                    .select({ id: savedProjects.id })
+                    .from(savedProjects)
+                    .where(and(eq(savedProjects.userId, user.id), eq(savedProjects.projectId, projectId)))
+                    .limit(1);
+
+                if (!existing) {
+                    await tx.insert(savedProjects)
+                        .values({ userId: user.id, projectId });
+
+                    const [updated] = await tx.update(projects)
+                        .set({ savesCount: sql`${projects.savesCount} + 1` })
+                        .where(eq(projects.id, projectId))
+                        .returning({ savesCount: projects.savesCount });
+                    return updated?.savesCount ?? 0;
+                }
+            } else {
+                const deleted = await tx.delete(savedProjects)
+                    .where(and(eq(savedProjects.userId, user.id), eq(savedProjects.projectId, projectId)))
+                    .returning({ id: savedProjects.id });
+
+                if (deleted.length > 0) {
+                    const [updated] = await tx.update(projects)
+                        .set({ savesCount: sql`GREATEST(${projects.savesCount} - 1, 0)` })
+                        .where(eq(projects.id, projectId))
+                        .returning({ savesCount: projects.savesCount });
+                    return updated?.savesCount ?? 0;
+                }
+            }
+
+            const [row] = await tx
+                .select({ savesCount: projects.savesCount })
+                .from(projects)
+                .where(eq(projects.id, projectId))
+                .limit(1);
+            return row?.savesCount ?? 0;
+        });
+
+        await revalidateProjectPaths(projectId);
+        return { success: true, savesCount };
     } catch (error) {
-        console.error('Error toggling bookmark:', error);
-        return { success: false, error: 'Failed to update bookmark' };
+        // Always attempt idempotent fallback through link table + recount.
+        if (!isMissingCounterColumn(error, 'saves_count')) {
+            console.error('Error toggling bookmark, trying fallback:', error);
+        }
+        try {
+            if (shouldBookmark) {
+                const [existing] = await db
+                    .select({ id: savedProjects.id })
+                    .from(savedProjects)
+                    .where(and(eq(savedProjects.userId, user.id), eq(savedProjects.projectId, projectId)))
+                    .limit(1);
+                if (!existing) {
+                    await db.insert(savedProjects)
+                        .values({ userId: user.id, projectId });
+                }
+            } else {
+                await db.delete(savedProjects)
+                    .where(and(eq(savedProjects.userId, user.id), eq(savedProjects.projectId, projectId)));
+            }
+            const [countRow] = await db
+                .select({ count: sql<number>`count(*)` })
+                .from(savedProjects)
+                .where(eq(savedProjects.projectId, projectId));
+            await revalidateProjectPaths(projectId);
+            return { success: true, savesCount: Number(countRow?.count || 0) };
+        } catch (fallbackError) {
+            console.error('Error toggling bookmark (fallback):', fallbackError);
+            return { success: false, error: 'Failed to update bookmark' };
+        }
     }
 }
 
 export async function toggleProjectFollowAction(projectId: string, shouldFollow: boolean) {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return { success: false, error: 'Not authenticated' };
     try {
-        const supabase = await createClient();
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) return { success: false, error: 'Not authenticated' };
-
-        if (shouldFollow) {
-            await db.insert(projectFollows)
-                .values({ userId: user.id, projectId })
-                .onConflictDoNothing();
-        } else {
-            await db.delete(projectFollows)
-                .where(and(eq(projectFollows.userId, user.id), eq(projectFollows.projectId, projectId)));
+        const followRate = await consumeRateLimit(`project-follow:${user.id}`, 80, 60);
+        if (!followRate.allowed) {
+            return { success: false, error: 'Too many follow actions. Please wait and try again.' };
         }
 
-        revalidatePath(`/projects/${projectId}`);
-        return { success: true };
+        const followersCount = await db.transaction(async (tx) => {
+            await lockProjectUserPair(tx, projectId, user.id);
+
+            if (shouldFollow) {
+                const [existing] = await tx
+                    .select({ id: projectFollows.id })
+                    .from(projectFollows)
+                    .where(and(eq(projectFollows.userId, user.id), eq(projectFollows.projectId, projectId)))
+                    .limit(1);
+
+                if (!existing) {
+                    await tx.insert(projectFollows)
+                        .values({ userId: user.id, projectId });
+
+                    const [updated] = await tx.update(projects)
+                        .set({ followersCount: sql`${projects.followersCount} + 1` })
+                        .where(eq(projects.id, projectId))
+                        .returning({ followersCount: projects.followersCount });
+                    return updated?.followersCount ?? 0;
+                }
+            } else {
+                const deleted = await tx.delete(projectFollows)
+                    .where(and(eq(projectFollows.userId, user.id), eq(projectFollows.projectId, projectId)))
+                    .returning({ id: projectFollows.id });
+
+                if (deleted.length > 0) {
+                    const [updated] = await tx.update(projects)
+                        .set({ followersCount: sql`GREATEST(${projects.followersCount} - 1, 0)` })
+                        .where(eq(projects.id, projectId))
+                        .returning({ followersCount: projects.followersCount });
+                    return updated?.followersCount ?? 0;
+                }
+            }
+
+            const [row] = await tx
+                .select({ followersCount: projects.followersCount })
+                .from(projects)
+                .where(eq(projects.id, projectId))
+                .limit(1);
+            return row?.followersCount ?? 0;
+        });
+
+        await revalidateProjectPaths(projectId);
+        return { success: true, followersCount };
     } catch (error) {
-        console.error('Error toggling follow:', error);
-        return { success: false, error: 'Failed to update follow status' };
+        // Always attempt idempotent fallback through link table + recount.
+        if (!isMissingCounterColumn(error, 'followers_count')) {
+            console.error('Error toggling follow, trying fallback:', error);
+        }
+        try {
+            if (shouldFollow) {
+                const [existing] = await db
+                    .select({ id: projectFollows.id })
+                    .from(projectFollows)
+                    .where(and(eq(projectFollows.userId, user.id), eq(projectFollows.projectId, projectId)))
+                    .limit(1);
+                if (!existing) {
+                    await db.insert(projectFollows)
+                        .values({ userId: user.id, projectId });
+                }
+            } else {
+                await db.delete(projectFollows)
+                    .where(and(eq(projectFollows.userId, user.id), eq(projectFollows.projectId, projectId)));
+            }
+            const [countRow] = await db
+                .select({ count: sql<number>`count(*)` })
+                .from(projectFollows)
+                .where(eq(projectFollows.projectId, projectId));
+            await revalidateProjectPaths(projectId);
+            return { success: true, followersCount: Number(countRow?.count || 0) };
+        } catch (fallbackError) {
+            console.error('Error toggling follow (fallback):', fallbackError);
+            return { success: false, error: 'Failed to update follow status' };
+        }
     }
 }
 
-export async function incrementProjectViewAction(projectId: string): Promise<void> {
+export async function incrementProjectViewAction(projectId: string): Promise<{ success: boolean; viewCount?: number; error?: string }> {
     try {
-        await db.update(projects)
+        const [updated] = await db.update(projects)
             .set({ viewCount: sql`${projects.viewCount} + 1` })
-            .where(eq(projects.id, projectId));
+            .where(eq(projects.id, projectId))
+            .returning({ viewCount: projects.viewCount });
+        return { success: true, viewCount: updated?.viewCount ?? undefined };
     } catch (e) {
+        if (isMissingCounterColumn(e, 'view_count')) {
+            // Legacy schema fallback: treat as no-op while keeping page functional.
+            return { success: true };
+        }
         console.error("Failed to increment view", e);
+        return { success: false, error: "Failed to increment view" };
     }
 }
 
@@ -664,9 +941,10 @@ export async function fetchProjectTasksAction(
         const supabase = await createClient();
         const { data: { user } } = await supabase.auth.getUser();
 
-        // Basic read access check can be done via RLS on Supabase side if using client, 
-        // but since we are server-side with drizzle, we should ideally check membership or public visibility.
-        // For speed, we'll optimistically fetch assuming the page component checked general access.
+        // Enforce read access server-side (public/unlisted or member/owner).
+        await assertProjectReadAccess(projectId, user?.id ?? null);
+
+        const safeLimit = Math.min(Math.max(limit, 1), 200);
 
         const projectTasks = await db.query.tasks.findMany({
             where: (t, { eq, and, lt }) => and(
@@ -674,17 +952,43 @@ export async function fetchProjectTasksAction(
                 cursor ? lt(t.createdAt, new Date(cursor)) : undefined
             ),
             orderBy: (t, { desc }) => [desc(t.createdAt)],
-            limit: limit + 1,
+            limit: safeLimit + 1,
+            columns: {
+                id: true,
+                projectId: true,
+                sprintId: true,
+                assigneeId: true,
+                creatorId: true,
+                title: true,
+                description: true,
+                status: true,
+                priority: true,
+                taskNumber: true,
+                storyPoints: true,
+                dueDate: true,
+                createdAt: true,
+                updatedAt: true,
+            },
             with: {
-                assignee: true,
-                creator: true,
-                attachments: true,
-                subtasks: true
+                assignee: {
+                    columns: {
+                        id: true,
+                        fullName: true,
+                        avatarUrl: true,
+                    },
+                },
+                creator: {
+                    columns: {
+                        id: true,
+                        fullName: true,
+                        avatarUrl: true,
+                    },
+                },
             }
         });
 
-        const hasMore = projectTasks.length > limit;
-        const tasks = projectTasks.slice(0, limit);
+        const hasMore = projectTasks.length > safeLimit;
+        const tasks = projectTasks.slice(0, safeLimit);
         const nextCursor = hasMore ? tasks[tasks.length - 1].createdAt.toISOString() : undefined;
 
         return { success: true, tasks, nextCursor, hasMore };
@@ -696,6 +1000,10 @@ export async function fetchProjectTasksAction(
 
 export async function fetchProjectSprintsAction(projectId: string) {
     try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        await assertProjectReadAccess(projectId, user?.id ?? null);
+
         const projectSprintsList = await db.query.projectSprints.findMany({
             where: (s, { eq }) => eq(s.projectId, projectId),
             orderBy: (s, { desc }) => [desc(s.createdAt)]
@@ -708,20 +1016,80 @@ export async function fetchProjectSprintsAction(projectId: string) {
     }
 }
 
-export async function fetchSprintTasksAction(sprintId: string) {
+export async function fetchSprintTasksAction(
+    sprintId: string,
+    limit: number = 50,
+    cursor?: string
+) {
     try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+
+        const [sprint] = await db
+            .select({ projectId: projectSprints.projectId })
+            .from(projectSprints)
+            .where(eq(projectSprints.id, sprintId))
+            .limit(1);
+
+        if (!sprint) {
+            return { success: false, error: "Sprint not found" };
+        }
+
+        await assertProjectReadAccess(sprint.projectId, user?.id ?? null);
+
+        const safeLimit = Math.min(Math.max(limit, 1), 200);
+
         const sprintTasks = await db.query.tasks.findMany({
-            where: (t, { eq }) => eq(t.sprintId, sprintId),
+            where: (t, { eq, and, lt }) => and(
+                eq(t.sprintId, sprintId),
+                cursor ? lt(t.createdAt, new Date(cursor)) : undefined
+            ),
             orderBy: (t, { desc }) => [desc(t.createdAt)],
+            columns: {
+                id: true,
+                projectId: true,
+                sprintId: true,
+                assigneeId: true,
+                creatorId: true,
+                title: true,
+                description: true,
+                status: true,
+                priority: true,
+                taskNumber: true,
+                storyPoints: true,
+                dueDate: true,
+                createdAt: true,
+                updatedAt: true,
+            },
             with: {
-                assignee: true,
-                creator: true,
-                attachments: true,
-                subtasks: true
-            }
+                assignee: {
+                    columns: {
+                        id: true,
+                        fullName: true,
+                        avatarUrl: true,
+                    },
+                },
+                creator: {
+                    columns: {
+                        id: true,
+                        fullName: true,
+                        avatarUrl: true,
+                    },
+                },
+                attachments: {
+                    columns: {
+                        id: true,
+                    },
+                },
+            },
+            limit: safeLimit + 1,
         });
 
-        return { success: true, tasks: sprintTasks };
+        const hasMore = sprintTasks.length > safeLimit;
+        const tasks = sprintTasks.slice(0, safeLimit);
+        const nextCursor = hasMore ? tasks[tasks.length - 1].createdAt.toISOString() : undefined;
+
+        return { success: true, tasks, nextCursor, hasMore };
     } catch (error) {
         console.error("Failed to fetch sprint tasks:", error);
         return { success: false, error: "Failed to fetch sprint tasks" };
@@ -731,22 +1099,90 @@ export async function fetchSprintTasksAction(sprintId: string) {
 export async function getProjectMembersAction(
     projectId: string,
     limit: number = 20,
-    offset: number = 0
+    cursor?: string
 ) {
     try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        await assertProjectReadAccess(projectId, user?.id ?? null);
+
+        const safeLimit = Math.min(Math.max(limit, 1), 100);
+        const whereConditions: any[] = [eq(projectMembers.projectId, projectId)];
+
+        if (cursor) {
+            try {
+                const decoded = Buffer.from(cursor, 'base64').toString('utf-8');
+                const [joinedAt, memberId] = decoded.split(':::');
+                if (joinedAt && memberId) {
+                    whereConditions.push(
+                        sql`(${projectMembers.joinedAt}, ${projectMembers.id}) < (${new Date(joinedAt)}, ${memberId})`
+                    );
+                }
+            } catch {
+                // Ignore invalid cursor
+            }
+        }
+
         const membersResult = await db.query.projectMembers.findMany({
-            where: (members, { eq }) => eq(members.projectId, projectId),
+            where: and(...whereConditions),
             with: {
-                user: true
+                user: {
+                    columns: {
+                        id: true,
+                        username: true,
+                        fullName: true,
+                        avatarUrl: true,
+                    }
+                }
             },
-            limit,
-            offset
+            orderBy: (members, { desc }) => [desc(members.joinedAt), desc(members.id)],
+            limit: safeLimit + 1,
         });
 
-        const members = membersResult.map(m => m.user);
-        const hasMore = members.length === limit;
+        const hasMore = membersResult.length > safeLimit;
+        const slice = membersResult.slice(0, safeLimit);
+        const last = slice[slice.length - 1];
+        const nextCursor = hasMore && last
+            ? Buffer.from(`${last.joinedAt.toISOString()}:::${last.id}`).toString('base64')
+            : undefined;
 
-        return { success: true, members, hasMore };
+        const members = slice
+            .map(m => m.user ? ({ ...m.user, membershipRole: m.role }) : null)
+            .filter(Boolean);
+
+        const memberIds = members.map((m: any) => m.id);
+        const acceptedRoleRows = memberIds.length > 0
+            ? await db
+                .select({
+                    applicantId: roleApplications.applicantId,
+                    roleTitle: projectOpenRoles.title,
+                    roleName: projectOpenRoles.role,
+                })
+                .from(roleApplications)
+                .leftJoin(projectOpenRoles, eq(projectOpenRoles.id, roleApplications.roleId))
+                .where(
+                    and(
+                        eq(roleApplications.projectId, projectId),
+                        eq(roleApplications.status, 'accepted'),
+                        inArray(roleApplications.applicantId, memberIds)
+                    )
+                )
+                .orderBy(desc(roleApplications.updatedAt))
+            : [];
+
+        const acceptedRoleByUser = new Map<string, string>();
+        for (const row of acceptedRoleRows) {
+            if (acceptedRoleByUser.has(row.applicantId)) continue;
+            const label = row.roleTitle || row.roleName || '';
+            if (label) acceptedRoleByUser.set(row.applicantId, label);
+        }
+
+        const membersWithRoleTitles = members.map((member: any) => ({
+            ...member,
+            projectRoleTitle: acceptedRoleByUser.get(member.id) || null,
+        }));
+
+        return { success: true, members: membersWithRoleTitles, hasMore, nextCursor };
     } catch (error) {
         console.error("Failed to fetch project members:", error);
         return { success: false, error: "Failed to fetch project members" };
@@ -755,52 +1191,48 @@ export async function getProjectMembersAction(
 
 export async function getProjectAnalyticsAction(projectId: string) {
     try {
-        const tasksResult = await db
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        await assertProjectReadAccess(projectId, user?.id ?? null);
+
+        const [row] = await db
             .select({
-                status: tasks.status,
-                priority: tasks.priority,
-                dueDate: tasks.dueDate,
-                count: sql<number>`count(*)`
+                totalTasks: sql<number>`count(*)`,
+                completedTasks: sql<number>`count(*) FILTER (WHERE ${tasks.status} = 'done')`,
+                inProgressTasks: sql<number>`count(*) FILTER (WHERE ${tasks.status} = 'in_progress')`,
+                overdueTasks: sql<number>`count(*) FILTER (WHERE ${tasks.status} != 'done' AND ${tasks.dueDate} IS NOT NULL AND ${tasks.dueDate} < NOW())`,
+                urgentCount: sql<number>`count(*) FILTER (WHERE ${tasks.priority} = 'urgent')`,
+                highCount: sql<number>`count(*) FILTER (WHERE ${tasks.priority} = 'high')`,
+                mediumCount: sql<number>`count(*) FILTER (WHERE ${tasks.priority} = 'medium')`,
+                lowCount: sql<number>`count(*) FILTER (WHERE ${tasks.priority} = 'low')`,
             })
             .from(tasks)
-            .where(eq(tasks.projectId, projectId))
-            .groupBy(tasks.status, tasks.priority, tasks.dueDate);
+            .where(eq(tasks.projectId, projectId));
 
-        const now = new Date();
-        const stats = {
-            totalTasks: 0,
-            completedTasks: 0,
-            inProgressTasks: 0,
-            overdueTasks: 0,
-            priorityDistribution: {} as Record<string, number>,
-        };
+        const totalTasks = Number(row?.totalTasks || 0);
+        const completedTasks = Number(row?.completedTasks || 0);
+        const inProgressTasks = Number(row?.inProgressTasks || 0);
+        const overdueTasks = Number(row?.overdueTasks || 0);
 
-        tasksResult.forEach(row => {
-            const count = Number(row.count);
-            stats.totalTasks += count;
+        const priorityDistribution = {
+            urgent: Number(row?.urgentCount || 0),
+            high: Number(row?.highCount || 0),
+            medium: Number(row?.mediumCount || 0),
+            low: Number(row?.lowCount || 0),
+        } as Record<string, number>;
 
-            if (row.status === 'done') {
-                stats.completedTasks += count;
-            } else if (row.status === 'in_progress') {
-                stats.inProgressTasks += count;
-            }
-
-            if (row.status !== 'done' && row.dueDate && new Date(row.dueDate) < now) {
-                stats.overdueTasks += count;
-            }
-
-            const priority = row.priority || 'medium';
-            stats.priorityDistribution[priority] = (stats.priorityDistribution[priority] || 0) + count;
-        });
-
-        const completionRate = stats.totalTasks > 0
-            ? Math.round((stats.completedTasks / stats.totalTasks) * 100)
+        const completionRate = totalTasks > 0
+            ? Math.round((completedTasks / totalTasks) * 100)
             : 0;
 
         return {
             success: true,
             analytics: {
-                ...stats,
+                totalTasks,
+                completedTasks,
+                inProgressTasks,
+                overdueTasks,
+                priorityDistribution,
                 completionRate
             }
         };
@@ -837,43 +1269,45 @@ export async function createTaskAction(data: z.infer<typeof createTaskSchema>) {
 
 
         const validated = createTaskSchema.parse(data);
+        const access = await getProjectAccessById(validated.projectId, user.id);
+        if (!access.project) throw new Error("Project not found");
+        if (!access.canWrite) {
+            throw new Error("You do not have permission to create tasks in this project");
+        }
 
-        // 1. Verify Project Access (Owner or Member)
-        const project = await db.query.projects.findFirst({
-            where: eq(projects.id, validated.projectId),
-            columns: { ownerId: true }
-        });
-
-        if (!project) throw new Error("Project not found");
-
-        if (project.ownerId !== user.id) {
-            const projectMember = await db.query.projectMembers.findFirst({
+        if (validated.assigneeId) {
+            const assigneeMember = await db.query.projectMembers.findFirst({
                 where: and(
                     eq(projectMembers.projectId, validated.projectId),
-                    eq(projectMembers.userId, user.id)
-                )
+                    eq(projectMembers.userId, validated.assigneeId)
+                ),
+                columns: { id: true },
             });
-
-            if (!projectMember) {
-                throw new Error("You do not have permission to create tasks in this project");
+            if (!assigneeMember) {
+                throw new Error("Assignee must be a project member");
             }
         }
 
-        // 2. Insert Task & Attachments Transactionally
-        const result = await db.transaction(async (tx) => {
-            // 2a. Increment Project Counter & Get New Number
-            const [updatedProject] = await tx
-                .update(projects)
-                .set({ currentTaskNumber: sql`${projects.currentTaskNumber} + 1` })
-                .where(eq(projects.id, validated.projectId))
-                .returning({ newNumber: projects.currentTaskNumber });
+        const createdTask = await db.transaction(async (tx) => {
+            // Lock row to ensure strictly monotonic task number under concurrent creates.
+            const counterRows = await tx.execute<{ current_task_number: number }>(sql`
+                SELECT current_task_number
+                FROM ${projects}
+                WHERE id = ${validated.projectId}
+                FOR UPDATE
+            `);
+            const current = Array.from(counterRows)[0];
+            if (!current) throw new Error("Project not found");
 
-            if (!updatedProject) throw new Error("Failed to generate task ID");
+            const nextTaskNumber = Number(current.current_task_number || 0) + 1;
+            await tx.update(projects)
+                .set({ currentTaskNumber: nextTaskNumber })
+                .where(eq(projects.id, validated.projectId));
 
             const [newTask] = await tx.insert(tasks).values({
                 projectId: validated.projectId,
-                title: validated.title,
-                description: validated.description,
+                title: validated.title.trim(),
+                description: validated.description?.trim() || null,
                 status: validated.status,
                 priority: validated.priority,
                 sprintId: validated.sprintId || null,
@@ -881,39 +1315,99 @@ export async function createTaskAction(data: z.infer<typeof createTaskSchema>) {
                 creatorId: user.id,
                 storyPoints: validated.storyPoints,
                 dueDate: validated.dueDate ? new Date(validated.dueDate) : null,
-                // Assign Sequential Number
-                taskNumber: updatedProject.newNumber,
-            }).returning();
+                taskNumber: nextTaskNumber,
+            }).returning({ id: tasks.id });
+
+            if (!newTask) throw new Error("Failed to create task");
 
             if (validated.attachmentNodeIds && validated.attachmentNodeIds.length > 0) {
+                const uniqueAttachmentIds = [...new Set(validated.attachmentNodeIds)];
+                const attachmentNodes = await tx.query.projectNodes.findMany({
+                    where: and(
+                        eq(projectNodes.projectId, validated.projectId),
+                        inArray(projectNodes.id, uniqueAttachmentIds),
+                        isNull(projectNodes.deletedAt)
+                    ),
+                    columns: { id: true },
+                });
+                if (attachmentNodes.length !== uniqueAttachmentIds.length) {
+                    throw new Error("One or more attachments are invalid for this project");
+                }
+
                 await tx.insert(taskNodeLinks).values(
-                    validated.attachmentNodeIds.map(nodeId => ({
+                    uniqueAttachmentIds.map((nodeId) => ({
                         taskId: newTask.id,
-                        nodeId: nodeId,
-                        createdBy: user.id
+                        nodeId,
+                        createdBy: user.id,
                     }))
-                );
+                ).onConflictDoNothing({
+                    target: [taskNodeLinks.taskId, taskNodeLinks.nodeId],
+                });
             }
 
             if (validated.subtasks && validated.subtasks.length > 0) {
                 await tx.insert(taskSubtasks).values(
-                    validated.subtasks.map((st, index) => ({
-                        taskId: newTask.id,
-                        title: st.title,
-                        completed: st.completed,
-                        position: index
-                    }))
+                    validated.subtasks
+                        .filter((st) => st.title.trim().length > 0)
+                        .map((st, index) => ({
+                            taskId: newTask.id,
+                            title: st.title.trim(),
+                            completed: st.completed,
+                            position: index,
+                        }))
                 );
             }
 
             return newTask;
         });
 
+        const hydratedTask = await db.query.tasks.findFirst({
+            where: eq(tasks.id, createdTask.id),
+            columns: {
+                id: true,
+                projectId: true,
+                sprintId: true,
+                assigneeId: true,
+                creatorId: true,
+                title: true,
+                description: true,
+                status: true,
+                priority: true,
+                taskNumber: true,
+                storyPoints: true,
+                dueDate: true,
+                createdAt: true,
+                updatedAt: true,
+            },
+            with: {
+                project: {
+                    columns: { key: true },
+                },
+                assignee: {
+                    columns: {
+                        id: true,
+                        fullName: true,
+                        avatarUrl: true,
+                    },
+                },
+                creator: {
+                    columns: {
+                        id: true,
+                        fullName: true,
+                        avatarUrl: true,
+                    },
+                },
+            },
+        });
+        if (!hydratedTask) {
+            throw new Error("Failed to load created task");
+        }
+
         // Note: We don't need to manually revalidate if we are using Realtime
         // But for fallback and initial load consistency:
         revalidatePath(`/projects/${validated.projectId}`);
 
-        return { success: true, task: result };
+        return { success: true, task: hydratedTask };
     } catch (error) {
         console.error("Failed to create task:", error);
         return { success: false, error: error instanceof Error ? error.message : "Failed to create task" };
@@ -1283,9 +1777,14 @@ export async function finalizeProjectAction(projectId: string) {
 export async function getProjectSyncStatus(projectId: string) {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
+    let access: Awaited<ReturnType<typeof assertProjectReadAccess>> | null = null;
 
-    // Minimal auth check
-    if (!user) return { success: false, error: 'Unauthorized' };
+    // Read access check (public projects are allowed)
+    try {
+        access = await assertProjectReadAccess(projectId, user?.id ?? null);
+    } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : 'Unauthorized' };
+    }
 
     try {
         const [project] = await db
@@ -1297,7 +1796,11 @@ export async function getProjectSyncStatus(projectId: string) {
             .where(eq(projects.id, projectId));
 
         const meta = (project?.importSource as any)?.metadata;
-        const lastError = meta?.lastError || null;
+        const rawError = meta?.lastError || null;
+        const canSeeDetailedError = !!access?.canWrite;
+        const lastError = rawError
+            ? (canSeeDetailedError ? sanitizeGitErrorMessage(rawError) : 'Import failed. Project owner can retry the import.')
+            : null;
 
         return {
             success: true,
@@ -1310,7 +1813,7 @@ export async function getProjectSyncStatus(projectId: string) {
     }
 }
 
-export async function retryGithubImportAction(projectId: string, clientToken?: string) {
+export async function retryGithubImportAction(projectId: string) {
     const supabase = await createClient();
     const { data: { session } } = await supabase.auth.getSession();
     const user = session?.user;
@@ -1334,15 +1837,27 @@ export async function retryGithubImportAction(projectId: string, clientToken?: s
         // Inngest handles concurrency/idempotency automatically via function settings.
         // We just re-emit the event.
 
-        // Prioritize client-provided token (fresh from client session), fallback to server session
-        const gitHubToken = clientToken || session?.provider_token;
+        const gitHubToken = session?.provider_token;
+        const normalizedRepoUrl = normalizeGithubRepoUrl(src.repoUrl || '');
+        if (!normalizedRepoUrl) return { success: false, error: 'Invalid GitHub repository URL' };
 
+        const normalizedBranch = normalizeGithubBranch(src.branch);
+        if (src.branch && !normalizedBranch) return { success: false, error: 'Invalid GitHub branch name' };
+
+        const accessCheck = await ensureGithubImportAccess(normalizedRepoUrl, gitHubToken || null);
+        if (!accessCheck.ok) return { success: false, error: accessCheck.error };
+
+        const sealed = gitHubToken ? sealGithubImportToken(gitHubToken) : null;
+        const clearedSource = clearSealedGithubTokenFromImportSource(src) as Record<string, any>;
         const nextImportSource = {
-            ...src,
+            ...clearedSource,
+            repoUrl: normalizedRepoUrl,
+            branch: normalizedBranch,
             metadata: {
-                ...(src.metadata || {}),
+                ...((clearedSource.metadata || {}) as Record<string, any>),
                 lastError: null,
                 lastRetryAt: new Date().toISOString(),
+                ...(sealed ? { importAuth: sealed } : {}),
             },
         };
 
@@ -1357,24 +1872,35 @@ export async function retryGithubImportAction(projectId: string, clientToken?: s
                 projectId,
                 importSource: {
                     type: 'github',
-                    repoUrl: src.repoUrl,
-                    branch: src.branch,
-                    metadata: nextImportSource.metadata,
+                    repoUrl: normalizedRepoUrl,
+                    branch: normalizedBranch,
+                    metadata: (clearSealedGithubTokenFromImportSource(nextImportSource) as Record<string, any>).metadata,
                 },
-                accessToken: gitHubToken || undefined,
                 userId: user.id,
             }
         });
 
         return { success: true };
     } catch (e: any) {
-        const msg = typeof e?.message === 'string' ? e.message : 'Retry failed';
+        const msg = sanitizeGitErrorMessage(typeof e?.message === 'string' ? e.message : 'Retry failed');
         try {
+            const [project] = await db
+                .select({ importSource: projects.importSource })
+                .from(projects)
+                .where(eq(projects.id, projectId))
+                .limit(1);
+            const clearedSource = clearSealedGithubTokenFromImportSource(project?.importSource) as Record<string, any>;
             await db.update(projects)
                 .set({
                     syncStatus: 'failed',
                     updatedAt: new Date(),
-                    importSource: sql`jsonb_set(COALESCE(${projects.importSource}, '{}'::jsonb), '{metadata,lastError}', ${JSON.stringify(msg)}::jsonb)` as any,
+                    importSource: {
+                        ...clearedSource,
+                        metadata: {
+                            ...((clearedSource?.metadata || {}) as Record<string, any>),
+                            lastError: msg,
+                        },
+                    } as any,
                 })
                 .where(eq(projects.id, projectId));
         } catch { }

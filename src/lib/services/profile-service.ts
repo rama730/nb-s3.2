@@ -76,6 +76,7 @@ export async function getProfile(userId: string): Promise<Profile | null> {
         openTo: data.open_to || [],
         availabilityStatus: data.availability_status || 'available',
         messagePrivacy: data.message_privacy || 'connections',
+        workspaceLayout: data.workspace_layout ?? null,
         connectionsCount: data.connections_count ?? 0,
         projectsCount: data.projects_count ?? 0,
         followersCount: data.followers_count ?? 0,

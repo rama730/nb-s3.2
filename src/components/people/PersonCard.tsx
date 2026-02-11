@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { MapPin, Briefcase, Loader2, Check, Clock, UserPlus } from "lucide-react";
+import { MapPin, Briefcase, Loader2, Check, Clock, UserPlus, X } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { profileHref } from "@/lib/routing/identifiers";
@@ -12,12 +12,17 @@ import type { SuggestedProfile } from "@/app/actions/connections";
 interface PersonCardProps {
     profile: SuggestedProfile;
     onConnect: (userId: string) => Promise<void>;
+    onDismiss?: (userId: string) => Promise<void>;
     isConnecting?: boolean;
 }
 
-export default function PersonCard({ profile, onConnect, isConnecting }: PersonCardProps) {
+export default function PersonCard({ profile, onConnect, onDismiss, isConnecting }: PersonCardProps) {
     const [isHovered, setIsHovered] = useState(false);
     const [localStatus, setLocalStatus] = useState(profile.connectionStatus);
+
+    useEffect(() => {
+        setLocalStatus(profile.connectionStatus);
+    }, [profile.connectionStatus]);
 
     const handleConnect = async (e: React.MouseEvent) => {
         e.preventDefault();
@@ -31,6 +36,13 @@ export default function PersonCard({ profile, onConnect, isConnecting }: PersonC
         } catch {
             setLocalStatus('none');
         }
+    };
+
+    const handleDismiss = async (e: React.MouseEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!onDismiss) return;
+        await onDismiss(profile.id);
     };
 
     const getButtonContent = () => {
@@ -93,8 +105,18 @@ export default function PersonCard({ profile, onConnect, isConnecting }: PersonC
             onMouseEnter={() => setIsHovered(true)}
             onMouseLeave={() => setIsHovered(false)}
             layout
-            className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 overflow-hidden transition-shadow hover:shadow-xl"
+            className="relative rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 overflow-hidden transition-shadow hover:shadow-xl"
         >
+            {onDismiss && (
+                <button
+                    type="button"
+                    onClick={handleDismiss}
+                    className="absolute right-3 top-3 z-10 rounded-full p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-200 transition-colors"
+                    aria-label={`Dismiss ${profile.fullName || profile.username || "suggestion"}`}
+                >
+                    <X className="w-4 h-4" />
+                </button>
+            )}
             <Link href={profileHref(profile)} className="block p-4">
                 {/* Main Content - Always Visible */}
                 <div className="flex items-start gap-3">

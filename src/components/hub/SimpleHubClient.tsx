@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, memo, useRef, useEffect, useCallback } from 'react';
+import { useState, useMemo, memo, useEffect, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import { motion } from 'framer-motion';
 import { Search, Sparkles, Filter } from 'lucide-react';
@@ -12,14 +12,14 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'next/navigation';
 import { useHubProjectsSimple } from '@/hooks/hub/useHubProjectsSimple';
 import { useAuth } from '@/hooks/useAuth';
+import { useHubSessionSeen } from '@/hooks/hub/useHubSessionSeen';
+import { useUserBookmarks, useUserFollowedProjects } from '@/hooks/hub/useUserInteractions';
 
 // Components
 import ProjectCard from '@/components/projects/ProjectCard';
 import ProjectCardSkeleton from '@/components/projects/ProjectCardSkeleton';
-import ProjectQuickView from '@/components/projects/ProjectQuickView';
 import CollectionsSidebar from '@/components/hub/CollectionsSidebar';
 import HubHeader from '@/components/hub/HubHeader';
-import BulkActionBar from '@/components/hub/BulkActionBar';
 import { HubErrorBoundary } from '@/components/hub/HubErrorBoundary';
 
 // Constants & Types
@@ -39,6 +39,8 @@ import { User, Project } from '@/types/hub';
 
 // Dynamic Modals
 const CreateProjectWizard = dynamic(() => import('@/components/projects/create-wizard/CreateProjectWizard'), { ssr: false });
+const ProjectQuickView = dynamic(() => import('@/components/projects/ProjectQuickView'), { ssr: false });
+const BulkActionBar = dynamic(() => import('@/components/hub/BulkActionBar'), { ssr: false });
 const ProjectComparisonModal = dynamic(() => import('@/components/hub/ProjectComparisonModal'), { ssr: false });
 const AddToCollectionModal = dynamic(() => import('@/components/hub/AddToCollectionModal'), { ssr: false });
 const NotificationSettingsModal = dynamic(() => import('@/components/hub/NotificationSettingsModal'), { ssr: false });
@@ -48,8 +50,12 @@ const MobileSidebarDrawer = dynamic(() => import('@/components/hub/MobileSidebar
 import { toProjectCardViewModel, ProjectCardViewModel } from '@/lib/view-models/project-card';
 
 interface SimpleHubClientProps {
-    returnUserData: any; // Passed from server to avoid double fetch if possible, or we rely on useAuth
-    initialProjectsPage?: any;
+    returnUserData: User | null;
+    initialProjectsPage?: {
+        projects?: Project[];
+        nextCursor?: string;
+        hasMore?: boolean;
+    } | null;
 }
 
 const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialProjectsPage }: SimpleHubClientProps) {
@@ -101,18 +107,26 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
         return returnUserData;
     }, [user, returnUserData]);
 
+    const { data: myBookmarks } = useUserBookmarks(currentUser?.id);
+    const { data: myFollowedProjects } = useUserFollowedProjects(currentUser?.id);
+    const { seenIds, hideSeen, setHideSeen, markSeen, clearSeen } = useHubSessionSeen();
+
     // Construct Filters
-    const currentFilters = useMemo(() => ({
-        status: statusFilter,
-        type: typeFilter,
-        tech: selectedTech,
-        sort: sortBy,
-        search, // Connected Global Search
-        // Simple logic: if 'My Projects', include user's ID
-        includedIds: undefined, 
-        // Note: Real "My Projects" logic should ideally filter by ownerId in the query, 
-        // but for now we stick to the main feed. If strict "My Projects" needed, we pass ownerId.
-    }), [statusFilter, typeFilter, selectedTech, sortBy, search]);
+    const currentFilters = useMemo(() => {
+        const effectiveSort =
+            filterView === FILTER_VIEWS.TRENDING
+                ? SORT_OPTIONS.TRENDING
+                : sortBy;
+
+        return {
+            status: statusFilter,
+            type: typeFilter,
+            tech: selectedTech,
+            sort: effectiveSort,
+            search, // Connected Global Search
+            includedIds: undefined,
+        };
+    }, [filterView, statusFilter, typeFilter, selectedTech, sortBy, search]);
 
     // --- Data Fetching ---
     const {
@@ -123,18 +137,31 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
         isLoading,
         error: projectsError,
         refetch
-    } = useHubProjectsSimple(currentFilters, initialProjectsPage);
+    } = useHubProjectsSimple(currentFilters, filterView, initialProjectsPage);
 
     const allProjects = useMemo(() => {
         return data?.pages?.flatMap((p) => p.projects) || [];
     }, [data]);
 
+    const visibleProjects = useMemo(() => {
+        if (!hideSeen) return allProjects;
+        return allProjects.filter((project) => !seenIds.has(project.id));
+    }, [allProjects, hideSeen, seenIds]);
+
+    useEffect(() => {
+        if (!hideSeen) return;
+        if (visibleProjects.length > 0) return;
+        if (!hasNextPage || isFetchingNextPage) return;
+        if (allProjects.length === 0) return;
+        fetchNextPage();
+    }, [hideSeen, visibleProjects.length, hasNextPage, isFetchingNextPage, allProjects.length, fetchNextPage]);
+
     const projectViewModels = useMemo(() => {
-        return allProjects.reduce((acc, p) => {
+        return visibleProjects.reduce((acc, p) => {
             acc[p.id] = toProjectCardViewModel(p);
             return acc;
         }, {} as Record<string, ProjectCardViewModel>);
-    }, [allProjects]);
+    }, [visibleProjects]);
 
     // --- Handlers ---
 
@@ -185,12 +212,12 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
     }, []);
 
     const selectAll = useCallback(() => {
-        if (selectedProjectIds.size === allProjects.length && allProjects.length > 0) {
+        if (selectedProjectIds.size === visibleProjects.length && visibleProjects.length > 0) {
             setSelectedProjectIds(new Set());
         } else {
-            setSelectedProjectIds(new Set(allProjects.map(p => p.id)));
+            setSelectedProjectIds(new Set(visibleProjects.map(p => p.id)));
         }
-    }, [allProjects, selectedProjectIds]);
+    }, [visibleProjects, selectedProjectIds]);
 
     const handleBulkBookmark = useCallback(() => {
         showToast(`${selectedProjectIds.size} project(s) bookmarked`, 'success');
@@ -240,7 +267,7 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
                     </div>
 
                     {/* Main Content */}
-                    <div className="flex-1 min-w-0 h-full overflow-y-auto" ref={scrollContainerRef}>
+                    <div className="flex-1 min-w-0 h-full overflow-y-auto" ref={scrollContainerRef} id="hub-scroll-container">
                         <div className="px-4 sm:px-6 lg:px-8 py-8 flex flex-col gap-6">
 
                             {/* Sticky Header */}
@@ -269,38 +296,62 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
                                 </div>
                             </div>
 
+                            <div className="flex flex-wrap items-center gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setHideSeen((prev) => !prev)}
+                                    className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium transition-colors ${hideSeen
+                                        ? 'border-indigo-400/70 bg-indigo-50 text-indigo-700 dark:border-indigo-500/70 dark:bg-indigo-950/40 dark:text-indigo-300'
+                                        : 'border-zinc-300 bg-white text-zinc-600 hover:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:border-zinc-500'
+                                        }`}
+                                >
+                                    {hideSeen ? 'Showing unread only' : 'Hide opened this session'}
+                                </button>
+                                {seenIds.size > 0 && (
+                                    <button
+                                        type="button"
+                                        onClick={clearSeen}
+                                        className="inline-flex items-center rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-600 transition-colors hover:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:border-zinc-500"
+                                    >
+                                        Reset opened ({seenIds.size})
+                                    </button>
+                                )}
+                            </div>
+
                             {/* Bulk Actions */}
-                            <BulkActionBar
-                                selectedCount={selectedProjectIds.size}
-                                totalCount={allProjects.length}
-                                onSelectAll={selectAll}
-                                onAddToCollection={() => setShowAddToCollectionModal(true)}
-                                onBookmark={handleBulkBookmark}
-                                onCompare={() => setShowComparisonModal(true)}
-                                onCancel={() => {
-                                    setSelectionMode(false);
-                                    setSelectedProjectIds(new Set());
-                                }}
-                                onShare={() => {
-                                    const ids = Array.from(selectedProjectIds).join(',');
-                                    const shareUrl = `${window.location.origin}/hub?projects=${ids}`;
-                                    navigator.clipboard.writeText(shareUrl);
-                                    showToast('Share link copied', 'success');
-                                }}
-                                onExport={() => {
-                                    showToast('Export functionality placeholder', 'success');
-                                }}
-                                canCompare={selectedProjectIds.size >= 2 && selectedProjectIds.size <= 4}
-                            />
+                            {selectionMode && (
+                                <BulkActionBar
+                                    selectedCount={selectedProjectIds.size}
+                                    totalCount={visibleProjects.length}
+                                    onSelectAll={selectAll}
+                                    onAddToCollection={() => setShowAddToCollectionModal(true)}
+                                    onBookmark={handleBulkBookmark}
+                                    onCompare={() => setShowComparisonModal(true)}
+                                    onCancel={() => {
+                                        setSelectionMode(false);
+                                        setSelectedProjectIds(new Set());
+                                    }}
+                                    onShare={() => {
+                                        const ids = Array.from(selectedProjectIds).join(',');
+                                        const shareUrl = `${window.location.origin}/hub?projects=${ids}`;
+                                        navigator.clipboard.writeText(shareUrl);
+                                        showToast('Share link copied', 'success');
+                                    }}
+                                    onExport={() => {
+                                        showToast('Export functionality placeholder', 'success');
+                                    }}
+                                    canCompare={selectedProjectIds.size >= 2 && selectedProjectIds.size <= 4}
+                                />
+                            )}
 
                             {/* Projects Grid */}
-                            {isLoading && allProjects.length === 0 ? (
+                            {isLoading && visibleProjects.length === 0 ? (
                                 <div className={`grid gap-6 ${viewMode === VIEW_MODES.GRID ? 'md:grid-cols-2 lg:grid-cols-3' : 'grid-cols-1'}`}>
                                     {[1, 2, 3, 4, 5, 6].map((i) => (
                                         <ProjectCardSkeleton key={i} />
                                     ))}
                                 </div>
-                            ) : allProjects.length === 0 ? (
+                            ) : visibleProjects.length === 0 ? (
                                 <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="text-center py-24 bg-white dark:bg-zinc-900 rounded-3xl border border-dashed border-slate-300 dark:border-zinc-800">
                                     <div className="w-20 h-20 mx-auto mb-6 rounded-full bg-slate-50 dark:bg-zinc-800 flex items-center justify-center">
                                         <Search className="w-10 h-10 text-slate-300 dark:text-zinc-600" />
@@ -325,8 +376,8 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
                                         <VirtuosoGrid
                                             customScrollParent={scrollContainer}
                                             style={{ width: '100%' }}
-                                            totalCount={allProjects.length}
-                                            data={allProjects}
+                                            totalCount={visibleProjects.length}
+                                            data={visibleProjects}
                                             endReached={() => {
                                                 if (hasNextPage && !isFetchingNextPage) {
                                                     fetchNextPage();
@@ -350,11 +401,10 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
                                                     isSelected={selectedProjectIds.has(project.id)}
                                                     onToggleSelection={() => toggleSelection(project.id)}
                                                     onQuickView={setSelectedProject}
-                                                    // Note: We removed the complex interaction hooks for simplicity.
-                                                    // Pass explicit props if "real" bookmark state is needed initially
-                                                    isBookmarked={false}
-                                                    isFollowing={false}
-                                                    followersCount={0}
+                                                    isBookmarked={myBookmarks?.has(project.id)}
+                                                    isFollowing={myFollowedProjects?.has(project.id)}
+                                                    followersCount={project.followersCount ?? 0}
+                                                    onOpenProject={markSeen}
                                                 />
                                             )}
                                         />
@@ -369,15 +419,15 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
                             isOpen={!!selectedProject}
                             onClose={() => setSelectedProject(null)}
                             onNext={() => {
-                                const idx = allProjects.findIndex(p => p.id === selectedProject?.id);
-                                if (idx >= 0 && idx < allProjects.length - 1) setSelectedProject(allProjects[idx + 1]);
+                                const idx = visibleProjects.findIndex(p => p.id === selectedProject?.id);
+                                if (idx >= 0 && idx < visibleProjects.length - 1) setSelectedProject(visibleProjects[idx + 1]);
                             }}
                             onPrevious={() => {
-                                const idx = allProjects.findIndex(p => p.id === selectedProject?.id);
-                                if (idx > 0) setSelectedProject(allProjects[idx - 1]);
+                                const idx = visibleProjects.findIndex(p => p.id === selectedProject?.id);
+                                if (idx > 0) setSelectedProject(visibleProjects[idx - 1]);
                             }}
-                            hasNext={allProjects.findIndex(p => p.id === selectedProject?.id) < allProjects.length - 1}
-                            hasPrevious={allProjects.findIndex(p => p.id === selectedProject?.id) > 0}
+                            hasNext={visibleProjects.findIndex(p => p.id === selectedProject?.id) < visibleProjects.length - 1}
+                            hasPrevious={visibleProjects.findIndex(p => p.id === selectedProject?.id) > 0}
                         />
 
                         {showCreateModal && (
@@ -390,7 +440,7 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
                         <NotificationSettingsModal isOpen={showNotificationSettings} onClose={() => setShowNotificationSettings(false)} />
 
                         {showComparisonModal && selectedProjectIds.size >= 2 && (
-                            <ProjectComparisonModal projects={allProjects.filter(p => selectedProjectIds.has(p.id))} onClose={() => setShowComparisonModal(false)} />
+                            <ProjectComparisonModal projects={visibleProjects.filter(p => selectedProjectIds.has(p.id))} onClose={() => setShowComparisonModal(false)} />
                         )}
 
                         {showAddToCollectionModal && (

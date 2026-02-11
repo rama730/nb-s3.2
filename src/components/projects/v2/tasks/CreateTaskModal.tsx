@@ -30,7 +30,7 @@ import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 interface CreateTaskModalProps {
     isOpen: boolean;
     onClose: () => void;
-    onCreate: (data: any) => void;
+    onCreate: (data: any) => Promise<{ success: boolean; error?: string }>;
     members?: any[]; // For assignee selector
     sprints?: any[]; // For sprint selector
     projectId: string; // Required for file picker and creation
@@ -63,6 +63,7 @@ export default function CreateTaskModal({
     const [showAdvanced, setShowAdvanced] = useState(false);
     const [createAnother, setCreateAnother] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const [submitError, setSubmitError] = useState<string | null>(null);
 
     // Dynamic Lists (Subtasks & Tags & Attachments)
     const [subtasks, setSubtasks] = useState<{ id: string; title: string }[]>([]);
@@ -80,6 +81,7 @@ export default function CreateTaskModal({
             setAttachments([]);
             setShowAdvanced(false);
             setIsFilePickerOpen(false);
+            setSubmitError(null);
             // Don't reset createAnother as user might want it to persist
         }
     }, [isOpen]);
@@ -88,13 +90,14 @@ export default function CreateTaskModal({
         if (!title.trim()) return;
 
         setIsSubmitting(true);
+        setSubmitError(null);
         
         try {
-            // Optimistic UX handled by parent or realtime hook
             const taskData = {
                 title,
                 description,
                 sprintId: sprintId || null,
+                status,
                 priority: priority as any,
                 type,
                 assigneeId: assigneeId || null,
@@ -104,20 +107,33 @@ export default function CreateTaskModal({
                 projectId
             };
 
-            onCreate(taskData); 
+            const result = await onCreate(taskData);
+            if (!result.success) {
+                setSubmitError(result.error || "Failed to create task");
+                return;
+            }
+
+            if (!createAnother) {
+                onClose();
+                return;
+            }
+
+            setTitle("");
+            setDescription("");
+            setSubtasks([]);
+            setTags([]);
+            setAttachments([]);
+            setAssigneeId("");
+            setDueDate("");
+            setSprintId("");
+            setStatus("todo");
+            setPriority("medium");
+            setType("task");
         } catch (e) {
             console.error(e);
+            setSubmitError("Failed to create task");
         } finally {
             setIsSubmitting(false);
-             if (!createAnother) {
-                onClose();
-            } else {
-                setTitle("");
-                setDescription("");
-                setSubtasks([]);
-                setTags([]);
-                setAttachments([]);
-            }
         }
     };
 
@@ -183,6 +199,11 @@ export default function CreateTaskModal({
                 {/* Form Content Area */}
                 <div className="flex-1 overflow-y-auto p-6 space-y-6">
                     <div className="space-y-6">
+                        {submitError ? (
+                            <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:border-rose-900/40 dark:bg-rose-900/20 dark:text-rose-200">
+                                {submitError}
+                            </div>
+                        ) : null}
 
                         {/* Section 1: Sprint & Attachments */}
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

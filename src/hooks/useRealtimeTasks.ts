@@ -1,8 +1,7 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { useRouter } from "next/navigation";
 import { Task } from "@/components/projects/v2/tasks/TaskCard"; // Import shared Task type
 
 /**
@@ -13,18 +12,25 @@ import { Task } from "@/components/projects/v2/tasks/TaskCard"; // Import shared
  */
 export function useRealtimeTasks(projectId: string, initialTasks: Task[] = []) {
     const [tasks, setTasks] = useState<Task[]>(initialTasks);
-    const router = useRouter();
-    const supabase = createClient();
+    const supabase = useMemo(() => createClient(), []);
+
+    const buildSignature = (items: Task[]) => {
+        if (!items || items.length === 0) return "0";
+        const first = items[0];
+        const last = items[items.length - 1];
+        const lastUpdated = (last as any).updatedAt || (last as any).updated_at || "";
+        return `${items.length}:${first.id}:${last.id}:${lastUpdated}`;
+    };
 
     // REF STABILITY FIX: Prevent infinite loop if initialTasks is a new reference but same content
-    const prevInitialTasksJson = useRef(JSON.stringify(initialTasks));
+    const prevInitialTasksSig = useRef(buildSignature(initialTasks));
 
     // Reset local state ONLY if content actually changes (server revalidation)
     useEffect(() => {
-        const currentJson = JSON.stringify(initialTasks);
-        if (prevInitialTasksJson.current !== currentJson) {
+        const currentSig = buildSignature(initialTasks);
+        if (prevInitialTasksSig.current !== currentSig) {
             setTasks(initialTasks);
-            prevInitialTasksJson.current = currentJson;
+            prevInitialTasksSig.current = currentSig;
         }
     }, [initialTasks]);
 
@@ -42,24 +48,22 @@ export function useRealtimeTasks(projectId: string, initialTasks: Task[] = []) {
                     filter: `project_id=eq.${projectId}`
                 },
                 (payload: any) => {
-                    console.log("Realtime Task Event:", payload);
-
                     if (payload.eventType === 'INSERT') {
                         const newTask = normalizeTask(payload.new);
-                        setTasks((prev) => [newTask, ...prev]);
+                        setTasks((prev) => {
+                            if (prev.some((task) => task.id === newTask.id)) return prev;
+                            return [newTask, ...prev];
+                        });
                     } else if (payload.eventType === 'UPDATE') {
                         const updatedTask = normalizeTask(payload.new);
-                        setTasks((prev) =>
-                            prev.map((t) => (t.id === updatedTask.id ? { ...t, ...updatedTask } as Task : t))
-                        );
+                        setTasks((prev) => {
+                            const exists = prev.some((t) => t.id === updatedTask.id);
+                            if (!exists) return [updatedTask, ...prev];
+                            return prev.map((t) => (t.id === updatedTask.id ? { ...t, ...updatedTask } as Task : t));
+                        });
                     } else if (payload.eventType === 'DELETE') {
                         setTasks((prev) => prev.filter((t) => t.id !== payload.old.id));
                     }
-
-                    // Trigger a soft refresh to ensure consistency (background revalidation)
-                    // PERFORMANCE FIX: Removed router.refresh() to prevent massive server load on every event.
-                    // The local state update above is sufficient for "Smooth Working".
-                    // router.refresh();
                 }
             )
             .subscribe();
@@ -67,7 +71,7 @@ export function useRealtimeTasks(projectId: string, initialTasks: Task[] = []) {
         return () => {
             supabase.removeChannel(channel);
         };
-    }, [projectId, supabase]); // Removed router dependence
+    }, [projectId, supabase]);
 
     return { tasks, setTasks };
 }

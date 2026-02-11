@@ -1,5 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { useAuth } from "@/lib/hooks/use-auth";
 
 interface UsePeopleNotificationsReturn {
     totalPending: number;
@@ -14,38 +15,58 @@ interface UsePeopleNotificationsReturn {
 export function usePeopleNotifications(): UsePeopleNotificationsReturn {
     const [pendingConnections, setPendingConnections] = useState(0);
     const [pendingInvites, setPendingInvites] = useState(0);
+    const { user } = useAuth();
+    const userId = user?.id;
+    const supabase = createSupabaseBrowserClient();
 
-    const refresh = async () => {
+    const refresh = useCallback(async () => {
         try {
-            const supabase = createSupabaseBrowserClient();
-            const { data: { user } } = await supabase.auth.getUser();
-
-            if (!user?.id) return;
+            if (!userId) {
+                setPendingConnections(0);
+                setPendingInvites(0);
+                return;
+            }
 
             // Count pending incoming connection requests
             const { count: connCount } = await supabase
                 .from("connections")
                 .select("id", { count: "exact", head: true })
-                .eq("connected_user_id", user.id)
-                .eq("status", "pending");
-
-            // Count pending project invites
-            const { count: invCount } = await supabase
-                .from("project_invitations")
-                .select("id", { count: "exact", head: true })
-                .eq("invitee_id", user.id)
+                .eq("addressee_id", userId)
                 .eq("status", "pending");
 
             setPendingConnections(connCount || 0);
-            setPendingInvites(invCount || 0);
+            setPendingInvites(0);
         } catch (error) {
             console.error("Error fetching notification counts:", error);
         }
-    };
+    }, [supabase, userId]);
 
     useEffect(() => {
-        refresh();
-    }, []);
+        void refresh();
+    }, [refresh]);
+
+    useEffect(() => {
+        if (!userId) return;
+        const channel = supabase
+            .channel(`people-notifications-${userId}`)
+            .on(
+                "postgres_changes",
+                {
+                    event: "*",
+                    schema: "public",
+                    table: "connections",
+                    filter: `addressee_id=eq.${userId}`,
+                },
+                () => {
+                    void refresh();
+                }
+            )
+            .subscribe();
+
+        return () => {
+            void supabase.removeChannel(channel);
+        };
+    }, [supabase, userId, refresh]);
 
     return {
         totalPending: pendingConnections + pendingInvites,

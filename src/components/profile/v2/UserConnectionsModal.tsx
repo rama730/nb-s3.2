@@ -1,12 +1,11 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { X, Search, Loader2 } from 'lucide-react';
 import { getAcceptedConnections } from '@/app/actions/connections';
 import Image from 'next/image';
 import Link from 'next/link';
 import { profileHref } from '@/lib/routing/identifiers';
-import { Dialog, DialogContent, DialogOverlay } from '@/components/ui/dialog'; // Assuming these exist, else use simple fixed div
 
 interface UserConnectionsModalProps {
     isOpen: boolean;
@@ -15,29 +14,110 @@ interface UserConnectionsModalProps {
     userName: string;
 }
 
+interface ConnectionUser {
+    id: string;
+    username: string | null;
+    fullName: string | null;
+    avatarUrl: string | null;
+    headline: string | null;
+}
+
+interface ConnectionRow {
+    id: string;
+    otherUser: ConnectionUser | null;
+}
+
 export function UserConnectionsModal({ isOpen, onClose, userId, userName }: UserConnectionsModalProps) {
-    const [connections, setConnections] = useState<any[]>([]);
+    const [connections, setConnections] = useState<ConnectionRow[]>([]);
     const [loading, setLoading] = useState(true);
+    const [loadingMore, setLoadingMore] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
+    const [debouncedSearch, setDebouncedSearch] = useState('');
+    const [cursor, setCursor] = useState<string | null>(null);
+    const [hasMore, setHasMore] = useState(false);
+    const requestTokenRef = useRef(0);
 
     useEffect(() => {
-        if (isOpen && userId) {
-            setLoading(true);
-            getAcceptedConnections(50, undefined, userId) // Passed userId
-                .then(res => {
-                    setConnections(res.connections);
-                })
-                .catch(err => console.error(err))
-                .finally(() => setLoading(false));
-        }
-    }, [isOpen, userId]);
+        const timeout = setTimeout(() => {
+            setDebouncedSearch(searchQuery.trim());
+        }, 250);
+        return () => clearTimeout(timeout);
+    }, [searchQuery]);
 
-    const filtered = connections.filter(c => {
-        const u = c.otherUser;
-        if (!u) return false;
-        const q = searchQuery.toLowerCase();
-        return (u.fullName || '').toLowerCase().includes(q) || (u.username || '').toLowerCase().includes(q);
-    });
+    const loadConnections = useCallback(async (opts?: { append?: boolean; search?: string }) => {
+        const append = Boolean(opts?.append);
+        const search = (opts?.search ?? debouncedSearch).trim();
+        const requestToken = ++requestTokenRef.current;
+
+        if (append) setLoadingMore(true);
+        else setLoading(true);
+
+        try {
+            const response = await getAcceptedConnections({
+                limit: 30,
+                cursor: append ? cursor || undefined : undefined,
+                search: search || undefined,
+                targetUserId: userId,
+            });
+
+            if (requestToken !== requestTokenRef.current) return;
+
+            const nextRows = (response.connections || []) as ConnectionRow[];
+            setHasMore(Boolean(response.hasMore));
+            setCursor(response.nextCursor || null);
+
+            if (append) {
+                setConnections((prev) => {
+                    const seen = new Set(prev.map((row) => row.id));
+                    const merged = [...prev];
+                    for (const row of nextRows) {
+                        if (seen.has(row.id)) continue;
+                        seen.add(row.id);
+                        merged.push(row);
+                    }
+                    return merged;
+                });
+                return;
+            }
+
+            setConnections(nextRows);
+        } catch (error) {
+            console.error(error);
+            if (!append) {
+                setConnections([]);
+                setHasMore(false);
+                setCursor(null);
+            }
+        } finally {
+            if (requestToken === requestTokenRef.current) {
+                setLoading(false);
+                setLoadingMore(false);
+            }
+        }
+    }, [cursor, debouncedSearch, userId]);
+
+    useEffect(() => {
+        if (!isOpen || !userId) return;
+        void loadConnections({ append: false, search: debouncedSearch });
+    }, [debouncedSearch, isOpen, loadConnections, userId]);
+
+    useEffect(() => {
+        if (!isOpen) {
+            requestTokenRef.current += 1;
+            setSearchQuery('');
+            setDebouncedSearch('');
+            setConnections([]);
+            setCursor(null);
+            setHasMore(false);
+            setLoading(true);
+            setLoadingMore(false);
+        }
+    }, [isOpen]);
+
+    const loadMore = useCallback(async () => {
+        if (!hasMore || loadingMore || loading) return;
+        await loadConnections({ append: true, search: debouncedSearch });
+    }, [debouncedSearch, hasMore, loadConnections, loading, loadingMore]);
 
     if (!isOpen) return null;
 
@@ -49,7 +129,7 @@ export function UserConnectionsModal({ isOpen, onClose, userId, userName }: User
                 {/* Header */}
                 <div className="flex items-center justify-between p-4 border-b border-zinc-200 dark:border-zinc-800">
                     <h3 className="font-semibold text-lg text-zinc-900 dark:text-zinc-100">
-                        {userName}'s Connections
+                        {`${userName}'s Connections`}
                     </h3>
                     <button onClick={onClose} className="p-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-full transition-colors">
                         <X className="w-5 h-5 text-zinc-500" />
@@ -76,13 +156,13 @@ export function UserConnectionsModal({ isOpen, onClose, userId, userName }: User
                         <div className="flex justify-center py-8">
                             <Loader2 className="w-6 h-6 animate-spin text-zinc-400" />
                         </div>
-                    ) : filtered.length === 0 ? (
+                    ) : connections.length === 0 ? (
                         <div className="text-center py-8 text-zinc-500 text-sm">
                             {searchQuery ? 'No matching connections.' : 'No connections found.'}
                         </div>
                     ) : (
                         <div className="space-y-1">
-                            {filtered.map(conn => {
+                            {connections.map(conn => {
                                 const u = conn.otherUser;
                                 if (!u) return null;
                                 return (
@@ -116,6 +196,18 @@ export function UserConnectionsModal({ isOpen, onClose, userId, userName }: User
                                     </Link>
                                 );
                             })}
+                            {hasMore && (
+                                <div className="p-2">
+                                    <button
+                                        type="button"
+                                        onClick={loadMore}
+                                        disabled={loadingMore}
+                                        className="w-full px-3 py-2 rounded-lg text-sm border border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 disabled:opacity-50"
+                                    >
+                                        {loadingMore ? 'Loading...' : 'Load more'}
+                                    </button>
+                                </div>
+                            )}
                         </div>
                     )}
                 </div>

@@ -99,7 +99,6 @@ export const TaskCard = memo(function TaskCard({
                 <div className="flex items-center justify-between mt-3 pt-3 border-t border-zinc-100 dark:border-zinc-800">
                     <div className="flex items-center gap-2">
                         <span className="text-[10px] font-mono text-zinc-400 group-hover:text-zinc-500 transition-colors">
-                            {/* @ts-ignore - project key may be populated by JOIN strategies */}
                             {(task as any).taskNumber && (task as any).project?.key 
                                 ? formatTaskId((task as any).project.key, (task as any).taskNumber) 
                                 : `#${task.id.slice(0, 6)}`}

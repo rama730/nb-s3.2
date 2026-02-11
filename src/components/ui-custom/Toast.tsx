@@ -1,6 +1,7 @@
 'use client';
 
 import { createContext, useContext, useState, useCallback, ReactNode } from 'react';
+import { toast } from 'sonner';
 
 type ToastType = 'success' | 'error' | 'info' | 'warning';
 
@@ -12,9 +13,6 @@ const ToastContext = createContext<ToastContextValue | null>(null);
 
 export function ToastProvider({ children }: { children: ReactNode }) {
     const showToast = useCallback((message: string, type: ToastType = 'info') => {
-        // Using sonner from existing setup
-        const { toast } = require('sonner');
-
         switch (type) {
             case 'success':
                 toast.success(message);
@@ -44,7 +42,6 @@ export function useToast() {
         // Fallback to sonner directly if not wrapped in provider
         return {
             showToast: (message: string, type: ToastType = 'info') => {
-                const { toast } = require('sonner');
                 switch (type) {
                     case 'success':
                         toast.success(message);

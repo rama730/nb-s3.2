@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import type { User, Session } from '@supabase/supabase-js';
 import { useRouter } from 'next/navigation';
@@ -71,32 +71,49 @@ export function AuthProvider({
         profile: initialProfile ? transformProfile(initialProfile) : null,
         isLoading: false, // Initialized immediately with server data
     });
+    const activeUserIdRef = useRef<string | null>(initialUser?.id || null);
     const router = useRouter();
 
     // Sync with Supabase Auth Listener
     useEffect(() => {
         const supabase = createClient();
+        let cancelled = false;
+
+        const loadProfile = async (userId: string) => {
+            const { data: profile } = await supabase
+                .from('profiles')
+                .select('*')
+                .eq('id', userId)
+                .single();
+            return transformProfile(profile);
+        };
         
         const { data: { subscription } } = supabase.auth.onAuthStateChange(
             async (event: string, session: Session | null) => {
+                if (cancelled) return;
                 if (event === 'SIGNED_IN' && session) {
-                     if (session.user.id !== state.user?.id) {
-                         const { data: profile } = await supabase
-                            .from('profiles')
-                            .select('*')
-                            .eq('id', session.user.id)
-                            .single();
-                         
-                         setState({
-                             user: session.user,
-                             session,
-                             profile: transformProfile(profile),
-                             isLoading: false
-                         });
-                         
-                         router.refresh();
-                     }
+                    if (session.user.id !== activeUserIdRef.current) {
+                        const profile = await loadProfile(session.user.id);
+                        if (cancelled) return;
+                        activeUserIdRef.current = session.user.id;
+                        setState({
+                            user: session.user,
+                            session,
+                            profile,
+                            isLoading: false
+                        });
+                        router.refresh();
+                        return;
+                    }
+
+                    setState(prev => ({
+                        ...prev,
+                        user: session.user,
+                        session,
+                        isLoading: false
+                    }));
                 } else if (event === 'SIGNED_OUT') {
+                    activeUserIdRef.current = null;
                     setState({
                         user: null,
                         session: null,
@@ -104,16 +121,30 @@ export function AuthProvider({
                         isLoading: false
                     });
                     router.refresh();
+                } else if (event === 'USER_UPDATED' && session) {
+                    const profile = await loadProfile(session.user.id);
+                    if (cancelled) return;
+                    activeUserIdRef.current = session.user.id;
+
+                    setState(prev => ({
+                        ...prev,
+                        user: session.user,
+                        session,
+                        profile: profile || prev.profile,
+                        isLoading: false
+                    }));
                 } else if (event === 'TOKEN_REFRESHED' && session) {
+                    activeUserIdRef.current = session.user.id;
                     setState(prev => ({ ...prev, session, user: session.user }));
                 }
             }
         );
 
         return () => {
+            cancelled = true;
             subscription.unsubscribe();
         };
-    }, [state.user?.id, router]);
+    }, [router]);
 
     // --- Actions ---
     const signIn = useCallback(async (email: string, password: string) => {

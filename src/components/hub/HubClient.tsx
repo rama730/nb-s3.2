@@ -412,7 +412,7 @@ const HubClient = memo(function HubClient({ initialUser }: HubClientProps) {
                                                     onQuickView={setSelectedProject}
                                                     isBookmarked={myBookmarks?.has(project.id)}
                                                     isFollowing={myFollowed?.has(project.id)}
-                                                    followersCount={0}
+                                                    followersCount={project.followersCount ?? 0}
                                                 />
                                             )}
                                         />

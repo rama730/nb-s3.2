@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 
 export interface Comment {
@@ -21,42 +21,61 @@ export interface Comment {
     like_count?: number;
 }
 
+function mapComments(data: any[]) {
+    return data.map((comment: any) => ({
+        ...comment,
+        like_count: comment.likes?.length || 0,
+    })) as Comment[];
+}
+
 export function useTaskComments(taskId: string, currentUserId?: string) {
     const [comments, setComments] = useState<Comment[]>([]);
     const [isLoading, setIsLoading] = useState(true);
+    const supabase = useMemo(() => createClient(), []);
+    const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    const refreshComments = useCallback(async () => {
+        if (!taskId) {
+            setComments([]);
+            setIsLoading(false);
+            return;
+        }
+
+        const { data, error } = await supabase
+            .from("task_comments")
+            .select(`
+                *,
+                user_profile:profiles!task_comments_user_id_fkey(
+                    id,
+                    full_name,
+                    username,
+                    avatar_url
+                ),
+                likes:task_comment_likes(id, user_id)
+            `)
+            .eq("task_id", taskId)
+            .order("created_at", { ascending: false });
+
+        if (!error && data) {
+            setComments(mapComments(data));
+        }
+        setIsLoading(false);
+    }, [supabase, taskId]);
+
+    const scheduleRefresh = useCallback(() => {
+        if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = setTimeout(() => {
+            void refreshComments();
+        }, 120);
+    }, [refreshComments]);
 
     useEffect(() => {
-        const supabase = createClient();
+        void refreshComments();
+    }, [refreshComments]);
 
-        // Initial fetch
-        const fetchComments = async () => {
-            const { data, error } = await supabase
-                .from("task_comments")
-                .select(`
-                    *,
-                    user_profile:profiles!task_comments_user_id_fkey(
-                        id,
-                        full_name,
-                        username,
-                        avatar_url
-                    ),
-                    likes:task_comment_likes(id, user_id)
-                `)
-                .eq("task_id", taskId)
-                .order("created_at", { ascending: false });
+    useEffect(() => {
+        if (!taskId) return;
 
-            if (!error && data) {
-                setComments(data.map((comment: any) => ({
-                    ...comment,
-                    like_count: comment.likes?.length || 0
-                })));
-            }
-            setIsLoading(false);
-        };
-
-        fetchComments();
-
-        // Real-time subscription for comments
         const commentsChannel = supabase
             .channel(`task_comments:${taskId}`)
             .on(
@@ -65,88 +84,27 @@ export function useTaskComments(taskId: string, currentUserId?: string) {
                     event: "*",
                     schema: "public",
                     table: "task_comments",
-                    filter: `task_id=eq.${taskId}`
+                    filter: `task_id=eq.${taskId}`,
                 },
-                async (payload: any) => {
-                    if (payload.eventType === "INSERT") {
-                        // Fetch the full comment with user profile
-                        const { data } = await supabase
-                            .from("task_comments")
-                            .select(`
-                                *,
-                                user_profile:profiles!task_comments_user_id_fkey(
-                                    id,
-                                    full_name,
-                                    username,
-                                    avatar_url
-                                ),
-                                likes:task_comment_likes(id, user_id)
-                            `)
-                            .eq("id", payload.new.id)
-                            .single();
-
-                        if (data) {
-                            setComments((prev) => [{ ...data, like_count: data.likes?.length || 0 }, ...prev]);
-                        }
-                    } else if (payload.eventType === "DELETE") {
-                        setComments((prev) => prev.filter((c) => c.id !== payload.old.id));
-                    }
-                }
+                scheduleRefresh
             )
             .subscribe();
 
-        // Real-time subscription for likes
-        const likesChannel = supabase
-            .channel(`task_comment_likes:${taskId}`)
-            .on(
-                "postgres_changes",
-                {
-                    event: "*",
-                    schema: "public",
-                    table: "task_comment_likes"
-                },
-                (payload: any) => {
-                    if (payload.eventType === "INSERT") {
-                        setComments((prev) =>
-                            prev.map((c) => {
-                                if (c.id === payload.new.comment_id) {
-                                    return {
-                                        ...c,
-                                        likes: [...(c.likes || []), payload.new as any],
-                                        like_count: (c.like_count || 0) + 1
-                                    };
-                                }
-                                return c;
-                            })
-                        );
-                    } else if (payload.eventType === "DELETE") {
-                        setComments((prev) =>
-                            prev.map((c) => {
-                                if (c.id === payload.old.comment_id) {
-                                    return {
-                                        ...c,
-                                        likes: (c.likes || []).filter((l) => l.id !== payload.old.id),
-                                        like_count: Math.max((c.like_count || 0) - 1, 0)
-                                    };
-                                }
-                                return c;
-                            })
-                        );
-                    }
-                }
-            )
-            .subscribe();
+        const pollId = setInterval(() => {
+            void refreshComments();
+        }, 30000);
 
         return () => {
+            clearInterval(pollId);
+            if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
             supabase.removeChannel(commentsChannel);
-            supabase.removeChannel(likesChannel);
         };
-    }, [taskId]);
+    }, [refreshComments, scheduleRefresh, supabase, taskId]);
 
-    const isLiked = (comment: Comment) => {
+    const isLiked = useCallback((comment: Comment) => {
         if (!currentUserId) return false;
         return comment.likes?.some((like) => like.user_id === currentUserId) || false;
-    };
+    }, [currentUserId]);
 
-    return { comments, isLoading, isLiked };
+    return { comments, isLoading, isLiked, refreshComments };
 }

@@ -9,6 +9,7 @@ import { ProfileHeader } from './ProfileHeader'
 import { ProfileRightRail } from './ProfileRightRail'
 import { ProfileTabs } from './ProfileTabs'
 import { useConnectionMutations } from '@/hooks/useConnections';
+import { checkConnectionStatus } from '@/app/actions/connections';
 import { toast } from 'sonner';
 import { useProfileProjects, useProfileStats } from '@/hooks/useProfileData';
 
@@ -62,7 +63,7 @@ export function ProfileV2Client({
     };
 
     // Use simplified hooks
-    const { sendRequest } = useConnectionMutations();
+    const { sendRequest, acceptRequest, rejectRequest, cancelRequest, disconnect } = useConnectionMutations();
 
     const [status, setStatus] = useState<any>(connectionStatus);
     const [isLoading, setIsLoading] = useState(false);
@@ -72,19 +73,33 @@ export function ProfileV2Client({
         setStatus(connectionStatus);
     }, [connectionStatus]);
 
+    const resolveConnectionId = async () => {
+        const result = await checkConnectionStatus(profile.id);
+        if (!result.success || !result.connectionId) {
+            throw new Error(result.error || "Connection record not found");
+        }
+        return result.connectionId;
+    };
+
     const handleConnectPrimary = async () => {
         if (!currentUser || !profile) return;
         setIsLoading(true);
         try {
-            if (status === 'none') {
-                toast.promise(sendRequest.mutateAsync({ userId: profile.id }), {
+            if (status === 'none' || status === 'rejected') {
+                await toast.promise(sendRequest.mutateAsync({ userId: profile.id }), {
                     loading: 'Sending request...',
                     success: 'Connection request sent',
                     error: 'Failed to send request'
                 });
                 setStatus('pending_outgoing');
             } else if (status === 'pending_incoming') {
-                toast.error("Please accept via the Connections tab for now");
+                const connectionId = await resolveConnectionId();
+                await toast.promise(acceptRequest.mutateAsync(connectionId), {
+                    loading: 'Accepting request...',
+                    success: 'Connection accepted',
+                    error: 'Failed to accept request'
+                });
+                setStatus('accepted');
             }
         } catch (e) {
             console.error(e);
@@ -98,9 +113,29 @@ export function ProfileV2Client({
         setIsLoading(true);
         try {
             if (status === 'pending_outgoing') {
-                toast.error("Please manage pending requests in Connections tab");
+                const connectionId = await resolveConnectionId();
+                await toast.promise(cancelRequest.mutateAsync(connectionId), {
+                    loading: 'Cancelling request...',
+                    success: 'Request cancelled',
+                    error: 'Failed to cancel request'
+                });
+                setStatus('none');
+            } else if (status === 'pending_incoming') {
+                const connectionId = await resolveConnectionId();
+                await toast.promise(rejectRequest.mutateAsync(connectionId), {
+                    loading: 'Declining request...',
+                    success: 'Request declined',
+                    error: 'Failed to decline request'
+                });
+                setStatus('none');
             } else if (status === 'accepted') {
-                toast.error("Please disconnect via the Connections tab");
+                const connectionId = await resolveConnectionId();
+                await toast.promise(disconnect.mutateAsync(connectionId), {
+                    loading: 'Disconnecting...',
+                    success: 'Disconnected',
+                    error: 'Failed to disconnect'
+                });
+                setStatus('none');
             }
         } catch (e) {
             console.error(e);

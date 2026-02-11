@@ -1,7 +1,6 @@
 import Link from 'next/link';
 import Image from 'next/image';
-import { useRouter } from 'next/navigation';
-import { memo, useState, useEffect, useRef } from 'react';
+import { memo, useState, useEffect } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import {
     Users,
@@ -34,6 +33,7 @@ interface ProjectCardProps {
     isBookmarked?: boolean;
     isFollowing?: boolean;
     followersCount?: number;
+    onOpenProject?: (projectId: string) => void;
 }
 
 export default memo(function ProjectCard({
@@ -49,12 +49,12 @@ export default memo(function ProjectCard({
     isBookmarked: propIsBookmarked,
     isFollowing: propIsFollowing,
     followersCount: propFollowersCount = 0,
+    onOpenProject,
 }: ProjectCardProps) {
     const supabase = createClient();
-    const router = useRouter();
     // Removed prefetch hooks as part of architectural optimization
     const { mutate: toggleBookmarkMutation } = useToggleProjectBookmark();
-    const { mutate: toggleFollowMutation } = useToggleProjectFollow();
+    const { mutateAsync: toggleFollowMutation } = useToggleProjectFollow();
 
     // OPTIMIZATION: Removed Debounce Ref (prefetching removed)
     // const prefetchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -84,6 +84,7 @@ export default memo(function ProjectCard({
         totalOpenRoles, 
         openRoles 
     } = viewModel;
+    const rankingReasons = project.rankingReasons || [];
 
     async function toggleBookmark(e: React.MouseEvent) {
         e.preventDefault();
@@ -105,13 +106,23 @@ export default memo(function ProjectCard({
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return;
 
-        toggleFollowMutation({
-            projectId: project.id,
-            currentStatus: followingProject,
-            userId: user.id,
-        });
-        setFollowingProject(!followingProject);
-        setFollowersCount((prev) => (followingProject ? Math.max(0, prev - 1) : prev + 1));
+        const nextFollowing = !followingProject;
+        setFollowingProject(nextFollowing);
+        setFollowersCount((prev) => (nextFollowing ? prev + 1 : Math.max(0, prev - 1)));
+
+        try {
+            const result = await toggleFollowMutation({
+                projectId: project.id,
+                currentStatus: followingProject,
+                userId: user.id,
+            });
+            if (result?.followersCount !== undefined) {
+                setFollowersCount(result.followersCount);
+            }
+        } catch {
+            setFollowingProject(!nextFollowing);
+            setFollowersCount((prev) => (!nextFollowing ? prev + 1 : Math.max(0, prev - 1)));
+        }
     }
 
     // OPTIMIZATION: Removed prefetch logic
@@ -124,11 +135,14 @@ export default memo(function ProjectCard({
         return (
             <div
                 className="group relative bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 hover:border-zinc-300 dark:hover:border-zinc-700 hover:shadow-lg dark:hover:shadow-black/40 transition-all duration-300 ease-out"
+                data-project-id={project.id}
+                data-testid={`project-card-${project.id}`}
             >
                 <Link
                     href={`/projects/${project.slug || project.id}?fromTab=${fromTab}`}
                     className="absolute inset-0 z-10"
                     aria-label={`View project ${project.title}`}
+                    onClick={() => onOpenProject?.(project.id)}
                 />
                 
                 {/* Content Container (Row Layout) */}
@@ -147,13 +161,25 @@ export default memo(function ProjectCard({
                             )}
                         </div>
                         <p className="text-sm text-zinc-500 truncate">{project.shortDescription || project.description}</p>
+                        {rankingReasons.length > 0 && (
+                            <div className="mt-1 flex items-center gap-1.5">
+                                {rankingReasons.slice(0, 1).map((reason) => (
+                                    <span
+                                        key={reason}
+                                        className="inline-flex items-center rounded-full border border-indigo-200/60 bg-indigo-50 px-2 py-0.5 text-[10px] font-medium text-indigo-700 dark:border-indigo-700/70 dark:bg-indigo-950/40 dark:text-indigo-300"
+                                    >
+                                        {reason}
+                                    </span>
+                                ))}
+                            </div>
+                        )}
                     </div>
                     
                     <div className="flex items-center gap-4 text-sm text-zinc-500 shrink-0">
                         <span className="flex items-center gap-1">
                             <Users className="w-4 h-4" /> {collaborators.length}
                         </span>
-                        <span className="flex items-center gap-1">
+                        <span className="flex items-center gap-1" data-testid={`project-card-views-${project.id}`}>
                             <Eye className="w-4 h-4" /> {project.viewCount || 0}
                         </span>
                     </div>
@@ -163,7 +189,11 @@ export default memo(function ProjectCard({
     }
 
     return (
-        <div className="h-full transform transition-all duration-300 hover:-translate-y-1">
+        <div
+            className="h-full transform transition-all duration-300 hover:-translate-y-1"
+            data-project-id={project.id}
+            data-testid={`project-card-${project.id}`}
+        >
             <div className="group relative h-full rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-sm hover:shadow-xl hover:border-indigo-500/20 dark:hover:border-indigo-500/20 transition-all duration-300 overflow-hidden flex flex-col">
                 {/* Selection Overlay */}
                 {selectionMode && (
@@ -186,7 +216,13 @@ export default memo(function ProjectCard({
                 )}
 
                 <div className={previewMode ? 'flex flex-col h-full pointer-events-none' : 'flex flex-col h-full'}>
-                    {!previewMode && <Link href={`/projects/${project.slug || project.id}?fromTab=${fromTab}`} className="absolute inset-0 z-0" />}
+                    {!previewMode && (
+                        <Link
+                            href={`/projects/${project.slug || project.id}?fromTab=${fromTab}`}
+                            className="absolute inset-0 z-0"
+                            onClick={() => onOpenProject?.(project.id)}
+                        />
+                    )}
 
                     {/* Header */}
                     <div className="p-5 flex items-start justify-between relative z-20">
@@ -224,6 +260,7 @@ export default memo(function ProjectCard({
                                 onClick={toggleFollow}
                                 className="p-2 text-zinc-400 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-zinc-800 rounded-full transition-colors"
                                 title={followingProject ? 'Unfollow' : 'Follow'}
+                                data-testid={`project-card-follow-${project.id}`}
                             >
                                 <UserPlus className={`w-4 h-4 ${followingProject ? 'text-emerald-600 fill-current' : ''}`} />
                             </button>
@@ -238,6 +275,18 @@ export default memo(function ProjectCard({
                         <p className="text-sm text-zinc-500 dark:text-zinc-400 line-clamp-3 mb-6">
                             {project.shortDescription || project.description || 'No description provided.'}
                         </p>
+                        {rankingReasons.length > 0 && (
+                            <div className="mb-4 flex flex-wrap gap-1.5">
+                                {rankingReasons.map((reason) => (
+                                    <span
+                                        key={reason}
+                                        className="inline-flex items-center rounded-full border border-indigo-200/60 bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold text-indigo-700 dark:border-indigo-700/70 dark:bg-indigo-950/40 dark:text-indigo-300"
+                                    >
+                                        {reason}
+                                    </span>
+                                ))}
+                            </div>
+                        )}
 
                         {/* Tech Stack */}
                         <div className="flex flex-wrap gap-1.5 mb-6">
@@ -287,10 +336,10 @@ export default memo(function ProjectCard({
                         {/* Quick Stats Row */}
                         <div className="flex items-center justify-between mb-4 text-xs font-medium text-zinc-500">
                             <div className="flex gap-4">
-                                <span className="flex items-center gap-1.5">
+                                <span className="flex items-center gap-1.5" data-testid={`project-card-views-${project.id}`}>
                                     <Eye className="w-3 h-3" /> {project.viewCount || 0}
                                 </span>
-                                <span className="flex items-center gap-1.5">
+                                <span className="flex items-center gap-1.5" data-testid={`project-card-followers-${project.id}`}>
                                     <UserPlus className="w-3 h-3" /> {followersCount}
                                 </span>
                             </div>

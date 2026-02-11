@@ -3,7 +3,7 @@
 import { db } from "@/lib/db";
 import { profiles, projectFileIndex, projectMembers, projectNodeEvents, projectNodeLocks, projectNodes, taskNodeLinks, projects, tasks } from "@/lib/db/schema";
 import type { ProjectNode } from "@/lib/db/schema";
-import { eq, and, isNull, isNotNull, ilike, inArray, sql, desc, type SQL } from "drizzle-orm";
+import { eq, and, isNull, isNotNull, ilike, inArray, sql, desc, ne, type SQL } from "drizzle-orm";
 
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
@@ -77,6 +77,121 @@ async function getTaskProjectId(taskId: string): Promise<string> {
     return projectId;
 }
 
+const MAX_NODE_NAME_LENGTH = 255;
+const MAX_SEARCH_QUERY_CHARS = 120;
+const MAX_TREE_PAGE_SIZE = 200;
+const MAX_BATCH_PARENT_FOLDERS = 50;
+const MAX_BULK_NODE_OPS = 200;
+const MAX_NODE_ACTIVITY_ITEMS = 100;
+const MAX_NODE_LINKED_TASKS = 100;
+
+function normalizeNodeName(name: string) {
+    return (name || "").trim();
+}
+
+function assertValidNodeName(name: string) {
+    if (!name) throw new Error("Name is required");
+    if (name.length > MAX_NODE_NAME_LENGTH) throw new Error("Name is too long");
+    if (name === "." || name === "..") throw new Error("Invalid name");
+    if (name.includes("/") || name.includes("\\")) throw new Error("Name cannot include path separators");
+}
+
+function normalizeSearchQuery(query?: string) {
+    const normalized = (query || "").trim();
+    if (!normalized) return "";
+    return normalized.slice(0, MAX_SEARCH_QUERY_CHARS);
+}
+
+function assertBulkLimit(nodeIds: string[]) {
+    if (nodeIds.length === 0) throw new Error("No nodes selected");
+    if (nodeIds.length > MAX_BULK_NODE_OPS) {
+        throw new Error(`Too many nodes selected. Max allowed: ${MAX_BULK_NODE_OPS}`);
+    }
+}
+
+async function assertNodeNotLockedByAnotherUser(
+    projectId: string,
+    nodeId: string,
+    userId: string,
+    tx: any = db
+) {
+    const now = new Date();
+    const lock = await tx.query.projectNodeLocks.findFirst({
+        where: and(
+            eq(projectNodeLocks.projectId, projectId),
+            eq(projectNodeLocks.nodeId, nodeId),
+            sql`${projectNodeLocks.expiresAt} > ${now}`
+        ),
+        columns: { lockedBy: true, expiresAt: true },
+    });
+
+    if (lock && lock.lockedBy !== userId) {
+        throw new Error("File is locked by another collaborator");
+    }
+}
+
+async function assertValidParentFolder(projectId: string, parentId: string | null, tx: any = db) {
+    if (!parentId) return null;
+    const parent = await tx.query.projectNodes.findFirst({
+        where: and(
+            eq(projectNodes.id, parentId),
+            eq(projectNodes.projectId, projectId),
+            isNull(projectNodes.deletedAt)
+        ),
+        columns: { id: true, type: true, parentId: true }
+    });
+    if (!parent) throw new Error("Destination folder not found");
+    if (parent.type !== 'folder') throw new Error("Destination must be a folder");
+    return parent;
+}
+
+async function assertUniqueSiblingName(
+    projectId: string,
+    parentId: string | null,
+    name: string,
+    tx: any = db,
+    ignoreNodeId?: string
+) {
+    const conditions: SQL[] = [
+        eq(projectNodes.projectId, projectId),
+        isWithParent(parentId),
+        isNull(projectNodes.deletedAt),
+        sql`lower(${projectNodes.name}) = lower(${name})`,
+    ];
+    if (ignoreNodeId) {
+        conditions.push(ne(projectNodes.id, ignoreNodeId));
+    }
+
+    const duplicate = await tx.query.projectNodes.findFirst({
+        where: and(...conditions),
+        columns: { id: true },
+    });
+
+    if (duplicate) {
+        throw new Error("A file/folder with this name already exists in this location");
+    }
+}
+
+async function assertNotMovingIntoDescendant(
+    projectId: string,
+    nodeId: string,
+    targetParentId: string | null,
+    tx: any = db
+) {
+    let cursor = targetParentId;
+    for (let depth = 0; cursor && depth < 256; depth++) {
+        if (cursor === nodeId) {
+            throw new Error("Cannot move a folder into itself or its descendant");
+        }
+        const next = await tx.query.projectNodes.findFirst({
+            where: and(eq(projectNodes.id, cursor), eq(projectNodes.projectId, projectId)),
+            columns: { parentId: true },
+        });
+        if (!next) break;
+        cursor = next.parentId;
+    }
+}
+
 export type GetProjectNodesResult = {
     nodes: ProjectNode[];
     nextCursor: string | null;
@@ -101,11 +216,13 @@ export async function getProjectNodes(
     const access = await assertProjectReadAccess(projectId, user?.id ?? null);
 
     // --- Search Mode (Flat) ---
-    if (query && query.trim()) {
+    const normalizedQuery = normalizeSearchQuery(query);
+    if (normalizedQuery) {
+        if (normalizedQuery.length < 2) return [];
         const whereClause = and(
             eq(projectNodes.projectId, projectId),
             isNull(projectNodes.deletedAt),
-            ilike(projectNodes.name, `%${query.trim()}%`)
+            ilike(projectNodes.name, `%${normalizedQuery}%`)
         );
 
         const nodes = await db.query.projectNodes.findMany({
@@ -137,12 +254,12 @@ export async function getProjectNodes(
                         (${projectNodes.type} = ${cType} AND ${projectNodes.name} = ${cName} AND ${projectNodes.id} > ${cId}))`
                 );
             }
-        } catch (e) {
+        } catch {
             // ignore invalid cursor
         }
     }
 
-    const LIMIT = Math.min(limit, 500); // safety cap
+    const LIMIT = Math.min(Math.max(1, limit), MAX_TREE_PAGE_SIZE);
 
     // Fetch one extra to check if there is a next page
     const nodes = await db.query.projectNodes.findMany({
@@ -153,7 +270,7 @@ export async function getProjectNodes(
 
     let nextCursor: string | null = null;
     if (nodes.length > LIMIT) {
-        const nextItem = nodes.pop(); // remove the extra one
+        nodes.pop(); // remove the extra one
         const lastItem = nodes[nodes.length - 1]; // the actual last valid item
         if (lastItem) {
             nextCursor = Buffer.from(`${lastItem.type}:::${lastItem.name}:::${lastItem.id}`).toString('base64');
@@ -202,6 +319,9 @@ export async function getProjectBatchNodes(projectId: string, parentIds: (string
 
     // De-dupe and sanitize
     const uniqueParents = Array.from(new Set(parentIds));
+    if (uniqueParents.length > MAX_BATCH_PARENT_FOLDERS) {
+        throw new Error(`Too many folders requested in one batch. Max: ${MAX_BATCH_PARENT_FOLDERS}`);
+    }
     const cleanParents = uniqueParents.map(id => id === 'root' ? null : id);
 
     // We can't really do cursor pagination easily on a batch hierarchy fetch without complexity.
@@ -236,8 +356,8 @@ export async function getProjectBatchNodes(projectId: string, parentIds: (string
 
     const safeNodes = await db.query.projectNodes.findMany({
         where: and(...conditions),
-        orderBy: (nodes, { asc }) => [asc(nodes.type), asc(nodes.name)],
-        limit: 2000
+        orderBy: (nodes, { asc }) => [asc(nodes.parentId), asc(nodes.type), asc(nodes.name)],
+        limit: 2500
     });
 
     return safeNodes;
@@ -311,6 +431,164 @@ export async function getTaskLinkCounts(projectId: string, nodeIds: string[]) {
     const out: Record<string, number> = {};
     for (const r of rows) out[r.nodeId] = Number(r.count) || 0;
     return out;
+}
+
+export type ProjectNodeActivityItem = {
+    id: string;
+    type: string;
+    at: number;
+    by: string | null;
+    metadata: Record<string, unknown> | null;
+};
+
+export async function getNodeActivity(projectId: string, nodeId: string, limit: number = 25) {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    await assertProjectReadAccess(projectId, user?.id ?? null);
+
+    const node = await db.query.projectNodes.findFirst({
+        where: and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId)),
+        columns: { id: true },
+    });
+    if (!node) throw new Error("File not found");
+
+    const safeLimit = Math.min(MAX_NODE_ACTIVITY_ITEMS, Math.max(1, limit));
+    const rows = await db
+        .select({
+            id: projectNodeEvents.id,
+            type: projectNodeEvents.type,
+            createdAt: projectNodeEvents.createdAt,
+            metadata: projectNodeEvents.metadata,
+            username: profiles.username,
+            fullName: profiles.fullName,
+        })
+        .from(projectNodeEvents)
+        .leftJoin(profiles, eq(projectNodeEvents.actorId, profiles.id))
+        .where(and(eq(projectNodeEvents.projectId, projectId), eq(projectNodeEvents.nodeId, nodeId)))
+        .orderBy(desc(projectNodeEvents.createdAt))
+        .limit(safeLimit);
+
+    return rows.map((row) => ({
+        id: row.id,
+        type: row.type,
+        at: row.createdAt.getTime(),
+        by: row.fullName || row.username || null,
+        metadata: (row.metadata as Record<string, unknown> | null) ?? null,
+    })) as ProjectNodeActivityItem[];
+}
+
+export type ProjectNodeLinkedTask = {
+    id: string;
+    title: string;
+    status: string;
+    priority: string;
+    taskNumber: number | null;
+    dueDate: number | null;
+    linkedAt: number;
+};
+
+export async function getNodeLinkedTasks(projectId: string, nodeId: string, limit: number = 25) {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    await assertProjectReadAccess(projectId, user?.id ?? null);
+
+    const node = await db.query.projectNodes.findFirst({
+        where: and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId)),
+        columns: { id: true },
+    });
+    if (!node) throw new Error("File not found");
+
+    const safeLimit = Math.min(MAX_NODE_LINKED_TASKS, Math.max(1, limit));
+    const rows = await db
+        .select({
+            id: tasks.id,
+            title: tasks.title,
+            status: tasks.status,
+            priority: tasks.priority,
+            taskNumber: tasks.taskNumber,
+            dueDate: tasks.dueDate,
+            linkedAt: taskNodeLinks.linkedAt,
+        })
+        .from(taskNodeLinks)
+        .innerJoin(tasks, eq(taskNodeLinks.taskId, tasks.id))
+        .where(and(eq(taskNodeLinks.nodeId, nodeId), eq(tasks.projectId, projectId)))
+        .orderBy(desc(taskNodeLinks.linkedAt))
+        .limit(safeLimit);
+
+    return rows.map((row) => ({
+        id: row.id,
+        title: row.title,
+        status: row.status,
+        priority: row.priority,
+        taskNumber: row.taskNumber ?? null,
+        dueDate: row.dueDate ? row.dueDate.getTime() : null,
+        linkedAt: row.linkedAt.getTime(),
+    })) as ProjectNodeLinkedTask[];
+}
+
+export type FederatedNodeSearchResult = {
+    nodeId: string;
+    score: number;
+    sources: Array<"name" | "content">;
+    snippet: string | null;
+};
+
+export async function searchProjectNodesFederated(projectId: string, query: string, limit: number = 80) {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    await assertProjectReadAccess(projectId, user?.id ?? null);
+
+    const q = normalizeSearchQuery(query);
+    if (!q || q.length < 2) return [] as FederatedNodeSearchResult[];
+
+    const safeLimit = Math.min(200, Math.max(1, limit));
+
+    const [nameRows, contentRows] = await Promise.all([
+        db.query.projectNodes.findMany({
+            where: and(
+                eq(projectNodes.projectId, projectId),
+                isNull(projectNodes.deletedAt),
+                ilike(projectNodes.name, `%${q}%`)
+            ),
+            columns: { id: true, name: true },
+            orderBy: (nodes, { asc }) => [asc(nodes.type), asc(nodes.name)],
+            limit: safeLimit,
+        }),
+        searchProjectFileIndex(projectId, q, safeLimit),
+    ]);
+
+    const ranked = new Map<string, FederatedNodeSearchResult>();
+    for (const row of nameRows) {
+        const lower = row.name.toLowerCase();
+        const exact = lower === q.toLowerCase();
+        const starts = lower.startsWith(q.toLowerCase());
+        ranked.set(row.id, {
+            nodeId: row.id,
+            score: exact ? 120 : starts ? 100 : 90,
+            sources: ["name"],
+            snippet: null,
+        });
+    }
+
+    for (const row of contentRows) {
+        const existing = ranked.get(row.nodeId);
+        if (existing) {
+            existing.score = Math.max(existing.score, 70);
+            if (!existing.sources.includes("content")) existing.sources.push("content");
+            if (!existing.snippet && row.snippet) existing.snippet = row.snippet;
+            continue;
+        }
+        ranked.set(row.nodeId, {
+            nodeId: row.nodeId,
+            score: 60,
+            sources: ["content"],
+            snippet: row.snippet || null,
+        });
+    }
+
+    return Array.from(ranked.values())
+        .sort((a, b) => b.score - a.score)
+        .slice(0, safeLimit);
 }
 
 export async function getNodesByIds(projectId: string, nodeIds: string[]) {
@@ -514,15 +792,23 @@ export async function createFolder(projectId: string, parentId: string | null, n
     if (!user) throw new Error("Unauthorized");
     await assertProjectWriteAccess(projectId, user.id);
 
-    const [node] = await db.insert(projectNodes).values({
-        projectId,
-        parentId,
-        type: 'folder',
-        name,
-        createdBy: user.id,
-    }).returning();
+    const safeName = normalizeNodeName(name);
+    assertValidNodeName(safeName);
 
-    await recordNodeEvent(projectId, user.id, node.id, 'create_folder', { parentId, name });
+    const node = await db.transaction(async (tx) => {
+        await assertValidParentFolder(projectId, parentId, tx);
+        await assertUniqueSiblingName(projectId, parentId, safeName, tx);
+        const [created] = await tx.insert(projectNodes).values({
+            projectId,
+            parentId,
+            type: 'folder',
+            name: safeName,
+            createdBy: user.id,
+        }).returning();
+        return created;
+    });
+
+    await recordNodeEvent(projectId, user.id, node.id, 'create_folder', { parentId, name: safeName });
     revalidatePath(`/projects/${projectId}`); // Revalidate generally
     return node;
 }
@@ -538,18 +824,26 @@ export async function createFileNode(projectId: string, parentId: string | null,
     if (!user) throw new Error("Unauthorized");
     await assertProjectWriteAccess(projectId, user.id);
 
-    const [node] = await db.insert(projectNodes).values({
-        projectId,
-        parentId,
-        type: 'file',
-        name: file.name,
-        s3Key: file.s3Key,
-        size: file.size, // schema uses bigint({ mode: 'number' }) so we pass number
-        mimeType: file.mimeType,
-        createdBy: user.id,
-    }).returning();
+    const safeName = normalizeNodeName(file.name);
+    assertValidNodeName(safeName);
 
-    await recordNodeEvent(projectId, user.id, node.id, 'create_file', { parentId, name: file.name, s3Key: file.s3Key });
+    const node = await db.transaction(async (tx) => {
+        await assertValidParentFolder(projectId, parentId, tx);
+        await assertUniqueSiblingName(projectId, parentId, safeName, tx);
+        const [created] = await tx.insert(projectNodes).values({
+            projectId,
+            parentId,
+            type: 'file',
+            name: safeName,
+            s3Key: file.s3Key,
+            size: file.size,
+            mimeType: file.mimeType,
+            createdBy: user.id,
+        }).returning();
+        return created;
+    });
+
+    await recordNodeEvent(projectId, user.id, node.id, 'create_file', { parentId, name: safeName, s3Key: file.s3Key });
     revalidatePath(`/projects/${projectId}`);
     return node;
 }
@@ -560,12 +854,30 @@ export async function renameNode(nodeId: string, newName: string, projectId: str
     if (!user) throw new Error("Unauthorized");
     await assertProjectWriteAccess(projectId, user.id);
 
-    const [node] = await db.update(projectNodes)
-        .set({ name: newName, updatedAt: new Date() })
-        .where(and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId)))
-        .returning();
+    const safeName = normalizeNodeName(newName);
+    assertValidNodeName(safeName);
 
-    await recordNodeEvent(projectId, user.id, nodeId, 'rename', { newName });
+    const node = await db.transaction(async (tx) => {
+        await assertNodeNotLockedByAnotherUser(projectId, nodeId, user.id, tx);
+        const current = await tx.query.projectNodes.findFirst({
+            where: and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId)),
+            columns: { id: true, parentId: true, metadata: true, deletedAt: true },
+        });
+
+        if (!current || current.deletedAt) throw new Error("File not found");
+        const isSystemFolder =
+            !!current.metadata && (current.metadata as { isSystem?: unknown }).isSystem === true;
+        if (isSystemFolder) throw new Error("Cannot rename system folder");
+
+        await assertUniqueSiblingName(projectId, current.parentId ?? null, safeName, tx, nodeId);
+        const [updated] = await tx.update(projectNodes)
+            .set({ name: safeName, updatedAt: new Date() })
+            .where(and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId)))
+            .returning();
+        return updated;
+    });
+
+    await recordNodeEvent(projectId, user.id, nodeId, 'rename', { newName: safeName });
     revalidatePath(`/projects/${projectId}`);
     return node;
 }
@@ -575,6 +887,8 @@ export async function updateProjectFileStats(projectId: string, nodeId: string, 
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new Error("Unauthorized");
     await assertProjectWriteAccess(projectId, user.id);
+
+    await assertNodeNotLockedByAnotherUser(projectId, nodeId, user.id);
 
     // Update size and updatedAt
     const [node] = await db.update(projectNodes)
@@ -659,6 +973,7 @@ export async function trashNode(nodeId: string, projectId: string) {
         where: and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId)),
         columns: { metadata: true, s3Key: true, deletedAt: true }
     });
+    await assertNodeNotLockedByAnotherUser(projectId, nodeId, user.id);
 
     const isSystemFolder =
         !!node?.metadata && (node.metadata as { isSystem?: unknown }).isSystem === true;
@@ -685,6 +1000,8 @@ export async function restoreNode(nodeId: string, projectId: string) {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new Error("Unauthorized");
     await assertProjectWriteAccess(projectId, user.id);
+
+    await assertNodeNotLockedByAnotherUser(projectId, nodeId, user.id);
 
     await db.update(projectNodes)
         .set({ deletedAt: null, deletedBy: null, updatedAt: new Date() })
@@ -718,6 +1035,8 @@ export async function purgeNode(nodeId: string, projectId: string) {
     if (!user) throw new Error("Unauthorized");
     await assertProjectWriteAccess(projectId, user.id);
 
+    await assertNodeNotLockedByAnotherUser(projectId, nodeId, user.id);
+
     const node = await db.query.projectNodes.findFirst({
         where: and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId)),
         columns: { metadata: true, s3Key: true, deletedAt: true }
@@ -740,6 +1059,8 @@ export async function deleteNode(nodeId: string, projectId: string) {
     if (!user) throw new Error("Unauthorized");
     await assertProjectWriteAccess(projectId, user.id);
 
+    await assertNodeNotLockedByAnotherUser(projectId, nodeId, user.id);
+
     const node = await db.query.projectNodes.findFirst({
         where: and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId)),
         columns: { metadata: true }
@@ -761,14 +1082,224 @@ export async function moveNode(nodeId: string, newParentId: string | null, proje
     if (!user) throw new Error("Unauthorized");
     await assertProjectWriteAccess(projectId, user.id);
 
-    const [node] = await db.update(projectNodes)
-        .set({ parentId: newParentId, updatedAt: new Date() })
-        .where(and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId)))
-        .returning();
+    const node = await db.transaction(async (tx) => {
+        await assertNodeNotLockedByAnotherUser(projectId, nodeId, user.id, tx);
+        const current = await tx.query.projectNodes.findFirst({
+            where: and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId)),
+        });
+        if (!current || current.deletedAt) throw new Error("Node not found");
+        if (newParentId === current.parentId) return current;
+        if (newParentId === nodeId) throw new Error("Cannot move node into itself");
+
+        const isSystemFolder =
+            !!current.metadata && (current.metadata as { isSystem?: unknown }).isSystem === true;
+        if (isSystemFolder) throw new Error("Cannot move system folder");
+
+        await assertValidParentFolder(projectId, newParentId, tx);
+
+        if (current.type === "folder") {
+            await assertNotMovingIntoDescendant(projectId, nodeId, newParentId, tx);
+        }
+
+        await assertUniqueSiblingName(projectId, newParentId, current.name, tx, nodeId);
+
+        const [updated] = await tx.update(projectNodes)
+            .set({ parentId: newParentId, updatedAt: new Date() })
+            .where(and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId)))
+            .returning();
+        return updated;
+    });
 
     await recordNodeEvent(projectId, user.id, nodeId, 'move', { newParentId });
     revalidatePath(`/projects/${projectId}`);
     return node;
+}
+
+export async function bulkMoveNodes(nodeIds: string[], newParentId: string | null, projectId: string) {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error("Unauthorized");
+    await assertProjectWriteAccess(projectId, user.id);
+
+    const uniqueIds = Array.from(new Set(nodeIds.filter(Boolean)));
+    assertBulkLimit(uniqueIds);
+
+    const moved = await db.transaction(async (tx) => {
+        await assertValidParentFolder(projectId, newParentId, tx);
+
+        const nodes = await tx.query.projectNodes.findMany({
+            where: and(
+                eq(projectNodes.projectId, projectId),
+                inArray(projectNodes.id, uniqueIds),
+                isNull(projectNodes.deletedAt)
+            ),
+            columns: {
+                id: true,
+                parentId: true,
+                name: true,
+                type: true,
+                metadata: true,
+            },
+        });
+
+        if (nodes.length !== uniqueIds.length) {
+            throw new Error("Some selected files are missing or already deleted");
+        }
+
+        const targetNameSet = new Set<string>();
+        for (const node of nodes) {
+            await assertNodeNotLockedByAnotherUser(projectId, node.id, user.id, tx);
+            const isSystemFolder =
+                !!node.metadata && (node.metadata as { isSystem?: unknown }).isSystem === true;
+            if (isSystemFolder) throw new Error(`Cannot move system folder: ${node.name}`);
+            if (node.parentId === newParentId) continue;
+
+            const lowName = node.name.toLowerCase();
+            if (targetNameSet.has(lowName)) {
+                throw new Error(`Duplicate name conflict in selection: ${node.name}`);
+            }
+            targetNameSet.add(lowName);
+
+            if (node.type === "folder") {
+                await assertNotMovingIntoDescendant(projectId, node.id, newParentId, tx);
+            }
+            await assertUniqueSiblingName(projectId, newParentId, node.name, tx, node.id);
+        }
+
+        const movedNodes: ProjectNode[] = [];
+        for (const node of nodes) {
+            if (node.parentId === newParentId) continue;
+            const [updated] = await tx.update(projectNodes)
+                .set({ parentId: newParentId, updatedAt: new Date() })
+                .where(and(eq(projectNodes.id, node.id), eq(projectNodes.projectId, projectId)))
+                .returning();
+            movedNodes.push(updated);
+        }
+
+        if (movedNodes.length > 0) {
+            await tx.insert(projectNodeEvents).values(
+                movedNodes.map((node) => ({
+                    projectId,
+                    nodeId: node.id,
+                    actorId: user.id,
+                    type: "move",
+                    metadata: { newParentId, bulk: true },
+                    createdAt: new Date(),
+                }))
+            );
+        }
+
+        return movedNodes;
+    });
+
+    revalidatePath(`/projects/${projectId}`);
+    return moved;
+}
+
+export async function bulkTrashNodes(nodeIds: string[], projectId: string) {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error("Unauthorized");
+    await assertProjectWriteAccess(projectId, user.id);
+
+    const uniqueIds = Array.from(new Set(nodeIds.filter(Boolean)));
+    assertBulkLimit(uniqueIds);
+
+    const now = new Date();
+    const result = await db.transaction(async (tx) => {
+        const nodes = await tx.query.projectNodes.findMany({
+            where: and(eq(projectNodes.projectId, projectId), inArray(projectNodes.id, uniqueIds)),
+            columns: { id: true, name: true, metadata: true, deletedAt: true },
+        });
+        if (nodes.length !== uniqueIds.length) {
+            throw new Error("Some selected files are missing");
+        }
+
+        for (const node of nodes) {
+            await assertNodeNotLockedByAnotherUser(projectId, node.id, user.id, tx);
+            const isSystemFolder =
+                !!node.metadata && (node.metadata as { isSystem?: unknown }).isSystem === true;
+            if (isSystemFolder) throw new Error(`Cannot delete system folder: ${node.name}`);
+        }
+
+        const toTrashIds = nodes.filter((n) => !n.deletedAt).map((n) => n.id);
+        const alreadyTrashedIds = nodes.filter((n) => !!n.deletedAt).map((n) => n.id);
+
+        if (toTrashIds.length > 0) {
+            await tx.update(projectNodes)
+                .set({ deletedAt: now, deletedBy: user.id, updatedAt: now })
+                .where(and(eq(projectNodes.projectId, projectId), inArray(projectNodes.id, toTrashIds)));
+
+            await tx.delete(projectFileIndex).where(inArray(projectFileIndex.nodeId, toTrashIds));
+            await tx.delete(projectNodeLocks).where(inArray(projectNodeLocks.nodeId, toTrashIds));
+
+            await tx.insert(projectNodeEvents).values(
+                toTrashIds.map((nodeId) => ({
+                    projectId,
+                    nodeId,
+                    actorId: user.id,
+                    type: "trash",
+                    metadata: { bulk: true },
+                    createdAt: now,
+                }))
+            );
+        }
+
+        return { trashedIds: toTrashIds, alreadyTrashedIds };
+    });
+
+    revalidatePath(`/projects/${projectId}`);
+    return result;
+}
+
+export async function bulkRestoreNodes(nodeIds: string[], projectId: string) {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error("Unauthorized");
+    await assertProjectWriteAccess(projectId, user.id);
+
+    const uniqueIds = Array.from(new Set(nodeIds.filter(Boolean)));
+    assertBulkLimit(uniqueIds);
+
+    const now = new Date();
+    const result = await db.transaction(async (tx) => {
+        const nodes = await tx.query.projectNodes.findMany({
+            where: and(eq(projectNodes.projectId, projectId), inArray(projectNodes.id, uniqueIds)),
+            columns: { id: true, deletedAt: true },
+        });
+        if (nodes.length !== uniqueIds.length) {
+            throw new Error("Some selected files are missing");
+        }
+
+        for (const node of nodes) {
+            await assertNodeNotLockedByAnotherUser(projectId, node.id, user.id, tx);
+        }
+
+        const toRestoreIds = nodes.filter((n) => !!n.deletedAt).map((n) => n.id);
+        const alreadyActiveIds = nodes.filter((n) => !n.deletedAt).map((n) => n.id);
+
+        if (toRestoreIds.length > 0) {
+            await tx.update(projectNodes)
+                .set({ deletedAt: null, deletedBy: null, updatedAt: now })
+                .where(and(eq(projectNodes.projectId, projectId), inArray(projectNodes.id, toRestoreIds)));
+
+            await tx.insert(projectNodeEvents).values(
+                toRestoreIds.map((nodeId) => ({
+                    projectId,
+                    nodeId,
+                    actorId: user.id,
+                    type: "restore",
+                    metadata: { bulk: true },
+                    createdAt: now,
+                }))
+            );
+        }
+
+        return { restoredIds: toRestoreIds, alreadyActiveIds };
+    });
+
+    revalidatePath(`/projects/${projectId}`);
+    return result;
 }
 
 export async function getBreadcrumbs(projectId: string, folderId: string | null) {
@@ -814,19 +1345,21 @@ export async function linkNodeToTask(taskId: string, nodeId: string) {
     });
     if (!node) throw new Error("File not found");
 
-    // Check if already linked (idempotent)
-    const existing = await db.query.taskNodeLinks.findFirst({
-        where: and(eq(taskNodeLinks.taskId, taskId), eq(taskNodeLinks.nodeId, nodeId)),
-    });
-    if (existing) return existing;
-
-    const [link] = await db.insert(taskNodeLinks).values({
+    const inserted = await db.insert(taskNodeLinks).values({
         taskId,
         nodeId,
         createdBy: user.id
+    }).onConflictDoNothing({
+        target: [taskNodeLinks.taskId, taskNodeLinks.nodeId],
     }).returning();
 
-    return link;
+    if (inserted[0]) return inserted[0];
+
+    const existing = await db.query.taskNodeLinks.findFirst({
+        where: and(eq(taskNodeLinks.taskId, taskId), eq(taskNodeLinks.nodeId, nodeId)),
+    });
+    if (!existing) throw new Error("Failed to link file to task");
+    return existing;
 }
 
 export async function unlinkNodeFromTask(taskId: string, nodeId: string) {

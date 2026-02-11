@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo } from "react";
+import React, { useMemo, useState, useEffect } from "react";
 import { TaskCard, Task } from "./TaskCard";
 import { cn } from "@/lib/utils";
 
@@ -29,6 +29,22 @@ export default function KanbanBoard({
     hasNextPage,
     isFetchingNextPage
 }: KanbanBoardProps) {
+    const DEFAULT_VISIBLE = 100;
+    const STEP = 50;
+    const [visibleCounts, setVisibleCounts] = useState({
+        todo: DEFAULT_VISIBLE,
+        in_progress: DEFAULT_VISIBLE,
+        done: DEFAULT_VISIBLE
+    });
+
+    useEffect(() => {
+        setVisibleCounts((prev) => ({
+            todo: Math.max(prev.todo, DEFAULT_VISIBLE),
+            in_progress: Math.max(prev.in_progress, DEFAULT_VISIBLE),
+            done: Math.max(prev.done, DEFAULT_VISIBLE),
+        }));
+    }, [tasks.length]);
+
     // Group tasks
     const columns = useMemo(() => {
         const cols = {
@@ -53,9 +69,13 @@ export default function KanbanBoard({
     ];
 
     return (
+        <>
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
             {columnConfig.map(col => {
                 const colTasks = columns[col.id as keyof typeof columns];
+                const visibleLimit = visibleCounts[col.id as keyof typeof visibleCounts] || DEFAULT_VISIBLE;
+                const visibleTasks = colTasks.slice(0, visibleLimit);
+                const hasMoreInColumn = colTasks.length > visibleLimit;
 
                 return (
                     <div key={col.id} className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-900/50 flex flex-col transition-all">
@@ -72,8 +92,9 @@ export default function KanbanBoard({
 
                         {/* List - Auto height */}
                         <div className="p-3 space-y-3 min-h-[100px]">
-                            {colTasks.length > 0 ? (
-                                colTasks.map((task) => (
+                            {visibleTasks.length > 0 ? (
+                                <>
+                                {visibleTasks.map((task) => (
                                     <TaskCard
                                         key={task.id}
                                         task={task}
@@ -84,7 +105,21 @@ export default function KanbanBoard({
                                         onSelect={() => toggleTaskSelection(task.id)}
                                         isBulkMode={isBulkMode}
                                     />
-                                ))
+                                ))}
+                                {hasMoreInColumn && (
+                                    <button
+                                        onClick={() =>
+                                            setVisibleCounts((prev) => ({
+                                                ...prev,
+                                                [col.id]: Math.min(colTasks.length, (prev as any)[col.id] + STEP),
+                                            }))
+                                        }
+                                        className="w-full py-2 text-xs font-semibold text-indigo-600 dark:text-indigo-400 border border-dashed border-indigo-200 dark:border-indigo-800 rounded-lg hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-colors"
+                                    >
+                                        Show more
+                                    </button>
+                                )}
+                                </>
                             ) : (
                                 <div className="h-24 flex flex-col items-center justify-center text-zinc-400 border-2 border-dashed border-zinc-200 dark:border-zinc-800 rounded-lg">
                                     <p className="text-xs font-medium">No tasks</p>
@@ -95,5 +130,17 @@ export default function KanbanBoard({
                 );
             })}
         </div>
+        {hasNextPage && (
+            <div className="mt-4 flex justify-center">
+                <button
+                    onClick={() => fetchNextPage()}
+                    disabled={isFetchingNextPage}
+                    className="px-4 py-2 text-xs font-semibold text-indigo-600 dark:text-indigo-400 border border-dashed border-indigo-200 dark:border-indigo-800 rounded-lg hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-colors disabled:opacity-60"
+                >
+                    {isFetchingNextPage ? "Loading more tasks..." : "Load more tasks"}
+                </button>
+            </div>
+        )}
+        </>
     );
 }

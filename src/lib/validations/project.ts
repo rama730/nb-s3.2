@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isValidGithubBranchName, normalizeGithubRepoUrl } from '@/lib/github/repo-validation';
 
 // Open Role Schema
 export const openRoleSchema = z.object({
@@ -92,6 +93,28 @@ export const createProjectSchema = z.object({
         s3Key: z.string().optional(),
         metadata: z.record(z.string(), z.any()).optional(),
     }).optional(),
+}).superRefine((val, ctx) => {
+    const src = val.import_source;
+    if (!src) return;
+
+    if (src.type === 'github') {
+        const normalized = normalizeGithubRepoUrl(src.repoUrl || '');
+        if (!normalized) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ['import_source', 'repoUrl'],
+                message: 'Enter a valid GitHub repository URL (https://github.com/owner/repo).',
+            });
+        }
+
+        if (src.branch && !isValidGithubBranchName(src.branch)) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ['import_source', 'branch'],
+                message: 'Branch name is invalid.',
+            });
+        }
+    }
 });
 
 export type CreateProjectInput = z.infer<typeof createProjectSchema>;

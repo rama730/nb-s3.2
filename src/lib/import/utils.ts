@@ -44,6 +44,9 @@ const ROOT_KEY = 'root';
 const FILE_BATCH_SIZE = 50;
 const DB_BATCH_SIZE = 500;
 const UPLOAD_CONCURRENCY = 5;
+const MAX_IMPORT_FILE_COUNT = Number(process.env.GITHUB_IMPORT_MAX_FILES || 6000);
+const MAX_IMPORT_TOTAL_BYTES = Number(process.env.GITHUB_IMPORT_MAX_TOTAL_BYTES || 1024 * 1024 * 1024); // 1GB
+const MAX_IMPORT_DIR_COUNT = Number(process.env.GITHUB_IMPORT_MAX_DIRS || 8000);
 
 function normalizeRelativePath(p: string): string {
     return (p || '').replaceAll('\\', '/').replace(/^\/+/, '');
@@ -420,6 +423,9 @@ export async function createDirectoryStructureFromRoot(
 ): Promise<Map<string, string>> {
     const dirPaths = new Set<string>();
     await collectDirPaths(rootDir, rootDir, dirPaths);
+    if (dirPaths.size > MAX_IMPORT_DIR_COUNT) {
+        throw new Error(`Repository has too many folders (${dirPaths.size}). Limit is ${MAX_IMPORT_DIR_COUNT}.`);
+    }
     return await createDirectoryStructureFromPaths(projectId, dirPaths, userId);
 }
 
@@ -428,7 +434,7 @@ export async function uploadRepoFiles(
     rootDir: string,
     folderMap: Map<string, string>,
     userId: string
-): Promise<number> {
+): Promise<{ processed: number; uploaded: number; failed: number }> {
     const adminClient = await createAdminClient();
 
     const runWithConcurrency = async <T, R>(
@@ -528,9 +534,21 @@ export async function uploadRepoFiles(
 
     let batch: ScannedFile[] = [];
     let fileCount = 0;
+    let totalBytes = 0;
+    let uploadedCount = 0;
+    let failedCount = 0;
     for await (const file of walkFiles(rootDir, rootDir)) {
         batch.push(file);
         fileCount++;
+        totalBytes += file.size;
+
+        if (fileCount > MAX_IMPORT_FILE_COUNT) {
+            throw new Error(`Repository has too many files (${fileCount}). Limit is ${MAX_IMPORT_FILE_COUNT}.`);
+        }
+        if (totalBytes > MAX_IMPORT_TOTAL_BYTES) {
+            throw new Error(`Repository is too large (${totalBytes} bytes). Limit is ${MAX_IMPORT_TOTAL_BYTES} bytes.`);
+        }
+
         if (batch.length >= FILE_BATCH_SIZE) {
             const results = await runWithConcurrency(batch, UPLOAD_CONCURRENCY, async (f) => {
                 try {
@@ -554,6 +572,8 @@ export async function uploadRepoFiles(
                 }
             });
             const successful = results.filter((f): f is ScannedFile => !!f);
+            uploadedCount += successful.length;
+            failedCount += results.length - successful.length;
             if (successful.length > 0) {
                 await upsertFileNodesBatch(successful);
             }
@@ -584,10 +604,16 @@ export async function uploadRepoFiles(
             }
         });
         const successful = results.filter((f): f is ScannedFile => !!f);
+        uploadedCount += successful.length;
+        failedCount += results.length - successful.length;
         if (successful.length > 0) {
             await upsertFileNodesBatch(successful);
         }
     }
 
-    return fileCount;
+    return {
+        processed: fileCount,
+        uploaded: uploadedCount,
+        failed: failedCount,
+    };
 }

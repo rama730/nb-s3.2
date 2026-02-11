@@ -7,6 +7,18 @@ import type { ProjectNode } from "@/lib/db/schema";
 export type ExplorerSort = "name" | "updated" | "type";
 export type ExplorerMode = "tree" | "search" | "favorites" | "recents" | "trash";
 export type FilesViewMode = "code" | "assets" | "all";
+export type SavedExplorerView = {
+  id: string;
+  name: string;
+  createdAt: number;
+  config: {
+    explorerMode: ExplorerMode;
+    viewMode: FilesViewMode;
+    sort: ExplorerSort;
+    foldersFirst: boolean;
+    selectedFolderId: string | null;
+  };
+};
 
 export type EditorPreferences = {
   lineNumbers: boolean;
@@ -62,6 +74,7 @@ type ProjectWorkspaceState = {
   foldersFirst: boolean;
   favorites: Record<string, boolean>;
   recents: string[];
+  savedViews: SavedExplorerView[];
 
   // Cached metadata
   nodesById: Record<string, ProjectNode>;
@@ -108,6 +121,9 @@ type FilesWorkspaceState = {
   setFoldersFirst: (projectId: string, foldersFirst: boolean) => void;
   addRecent: (projectId: string, nodeId: string) => void;
   toggleFavorite: (projectId: string, nodeId: string) => void;
+  saveCurrentView: (projectId: string, name: string) => void;
+  applySavedView: (projectId: string, viewId: string) => void;
+  deleteSavedView: (projectId: string, viewId: string) => void;
 
   // cache actions
   upsertNodes: (projectId: string, nodes: ProjectNode[]) => void;
@@ -168,6 +184,7 @@ function defaultWorkspace(): ProjectWorkspaceState {
     foldersFirst: true,
     favorites: {},
     recents: [],
+    savedViews: [],
 
     nodesById: {},
     childrenByParentId: {},
@@ -347,6 +364,92 @@ export const useFilesWorkspaceStore = create<FilesWorkspaceState>()(
               [projectId]: {
                 ...ws,
                 favorites: { ...ws.favorites, [nodeId]: !ws.favorites[nodeId] },
+              },
+            },
+          };
+        }),
+
+      saveCurrentView: (projectId, name) =>
+        set((state) => {
+          const ws = state.byProjectId[projectId] ?? defaultWorkspace();
+          const cleanName = (name || "").trim();
+          if (!cleanName) return state;
+
+          const now = Date.now();
+          const config: SavedExplorerView["config"] = {
+            explorerMode: ws.explorerMode,
+            viewMode: ws.viewMode,
+            sort: ws.sort,
+            foldersFirst: ws.foldersFirst,
+            selectedFolderId: ws.selectedFolderId ?? null,
+          };
+
+          const existing = ws.savedViews.find(
+            (view) => view.name.toLowerCase() === cleanName.toLowerCase()
+          );
+          const nextViews = existing
+            ? ws.savedViews.map((view) =>
+                view.id === existing.id
+                  ? {
+                      ...view,
+                      name: cleanName,
+                      config,
+                      createdAt: now,
+                    }
+                  : view
+              )
+            : [
+                {
+                  id: `${now}-${Math.random().toString(36).slice(2, 8)}`,
+                  name: cleanName,
+                  createdAt: now,
+                  config,
+                },
+                ...ws.savedViews,
+              ];
+
+          return {
+            byProjectId: {
+              ...state.byProjectId,
+              [projectId]: {
+                ...ws,
+                savedViews: nextViews.slice(0, 20),
+              },
+            },
+          };
+        }),
+
+      applySavedView: (projectId, viewId) =>
+        set((state) => {
+          const ws = state.byProjectId[projectId] ?? defaultWorkspace();
+          const view = ws.savedViews.find((entry) => entry.id === viewId);
+          if (!view) return state;
+          return {
+            byProjectId: {
+              ...state.byProjectId,
+              [projectId]: {
+                ...ws,
+                explorerMode: view.config.explorerMode,
+                viewMode: view.config.viewMode,
+                sort: view.config.sort,
+                foldersFirst: view.config.foldersFirst,
+                selectedFolderId: view.config.selectedFolderId,
+                searchQuery:
+                  view.config.explorerMode === "search" ? ws.searchQuery : "",
+              },
+            },
+          };
+        }),
+
+      deleteSavedView: (projectId, viewId) =>
+        set((state) => {
+          const ws = state.byProjectId[projectId] ?? defaultWorkspace();
+          return {
+            byProjectId: {
+              ...state.byProjectId,
+              [projectId]: {
+                ...ws,
+                savedViews: ws.savedViews.filter((view) => view.id !== viewId),
               },
             },
           };
@@ -751,7 +854,7 @@ export const useFilesWorkspaceStore = create<FilesWorkspaceState>()(
 
           for (const node of nodes) {
             nodesById[node.id] = node;
-            const pid = node.parentId || "root";
+            const pid = parentKey(node.parentId ?? null);
             if (!childrenByParentId[pid]) childrenByParentId[pid] = [];
             // A simple implementation: reset children if it's a bulk set? 
             // Or just ensure unique.
@@ -809,6 +912,7 @@ export const useFilesWorkspaceStore = create<FilesWorkspaceState>()(
               foldersFirst: ws.foldersFirst,
               favorites: ws.favorites,
               recents: ws.recents,
+              savedViews: ws.savedViews,
               splitEnabled: ws.splitEnabled,
               splitRatio: ws.splitRatio,
               panes: ws.panes,
@@ -847,4 +951,3 @@ export const useFilesWorkspaceStore = create<FilesWorkspaceState>()(
 
 export const FILES_ROOT_KEY = ROOT_KEY;
 export const filesParentKey = parentKey;
-

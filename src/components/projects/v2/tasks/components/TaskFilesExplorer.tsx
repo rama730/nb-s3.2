@@ -188,7 +188,13 @@ export function TaskFilesExplorer({
                 isExpanded={isExpanded}
                 canEdit={canEdit}
                 onToggle={() => handleToggle(node)}
-                onSelect={() => onOpenFile?.(node)}
+                onSelect={() => {
+                    if (node.type === "folder") {
+                        handleToggle(node);
+                        return;
+                    }
+                    onOpenFile?.(node);
+                }}
                 onContextMenu={(e) => {
                      e.preventDefault();
                 }}
@@ -198,7 +204,7 @@ export function TaskFilesExplorer({
                 
                 menu={
                     <>
-                        {onOpenFile && (
+                        {onOpenFile && node.type === "file" && (
                             <DropdownMenuItem onClick={() => onOpenFile(node)}>
                                 <ExternalLink className="w-4 h-4 mr-2" />
                                 Open / Download

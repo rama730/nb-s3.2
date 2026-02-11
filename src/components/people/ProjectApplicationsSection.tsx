@@ -53,10 +53,11 @@ interface IncomingApplication {
 }
 
 export default function ProjectApplicationsSection({ initialUser, initialApplications }: ProjectApplicationsProps) {
+    const hasInitialApplications = !!initialApplications;
     const [myApplications, setMyApplications] = useState<MyApplication[]>(initialApplications?.my || []);
     const [incomingApplications, setIncomingApplications] = useState<IncomingApplication[]>(initialApplications?.incoming || []);
     const [hasMoreIncoming, setHasMoreIncoming] = useState(initialApplications ? initialApplications.incoming.length >= 20 : false); // Optimistic guess
-    const [isLoading, setIsLoading] = useState(!initialApplications);
+    const [isLoading, setIsLoading] = useState(!hasInitialApplications);
     const [isLoadingMore, setIsLoadingMore] = useState(false);
     const [expandMy, setExpandMy] = useState(true);
     const [expandIncoming, setExpandIncoming] = useState(true);
@@ -79,13 +80,17 @@ export default function ProjectApplicationsSection({ initialUser, initialApplica
 
     // OPTIMIZATION: Fetch both in parallel, let backend filter appropriately
     useEffect(() => {
-        if (!initialUser?.id || initialApplications) {
-            if (initialApplications) setIsLoading(false);
-            return;
-        }
+        if (!initialUser?.id) return;
 
         let cancelled = false;
-        
+
+        // Keep server-provided data visible while refreshing in background.
+        if (!hasInitialApplications) {
+            setIsLoading(true);
+        } else {
+            setIsLoading(false);
+        }
+
         async function fetchApplications() {
             try {
                 // Parallel fetch - both actions are lightweight and indexed
@@ -113,7 +118,7 @@ export default function ProjectApplicationsSection({ initialUser, initialApplica
         return () => {
             cancelled = true;
         };
-    }, [initialUser?.id, initialApplications]);
+    }, [initialUser?.id, hasInitialApplications]);
 
     const handleLoadMore = async () => {
         if (isLoadingMore || !hasMoreIncoming) return;

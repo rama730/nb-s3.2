@@ -3,14 +3,23 @@
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { Project, HubFilters } from '@/types/hub';
 import { fetchHubProjectsAction } from '@/app/actions/hub';
+import { type FilterView } from '@/constants/hub';
 
 const PAGE_SIZE = 24;
 
-export function useHubProjectsSimple(filters: HubFilters, initialProjectsPage?: any) {
+export function useHubProjectsSimple(
+    filters: HubFilters,
+    view: FilterView,
+    initialProjectsPage?: {
+        projects?: Project[];
+        nextCursor?: string;
+        hasMore?: boolean;
+    } | null,
+) {
     return useInfiniteQuery({
-        queryKey: ['hub-projects-simple', filters],
+        queryKey: ['hub-projects-simple', view, filters],
         queryFn: async ({ pageParam = undefined as string | undefined }) => {
-            const result = await fetchHubProjectsAction(filters, pageParam, PAGE_SIZE);
+            const result = await fetchHubProjectsAction(filters, pageParam, PAGE_SIZE, view);
 
             if (!result.success) {
                 throw new Error(result.error);
@@ -36,7 +45,7 @@ export function useHubProjectsSimple(filters: HubFilters, initialProjectsPage?: 
         placeholderData: (previousData) => previousData,
         // Use initial data if provided and filters match default (empty/all)
         // Note: infinite query initialData structure needs { pages: [...], pageParams: [...] }
-        initialData: (initialProjectsPage && isDefaultFilters(filters)) ? {
+        initialData: (initialProjectsPage && view === 'all' && isDefaultFilters(filters)) ? {
             pages: [{
                 projects: initialProjectsPage.projects || [],
                 nextCursor: initialProjectsPage.nextCursor,
@@ -50,9 +59,9 @@ export function useHubProjectsSimple(filters: HubFilters, initialProjectsPage?: 
 function isDefaultFilters(filters: HubFilters) {
     // Check if filters match the default fetched server-side
     return (
-        (!filters.status || filters.status === 'ALL') &&
-        (!filters.type || filters.type === 'ALL') &&
-        (!filters.sort || filters.sort === 'NEWEST') &&
+        (!filters.status || filters.status === 'all') &&
+        (!filters.type || filters.type === 'all') &&
+        (!filters.sort || filters.sort === 'newest') &&
         (!filters.tech || filters.tech.length === 0) &&
         !filters.search &&
         !filters.includedIds

@@ -1,12 +1,11 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useMemo, useState } from "react";
 import { Search, Users, Loader2 } from "lucide-react";
-import PersonCard from "@/components/people/PersonCard";
-import { getSuggestedPeople, type SuggestedProfile } from "@/app/actions/connections";
 import { toast } from "sonner";
-import { useConnectionMutations } from "@/hooks/useConnections";
-import { profileHref } from "@/lib/routing/identifiers";
+import { useDebounce } from "use-debounce";
+import PersonCard from "@/components/people/PersonCard";
+import { useConnectionMutations, useSuggestedPeople } from "@/hooks/useConnections";
 
 interface PeopleClientProps {
     embedded?: boolean;
@@ -20,98 +19,52 @@ interface PeopleClientProps {
     facetsPromise?: Promise<any>;
 }
 
-export default function PeopleClient({
-    embedded = false,
-    initialUser,
-    initialProfiles = [],
-}: PeopleClientProps) {
-    const [profiles, setProfiles] = useState<SuggestedProfile[]>(initialProfiles);
-    const [loading, setLoading] = useState(initialProfiles.length === 0);
+export default function PeopleClient({ initialUser }: PeopleClientProps) {
     const [searchQuery, setSearchQuery] = useState("");
-    const [hasMore, setHasMore] = useState(true);
-    const [offset, setOffset] = useState(initialProfiles.length);
+    const [debouncedSearch] = useDebounce(searchQuery, 300);
 
-    const { sendRequest } = useConnectionMutations();
+    const {
+        data,
+        isLoading,
+        fetchNextPage,
+        hasNextPage,
+        isFetchingNextPage,
+    } = useSuggestedPeople(20, debouncedSearch);
+    const { sendRequest, dismissSuggestion } = useConnectionMutations();
 
-    // Fetch suggested people on mount ONLY if no initial data
-    useEffect(() => {
-        if (initialProfiles.length > 0) return;
+    const profiles = useMemo(
+        () => data?.pages.flatMap((page) => page.items) || [],
+        [data],
+    );
 
-        async function fetchProfiles() {
-            try {
-                const { profiles: data, hasMore: more } = await getSuggestedPeople(20, 0);
-                setProfiles(data);
-                setHasMore(more);
-                setOffset(20);
-            } catch (error) {
-                console.error("Error loading profiles:", error);
-            } finally {
-                setLoading(false);
-            }
-        }
-        fetchProfiles();
-    }, [initialProfiles.length]);
-
-    // Load more profiles
-    const loadMore = async () => {
-        if (!hasMore || loading) return;
-
-        try {
-            const { profiles: data, hasMore: more } = await getSuggestedPeople(20, offset);
-            setProfiles(prev => [...prev, ...data]);
-            setHasMore(more);
-            setOffset(prev => prev + 20);
-        } catch (error) {
-            console.error("Error loading more profiles:", error);
-        }
-    };
-
-    // Handle connection request
     const handleConnect = async (userId: string) => {
         if (!initialUser?.id) {
             toast.error("Please log in to connect");
             return;
         }
 
-        const profile = profiles.find(p => p.id === userId);
-        if (!profile) return;
-
-        toast.promise(
-            sendRequest.mutateAsync({ userId: userId }),
+        await toast.promise(
+            sendRequest.mutateAsync({ userId }),
             {
-                loading: 'Sending request...',
-                success: 'Connection request sent!',
-                error: 'Failed to send request'
-            }
-        );
-
-        // Also update local state to reflect change immediately 
-        // Note: Ideally we'd re-fetch suggestions or have the card subscribe to status,
-        // but for suggestions list simple local state update is often enough or we let React Query invalidate?
-        // Since getSuggestedPeople isn't a React Query hook yet (it's called in useEffect), we manually update logic.
-        // Actually, sendRequest invalidates 'connections' keys, but maybe not 'suggested-people' if we haven't defined that key yet.
-        // Let's manually update UI for responsiveness.
-        setProfiles(prev =>
-            prev.map(p =>
-                p.id === userId ? { ...p, connectionStatus: 'pending_sent' as const } : p
-            )
+                loading: "Sending request...",
+                success: "Connection request sent",
+                error: "Failed to send request",
+            },
         );
     };
 
-    // Filter profiles by search query
-    const filteredProfiles = searchQuery.trim()
-        ? profiles.filter((p) => {
-            const q = searchQuery.toLowerCase();
-            return (
-                (p.fullName && p.fullName.toLowerCase().includes(q)) ||
-                (p.username && p.username.toLowerCase().includes(q)) ||
-                (p.headline && p.headline.toLowerCase().includes(q)) ||
-                (p.location && p.location.toLowerCase().includes(q))
-            );
-        })
-        : profiles;
+    const handleDismiss = async (userId: string) => {
+        await toast.promise(
+            dismissSuggestion.mutateAsync(userId),
+            {
+                loading: "Hiding suggestion...",
+                success: "Suggestion hidden",
+                error: "Failed to hide suggestion",
+            },
+        );
+    };
 
-    if (loading) {
+    if (isLoading && profiles.length === 0) {
         return (
             <div className="flex items-center justify-center py-12">
                 <Loader2 className="w-8 h-8 animate-spin text-zinc-400" />
@@ -121,7 +74,6 @@ export default function PeopleClient({
 
     return (
         <div>
-            {/* Search */}
             <div className="mb-6">
                 <div className="relative">
                     <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-zinc-400" />
@@ -136,34 +88,34 @@ export default function PeopleClient({
                 </div>
             </div>
 
-            {/* People Grid */}
-            {filteredProfiles.length === 0 ? (
+            {profiles.length === 0 ? (
                 <div className="text-center py-12 bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-200 dark:border-zinc-800">
                     <Users className="w-12 h-12 text-zinc-400 mx-auto mb-4" />
                     <p className="text-zinc-600 dark:text-zinc-400">
-                        {searchQuery ? "No people match your search." : "No people found."}
+                        {debouncedSearch ? "No people match your search." : "No people found."}
                     </p>
                 </div>
             ) : (
                 <>
                     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                        {filteredProfiles.map((profile) => (
+                        {profiles.map((profile: any) => (
                             <PersonCard
                                 key={profile.id}
                                 profile={profile}
                                 onConnect={handleConnect}
+                                onDismiss={handleDismiss}
                             />
                         ))}
                     </div>
 
-                    {/* Load More */}
-                    {hasMore && !searchQuery && (
+                    {hasNextPage && !debouncedSearch && (
                         <div className="mt-8 text-center">
                             <button
-                                onClick={loadMore}
-                                className="px-6 py-2.5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl text-sm font-medium hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
+                                onClick={() => fetchNextPage()}
+                                disabled={isFetchingNextPage}
+                                className="px-6 py-2.5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl text-sm font-medium hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors disabled:opacity-50"
                             >
-                                Load More
+                                {isFetchingNextPage ? "Loading..." : "Load More"}
                             </button>
                         </div>
                     )}

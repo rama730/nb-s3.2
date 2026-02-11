@@ -173,7 +173,12 @@ export const FileTreeRow = React.memo(function FileTreeRow({
 
             {badge}
 
-            <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center ml-2">
+            <div
+                className={cn(
+                    "transition-opacity flex items-center ml-2",
+                    isSelected ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+                )}
+            >
                 {menu ? (
                      <DropdownMenu>
                          <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
@@ -190,4 +195,3 @@ export const FileTreeRow = React.memo(function FileTreeRow({
         </div>
     );
 }, arePropsEqual);
-

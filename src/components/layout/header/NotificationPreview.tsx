@@ -1,7 +1,7 @@
 "use client";
 
 import { Bell } from "lucide-react";
-import { useNotifications } from "@/hooks/use-mocks";
+import { useNotifications } from "@/hooks/useNotifications";
 
 export default function NotificationPreview() {
     const { unreadCount } = useNotifications();

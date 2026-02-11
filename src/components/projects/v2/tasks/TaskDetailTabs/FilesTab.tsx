@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Download, FileText, Link2, Loader2, Paperclip, Plus, Search, Trash2, Upload, X } from "lucide-react";
+import { Download, FileText, Folder, Link2, Loader2, Paperclip, Plus, Search, Trash2, Upload, X } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import type { ProjectNode } from "@/lib/db/schema";
 import { createFileNode, getProjectNodes, getTaskAttachments, linkNodeToTask, unlinkNodeFromTask } from "@/app/actions/files";
@@ -28,6 +28,12 @@ function extOf(name: string) {
     return parts.length > 1 ? parts[parts.length - 1].toLowerCase() : "";
 }
 
+function appendUploadSuffix(filename: string, suffix: number) {
+    const idx = filename.lastIndexOf(".");
+    if (idx <= 0) return `${filename}-${suffix}`;
+    return `${filename.slice(0, idx)}-${suffix}${filename.slice(idx)}`;
+}
+
 type PickerState =
     | { open: false }
     | { open: true; query: string; loading: boolean; results: ProjectNode[] };
@@ -35,6 +41,7 @@ type PickerState =
 export default function FilesTab({ taskId, isOwnerOrMember, projectId, taskTitle }: FilesTabProps) {
     const canEdit = isOwnerOrMember;
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const pickerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const [isLoading, setIsLoading] = useState(true);
     const [isUploading, setIsUploading] = useState(false);
@@ -63,31 +70,51 @@ export default function FilesTab({ taskId, isOwnerOrMember, projectId, taskTitle
     }, [refresh]);
 
     const handleUploadAndAttach = useCallback(
-        async (file: File) => {
-            if (!file) return;
+        async (files: File[]) => {
+            if (!files.length) return;
             if (!canEdit) return;
             setIsUploading(true);
             setError(null);
 
             try {
-                const fileExt = extOf(file.name);
-                const opaque = Math.random().toString(36).slice(2);
-                const storagePath = `projects/${projectId}/${opaque}${fileExt ? `.${fileExt}` : ""}`;
+                for (const file of files) {
+                    const fileExt = extOf(file.name);
+                    const opaque = Math.random().toString(36).slice(2);
+                    const storagePath = `projects/${projectId}/${opaque}${fileExt ? `.${fileExt}` : ""}`;
 
-                const { error: uploadError } = await supabase.storage
-                    .from("project-files")
-                    .upload(storagePath, file, { upsert: false });
-                if (uploadError) throw uploadError;
+                    const { error: uploadError } = await supabase.storage
+                        .from("project-files")
+                        .upload(storagePath, file, { upsert: false });
+                    if (uploadError) throw uploadError;
 
-                // Keep it simple: store uploaded files at root. Users can organize later in explorer.
-                const node = (await createFileNode(projectId, null, {
-                    name: file.name,
-                    s3Key: storagePath,
-                    size: file.size,
-                    mimeType: file.type || "application/octet-stream",
-                })) as ProjectNode;
-
-                await linkNodeToTask(taskId, node.id);
+                    let createdNode: ProjectNode | null = null;
+                    let candidateName = file.name;
+                    try {
+                        for (let attempt = 0; attempt < 5; attempt++) {
+                            try {
+                                createdNode = (await createFileNode(projectId, null, {
+                                    name: candidateName,
+                                    s3Key: storagePath,
+                                    size: file.size,
+                                    mimeType: file.type || "application/octet-stream",
+                                })) as ProjectNode;
+                                break;
+                            } catch (e: any) {
+                                if (typeof e?.message === "string" && e.message.includes("already exists in this location")) {
+                                    candidateName = appendUploadSuffix(file.name, attempt + 1);
+                                    continue;
+                                }
+                                throw e;
+                            }
+                        }
+                        if (!createdNode) throw new Error("Failed to create attachment record");
+                        await linkNodeToTask(taskId, createdNode.id);
+                    } catch (e) {
+                        // Cleanup orphan object when metadata linking fails.
+                        await supabase.storage.from("project-files").remove([storagePath]);
+                        throw e;
+                    }
+                }
                 await refresh();
             } catch (e: any) {
                 setError(e?.message || "Upload failed");
@@ -148,8 +175,8 @@ export default function FilesTab({ taskId, isOwnerOrMember, projectId, taskTitle
             try {
                 const res = await getProjectNodes(projectId, null, query);
                 const nodes = Array.isArray(res) ? res : res.nodes;
-                const files = (nodes || []).filter((n) => n.type === "file");
-                setPicker((p) => (p.open ? { ...p, loading: false, results: files } : p));
+                const validNodes = (nodes || []).filter((n) => n.type === "file" || n.type === "folder");
+                setPicker((p) => (p.open ? { ...p, loading: false, results: validNodes } : p));
             } catch {
                 setPicker((p) => (p.open ? { ...p, loading: false, results: [] } : p));
             }
@@ -160,6 +187,10 @@ export default function FilesTab({ taskId, isOwnerOrMember, projectId, taskTitle
     const attachExisting = useCallback(
         async (nodeId: string) => {
             if (!canEdit) return;
+            if (attachments.some((a) => a.id === nodeId)) {
+                closePicker();
+                return;
+            }
             setError(null);
             try {
                 await linkNodeToTask(taskId, nodeId);
@@ -171,6 +202,12 @@ export default function FilesTab({ taskId, isOwnerOrMember, projectId, taskTitle
         },
         [canEdit, closePicker, refresh, taskId]
     );
+
+    useEffect(() => {
+        return () => {
+            if (pickerTimerRef.current) clearTimeout(pickerTimerRef.current);
+        };
+    }, []);
 
     const headerSubtitle = useMemo(() => {
         const base = `${attachments.length} attachment${attachments.length === 1 ? "" : "s"}`;
@@ -201,10 +238,11 @@ export default function FilesTab({ taskId, isOwnerOrMember, projectId, taskTitle
                     <input
                         ref={fileInputRef}
                         type="file"
+                        multiple
                         className="hidden"
                         onChange={(e) => {
-                            const f = e.target.files?.[0];
-                            if (f) void handleUploadAndAttach(f);
+                            const incoming = Array.from(e.target.files || []);
+                            if (incoming.length > 0) void handleUploadAndAttach(incoming);
                         }}
                         disabled={!canEdit || isUploading}
                         id="task-attach-upload"
@@ -264,7 +302,7 @@ export default function FilesTab({ taskId, isOwnerOrMember, projectId, taskTitle
                         <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-200 dark:border-zinc-800">
                             <div className="flex items-center gap-2">
                                 <Link2 className="w-4 h-4 text-zinc-400" />
-                                <div className="text-sm font-semibold">Attach existing file</div>
+                                <div className="text-sm font-semibold">Attach existing file or folder</div>
                             </div>
                             <button
                                 type="button"
@@ -285,9 +323,12 @@ export default function FilesTab({ taskId, isOwnerOrMember, projectId, taskTitle
                                     onChange={(e) => {
                                         const q = e.target.value;
                                         setPicker((p) => (p.open ? { ...p, query: q } : p));
-                                        void runPickerSearch(q.trim());
+                                        if (pickerTimerRef.current) clearTimeout(pickerTimerRef.current);
+                                        pickerTimerRef.current = setTimeout(() => {
+                                            void runPickerSearch(q.trim());
+                                        }, 180);
                                     }}
-                                    placeholder="Search project files by name…"
+                                    placeholder="Search project files/folders by name…"
                                     className="w-full h-10 pl-9 pr-3 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 text-sm outline-none"
                                 />
                             </div>
@@ -305,18 +346,30 @@ export default function FilesTab({ taskId, isOwnerOrMember, projectId, taskTitle
                                         {picker.results.map((n) => (
                                             <div key={n.id} className="flex items-center justify-between gap-3 px-4 py-3">
                                                 <div className="min-w-0">
-                                                    <div className="text-sm font-medium text-zinc-900 dark:text-zinc-100 truncate">
+                                                    <div className="text-sm font-medium text-zinc-900 dark:text-zinc-100 truncate flex items-center gap-2">
+                                                        {n.type === "folder" ? (
+                                                            <Folder className="w-4 h-4 text-blue-500 flex-shrink-0" />
+                                                        ) : (
+                                                            <FileText className="w-4 h-4 text-zinc-400 flex-shrink-0" />
+                                                        )}
                                                         {n.name}
                                                     </div>
-                                                    <div className="text-xs text-zinc-500">{formatBytes(n.size)}</div>
+                                                    <div className="text-xs text-zinc-500">
+                                                        {n.type === "folder" ? "Folder" : formatBytes(n.size)}
+                                                    </div>
                                                 </div>
+                                                {attachments.some((a) => a.id === n.id) ? (
+                                                    <div className="text-xs text-emerald-600 dark:text-emerald-400 font-medium">
+                                                        Already attached
+                                                    </div>
+                                                ) : null}
                                                 <button
                                                     type="button"
-                                                    disabled={!canEdit}
+                                                    disabled={!canEdit || attachments.some((a) => a.id === n.id)}
                                                     onClick={() => void attachExisting(n.id)}
                                                     className={[
                                                         "inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors",
-                                                        canEdit
+                                                        canEdit && !attachments.some((a) => a.id === n.id)
                                                             ? "bg-indigo-600 text-white hover:bg-indigo-700"
                                                             : "bg-zinc-200 text-zinc-500 cursor-not-allowed dark:bg-zinc-800 dark:text-zinc-400",
                                                     ].join(" ")}

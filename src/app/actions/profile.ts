@@ -2,8 +2,8 @@
 
 import { createClient } from '@/lib/supabase/server'
 import { db } from '@/lib/db'
-import { profiles, projects, connections } from '@/lib/db/schema'
-import { eq, and, ne, desc, sql, or } from 'drizzle-orm'
+import { profiles, projects } from '@/lib/db/schema'
+import { eq, and, ne, desc } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
 
@@ -139,12 +139,26 @@ export async function getProfileBasic(userId: string) {
 export async function getProfileProjectsAction(userId: string) {
     if (!userId) return [];
     try {
-        const userProjects = await db.query.projects.findMany({
-            where: eq(projects.ownerId, userId),
-            orderBy: [desc(projects.viewCount), desc(projects.updatedAt), desc(projects.createdAt)],
-            limit: 12
-        });
-        return userProjects;
+        const userProjects = await db
+            .select({
+                id: projects.id,
+                slug: projects.slug,
+                title: projects.title,
+                description: projects.description,
+                shortDescription: projects.shortDescription,
+                coverImage: projects.coverImage,
+                updatedAt: projects.updatedAt,
+            })
+            .from(projects)
+            .where(eq(projects.ownerId, userId))
+            .orderBy(desc(projects.updatedAt), desc(projects.createdAt))
+            .limit(12);
+
+        return userProjects.map((project) => ({
+            ...project,
+            image: project.coverImage || null,
+            url: project.slug ? `/projects/${project.slug}` : `/projects/${project.id}`,
+        }));
     } catch (error) {
         console.error('Error fetching profile projects:', error);
         return [];
@@ -154,31 +168,28 @@ export async function getProfileProjectsAction(userId: string) {
 export async function getProfileStatsAction(userId: string) {
     if (!userId) return { connectionsCount: 0, projectsCount: 0, followersCount: 0 };
     try {
-        // Parallel fetch for stats
-        const [connectionsCount, projectsCount] = await Promise.all([
-            db.select({ count: sql<number>`count(*)` })
-                .from(connections)
-                .where(
-                    and(
-                        eq(connections.status, 'accepted'),
-                        or(
-                            eq(connections.requesterId, userId),
-                            eq(connections.addresseeId, userId)
-                        )
-                    )
-                )
-                .then(res => Number(res[0]?.count || 0)),
+        const [profileStats] = await db
+            .select({
+                connectionsCount: profiles.connectionsCount,
+                projectsCount: profiles.projectsCount,
+                followersCount: profiles.followersCount,
+            })
+            .from(profiles)
+            .where(eq(profiles.id, userId))
+            .limit(1);
 
-            db.select({ count: sql<number>`count(*)` })
-                .from(projects)
-                .where(eq(projects.ownerId, userId))
-                .then(res => Number(res[0]?.count || 0))
-        ]);
+        if (profileStats) {
+            return {
+                connectionsCount: profileStats.connectionsCount || 0,
+                projectsCount: profileStats.projectsCount || 0,
+                followersCount: profileStats.followersCount || 0,
+            };
+        }
 
         return {
-            connectionsCount,
-            projectsCount,
-            followersCount: 0 // Placeholder if not implemented yet
+            connectionsCount: 0,
+            projectsCount: 0,
+            followersCount: 0
         };
     } catch (error) {
         console.error('Error fetching profile stats:', error);

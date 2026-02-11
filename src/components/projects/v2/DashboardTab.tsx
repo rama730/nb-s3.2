@@ -124,17 +124,9 @@ export function DashboardTab({
                 <ProjectOverviewCard
                     project={project}
                     isCreator={isCreator}
-                    bookmarked={false} // TODO: wire up
-                    bookmarkCount={project.bookmark_count || 0}
-                    followersCount={project.followers_count || 0}
                     membersCount={(project.project_collaborators?.length || 0) + 1}
                     hideActionBar={true}
-                    onEdit={() => { }}
                     onShare={() => { }}
-                    onBookmark={() => { }}
-                    onFinalize={() => { }}
-                    shareCopied={false}
-                    bookmarkLoading={false}
                     lifecycleStages={[]} // TODO: wire up from project.lifecycle_stages if available
                     currentStageIndex={0}
                     onAdvanceStage={() => { }}
