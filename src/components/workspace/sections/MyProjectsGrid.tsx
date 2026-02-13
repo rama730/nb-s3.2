@@ -2,6 +2,7 @@
 
 import { memo } from 'react';
 import Link from 'next/link';
+import Image from 'next/image';
 import { FolderKanban, ArrowRight, Zap } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { WorkspaceProject } from '@/app/actions/workspace';
@@ -88,23 +89,23 @@ function MyProjectsGrid({ projects, sizeMode = 'standard' }: MyProjectsGridProps
                                     href={projectHref}
                                     className="group flex items-center justify-between gap-2 p-2 rounded-lg border border-zinc-100 dark:border-zinc-800 hover:border-blue-200 dark:hover:border-blue-800/50 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 transition-all duration-150 motion-safe:hover:-translate-y-0.5"
                                 >
-                                    <div className="min-w-0">
+                                    <div className="min-w-0 flex-1">
                                         <div className="flex items-center gap-2">
-                                            <div className={cn('w-2 h-2 rounded-full', STATUS_COLOR[project.status ?? 'draft'])} />
+                                            <div className={cn('w-2 h-2 rounded-full shrink-0', STATUS_COLOR[project.status ?? 'draft'])} />
                                             <p className="text-[13px] leading-4 font-semibold text-zinc-800 dark:text-zinc-100 truncate group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
                                                 {project.title}
                                             </p>
                                         </div>
                                         <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-zinc-500 dark:text-zinc-400">
                                             {project.key && (
-                                                <span className="px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 font-mono uppercase">
+                                                <span className="font-mono uppercase text-zinc-400 dark:text-zinc-500">
                                                     {project.key}
                                                 </span>
                                             )}
                                             <span>{project.openTaskCount} open</span>
                                         </div>
                                     </div>
-                                    <span className="text-[10px] font-medium text-zinc-400">{completedPercent}%</span>
+                                    <span className="text-[10px] font-medium text-zinc-400 shrink-0">{completedPercent}%</span>
                                 </Link>
                             );
                         }
@@ -113,57 +114,89 @@ function MyProjectsGrid({ projects, sizeMode = 'standard' }: MyProjectsGridProps
                             <Link
                                 key={project.id}
                                 href={projectHref}
-                                className="group flex flex-col p-3.5 rounded-lg border border-zinc-100 dark:border-zinc-800 hover:border-blue-200 dark:hover:border-blue-800/50 hover:shadow-sm transition-all"
+                                className={cn(
+                                    'group flex rounded-lg border border-zinc-100 dark:border-zinc-800 hover:border-blue-200 dark:hover:border-blue-800/50 hover:shadow-sm transition-all',
+                                    isExpanded ? 'flex-row gap-3 p-3.5' : 'flex-col p-3.5'
+                                )}
                             >
-                                <div className="flex items-start justify-between gap-2 mb-1.5">
-                                    <div className="flex items-start gap-2 min-w-0">
-                                        <div className={cn('w-2 h-2 rounded-full mt-1 shrink-0', STATUS_COLOR[project.status ?? 'draft'])} />
-                                        <h4 className={cn(
-                                            'font-semibold text-zinc-800 dark:text-zinc-100 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors',
-                                            isExpanded ? 'text-sm line-clamp-2' : 'text-sm line-clamp-1'
-                                        )}>
-                                            {project.title}
-                                        </h4>
-                                    </div>
-                                    {project.key && (
-                                        <span className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 shrink-0">
-                                            {project.key}
-                                        </span>
-                                    )}
-                                </div>
-
                                 {isExpanded && (
-                                    <p className="text-xs text-zinc-500 dark:text-zinc-400 line-clamp-2 mb-2">
-                                        {project.shortDescription || 'Project in active development.'}
-                                    </p>
-                                )}
-
-                                <div className="flex items-center flex-wrap gap-2 text-[10px] text-zinc-500 dark:text-zinc-400">
-                                    <span>
-                                        <span className="font-semibold text-zinc-700 dark:text-zinc-200">{project.openTaskCount}</span> open
-                                    </span>
-                                    <span>{project.totalTaskCount} total</span>
-                                    <span className="px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800">
-                                        {STATUS_LABEL[project.status ?? 'draft'] || project.status}
-                                    </span>
-                                    {project.activeSprintTitle && (
-                                        <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
-                                            <Zap className="w-3 h-3" />
-                                            <span className="truncate max-w-[120px]">{project.activeSprintTitle}</span>
-                                        </span>
-                                    )}
-                                </div>
-
-                                {project.totalTaskCount > 0 && (
-                                    <div className="mt-2">
-                                        <div className="h-1 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden">
-                                            <div
-                                                className="h-full bg-emerald-500 rounded-full transition-all duration-200"
-                                                style={{ width: `${completedPercent}%` }}
+                                    <div className="shrink-0 w-10 h-10 rounded-lg overflow-hidden bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center">
+                                        {project.coverImage ? (
+                                            <Image
+                                                src={project.coverImage}
+                                                alt={project.title}
+                                                width={40}
+                                                height={40}
+                                                className="object-cover w-full h-full"
                                             />
-                                        </div>
+                                        ) : (
+                                            <FolderKanban className="w-5 h-5 text-indigo-500/40" />
+                                        )}
                                     </div>
                                 )}
+                                <div className={cn('min-w-0 flex-1', isExpanded ? '' : 'flex flex-col')}>
+                                    <div className={cn(
+                                        'flex items-start gap-2',
+                                        isExpanded ? 'flex-row flex-wrap' : 'justify-between'
+                                    )}>
+                                        <div className="flex items-start gap-2 min-w-0">
+                                            {!isExpanded && (
+                                                <div className={cn('w-2 h-2 rounded-full mt-1 shrink-0', STATUS_COLOR[project.status ?? 'draft'])} />
+                                            )}
+                                            <h4 className={cn(
+                                                'font-semibold text-zinc-800 dark:text-zinc-100 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors',
+                                                isExpanded ? 'text-sm line-clamp-2' : 'text-sm line-clamp-1'
+                                            )}>
+                                                {project.title}
+                                            </h4>
+                                        </div>
+                                        {project.key && (
+                                            <span className="text-[10px] font-mono uppercase text-zinc-500 dark:text-zinc-400 shrink-0">
+                                                {project.key}
+                                            </span>
+                                        )}
+                                    </div>
+
+                                    {isExpanded && (
+                                        <p className="text-xs text-zinc-500 dark:text-zinc-400 line-clamp-2 mt-1 mb-2">
+                                            {project.shortDescription || 'Project in active development.'}
+                                        </p>
+                                    )}
+
+                                    <div className="flex items-center flex-wrap gap-2 text-[10px] text-zinc-500 dark:text-zinc-400">
+                                        <span>
+                                            <span className="font-semibold text-zinc-700 dark:text-zinc-200">{project.openTaskCount}</span> open
+                                        </span>
+                                        <span>{project.totalTaskCount} total</span>
+                                        <span className="px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800">
+                                            {STATUS_LABEL[project.status ?? 'draft'] || project.status}
+                                        </span>
+                                        {project.activeSprintTitle && (
+                                            <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
+                                                <Zap className="w-3 h-3" />
+                                                <span className="truncate max-w-[120px]">{project.activeSprintTitle}</span>
+                                            </span>
+                                        )}
+                                    </div>
+
+                                    {project.totalTaskCount > 0 && (
+                                        <div className="mt-2">
+                                            <div
+                                                role="progressbar"
+                                                aria-valuenow={Math.min(100, Math.max(0, completedPercent))}
+                                                aria-valuemin={0}
+                                                aria-valuemax={100}
+                                                aria-label={`Progress for ${project.title ?? 'project'}: ${Math.min(100, Math.max(0, completedPercent))}% complete`}
+                                                className="h-1 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden"
+                                            >
+                                                <div
+                                                    className="h-full bg-emerald-500 rounded-full transition-all duration-200"
+                                                    style={{ width: `${completedPercent}%` }}
+                                                />
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
                             </Link>
                         );
                     })}

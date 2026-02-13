@@ -70,7 +70,7 @@ export const connections = pgTable('connections', {
     id: uuid('id').primaryKey().defaultRandom(),
     requesterId: uuid('requester_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
     addresseeId: uuid('addressee_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
-    status: text('status', { enum: ['pending', 'accepted', 'rejected', 'blocked'] }).default('pending').notNull(),
+    status: text('status', { enum: ['pending', 'accepted', 'rejected', 'cancelled', 'disconnected', 'blocked'] }).default('pending').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({

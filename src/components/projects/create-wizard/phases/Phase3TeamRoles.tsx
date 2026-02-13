@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect } from 'react';
 import { useFormContext } from 'react-hook-form';
 import { CreateProjectInput } from '@/lib/validations/project';
 import { WizardContextType } from '../useCreateProjectWizard';
@@ -25,10 +26,26 @@ interface Phase3TeamRolesProps {
 }
 
 export default function Phase3TeamRoles({ wizardContext }: Phase3TeamRolesProps) {
-    const { setValue, watch } = useFormContext<CreateProjectInput>();
+    const { getValues, setValue, watch } = useFormContext<CreateProjectInput>();
     const { openRoles, addRole, updateRole, removeRole } = wizardContext;
 
     const creatorRole = watch('creator_role');
+    const leadFocus = creatorRole?.title || '';
+
+    useEffect(() => {
+        const currentRole = getValues('creator_role');
+        if (!currentRole || currentRole.role_type !== 'lead') {
+            setValue(
+                'creator_role',
+                {
+                    role_type: 'lead',
+                    title: currentRole?.title || '',
+                    time_commitment: currentRole?.time_commitment,
+                },
+                { shouldDirty: !!currentRole && currentRole.role_type !== 'lead' }
+            );
+        }
+    }, [getValues, setValue]);
 
     return (
         <div className="space-y-8">
@@ -38,41 +55,28 @@ export default function Phase3TeamRoles({ wizardContext }: Phase3TeamRolesProps)
                     Your Role
                 </h3>
                 <p className="text-sm text-zinc-500 dark:text-zinc-400 mb-4">
-                    What role will you play in this project?
+                    Project creator is always the lead. Add an optional focus area.
                 </p>
 
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-                    {['founder', 'lead', 'contributor', 'advisor'].map((type) => (
-                        <button
-                            key={type}
-                            type="button"
-                            onClick={() =>
-                                setValue('creator_role', {
-                                    role_type: type as 'founder' | 'lead' | 'contributor' | 'advisor',
-                                    title: creatorRole?.title || '',
-                                    time_commitment: creatorRole?.time_commitment,
-                                })
-                            }
-                            className={`p-3 rounded-xl border-2 text-sm font-medium capitalize transition-all ${creatorRole?.role_type === type
-                                    ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600'
-                                    : 'border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-400 hover:border-zinc-300'
-                                }`}
-                        >
-                            {type}
-                        </button>
-                    ))}
+                <div className="mb-4 rounded-xl border border-indigo-200 dark:border-indigo-900/40 bg-indigo-50/60 dark:bg-indigo-900/15 px-4 py-3">
+                    <p className="text-sm font-semibold text-indigo-700 dark:text-indigo-300">Lead</p>
+                    <p className="text-xs text-indigo-600/80 dark:text-indigo-300/70">
+                        You own direction, decisions, and team alignment.
+                    </p>
                 </div>
 
                 <input
-                    value={creatorRole?.title || ''}
+                    value={leadFocus}
                     onChange={(e) =>
                         setValue('creator_role', {
-                            ...(creatorRole || { role_type: 'founder' }),
+                            role_type: 'lead',
                             title: e.target.value,
-                        } as any)
+                            time_commitment: creatorRole?.time_commitment,
+                        })
                     }
                     className="w-full px-4 py-3 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100"
-                    placeholder="Your title (e.g., CEO, Lead Developer)"
+                    placeholder="Lead focus (optional, e.g. Frontend, Product, AI)"
+                    maxLength={80}
                 />
             </div>
 

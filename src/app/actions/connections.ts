@@ -76,6 +76,29 @@ type RequestFeedItem = {
     } | null;
 };
 
+export type ConnectionRequestHistoryStatus =
+    | 'pending'
+    | 'accepted'
+    | 'rejected'
+    | 'cancelled'
+    | 'disconnected';
+
+export interface ConnectionRequestHistoryItem {
+    id: string;
+    kind: 'connection';
+    direction: 'incoming' | 'outgoing';
+    status: ConnectionRequestHistoryStatus;
+    eventAt: string;
+    createdAt: string;
+    user: {
+        id: string;
+        username: string | null;
+        fullName: string | null;
+        avatarUrl: string | null;
+        headline: string | null;
+    };
+}
+
 type NetworkFeedItem = {
     id: string;
     requesterId: string;
@@ -93,6 +116,27 @@ type NetworkFeedItem = {
 };
 
 const REJECT_REQUEST_COOLDOWN_MS = 2 * 24 * 60 * 60 * 1000;
+const CONNECTION_HISTORY_STATUSES: ConnectionRequestHistoryStatus[] = [
+    'pending',
+    'accepted',
+    'rejected',
+    'cancelled',
+    'disconnected',
+];
+const CONNECTION_HISTORY_STATUS_MAP: Record<ConnectionRequestHistoryStatus, true> = {
+    pending: true,
+    accepted: true,
+    rejected: true,
+    cancelled: true,
+    disconnected: true,
+};
+
+function isConnectionRequestHistoryStatus(status: unknown): status is ConnectionRequestHistoryStatus {
+    return (
+        typeof status === 'string' &&
+        Object.prototype.hasOwnProperty.call(CONNECTION_HISTORY_STATUS_MAP, status)
+    );
+}
 type DbTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 // ============================================================================
@@ -637,6 +681,82 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
     return { success: true as const, items, hasMore, nextCursor, stats };
 }
 
+export async function getConnectionRequestHistory(limit: number = 80): Promise<{
+    success: boolean;
+    items: ConnectionRequestHistoryItem[];
+    error?: string;
+}> {
+    try {
+        const user = await getAuthUser();
+        if (!user) return { success: false, items: [], error: 'Not authenticated' };
+
+        const effectiveLimit = Math.max(1, Math.min(limit, 200));
+
+        const rows = await db
+            .select({
+                id: connections.id,
+                requesterId: connections.requesterId,
+                addresseeId: connections.addresseeId,
+                status: connections.status,
+                createdAt: connections.createdAt,
+                updatedAt: connections.updatedAt,
+                profileId: profiles.id,
+                username: profiles.username,
+                fullName: profiles.fullName,
+                avatarUrl: profiles.avatarUrl,
+                headline: profiles.headline,
+            })
+            .from(connections)
+            .innerJoin(
+                profiles,
+                or(
+                    and(eq(connections.requesterId, user.id), eq(connections.addresseeId, profiles.id)),
+                    and(eq(connections.addresseeId, user.id), eq(connections.requesterId, profiles.id)),
+                ),
+            )
+            .where(
+                and(
+                    or(eq(connections.requesterId, user.id), eq(connections.addresseeId, user.id)),
+                    inArray(connections.status, CONNECTION_HISTORY_STATUSES),
+                ),
+            )
+            .orderBy(desc(connections.updatedAt), desc(connections.id))
+            .limit(effectiveLimit);
+
+        const items: ConnectionRequestHistoryItem[] = rows.flatMap((row) => {
+            if (!isConnectionRequestHistoryStatus(row.status)) {
+                console.error('Invalid connection history status encountered', {
+                    connectionId: row.id,
+                    status: row.status,
+                });
+                return [];
+            }
+
+            const status = row.status;
+            return [{
+                id: row.id,
+                kind: 'connection',
+                direction: row.requesterId === user.id ? 'outgoing' : 'incoming',
+                status,
+                eventAt: (status === 'pending' ? row.createdAt : row.updatedAt).toISOString(),
+                createdAt: row.createdAt.toISOString(),
+                user: {
+                    id: row.profileId,
+                    username: row.username,
+                    fullName: row.fullName,
+                    avatarUrl: row.avatarUrl,
+                    headline: row.headline,
+                },
+            }];
+        });
+
+        return { success: true, items };
+    } catch (error) {
+        console.error('Error fetching connection request history:', error);
+        return { success: false, items: [], error: 'Failed to load history' };
+    }
+}
+
 // ============================================================================
 // SEND CONNECTION REQUEST
 // ============================================================================
@@ -703,14 +823,16 @@ export async function sendConnectionRequest(
                     };
                 }
                 if (conn.status === 'blocked') return { error: 'Cannot send request' };
-                if (conn.status === 'rejected') {
-                    const isSameDirection = conn.requesterId === user.id && conn.addresseeId === addresseeId;
-                    if (isSameDirection) {
-                        const cooldownUntil = new Date(new Date(conn.updatedAt).getTime() + REJECT_REQUEST_COOLDOWN_MS);
-                        if (cooldownUntil.getTime() > Date.now()) {
-                            return {
-                                error: `This request was recently declined. You can retry after ${cooldownUntil.toLocaleString()}.`,
-                            };
+                if (conn.status === 'rejected' || conn.status === 'cancelled' || conn.status === 'disconnected') {
+                    if (conn.status === 'rejected') {
+                        const isSameDirection = conn.requesterId === user.id && conn.addresseeId === addresseeId;
+                        if (isSameDirection) {
+                            const cooldownUntil = new Date(new Date(conn.updatedAt).getTime() + REJECT_REQUEST_COOLDOWN_MS);
+                            if (cooldownUntil.getTime() > Date.now()) {
+                                return {
+                                    error: `This request was recently declined. You can retry after ${cooldownUntil.toLocaleString()}.`,
+                                };
+                            }
                         }
                     }
 
@@ -900,20 +1022,48 @@ export async function cancelConnectionRequest(
             return { success: false, error: 'Too many actions. Please wait and try again.' };
         }
 
-        const deleted = await db
-            .delete(connections)
-            .where(
-                and(
-                    eq(connections.id, connectionId),
-                    eq(connections.requesterId, user.id),
-                    eq(connections.status, 'pending')
-                )
-            )
-            .returning({ id: connections.id });
+        const cancelled = await db.transaction(async (tx) => {
+            // Resolve pair first so advisory lock covers the full read -> update sequence.
+            const [connectionPreview] = await tx
+                .select({
+                    requesterId: connections.requesterId,
+                    addresseeId: connections.addresseeId,
+                })
+                .from(connections)
+                .where(and(eq(connections.id, connectionId), eq(connections.requesterId, user.id)))
+                .limit(1);
 
-        if (deleted.length === 0) {
-            return { success: false, error: 'Request not found or cannot be cancelled' };
-        }
+            if (!connectionPreview) return null;
+
+            await lockConnectionPair(tx, connectionPreview.requesterId, connectionPreview.addresseeId);
+
+            // Re-read under lock for authoritative status validation.
+            const [connection] = await tx
+                .select({
+                    id: connections.id,
+                    requesterId: connections.requesterId,
+                    addresseeId: connections.addresseeId,
+                    status: connections.status,
+                })
+                .from(connections)
+                .where(and(eq(connections.id, connectionId), eq(connections.requesterId, user.id)))
+                .limit(1);
+
+            if (!connection || connection.status !== 'pending') return null;
+
+            const [updated] = await tx
+                .update(connections)
+                .set({
+                    status: 'cancelled',
+                    updatedAt: new Date(),
+                })
+                .where(and(eq(connections.id, connectionId), eq(connections.status, 'pending')))
+                .returning({ id: connections.id });
+
+            return updated || null;
+        });
+
+        if (!cancelled) return { success: false, error: 'Request not found or cannot be cancelled' };
 
         await revalidateConnectionsPaths();
         return { success: true };
@@ -1081,16 +1231,51 @@ export async function removeConnection(
         }
 
         const removed = await db.transaction(async (tx) => {
-            const deleted = await tx
-                .delete(connections)
+            // Step 1: Resolve the pair for this connection id, then lock the pair first.
+            const [pair] = await tx
+                .select({
+                    id: connections.id,
+                    requesterId: connections.requesterId,
+                    addresseeId: connections.addresseeId,
+                })
+                .from(connections)
+                .where(eq(connections.id, connectionId))
+                .limit(1);
+
+            if (!pair) return null;
+
+            await lockConnectionPair(tx, pair.requesterId, pair.addresseeId);
+
+            // Step 2: Validate under lock (ownership + accepted state).
+            const [connection] = await tx
+                .select({
+                    id: connections.id,
+                    requesterId: connections.requesterId,
+                    addresseeId: connections.addresseeId,
+                    status: connections.status,
+                })
+                .from(connections)
+                .where(
+                    and(
+                        eq(connections.id, connectionId),
+                        or(eq(connections.requesterId, user.id), eq(connections.addresseeId, user.id)),
+                    ),
+                )
+                .limit(1);
+
+            if (!connection || connection.status !== 'accepted') return null;
+
+            const [updated] = await tx
+                .update(connections)
+                .set({
+                    status: 'disconnected',
+                    updatedAt: new Date(),
+                })
                 .where(
                     and(
                         eq(connections.id, connectionId),
                         eq(connections.status, 'accepted'),
-                        or(
-                            eq(connections.requesterId, user.id),
-                            eq(connections.addresseeId, user.id)
-                        )
+                        or(eq(connections.requesterId, user.id), eq(connections.addresseeId, user.id)),
                     )
                 )
                 .returning({
@@ -1098,15 +1283,10 @@ export async function removeConnection(
                     addresseeId: connections.addresseeId,
                 });
 
-            if (deleted.length === 0) return null;
+            if (!updated) return null;
 
-            await applyConnectionsCountDelta(
-                tx,
-                [deleted[0].requesterId, deleted[0].addresseeId],
-                -1
-            );
-
-            return deleted[0];
+            await applyConnectionsCountDelta(tx, [updated.requesterId, updated.addresseeId], -1);
+            return updated;
         });
 
         if (!removed) {
@@ -1503,7 +1683,7 @@ export async function getAcceptedConnections(
         id: row.id,
         requesterId: row.requesterId,
         addresseeId: row.addresseeId,
-        status: row.status as 'accepted' | 'pending' | 'blocked' | 'none',
+        status: row.status as typeof connections.$inferSelect.status,
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,
         otherUser: {

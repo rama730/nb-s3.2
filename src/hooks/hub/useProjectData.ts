@@ -150,7 +150,11 @@ export function useProjectMembers(
         initialPageParam: undefined as string | undefined,
         getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
         initialData,
-        staleTime: 1000 * 60 * 15,
+        staleTime: 1000 * 20,
+        refetchOnMount: "always",
+        refetchOnWindowFocus: true,
+        refetchInterval: enabled ? 1000 * 30 : false,
+        refetchIntervalInBackground: false,
         enabled,
     });
 }

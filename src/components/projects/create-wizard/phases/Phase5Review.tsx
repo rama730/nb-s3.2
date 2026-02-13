@@ -14,6 +14,7 @@ export default function Phase5Review({ wizardContext, goToPhase }: Phase5ReviewP
     const { watch } = useFormContext<CreateProjectInput>();
     const formData = watch();
     const { openRoles } = wizardContext;
+    const leadFocus = (formData.creator_role?.title || '').trim();
 
     const visibilityIcons = {
         public: Globe,
@@ -150,9 +151,12 @@ export default function Phase5Review({ wizardContext, goToPhase }: Phase5ReviewP
                 {formData.creator_role && (
                     <div className="mb-4 p-3 bg-indigo-50 dark:bg-indigo-900/20 rounded-lg">
                         <span className="text-sm text-indigo-600 dark:text-indigo-400">Your Role</span>
-                        <p className="font-medium text-indigo-700 dark:text-indigo-300">
-                            {formData.creator_role.title || formData.creator_role.role_type}
-                        </p>
+                        <p className="font-medium text-indigo-700 dark:text-indigo-300">Lead</p>
+                        {leadFocus && (
+                            <p className="text-xs text-indigo-600/90 dark:text-indigo-300/80">
+                                Focus: {leadFocus}
+                            </p>
+                        )}
                     </div>
                 )}
 

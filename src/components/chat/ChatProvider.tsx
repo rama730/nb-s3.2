@@ -20,6 +20,8 @@ export function ChatProvider({ children }: ChatProviderProps) {
     const initialize = useChatStore(state => state.initialize);
     const flushOutbox = useChatStore(state => state.flushOutbox);
     const refreshMessages = useChatStore(state => state.refreshMessages);
+    const refreshConversations = useChatStore(state => state.refreshConversations);
+    const isConnected = useChatStore(state => state.isConnected);
     const activeConversationId = useChatStore(state => state.activeConversationId);
     const activeConversationCache = useChatStore(state =>
         state.activeConversationId ? state.messagesByConversation[state.activeConversationId] : undefined
@@ -51,6 +53,24 @@ export function ChatProvider({ children }: ChatProviderProps) {
             window.removeEventListener('online', onOnline);
         };
     }, [user, flushOutbox]);
+
+    // Fallback sync when websocket is temporarily disconnected.
+    // Keeps message delivery near-real-time without heavy polling.
+    useEffect(() => {
+        if (!user || isConnected) return;
+
+        const timer = window.setInterval(() => {
+            if (typeof document !== 'undefined' && document.hidden) return;
+            void refreshConversations();
+            if (activeConversationId) {
+                void refreshMessages(activeConversationId);
+            }
+        }, 5000);
+
+        return () => {
+            window.clearInterval(timer);
+        };
+    }, [user, isConnected, activeConversationId, refreshConversations, refreshMessages]);
 
     // Refresh signed attachment URLs for the active conversation only.
     // Keeps media valid on long-lived tabs without reloading the whole app.

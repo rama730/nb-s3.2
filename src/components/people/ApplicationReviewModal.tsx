@@ -23,6 +23,14 @@ const REJECTION_REASONS = [
     { value: "other", label: "Other" },
 ];
 
+const REJECTION_REASON_TEMPLATES: Record<string, string> = {
+    skills_mismatch: "Thanks for applying. Your profile is strong, but we currently need a closer stack match for this role.",
+    role_filled: "Thanks for applying. This role has been filled for now.",
+    availability: "Thanks for applying. We currently need availability that better aligns with the team schedule.",
+    experience: "Thanks for applying. At this stage we need deeper experience for this role.",
+    other: "Thanks for applying. We are moving forward with another direction right now.",
+};
+
 export default function ApplicationReviewModal({
     isOpen,
     onClose,
@@ -101,7 +109,13 @@ export default function ApplicationReviewModal({
                                 <div className="relative">
                                     <select
                                         value={reason}
-                                        onChange={(e) => setReason(e.target.value)}
+                                        onChange={(e) => {
+                                            const next = e.target.value;
+                                            setReason(next);
+                                            if (!message.trim() && REJECTION_REASON_TEMPLATES[next]) {
+                                                setMessage(REJECTION_REASON_TEMPLATES[next]);
+                                            }
+                                        }}
                                         className="w-full px-4 py-2.5 bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-200 dark:border-zinc-700 rounded-xl text-sm appearance-none focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500 transition-colors"
                                     >
                                         <option value="" disabled>Select a reason...</option>

@@ -43,7 +43,7 @@ export default function Phase1SourceSelection({
     loadGithubFolder: (folderPath: string) => Promise<void>;
     startGithubRootPreview: (repoUrl: string) => Promise<void>;
 }) {
-    const { setValue, watch, formState: { errors } } = useFormContext<CreateProjectInput>();
+    const { getValues, setValue, watch, formState: { errors } } = useFormContext<CreateProjectInput>();
     const importSourceType = watch('import_source.type');
     const repoUrl = watch('import_source.repoUrl');
     
@@ -144,8 +144,16 @@ export default function Phase1SourceSelection({
     };
 
     const handleSelect = (type: 'scratch' | 'github' | 'upload') => {
-        // Explicitly set type for all options to ensure state updates
-        setValue('import_source', { type }, { shouldValidate: true, shouldDirty: true });
+        // Keep existing source payload (repo/branch/metadata) to avoid losing draft context.
+        const currentImportSource = getValues('import_source');
+        setValue(
+            'import_source',
+            {
+                ...(currentImportSource || {}),
+                type,
+            },
+            { shouldValidate: true, shouldDirty: true }
+        );
         if (type !== 'upload') {
             setUploadFiles(null);
         }
@@ -164,10 +172,12 @@ export default function Phase1SourceSelection({
         
         setUploadFiles(files);
         
-        // Store file count in metadata
-        setValue('import_source.metadata', { 
+        // Store file count in metadata without dropping existing keys (e.g. leadFocus).
+        const currentMetadata = getValues('import_source.metadata') || {};
+        setValue('import_source.metadata', {
+            ...currentMetadata,
             fileCount: files.length,
-            folderName: files[0].webkitRelativePath?.split('/')[0] || 'Uploaded Files'
+            folderName: files[0].webkitRelativePath?.split('/')[0] || 'Uploaded Files',
         });
         
         // Analyze folder for package.json / README.md

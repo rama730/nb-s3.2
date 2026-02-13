@@ -11,6 +11,8 @@ interface OpenRolesCardProps {
     isCollaborator: boolean;
     applicationStatus: {
         status: 'none' | 'pending' | 'accepted' | 'rejected';
+        lifecycleStatus?: 'none' | 'pending' | 'accepted' | 'rejected' | 'withdrawn' | 'role_filled';
+        decisionReason?: string | null;
         roleTitle?: string;
         canReapply?: boolean;
         waitTime?: string;
@@ -34,7 +36,16 @@ export default function OpenRolesCard({
 
     const isPending = applicationStatus.status === 'pending';
     const isRejected = applicationStatus.status === 'rejected';
+    const isRoleFilled = applicationStatus.lifecycleStatus === 'role_filled' || applicationStatus.decisionReason === 'role_filled';
     const canReapply = applicationStatus.canReapply ?? true;
+    const hasReapplyWaitTime = Boolean(applicationStatus.waitTime);
+    const isRejectedCooldownBlocked = isRejected && !canReapply && hasReapplyWaitTime && !isRoleFilled;
+    const isRejectedHardBlocked = isRejected && !canReapply && !hasReapplyWaitTime && !isRoleFilled;
+    const cannotReapplyLabel = isRejectedCooldownBlocked
+        ? `Cannot reapply now • ${applicationStatus.waitTime} left`
+        : isRejectedHardBlocked
+            ? "Cannot reapply"
+            : null;
     const isBlocked = isPending || (isRejected && !canReapply);
 
     return (
@@ -58,7 +69,7 @@ export default function OpenRolesCard({
                 ) : isRejected && !canReapply ? (
                     <motion.div className="flex items-center gap-2 bg-red-50 dark:bg-red-900/10 text-red-700 dark:text-red-400 p-2 rounded-lg border border-red-100 dark:border-red-900/20">
                         <XCircle className="w-3.5 h-3.5 fill-current" />
-                        <span className="text-xs font-medium">Application details</span>
+                        <span className="text-xs font-medium">{isRoleFilled ? "Role filled" : cannotReapplyLabel || "Cannot reapply"}</span>
                     </motion.div>
                 ) : null}
 
@@ -98,7 +109,7 @@ export default function OpenRolesCard({
                                                         : "bg-indigo-600 text-white hover:bg-indigo-700"
                                                 )}
                                             >
-                                                {isPending ? 'Pending' : (isRejected && !canReapply) ? 'Rejected' : 'Apply'}
+                                                {isPending ? 'Pending' : (isRejected && !canReapply) ? (isRoleFilled ? 'Filled' : 'Rejected') : 'Apply'}
                                             </button>
                                         )}
                                     </div>
@@ -129,12 +140,14 @@ export default function OpenRolesCard({
                                 : "bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-50 dark:bg-zinc-800 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-700 shadow-sm"
                         )}
                     >
-                        {isPending ? "Application Submitted" : (isRejected && !canReapply) ? `Reapply in ${applicationStatus.waitTime}` : "Apply General"}
+                        {isPending
+                            ? "Application Submitted"
+                            : (isRejected && !canReapply)
+                                ? (isRoleFilled ? "Role filled" : cannotReapplyLabel || "Cannot reapply")
+                                : "Apply General"}
                     </button>
                 )}
             </div>
         </DashboardCard>
     );
 }
-
-

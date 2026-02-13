@@ -1,7 +1,7 @@
 'use client';
 
 import { memo, useCallback, useRef, useState } from 'react';
-import { GRID_COLS } from './types';
+import { GRID_COLS, ROW_HEIGHT_PX } from './types';
 import type { WidgetPlacement } from './types';
 import { WIDGET_REGISTRY } from './widgetRegistry';
 
@@ -13,7 +13,6 @@ interface ResizeHandleProps {
 function ResizeHandle({ placement, onResize }: ResizeHandleProps) {
     const [isResizing, setIsResizing] = useState(false);
     const startRef = useRef<{ x: number; y: number; colSpan: number; rowSpan: number } | null>(null);
-    const containerRef = useRef<HTMLElement | null>(null);
 
     const config = WIDGET_REGISTRY[placement.widgetId as keyof typeof WIDGET_REGISTRY];
     const maxColSpan = config?.maxColSpan ?? 3;
@@ -31,7 +30,6 @@ function ResizeHandle({ placement, onResize }: ResizeHandleProps) {
             const gridEl = target.closest('[data-widget-grid]') as HTMLElement | null;
             if (!gridEl) return;
 
-            containerRef.current = gridEl;
             startRef.current = {
                 x: e.clientX,
                 y: e.clientY,
@@ -41,10 +39,7 @@ function ResizeHandle({ placement, onResize }: ResizeHandleProps) {
             setIsResizing(true);
 
             const cellWidth = gridEl.clientWidth / GRID_COLS;
-            const cellHeight = gridEl.clientHeight / Math.max(3, gridEl.children.length > 0 ? 3 : 3);
-
-            // Use estimated row height from grid
-            const rowHeight = Math.max(120, cellHeight);
+            const rowHeight = ROW_HEIGHT_PX;
 
             const handlePointerMove = (moveEvent: PointerEvent) => {
                 if (!startRef.current) return;

@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 
 interface ApplicationStatusBannerProps {
     status: "none" | "pending" | "accepted" | "rejected";
+    lifecycleStatus?: "none" | "pending" | "accepted" | "rejected" | "withdrawn" | "role_filled";
+    decisionReason?: string | null;
     roleTitle?: string;
     canReapply?: boolean;
     waitTime?: string;
@@ -16,6 +18,8 @@ interface ApplicationStatusBannerProps {
 
 export default function ApplicationStatusBanner({
     status,
+    lifecycleStatus,
+    decisionReason,
     roleTitle,
     canReapply,
     waitTime,
@@ -93,6 +97,8 @@ export default function ApplicationStatusBanner({
 
     // Rejected
     if (status === "rejected") {
+        const isRoleFilled = lifecycleStatus === "role_filled" || decisionReason === "role_filled";
+        const isWithdrawn = lifecycleStatus === "withdrawn" || decisionReason === "withdrawn_by_applicant";
         return (
             <div className="flex items-center justify-between p-4 rounded-xl bg-zinc-100 dark:bg-zinc-800/50 border border-zinc-200 dark:border-zinc-700">
                 <div className="flex items-center gap-3">
@@ -101,16 +107,22 @@ export default function ApplicationStatusBanner({
                     </div>
                     <div>
                         <p className="font-medium text-zinc-900 dark:text-zinc-100">
-                            Application Not Accepted
+                            {isRoleFilled ? "Role Filled" : isWithdrawn ? "Application Withdrawn" : "Application Not Accepted"}
                         </p>
                         <p className="text-sm text-zinc-500">
-                            {canReapply
-                                ? "You can apply again now"
-                                : `You can apply again in: ${waitTime}`}
+                            {isRoleFilled
+                                ? "The role was filled. You can apply for other open roles."
+                                : isWithdrawn
+                                    ? "You withdrew this application."
+                                    : canReapply
+                                        ? "You can apply again now"
+                                        : waitTime
+                                            ? `You can apply again in: ${waitTime}`
+                                            : "You cannot reapply at this time"}
                         </p>
                     </div>
                 </div>
-                {canReapply && (
+                {canReapply && !isWithdrawn && !isRoleFilled && (
                     <Button
                         onClick={onApply}
                         variant="outline"

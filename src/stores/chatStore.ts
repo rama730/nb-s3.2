@@ -74,6 +74,9 @@ export interface InboxApplication {
     roleTitle: string;
     conversationId?: string | null;
     status: 'pending' | 'accepted' | 'rejected';
+    lifecycleStatus?: 'pending' | 'accepted' | 'rejected' | 'withdrawn' | 'role_filled';
+    decisionReason?: string | null;
+    decisionAt?: string | null;
     createdAt: Date;
     displayUser: {
         id?: string;
@@ -124,6 +127,7 @@ interface ChatState {
     applicationsError: string | null;
     hasMoreApplications: boolean;
     applicationsOffset: number;
+    applicationsLastFetchedAt: number;
 
     // Project Groups Cache
     projectGroups: ProjectGroupConversation[];
@@ -240,6 +244,7 @@ export const useChatStore = create<ChatState>()(
             applicationsError: null,
             hasMoreApplications: false,
             applicationsOffset: 0,
+            applicationsLastFetchedAt: 0,
 
             // Project Groups
             projectGroups: [],
@@ -1660,6 +1665,10 @@ export const useChatStore = create<ChatState>()(
                 const state = get();
                 // If we have data and not refreshing, return immediately (Cache First)
                 if (!refresh && state.applications.length > 0) return;
+                // Throttle forced refreshes to avoid hot-loop fetch storms from multiple surfaces.
+                if (refresh && state.applicationsLastFetchedAt > 0 && Date.now() - state.applicationsLastFetchedAt < 2_000) {
+                    return;
+                }
 
                 if (state.applicationsLoading) return;
 
@@ -1673,7 +1682,8 @@ export const useChatStore = create<ChatState>()(
                             applications: result.applications as InboxApplication[],
                             applicationsLoading: false,
                             hasMoreApplications: result.hasMore || false,
-                            applicationsOffset: 20
+                            applicationsOffset: 20,
+                            applicationsLastFetchedAt: Date.now(),
                         });
                     } else {
                         set({
@@ -1704,7 +1714,8 @@ export const useChatStore = create<ChatState>()(
                             applications: [...prev.applications, ...result.applications as InboxApplication[]],
                             applicationsLoading: false,
                             hasMoreApplications: result.hasMore || false,
-                            applicationsOffset: prev.applicationsOffset + 20
+                            applicationsOffset: prev.applicationsOffset + 20,
+                            applicationsLastFetchedAt: Date.now(),
                         }));
                     } else {
                         set({ applicationsLoading: false });

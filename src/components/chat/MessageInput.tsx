@@ -485,6 +485,7 @@ export function MessageInput({ conversationId, targetUserId }: MessageInputProps
                     activeApplicationId={activeApplicationId}
                     activeApplicationStatus={activeApplicationStatus}
                     activeProjectId={activeProjectId}
+                    conversationId={conversationId}
                 />
             )}
 

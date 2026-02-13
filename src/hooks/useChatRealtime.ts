@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { useChatStore } from '@/stores/chatStore';
 import type { RealtimeChannel } from '@supabase/supabase-js';
@@ -14,6 +14,9 @@ export function useChatRealtime(userId: string | null) {
     const channelRef = useRef<RealtimeChannel | null>(null);
     const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const messageRefreshTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+    const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const reconnectAttemptsRef = useRef(0);
+    const [reconnectNonce, setReconnectNonce] = useState(0);
 
     // Store Selectors (Stable references)
     const setConnected = useChatStore(state => state.setConnected);
@@ -121,7 +124,18 @@ export function useChatRealtime(userId: string | null) {
             scheduleConversationRefresh();
         };
 
-        const channel = supabase.channel(`user-${userId}`)
+        const scheduleReconnect = (reason: string) => {
+            if (reconnectTimerRef.current) return;
+            const backoffMs = Math.min(10_000, 800 * Math.max(1, reconnectAttemptsRef.current + 1));
+            reconnectTimerRef.current = setTimeout(() => {
+                reconnectTimerRef.current = null;
+                reconnectAttemptsRef.current += 1;
+                setReconnectNonce((value) => value + 1);
+            }, backoffMs);
+            setConnected(false, `Realtime disconnected (${reason}). Reconnecting...`);
+        };
+
+        const channel = supabase.channel(`user-${userId}-${reconnectNonce}`)
             // 1. Conversation updates scoped to the authenticated user only.
             .on(
                 'postgres_changes',
@@ -171,8 +185,18 @@ export function useChatRealtime(userId: string | null) {
                 () => checkActiveConnectionStatus()
             )
             .subscribe((status: string) => {
-                if (status === 'SUBSCRIBED') setConnected(true);
-                else if (status === 'CLOSED' || status === 'CHANNEL_ERROR') setConnected(false);
+                if (status === 'SUBSCRIBED') {
+                    reconnectAttemptsRef.current = 0;
+                    if (reconnectTimerRef.current) {
+                        clearTimeout(reconnectTimerRef.current);
+                        reconnectTimerRef.current = null;
+                    }
+                    setConnected(true);
+                    return;
+                }
+                if (status === 'CLOSED' || status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+                    scheduleReconnect(status.toLowerCase());
+                }
             });
 
         channelRef.current = channel;
@@ -187,6 +211,10 @@ export function useChatRealtime(userId: string | null) {
             }
             messageRefreshTimers.forEach(clearTimeout);
             messageRefreshTimers.clear();
+            if (reconnectTimerRef.current) {
+                clearTimeout(reconnectTimerRef.current);
+                reconnectTimerRef.current = null;
+            }
             if (channelRef.current) {
                 supabase.removeChannel(channelRef.current);
                 channelRef.current = null;
@@ -199,6 +227,7 @@ export function useChatRealtime(userId: string | null) {
         scheduleMessageRefresh,
         findConversationIdByMessageId,
         checkActiveConnectionStatus,
+        reconnectNonce,
     ]);
 
     return null;

@@ -16,8 +16,10 @@ export type OpenRoleInput = z.infer<typeof openRoleSchema>;
 
 // Creator Role Schema
 export const creatorRoleSchema = z.object({
-    role_type: z.enum(['founder', 'lead', 'contributor', 'advisor']),
-    title: z.string().min(1, 'Title is required'),
+    // Keep legacy enum values for backward-compat drafts; wizard now always sets `lead`.
+    role_type: z.enum(['founder', 'lead', 'contributor', 'advisor']).default('lead'),
+    // Optional lead focus (e.g. Frontend, Product, AI).
+    title: z.string().max(80).optional(),
     time_commitment: z.number().min(0).max(168).optional(), // hours per week
 });
 

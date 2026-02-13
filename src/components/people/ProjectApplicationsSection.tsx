@@ -6,13 +6,27 @@ import Image from "next/image";
 import { Briefcase, Check, X, Loader2, Clock, ChevronDown, ChevronUp } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { toast } from "sonner";
+import { useQueryClient } from "@tanstack/react-query";
 import { 
     getMyApplicationsAction, 
     getIncomingApplicationsAction,
     acceptApplicationAction,
-    rejectApplicationAction 
+    rejectApplicationAction,
+    editPendingApplicationAction,
 } from "@/app/actions/applications";
 import ApplicationReviewModal from "./ApplicationReviewModal";
+import { PROJECT_MEMBERS_QUERY_KEY } from "@/hooks/hub/useProjectData";
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+
+const APPLICATION_EDIT_WINDOW_MS = 10 * 60 * 1000;
 
 interface ProjectApplicationsProps {
     initialUser: { id?: string | null } | null;
@@ -29,9 +43,15 @@ export interface MyApplication {
     projectSlug?: string | null;
     projectCover?: string | null;
     roleTitle: string;
+    message?: string | null;
     status: string;
+    lifecycleStatus?: "pending" | "accepted" | "rejected" | "withdrawn" | "role_filled";
+    decisionReason?: string | null;
+    decisionAt?: string | null;
+    conversationId?: string | null;
     createdAt: Date;
     updatedAt: Date;
+    canEdit?: boolean;
     canApply?: boolean;
     waitTime?: string;
 }
@@ -53,6 +73,7 @@ export interface IncomingApplication {
 }
 
 export default function ProjectApplicationsSection({ initialUser, initialApplications }: ProjectApplicationsProps) {
+    const queryClient = useQueryClient();
     const hasInitialApplications = !!initialApplications;
     const [myApplications, setMyApplications] = useState<MyApplication[]>(initialApplications?.my || []);
     const [incomingApplications, setIncomingApplications] = useState<IncomingApplication[]>(initialApplications?.incoming || []);
@@ -62,17 +83,31 @@ export default function ProjectApplicationsSection({ initialUser, initialApplica
     const [expandMy, setExpandMy] = useState(true);
     const [expandIncoming, setExpandIncoming] = useState(true);
     const [processingId, setProcessingId] = useState<string | null>(null);
+    const [isSavingEdit, setIsSavingEdit] = useState(false);
+    const [editModalState, setEditModalState] = useState<{
+        isOpen: boolean;
+        applicationId: string | null;
+        projectId: string | null;
+        draft: string;
+    }>({
+        isOpen: false,
+        applicationId: null,
+        projectId: null,
+        draft: "",
+    });
 
     // Modal State
     const [reviewModalState, setReviewModalState] = useState<{
         isOpen: boolean;
         applicationId: string | null;
+        projectId: string | null;
         mode: "accept" | "reject";
         applicantName: string;
         roleTitle: string;
     }>({
         isOpen: false,
         applicationId: null,
+        projectId: null,
         mode: "accept",
         applicantName: "",
         roleTitle: ""
@@ -120,6 +155,33 @@ export default function ProjectApplicationsSection({ initialUser, initialApplica
         };
     }, [initialUser?.id, hasInitialApplications]);
 
+    useEffect(() => {
+        if (!initialUser?.id) return;
+        let cancelled = false;
+
+        const refresh = async () => {
+            if (typeof document !== "undefined" && document.hidden) return;
+            try {
+                const [myRes, incomingRes] = await Promise.all([
+                    getMyApplicationsAction(),
+                    getIncomingApplicationsAction(20, 0),
+                ]);
+                if (cancelled) return;
+                setMyApplications(myRes.applications || []);
+                setIncomingApplications(incomingRes.applications || []);
+                setHasMoreIncoming(!!incomingRes.hasMore);
+            } catch {
+                // silent background refresh
+            }
+        };
+
+        const intervalId = window.setInterval(refresh, 30000);
+        return () => {
+            cancelled = true;
+            window.clearInterval(intervalId);
+        };
+    }, [initialUser?.id]);
+
     const handleLoadMore = async () => {
         if (isLoadingMore || !hasMoreIncoming) return;
         setIsLoadingMore(true);
@@ -140,6 +202,7 @@ export default function ProjectApplicationsSection({ initialUser, initialApplica
         setReviewModalState({
             isOpen: true,
             applicationId: app.id,
+            projectId: app.projectId,
             mode: "accept",
             applicantName: app.applicant.fullName || app.applicant.username || "User",
             roleTitle: app.roleTitle
@@ -150,6 +213,7 @@ export default function ProjectApplicationsSection({ initialUser, initialApplica
         setReviewModalState({
             isOpen: true,
             applicationId: app.id,
+            projectId: app.projectId,
             mode: "reject",
             applicantName: app.applicant.fullName || app.applicant.username || "User",
             roleTitle: app.roleTitle
@@ -157,7 +221,7 @@ export default function ProjectApplicationsSection({ initialUser, initialApplica
     }, []);
 
     const handleConfirmReview = async (message: string, reason?: string) => {
-        const { applicationId, mode } = reviewModalState;
+        const { applicationId, projectId, mode } = reviewModalState;
         if (!applicationId) return;
 
         setProcessingId(applicationId); // Optimistic UI for list item
@@ -172,6 +236,13 @@ export default function ProjectApplicationsSection({ initialUser, initialApplica
             if (result.success) {
                 toast.success(mode === "accept" ? "Application accepted!" : "Application rejected");
                 setIncomingApplications(prev => prev.filter(a => a.id !== applicationId));
+
+                if (projectId) {
+                    await queryClient.invalidateQueries({
+                        queryKey: PROJECT_MEMBERS_QUERY_KEY(projectId),
+                        refetchType: "all",
+                    });
+                }
             } else {
                 toast.error(result.error || `Failed to ${mode}`);
             }
@@ -181,6 +252,70 @@ export default function ProjectApplicationsSection({ initialUser, initialApplica
             setProcessingId(null);
         }
     };
+
+    const openEditModal = useCallback((application: MyApplication) => {
+        setEditModalState({
+            isOpen: true,
+            applicationId: application.id,
+            projectId: application.projectId,
+            draft: application.message || "",
+        });
+    }, []);
+
+    const closeEditModal = useCallback(() => {
+        if (isSavingEdit) return;
+        setEditModalState({
+            isOpen: false,
+            applicationId: null,
+            projectId: null,
+            draft: "",
+        });
+    }, [isSavingEdit]);
+
+    const handleSubmitEdit = useCallback(async () => {
+        if (!editModalState.applicationId) return;
+        const nextMessage = editModalState.draft.trim();
+        if (!nextMessage) {
+            toast.error("Application message cannot be empty");
+            return;
+        }
+
+        setIsSavingEdit(true);
+        try {
+            const result = await editPendingApplicationAction(editModalState.applicationId, nextMessage);
+            if (!result.success) {
+                toast.error(result.error || "Failed to update application");
+                return;
+            }
+
+            setMyApplications((previous) =>
+                previous.map((application) =>
+                    application.id === editModalState.applicationId
+                        ? {
+                            ...application,
+                            message: nextMessage,
+                            updatedAt: new Date(),
+                            canEdit:
+                                Date.now() - new Date(application.createdAt).getTime() <= APPLICATION_EDIT_WINDOW_MS,
+                        }
+                        : application
+                )
+            );
+
+            toast.success("Application updated");
+            if (editModalState.projectId) {
+                await queryClient.invalidateQueries({
+                    queryKey: PROJECT_MEMBERS_QUERY_KEY(editModalState.projectId),
+                    refetchType: "all",
+                });
+            }
+            closeEditModal();
+        } catch {
+            toast.error("Failed to update application");
+        } finally {
+            setIsSavingEdit(false);
+        }
+    }, [closeEditModal, editModalState.applicationId, editModalState.draft, editModalState.projectId, queryClient]);
 
     if (!initialUser) return null;
     if (isLoading) {
@@ -314,15 +449,25 @@ export default function ProjectApplicationsSection({ initialUser, initialApplica
                     {expandMy && (
                         <div className="space-y-3">
                             {myApplications.map(app => {
+                                const lifecycle = app.lifecycleStatus || app.status;
                                 const statusStyle = {
                                     pending: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
                                     accepted: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400",
-                                    rejected: "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
-                                }[app.status] || "";
+                                    rejected: "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400",
+                                    withdrawn: "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400",
+                                    role_filled: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300",
+                                }[lifecycle] || "";
+                                const statusLabel = lifecycle === "role_filled" ? "filled" : lifecycle;
+                                const reasonLabel = app.decisionReason === "role_filled"
+                                    ? "Role was filled"
+                                    : app.decisionReason === "withdrawn_by_applicant"
+                                        ? "Withdrawn"
+                                        : null;
 
                                 return (
                                     <div 
                                         key={app.id}
+                                        id={`app-${app.id}`}
                                         className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4"
                                     >
                                         <div className="flex items-center gap-3">
@@ -341,18 +486,48 @@ export default function ProjectApplicationsSection({ initialUser, initialApplica
                                                 </p>
                                             </div>
                                             <div className={`px-2 py-1 text-[10px] font-bold uppercase tracking-wider rounded-full ${statusStyle}`}>
-                                                {app.status === "pending" && <Clock className="w-3 h-3 inline mr-1" />}
-                                                {app.status}
+                                                {lifecycle === "pending" && <Clock className="w-3 h-3 inline mr-1" />}
+                                                {statusLabel}
                                             </div>
                                         </div>
+                                        {reasonLabel && (
+                                            <p className="text-xs mt-2 text-zinc-500 dark:text-zinc-400">
+                                                {reasonLabel}
+                                            </p>
+                                        )}
                                         {app.status === "rejected" && app.waitTime && !app.canApply && (
                                             <p className="text-xs text-zinc-500 mt-2">
                                                 ⏳ You can reapply in {app.waitTime}
                                             </p>
                                         )}
+                                        {lifecycle === "pending" && (
+                                            <div className="mt-3 flex items-center justify-between gap-2">
+                                                <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                                                    {app.canEdit ? "You can edit this application for up to 10 minutes." : "Edit window closed."}
+                                                </p>
+                                                <button
+                                                    onClick={() => openEditModal(app)}
+                                                    disabled={!app.canEdit || processingId === app.id}
+                                                    className="rounded-lg border border-zinc-200 px-2.5 py-1 text-xs font-medium text-zinc-700 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                                                >
+                                                    Edit
+                                                </button>
+                                            </div>
+                                        )}
                                         <p className="text-xs text-zinc-400 mt-2">
                                             Applied {formatDistanceToNow(new Date(app.createdAt), { addSuffix: true })}
+                                            {app.decisionAt ? ` • Updated ${formatDistanceToNow(new Date(app.decisionAt), { addSuffix: true })}` : ""}
                                         </p>
+                                        <div className="mt-2 flex items-center justify-end">
+                                            {app.conversationId ? (
+                                                <Link
+                                                    href={`/messages?conversationId=${app.conversationId}&applicationId=${app.id}`}
+                                                    className="text-xs font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400 dark:hover:text-indigo-300"
+                                                >
+                                                    Open chat
+                                                </Link>
+                                            ) : null}
+                                        </div>
                                     </div>
                                 );
                             })}
@@ -369,6 +544,43 @@ export default function ProjectApplicationsSection({ initialUser, initialApplica
                 applicantName={reviewModalState.applicantName}
                 roleTitle={reviewModalState.roleTitle}
             />
+
+            <Dialog open={editModalState.isOpen} onOpenChange={(open) => !open && closeEditModal()}>
+                <DialogContent className="sm:max-w-lg">
+                    <DialogHeader>
+                        <DialogTitle>Edit Application</DialogTitle>
+                        <DialogDescription>
+                            Update your message. This update is mirrored to your chat thread.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <textarea
+                        value={editModalState.draft}
+                        onChange={(event) =>
+                            setEditModalState((previous) => ({ ...previous, draft: event.target.value.slice(0, 2000) }))
+                        }
+                        rows={8}
+                        className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm transition-colors focus:border-indigo-400 focus:ring-2 focus:ring-indigo-200/60 dark:border-zinc-700 dark:bg-zinc-950 dark:focus:border-indigo-500 dark:focus:ring-indigo-500/20"
+                        placeholder="Write your updated application message..."
+                        disabled={isSavingEdit}
+                    />
+                    <div className="text-right text-xs text-zinc-500 dark:text-zinc-400">
+                        {editModalState.draft.length}/2000
+                    </div>
+                    <DialogFooter>
+                        <Button variant="outline" type="button" onClick={closeEditModal} disabled={isSavingEdit}>
+                            Cancel
+                        </Button>
+                        <Button
+                            type="button"
+                            onClick={handleSubmitEdit}
+                            disabled={isSavingEdit || !editModalState.draft.trim()}
+                        >
+                            {isSavingEdit ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                            Save Changes
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
         </div>
     );
 }

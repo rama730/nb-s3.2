@@ -348,6 +348,7 @@ export function MessageBubble({ message, showAvatar = true }: MessageBubbleProps
                                     <MessageTextContent
                                         content={message.content}
                                         isOwn={isOwn}
+                                        isApplication={isApplication}
                                     />
                                 </div>
                             )}
@@ -456,8 +457,56 @@ export function MessageBubble({ message, showAvatar = true }: MessageBubbleProps
     );
 }
 
-function MessageTextContent({ content, isOwn }: { content: string | null; isOwn: boolean }) {
+function MessageTextContent({
+    content,
+    isOwn,
+    isApplication,
+}: {
+    content: string | null;
+    isOwn: boolean;
+    isApplication?: boolean;
+}) {
     if (!content) return null;
+    if (isApplication) {
+        const lines = content.split(/\r?\n/);
+        return (
+            <div className="space-y-1.5">
+                {lines.map((line, index) => {
+                    const trimmed = line.trim();
+                    if (!trimmed) return <div key={`app-space-${index}`} className="h-2" />;
+                    const match = trimmed.match(/^([A-Za-z][A-Za-z ]{1,24}):\s*(.+)$/);
+                    if (!match) {
+                        return (
+                            <p key={`app-line-${index}`} className="whitespace-pre-wrap break-words leading-relaxed">
+                                {renderTextWithMentions(trimmed, isOwn)}
+                            </p>
+                        );
+                    }
+
+                    const label = match[1].trim();
+                    const value = match[2].trim();
+                    const isUrl = /^https?:\/\//i.test(value);
+                    return (
+                        <p key={`app-meta-${index}`} className="whitespace-pre-wrap break-words leading-relaxed">
+                            <span className="font-semibold">{label}: </span>
+                            {isUrl ? (
+                                <a
+                                    href={value}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className={isOwn ? "underline text-white" : "underline text-blue-600 dark:text-blue-400"}
+                                >
+                                    {value}
+                                </a>
+                            ) : (
+                                renderTextWithMentions(value, isOwn)
+                            )}
+                        </p>
+                    );
+                })}
+            </div>
+        );
+    }
     const segments = parseMessageSegments(content);
     return (
         <div className="space-y-2">

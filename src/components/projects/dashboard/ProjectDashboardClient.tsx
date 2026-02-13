@@ -89,6 +89,8 @@ export default function ProjectDashboardClient({
     const [applicationStatus, setApplicationStatus] = useState<{
         status: 'none' | 'pending' | 'accepted' | 'rejected';
         roleTitle?: string;
+        decisionReason?: string | null;
+        lifecycleStatus?: 'none' | 'pending' | 'accepted' | 'rejected' | 'withdrawn' | 'role_filled';
         canReapply?: boolean;
         waitTime?: string;
     }>({ status: 'none' });
@@ -136,7 +138,12 @@ export default function ProjectDashboardClient({
     const collaboratorUsers = useMemo(() => {
         const list = (extendedProject?.collaborators || []) as any[];
         return list
-            .map((c) => (c?.user ? { ...c.user, membershipRole: c.membershipRole } : null))
+            .map((c) => (c?.user ? {
+                ...c.user,
+                membershipRole: c.membershipRole,
+                projectRoleTitle: c.projectRoleTitle ?? null,
+                joinedAt: c.joinedAt ?? null,
+            } : null))
             .filter(Boolean);
     }, [extendedProject]);
 
@@ -567,6 +574,8 @@ export default function ProjectDashboardClient({
                     <div className="mb-6">
                         <ApplicationStatusBanner
                             status={applicationStatus.status}
+                            lifecycleStatus={applicationStatus.lifecycleStatus}
+                            decisionReason={applicationStatus.decisionReason}
                             roleTitle={applicationStatus.roleTitle}
                             canReapply={applicationStatus.canReapply}
                             waitTime={applicationStatus.waitTime}

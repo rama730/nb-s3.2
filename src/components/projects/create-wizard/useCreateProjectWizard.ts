@@ -81,6 +81,10 @@ export function useCreateProjectWizard({ onClose, onSuccess, draftId }: UseCreat
                 portfolio_showcase_allowed: true,
                 additional_terms: '',
             },
+            creator_role: {
+                role_type: 'lead',
+                title: '',
+            },
             import_source: { type: 'scratch' },
             metadata: {},
         },

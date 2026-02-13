@@ -13,17 +13,23 @@ import {
     cancelConnectionRequest,
     dismissConnectionSuggestion,
     getConnectionStats,
+    getConnectionRequestHistory,
     getConnectionsFeed,
     rejectAllIncomingConnectionRequests,
     rejectConnectionRequest,
     removeConnection,
     sendConnectionRequest,
     undoRejectConnectionRequest,
+    type ConnectionRequestHistoryItem,
     type ConnectionStats,
     type ConnectionsFeedInput,
     type ConnectionsFeedTab,
     type SuggestedProfile,
 } from '@/app/actions/connections';
+import {
+    getApplicationRequestHistory,
+    type ApplicationRequestHistoryItem,
+} from '@/app/actions/applications';
 import { createSupabaseBrowserClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 
@@ -127,6 +133,21 @@ export type PendingRequestsData = {
     stats: FeedStats;
 };
 
+export type RequestHistoryConnectionItem = ConnectionRequestHistoryItem & {
+    source: 'connection';
+};
+
+export type RequestHistoryApplicationItem = ApplicationRequestHistoryItem & {
+    source: 'application';
+};
+
+export type RequestHistoryItem = RequestHistoryConnectionItem | RequestHistoryApplicationItem;
+
+export type RequestHistoryData = {
+    items: RequestHistoryItem[];
+    warning?: string | null;
+};
+
 const EMPTY_STATS: FeedStats = {
     totalConnections: 0,
     pendingIncoming: 0,
@@ -138,6 +159,7 @@ export const CONNECTIONS_QUERY_KEYS = {
     feed: (tab: ConnectionsFeedTab, limit: number, search?: string) =>
         ['connections', 'feed', tab, limit, search || ''] as const,
     pendingRequests: (limit: number) => ['connections', 'pending-requests', limit] as const,
+    requestHistory: (limit: number) => ['connections', 'request-history', limit] as const,
     suggestions: (limit: number, search?: string) => ['connections', 'suggestions', limit, search || ''] as const,
     stats: (userId: string) => ['connections', 'stats', userId] as const,
 };
@@ -344,6 +366,57 @@ export function usePendingRequests(limit = 20) {
             };
         },
         staleTime: 30_000,
+        refetchInterval: 30_000,
+    });
+}
+
+export function useRequestHistory(limit = 80) {
+    return useQuery({
+        queryKey: CONNECTIONS_QUERY_KEYS.requestHistory(limit),
+        queryFn: async (): Promise<RequestHistoryData> => {
+            const [connectionsHistory, applicationsHistory] = await Promise.all([
+                getConnectionRequestHistory(limit),
+                getApplicationRequestHistory(limit),
+            ]);
+
+            const failures: string[] = [];
+            if (!connectionsHistory.success) {
+                failures.push(`connections: ${connectionsHistory.error || 'unknown error'}`);
+            }
+            if (!applicationsHistory.success) {
+                failures.push(`applications: ${applicationsHistory.error || 'unknown error'}`);
+            }
+            if (failures.length === 2) {
+                throw new Error(`Failed to load request history (${failures.join('; ')})`);
+            }
+            if (failures.length > 0) {
+                console.error('Partial request history fetch failure', { failures });
+            }
+
+            const connectionItems = connectionsHistory.success
+                ? connectionsHistory.items.map<RequestHistoryConnectionItem>((item) => ({
+                    ...item,
+                    source: 'connection',
+                }))
+                : [];
+
+            const applicationItems = applicationsHistory.success
+                ? applicationsHistory.items.map<RequestHistoryApplicationItem>((item) => ({
+                    ...item,
+                    source: 'application',
+                }))
+                : [];
+
+            const items = [...connectionItems, ...applicationItems]
+                .sort((a, b) => new Date(b.eventAt).getTime() - new Date(a.eventAt).getTime())
+                .slice(0, limit);
+
+            return {
+                items,
+                warning: failures.length > 0 ? failures.join('; ') : null,
+            };
+        },
+        staleTime: 20_000,
         refetchInterval: 30_000,
     });
 }

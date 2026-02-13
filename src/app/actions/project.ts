@@ -1,12 +1,13 @@
 'use server';
 
 import { db } from '@/lib/db';
-import { projects, projectFollows, savedProjects, projectOpenRoles, roleApplications, conversations, conversationParticipants, messages, projectNodes } from '@/lib/db/schema';
+import { projects, projectFollows, savedProjects, projectOpenRoles, roleApplications, conversations, conversationParticipants, messages, projectNodes, projectMembers, profiles, tasks, projectSprints, taskNodeLinks, taskSubtasks } from '@/lib/db/schema';
 import { eq, and, sql, inArray, isNotNull, isNull, desc } from 'drizzle-orm';
 import { createClient, createAdminClient } from '@/lib/supabase/server';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { CreateProjectInput } from '@/lib/validations/project';
+import { z } from 'zod';
 import { generateSlug } from '@/lib/utils/slug';
 import { generateProjectKey } from '@/lib/project-key';
 import { getProjectAccessById } from '@/lib/data/project-access';
@@ -105,6 +106,30 @@ function normalizeImportSourceForPersist(
         metadata,
     };
     return { ok: true, value: normalized };
+}
+
+function withLeadFocusMetadata(
+    importSource: ImportSourcePayload | null,
+    creatorRole: CreateProjectInput['creator_role']
+): ImportSourcePayload | null {
+    const leadFocus = (creatorRole?.title || '').trim();
+    if (!importSource && !leadFocus) {
+        return null;
+    }
+
+    const base: ImportSourcePayload = importSource || { type: 'scratch' };
+    const metadata: Record<string, unknown> = { ...(base.metadata || {}) };
+
+    if (leadFocus) {
+        metadata.leadFocus = leadFocus;
+    } else {
+        delete metadata.leadFocus;
+    }
+
+    return {
+        ...base,
+        metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+    };
 }
 
 async function ensureGithubImportAccess(repoUrl: string, gitHubToken?: string | null): Promise<{ ok: true } | { ok: false; error: string }> {
@@ -257,6 +282,7 @@ export async function createProjectAction(input: CreateProjectInput & { slug?: s
                 return { success: false, error: accessCheck.error };
             }
         }
+        const normalizedImportSourceWithLeadFocus = withLeadFocusMetadata(normalizedImportSource, input.creator_role);
 
         let finalSlug = input.slug || generateSlug(input.title);
         // Initial Key Generation
@@ -289,10 +315,10 @@ export async function createProjectAction(input: CreateProjectInput & { slug?: s
                         ? input.lifecycle_stages
                         : getLifecycleStagesForProjectType(input.project_type),
                     currentStageIndex: input.current_stage_index || 0,
-                    importSource: normalizedImportSource,
+                    importSource: normalizedImportSourceWithLeadFocus,
                     // For GitHub imports, start at `pending` until the worker actually begins cloning.
-                    syncStatus: (normalizedImportSource?.type === 'github' ? 'pending' :
-                        normalizedImportSource?.type === 'upload' ? 'pending' : 'ready') as 'pending' | 'cloning' | 'indexing' | 'ready' | 'failed',
+                    syncStatus: (normalizedImportSourceWithLeadFocus?.type === 'github' ? 'pending' :
+                        normalizedImportSourceWithLeadFocus?.type === 'upload' ? 'pending' : 'ready') as 'pending' | 'cloning' | 'indexing' | 'ready' | 'failed',
                 };
 
                 // Use transaction to ensure project, owner membership, and project group are created together
@@ -354,9 +380,9 @@ export async function createProjectAction(input: CreateProjectInput & { slug?: s
                 revalidatePath('/hub');
 
                 // Add to Import Queue if applicable
-                if (normalizedImportSource?.type === 'github' && normalizedImportSource.repoUrl) {
+                if (normalizedImportSourceWithLeadFocus?.type === 'github' && normalizedImportSourceWithLeadFocus.repoUrl) {
                     try {
-                        const queueImportSource = clearSealedGithubTokenFromImportSource(normalizedImportSource) as ImportSourcePayload;
+                        const queueImportSource = clearSealedGithubTokenFromImportSource(normalizedImportSourceWithLeadFocus) as ImportSourcePayload;
                         await inngest.send({
                             name: "project/import",
                             data: {
@@ -377,7 +403,7 @@ export async function createProjectAction(input: CreateProjectInput & { slug?: s
                         );
                         console.error('[Action] Failed to add to queue', msg);
 
-                        const currentImportSource = normalizedImportSource!;
+                        const currentImportSource = normalizedImportSourceWithLeadFocus!;
                         const clearedImportSource = clearSealedGithubTokenFromImportSource(currentImportSource) as Record<string, any>;
                         const nextImportSource = {
                             ...clearedImportSource,
@@ -927,8 +953,6 @@ function mapStatus(status?: string): 'draft' | 'active' | 'completed' | 'archive
 // ============================================================================
 // TASK & SPRINT ACTIONS (PHASE 8 OPTIMIZATION)
 // ============================================================================
-import { z } from "zod";
-import { tasks, projectSprints, projectMembers, taskNodeLinks, taskSubtasks, profiles } from "@/lib/db/schema";
 
 // --- Fetch Actions (Optimization) ---
 
@@ -1147,7 +1171,11 @@ export async function getProjectMembersAction(
             : undefined;
 
         const members = slice
-            .map(m => m.user ? ({ ...m.user, membershipRole: m.role }) : null)
+            .map(m => m.user ? ({
+                ...m.user,
+                membershipRole: m.role,
+                joinedAt: m.joinedAt?.toISOString?.() || null,
+            }) : null)
             .filter(Boolean);
 
         const memberIds = members.map((m: any) => m.id);

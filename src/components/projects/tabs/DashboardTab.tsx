@@ -125,9 +125,7 @@ export function DashboardTab({
                         hasNextMembers={hasNextMembers}
                         fetchNextMembers={fetchNextMembers}
                         loadingMembers={loadingMembers}
-                        openRoles={rolesWithFilled}
                         isCreator={isCreator}
-                        onManageTeam={onManageTeam}
                         onInvite={onManageTeam}
                     />
                 </Suspense>

@@ -10,6 +10,7 @@ import {
 } from '@dnd-kit/core';
 import type { WorkspaceLayout, WidgetPlacement, WidgetCardSizeMode } from './types';
 import { GRID_COLS, ROW_HEIGHT_PX } from './types';
+import { getWidgetCardSizeMode } from './sizeModeUtils';
 import { getOccupiedCells, getMaxRow } from './gridEngine';
 import GridCell from './GridCell';
 import EmptyCell from './EmptyCell';
@@ -62,13 +63,6 @@ interface WidgetRenderData {
     recentActivity: WorkspaceOverviewData['recentActivity'];
     urgentTasks: WorkspaceTask[];
     focusTasks: WorkspaceTask[];
-}
-
-function getWidgetCardSizeMode(placement: WidgetPlacement): WidgetCardSizeMode {
-    const area = placement.colSpan * placement.rowSpan;
-    if (area <= 2) return 'compact';
-    if (placement.colSpan >= 3 || placement.rowSpan >= 2 || area >= 5) return 'expanded';
-    return 'standard';
 }
 
 function renderWidget(
@@ -241,7 +235,7 @@ function WidgetGrid({
                 className="hidden lg:grid gap-3"
                 style={{
                     gridTemplateColumns: `repeat(${GRID_COLS}, 1fr)`,
-                    gridTemplateRows: `repeat(${gridRows}, ${ROW_HEIGHT_PX}px)`,
+                    gridTemplateRows: `repeat(${gridRows}, minmax(${ROW_HEIGHT_PX}px, 1fr))`,
                 }}
             >
                 {/* Placed widgets */}

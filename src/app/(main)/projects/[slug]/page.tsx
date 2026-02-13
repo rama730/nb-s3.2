@@ -194,6 +194,7 @@ async function fetchProjectShellData(projectId: string, ownerId: string, include
         .map((m) => ({
             userId: m.userId,
             membershipRole: m.membershipRole,
+            joinedAt: m.joinedAt?.toISOString?.() ?? null,
             user: m.profileId
                 ? {
                     id: m.profileId,

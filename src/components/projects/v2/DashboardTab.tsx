@@ -100,9 +100,7 @@ export function DashboardTab({
             <TeamCard
                 project={project}
                 members={project.project_collaborators || []} // Assuming mapped data
-                openRoles={project.roles || []} // Assuming mapped data
                 isCreator={isCreator}
-                onManageTeam={() => { }}
                 onInvite={() => { }}
             />
             {(project.roles || []).some((r: any) => (r.count || 0) > (r.filled || 0)) && (

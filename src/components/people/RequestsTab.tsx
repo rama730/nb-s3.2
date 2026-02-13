@@ -1,14 +1,16 @@
 import { useMemo } from "react";
-import { Loader2, UserPlus, X, Check, Clock, CheckCheck } from "lucide-react";
+import { Loader2, UserPlus, X, Check, Clock, CheckCheck, Briefcase } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { formatDistanceToNow } from "date-fns";
 import { profileHref } from "@/lib/routing/identifiers";
 import {
     usePendingRequests,
+    useRequestHistory,
     useConnectionMutations,
     type PendingIncomingRequest,
     type PendingSentRequest,
+    type RequestHistoryItem,
 } from "@/hooks/useConnections";
 import { toast } from "sonner";
 import { Virtuoso } from 'react-virtuoso';
@@ -27,8 +29,79 @@ type RequestItem =
     | { type: 'sent'; request: PendingSentRequest }
     | { type: 'empty' };
 
+const HISTORY_STATUS_STYLES: Record<string, string> = {
+    pending: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300',
+    accepted: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300',
+    rejected: 'bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300',
+    cancelled: 'bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300',
+    disconnected: 'bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300',
+    withdrawn: 'bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300',
+    role_filled: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300',
+};
+
+const HISTORY_STATUS_LABELS: Record<string, string> = {
+    pending: 'Pending',
+    accepted: 'Accepted',
+    rejected: 'Rejected',
+    cancelled: 'Cancelled',
+    disconnected: 'Disconnected',
+    withdrawn: 'Withdrawn',
+    role_filled: 'Role Filled',
+};
+
+function getHistorySummary(item: RequestHistoryItem) {
+    if (item.source === 'connection') {
+        switch (item.status) {
+            case 'pending':
+                return item.direction === 'incoming'
+                    ? 'Sent you a connection request'
+                    : 'You sent a connection request';
+            case 'accepted':
+                return item.direction === 'incoming'
+                    ? 'Connection request accepted'
+                    : 'You connected';
+            case 'rejected':
+                return item.direction === 'incoming'
+                    ? 'You declined the request'
+                    : 'Your request was declined';
+            case 'cancelled':
+                return item.direction === 'outgoing'
+                    ? 'You cancelled the request'
+                    : 'Request was cancelled';
+            case 'disconnected':
+                return 'Connection was removed';
+            default:
+                return 'Connection update';
+        }
+    }
+
+    const safeRoleTitle = item.roleTitle || 'a role';
+
+    switch (item.status) {
+        case 'pending':
+            return item.direction === 'incoming'
+                ? `Applied for ${safeRoleTitle}`
+                : `You applied for ${safeRoleTitle}`;
+        case 'accepted':
+            return item.direction === 'incoming'
+                ? `You accepted this application`
+                : `Accepted for ${safeRoleTitle}`;
+        case 'rejected':
+            return item.direction === 'incoming'
+                ? `You rejected this application`
+                : `Application was rejected`;
+        case 'withdrawn':
+            return 'Application was withdrawn';
+        case 'role_filled':
+            return 'Role was filled';
+        default:
+            return 'Application update';
+    }
+}
+
 export default function RequestsTab({ initialUser, initialRequests, initialApplications }: RequestsTabProps) {
     const { data: requestData, isLoading: requestsLoading } = usePendingRequests();
+    const { data: requestHistoryData, isLoading: historyLoading } = useRequestHistory(80);
     const { acceptRequest, rejectRequest, undoRejectRequest, cancelRequest, acceptAllIncoming, rejectAllIncoming } = useConnectionMutations();
 
     // Use initial data if available, or fallback to hook data
@@ -45,6 +118,7 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
     const isLoading = requestsLoading && !initialRequests && incomingRequests.length === 0 && sentRequests.length === 0;
 
     const hasRequests = incomingRequests.length > 0 || sentRequests.length > 0;
+    const historyItems = requestHistoryData?.items || [];
 
     const handleAccept = async (id: string) => {
         toast.promise(acceptRequest.mutateAsync(id), {
@@ -371,6 +445,115 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
             }}
                 />
             )}
+
+            <div className="mt-8">
+                <div className="mb-4 flex items-center gap-2">
+                    <Clock className="h-5 w-5 text-zinc-500" />
+                    <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">Request History</h2>
+                </div>
+
+                {historyLoading && historyItems.length === 0 ? (
+                    <div className="flex items-center justify-center rounded-2xl border border-zinc-200 bg-white py-8 dark:border-zinc-800 dark:bg-zinc-900">
+                        <Loader2 className="h-6 w-6 animate-spin text-zinc-400" />
+                    </div>
+                ) : historyItems.length === 0 ? (
+                    <div className="rounded-2xl border border-zinc-200 bg-white px-4 py-8 text-center text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400">
+                        No request history yet.
+                    </div>
+                ) : (
+                    <div className="space-y-3">
+                        {historyItems.map((item) => {
+                            const statusLabel = HISTORY_STATUS_LABELS[item.status] || item.status;
+                            const statusStyle = HISTORY_STATUS_STYLES[item.status] || HISTORY_STATUS_STYLES.rejected;
+                            const timelineKey = `${item.source}-${item.id}-${item.status}-${item.eventAt}`;
+                            const user = item.user;
+                            const connectionHeadline = item.source === 'connection' ? user?.headline : null;
+                            const applicationProjectTitle =
+                                item.source === 'application' ? item.project?.title || 'Unknown project' : null;
+                            const applicationRoleTitle =
+                                item.source === 'application' ? item.roleTitle || '—' : null;
+                            const applicationProjectHref =
+                                item.source === 'application'
+                                    ? (item.project?.slug || item.project?.id ? `/projects/${item.project?.slug || item.project?.id}` : null)
+                                    : null;
+
+                            return (
+                                <div
+                                    key={timelineKey}
+                                    className="rounded-2xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900"
+                                >
+                                    <div className="flex items-start gap-3">
+                                        {user?.avatarUrl ? (
+                                            <Image
+                                                src={user.avatarUrl}
+                                                alt={user.fullName || user.username || 'User'}
+                                                width={40}
+                                                height={40}
+                                                className="h-10 w-10 rounded-full object-cover"
+                                            />
+                                        ) : (
+                                            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
+                                                {item.source === 'application' ? (
+                                                    <Briefcase className="h-4 w-4" />
+                                                ) : (
+                                                    <UserPlus className="h-4 w-4" />
+                                                )}
+                                            </div>
+                                        )}
+
+                                        <div className="min-w-0 flex-1">
+                                            <div className="mb-1 flex items-center justify-between gap-2">
+                                                <p className="truncate text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                                                    {item.source === 'application'
+                                                        ? applicationProjectTitle
+                                                        : user?.fullName || user?.username || 'Connection request'}
+                                                </p>
+                                                <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${statusStyle}`}>
+                                                    {statusLabel}
+                                                </span>
+                                            </div>
+                                            <p className="text-sm text-zinc-600 dark:text-zinc-300">{getHistorySummary(item)}</p>
+                                            {item.source === 'application' ? (
+                                                <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{applicationRoleTitle}</p>
+                                            ) : connectionHeadline ? (
+                                                <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400 line-clamp-1">{connectionHeadline}</p>
+                                            ) : null}
+                                            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500 dark:text-zinc-400">
+                                                {user ? (
+                                                    <Link href={profileHref(user)} className="hover:text-indigo-600 dark:hover:text-indigo-400">
+                                                        View profile
+                                                    </Link>
+                                                ) : null}
+                                                {item.source === 'application' && applicationProjectHref ? (
+                                                    <Link
+                                                        href={applicationProjectHref}
+                                                        className="hover:text-indigo-600 dark:hover:text-indigo-400"
+                                                    >
+                                                        View project
+                                                    </Link>
+                                                ) : item.source === 'application' ? (
+                                                    <span className="text-zinc-400 dark:text-zinc-500">Project unavailable</span>
+                                                ) : null}
+                                                {item.source === 'application' && item.conversationId ? (
+                                                    <Link
+                                                        href={`/messages?conversationId=${item.conversationId}&applicationId=${item.id}`}
+                                                        className="hover:text-indigo-600 dark:hover:text-indigo-400"
+                                                    >
+                                                        Open chat
+                                                    </Link>
+                                                ) : null}
+                                                <span>
+                                                    {formatDistanceToNow(new Date(item.eventAt), { addSuffix: true })}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                )}
+            </div>
         </div>
     );
 }

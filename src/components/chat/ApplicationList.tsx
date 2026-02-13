@@ -96,8 +96,9 @@ export function ApplicationList() {
                         <div className="flex flex-col gap-0.5">
                             <p className="text-xs text-zinc-500 dark:text-zinc-400 font-medium">
                                 <span className={
-                                    app.status === 'accepted' ? 'text-emerald-600 dark:text-emerald-400' :
-                                    app.status === 'rejected' ? 'text-red-600 dark:text-red-400' :
+                                    (app.lifecycleStatus || app.status) === 'accepted' ? 'text-emerald-600 dark:text-emerald-400' :
+                                    (app.lifecycleStatus || app.status) === 'role_filled' ? 'text-blue-600 dark:text-blue-400' :
+                                    (app.lifecycleStatus || app.status) === 'rejected' || (app.lifecycleStatus || app.status) === 'withdrawn' ? 'text-red-600 dark:text-red-400' :
                                     'text-indigo-600 dark:text-indigo-400'
                                 }>
                                     {app.type === 'incoming' ? 'Applying for ' : 'Applied for '}
@@ -106,14 +107,21 @@ export function ApplicationList() {
                             </p>
                             <p className="text-[10px] text-zinc-400 truncate flex items-center gap-1">
                                 {app.projectTitle}
-                                {app.status !== 'pending' && (
+                                {(app.lifecycleStatus || app.status) !== 'pending' && (
                                     <span className={`px-1 rounded-full text-[8px] font-bold uppercase ${
-                                        app.status === 'accepted' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'
+                                        (app.lifecycleStatus || app.status) === 'accepted'
+                                            ? 'bg-emerald-100 text-emerald-700'
+                                            : (app.lifecycleStatus || app.status) === 'role_filled'
+                                                ? 'bg-blue-100 text-blue-700'
+                                                : 'bg-red-100 text-red-700'
                                     }`}>
-                                        {app.status}
+                                        {(app.lifecycleStatus || app.status) === 'role_filled' ? 'filled' : (app.lifecycleStatus || app.status)}
                                     </span>
                                 )}
                             </p>
+                            {app.decisionReason === 'role_filled' && (
+                                <p className="text-[10px] text-blue-500 dark:text-blue-300">Role filled</p>
+                            )}
                         </div>
                     </div>
                 </button>
