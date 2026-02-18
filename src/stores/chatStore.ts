@@ -1191,13 +1191,19 @@ export const useChatStore = create<ChatState>()(
                                     fullName: data.full_name,
                                     avatarUrl: data.avatar_url,
                                 };
-                                // Cache the profile for future use
-                                set(prev => ({
-                                    profileCache: {
-                                        ...prev.profileCache,
-                                        [sender!.id]: sender!,
-                                    },
-                                }));
+                                // Cache the profile for future use (bounded to 500 entries)
+                                set(prev => {
+                                    const cache = { ...prev.profileCache };
+                                    const keys = Object.keys(cache);
+                                    if (keys.length >= 500) {
+                                        // Evict oldest ~100 entries to amortize cleanup
+                                        for (const key of keys.slice(0, 100)) {
+                                            delete cache[key];
+                                        }
+                                    }
+                                    cache[sender!.id] = sender!;
+                                    return { profileCache: cache };
+                                });
                             }
                         } catch (error) {
                             console.error('Error fetching profile:', error);
@@ -1273,9 +1279,11 @@ export const useChatStore = create<ChatState>()(
                 };
 
                 // Add to message cache if conversation is cached
-                if (state.messagesByConversation[completeMessage.conversationId]) {
+                // Re-read state after async gap to avoid stale closure
+                const freshState = get();
+                if (freshState.messagesByConversation[completeMessage.conversationId]) {
                     // Check if message already exists (avoid duplicates)
-                    const exists = state.messagesByConversation[completeMessage.conversationId].messages.some(
+                    const exists = freshState.messagesByConversation[completeMessage.conversationId].messages.some(
                         m => m.id === completeMessage.id ||
                             (!!completeMessage.clientMessageId && m.clientMessageId === completeMessage.clientMessageId)
                     );

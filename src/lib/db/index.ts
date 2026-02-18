@@ -13,10 +13,9 @@ const globalForDb = globalThis as unknown as {
 }
 
 const client = globalForDb.conn ?? postgres(connectionString, {
-    prepare: false,
-    // Add max connections limit for dev to prevent exhaustion
-    max: process.env.NODE_ENV === 'development' ? 5 : 10,
-    idle_timeout: 10 // Close idle connections after 10 seconds
+    prepare: true,
+    max: process.env.NODE_ENV === 'development' ? 5 : 20,
+    idle_timeout: 30,
 })
 
 if (process.env.NODE_ENV !== 'production') {

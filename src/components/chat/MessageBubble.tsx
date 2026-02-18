@@ -68,7 +68,6 @@ export function MessageBubble({ message, showAvatar = true }: MessageBubbleProps
     const [isActionLoading, setIsActionLoading] = useState(false);
     const [hiddenForViewer, setHiddenForViewer] = useState(false);
     const [isMenuOpen, setIsMenuOpen] = useState(false);
-    const [isHovered, setIsHovered] = useState(false);
 
     const attachments = useMemo(
         () => (message.attachments || []) as ChatAttachment[],
@@ -249,9 +248,7 @@ export function MessageBubble({ message, showAvatar = true }: MessageBubbleProps
 
                 <div className={`w-fit max-w-[78%] ${isOwn ? 'items-end' : 'items-start'}`}>
                     <div
-                        className={`flex items-end gap-1 ${isOwn ? 'flex-row-reverse' : 'flex-row'}`}
-                        onMouseEnter={() => setIsHovered(true)}
-                        onMouseLeave={() => setIsHovered(false)}
+                        className={`group/bubble flex items-end gap-1 ${isOwn ? 'flex-row-reverse' : 'flex-row'}`}
                     >
                         <div className="max-w-full">
                             {mediaAttachments.length > 0 && (
@@ -359,16 +356,15 @@ export function MessageBubble({ message, showAvatar = true }: MessageBubbleProps
                                 modal={false}
                                 onOpenChange={(open) => {
                                     setIsMenuOpen(open);
-                                    if (open) setIsHovered(true);
                                 }}
                             >
                                 <DropdownMenuTrigger asChild>
                                     <button
                                         type="button"
                                         className={`p-1 rounded-md text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-opacity duration-100 ${
-                                            (isMenuOpen || isHovered)
+                                            isMenuOpen
                                                 ? 'opacity-100 pointer-events-auto'
-                                                : 'opacity-0 pointer-events-none'
+                                                : 'opacity-0 pointer-events-none group-hover/bubble:opacity-100 group-hover/bubble:pointer-events-auto'
                                         }`}
                                         aria-label="Message actions"
                                         disabled={isActionLoading}
