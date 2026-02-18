@@ -194,20 +194,20 @@ export function AuthProvider({
     }, []);
 
     const refreshProfile = useCallback(async () => {
-        const supabase = createClient();
-        const currentUser = state.user; // Use current state user
-        if (!currentUser) return;
+        const currentUserId = activeUserIdRef.current;
+        if (!currentUserId) return;
 
+        const supabase = createClient();
         const { data: profile } = await supabase
             .from('profiles')
             .select('*')
-            .eq('id', currentUser.id)
+            .eq('id', currentUserId)
             .single();
 
         if (profile) {
             setState(prev => ({ ...prev, profile: transformProfile(profile) }));
         }
-    }, [state.user]);
+    }, []);
 
 
     const value = {

@@ -67,7 +67,8 @@ export const useProfile = (usernameOrId?: string, initialData?: Profile | null) 
     useEffect(() => {
         if (!activeProfile?.id || isMe) return;
 
-        const channel = supabase.channel(`profile-${activeProfile.id}`)
+        const sb = createClient();
+        const channel = sb.channel(`profile-${activeProfile.id}`)
             .on(
                 'postgres_changes',
                 {
@@ -76,15 +77,14 @@ export const useProfile = (usernameOrId?: string, initialData?: Profile | null) 
                     table: 'profiles',
                     filter: `id=eq.${activeProfile.id}`
                 },
-                (payload: any) => {
-                    console.log('Realtime profile update (other):', payload);
+                () => {
                     queryClient.invalidateQueries({ queryKey: ['profile', targetKey] });
                 }
             )
             .subscribe();
 
         return () => {
-            supabase.removeChannel(channel);
+            sb.removeChannel(channel);
         };
     }, [activeProfile?.id, queryClient, targetKey, isMe]);
 

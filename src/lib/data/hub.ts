@@ -265,7 +265,7 @@ const buildBaseConditions = (
     const selectedTechTerms = dedupeTerms(filters.tech, MAX_TECH_TERMS);
     if (selectedTechTerms.length > 0) {
         const techConditions = selectedTechTerms.map((term) =>
-            sql<boolean>`lower(coalesce(${projects.skills}::text, '[]')) LIKE ${likePattern(term)}`,
+            sql<boolean>`${projects.skills}::jsonb @> ${JSON.stringify([term])}::jsonb`,
         );
         conditions.push(or(...techConditions)!);
     }
@@ -680,6 +680,7 @@ const hydrateProjects = async (
             .select()
             .from(projectOpenRoles)
             .where(inArray(projectOpenRoles.projectId, projectIds))
+            .limit(projectIds.length * 10)
             .catch((error) => {
                 const message = error instanceof Error ? error.message : String(error);
                 if (message.toLowerCase().includes('project_open_roles') && message.toLowerCase().includes('does not exist')) {
@@ -694,7 +695,8 @@ const hydrateProjects = async (
             })
             .from(projectMembers)
             .leftJoin(profiles, eq(projectMembers.userId, profiles.id))
-            .where(inArray(projectMembers.projectId, projectIds)),
+            .where(inArray(projectMembers.projectId, projectIds))
+            .limit(projectIds.length * 20),
         hasFollowersCountColumn
             ? Promise.resolve([])
             : db

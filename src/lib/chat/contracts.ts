@@ -1,5 +1,4 @@
 export function validateUniqueConversationIds(conversationIds: string[], source: string): void {
-    if (process.env.NODE_ENV === 'production') return;
     const seen = new Set<string>();
     const duplicates: string[] = [];
     for (const id of conversationIds) {
@@ -15,8 +14,6 @@ export function validateSingleOutboxKey(
     outboxByConversation: Record<string, Array<{ clientMessageId: string }>>,
     source: string
 ): void {
-    if (process.env.NODE_ENV === 'production') return;
-
     const seen = new Set<string>();
     const dupes: string[] = [];
 

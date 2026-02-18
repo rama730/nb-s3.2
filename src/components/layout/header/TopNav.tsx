@@ -30,7 +30,7 @@ import MessageIndicator from "./MessageIndicator";
 export default function TopNav() {
     const pathname = usePathname();
     const router = useRouter();
-    const supabase = useMemo(() => createSupabaseBrowserClient(), []);
+    const supabase = createSupabaseBrowserClient();
     const { isAuthenticated: isSignedIn, isLoading: authLoading, profile } = useAuth();
 
     const { unreadCount: unreadNotifications } = useNotifications();

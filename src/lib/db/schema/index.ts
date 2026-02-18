@@ -176,6 +176,10 @@ export const projects = pgTable('projects', {
 
     // 3. "My Projects": Filter by Owner -> Sort by CreatedAt
     myProjectsIdx: index('projects_my_projects_idx').on(t.ownerId, t.createdAt),
+
+    // GIN indexes for JSONB array containment queries on skills/tags (Hub Search Optimization)
+    skillsIdx: index('projects_skills_idx').using('gin', t.skills),
+    tagsIdx: index('projects_tags_idx').using('gin', t.tags),
 }))
 
 // ============================================================================

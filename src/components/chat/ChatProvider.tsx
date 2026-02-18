@@ -23,9 +23,6 @@ export function ChatProvider({ children }: ChatProviderProps) {
     const refreshConversations = useChatStore(state => state.refreshConversations);
     const isConnected = useChatStore(state => state.isConnected);
     const activeConversationId = useChatStore(state => state.activeConversationId);
-    const activeConversationCache = useChatStore(state =>
-        state.activeConversationId ? state.messagesByConversation[state.activeConversationId] : undefined
-    );
     const lastMediaRefreshRef = useRef<Map<string, number>>(new Map());
 
     // Initialize chat when user is available
@@ -78,8 +75,11 @@ export function ChatProvider({ children }: ChatProviderProps) {
         if (!user) return;
 
         const timer = window.setInterval(() => {
-            if (!activeConversationId) return;
-            const cache = activeConversationCache;
+            // Read fresh state inside the interval to avoid stale closures
+            const state = useChatStore.getState();
+            const convId = state.activeConversationId;
+            if (!convId) return;
+            const cache = state.messagesByConversation[convId];
             if (!cache?.messages?.length) return;
 
             const hasAttachment = cache.messages.some(
@@ -88,17 +88,17 @@ export function ChatProvider({ children }: ChatProviderProps) {
             if (!hasAttachment) return;
 
             const now = Date.now();
-            const lastRefresh = lastMediaRefreshRef.current.get(activeConversationId) || 0;
+            const lastRefresh = lastMediaRefreshRef.current.get(convId) || 0;
             if (now - lastRefresh < 4 * 60 * 1000) return;
 
-            lastMediaRefreshRef.current.set(activeConversationId, now);
-            void refreshMessages(activeConversationId);
+            lastMediaRefreshRef.current.set(convId, now);
+            void refreshMessages(convId);
         }, 60 * 1000);
 
         return () => {
             window.clearInterval(timer);
         };
-    }, [user, activeConversationId, activeConversationCache, refreshMessages]);
+    }, [user, refreshMessages]);
 
     // Setup realtime subscription
     useChatRealtime(user?.id || null);

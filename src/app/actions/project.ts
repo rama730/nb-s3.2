@@ -1641,7 +1641,7 @@ export async function deleteTaskAction(taskId: string, projectId: string) {
         return { success: true };
     } catch (error) {
         console.error("Failed to delete task:", error);
-        return { success: true, error: error instanceof Error ? error.message : "Failed to delete task" };
+        return { success: false, error: error instanceof Error ? error.message : "Failed to delete task" };
     }
 }
 

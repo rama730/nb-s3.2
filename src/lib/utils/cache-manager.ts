@@ -32,19 +32,21 @@ class CacheManager {
         // Clear IndexedDB databases
         if (typeof indexedDB !== "undefined") {
             const databases = await indexedDB.databases?.() || [];
-            for (const db of databases) {
-                if (db.name) {
-                    indexedDB.deleteDatabase(db.name);
-                }
-            }
+            await Promise.all(
+                databases
+                    .filter((db) => db.name)
+                    .map((db) => new Promise<void>((resolve, reject) => {
+                        const req = indexedDB.deleteDatabase(db.name!);
+                        req.onsuccess = () => resolve();
+                        req.onerror = () => reject(req.error);
+                    }))
+            );
         }
 
         // Clear Cache API caches
         if (typeof caches !== "undefined") {
             const cacheNames = await caches.keys();
-            for (const name of cacheNames) {
-                await caches.delete(name);
-            }
+            await Promise.all(cacheNames.map((name) => caches.delete(name)));
         }
     }
 
@@ -64,11 +66,15 @@ class CacheManager {
     async clearIndexedDB(): Promise<void> {
         if (typeof indexedDB !== "undefined") {
             const databases = await indexedDB.databases?.() || [];
-            for (const db of databases) {
-                if (db.name) {
-                    indexedDB.deleteDatabase(db.name);
-                }
-            }
+            await Promise.all(
+                databases
+                    .filter((db) => db.name)
+                    .map((db) => new Promise<void>((resolve, reject) => {
+                        const req = indexedDB.deleteDatabase(db.name!);
+                        req.onsuccess = () => resolve();
+                        req.onerror = () => reject(req.error);
+                    }))
+            );
         }
     }
 
