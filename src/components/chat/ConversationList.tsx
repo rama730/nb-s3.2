@@ -67,8 +67,72 @@ export function ConversationList({
         );
     }
 
+    const renderConversationItem = (conv: (typeof filteredConversations)[number]) => {
+        const participant = conv.participants[0];
+        const unread = unreadCounts[conv.id] || 0;
+
+        return (
+            <button
+                key={conv.id}
+                onClick={() => (onConversationSelect ? onConversationSelect(conv.id) : openConversation(conv.id))}
+                className={`w-full flex items-center gap-3 p-3 transition-colors text-left border-l-2 ${
+                    selectedConversationId === conv.id
+                        ? 'bg-blue-50 dark:bg-blue-950/30 border-l-blue-600'
+                        : 'hover:bg-zinc-50 dark:hover:bg-zinc-800/50 border-l-transparent'
+                }`}
+            >
+                <div className="relative flex-shrink-0">
+                    <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center overflow-hidden">
+                        {participant?.avatarUrl ? (
+                            <Image
+                                src={participant.avatarUrl}
+                                alt={participant.fullName || ''}
+                                width={48}
+                                height={48}
+                                unoptimized
+                                className="w-full h-full object-cover"
+                            />
+                        ) : (
+                            <span className="text-white font-medium">
+                                {(participant?.fullName || participant?.username || '?')[0].toUpperCase()}
+                            </span>
+                        )}
+                    </div>
+                    {unread > 0 && (
+                        <span className="absolute -top-1 -right-1 w-5 h-5 flex items-center justify-center bg-red-500 text-white text-xs font-bold rounded-full">
+                            {unread > 9 ? '9+' : unread}
+                        </span>
+                    )}
+                </div>
+
+                <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between mb-0.5">
+                        <div className="flex items-center gap-1 min-w-0">
+                            <span className={`font-medium text-sm truncate ${unread > 0 ? 'text-zinc-900 dark:text-white' : 'text-zinc-700 dark:text-zinc-300'}`}>
+                                {participant?.fullName || participant?.username || 'Unknown'}
+                            </span>
+                            {conv.muted && (
+                                <BellOff className="w-3.5 h-3.5 text-zinc-400 flex-shrink-0" />
+                            )}
+                        </div>
+                        {conv.lastMessage && safeFormatRelativeTime(conv.lastMessage.createdAt) && (
+                            <span className="text-xs text-zinc-400 flex-shrink-0 ml-2">
+                                {safeFormatRelativeTime(conv.lastMessage.createdAt)}
+                            </span>
+                        )}
+                    </div>
+                    <ConversationPreview
+                        typingConversationId={conv.id}
+                        lastMessage={conv.lastMessage}
+                        unread={unread}
+                    />
+                </div>
+            </button>
+        );
+    };
+
     return (
-        <div className="flex-1 flex flex-col overflow-hidden">
+        <div className="h-full min-h-0 flex flex-col overflow-hidden">
             {/* Search */}
             {!hideSearch && (
                 <div className="p-3 border-b border-zinc-200 dark:border-zinc-800">
@@ -100,85 +164,41 @@ export function ConversationList({
                         </p>
                     </div>
                 ) : (
-                    <Virtuoso
-                        style={{ height: '100%' }}
-                        data={filteredConversations}
-                        endReached={() => {
-                            if (hasMoreConversations && !effectiveSearchQuery.trim() && !conversationsLoading) {
-                                void loadMoreConversations();
-                            }
-                        }}
-                        components={{
-                            Footer: () =>
-                                hasMoreConversations && !effectiveSearchQuery.trim() ? (
-                                    <div className="p-3 text-center text-xs text-zinc-500">
-                                        {conversationsLoading ? 'Loading…' : 'Scroll for older conversations'}
-                                    </div>
-                                ) : null,
-                        }}
-                        itemContent={(_, conv) => {
-                            const participant = conv.participants[0];
-                            const unread = unreadCounts[conv.id] || 0;
-                            return (
-                                <button
-                                    key={conv.id}
-                                    onClick={() => (onConversationSelect ? onConversationSelect(conv.id) : openConversation(conv.id))}
-                                    className={`w-full flex items-center gap-3 p-3 transition-colors text-left border-l-2 ${
-                                        selectedConversationId === conv.id
-                                            ? 'bg-blue-50 dark:bg-blue-950/30 border-l-blue-600'
-                                            : 'hover:bg-zinc-50 dark:hover:bg-zinc-800/50 border-l-transparent'
-                                    }`}
-                                >
-                                    <div className="relative flex-shrink-0">
-                                        <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center overflow-hidden">
-                                            {participant?.avatarUrl ? (
-                                                <Image
-                                                    src={participant.avatarUrl}
-                                                    alt={participant.fullName || ''}
-                                                    width={48}
-                                                    height={48}
-                                                    unoptimized
-                                                    className="w-full h-full object-cover"
-                                                />
-                                            ) : (
-                                                <span className="text-white font-medium">
-                                                    {(participant?.fullName || participant?.username || '?')[0].toUpperCase()}
-                                                </span>
-                                            )}
+                    hideSearch ? (
+                        <div className="h-full overflow-y-auto divide-y divide-zinc-100 dark:divide-zinc-800">
+                            {filteredConversations.map(renderConversationItem)}
+                            {hasMoreConversations && !effectiveSearchQuery.trim() && (
+                                <div className="p-3 text-center">
+                                    <button
+                                        onClick={() => void loadMoreConversations()}
+                                        disabled={conversationsLoading}
+                                        className="text-xs text-zinc-500 hover:text-zinc-700 disabled:opacity-60"
+                                    >
+                                        {conversationsLoading ? 'Loading…' : 'Load older conversations'}
+                                    </button>
+                                </div>
+                            )}
+                        </div>
+                    ) : (
+                        <Virtuoso
+                            style={{ height: '100%' }}
+                            data={filteredConversations}
+                            endReached={() => {
+                                if (hasMoreConversations && !effectiveSearchQuery.trim() && !conversationsLoading) {
+                                    void loadMoreConversations();
+                                }
+                            }}
+                            components={{
+                                Footer: () =>
+                                    hasMoreConversations && !effectiveSearchQuery.trim() ? (
+                                        <div className="p-3 text-center text-xs text-zinc-500">
+                                            {conversationsLoading ? 'Loading…' : 'Scroll for older conversations'}
                                         </div>
-                                        {unread > 0 && (
-                                            <span className="absolute -top-1 -right-1 w-5 h-5 flex items-center justify-center bg-red-500 text-white text-xs font-bold rounded-full">
-                                                {unread > 9 ? '9+' : unread}
-                                            </span>
-                                        )}
-                                    </div>
-
-                                    <div className="flex-1 min-w-0">
-                                        <div className="flex items-center justify-between mb-0.5">
-                                            <div className="flex items-center gap-1 min-w-0">
-                                                <span className={`font-medium text-sm truncate ${unread > 0 ? 'text-zinc-900 dark:text-white' : 'text-zinc-700 dark:text-zinc-300'}`}>
-                                                    {participant?.fullName || participant?.username || 'Unknown'}
-                                                </span>
-                                                {conv.muted && (
-                                                    <BellOff className="w-3.5 h-3.5 text-zinc-400 flex-shrink-0" />
-                                                )}
-                                            </div>
-                                            {conv.lastMessage && safeFormatRelativeTime(conv.lastMessage.createdAt) && (
-                                                <span className="text-xs text-zinc-400 flex-shrink-0 ml-2">
-                                                    {safeFormatRelativeTime(conv.lastMessage.createdAt)}
-                                                </span>
-                                            )}
-                                        </div>
-                                        <ConversationPreview
-                                            typingConversationId={conv.id}
-                                            lastMessage={conv.lastMessage}
-                                            unread={unread}
-                                        />
-                                    </div>
-                                </button>
-                            );
-                        }}
-                    />
+                                    ) : null,
+                            }}
+                            itemContent={(_, conv) => renderConversationItem(conv)}
+                        />
+                    )
                 )}
             </div>
         </div>

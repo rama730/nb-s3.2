@@ -14,6 +14,7 @@ import type { EditorSymbol } from "@/stores/filesWorkspaceStore";
 
 export interface MonacoCodeEditorProps {
   filename: string;
+  modelPath?: string;
   value: string;
   onChange: (value: string) => void;
   theme: ThemeMode;
@@ -63,6 +64,7 @@ const getLanguage = (filename: string) => {
 
 export default function MonacoCodeEditor({
   filename,
+  modelPath,
   value,
   onChange,
   theme,
@@ -223,7 +225,7 @@ export default function MonacoCodeEditor({
         height="100%"
         width="100%"
         language={getLanguage(filename)}
-        path={filename} // Important for Monaco capability to distinguish files (like TS sharing types)
+        path={modelPath || filename}
         theme={theme === "dark" ? "vs-dark" : "light"}
         value={value}
         onChange={handleEditorChange}

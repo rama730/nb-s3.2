@@ -3,7 +3,7 @@
 import { db } from "@/lib/db";
 import { profiles, projectFileIndex, projectMembers, projectNodeEvents, projectNodeLocks, projectNodes, taskNodeLinks, projects, tasks } from "@/lib/db/schema";
 import type { ProjectNode } from "@/lib/db/schema";
-import { eq, and, isNull, isNotNull, ilike, inArray, sql, desc, ne, type SQL } from "drizzle-orm";
+import { eq, and, isNull, isNotNull, ilike, inArray, sql, desc, ne, gt, type SQL } from "drizzle-orm";
 
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
@@ -11,8 +11,8 @@ import prettier from "prettier";
 import { format as sqlFormat } from "sql-formatter";
 
 async function assertProjectAccess(projectId: string, userId: string) {
-    // Backward-compatible alias: write access
-    await assertProjectWriteAccess(projectId, userId);
+    // Backward-compatible alias: read access
+    await assertProjectReadAccess(projectId, userId);
 }
 
 async function getProjectAccess(projectId: string, userId: string | null) {
@@ -213,7 +213,7 @@ async function assertNodeNotLockedByAnotherUser(
         where: and(
             eq(projectNodeLocks.projectId, projectId),
             eq(projectNodeLocks.nodeId, nodeId),
-            sql`${projectNodeLocks.expiresAt} > ${now}`
+            gt(projectNodeLocks.expiresAt, now)
         ),
         columns: { lockedBy: true, expiresAt: true },
     });

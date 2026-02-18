@@ -21,6 +21,11 @@ type TooltipMarkerComponent = React.FC<AvatarGroupTooltipProps> & {
     __avatarGroupTooltipType: symbol;
 };
 
+/**
+ * Marker component — rendered content is extracted by AvatarGroup.
+ * `open` and `onOpenChange` are forwarded to the Radix Tooltip by
+ * the parent AvatarGroup; they are intentionally not consumed here.
+ */
 export const AvatarGroupTooltip: TooltipMarkerComponent = ({ children }: AvatarGroupTooltipProps) => {
     return <>{children}</>;
 };
@@ -39,8 +44,8 @@ export function AvatarGroup({ children, className }: AvatarGroupProps) {
     const items = React.Children.toArray(children).filter(React.isValidElement);
 
     return (
-        <TooltipProvider delayDuration={80} skipDelayDuration={0}>
-            <div className={cn("flex items-center -space-x-3", className)}>
+        <TooltipProvider delayDuration={100} skipDelayDuration={300}>
+            <div className={cn("flex items-center overflow-visible -space-x-3 isolate [contain:layout]", className)}>
                 {items.map((child, index) => {
                     const avatarNode = child as React.ReactElement<any>;
                     const avatarChildren = React.Children.toArray(avatarNode.props.children);
@@ -66,9 +71,9 @@ export function AvatarGroup({ children, className }: AvatarGroupProps) {
                             <TooltipContent
                                 side="top"
                                 align="center"
-                                sideOffset={8}
-                                collisionPadding={12}
-                                className="text-xs text-center motion-reduce:transition-none"
+                                sideOffset={10}
+                                avoidCollisions={false}
+                                className="!animate-none bg-black text-white border-0 rounded-lg px-3 py-2 text-xs text-center motion-reduce:transition-none opacity-0 data-[state=delayed-open]:opacity-100 data-[state=instant-open]:opacity-100 data-[state=closed]:opacity-0 transition-opacity duration-75"
                             >
                                 {tooltipNode.props.children}
                             </TooltipContent>

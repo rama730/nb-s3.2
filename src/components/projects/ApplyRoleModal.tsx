@@ -165,7 +165,10 @@ export default function ApplyRoleModal({
                 window.localStorage.removeItem(draftStorageKey);
                 return;
             }
-            if (!preselectedRoleId && parsed.roleId) setRoleId(parsed.roleId);
+            if (!preselectedRoleId && parsed.roleId) {
+                hasUserSelectedRole.current = true;
+                setRoleId(parsed.roleId);
+            }
             if (parsed.message) setMessage(parsed.message.slice(0, MAX_MESSAGE_LENGTH));
             if (parsed.portfolioUrl) setPortfolioUrl(parsed.portfolioUrl);
             if (parsed.availability) setAvailability(parsed.availability);
@@ -504,7 +507,7 @@ export default function ApplyRoleModal({
                                     <div className="flex items-start gap-2">
                                         <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                                         <p>
-                                            Your application will be sent to the project lead and mirrored in your direct conversation thread.
+                                            Your application will be sent to the project owner/admin team and mirrored in your direct conversation thread.
                                         </p>
                                     </div>
                                 </div>

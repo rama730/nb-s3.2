@@ -5,6 +5,7 @@ import { assertProjectWriteAccess } from '@/app/actions/files';
 
 const UUID_RE =
     /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+const MAX_BATCH_UPLOAD_KEYS = 200;
 
 function extractProjectIdFromKey(key: string): string | null {
     const clean = (key || '').trim().replace(/^\/+/, '');
@@ -76,6 +77,9 @@ export async function getBatchUploadUrls(
 
         if (!keys || keys.length === 0) {
             return { urls: {} };
+        }
+        if (keys.length > MAX_BATCH_UPLOAD_KEYS) {
+            return { error: `Too many files in one request. Max ${MAX_BATCH_UPLOAD_KEYS}.` };
         }
 
         const firstProjectId = extractProjectIdFromKey(keys[0]?.key || '');

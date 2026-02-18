@@ -49,6 +49,8 @@ export default function MessagesClient({ targetUserId, initialConversationId }: 
     const messagesByConversation = useChatStore(state => state.messagesByConversation);
     const openConversation = useChatStore(state => state.openConversation);
     const upsertConversation = useChatStore(state => state.upsertConversation);
+    const initializeChat = useChatStore(state => state.initialize);
+    const chatInitialized = useChatStore(state => state.isInitialized);
 
     // Target User Resolution
     const targetUser = fetchedTargetUser;
@@ -64,6 +66,11 @@ export default function MessagesClient({ targetUserId, initialConversationId }: 
     }, [conversations, targetUser]);
 
     // Handle Target User Navigation
+    useEffect(() => {
+        if (authLoading || !user || chatInitialized) return;
+        void initializeChat();
+    }, [authLoading, user, chatInitialized, initializeChat]);
+
     useEffect(() => {
         if (initialConversationId) return;
         if (targetUser) {
@@ -111,8 +118,14 @@ export default function MessagesClient({ targetUserId, initialConversationId }: 
     
     // Full-text search effect
     useEffect(() => {
+        let cancelled = false;
+
         async function performSearch() {
-            if (!debouncedSearch.trim()) {
+            const query = debouncedSearch.trim();
+
+            if (!query) {
+                setIsSearching(false);
+                setShowSearchResults(false);
                 setSearchResults([]);
                 return;
             }
@@ -121,17 +134,28 @@ export default function MessagesClient({ targetUserId, initialConversationId }: 
             setShowSearchResults(true);
             
             try {
-                const result = await searchMessages(debouncedSearch);
+                const result = await searchMessages(query);
+                if (cancelled) return;
                 if (result.success && result.results) {
                     setSearchResults(result.results);
+                } else {
+                    setSearchResults([]);
                 }
             } catch (error) {
+                if (cancelled) return;
                 console.error('Search failed:', error);
+                setSearchResults([]);
             } finally {
+                if (cancelled) return;
                 setIsSearching(false);
             }
         }
+
         performSearch();
+
+        return () => {
+            cancelled = true;
+        };
     }, [debouncedSearch]);
 
     // Handle search result click
@@ -281,6 +305,7 @@ export default function MessagesClient({ targetUserId, initialConversationId }: 
                                 <button
                                     onClick={() => {
                                         setSearchQuery('');
+                                        setIsSearching(false);
                                         setShowSearchResults(false);
                                         setSearchResults([]);
                                     }}
@@ -294,14 +319,18 @@ export default function MessagesClient({ targetUserId, initialConversationId }: 
                 )}
 
                 {/* Content: Search Results or Conversation List/Application List */}
-                <div className="flex-1 overflow-y-auto">
+                <div className="flex-1 min-h-0 overflow-hidden">
                     {activeTab === 'applications' ? (
-                        <ApplicationList />
+                        <div className="h-full overflow-y-auto">
+                            <ApplicationList />
+                        </div>
                     ) : activeTab === 'projects' ? (
-                        <ProjectGroupList />
+                        <div className="h-full min-h-0 overflow-hidden">
+                            <ProjectGroupList />
+                        </div>
                     ) : showSearchResults ? (
                         isSearching ? (
-                            <div className="flex items-center justify-center p-8">
+                            <div className="h-full flex items-center justify-center p-8">
                                 <Loader2 className="w-6 h-6 animate-spin text-blue-600" />
                             </div>
                         ) : searchResults.length === 0 ? (
@@ -310,50 +339,52 @@ export default function MessagesClient({ targetUserId, initialConversationId }: 
                                 <p className="text-sm text-zinc-500">No messages found</p>
                             </div>
                         ) : (
-                            <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
-                                {searchResults.map((item) => {
-                                    const { message, conversationId } = item;
-                                    // Use local or hydrated conversation
-                                    const conv = conversations.find(c => c.id === conversationId) || item.conversation;
-                                    const participant = conv?.participants.find(p => p.id !== user?.id) || conv?.participants[0];
+                            <div className="h-full overflow-y-auto">
+                                <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                                    {searchResults.map((item) => {
+                                        const { message, conversationId } = item;
+                                        // Use local or hydrated conversation
+                                        const conv = conversations.find(c => c.id === conversationId) || item.conversation;
+                                        const participant = conv?.participants.find(p => p.id !== user?.id) || conv?.participants[0];
 
-                                    return (
-                                        <button
-                                            key={message.id}
-                                            onClick={() => handleSearchResultClick(conversationId, item.conversation)}
-                                            className="w-full flex flex-col gap-1 p-4 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 text-left transition-colors"
-                                        >
-                                            <div className="flex items-center gap-2">
-                                                <div className="w-6 h-6 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center overflow-hidden">
-                                                    {participant?.avatarUrl ? (
-                                                        <Image
-                                                            src={participant.avatarUrl}
-                                                            alt=""
-                                                            width={24}
-                                                            height={24}
-                                                            unoptimized
-                                                            className="w-full h-full object-cover"
-                                                        />
-                                                    ) : (
-                                                        <span className="text-white text-xs">
-                                                            {(participant?.fullName || '?')[0].toUpperCase()}
-                                                        </span>
-                                                    )}
+                                        return (
+                                            <button
+                                                key={message.id}
+                                                onClick={() => handleSearchResultClick(conversationId, item.conversation)}
+                                                className="w-full flex flex-col gap-1 p-4 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 text-left transition-colors"
+                                            >
+                                                <div className="flex items-center gap-2">
+                                                    <div className="w-6 h-6 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center overflow-hidden">
+                                                        {participant?.avatarUrl ? (
+                                                            <Image
+                                                                src={participant.avatarUrl}
+                                                                alt=""
+                                                                width={24}
+                                                                height={24}
+                                                                unoptimized
+                                                                className="w-full h-full object-cover"
+                                                            />
+                                                        ) : (
+                                                            <span className="text-white text-xs">
+                                                                {(participant?.fullName || '?')[0].toUpperCase()}
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                    <span className="text-xs font-medium text-zinc-700 dark:text-zinc-300">
+                                                        {participant?.fullName || participant?.username || 'Unknown'}
+                                                    </span>
                                                 </div>
-                                                <span className="text-xs font-medium text-zinc-700 dark:text-zinc-300">
-                                                    {participant?.fullName || participant?.username || 'Unknown'}
-                                                </span>
-                                            </div>
-                                            <p className="text-sm text-zinc-600 dark:text-zinc-300 line-clamp-2">
-                                                {highlightMatch(message.content || '', debouncedSearch)}
-                                            </p>
-                                        </button>
-                                    );
-                                })}
+                                                <p className="text-sm text-zinc-600 dark:text-zinc-300 line-clamp-2">
+                                                    {highlightMatch(message.content || '', debouncedSearch)}
+                                                </p>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
                             </div>
                         )
                     ) : (
-                        <div className="flex-1 min-h-0 overflow-hidden">
+                        <div className="h-full min-h-0 overflow-hidden">
                             {isDraftMode && targetUser && (
                                 <div className="w-full flex items-center gap-3 p-4 bg-blue-50 dark:bg-blue-950/30 border-l-2 border-blue-600 border-b border-zinc-100 dark:border-zinc-800">
                                     <div className="relative flex-shrink-0">

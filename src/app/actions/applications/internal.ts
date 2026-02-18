@@ -18,6 +18,17 @@ import { createClient } from '@/lib/supabase/server';
 import { revalidatePath } from 'next/cache';
 import { consumeRateLimit } from '@/lib/security/rate-limit';
 import { trackApplicationEvent } from '@/lib/observability/applications';
+import type {
+    ApplicationCoreStatus,
+    ApplicationLifecycleStatus,
+    ApplicationLifecycleStatusWithNone,
+} from '@/lib/applications/status';
+import {
+    calculateCooldown,
+    normalizeApplicationMessageText,
+    resolveLifecycleStatus,
+} from '@/lib/applications/utils';
+import { isApplicationReviewerRole } from '@/lib/applications/authorization';
 
 // ============================================================================
 // TYPES
@@ -30,18 +41,17 @@ interface ApplicationResult {
 }
 
 interface ApplicationStatus {
-    status: 'none' | 'pending' | 'accepted' | 'rejected';
+    status: ApplicationCoreStatus;
     roleId?: string;
     roleTitle?: string;
     decisionReason?: string | null;
-    lifecycleStatus?: 'none' | 'pending' | 'accepted' | 'rejected' | 'withdrawn' | 'role_filled';
+    lifecycleStatus?: ApplicationLifecycleStatusWithNone;
     canReapply?: boolean;
     waitTime?: string;
     updatedAt?: Date;
 }
 
 type ApplicationDecisionStatus = 'accepted' | 'rejected';
-type ApplicationLifecycleStatus = 'none' | 'pending' | 'accepted' | 'rejected' | 'withdrawn' | 'role_filled';
 
 export interface ApplicationRequestHistoryItem {
     id: string;
@@ -69,19 +79,14 @@ export interface ApplicationRequestHistoryItem {
 // ============================================================================
 // COOLDOWN HELPER (24 hours)
 // ============================================================================
-const COOLDOWN_MS = 24 * 60 * 60 * 1000; // 24 hours
 const APPLICATION_EDIT_WINDOW_MS = 10 * 60 * 1000; // 10 minutes
 const APPLICATION_REOPEN_WINDOW_MS = 10 * 60 * 1000; // 10 minutes
 const APPLICATION_PENDING_CAP_PER_USER = 20;
 const APPLICATION_APPLY_COOLDOWN_PER_PROJECT_SECONDS = 60;
 const APPLICATION_APPLY_COOLDOWN_GLOBAL_SECONDS = 8;
-const REVIEWER_ROLES = new Set(['owner', 'lead', 'admin', 'manager']);
-
-const APPLICATION_LINK_LABELS = [
-    { hostIncludes: 'github.com', label: 'GitHub' },
-    { hostIncludes: 'linkedin.com', label: 'LinkedIn' },
-    { hostIncludes: 'gitlab.com', label: 'GitLab' },
-] as const;
+const APPLICATION_LIST_DEFAULT_LIMIT = 20;
+const APPLICATION_LIST_MAX_LIMIT = 100;
+const APPLICATION_LIST_MAX_OFFSET = 100_000;
 
 const DECISION_REASON_TEMPLATES = {
     skills_mismatch: 'Your skills are strong, but this role currently needs a closer stack match.',
@@ -91,81 +96,22 @@ const DECISION_REASON_TEMPLATES = {
     other: 'Thank you for applying. We are moving forward with another direction right now.',
 } as const;
 
-function calculateCooldown(updatedAt: Date): { canApply: boolean; waitTime?: string } {
-    const elapsed = Date.now() - new Date(updatedAt).getTime();
+function normalizeApplicationListPagination(limit: unknown, offset: unknown) {
+    const rawLimit = typeof limit === 'number' ? limit : Number(limit);
+    const normalizedLimit = Number.isFinite(rawLimit)
+        ? Math.trunc(rawLimit)
+        : APPLICATION_LIST_DEFAULT_LIMIT;
+    const safeLimit = Math.min(Math.max(normalizedLimit, 1), APPLICATION_LIST_MAX_LIMIT);
 
-    if (elapsed >= COOLDOWN_MS) {
-        return { canApply: true };
-    }
+    const rawOffset = typeof offset === 'number' ? offset : Number(offset);
+    const normalizedOffset = Number.isFinite(rawOffset)
+        ? Math.trunc(rawOffset)
+        : 0;
+    const safeOffset = Math.min(Math.max(normalizedOffset, 0), APPLICATION_LIST_MAX_OFFSET);
 
-    const remaining = COOLDOWN_MS - elapsed;
-    const hours = Math.floor(remaining / (60 * 60 * 1000));
-    const minutes = Math.floor((remaining % (60 * 60 * 1000)) / (60 * 1000));
-
-    return { canApply: false, waitTime: `${hours}h ${minutes}m` };
+    return { safeLimit, safeOffset };
 }
 
-function getLinkTypeLabel(hostnameOrRaw: string) {
-    const value = hostnameOrRaw.toLowerCase();
-    const matched = APPLICATION_LINK_LABELS.find((item) => value.includes(item.hostIncludes));
-    return matched?.label || 'Link';
-}
-
-function normalizeTypedLinkLine(rawValue: string) {
-    const trimmed = rawValue.trim();
-    if (!trimmed) return null;
-    const looksLikeLink = /^https?:\/\//i.test(trimmed) || /[a-z0-9-]+\.[a-z]{2,}/i.test(trimmed);
-    if (!looksLikeLink) return null;
-    const firstToken = trimmed.split(/\s+/)[0];
-    const candidate = /^https?:\/\//i.test(firstToken) ? firstToken : `https://${firstToken}`;
-
-    try {
-        const parsed = new URL(candidate);
-        const label = getLinkTypeLabel(parsed.hostname);
-        return `${label}: ${parsed.toString()}`;
-    } catch {
-        const label = getLinkTypeLabel(firstToken);
-        return `${label}: ${trimmed}`;
-    }
-}
-
-function normalizeApplicationMessageText(raw: string) {
-    const text = (raw || '').trim();
-    if (!text) return '';
-
-    const lines = text
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter(Boolean);
-
-    const normalized: string[] = [];
-    let availabilityLine: string | null = null;
-
-    for (const line of lines) {
-        if (/^availability\s*:/i.test(line)) {
-            if (!availabilityLine) {
-                const value = line.replace(/^availability\s*:/i, '').trim();
-                if (value) availabilityLine = `Availability: ${value}`;
-            }
-            continue;
-        }
-
-        const normalizedLink = normalizeTypedLinkLine(line);
-        if (normalizedLink) {
-            normalized.push(normalizedLink);
-            continue;
-        }
-
-        normalized.push(line);
-    }
-
-    const deduped = normalized.filter((line, index, arr) => arr.indexOf(line) === index);
-    const output = [...deduped, ...(availabilityLine ? [availabilityLine] : [])]
-        .join('\n\n')
-        .trim();
-
-    return output.slice(0, 2000);
-}
 
 function buildApplicationMessageContent(projectTitle: string, roleTitle: string, normalizedMessage: string) {
     return `${projectTitle} / ${roleTitle}\n\n${normalizedMessage}`.trim();
@@ -209,17 +155,6 @@ function resolveDecisionMessage(
     return DECISION_REASON_TEMPLATES[reasonKey] || DECISION_REASON_TEMPLATES.other;
 }
 
-function resolveLifecycleStatus(
-    status: ApplicationDecisionStatus | 'pending',
-    decisionReason?: string | null
-): ApplicationLifecycleStatus {
-    if (status === 'pending') return 'pending';
-    if (status === 'accepted') return 'accepted';
-    if (decisionReason === 'withdrawn_by_applicant') return 'withdrawn';
-    if (decisionReason === 'role_filled') return 'role_filled';
-    return 'rejected';
-}
-
 function toISODate(value: Date | string | null | undefined) {
     if (!value) return null;
     const date = value instanceof Date ? value : new Date(value);
@@ -237,8 +172,7 @@ async function canReviewProjectApplicationInternal(
         where: and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, userId)),
         columns: { role: true },
     });
-    if (!membership?.role) return false;
-    return REVIEWER_ROLES.has(membership.role.toLowerCase());
+    return isApplicationReviewerRole(membership?.role);
 }
 
 async function getDecisionMetadataMap(applicationIds: string[]) {
@@ -247,27 +181,43 @@ async function getDecisionMetadataMap(applicationIds: string[]) {
         return new Map<string, { reasonCode: string | null; decisionAt: string | null }>();
     }
 
-    const idList = sql.join(normalizedIds.map((id) => sql`${id}`), sql`,`);
-    const rows = await db.execute(sql`
-        SELECT
-            metadata->>'applicationId' AS application_id,
-            metadata->>'reasonCode' AS reason_code,
-            metadata->>'decisionAt' AS decision_at
-        FROM ${messages}
-        WHERE metadata->>'kind' = 'application_decision'
-          AND metadata->>'applicationId' IN (${idList})
-        ORDER BY created_at DESC
-    `);
-
+    const startedAtMs = Date.now();
+    const CHUNK_SIZE = 200;
     const map = new Map<string, { reasonCode: string | null; decisionAt: string | null }>();
-    for (const row of rows as Array<Record<string, unknown>>) {
-        const applicationId = typeof row.application_id === 'string' ? row.application_id : null;
-        if (!applicationId || map.has(applicationId)) continue;
-        const reasonCode = typeof row.reason_code === 'string' ? row.reason_code : null;
-        const decisionAt = typeof row.decision_at === 'string' ? row.decision_at : null;
-        map.set(applicationId, {
-            reasonCode,
-            decisionAt,
+
+    for (let i = 0; i < normalizedIds.length; i += CHUNK_SIZE) {
+        const chunk = normalizedIds.slice(i, i + CHUNK_SIZE);
+        const rows = await db
+            .select({
+                applicationId: sql<string>`metadata->>'applicationId'`,
+                reasonCode: sql<string | null>`metadata->>'reasonCode'`,
+                decisionAt: sql<string | null>`metadata->>'decisionAt'`,
+                createdAt: messages.createdAt,
+            })
+            .from(messages)
+            .where(
+                and(
+                    eq(sql<string>`metadata->>'kind'`, 'application_decision'),
+                    inArray(sql<string>`metadata->>'applicationId'`, chunk),
+                ),
+            )
+            .orderBy(desc(messages.createdAt));
+
+        for (const row of rows) {
+            const applicationId = typeof row.applicationId === 'string' ? row.applicationId : null;
+            if (!applicationId || map.has(applicationId)) continue;
+            map.set(applicationId, {
+                reasonCode: typeof row.reasonCode === 'string' ? row.reasonCode : null,
+                decisionAt: typeof row.decisionAt === 'string' ? row.decisionAt : null,
+            });
+        }
+    }
+
+    const elapsedMs = Date.now() - startedAtMs;
+    if (elapsedMs > 250) {
+        console.info('[applications] getDecisionMetadataMap slow-path', {
+            count: normalizedIds.length,
+            elapsedMs,
         });
     }
     return map;
@@ -499,7 +449,7 @@ async function sendApplicationMessageInternal(
     roleTitle: string,
     userMessage: string,
     applicationId: string
-): Promise<{ conversationId: string; messageId: string }> {
+): Promise<{ conversationId: string }> {
     // 1) Ensure a single DM conversation for this user pair
     const conversationId = await getOrCreateDmConversationIdInternal(tx, applicantId, creatorId);
     const clientMessageId = buildApplicationClientMessageId(applicationId);
@@ -563,9 +513,8 @@ async function sendApplicationMessageInternal(
         ...baseMetadata,
     };
 
-    let messageId: string;
     if (existingMessage?.id) {
-        const updated = await tx
+        await tx
             .update(messages)
             .set({
                 content: applicationMessage,
@@ -576,7 +525,6 @@ async function sendApplicationMessageInternal(
             })
             .where(eq(messages.id, existingMessage.id))
             .returning({ id: messages.id });
-        messageId = updated[0]?.id || existingMessage.id;
     } else {
         const inserted = await tx
             .insert(messages)
@@ -604,7 +552,6 @@ async function sendApplicationMessageInternal(
                 `Message insert returned no id: conversationId=${conversationId}, applicationId=${applicationId}`
             );
         }
-        messageId = insertedId;
     }
 
     // 3) Update conversation timestamp for sorting
@@ -613,12 +560,9 @@ async function sendApplicationMessageInternal(
         .set({ updatedAt: new Date() })
         .where(eq(conversations.id, conversationId));
 
-    return { conversationId, messageId };
+    return { conversationId };
 }
 
-// ============================================================================
-// INTERNAL HELPER: Send status update message to chat
-// ============================================================================
 // ============================================================================
 // INTERNAL HELPER: Send status update message to chat
 // ============================================================================
@@ -986,7 +930,7 @@ export async function applyToRoleAction(
                     return { success: false, error: `You can reapply in ${waitTime}` };
                 }
 
-                const { conversationId, messageId } = await db.transaction(async (tx) => {
+                const { conversationId } = await db.transaction(async (tx) => {
                     // State transition: rejected -> pending
                     const reopened = await transitionApplicationToPendingInternal(tx, existingApp.id);
                     if (!reopened) {
@@ -1003,7 +947,7 @@ export async function applyToRoleAction(
                         .where(eq(roleApplications.id, existingApp.id));
 
                     // Send reapplication message to chat (atomic with the application update)
-                    const { conversationId, messageId } = await sendApplicationMessageInternal(
+                    const { conversationId } = await sendApplicationMessageInternal(
                         tx,
                         user.id,
                         project.ownerId,
@@ -1020,10 +964,8 @@ export async function applyToRoleAction(
                         .set({ conversationId, updatedAt: new Date() })
                         .where(eq(roleApplications.id, existingApp.id));
 
-                    return { conversationId, messageId };
+                    return { conversationId };
                 });
-
-                void messageId;
 
                 revalidatePath(`/projects/${project.slug || projectId}`);
                 revalidatePath('/messages');
@@ -1047,7 +989,7 @@ export async function applyToRoleAction(
             return { success: false, error: 'You already have too many pending applications. Please wait for decisions.' };
         }
 
-        const { applicationId: newApplicationId, conversationId, messageId } = await db.transaction(async (tx) => {
+        const { applicationId: newApplicationId, conversationId } = await db.transaction(async (tx) => {
             // Create new application with message
             const [newApp] = await tx.insert(roleApplications)
                 .values({
@@ -1061,7 +1003,7 @@ export async function applyToRoleAction(
                 .returning({ id: roleApplications.id });
 
             // Send application message to chat (atomic with application insert)
-            const { conversationId, messageId } = await sendApplicationMessageInternal(
+            const { conversationId } = await sendApplicationMessageInternal(
                 tx,
                 user.id,
                 project.ownerId,
@@ -1078,10 +1020,8 @@ export async function applyToRoleAction(
                 .set({ conversationId, updatedAt: new Date() })
                 .where(eq(roleApplications.id, newApp.id));
 
-            return { applicationId: newApp.id, conversationId, messageId };
+            return { applicationId: newApp.id, conversationId };
         });
-
-        void messageId;
 
         revalidatePath(`/projects/${project.slug || projectId}`);
         revalidatePath('/messages');
@@ -1144,7 +1084,7 @@ export async function acceptApplicationAction(
             application.project?.ownerId
         );
         if (!canReview) {
-            return { success: false, error: 'Only the project owner or leads can accept applications' };
+            return { success: false, error: 'Only the project owner or admins can accept applications' };
         }
 
         if (application.status === 'accepted') {
@@ -1334,7 +1274,7 @@ export async function rejectApplicationAction(
             application.project?.ownerId || application.creatorId
         );
         if (!canReview) {
-            return { success: false, error: 'Only the project owner or leads can reject applications' };
+            return { success: false, error: 'Only the project owner or admins can reject applications' };
         }
 
         if (application.status === 'rejected') {
@@ -1654,7 +1594,7 @@ export async function reopenApplicationAction(
             application.project?.ownerId || application.creatorId
         );
         if (!canReview) {
-            return { success: false, error: 'Only project owner or leads can reopen applications' };
+            return { success: false, error: 'Only project owner or admins can reopen applications' };
         }
 
         if (application.status === 'pending') {
@@ -1815,7 +1755,7 @@ export async function getMyApplicationsAction() {
 // GET INCOMING APPLICATIONS (for Creator - Connections > Requests tab)
 // ============================================================================
 export async function getIncomingApplicationsAction(
-    limit: number = 20,
+    limit: number = APPLICATION_LIST_DEFAULT_LIMIT,
     offset: number = 0
 ) {
     try {
@@ -1825,6 +1765,7 @@ export async function getIncomingApplicationsAction(
         if (!user) {
             return { success: false, applications: [], hasMore: false };
         }
+        const { safeLimit, safeOffset } = normalizeApplicationListPagination(limit, offset);
 
         const applications = await db.query.roleApplications.findMany({
             where: and(
@@ -1844,12 +1785,12 @@ export async function getIncomingApplicationsAction(
             },
             columns: { id: true, projectId: true, status: true, createdAt: true, conversationId: true },
             orderBy: (apps, { desc }) => [desc(apps.createdAt)],
-            limit: limit + 1,
-            offset: offset
+            limit: safeLimit + 1,
+            offset: safeOffset
         });
 
-        const hasMore = applications.length > limit;
-        const slicedApplications = applications.slice(0, limit);
+        const hasMore = applications.length > safeLimit;
+        const slicedApplications = applications.slice(0, safeLimit);
 
         return {
             success: true,
@@ -1881,16 +1822,18 @@ export async function getIncomingApplicationsAction(
 // GET INBOX APPLICATIONS (Unified Incoming + Outgoing)
 // ============================================================================
 export async function getInboxApplicationsAction(
-    limit: number = 20,
+    limit: number = APPLICATION_LIST_DEFAULT_LIMIT,
     offset: number = 0
 ) {
     try {
+        const startedAtMs = Date.now();
         const supabase = await createClient();
         const { data: { user } } = await supabase.auth.getUser();
 
         if (!user) {
             return { success: false, applications: [], hasMore: false };
         }
+        const { safeLimit, safeOffset } = normalizeApplicationListPagination(limit, offset);
 
         // Fetch applications where:
         // 1. User is Creator AND status is 'pending' (Incoming)
@@ -1914,14 +1857,23 @@ export async function getInboxApplicationsAction(
                     columns: { id: true, username: true, fullName: true, avatarUrl: true }
                 }
             },
-            columns: { id: true, projectId: true, creatorId: true, applicantId: true, status: true, createdAt: true, conversationId: true },
+            columns: {
+                id: true,
+                projectId: true,
+                creatorId: true,
+                applicantId: true,
+                status: true,
+                createdAt: true,
+                updatedAt: true,
+                conversationId: true,
+            },
             orderBy: (apps, { desc }) => [desc(apps.createdAt)],
-            limit: limit + 1,
-            offset: offset
+            limit: safeLimit + 1,
+            offset: safeOffset
         });
 
-        const hasMore = applications.length > limit;
-        const slicedApplications = applications.slice(0, limit);
+        const hasMore = applications.length > safeLimit;
+        const slicedApplications = applications.slice(0, safeLimit);
         const decisionMap = await getDecisionMetadataMap(slicedApplications.map((app) => app.id));
 
         // Fetch creator profiles for outgoing applications
@@ -1943,7 +1895,7 @@ export async function getInboxApplicationsAction(
             creatorsMap = new Map(creators.map(c => [c.id, c]));
         }
 
-        return {
+        const payload = {
             success: true,
             applications: slicedApplications.map((app) => {
                 const isIncoming = app.creatorId === user.id;
@@ -1997,6 +1949,16 @@ export async function getInboxApplicationsAction(
             }),
             hasMore,
         };
+        const elapsedMs = Date.now() - startedAtMs;
+        if (elapsedMs > 300) {
+            console.info('[applications] getInboxApplicationsAction slow-path', {
+                limit,
+                offset: safeOffset,
+                count: payload.applications.length,
+                elapsedMs,
+            });
+        }
+        return payload;
     } catch (error) {
         console.error('Failed to get inbox applications:', error);
         return { success: false, applications: [], hasMore: false };

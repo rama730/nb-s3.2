@@ -3,26 +3,54 @@ export const runtime = 'edge';
 import { NextResponse } from 'next/server';
 import { cacheData, getCachedData } from '@/lib/redis';
 
+const DEFAULT_PAGE = 0;
+const DEFAULT_LIMIT = 24;
+const MAX_LIMIT = 100;
+const MAX_PAGE = 10_000;
+
+function parseNonNegativeInt(value: string | null, fallback: number) {
+    if (value === null || value.trim() === '') return { ok: true as const, value: fallback };
+    if (!/^\d+$/.test(value)) return { ok: false as const };
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return { ok: false as const };
+    return { ok: true as const, value: parsed };
+}
+
 export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
-    const page = parseInt(searchParams.get('page') || '0');
-    const limit = parseInt(searchParams.get('limit') || '24');
+
+    const parsedPage = parseNonNegativeInt(searchParams.get('page'), DEFAULT_PAGE);
+    const parsedLimit = parseNonNegativeInt(searchParams.get('limit'), DEFAULT_LIMIT);
+
+    if (!parsedPage.ok || !parsedLimit.ok) {
+        return NextResponse.json(
+            { error: 'Invalid pagination parameters' },
+            { status: 400 }
+        );
+    }
+
+    const page = Math.min(parsedPage.value, MAX_PAGE);
+    const limit = Math.min(Math.max(parsedLimit.value, 1), MAX_LIMIT);
 
     // Construct cache key based on params
-    const cacheKey = `projects:public:page:${page}:limit:${limit}:q:${searchParams.get('q') || ''}:sort:${searchParams.get('sort') || ''}`;
+    const cacheKey = `projects:public:page:${page}:limit:${limit}`;
 
     // 1. Try Redis Cache
-    const cached = await getCachedData(cacheKey);
-    if (cached) {
-        return NextResponse.json({
-            data: cached,
-            source: 'redis-edge-cache'
-        }, {
-            headers: {
-                'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=300',
-                'X-Edge-Region': 'global'
-            }
-        });
+    try {
+        const cached = await getCachedData(cacheKey);
+        if (cached) {
+            return NextResponse.json({
+                data: cached,
+                source: 'redis-edge-cache'
+            }, {
+                headers: {
+                    'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=300',
+                    'X-Edge-Region': 'global'
+                }
+            });
+        }
+    } catch (error) {
+        console.warn('Projects cache read failed, continuing without cache', error);
     }
 
     // 2. Fetch from DB if miss
@@ -50,7 +78,11 @@ export async function GET(request: Request) {
         const data = await response.json();
 
         // 3. Cache Result
-        await cacheData(cacheKey, data, 60); // Cache for 60s
+        try {
+            await cacheData(cacheKey, data, 60); // Cache for 60s
+        } catch (error) {
+            console.warn('Projects cache write failed, continuing without cache', error);
+        }
 
         return NextResponse.json({
             data: data,

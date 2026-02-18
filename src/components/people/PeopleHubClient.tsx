@@ -84,9 +84,9 @@ export default function PeopleHubClient({
     return (
         <div className="bg-zinc-50 dark:bg-black min-h-screen">
             {/* Sticky Tabs Bar - Minimal */}
-            <div className="sticky top-16 z-30 bg-zinc-50 dark:bg-black border-b border-zinc-200 dark:border-zinc-800">
-                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-1.5">
-                    <div className="inline-flex items-center p-0.5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg shadow-sm">
+            <div className="sticky top-16 z-30 bg-zinc-50/80 dark:bg-black/80 backdrop-blur-xl border-b border-zinc-200/60 dark:border-white/5">
+                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2">
+                    <div className="inline-flex items-center p-1 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-sm border border-zinc-200/60 dark:border-white/10 rounded-2xl shadow-sm">
                         {visibleTabs.map((t) => {
                             const Icon = t.icon;
                             const selected = activeTab === t.key;
@@ -97,7 +97,7 @@ export default function PeopleHubClient({
                                     key={t.key}
                                     onClick={() => navigateTab(t.key)}
                                     className={cn(
-                                        "relative flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 whitespace-nowrap group",
+                                        "relative flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 whitespace-nowrap",
                                         selected
                                             ? "text-zinc-900 dark:text-white"
                                             : "text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800/50"
@@ -107,21 +107,24 @@ export default function PeopleHubClient({
                                     {selected && (
                                         <motion.div
                                             layoutId="activePeopleTab"
-                                            className="absolute inset-0 bg-zinc-100 dark:bg-zinc-800 rounded-xl shadow-sm"
+                                            className="absolute inset-0 bg-gradient-to-r from-indigo-500/10 to-purple-500/10 dark:from-indigo-500/20 dark:to-purple-500/20 rounded-xl shadow-sm ring-1 ring-indigo-500/20 dark:ring-indigo-400/20"
                                             transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
                                         />
                                     )}
                                     <span className="relative z-10 flex items-center gap-2">
-                                        <Icon className="w-4 h-4" />
+                                        <Icon className={cn("w-4 h-4", selected && "text-indigo-600 dark:text-indigo-400")} />
                                         <span>{t.label}</span>
                                         {badgeCount && (
-                                            <span className="ml-1 px-1.5 py-0.5 text-[10px] font-bold bg-red-500 text-white rounded-full">
-                                                {badgeCount > 9 ? "9+" : badgeCount}
+                                            <span className="relative ml-1 flex h-5 items-center">
+                                                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-40" />
+                                                <span className="relative inline-flex items-center justify-center px-1.5 py-0.5 text-[10px] font-bold bg-red-500 text-white rounded-full min-w-[20px]">
+                                                    {badgeCount > 9 ? "9+" : badgeCount}
+                                                </span>
                                             </span>
                                         )}
                                     </span>
                                     {selected && (
-                                        <span className="relative z-10 text-xs text-zinc-500 dark:text-zinc-400 hidden sm:inline ml-1">
+                                        <span className="relative z-10 text-xs text-indigo-600/70 dark:text-indigo-400/70 hidden sm:inline ml-1">
                                             {t.hint}
                                         </span>
                                     )}

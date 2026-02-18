@@ -35,20 +35,24 @@ test.describe("Messaging smoke", () => {
         const composer = page.getByPlaceholder("Type a message...");
         await expect(composer).toBeVisible();
 
-        const marker = `pw-code-${Date.now()}`;
-        const content = `\`\`\`ts\nconst marker = "${marker}"\n\`\`\``;
+        const marker = `pw-msg-${Date.now()}`;
+        const content = `optimistic ${marker}`;
         await composer.fill(content);
         await composer.press("Enter");
 
-        const sentMessage = page.getByText(marker).last();
-        await expect(sentMessage).toBeVisible({ timeout: 15000 });
+        const sentMessageText = page.getByText(content).last();
+        await expect(sentMessageText).toBeVisible({ timeout: 15000 });
+        await expect(
+            page.locator("div.justify-end", { has: page.getByText(content) }).last()
+        ).toBeVisible({ timeout: 2000 });
+        await expect(page.locator("div.justify-start", { has: page.getByText(content) })).toHaveCount(0);
 
-        await sentMessage.hover();
+        await sentMessageText.hover();
         await page.getByLabel("Message actions").last().click();
         await page.getByRole("menuitem", { name: "Reply" }).click();
         await expect(page.getByText("Replying to")).toBeVisible();
 
-        await sentMessage.hover();
+        await sentMessageText.hover();
         await page.getByLabel("Message actions").last().click();
         const pinAction = page.getByRole("menuitem", { name: "Pin" });
         if (await pinAction.count()) {
@@ -59,4 +63,3 @@ test.describe("Messaging smoke", () => {
         await context.close();
     });
 });
-

@@ -10,6 +10,7 @@ import { Send, Paperclip, Image as ImageIcon, X, Loader2, UserPlus, Clock, Check
 import { toast } from 'sonner';
 import { ChatApplicationBanner } from './ChatApplicationBanner';
 import { useRouter } from 'next/navigation';
+import { useAuth } from '@/hooks/useAuth';
 
 // ============================================================================
 // MESSAGE INPUT
@@ -38,6 +39,7 @@ const UPLOAD_CONCURRENCY = 3;
 const MAX_UPLOAD_RETRIES = 3;
 
 export function MessageInput({ conversationId, targetUserId }: MessageInputProps) {
+    const { user } = useAuth();
     const draft = useChatStore(state => state.draftsByConversation[conversationId] || '');
     const setDraft = useChatStore(state => state.setDraft);
     const replyTarget = useChatStore(state => state.replyTargetByConversation[conversationId] || null);
@@ -269,6 +271,14 @@ export function MessageInput({ conversationId, targetUserId }: MessageInputProps
             const result = await sendMessage(actualConversationId, text, {
                 attachments: uploadedAttachments,
                 replyToMessageId: replyTarget?.id || null,
+                senderSnapshot: user
+                    ? {
+                        id: user.id,
+                        username: (user.user_metadata?.username as string | undefined) || null,
+                        fullName: (user.user_metadata?.full_name as string | undefined) || null,
+                        avatarUrl: (user.user_metadata?.avatar_url as string | undefined) || null,
+                    }
+                    : undefined,
             });
             const success = result.ok;
 
@@ -309,7 +319,7 @@ export function MessageInput({ conversationId, targetUserId }: MessageInputProps
 
         // Focus back on input
         inputRef.current?.focus();
-    }, [conversationId, targetUserId, draft, attachments, isSending, sendTyping, setDraft, sendMessage, refreshConversations, openConversation, router, replyTarget, clearReplyTarget]);
+    }, [conversationId, targetUserId, draft, attachments, isSending, sendTyping, setDraft, sendMessage, refreshConversations, openConversation, router, replyTarget, clearReplyTarget, user]);
 
     // Handle key press
     const handleKeyDown = (e: React.KeyboardEvent) => {

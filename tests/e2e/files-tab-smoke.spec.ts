@@ -34,6 +34,28 @@ test.describe("Files tab smoke", () => {
         await page.goto(`${projectHref}?tab=files`);
         await expect(page.getByPlaceholder("Search files…")).toBeVisible();
 
+        const firstFileEntry = page
+            .locator("span")
+            .filter({ hasText: /\.(md|txt|ts|tsx|js|jsx|json|css|html|py|sql)$/ })
+            .first();
+        if (await firstFileEntry.count()) {
+            await firstFileEntry.click();
+            const saveButton = page.getByRole("button", { name: /^Save$/ }).first();
+            await expect(saveButton).toBeVisible();
+            await expect(saveButton).toBeDisabled();
+            await expect(page.getByText("Unsaved")).toHaveCount(0);
+            await page.waitForTimeout(3500);
+            await expect(saveButton).toBeDisabled();
+            await expect(page.getByText("Unsaved")).toHaveCount(0);
+
+            const readOnlyBadge = page.getByText("Read-only").first();
+            if (await readOnlyBadge.count()) {
+                await expect(readOnlyBadge).toBeVisible();
+                await page.waitForTimeout(3500);
+                await expect(readOnlyBadge).toBeVisible();
+            }
+        }
+
         const folderName = `pw-folder-${Date.now()}`;
         await page.getByTitle("New folder").click();
         await expect(page.getByRole("heading", { name: "Create folder" })).toBeVisible();

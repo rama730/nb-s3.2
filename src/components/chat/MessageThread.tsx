@@ -6,7 +6,7 @@ import { useTypingChannel } from '@/hooks/useTypingChannel';
 import { MessageBubble } from './MessageBubble';
 import { TypingIndicator } from './TypingIndicator';
 import type { MessageWithSender } from '@/app/actions/messaging';
-import { Virtuoso } from 'react-virtuoso';
+import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import { Loader2 } from 'lucide-react';
 
 // ============================================================================
@@ -22,7 +22,9 @@ interface MessageThreadProps {
 const EMPTY_PINNED_MESSAGES: MessageWithSender[] = [];
 
 export function MessageThread({ messages, conversationId }: MessageThreadProps) {
-    const bottomRef = useRef<HTMLDivElement>(null);
+    const virtuosoRef = useRef<VirtuosoHandle | null>(null);
+    const isAtBottomRef = useRef(true);
+    const initialBottomAppliedForConversationRef = useRef<string | null>(null);
     const prevMessagesLengthRef = useRef(messages.length);
 
     const messageCache = useChatStore(state => state.messagesByConversation[conversationId]);
@@ -38,25 +40,48 @@ export function MessageThread({ messages, conversationId }: MessageThreadProps) 
     const isLoading = messageCache?.loading || false;
     const hasMore = messageCache?.hasMore || false;
 
-    // Auto-scroll to bottom on new messages
     useEffect(() => {
-        if (messages.length > prevMessagesLengthRef.current) {
-            bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+        isAtBottomRef.current = true;
+        initialBottomAppliedForConversationRef.current = null;
+        prevMessagesLengthRef.current = 0;
+    }, [conversationId]);
+
+    // Auto-scroll to bottom on new messages when user is already at bottom
+    useEffect(() => {
+        if (messages.length > prevMessagesLengthRef.current && isAtBottomRef.current) {
+            virtuosoRef.current?.scrollToIndex({
+                index: 'LAST',
+                align: 'end',
+                behavior: 'smooth',
+            });
         }
         prevMessagesLengthRef.current = messages.length;
     }, [messages.length]);
 
-    // Scroll when typing users change (if near bottom)
+    // Scroll when typing users change (only if at bottom)
     useEffect(() => {
-        if (typingUsers.length > 0) {
-           bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+        if (typingUsers.length > 0 && messages.length > 0 && isAtBottomRef.current) {
+            virtuosoRef.current?.scrollToIndex({
+                index: 'LAST',
+                align: 'end',
+                behavior: 'smooth',
+            });
         }
-    }, [typingUsers.length]);
+    }, [messages.length, typingUsers.length]);
 
-    // Initial scroll to bottom
+    // Ensure each conversation opens from latest message once data is ready
     useEffect(() => {
-        bottomRef.current?.scrollIntoView();
-    }, [conversationId]);
+        if (isLoading) return;
+        if (messages.length === 0) return;
+        if (initialBottomAppliedForConversationRef.current === conversationId) return;
+
+        initialBottomAppliedForConversationRef.current = conversationId;
+        virtuosoRef.current?.scrollToIndex({
+            index: 'LAST',
+            align: 'end',
+            behavior: 'auto',
+        });
+    }, [conversationId, isLoading, messages.length]);
 
     useEffect(() => {
         void fetchPinnedMessages(conversationId);
@@ -141,11 +166,15 @@ export function MessageThread({ messages, conversationId }: MessageThreadProps) 
                 </div>
             )}
             <Virtuoso
+                ref={virtuosoRef}
                 style={{ height: '100%', flex: 1 }}
                 data={items}
                 initialTopMostItemIndex={initialTopMostItemIndex} // Start at bottom
                 followOutput="smooth" // Auto-scroll on new messages
                 alignToBottom // Stick to bottom on load
+                atBottomStateChange={(atBottom) => {
+                    isAtBottomRef.current = atBottom;
+                }}
                 startReached={() => {
                     if (!isLoading && hasMore) {
                         loadMoreMessages(conversationId);
@@ -158,7 +187,7 @@ export function MessageThread({ messages, conversationId }: MessageThreadProps) 
                         </div>
                     ) : null,
                     Footer: () => (
-                        <div className="pb-2 px-4" ref={bottomRef}>
+                        <div className="pb-2 px-4">
                             {typingUsers.length > 0 && <TypingIndicator users={typingUsers} />}
                             <div className="pb-2" />
                         </div>

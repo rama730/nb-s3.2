@@ -28,8 +28,8 @@ test.describe("Application flow smoke", () => {
         await page.getByRole("button", { name: "Applications" }).click();
 
         if (await page.getByText("No applications").count()) {
-            test.skip(true, "No application rows found for this account.");
             await context.close();
+            test.skip(true, "No application rows found for this account.");
             return;
         }
 
@@ -49,6 +49,17 @@ test.describe("Application flow smoke", () => {
             await expect(page.getByRole("heading", { name: "Edit Application" })).toBeVisible();
             await page.getByRole("button", { name: "Cancel" }).click();
             await expect(page.getByRole("heading", { name: "Edit Application" })).toHaveCount(0);
+        }
+
+        const terminalBannerText = page
+            .getByText(/application was accepted|accepted this application|application was rejected|rejected this application/i)
+            .first();
+        if (await terminalBannerText.count()) {
+            const marker = `pw-followup-${Date.now()}`;
+            await page.getByPlaceholder("Type a message...").fill(marker);
+            await page.getByPlaceholder("Type a message...").press("Enter");
+            await expect(page.getByText(marker).last()).toBeVisible({ timeout: 10000 });
+            await expect(terminalBannerText).toHaveCount(0, { timeout: 10000 });
         }
 
         await context.close();

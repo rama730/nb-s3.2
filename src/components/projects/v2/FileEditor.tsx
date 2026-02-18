@@ -96,6 +96,10 @@ export default function FileEditor({
   const deferredContent = useDeferredValue(content);
 
   const isMarkdown = file.name.endsWith(".md");
+  const modelPath = useMemo(
+    () => `project-${file.projectId}/node-${file.id}/${file.name}`,
+    [file.id, file.name, file.projectId]
+  );
 
   useEffect(() => {
       setShowPreview(false);
@@ -329,6 +333,7 @@ export default function FileEditor({
             <div className="mt-6 w-full flex-1 min-h-[200px] border rounded-lg overflow-hidden border-zinc-200 dark:border-zinc-800">
               <CodeEditor
                 filename={file.name}
+                modelPath={modelPath}
                 value={content}
                 onChange={onChange}
                 theme={isDark ? "dark" : "light"}
@@ -348,6 +353,7 @@ export default function FileEditor({
                     <div className="w-1/2 h-full border-r border-zinc-200 dark:border-zinc-800">
                          <CodeEditor
                             filename={file.name}
+                            modelPath={modelPath}
                             value={content}
                             onChange={onChange}
                             theme={isDark ? "dark" : "light"}
@@ -367,6 +373,7 @@ export default function FileEditor({
             ) : (
               <CodeEditor
                 filename={file.name}
+                modelPath={modelPath}
                 value={content}
                 onChange={onChange}
                 theme={isDark ? "dark" : "light"}

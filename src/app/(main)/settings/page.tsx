@@ -12,7 +12,7 @@ type SettingsItem = {
 
 const items: SettingsItem[] = [
     {
-        href: "/settings/profile",
+        href: "/profile",
         title: "Profile",
         desc: "Public profile, avatar, and bio",
     },

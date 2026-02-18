@@ -22,6 +22,7 @@ import {
     DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { shouldHideTerminalApplicationBanner } from "@/lib/chat/banner-lifecycle";
 
 interface ChatApplicationBannerProps {
     isApplicant: boolean;
@@ -130,6 +131,15 @@ export function ChatApplicationBanner({
     const isPending = status === 'pending';
     const isAccepted = status === 'accepted';
     const isRejected = status === 'rejected';
+    const shouldHideBanner = useMemo(
+        () =>
+            shouldHideTerminalApplicationBanner({
+                status,
+                applicationId: activeApplicationId,
+                messages: conversationMessages,
+            }),
+        [activeApplicationId, conversationMessages, status]
+    );
 
     const currentStyle = isAccepted ? BANNER_STYLES.accepted : isRejected ? BANNER_STYLES.rejected : BANNER_STYLES.pending;
     const { Icon } = currentStyle;
@@ -157,6 +167,10 @@ export function ChatApplicationBanner({
     const decisionAt = typeof applicationMetadata?.decisionAt === "string" ? applicationMetadata.decisionAt : null;
     const reopenedAt = typeof applicationMetadata?.reopenedAt === "string" ? applicationMetadata.reopenedAt : null;
     const lastStatusUpdate = formatRelativeTimestamp(reopenedAt || decisionAt);
+
+    if (shouldHideBanner) {
+        return null;
+    }
 
     // Content Handling
     const getTitle = () => {

@@ -91,6 +91,15 @@ export async function registerUploadedFolderAction(projectId: string, manifest: 
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error('Unauthorized');
 
+  const [project] = await db
+    .select({ id: projects.id, ownerId: projects.ownerId, slug: projects.slug })
+    .from(projects)
+    .where(eq(projects.id, projectId))
+    .limit(1);
+
+  if (!project) throw new Error('Project not found');
+  if (project.ownerId !== user.id) throw new Error('Unauthorized');
+
   const entries = (manifest || [])
     .map((e) => ({
       relativePath: normalizeRelativePath(e.relativePath),
@@ -105,19 +114,12 @@ export async function registerUploadedFolderAction(projectId: string, manifest: 
       .set({ syncStatus: 'ready', updatedAt: new Date() })
       .where(eq(projects.id, projectId));
     revalidatePath(`/projects/${projectId}`);
+    if (project.slug) revalidatePath(`/projects/${project.slug}`);
+    revalidatePath('/hub');
     return { success: true, registeredFiles: 0 };
   }
 
   const result = await db.transaction(async (tx) => {
-    const [project] = await tx
-      .select({ id: projects.id, ownerId: projects.ownerId, slug: projects.slug })
-      .from(projects)
-      .where(eq(projects.id, projectId))
-      .limit(1);
-
-    if (!project) throw new Error('Project not found');
-    if (project.ownerId !== user.id) throw new Error('Unauthorized');
-
     await tx.update(projects)
       .set({ syncStatus: 'indexing', updatedAt: new Date() })
       .where(eq(projects.id, projectId));
@@ -310,12 +312,12 @@ export async function registerUploadedFolderAction(projectId: string, manifest: 
       .set({ syncStatus: 'ready', updatedAt: new Date() })
       .where(eq(projects.id, projectId));
 
-    return { slug: project.slug, registeredFiles };
+    return { registeredFiles };
   });
 
   // Refresh the project page (slug or id)
   revalidatePath(`/projects/${projectId}`);
-  if (result.slug) revalidatePath(`/projects/${result.slug}`);
+  if (project.slug) revalidatePath(`/projects/${project.slug}`);
   revalidatePath('/hub');
 
   return { success: true, registeredFiles: result.registeredFiles };

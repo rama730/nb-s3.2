@@ -74,6 +74,7 @@ import { isAssetLike, isTextLike } from "./utils/fileKind";
 import AssetPreview from "./preview/AssetPreview";
 import RunnerPanel from "./runner/RunnerPanel";
 import type { PersistedRunSessionDetail, RunnerProfileRecord, RunnerSessionRecord } from "@/lib/runner/contracts";
+import { isNoOpSave, resolvePostSaveState } from "@/lib/files/save-logic";
 
 const EMPTY_ARRAY: string[] = [];
 
@@ -90,6 +91,9 @@ const DEFAULT_PANES = { left: { openTabIds: [], activeTabId: null }, right: { op
 const DEFAULT_PREFS = { lineNumbers: true, wordWrap: false, fontSize: 14, minimap: true };
 const DEFAULT_NODES: Record<string, ProjectNode> = {};
 const DEFAULT_PINNED: Record<string, boolean> = {};
+const LOCK_RETRY_FALLBACK_MS = 5_000;
+const LOCK_RETRY_MIN_DELAY_MS = 1_000;
+const LOCK_RETRY_EXPIRY_BUFFER_MS = 250;
 
 type PaneId = "left" | "right";
 
@@ -407,6 +411,8 @@ export default function ProjectFilesWorkspace({
 
   const loadTokenRef = useRef<Map<string, number>>(new Map());
   const lastServerVersionCheckRef = useRef<Map<string, number>>(new Map());
+  const nextLockAttemptAtRef = useRef<Map<string, number>>(new Map());
+  const inFlightSaveByNodeRef = useRef<Map<string, Promise<boolean>>>(new Map());
   const runnerRefreshInFlightRef = useRef<Promise<boolean> | null>(null);
   const lastRunnerRefreshAtRef = useRef(0);
   const runnerDetailCacheRef = useRef<Map<string, PersistedRunSessionDetail>>(new Map());
@@ -423,6 +429,8 @@ export default function ProjectFilesWorkspace({
   );
   const leftOpenTabIdsKey = useMemo(() => leftOpenTabIds.join(","), [leftOpenTabIds]);
   const rightOpenTabIdsKey = useMemo(() => rightOpenTabIds.join(","), [rightOpenTabIds]);
+  const leftActiveTab = activeTabIdByPane.left ? tabById[activeTabIdByPane.left] : null;
+  const rightActiveTab = activeTabIdByPane.right ? tabById[activeTabIdByPane.right] : null;
 
   const [findOpen, setFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState("");
@@ -1130,12 +1138,26 @@ export default function ProjectFilesWorkspace({
     showToast,
   ]);
 
+  const scheduleNextLockAttempt = useCallback((nodeId: string, lockExpiresAt?: number | null) => {
+    const now = Date.now();
+    const nextAttemptAt =
+      typeof lockExpiresAt === "number" && Number.isFinite(lockExpiresAt)
+        ? Math.max(now + LOCK_RETRY_MIN_DELAY_MS, lockExpiresAt + LOCK_RETRY_EXPIRY_BUFFER_MS)
+        : now + LOCK_RETRY_FALLBACK_MS;
+    nextLockAttemptAtRef.current.set(nodeId, nextAttemptAt);
+  }, []);
+
+  const clearLockAttemptSchedule = useCallback((nodeId: string) => {
+    nextLockAttemptAtRef.current.delete(nodeId);
+  }, []);
+
   const acquireLockForNode = useCallback(
     async (node: ProjectNode) => {
       if (!currentUserId) return;
       try {
         const res = (await acquireProjectNodeLock(projectId, node.id, 120)) as NodeLockResult;
         if (res.ok) {
+          clearLockAttemptSchedule(node.id);
           setTabById((prev) => ({
             ...prev,
             [node.id]: { ...prev[node.id], hasLock: true, lockInfo: null },
@@ -1144,12 +1166,14 @@ export default function ProjectFilesWorkspace({
         } else {
           const lock = res.lock;
           if (!lock) {
+            scheduleNextLockAttempt(node.id);
             setTabById((prev) => ({
               ...prev,
               [node.id]: { ...prev[node.id], hasLock: false },
             }));
             return;
           }
+          scheduleNextLockAttempt(node.id, lock.expiresAt);
           setTabById((prev) => ({
             ...prev,
             [node.id]: { ...prev[node.id], hasLock: false, lockInfo: lock },
@@ -1162,13 +1186,14 @@ export default function ProjectFilesWorkspace({
           });
         }
       } catch {
+        scheduleNextLockAttempt(node.id);
         setTabById((prev) => ({
           ...prev,
           [node.id]: { ...prev[node.id], hasLock: false },
         }));
       }
     },
-    [clearLock, currentUserId, projectId, setLock]
+    [clearLock, clearLockAttemptSchedule, currentUserId, projectId, scheduleNextLockAttempt, setLock]
   );
 
   const openFileInPane = useCallback(
@@ -1309,107 +1334,156 @@ export default function ProjectFilesWorkspace({
   const saveTab = useCallback(
     async (nodeId: string, opts?: { silent?: boolean; reason?: string }): Promise<boolean> => {
       if (!canEdit) return false;
-      const tab = tabByIdRef.current[nodeId];
-      if (!tab) return false;
-      if (!tab.node?.s3Key) return false;
-      if (!tab.isDirty) return true;
-      if (tab.isSaving) return false;
-      if (!tab.hasLock) return false;
+      const existingInFlight = inFlightSaveByNodeRef.current.get(nodeId);
+      if (existingInFlight) return existingInFlight;
 
-      const guard = await ensureSaveGuards(nodeId, opts?.reason);
-      if (!guard.ok) {
-        if (!opts?.silent) showToast(guard.error, "error");
-        return false;
-      }
+      const runSave = (async (): Promise<boolean> => {
+        const initialTab = tabByIdRef.current[nodeId];
+        if (!initialTab) return false;
+        if (!initialTab.node?.s3Key) return false;
+        if (!initialTab.isDirty) return true;
+        if (initialTab.isSaving) return false;
+        if (!initialTab.hasLock) return false;
 
-      // Offline queue
-      if (typeof navigator !== "undefined" && !navigator.onLine) {
-        setTabById((prev) => ({
-          ...prev,
-          [nodeId]: { ...prev[nodeId], offlineQueued: true },
-        }));
-        try {
-          const key = `files-offline-queue:${projectId}`;
-          const raw = localStorage.getItem(key);
-          const queue = raw ? JSON.parse(raw) : {};
-          queue[nodeId] = { content: tab.content, ts: Date.now() };
-          localStorage.setItem(key, JSON.stringify(queue));
-        } catch {}
-        if (!opts?.silent) showToast("Offline: changes queued", "success");
-        return true;
-      }
-
-      setTabById((prev) => ({ ...prev, [nodeId]: { ...prev[nodeId], isSaving: true } }));
-
-      try {
-        const supabase = getSupabase();
-        const blob = new Blob([tab.content], { type: tab.node.mimeType || "text/plain" });
-        const { error } = await supabase.storage
-          .from("project-files")
-          .update(tab.node.s3Key, blob, { upsert: true });
-        if (error) throw error;
-
-        // Calculate size in bytes
-        const size = new TextEncoder().encode(tab.content).length;
-
-        // Update metadata in DB
-        const updatedNode = (await updateProjectFileStats(projectId, nodeId, size)) as ProjectNode;
-        
-        // Update local node store immediately
-        upsertNodes(projectId, [updatedNode]);
-
-        // Update search index for text-like files (best-effort)
-        try {
-          const ext = tab.node.name.split(".").pop()?.toLowerCase();
-          const isText =
-            (tab.node.mimeType || "").startsWith("text/") ||
-            ["ts", "tsx", "js", "jsx", "json", "md", "css", "html", "sql", "py", "txt"].includes(
-              ext || ""
-            );
-          if (isText) {
-            await upsertProjectFileIndex(projectId, tab.node.id, tab.content);
-          }
-        } catch {
-          // ignore indexing failures (search will be best-effort)
+        if (isNoOpSave(initialTab.content, initialTab.savedSnapshot)) {
+          setFileState(projectId, nodeId, { isDirty: false });
+          setTabById((prev) => {
+            const current = prev[nodeId];
+            if (!current || !current.isDirty) return prev;
+            return {
+              ...prev,
+              [nodeId]: {
+                ...current,
+                isDirty: false,
+                offlineQueued: false,
+              },
+            };
+          });
+          return true;
         }
 
-        const savedAt = Date.now();
-        setFileState(projectId, nodeId, { isDirty: false, lastSavedAt: savedAt });
-        setTabById((prev) => ({
-          ...prev,
-          [nodeId]: {
-            ...prev[nodeId],
-            node: updatedNode,
-            isSaving: false,
-            isDirty: false,
-            offlineQueued: false,
-            lastSavedAt: savedAt,
-          },
-        }));
-        setTabById((prev) => ({
-          ...prev,
-          [nodeId]: { ...prev[nodeId], savedSnapshot: prev[nodeId].content },
-        }));
-        try {
-          const key = `files-offline-queue:${projectId}`;
-          const raw = localStorage.getItem(key);
-          if (raw) {
-            const queue = JSON.parse(raw);
-            delete queue[nodeId];
+        const guard = await ensureSaveGuards(nodeId, opts?.reason);
+        if (!guard.ok) {
+          if (!opts?.silent) showToast(guard.error, "error");
+          return false;
+        }
+
+        const tabForSave = tabByIdRef.current[nodeId];
+        if (!tabForSave) {
+          return false;
+        }
+        const contentToSave = tabForSave.content;
+        const nodeToSave = tabForSave.node;
+
+        // Offline queue
+        if (typeof navigator !== "undefined" && !navigator.onLine) {
+          setTabById((prev) => ({
+            ...prev,
+            [nodeId]: { ...prev[nodeId], offlineQueued: true },
+          }));
+          try {
+            const key = `files-offline-queue:${projectId}`;
+            const raw = localStorage.getItem(key);
+            const queue = raw ? JSON.parse(raw) : {};
+            queue[nodeId] = { content: contentToSave, ts: Date.now() };
             localStorage.setItem(key, JSON.stringify(queue));
-          }
-        } catch {}
+          } catch {}
+          if (!opts?.silent) showToast("Offline: changes queued", "success");
+          return true;
+        }
+
+        setTabById((prev) => ({ ...prev, [nodeId]: { ...prev[nodeId], isSaving: true } }));
+
         try {
-          await recordProjectNodeEvent(projectId, nodeId, "save", {
-            bytes: tab.content.length,
+          const supabase = getSupabase();
+          const blob = new Blob([contentToSave], { type: nodeToSave.mimeType || "text/plain" });
+          const { error } = await supabase.storage
+            .from("project-files")
+            .update(nodeToSave.s3Key, blob, { upsert: true });
+          if (error) throw error;
+
+          // Calculate size in bytes
+          const size = new TextEncoder().encode(contentToSave).length;
+
+          // Update metadata in DB
+          const updatedNode = (await updateProjectFileStats(projectId, nodeId, size)) as ProjectNode;
+
+          // Update local node store immediately
+          upsertNodes(projectId, [updatedNode]);
+
+          // Update search index for text-like files (best-effort)
+          try {
+            const ext = nodeToSave.name.split(".").pop()?.toLowerCase();
+            const isText =
+              (nodeToSave.mimeType || "").startsWith("text/") ||
+              ["ts", "tsx", "js", "jsx", "json", "md", "css", "html", "sql", "py", "txt"].includes(
+                ext || ""
+              );
+            if (isText) {
+              await upsertProjectFileIndex(projectId, nodeToSave.id, contentToSave);
+            }
+          } catch {
+            // ignore indexing failures (search will be best-effort)
+          }
+
+          const latestContent = tabByIdRef.current[nodeId]?.content ?? contentToSave;
+          const postSaveState = resolvePostSaveState({
+            savedContent: contentToSave,
+            currentContent: latestContent,
           });
-        } catch {}
-        if (!opts?.silent) showToast("File saved", "success");
-        return true;
-      } catch (e: unknown) {
-        setTabById((prev) => ({ ...prev, [nodeId]: { ...prev[nodeId], isSaving: false } }));
-        if (!opts?.silent) showToast(`Failed to save: ${getErrorMessage(e, "Unknown error")}`, "error");
-        return false;
+          const savedAt = Date.now();
+          setFileState(projectId, nodeId, {
+            content: latestContent,
+            isDirty: postSaveState.isDirty,
+            lastSavedAt: savedAt,
+          });
+          setTabById((prev) => {
+            const current = prev[nodeId];
+            if (!current) return prev;
+            return {
+              ...prev,
+              [nodeId]: {
+                ...current,
+                node: updatedNode,
+                isSaving: false,
+                isDirty: postSaveState.isDirty,
+                savedSnapshot: postSaveState.savedSnapshot,
+                offlineQueued: false,
+                lastSavedAt: savedAt,
+              },
+            };
+          });
+          try {
+            const key = `files-offline-queue:${projectId}`;
+            const raw = localStorage.getItem(key);
+            if (raw) {
+              const queue = JSON.parse(raw);
+              delete queue[nodeId];
+              localStorage.setItem(key, JSON.stringify(queue));
+            }
+          } catch {}
+          try {
+            await recordProjectNodeEvent(projectId, nodeId, "save", {
+              bytes: contentToSave.length,
+            });
+          } catch {}
+          if (!opts?.silent) showToast("File saved", "success");
+          return true;
+        } catch (e: unknown) {
+          setTabById((prev) => ({ ...prev, [nodeId]: { ...prev[nodeId], isSaving: false } }));
+          if (!opts?.silent) showToast(`Failed to save: ${getErrorMessage(e, "Unknown error")}`, "error");
+          return false;
+        }
+      })();
+
+      inFlightSaveByNodeRef.current.set(nodeId, runSave);
+      try {
+        return await runSave;
+      } finally {
+        const current = inFlightSaveByNodeRef.current.get(nodeId);
+        if (current === runSave) {
+          inFlightSaveByNodeRef.current.delete(nodeId);
+        }
       }
     },
     [canEdit, ensureSaveGuards, getSupabase, projectId, setFileState, showToast, upsertNodes]
@@ -1507,6 +1581,7 @@ export default function ProjectFilesWorkspace({
         } catch {}
         clearLock(projectId, nodeId);
       }
+      nextLockAttemptAtRef.current.delete(nodeId);
       closeTabStore(projectId, paneId, nodeId);
     },
     [canEdit, clearLock, closeTabStore, projectId, saveTab, showToast]
@@ -1534,6 +1609,7 @@ export default function ProjectFilesWorkspace({
           delete next[nodeId];
           return next;
         });
+        nextLockAttemptAtRef.current.delete(nodeId);
         showToast("Moved to Trash", "success");
       } catch (e: unknown) {
         setTabById((prev) => ({ ...prev, [nodeId]: { ...prev[nodeId], isDeleting: false } }));
@@ -1689,6 +1765,15 @@ export default function ProjectFilesWorkspace({
     viewMode,
   ]);
 
+  useEffect(() => {
+    const openTabIds = new Set([...leftOpenTabIds, ...rightOpenTabIds]);
+    for (const nodeId of Array.from(nextLockAttemptAtRef.current.keys())) {
+      if (!openTabIds.has(nodeId)) {
+        nextLockAttemptAtRef.current.delete(nodeId);
+      }
+    }
+  }, [leftOpenTabIds, rightOpenTabIds, leftOpenTabIdsKey, rightOpenTabIdsKey]);
+
   // Save previous active tab on switch, per pane (best-effort)
   useEffect(() => {
     for (const paneId of panesToRender) {
@@ -1702,19 +1787,33 @@ export default function ProjectFilesWorkspace({
     }
   }, [activeTabIdByPane, canEdit, panesToRender, saveTab, leftActiveTabId, rightActiveTabId]);
 
-  // Ensure active tabs attempt to acquire a lock
-  useEffect(() => {
-    if (!currentUserId) return;
+  const tryAcquireActivePaneLocks = useCallback(() => {
+    if (!currentUserId || !canEdit) return;
+    const now = Date.now();
     for (const paneId of panesToRender) {
       const id = activeTabIdByPane[paneId];
       if (!id) continue;
-      const tab = tabById[id];
-      if (!tab) continue;
-      if (tab.hasLock) continue;
-      if (!canEdit) continue;
+      const tab = tabByIdRef.current[id];
+      if (!tab || tab.hasLock) continue;
+      const nextAttemptAt = nextLockAttemptAtRef.current.get(id) || 0;
+      if (nextAttemptAt > now) continue;
       void acquireLockForNode(tab.node);
     }
-  }, [acquireLockForNode, activeTabIdByPane, canEdit, currentUserId, panesToRender, tabById, leftActiveTabId, rightActiveTabId]);
+  }, [acquireLockForNode, activeTabIdByPane, canEdit, currentUserId, panesToRender]);
+
+  // Attempt lock acquisition immediately when active tabs change
+  useEffect(() => {
+    tryAcquireActivePaneLocks();
+  }, [tryAcquireActivePaneLocks]);
+
+  // Retry lock acquisition for active tabs with throttled backoff
+  useEffect(() => {
+    if (!currentUserId || !canEdit) return;
+    const interval = window.setInterval(() => {
+      tryAcquireActivePaneLocks();
+    }, 3_000);
+    return () => window.clearInterval(interval);
+  }, [canEdit, currentUserId, tryAcquireActivePaneLocks]);
 
   // Debounced autosave per pane active tab
   useEffect(() => {
@@ -1723,7 +1822,7 @@ export default function ProjectFilesWorkspace({
       if (paneTimers[paneId]) clearTimeout(paneTimers[paneId]!);
       const id = activeTabIdByPane[paneId];
       if (!id || !canEdit) continue;
-      const tab = tabById[id];
+      const tab = tabByIdRef.current[id];
       if (!tab || !tab.isDirty || tab.isSaving) continue;
 
       paneTimers[paneId] = setTimeout(() => {
@@ -1735,7 +1834,18 @@ export default function ProjectFilesWorkspace({
         if (paneTimers[paneId]) clearTimeout(paneTimers[paneId]!);
       }
     };
-  }, [activeTabIdByPane, canEdit, panesToRender, saveTab, tabById, leftActiveTabId, rightActiveTabId]);
+  }, [
+    activeTabIdByPane,
+    canEdit,
+    panesToRender,
+    saveTab,
+    leftActiveTab?.content,
+    leftActiveTab?.isDirty,
+    leftActiveTab?.isSaving,
+    rightActiveTab?.content,
+    rightActiveTab?.isDirty,
+    rightActiveTab?.isSaving,
+  ]);
 
   // Keepalive for active locks
   useEffect(() => {
@@ -2008,6 +2118,8 @@ export default function ProjectFilesWorkspace({
             onCloseOthers={(id) => closeOtherTabs(projectId, "left", id)}
             onCloseToRight={(id) => closeTabsToRight(projectId, "left", id)}
             onChange={(id, next) => {
+              const current = tabByIdRef.current[id];
+              if (!current || current.content === next) return;
               setFileState(projectId, id, { content: next, isDirty: true });
               setTabById((prev) => ({ ...prev, [id]: { ...prev[id], content: next, isDirty: true } }))
             }}
@@ -2050,6 +2162,8 @@ export default function ProjectFilesWorkspace({
               onCloseOthers={(id) => closeOtherTabs(projectId, "right", id)}
               onCloseToRight={(id) => closeTabsToRight(projectId, "right", id)}
               onChange={(id, next) => {
+                const current = tabByIdRef.current[id];
+                if (!current || current.content === next) return;
                 setFileState(projectId, id, { content: next, isDirty: true });
                 setTabById((prev) => ({ ...prev, [id]: { ...prev[id], content: next, isDirty: true } }))
               }}

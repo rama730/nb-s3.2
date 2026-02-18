@@ -6,6 +6,12 @@ import { createClient } from '@/lib/supabase/server';
 import { eq, and, or, desc, sql, inArray } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { consumeRateLimit } from '@/lib/security/rate-limit';
+import {
+    CONNECTION_REQUEST_HISTORY_STATUSES,
+    isConnectionHistoryStatus,
+    type ConnectionRequestHistoryStatus,
+} from '@/lib/applications/status';
+import { APPLICATION_BANNER_HIDE_AFTER_MS } from '@/lib/chat/banner-lifecycle';
 
 // ============================================================================
 // TYPES
@@ -76,13 +82,6 @@ type RequestFeedItem = {
     } | null;
 };
 
-export type ConnectionRequestHistoryStatus =
-    | 'pending'
-    | 'accepted'
-    | 'rejected'
-    | 'cancelled'
-    | 'disconnected';
-
 export interface ConnectionRequestHistoryItem {
     id: string;
     kind: 'connection';
@@ -116,26 +115,10 @@ type NetworkFeedItem = {
 };
 
 const REJECT_REQUEST_COOLDOWN_MS = 2 * 24 * 60 * 60 * 1000;
-const CONNECTION_HISTORY_STATUSES: ConnectionRequestHistoryStatus[] = [
-    'pending',
-    'accepted',
-    'rejected',
-    'cancelled',
-    'disconnected',
-];
-const CONNECTION_HISTORY_STATUS_MAP: Record<ConnectionRequestHistoryStatus, true> = {
-    pending: true,
-    accepted: true,
-    rejected: true,
-    cancelled: true,
-    disconnected: true,
-};
+const CONNECTION_HISTORY_STATUSES: readonly ConnectionRequestHistoryStatus[] = CONNECTION_REQUEST_HISTORY_STATUSES;
 
 function isConnectionRequestHistoryStatus(status: unknown): status is ConnectionRequestHistoryStatus {
-    return (
-        typeof status === 'string' &&
-        Object.prototype.hasOwnProperty.call(CONNECTION_HISTORY_STATUS_MAP, status)
-    );
+    return isConnectionHistoryStatus(status);
 }
 type DbTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -1786,7 +1769,8 @@ export async function checkConnectionStatus(
                     applicantId: roleApplications.applicantId,
                     creatorId: roleApplications.creatorId,
                     status: roleApplications.status,
-                    projectId: roleApplications.projectId
+                    projectId: roleApplications.projectId,
+                    updatedAt: roleApplications.updatedAt,
                 })
                 .from(roleApplications)
                 .where(
@@ -1797,7 +1781,7 @@ export async function checkConnectionStatus(
                         )
                     )
                 )
-                .orderBy(desc(roleApplications.createdAt))
+                .orderBy(desc(roleApplications.updatedAt), desc(roleApplications.id))
                 .limit(1)
         ]);
 
@@ -1808,14 +1792,20 @@ export async function checkConnectionStatus(
         if (activeApp) {
             let connectionId: string | undefined;
             if (existing.length > 0) connectionId = existing[0].id;
+            const appStatus = activeApp.status as 'pending' | 'accepted' | 'rejected';
+            const isPending = appStatus === 'pending';
+            const updatedAtMs = new Date(activeApp.updatedAt).getTime();
+            const isFreshTerminal =
+                Number.isFinite(updatedAtMs) &&
+                Date.now() - updatedAtMs <= APPLICATION_BANNER_HIDE_AFTER_MS;
 
             return {
                 success: true,
                 status: 'open',
                 connectionId,
-                hasActiveApplication: true,
+                hasActiveApplication: isPending || isFreshTerminal,
                 activeApplicationId: activeApp.id,
-                activeApplicationStatus: activeApp.status as 'pending' | 'accepted' | 'rejected',
+                activeApplicationStatus: appStatus,
                 activeProjectId: activeApp.projectId, // Mapped correctly by Drizzle
                 isApplicant: activeApp.applicantId === user.id,
                 isCreator: activeApp.creatorId === user.id

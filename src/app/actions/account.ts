@@ -6,6 +6,20 @@ import { createClient } from '@/lib/supabase/server';
 import { eq, or } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 
+const UUID_RE =
+    /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+function isAdminUser(user: { id: string; app_metadata?: Record<string, unknown> }) {
+    const role = typeof user.app_metadata?.role === 'string' ? user.app_metadata.role : '';
+    if (role === 'admin' || role === 'service_role') return true;
+
+    const adminIds = (process.env.ADMIN_USER_IDS || '')
+        .split(',')
+        .map((id) => id.trim())
+        .filter(Boolean);
+    return adminIds.includes(user.id);
+}
+
 /**
  * Delete the current user's account and all associated data.
  * This is a DESTRUCTIVE action that cannot be undone.
@@ -91,6 +105,19 @@ export async function deleteMyAccount(): Promise<{ success: boolean; error?: str
  */
 export async function cleanupOrphanedProfile(profileId: string): Promise<{ success: boolean; error?: string }> {
     try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+
+        if (!user) {
+            return { success: false, error: 'Not authenticated' };
+        }
+        if (!isAdminUser(user)) {
+            return { success: false, error: 'Forbidden' };
+        }
+        if (!UUID_RE.test(profileId)) {
+            return { success: false, error: 'Invalid profile id' };
+        }
+
         // First, check if the profile exists
         const profile = await db.select().from(profiles).where(eq(profiles.id, profileId)).limit(1);
 

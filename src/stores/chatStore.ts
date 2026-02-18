@@ -53,6 +53,13 @@ interface ReplyTargetDraft {
     type: MessageWithSender['type'];
 }
 
+interface SenderSnapshot {
+    id: string;
+    username: string | null;
+    fullName: string | null;
+    avatarUrl: string | null;
+}
+
 type MessageDeliveryState = 'sending' | 'queued' | 'sent' | 'delivered' | 'read' | 'failed';
 
 function withDeliveryMetadata(
@@ -63,6 +70,19 @@ function withDeliveryMetadata(
         ...(metadata || {}),
         deliveryState: state,
     };
+}
+
+function toEpochMs(value: unknown): number {
+    if (value instanceof Date) {
+        const ms = value.getTime();
+        return Number.isNaN(ms) ? 0 : ms;
+    }
+    if (typeof value === 'string' || typeof value === 'number') {
+        const parsed = new Date(value);
+        const ms = parsed.getTime();
+        return Number.isNaN(ms) ? 0 : ms;
+    }
+    return 0;
 }
 
 export interface InboxApplication {
@@ -173,7 +193,12 @@ interface ChatState {
     sendMessage: (
         conversationId: string,
         content: string,
-        options?: { attachments?: UploadedAttachment[]; clientMessageId?: string; replyToMessageId?: string | null }
+        options?: {
+            attachments?: UploadedAttachment[];
+            clientMessageId?: string;
+            replyToMessageId?: string | null;
+            senderSnapshot?: SenderSnapshot;
+        }
     ) => Promise<{ ok: boolean; queued?: boolean }>;
     flushOutbox: () => Promise<void>;
     loadMoreMessages: (conversationId: string) => Promise<void>;
@@ -562,6 +587,7 @@ export const useChatStore = create<ChatState>()(
                 const state = get();
                 const normalized = content.trim();
                 const attachments = options?.attachments || [];
+                const senderSnapshot = options?.senderSnapshot || null;
 	                const replyTarget =
 	                    options?.replyToMessageId
 	                        ? (state.messagesByConversation[conversationId]?.messages || []).find(
@@ -654,7 +680,7 @@ export const useChatStore = create<ChatState>()(
                 const optimisticMessage: MessageWithSender = {
                     id: tempId,
                     conversationId,
-                    senderId: null,
+                    senderId: senderSnapshot?.id || null,
                     clientMessageId: generatedClientId,
                     content: normalized || null,
                     type: attachments[0]?.type || 'text',
@@ -675,7 +701,14 @@ export const useChatStore = create<ChatState>()(
                     createdAt: new Date(),
                     editedAt: null,
                     deletedAt: null,
-                    sender: null,
+                    sender: senderSnapshot
+                        ? {
+                            id: senderSnapshot.id,
+                            username: senderSnapshot.username,
+                            fullName: senderSnapshot.fullName,
+                            avatarUrl: senderSnapshot.avatarUrl,
+                        }
+                        : null,
                     attachments: attachments.map((att) => ({
                         id: att.id,
                         type: att.type,
@@ -1309,7 +1342,7 @@ export const useChatStore = create<ChatState>()(
                             },
                         };
                         // Move to top (sort by updatedAt)
-                        conversations.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+                        conversations.sort((a, b) => toEpochMs(b.updatedAt) - toEpochMs(a.updatedAt));
                     } else {
                         // NEW CONVERSATION DETECTED: Refresh entire list to get participants/metadata
                         // We do this in the background to not block the message delivery
@@ -1345,7 +1378,7 @@ export const useChatStore = create<ChatState>()(
                         },
                         updatedAt: completeMessage.createdAt,
                     };
-                    nextGroups.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+                    nextGroups.sort((a, b) => toEpochMs(b.updatedAt) - toEpochMs(a.updatedAt));
                     return { projectGroups: nextGroups };
                 });
 

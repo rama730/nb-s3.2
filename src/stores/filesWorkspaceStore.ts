@@ -213,6 +213,29 @@ function defaultWorkspace(): ProjectWorkspaceState {
 const ROOT_KEY = "__root__";
 const parentKey = (parentId: string | null) => parentId ?? ROOT_KEY;
 
+function symbolsEqual(a: EditorSymbol[], b: EditorSymbol[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    const left = a[i];
+    const right = b[i];
+    if (
+      left.name !== right.name ||
+      left.kind !== right.kind ||
+      left.range.startLineNumber !== right.range.startLineNumber ||
+      left.range.endLineNumber !== right.range.endLineNumber
+    ) {
+      return false;
+    }
+    const leftChildren = left.children || [];
+    const rightChildren = right.children || [];
+    if (!symbolsEqual(leftChildren, rightChildren)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 // React 19 + useSyncExternalStore requires selector results to be stable.
 // This fallback must be a stable reference (do not mutate it).
 const FALLBACK_WORKSPACE: ProjectWorkspaceState = Object.freeze(defaultWorkspace());
@@ -588,6 +611,14 @@ export const useFilesWorkspaceStore = create<FilesWorkspaceState>()(
           if (!ws) return state;
 
           const prev = ws.fileStates[nodeId] || { content: "", isDirty: false };
+          const next = { ...prev, ...fileState };
+          if (
+            prev.content === next.content &&
+            prev.isDirty === next.isDirty &&
+            prev.lastSavedAt === next.lastSavedAt
+          ) {
+            return state;
+          }
           return {
             byProjectId: {
               ...state.byProjectId,
@@ -595,7 +626,7 @@ export const useFilesWorkspaceStore = create<FilesWorkspaceState>()(
                 ...ws,
                 fileStates: {
                   ...ws.fileStates,
-                  [nodeId]: { ...prev, ...fileState },
+                  [nodeId]: next,
                 },
               },
             },
@@ -607,6 +638,9 @@ export const useFilesWorkspaceStore = create<FilesWorkspaceState>()(
       setActiveFileSymbols: (projectId, symbols) =>
         set((state) => {
           const ws = state.byProjectId[projectId] ?? defaultWorkspace();
+          if (symbolsEqual(ws.activeFileSymbols, symbols)) {
+            return state;
+          }
           return {
             byProjectId: {
               ...state.byProjectId,
@@ -823,6 +857,15 @@ export const useFilesWorkspaceStore = create<FilesWorkspaceState>()(
       setLock: (projectId, lock) =>
         set((state) => {
           const ws = state.byProjectId[projectId] ?? defaultWorkspace();
+          const prevLock = ws.locksByNodeId[lock.nodeId];
+          if (
+            prevLock &&
+            prevLock.lockedBy === lock.lockedBy &&
+            prevLock.lockedByName === lock.lockedByName &&
+            prevLock.expiresAt === lock.expiresAt
+          ) {
+            return state;
+          }
           return {
             byProjectId: {
               ...state.byProjectId,
@@ -837,6 +880,9 @@ export const useFilesWorkspaceStore = create<FilesWorkspaceState>()(
       clearLock: (projectId, nodeId) =>
         set((state) => {
           const ws = state.byProjectId[projectId] ?? defaultWorkspace();
+          if (!ws.locksByNodeId[nodeId]) {
+            return state;
+          }
           const next = { ...ws.locksByNodeId };
           delete next[nodeId];
           return {

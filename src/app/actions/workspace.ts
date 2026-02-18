@@ -80,6 +80,65 @@ async function getAuthUser() {
     return user;
 }
 
+const WORKSPACE_TASK_DEFAULT_LIMIT = 20;
+const WORKSPACE_TASK_MAX_LIMIT = 100;
+const WORKSPACE_INBOX_DEFAULT_LIMIT = 10;
+const WORKSPACE_INBOX_MAX_LIMIT = 50;
+const WORKSPACE_INBOX_FETCH_PADDING = 5;
+const WORKSPACE_INBOX_MAX_OFFSET = 100_000;
+
+type WorkspaceInboxCursorState = {
+    pendingOffset: number;
+    applicationOffset: number;
+};
+
+function normalizePositiveInt(value: unknown, fallback: number, max: number) {
+    const numeric = typeof value === 'number' ? value : Number(value);
+    if (!Number.isFinite(numeric)) return fallback;
+    const normalized = Math.trunc(numeric);
+    if (normalized < 1) return fallback;
+    return Math.min(normalized, max);
+}
+
+function normalizeOffset(value: unknown, fallback: number = 0) {
+    const numeric = typeof value === 'number' ? value : Number(value);
+    if (!Number.isFinite(numeric)) return fallback;
+    const normalized = Math.trunc(numeric);
+    if (normalized < 0) return fallback;
+    return Math.min(normalized, WORKSPACE_INBOX_MAX_OFFSET);
+}
+
+function parseCursorDate(cursor?: string) {
+    if (!cursor) return { ok: true as const, value: null as Date | null };
+    const parsed = new Date(cursor);
+    if (Number.isNaN(parsed.getTime())) {
+        return { ok: false as const, value: null as Date | null };
+    }
+    return { ok: true as const, value: parsed };
+}
+
+function parseWorkspaceInboxCursor(cursor?: string): WorkspaceInboxCursorState {
+    if (!cursor) {
+        return { pendingOffset: 0, applicationOffset: 0 };
+    }
+
+    try {
+        const decoded = Buffer.from(cursor, 'base64').toString('utf-8');
+        const parsed = JSON.parse(decoded) as Partial<WorkspaceInboxCursorState>;
+        return {
+            pendingOffset: normalizeOffset(parsed.pendingOffset),
+            applicationOffset: normalizeOffset(parsed.applicationOffset),
+        };
+    } catch {
+        const legacyOffset = normalizeOffset(cursor, 0);
+        return { pendingOffset: legacyOffset, applicationOffset: legacyOffset };
+    }
+}
+
+function encodeWorkspaceInboxCursor(cursor: WorkspaceInboxCursorState) {
+    return Buffer.from(JSON.stringify(cursor), 'utf-8').toString('base64');
+}
+
 // ============================================================================
 // getWorkspaceOverview — Server-prefetch for the Overview tab
 // Runs 4 parallel queries in a single round trip to the DB pool.
@@ -428,7 +487,7 @@ export interface WorkspaceTaskFilters {
 export async function getWorkspaceTasks(
     filters: WorkspaceTaskFilters = {},
     cursor?: string,
-    limit: number = 20
+    limit: number = WORKSPACE_TASK_DEFAULT_LIMIT
 ): Promise<{
     success: boolean;
     error?: string;
@@ -439,6 +498,11 @@ export async function getWorkspaceTasks(
     try {
         const user = await getAuthUser();
         if (!user) return { success: false, error: 'Not authenticated' };
+        const safeLimit = normalizePositiveInt(limit, WORKSPACE_TASK_DEFAULT_LIMIT, WORKSPACE_TASK_MAX_LIMIT);
+        const parsedCursor = parseCursorDate(cursor);
+        if (!parsedCursor.ok) {
+            return { success: false, error: 'Invalid cursor' };
+        }
 
         const conditions = [eq(tasks.assigneeId, user.id)];
 
@@ -451,8 +515,8 @@ export async function getWorkspaceTasks(
         if (filters.projectId) {
             conditions.push(eq(tasks.projectId, filters.projectId));
         }
-        if (cursor) {
-            conditions.push(lt(tasks.createdAt, new Date(cursor)));
+        if (parsedCursor.value) {
+            conditions.push(lt(tasks.createdAt, parsedCursor.value));
         }
 
         const rows = await db
@@ -473,10 +537,10 @@ export async function getWorkspaceTasks(
             .innerJoin(projects, eq(tasks.projectId, projects.id))
             .where(and(...conditions))
             .orderBy(desc(tasks.createdAt))
-            .limit(limit + 1);
+            .limit(safeLimit + 1);
 
-        const hasMore = rows.length > limit;
-        const paginated = rows.slice(0, limit);
+        const hasMore = rows.length > safeLimit;
+        const paginated = rows.slice(0, safeLimit);
         const nextCursor = hasMore ? paginated[paginated.length - 1]?.createdAt?.toISOString() : undefined;
 
         return {
@@ -507,7 +571,7 @@ export interface WorkspaceInboxItem {
 
 export async function getWorkspaceInbox(
     cursor?: string,
-    limit: number = 10
+    limit: number = WORKSPACE_INBOX_DEFAULT_LIMIT
 ): Promise<{
     success: boolean;
     error?: string;
@@ -518,17 +582,19 @@ export async function getWorkspaceInbox(
     try {
         const user = await getAuthUser();
         if (!user) return { success: false, error: 'Not authenticated' };
+        const safeLimit = normalizePositiveInt(limit, WORKSPACE_INBOX_DEFAULT_LIMIT, WORKSPACE_INBOX_MAX_LIMIT);
+        const cursorState = parseWorkspaceInboxCursor(cursor);
 
-        // Fetch slightly more than limit from each source to handle pagination
-        const fetchLimit = limit + 5;
-        const offset = cursor ? parseInt(cursor, 10) : 0;
+        // Fetch slightly more than limit from each source to support stable merge pagination.
+        const fetchLimit = safeLimit + WORKSPACE_INBOX_FETCH_PADDING;
 
         const [pendingResult, applicationsResult] = await Promise.all([
-            getPendingRequests(fetchLimit, offset),
-            getInboxApplicationsAction(fetchLimit, offset),
+            getPendingRequests(fetchLimit, cursorState.pendingOffset),
+            getInboxApplicationsAction(fetchLimit, cursorState.applicationOffset),
         ]);
 
-        const items: WorkspaceInboxItem[] = [];
+        type SourcedInboxItem = WorkspaceInboxItem & { source: 'pending' | 'application' };
+        const items: SourcedInboxItem[] = [];
 
         // Map connection requests
         if (pendingResult.incoming) {
@@ -541,6 +607,7 @@ export async function getWorkspaceInbox(
                     avatarUrl: req.requesterAvatarUrl || null,
                     createdAt: req.createdAt,
                     meta: { connectionId: req.id, requesterId: req.requesterId },
+                    source: 'pending',
                 });
             }
         }
@@ -562,18 +629,37 @@ export async function getWorkspaceInbox(
                         status: app.status,
                         conversationId: app.conversationId,
                     },
+                    source: 'application',
                 });
             }
         }
 
-        // Sort unified list by most recent first
-        items.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        // Sort unified list by most recent first, tie-break by id for stable pagination.
+        items.sort((a, b) => {
+            const byTime = new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+            if (byTime !== 0) return byTime;
+            return b.id.localeCompare(a.id);
+        });
 
-        const hasMore = items.length > limit;
-        const paginated = items.slice(0, limit);
-        const nextCursor = hasMore ? String(offset + limit) : undefined;
+        const hasMoreCombined = items.length > safeLimit;
+        const paginated = items.slice(0, safeLimit);
+        const consumedPending = paginated.filter((item) => item.source === 'pending').length;
+        const consumedApplications = paginated.filter((item) => item.source === 'application').length;
+        const hasMoreSource = Boolean(pendingResult.hasMoreIncoming || applicationsResult.hasMore);
+        const hasMore = hasMoreCombined || hasMoreSource;
+        const nextCursor = hasMore
+            ? encodeWorkspaceInboxCursor({
+                pendingOffset: cursorState.pendingOffset + consumedPending,
+                applicationOffset: cursorState.applicationOffset + consumedApplications,
+            })
+            : undefined;
 
-        return { success: true, items: paginated, hasMore, nextCursor };
+        return {
+            success: true,
+            items: paginated.map(({ source: _source, ...item }) => item),
+            hasMore,
+            nextCursor,
+        };
     } catch (error) {
         console.error('[getWorkspaceInbox] Error:', error);
         return { success: false, error: 'Failed to load inbox' };

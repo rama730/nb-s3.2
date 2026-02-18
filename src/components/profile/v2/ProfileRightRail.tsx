@@ -201,7 +201,7 @@ export function ProfileRightRail({
                     {isOwner ? (
                         <>
                             <Link
-                                href="/settings/profile"
+                                href="/profile"
                                 className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-800 px-3 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700 flex items-center gap-2"
                             >
                                 <Pencil className="w-4 h-4 text-zinc-400" />

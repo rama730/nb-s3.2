@@ -139,6 +139,18 @@ export async function getProfileBasic(userId: string) {
 export async function getProfileProjectsAction(userId: string) {
     if (!userId) return [];
     try {
+        const supabase = await createClient()
+        const { data: { user } } = await supabase.auth.getUser()
+        const isOwner = user?.id === userId
+
+        const visibilityFilter = isOwner
+            ? eq(projects.ownerId, userId)
+            : and(
+                eq(projects.ownerId, userId),
+                eq(projects.visibility, 'public'),
+                ne(projects.status, 'draft')
+            )
+
         const userProjects = await db
             .select({
                 id: projects.id,
@@ -150,7 +162,7 @@ export async function getProfileProjectsAction(userId: string) {
                 updatedAt: projects.updatedAt,
             })
             .from(projects)
-            .where(eq(projects.ownerId, userId))
+            .where(visibilityFilter)
             .orderBy(desc(projects.updatedAt), desc(projects.createdAt))
             .limit(12);
 
