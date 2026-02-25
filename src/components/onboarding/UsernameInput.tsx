@@ -1,38 +1,17 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Check, X, Loader2 } from 'lucide-react'
+import { Check, Loader2, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { sanitizeUsernameInput, validateUsername } from '@/lib/validations/username'
 
 interface UsernameInputProps {
     value: string
     onChange: (value: string) => void
     fullName?: string
     disabled?: boolean
-}
-
-// Simple client-side validation - no database call needed
-function validateUsername(username: string): { valid: boolean; message: string } {
-    if (!username || username.length < 3) {
-        return { valid: false, message: 'Username must be at least 3 characters' }
-    }
-
-    if (username.length > 20) {
-        return { valid: false, message: 'Username must be 20 characters or less' }
-    }
-
-    if (!/^[a-z0-9_]+$/.test(username)) {
-        return { valid: false, message: 'Only lowercase letters, numbers, and underscores' }
-    }
-
-    const reserved = ['admin', 'edge', 'api', 'www', 'mail', 'support', 'help', 'settings', 'profile', 'login', 'signup', 'auth']
-    if (reserved.includes(username)) {
-        return { valid: false, message: 'This username is reserved' }
-    }
-
-    return { valid: true, message: 'Looks good!' }
 }
 
 // Generate simple suggestions from name
@@ -62,12 +41,14 @@ function generateSuggestions(fullName: string): string[] {
 }
 
 export default function UsernameInput({ value, onChange, fullName, disabled }: UsernameInputProps) {
-    const [status, setStatus] = useState<'idle' | 'valid' | 'invalid'>('idle')
+    const [status, setStatus] = useState<'idle' | 'checking' | 'valid' | 'invalid' | 'error'>('idle')
     const [message, setMessage] = useState('')
     const [suggestions, setSuggestions] = useState<string[]>([])
     const [showSuggestions, setShowSuggestions] = useState(false)
+    const requestIdRef = useRef(0)
+    const suggestionsRequestIdRef = useRef(0)
 
-    // Validate on change - instant local + debounced server check
+    // Validate on change: local validation first, then cancellable API check.
     useEffect(() => {
         if (!value) {
             setStatus('idle')
@@ -83,45 +64,131 @@ export default function UsernameInput({ value, onChange, fullName, disabled }: U
             return
         }
 
-        // 2. Server Validation (Debounced)
-        setStatus('idle') // Show loading state if needed or just idle
+        setStatus('checking')
+        setMessage('Checking availability...')
+        const requestId = requestIdRef.current + 1
+        requestIdRef.current = requestId
+        const controller = new AbortController()
+
         const timer = setTimeout(async () => {
             try {
-               // Import dynamically to avoid top-level server action issues in some contexts? 
-               // Standard import is fine if 'use client' is set. 
-               // We need to import it at top of file.
-               const { checkUsernameAvailability } = await import('@/app/actions/onboarding')
-               const availability = await checkUsernameAvailability(value)
-               
-               if (availability.available) {
-                   setStatus('valid')
-                   setMessage('Username is available')
-               } else {
-                   setStatus('invalid')
-                   setMessage(availability.message)
-               }
-            } catch (e) {
-                console.error(e)
-                // Fallback to valid if server check fails? Or ignore?
-                // Let's keep it 'valid' locally if server fails to respond, 
-                // but better to just show nothing or generic error.
-            }
-        }, 500)
+                const response = await fetch(`/api/onboarding/username-check?username=${encodeURIComponent(value)}`, {
+                    method: 'GET',
+                    cache: 'no-store',
+                    signal: controller.signal,
+                })
+                const responseForText = response.clone()
+                let payload: {
+                    available?: boolean
+                    message?: string
+                    code?: string
+                }
+                let responseText = ''
+                const contentType = response.headers.get('content-type') || ''
+                if (contentType.includes('application/json')) {
+                    try {
+                        payload = (await response.json()) as {
+                            available?: boolean
+                            message?: string
+                            code?: string
+                        }
+                    } catch {
+                        payload = {}
+                    }
+                } else {
+                    payload = {}
+                }
+                if (!payload.message) {
+                    try {
+                        responseText = (await responseForText.text()).trim()
+                    } catch {
+                        responseText = ''
+                    }
+                }
+                if (requestId !== requestIdRef.current) return
 
-        return () => clearTimeout(timer)
+                if (!response.ok) {
+                    if (response.status === 429 || payload.code === 'RATE_LIMITED') {
+                        setStatus('invalid')
+                        setMessage('Too many checks. Please wait and try again.')
+                        return
+                    }
+                    setStatus('error')
+                    setMessage(payload.message || responseText || `HTTP ${response.status}`)
+                    return
+                }
+
+                if (payload.available) {
+                    setStatus('valid')
+                    setMessage('Username is available')
+                    return
+                }
+
+                if (typeof payload.available !== 'boolean') {
+                    setStatus('error')
+                    setMessage(payload.message || responseText || 'Unable to verify username right now. Please retry.')
+                    return
+                }
+
+                setStatus('invalid')
+                if (response.status === 429 || payload.code === 'RATE_LIMITED') {
+                    setMessage('Too many checks. Please wait and try again.')
+                } else {
+                    setMessage(payload.message || responseText || 'Username is unavailable')
+                }
+            } catch (error) {
+                if ((error as Error)?.name === 'AbortError') return
+                if (requestId !== requestIdRef.current) return
+                setStatus('error')
+                setMessage('Unable to verify username right now. Please retry.')
+            }
+        }, 350)
+
+        return () => {
+            clearTimeout(timer)
+            controller.abort()
+        }
     }, [value])
 
-    // Generate suggestions from name
+    // Generate suggestions from name (backend conflict-aware + local fallback).
     useEffect(() => {
-        if (fullName && !value) {
-            const newSuggestions = generateSuggestions(fullName)
-            setSuggestions(newSuggestions)
-            setShowSuggestions(newSuggestions.length > 0)
+        if (!fullName || value) {
+            if (value) setShowSuggestions(false)
+            return
+        }
+
+        const sourceName = fullName
+        const fallback = generateSuggestions(sourceName)
+        const requestId = suggestionsRequestIdRef.current + 1
+        suggestionsRequestIdRef.current = requestId
+        let cancelled = false
+
+        async function loadSuggestions() {
+            try {
+                const { getUsernameSuggestions } = await import('@/app/actions/onboarding')
+                const response = await getUsernameSuggestions(sourceName)
+                if (cancelled || requestId !== suggestionsRequestIdRef.current) return
+                const merged = Array.from(
+                    new Set([...(response.suggestions || []), ...fallback].filter((item): item is string => typeof item === 'string'))
+                ).slice(0, 5)
+                setSuggestions(merged)
+                setShowSuggestions(merged.length > 0)
+            } catch {
+                if (cancelled || requestId !== suggestionsRequestIdRef.current) return
+                setSuggestions(fallback)
+                setShowSuggestions(fallback.length > 0)
+            }
+        }
+
+        void loadSuggestions()
+
+        return () => {
+            cancelled = true
         }
     }, [fullName, value])
 
     const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const newValue = e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '')
+        const newValue = sanitizeUsernameInput(e.target.value)
         onChange(newValue)
         setShowSuggestions(false)
     }
@@ -156,8 +223,10 @@ export default function UsernameInput({ value, onChange, fullName, disabled }: U
                     maxLength={20}
                 />
                 <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                    {status === 'checking' && <Loader2 className="w-4 h-4 text-zinc-400 animate-spin" />}
                     {status === 'valid' && <Check className="w-4 h-4 text-green-500" />}
                     {status === 'invalid' && <X className="w-4 h-4 text-red-500" />}
+                    {status === 'error' && <X className="w-4 h-4 text-amber-500" />}
                 </div>
             </div>
 
@@ -165,7 +234,10 @@ export default function UsernameInput({ value, onChange, fullName, disabled }: U
             {message && (
                 <p className={cn(
                     "text-sm",
-                    status === 'valid' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'
+                    status === 'checking' && 'text-zinc-500 dark:text-zinc-400',
+                    status === 'valid' && 'text-green-600 dark:text-green-400',
+                    status === 'invalid' && 'text-red-600 dark:text-red-400',
+                    status === 'error' && 'text-amber-600 dark:text-amber-400'
                 )}>
                     {message}
                 </p>

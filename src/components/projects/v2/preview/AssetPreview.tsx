@@ -1,7 +1,7 @@
 "use client";
 
-import { ExternalLink, FileText, ZoomIn, ZoomOut, RotateCcw } from "lucide-react";
-import { useState, useRef } from "react";
+import { ExternalLink, FileText, ZoomIn, ZoomOut, RotateCcw, AlertTriangle } from "lucide-react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import Image from "next/image";
 import type { ProjectNode } from "@/lib/db/schema";
 import { fileKind } from "../utils/fileKind";
@@ -16,6 +16,21 @@ function formatBytes(bytes?: number | null) {
   return `${mb.toFixed(1)} MB`;
 }
 
+function ErrorFallback({ message, url }: { message: string; url: string }) {
+  return (
+    <div className="flex flex-col items-center justify-center h-full gap-3 p-8 text-center">
+      <AlertTriangle className="w-8 h-8 text-amber-500" />
+      <p className="text-sm text-zinc-500">{message}</p>
+      <Button asChild size="sm" variant="outline">
+        <a href={url} target="_blank" rel="noreferrer">
+          <ExternalLink className="w-4 h-4 mr-2" />
+          Open in new tab
+        </a>
+      </Button>
+    </div>
+  );
+}
+
 export default function AssetPreview({
   node,
   signedUrl,
@@ -28,37 +43,49 @@ export default function AssetPreview({
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
   const dragStart = useRef({ x: 0, y: 0 });
+  const [imageError, setImageError] = useState(false);
+  const [videoError, setVideoError] = useState(false);
 
-  const handleZoomIn = () => setScale((s) => Math.min(s + 0.5, 5));
-  const handleZoomOut = () => setScale((s) => Math.max(s - 0.5, 0.5));
-  const handleReset = () => {
+  const handleZoomIn = useCallback(() => setScale((s) => Math.min(s + 0.5, 5)), []);
+  const handleZoomOut = useCallback(() => setScale((s) => Math.max(s - 0.5, 0.5)), []);
+  const handleReset = useCallback(() => {
     setScale(1);
     setPosition({ x: 0, y: 0 });
-  };
+  }, []);
 
-  const onWheel = (e: React.WheelEvent) => {
-    if (e.ctrlKey || e.metaKey) {
-       e.preventDefault();
-       const delta = e.deltaY > 0 ? -0.1 : 0.1;
-       setScale(s => Math.min(Math.max(s + delta, 0.5), 5));
-    }
-  };
+  const containerRef = useRef<HTMLDivElement>(null);
 
-  const onMouseDown = (e: React.MouseEvent) => {
-      e.preventDefault();
-      setIsDragging(true);
-      dragStart.current = { x: e.clientX - position.x, y: e.clientY - position.y };
-  };
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || kind !== "image") return;
 
-  const onMouseMove = (e: React.MouseEvent) => {
-      if (!isDragging) return;
-      setPosition({
-          x: e.clientX - dragStart.current.x,
-          y: e.clientY - dragStart.current.y
-      });
-  };
+    const handleWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        const delta = e.deltaY > 0 ? -0.1 : 0.1;
+        setScale((s) => Math.min(Math.max(s + delta, 0.5), 5));
+      }
+    };
 
-  const onMouseUp = () => setIsDragging(false);
+    container.addEventListener("wheel", handleWheel, { passive: false });
+    return () => container.removeEventListener("wheel", handleWheel);
+  }, [kind]);
+
+  const onMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+    dragStart.current = { x: e.clientX - position.x, y: e.clientY - position.y };
+  }, [position]);
+
+  const onMouseMove = useCallback((e: React.MouseEvent) => {
+    if (!isDragging) return;
+    setPosition({
+      x: e.clientX - dragStart.current.x,
+      y: e.clientY - dragStart.current.y,
+    });
+  }, [isDragging]);
+
+  const onMouseUp = useCallback(() => setIsDragging(false), []);
 
   if (!signedUrl) {
     return (
@@ -69,49 +96,55 @@ export default function AssetPreview({
   }
 
   if (kind === "image") {
+    if (imageError) {
+      return <ErrorFallback message="Failed to load image preview" url={signedUrl} />;
+    }
+
     return (
       <div className="h-full w-full flex flex-col bg-white dark:bg-zinc-950 overflow-hidden">
         <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-200 dark:border-zinc-800 z-10 bg-white dark:bg-zinc-950">
           <div className="text-xs font-mono truncate mr-2">{node.name}</div>
           <div className="flex items-center gap-1">
-             <Button size="sm" variant="ghost" onClick={handleZoomOut} disabled={scale <= 0.5} className="h-7 w-7 p-0">
-                <ZoomOut className="w-4 h-4" />
-             </Button>
-             <span className="text-xs w-12 text-center text-zinc-500">{Math.round(scale * 100)}%</span>
-             <Button size="sm" variant="ghost" onClick={handleZoomIn} disabled={scale >= 5} className="h-7 w-7 p-0">
-                <ZoomIn className="w-4 h-4" />
-             </Button>
-             <Button size="sm" variant="ghost" onClick={handleReset} className="h-7 w-7 p-0" title="Reset">
-                <RotateCcw className="w-3 h-3" />
-             </Button>
-             <div className="w-px h-4 bg-zinc-200 dark:bg-zinc-800 mx-1" />
+            <Button size="sm" variant="ghost" onClick={handleZoomOut} disabled={scale <= 0.5} className="h-7 w-7 p-0">
+              <ZoomOut className="w-4 h-4" />
+            </Button>
+            <span className="text-xs w-12 text-center text-zinc-500">{Math.round(scale * 100)}%</span>
+            <Button size="sm" variant="ghost" onClick={handleZoomIn} disabled={scale >= 5} className="h-7 w-7 p-0">
+              <ZoomIn className="w-4 h-4" />
+            </Button>
+            <Button size="sm" variant="ghost" onClick={handleReset} className="h-7 w-7 p-0" title="Reset">
+              <RotateCcw className="w-3 h-3" />
+            </Button>
+            <div className="w-px h-4 bg-zinc-200 dark:bg-zinc-800 mx-1" />
             <Button asChild size="sm" variant="outline" className="h-7">
-                <a href={signedUrl} target="_blank" rel="noreferrer">
+              <a href={signedUrl} target="_blank" rel="noreferrer">
                 <ExternalLink className="w-4 h-4 mr-2" />
                 Open
-                </a>
+              </a>
             </Button>
           </div>
         </div>
-        <div 
-            className="flex-1 min-h-0 flex items-center justify-center p-4 overflow-hidden relative bg-zinc-50/50 dark:bg-zinc-900/50 cursor-grab active:cursor-grabbing"
-            onWheel={onWheel}
-            onMouseDown={onMouseDown}
-            onMouseMove={onMouseMove}
-            onMouseUp={onMouseUp}
-            onMouseLeave={onMouseUp}
+        <div
+          ref={containerRef}
+          className="flex-1 min-h-0 flex items-center justify-center p-4 overflow-hidden relative bg-zinc-50/50 dark:bg-zinc-900/50 cursor-grab active:cursor-grabbing"
+          onMouseDown={onMouseDown}
+          onMouseMove={onMouseMove}
+          onMouseUp={onMouseUp}
+          onMouseLeave={onMouseUp}
         >
           <Image
             src={signedUrl}
             alt={node.name}
             width={1600}
             height={900}
-            unoptimized
+            sizes="(max-width: 768px) 100vw, 80vw"
+            loading="lazy"
             className="max-h-full max-w-full object-contain transition-transform duration-75 ease-out select-none"
             style={{
-                transform: `translate(${position.x}px, ${position.y}px) scale(${scale})`,
+              transform: `translate(${position.x}px, ${position.y}px) scale(${scale})`,
             }}
             draggable={false}
+            onError={() => setImageError(true)}
           />
         </div>
       </div>
@@ -119,6 +152,10 @@ export default function AssetPreview({
   }
 
   if (kind === "video") {
+    if (videoError) {
+      return <ErrorFallback message="Failed to load video preview" url={signedUrl} />;
+    }
+
     return (
       <div className="h-full w-full flex flex-col bg-white dark:bg-zinc-950">
         <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-200 dark:border-zinc-800">
@@ -131,7 +168,14 @@ export default function AssetPreview({
           </Button>
         </div>
         <div className="flex-1 min-h-0 p-4">
-          <video src={signedUrl} controls className="w-full h-full rounded-md bg-black" />
+          <video
+            src={signedUrl}
+            controls
+            preload="metadata"
+            aria-label={`Video: ${node.name}`}
+            className="w-full h-full rounded-md bg-black"
+            onError={() => setVideoError(true)}
+          />
         </div>
       </div>
     );
@@ -150,7 +194,7 @@ export default function AssetPreview({
           </Button>
         </div>
         <div className="flex-1 min-h-0 flex items-center justify-center p-8">
-          <audio src={signedUrl} controls className="w-full" />
+          <audio src={signedUrl} controls preload="metadata" aria-label={`Audio: ${node.name}`} className="w-full" />
         </div>
       </div>
     );
@@ -169,18 +213,26 @@ export default function AssetPreview({
           </Button>
         </div>
         <div className="flex-1 min-h-0">
-          <iframe
+          <object
+            data={signedUrl}
+            type="application/pdf"
             title={node.name}
-            src={signedUrl}
             className="w-full h-full border-0 bg-white"
-          />
+          >
+            <div className="flex flex-col items-center justify-center h-full gap-3 p-8">
+              <FileText className="w-8 h-8 text-zinc-400" />
+              <p className="text-sm text-zinc-500">PDF preview not supported in this browser.</p>
+              <Button asChild size="sm" variant="outline">
+                <a href={signedUrl} target="_blank" rel="noreferrer">Download PDF</a>
+              </Button>
+            </div>
+          </object>
         </div>
       </div>
     );
   }
 
   if (kind === "doc") {
-    // encodeURIComponent is crucial for the viewer
     const viewerUrl = `https://docs.google.com/viewer?url=${encodeURIComponent(signedUrl)}&embedded=true`;
     return (
       <div className="h-full w-full flex flex-col bg-white dark:bg-zinc-950">
@@ -222,10 +274,10 @@ export default function AssetPreview({
           </div>
           <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">{node.name}</div>
           <div className="mt-1 text-xs text-zinc-500">
-            {(node.mimeType || "unknown").toLowerCase()} • {formatBytes(node.size)}
+            {(node.mimeType || "unknown").toLowerCase()} · {formatBytes(node.size)}
           </div>
           <div className="mt-3 text-xs text-zinc-500">
-            This file type doesn’t have an inline preview yet. Use “Open” to view it in a new tab.
+            This file type doesn&apos;t have an inline preview yet. Use &quot;Open&quot; to view it in a new tab.
           </div>
         </div>
       </div>

@@ -6,6 +6,7 @@ import { db } from "@/lib/db";
 import { projectMembers, projectSprints, tasks } from "@/lib/db/schema";
 import { getProjectAccessById } from "@/lib/data/project-access";
 import { createClient } from "@/lib/supabase/server";
+import { consumeRateLimit } from "@/lib/security/rate-limit";
 
 type MutableTaskField = "title" | "description" | "priority" | "sprintId" | "dueDate";
 
@@ -52,6 +53,8 @@ export async function updateTaskFieldAction(
         if (authError || !user) {
             return { success: false, error: "Unauthorized" };
         }
+        const { allowed: taskRlOk } = await consumeRateLimit(`task:${user.id}`, 60, 60);
+        if (!taskRlOk) return { success: false, error: "Rate limit exceeded" };
 
         if (!ALLOWED_FIELDS.has(field as MutableTaskField)) {
             return { success: false, error: "Invalid field" };

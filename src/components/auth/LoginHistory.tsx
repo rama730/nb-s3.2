@@ -9,29 +9,39 @@ interface LoginHistoryProps {
     initialHistory?: LoginHistoryEntry[];
 }
 
-export default function LoginHistory({ initialHistory = [] }: LoginHistoryProps) {
-    const [history, setHistory] = useState<LoginHistoryEntry[]>(initialHistory);
-    const [loading, setLoading] = useState(!initialHistory.length);
+export default function LoginHistory({ initialHistory }: LoginHistoryProps) {
+    const hasInitialHistory = Array.isArray(initialHistory);
+    const [history, setHistory] = useState<LoginHistoryEntry[]>(initialHistory ?? []);
+    const [loading, setLoading] = useState(!hasInitialHistory);
 
     const loadHistory = useCallback(async () => {
         try {
             const res = await fetch("/api/v1/auth/login-history");
-            const json = await res.json();
-            if (json.success) {
-                setHistory(json.data.history || []);
+            if (!res.ok) {
+                setHistory([]);
+                return;
             }
-        } catch (error) {
-            console.error("Failed to load login history:", error);
+            const contentType = res.headers.get("content-type") || "";
+            if (!contentType.includes("application/json")) {
+                setHistory([]);
+                return;
+            }
+            const json = await res.json();
+            if (json?.success) {
+                setHistory(json?.data?.history || []);
+            }
+        } catch {
+            setHistory([]);
         } finally {
             setLoading(false);
         }
     }, []);
 
     useEffect(() => {
-        if (!initialHistory.length) {
+        if (!hasInitialHistory) {
             void loadHistory();
         }
-    }, [initialHistory.length, loadHistory]);
+    }, [hasInitialHistory, loadHistory]);
 
     if (loading) {
         return (

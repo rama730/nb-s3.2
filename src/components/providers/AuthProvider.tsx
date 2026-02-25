@@ -6,6 +6,10 @@ import type { User, Session } from '@supabase/supabase-js';
 import { useRouter } from 'next/navigation';
 import type { Profile } from '@/lib/db/schema';
 
+const AUTH_SIGN_IN_TIMEOUT_MS = 8_000;
+const USE_CLIENT_E2E_AUTH_FALLBACK = process.env.NEXT_PUBLIC_E2E_AUTH_FALLBACK === '1';
+const AUTH_UNREACHABLE_MESSAGE = 'Authentication service is unavailable. Check your Supabase connection and try again.';
+
 // --- Types ---
 interface AuthState {
     user: User | null;
@@ -14,13 +18,23 @@ interface AuthState {
     isLoading: boolean;
 }
 
+interface AuthResult {
+    data: { user: User | null; session: Session | null } | null;
+    error: { message: string } | null;
+}
+
+interface OAuthResult {
+    data: { url: string } | null;
+    error: { message: string } | null;
+}
+
 interface AuthContextType extends AuthState {
     isAuthenticated: boolean;
-    signIn: (email: string, password: string) => Promise<any>;
-    signUp: (email: string, password: string, fullName?: string) => Promise<any>;
+    signIn: (email: string, password: string) => Promise<AuthResult>;
+    signUp: (email: string, password: string, fullName?: string) => Promise<AuthResult>;
     signOut: () => Promise<void>;
-    signInWithGoogle: () => Promise<any>;
-    signInWithGitHub: () => Promise<any>;
+    signInWithGoogle: () => Promise<OAuthResult>;
+    signInWithGitHub: () => Promise<OAuthResult>;
     refreshProfile: () => Promise<void>;
 }
 
@@ -73,6 +87,38 @@ export function AuthProvider({
     });
     const activeUserIdRef = useRef<string | null>(initialUser?.id || null);
     const router = useRouter();
+
+    const signInWithE2EFallback = useCallback(async (email: string, password: string): Promise<AuthResult> => {
+        try {
+            const response = await fetch('/api/e2e/auth', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email, password }),
+            });
+            const payload = await response.json().catch(() => ({} as { error?: string }));
+            if (!response.ok) {
+                if (response.status === 404) {
+                    return {
+                        data: null,
+                        error: { message: 'E2E auth fallback is disabled. Set E2E_AUTH_FALLBACK=1 (or NEXT_PUBLIC_E2E_AUTH_FALLBACK=1) and restart dev server.' },
+                    };
+                }
+                return {
+                    data: null,
+                    error: { message: payload.error || 'Sign in failed' },
+                };
+            }
+            return {
+                data: { user: null, session: null },
+                error: null,
+            };
+        } catch {
+            return {
+                data: null,
+                error: { message: 'Sign in failed' },
+            };
+        }
+    }, []);
 
     // Sync with Supabase Auth Listener
     useEffect(() => {
@@ -148,9 +194,50 @@ export function AuthProvider({
 
     // --- Actions ---
     const signIn = useCallback(async (email: string, password: string) => {
+        if (USE_CLIENT_E2E_AUTH_FALLBACK) {
+            return await signInWithE2EFallback(email, password);
+        }
+
         const supabase = createClient();
-        return await supabase.auth.signInWithPassword({ email, password });
-    }, []);
+        try {
+            const result = await Promise.race([
+                supabase.auth.signInWithPassword({ email, password }),
+                new Promise<never>((_, reject) => {
+                    setTimeout(() => reject(new Error('AUTH_TIMEOUT')), AUTH_SIGN_IN_TIMEOUT_MS);
+                }),
+            ]);
+            if (!result.error) return result;
+
+            const message = (result.error.message || '').toLowerCase();
+            const isConnectivityError = message.includes('fetch failed') || message.includes('timeout');
+            if (isConnectivityError && USE_CLIENT_E2E_AUTH_FALLBACK) {
+                return await signInWithE2EFallback(email, password);
+            }
+            if (isConnectivityError) {
+                return {
+                    data: null,
+                    error: { message: AUTH_UNREACHABLE_MESSAGE },
+                };
+            }
+            return result;
+        } catch (error) {
+            const message = error instanceof Error ? error.message : '';
+            const isConnectivityError = message === 'AUTH_TIMEOUT' || message.toLowerCase().includes('fetch failed');
+            if (isConnectivityError && USE_CLIENT_E2E_AUTH_FALLBACK) {
+                return await signInWithE2EFallback(email, password);
+            }
+            if (isConnectivityError) {
+                return {
+                    data: null,
+                    error: { message: AUTH_UNREACHABLE_MESSAGE },
+                };
+            }
+            return {
+                data: null,
+                error: { message: 'Sign in failed' },
+            };
+        }
+    }, [signInWithE2EFallback]);
 
     const signUp = useCallback(async (email: string, password: string, fullName?: string) => {
         const supabase = createClient();
@@ -183,7 +270,8 @@ export function AuthProvider({
 
     const signOut = useCallback(async () => {
         const supabase = createClient();
-        await supabase.auth.signOut();
+        await supabase.auth.signOut().catch(() => null);
+        await fetch('/api/e2e/auth', { method: 'DELETE' }).catch(() => null);
         // State update handled by onAuthStateChange, but we can optimise responsiveness
         setState({
             user: null,

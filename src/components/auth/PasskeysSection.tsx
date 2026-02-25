@@ -3,53 +3,65 @@
 import { useState, useEffect, useCallback } from "react";
 import Button from "@/components/ui-custom/Button";
 import { Loader2, Key, Plus, Trash2 } from "lucide-react";
+import { toast } from "sonner";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import type { Passkey } from "@/lib/types/settingsTypes";
 
 interface PasskeysSectionProps {
     initialPasskeys?: Passkey[];
 }
 
-export default function PasskeysSection({ initialPasskeys = [] }: PasskeysSectionProps) {
-    const [passkeys, setPasskeys] = useState<Passkey[]>(initialPasskeys);
-    const [loading, setLoading] = useState(!initialPasskeys.length);
+export default function PasskeysSection({ initialPasskeys }: PasskeysSectionProps) {
+    const hasInitialPasskeys = Array.isArray(initialPasskeys);
+    const [passkeys, setPasskeys] = useState<Passkey[]>(initialPasskeys ?? []);
+    const [loading, setLoading] = useState(!hasInitialPasskeys);
     const [registering, setRegistering] = useState(false);
 
     const loadPasskeys = useCallback(async () => {
         try {
             const res = await fetch("/api/v1/auth/passkeys");
-            const json = await res.json();
-            if (json.success) {
-                setPasskeys(json.data.passkeys || []);
+            if (!res.ok) {
+                setPasskeys([]);
+                return;
             }
-        } catch (error) {
-            console.error("Failed to load passkeys:", error);
+            const contentType = res.headers.get("content-type") || "";
+            if (!contentType.includes("application/json")) {
+                setPasskeys([]);
+                return;
+            }
+            const json = await res.json();
+            if (json?.success) {
+                setPasskeys(json?.data?.passkeys || []);
+            }
+        } catch {
+            setPasskeys([]);
         } finally {
             setLoading(false);
         }
     }, []);
 
     useEffect(() => {
-        if (!initialPasskeys.length) {
+        if (!hasInitialPasskeys) {
             void loadPasskeys();
         }
-    }, [initialPasskeys.length, loadPasskeys]);
+    }, [hasInitialPasskeys, loadPasskeys]);
 
     const handleRegister = async () => {
         setRegistering(true);
         try {
             // In a real app, this would use WebAuthn API
-            alert("Passkey registration would open here using WebAuthn API");
+            toast.info("Passkey registration would open here using WebAuthn API");
         } catch (error) {
             console.error("Failed to register passkey:", error);
-            alert("Failed to register passkey");
+            toast.error("Failed to register passkey");
         } finally {
             setRegistering(false);
         }
     };
 
-    const handleDelete = async (passkeyId: string) => {
-        if (!confirm("Are you sure you want to remove this passkey?")) return;
+    const [deleteId, setDeleteId] = useState<string | null>(null);
 
+    const handleDelete = async (passkeyId: string) => {
         try {
             const res = await fetch(`/api/v1/auth/passkeys/${passkeyId}`, {
                 method: "DELETE",
@@ -59,7 +71,7 @@ export default function PasskeysSection({ initialPasskeys = [] }: PasskeysSectio
             }
         } catch (error) {
             console.error("Failed to delete passkey:", error);
-            alert("Failed to remove passkey");
+            toast.error("Failed to remove passkey");
         }
     };
 
@@ -96,7 +108,7 @@ export default function PasskeysSection({ initialPasskeys = [] }: PasskeysSectio
                             <Button
                                 variant="ghost"
                                 size="sm"
-                                onClick={() => handleDelete(passkey.id)}
+                                onClick={() => setDeleteId(passkey.id)}
                             >
                                 <Trash2 className="h-4 w-4 text-red-500" />
                             </Button>
@@ -119,6 +131,16 @@ export default function PasskeysSection({ initialPasskeys = [] }: PasskeysSectio
                     "Add passkey"
                 )}
             </Button>
+
+            <ConfirmDialog
+                open={!!deleteId}
+                onOpenChange={(open) => { if (!open) setDeleteId(null); }}
+                title="Remove passkey?"
+                description="You won't be able to use this passkey to sign in anymore."
+                confirmLabel="Remove"
+                variant="destructive"
+                onConfirm={() => { if (deleteId) void handleDelete(deleteId); }}
+            />
         </div>
     );
 }

@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import Button from "@/components/ui-custom/Button";
 import Input from "@/components/ui-custom/Input";
 import { Label } from "@/components/ui-custom/Label";
@@ -28,7 +27,6 @@ interface ProfileFormProps {
 
 export function ProfileForm({ initialData, onOptimisticUpdate }: ProfileFormProps) {
     const { showToast } = useToast();
-    const router = useRouter();
     const queryClient = useQueryClient();
     const supabase = createSupabaseBrowserClient();
     const { refreshProfile } = useAuth();
@@ -124,7 +122,6 @@ export function ProfileForm({ initialData, onOptimisticUpdate }: ProfileFormProp
             ]);
 
             showToast("Profile updated", "success");
-            router.refresh();
         } catch (error) {
             console.error("Error updating profile:", error);
             showToast("Failed to update profile", "error");

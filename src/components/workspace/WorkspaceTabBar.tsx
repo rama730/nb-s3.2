@@ -38,6 +38,7 @@ function WorkspaceTabBar({ activeTab, onTabChange, badges }: WorkspaceTabBarProp
                 return (
                     <button
                         key={key}
+                        data-testid={`workspace-tab-${key}`}
                         role="tab"
                         aria-selected={isActive}
                         aria-controls={`workspace-tab-${key}`}

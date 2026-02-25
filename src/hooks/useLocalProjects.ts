@@ -5,35 +5,52 @@ import { createClient } from '@/lib/supabase/client';
 import { CreateProjectInput } from '@/lib/validations/project';
 import { RxDocument } from 'rxdb';
 
+let singletonReplication: { cancel: () => Promise<void> } | null = null;
+let singletonDbPromise: ReturnType<typeof getDatabase> | null = null;
+
+function getSingletonDb() {
+    if (!singletonDbPromise) {
+        singletonDbPromise = getDatabase();
+    }
+    return singletonDbPromise;
+}
+
 export function useLocalProjects() {
     const [projects, setProjects] = useState<ProjectDoc[]>([]);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
         let sub: any;
+        let isActive = true;
 
         const init = async () => {
-            const db = await getDatabase();
+            const db = await getSingletonDb();
+            if (!isActive) return;
 
-            // 1. Initial Load from Local DB (Instant)
             const initialDocs = await db.projects.find().sort({ created_at: 'desc' }).exec();
+            if (!isActive) return;
             setProjects(initialDocs.map(d => d.toJSON()));
             setLoading(false);
 
-            // 2. Subscribe to local changes
             sub = db.projects.find().sort({ created_at: 'desc' }).$.subscribe(docs => {
+                if (!isActive) return;
                 setProjects(docs.map(d => d.toJSON()));
             });
 
-            // 3. Start Sync (Background)
-            // In a real app, replication should be a singleton service, not inside hook
-            // But for demo/MVP this ensures it runs when component mounts
-            replicateSupabase(db.projects);
+            if (!singletonReplication) {
+                const replicationState = await replicateSupabase(db.projects);
+                if (!isActive) {
+                    void replicationState.cancel();
+                    return;
+                }
+                singletonReplication = replicationState;
+            }
         };
 
-        init();
+        void init();
 
         return () => {
+            isActive = false;
             if (sub) sub.unsubscribe();
         };
     }, []);
@@ -116,14 +133,16 @@ export const useLocalProject = (projectId: string) => {
 
     useEffect(() => {
         let sub: any = null;
+        let isActive = true;
 
         const init = async () => {
             const db = await getDatabase();
-            if (!db) return;
+            if (!db || !isActive) return;
 
             const query = db.projects.findOne(projectId);
 
             sub = query.$.subscribe(doc => {
+                if (!isActive) return;
                 if (doc) {
                     setProject(doc.toJSON());
                     setLoading(false);
@@ -133,9 +152,10 @@ export const useLocalProject = (projectId: string) => {
             });
         };
 
-        init();
+        void init();
 
         return () => {
+            isActive = false;
             if (sub) sub.unsubscribe();
         };
     }, [projectId]);

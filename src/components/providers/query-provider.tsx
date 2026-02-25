@@ -2,6 +2,7 @@
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useState, type ReactNode } from 'react'
+import { QUERY_DEFAULTS } from '@/lib/query-defaults'
 
 interface QueryProviderProps {
     children: ReactNode
@@ -13,12 +14,10 @@ export function QueryProvider({ children }: QueryProviderProps) {
             new QueryClient({
                 defaultOptions: {
                     queries: {
-                        // With SSR, we usually want to set some default staleTime
-                        // above 0 to avoid refetching immediately on the client
-                        staleTime: 60 * 1000, // 1 minute
-                        gcTime: 5 * 60 * 1000, // 5 minutes
-                        retry: 1,
-                        refetchOnWindowFocus: false,
+                        staleTime: QUERY_DEFAULTS.staleTime,
+                        gcTime: QUERY_DEFAULTS.gcTime,
+                        retry: QUERY_DEFAULTS.retry,
+                        refetchOnWindowFocus: QUERY_DEFAULTS.refetchOnWindowFocus,
                     },
                     mutations: {
                         retry: 1,

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { createVisibilityAwareInterval } from "@/lib/utils/visibility";
 
 export interface Comment {
     id: string;
@@ -33,11 +34,22 @@ export function useTaskComments(taskId: string, currentUserId?: string) {
     const [isLoading, setIsLoading] = useState(true);
     const supabase = useMemo(() => createClient(), []);
     const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const isMountedRef = useRef(true);
+
+    useEffect(() => {
+        isMountedRef.current = true;
+        return () => {
+            isMountedRef.current = false;
+        };
+    }, []);
 
     const refreshComments = useCallback(async () => {
+        if (!isMountedRef.current) return;
         if (!taskId) {
-            setComments([]);
-            setIsLoading(false);
+            if (isMountedRef.current) {
+                setComments([]);
+                setIsLoading(false);
+            }
             return;
         }
 
@@ -56,15 +68,20 @@ export function useTaskComments(taskId: string, currentUserId?: string) {
             .eq("task_id", taskId)
             .order("created_at", { ascending: false });
 
+        if (!isMountedRef.current) return;
         if (!error && data) {
             setComments(mapComments(data));
         }
-        setIsLoading(false);
+        if (isMountedRef.current) {
+            setIsLoading(false);
+        }
     }, [supabase, taskId]);
 
     const scheduleRefresh = useCallback(() => {
+        if (!isMountedRef.current) return;
         if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
         refreshTimerRef.current = setTimeout(() => {
+            if (!isMountedRef.current) return;
             void refreshComments();
         }, 120);
     }, [refreshComments]);
@@ -90,12 +107,12 @@ export function useTaskComments(taskId: string, currentUserId?: string) {
             )
             .subscribe();
 
-        const pollId = setInterval(() => {
+        const cleanup = createVisibilityAwareInterval(() => {
             void refreshComments();
         }, 30000);
 
         return () => {
-            clearInterval(pollId);
+            cleanup();
             if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
             supabase.removeChannel(commentsChannel);
         };

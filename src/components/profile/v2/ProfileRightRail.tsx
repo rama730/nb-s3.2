@@ -1,5 +1,6 @@
 'use client'
 
+import React from 'react'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
 import { Briefcase, Users, FolderKanban, Link2, Sparkles, MessageSquare, Pencil, Github, Linkedin, Globe } from 'lucide-react'
@@ -46,7 +47,7 @@ function Stat({
     return href ? <Link href={href} className="block hover:opacity-90">{inner}</Link> : inner
 }
 
-function normalizeSocialLinks(profile: any, list: any): Array<{ label: string; url: string }> {
+function normalizeSocialLinks(profile: Record<string, unknown>, list: Array<{ label?: string; url?: string; platform?: string }> | null | undefined): Array<{ label: string; url: string }> {
     const out: Array<{ label: string; url: string }> = []
 
     const add = (label: string, url: string) => {
@@ -73,7 +74,7 @@ function normalizeSocialLinks(profile: any, list: any): Array<{ label: string; u
     if (Array.isArray(list)) {
         // Legacy table concept
         for (const row of list) {
-            add(row?.platform || row?.label, row?.url)
+            add(row?.platform || row?.label || '', row?.url || '')
         }
     } else if (list && typeof list === 'object') {
         // If list is passed as the object itself
@@ -85,7 +86,7 @@ function normalizeSocialLinks(profile: any, list: any): Array<{ label: string; u
     return out
 }
 
-export function ProfileRightRail({
+export const ProfileRightRail = React.memo(function ProfileRightRail({
     profile,
     stats,
     isOwner,
@@ -117,6 +118,10 @@ export function ProfileRightRail({
         if (u.includes('linkedin.com')) return <Linkedin className="w-4 h-4" />
         return <Globe className="w-4 h-4" />
     }
+    const completionScore = Number(vm.profileStrength || 0)
+    const missingItems: string[] = Array.isArray((profile as any)?.completionMissing)
+        ? (profile as any).completionMissing
+        : []
 
     return (
         <>
@@ -196,6 +201,36 @@ export function ProfileRightRail({
                 )}
             </RailCard>
 
+            {isOwner ? (
+                <RailCard title="Profile Completeness" icon={<Sparkles className="w-4 h-4" />}>
+                    <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                            <span className="text-sm text-zinc-600 dark:text-zinc-300">Completion</span>
+                            <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                                {completionScore}%
+                            </span>
+                        </div>
+                        <div className="h-2 rounded-full bg-zinc-100 dark:bg-zinc-800 overflow-hidden">
+                            <div
+                                className="h-full bg-indigo-600 dark:bg-indigo-400 transition-all"
+                                style={{ width: `${Math.max(0, Math.min(100, completionScore))}%` }}
+                            />
+                        </div>
+                        {missingItems.length > 0 ? (
+                            <ul className="space-y-1 text-xs text-zinc-500 dark:text-zinc-400">
+                                {missingItems.slice(0, 3).map((item) => (
+                                    <li key={item}>• {item}</li>
+                                ))}
+                            </ul>
+                        ) : completionScore >= 100 ? (
+                            <p className="text-xs text-emerald-600 dark:text-emerald-400">
+                                Profile is complete. Great work.
+                            </p>
+                        ) : null}
+                    </div>
+                </RailCard>
+            ) : null}
+
             <RailCard title="Shortcuts" icon={<FolderKanban className="w-4 h-4" />}>
                 <div className="grid grid-cols-2 gap-2">
                     {isOwner ? (
@@ -235,4 +270,4 @@ export function ProfileRightRail({
             </RailCard>
         </>
     )
-}
+})

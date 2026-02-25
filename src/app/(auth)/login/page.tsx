@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/hooks/use-auth'
@@ -11,6 +11,8 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Separator } from '@/components/ui/separator'
 import { Github, Mail, Loader2, Eye, EyeOff } from 'lucide-react'
 
+const LOGIN_REQUEST_TIMEOUT_MS = 25_000
+
 export default function LoginPage() {
     const router = useRouter()
     const { signIn, signInWithGoogle, signInWithGitHub } = useAuth()
@@ -20,23 +22,39 @@ export default function LoginPage() {
     const [showPassword, setShowPassword] = useState(false)
     const [isLoading, setIsLoading] = useState(false)
     const [error, setError] = useState<string | null>(null)
+    const submitRequestIdRef = useRef(0)
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault()
         setError(null)
         setIsLoading(true)
+        const currentRequestId = ++submitRequestIdRef.current
 
         try {
-            const { error } = await signIn(email, password)
-            if (error) {
-                setError(error.message)
+            const result = await Promise.race([
+                signIn(email, password),
+                new Promise<never>((_, reject) => {
+                    setTimeout(() => reject(new Error('LOGIN_TIMEOUT')), LOGIN_REQUEST_TIMEOUT_MS)
+                }),
+            ])
+
+            if (currentRequestId !== submitRequestIdRef.current) return
+            if (result.error) {
+                setError(result.error.message)
             } else {
                 router.push('/hub')
             }
-        } catch {
-            setError('An unexpected error occurred')
+        } catch (loginError) {
+            if (currentRequestId !== submitRequestIdRef.current) return
+            if (loginError instanceof Error && loginError.message === 'LOGIN_TIMEOUT') {
+                setError('Sign in is taking too long. Please try again.')
+            } else {
+                setError('An unexpected error occurred')
+            }
         } finally {
-            setIsLoading(false)
+            if (currentRequestId === submitRequestIdRef.current) {
+                setIsLoading(false)
+            }
         }
     }
 

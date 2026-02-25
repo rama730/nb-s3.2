@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { useRouter, useParams, useSearchParams } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
 import dynamic from "next/dynamic";
@@ -13,6 +14,8 @@ import { toggleProjectBookmarkAction, toggleProjectFollowAction, startSprintActi
 import { getApplicationStatusAction } from "@/app/actions/applications";
 import ApplicationStatusBanner from "@/components/projects/ApplicationStatusBanner";
 import { useProjectMembers } from "@/hooks/hub/useProjectData";
+import { filesFeatureFlags } from "@/lib/features/files";
+import { getProjectNodes } from "@/app/actions/files";
 
 import { 
     DashboardTab, 
@@ -52,13 +55,22 @@ export default function ProjectDashboardClient({
     isMember,
 }: ProjectDashboardClientProps) {
     const router = useRouter();
+    const queryClient = useQueryClient();
     const params = useParams();
     const searchParams = useSearchParams();
+
+    const refreshProjectData = useCallback(() => {
+        void queryClient.invalidateQueries({ queryKey: ['project', project.slug] });
+        void queryClient.invalidateQueries({ queryKey: ['project', project.id] });
+    }, [queryClient, project.slug, project.id]);
 
     // Active tab from URL or default
     const [activeTab, setActiveTab] = useState(() => {
         return searchParams?.get("tab") || "dashboard";
     });
+    const [hasMountedFilesTab, setHasMountedFilesTab] = useState(
+        () => (searchParams?.get("tab") || "dashboard") === "files"
+    );
 
     // State management
     const [isBookmarked, setIsBookmarked] = useState((project as any).isSaved || false);
@@ -223,6 +235,51 @@ export default function ProjectDashboardClient({
         router.replace(`?${params.toString()}`, { scroll: false });
     }, [activeTab, router]);
 
+    const filesPrefetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const filesPrefetchQueryKey = useMemo(
+        () => ['project-nodes', project.id, null] as const,
+        [project.id]
+    );
+
+    const handleTabHover = useCallback((tabId: string) => {
+        if (!(filesFeatureFlags.prefetchHover || filesFeatureFlags.wave2PrefetchHover)) return;
+        if (tabId !== "files") return;
+        if (filesPrefetchTimerRef.current) {
+            clearTimeout(filesPrefetchTimerRef.current);
+            filesPrefetchTimerRef.current = null;
+        }
+        filesPrefetchTimerRef.current = setTimeout(() => {
+            const queryState = queryClient.getQueryState(filesPrefetchQueryKey);
+            const isFresh =
+                !!queryState?.dataUpdatedAt && Date.now() - queryState.dataUpdatedAt < 60_000;
+            if (isFresh) return;
+            void import("@/components/projects/v2/ProjectFilesWorkspace");
+            queryClient.prefetchQuery({
+                queryKey: filesPrefetchQueryKey,
+                queryFn: () => getProjectNodes(project.id, null),
+                staleTime: 60_000,
+            });
+        }, 120);
+    }, [filesPrefetchQueryKey, project.id, queryClient]);
+
+    const handleTabLeave = useCallback((tabId: string) => {
+        if (tabId !== "files") return;
+        if (filesPrefetchTimerRef.current) {
+            clearTimeout(filesPrefetchTimerRef.current);
+            filesPrefetchTimerRef.current = null;
+        }
+        void queryClient.cancelQueries({ queryKey: filesPrefetchQueryKey });
+    }, [filesPrefetchQueryKey, queryClient]);
+
+    useEffect(() => {
+        return () => {
+            if (filesPrefetchTimerRef.current) {
+                clearTimeout(filesPrefetchTimerRef.current);
+                filesPrefetchTimerRef.current = null;
+            }
+        };
+    }, []);
+
     // Actions
     const handleEdit = useCallback((section?: string) => {
         setIsEditModalOpen(true);
@@ -384,6 +441,17 @@ export default function ProjectDashboardClient({
 
     const filesSyncStatus = extendedProject?.syncStatus;
     const filesImportSourceType = extendedProject?.importSource?.type || null;
+    const initialOpenPath = searchParams?.get("path") || null;
+    const initialOpenLineRaw = Number(searchParams?.get("line") || "");
+    const initialOpenColumnRaw = Number(searchParams?.get("column") || "");
+    const initialOpenLine = Number.isFinite(initialOpenLineRaw) ? initialOpenLineRaw : null;
+    const initialOpenColumn = Number.isFinite(initialOpenColumnRaw) ? initialOpenColumnRaw : null;
+
+    useEffect(() => {
+        if (activeTab === "files") {
+            setHasMountedFilesTab(true);
+        }
+    }, [activeTab]);
 
     // Memoize the Files tab to prevent unmounting/remounting on parent re-renders (e.g. scroll)
     const filesTabContent = useMemo(() => (
@@ -396,9 +464,23 @@ export default function ProjectDashboardClient({
                 initialFileNodes={initialFileNodes}
                 syncStatus={filesSyncStatus}
                 importSourceType={filesImportSourceType}
+                initialOpenPath={initialOpenPath}
+                initialOpenLine={initialOpenLine}
+                initialOpenColumn={initialOpenColumn}
             />
         </TabErrorBoundary>
-    ), [project.id, project.title, currentUserId, isOwnerOrMember, initialFileNodes, filesSyncStatus, filesImportSourceType]);
+    ), [
+        project.id,
+        project.title,
+        currentUserId,
+        isOwnerOrMember,
+        initialFileNodes,
+        filesSyncStatus,
+        filesImportSourceType,
+        initialOpenPath,
+        initialOpenLine,
+        initialOpenColumn,
+    ]);
 
     // Render active tab content
     const renderTabContent = () => {
@@ -450,14 +532,14 @@ export default function ProjectDashboardClient({
                                 tasks={tasks}
                                 onCreateSprint={() => {
                                     toast.success("Sprint created successfully");
-                                    router.refresh();
+                                    refreshProjectData();
                                 }}
                                 onStartSprint={async (id) => {
                                     try {
                                         const result = await startSprintAction(id, project.id);
                                         if (result.success) {
                                             toast.success("Sprint started");
-                                            router.refresh();
+                                            refreshProjectData();
                                         } else {
                                             toast.error(result.error);
                                         }
@@ -470,7 +552,7 @@ export default function ProjectDashboardClient({
                                         const result = await completeSprintAction(id, project.id);
                                         if (result.success) {
                                             toast.success("Sprint completed");
-                                            router.refresh();
+                                            refreshProjectData();
                                         } else {
                                             toast.error(result.error);
                                         }
@@ -483,7 +565,7 @@ export default function ProjectDashboardClient({
                                         const result = await moveTaskToSprintAction(taskId, sprintId, project.id);
                                         if (result.success) {
                                             toast.success("Task moved");
-                                            router.refresh();
+                                            refreshProjectData();
                                         } else {
                                             toast.error(result.error);
                                         }
@@ -522,7 +604,7 @@ export default function ProjectDashboardClient({
                 );
 
             case "files":
-                return filesTabContent;
+                return null;
 
             case "settings":
                 if (!isOwner) return null;
@@ -531,7 +613,7 @@ export default function ProjectDashboardClient({
                         <ProjectSettingsTab
                             projectId={project.id}
                             project={project}
-                            onProjectUpdated={() => router.refresh()}
+                            onProjectUpdated={() => refreshProjectData()}
                             isProjectOwner={isOwner}
                         />
                     </TabErrorBoundary>
@@ -568,6 +650,8 @@ export default function ProjectDashboardClient({
                 onFollow={handleFollow}
                 followLoading={followLoading}
                 onShare={handleShare}
+                onTabHover={handleTabHover}
+                onTabLeave={handleTabLeave}
             >
                 {/* Application Status Banner for visitors */}
                 {!isOwner && !isMember && currentUserId && rolesWithFilled.length > 0 && (
@@ -586,7 +670,10 @@ export default function ProjectDashboardClient({
                     </div>
                 )}
                 
-                {renderTabContent()}
+                {activeTab === "files" ? filesTabContent : renderTabContent()}
+                {hasMountedFilesTab && activeTab !== "files" ? (
+                    <div className="hidden">{filesTabContent}</div>
+                ) : null}
 
                 <ProjectOnboardingModal
                     isOpen={isOnboardingOpen}
@@ -607,7 +694,7 @@ export default function ProjectDashboardClient({
                     project={extendedProject}
                     isOpen={isEditModalOpen}
                     onClose={() => setIsEditModalOpen(false)}
-                    onSaved={() => router.refresh()}
+                    onSaved={() => refreshProjectData()}
                 />
                 
                 {rolesWithFilled.length > 0 && (
@@ -624,7 +711,7 @@ export default function ProjectDashboardClient({
                         }}
                         roles={rolesWithFilled}
                         preselectedRoleId={preselectedRoleId}
-                        onSuccess={() => router.refresh()}
+                        onSuccess={() => refreshProjectData()}
                     />
                 )}
             </ProjectLayout>

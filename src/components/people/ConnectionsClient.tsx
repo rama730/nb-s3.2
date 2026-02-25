@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, forwardRef, useMemo } from "react";
+import { useState, forwardRef, useMemo, useCallback } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import {
@@ -11,6 +11,7 @@ import {
 import { formatDistanceToNow } from "date-fns";
 import { VirtuosoGrid } from "react-virtuoso";
 import { toast } from "sonner";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { cn } from "@/lib/utils";
 import { profileHref } from "@/lib/routing/identifiers";
 import { useConnections, useConnectionStats, useConnectionMutations } from "@/hooks/useConnections";
@@ -65,8 +66,13 @@ export default function ConnectionsClient({
         [connectionsData]
     );
 
+    const validConnections = useMemo(
+        () => rawConnections.filter((item) => Boolean(item.otherUser)),
+        [rawConnections]
+    );
+
     const connections = useMemo(() => {
-        const items = rawConnections;
+        const items = validConnections;
         if (sortBy === "name") {
             return [...items].sort((a, b) => {
                 const nameA = a.otherUser?.fullName || a.otherUser?.username || "";
@@ -80,7 +86,7 @@ export default function ConnectionsClient({
             );
         }
         return items; // "recent" keeps server order
-    }, [rawConnections, sortBy]);
+    }, [validConnections, sortBy]);
 
     const stats = statsData || {
         totalConnections: 0,
@@ -90,13 +96,19 @@ export default function ConnectionsClient({
         pendingIncoming: 0
     };
 
-    const handleDisconnect = async (connectionId: string, userName: string) => {
-        if (!confirm(`Are you sure you want to disconnect from ${userName}?`)) return;
-        toast.promise(disconnect.mutateAsync(connectionId), {
+    const [disconnectTarget, setDisconnectTarget] = useState<{ id: string; name: string } | null>(null);
+
+    const confirmDisconnect = useCallback(() => {
+        if (!disconnectTarget) return;
+        toast.promise(disconnect.mutateAsync(disconnectTarget.id), {
             loading: 'Disconnecting...',
             success: 'Disconnected',
             error: 'Failed to disconnect'
         });
+    }, [disconnect, disconnectTarget]);
+
+    const handleDisconnect = (connectionId: string, userName: string) => {
+        setDisconnectTarget({ id: connectionId, name: userName });
     };
 
     const handleMessage = (userId: string) => {
@@ -106,11 +118,19 @@ export default function ConnectionsClient({
     // Recently connected (always latest by updatedAt, independent from active sort UI)
     const recentConnections = useMemo(
         () =>
-            [...rawConnections]
+            [...validConnections]
                 .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
                 .slice(0, 5),
-        [rawConnections]
+        [validConnections]
     );
+
+    const connectionsGrowth = useMemo(() => {
+        const candidate = (statsData as { connectionsGrowth?: number[] } | undefined)?.connectionsGrowth;
+        if (!Array.isArray(candidate)) return [] as number[];
+        return candidate
+            .filter((value): value is number => Number.isFinite(value))
+            .map((value) => Math.max(0, Math.min(100, value)));
+    }, [statsData]);
 
     if (connectionsLoading && !connectionsData) {
         return (
@@ -141,7 +161,7 @@ export default function ConnectionsClient({
         );
     }
 
-    return (
+    return (<>
         <div className={cn(!embedded && "max-w-7xl mx-auto")}>
             {/* ── COMPACT STATS STRIP ── */}
             <div className="flex flex-wrap gap-3 mb-6">
@@ -241,7 +261,13 @@ export default function ConnectionsClient({
                                 }}
                                 itemContent={(_, conn) => {
                                     const user = conn.otherUser;
-                                    if (!user) return null;
+                                    if (!user) {
+                                        return (
+                                            <div className="rounded-2xl border border-zinc-200/60 dark:border-white/5 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl p-4">
+                                                <p className="text-sm text-zinc-500 dark:text-zinc-400">Connection unavailable.</p>
+                                            </div>
+                                        );
+                                    }
                                     const isProcessing = disconnect.isPending && disconnect.variables === conn.id;
 
                                     return (
@@ -322,20 +348,27 @@ export default function ConnectionsClient({
                                 <TrendingUp className="w-4 h-4 text-indigo-500" />
                                 <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Connection Growth</h3>
                             </div>
-                            {/* Mini sparkline visualization */}
-                            <div className="flex items-end gap-1 h-16 px-1">
-                                {[40, 55, 35, 65, 50, 75, 60, 80, 70, 90, 85, 100].map((h, i) => (
-                                    <div
-                                        key={i}
-                                        className="flex-1 rounded-sm bg-gradient-to-t from-indigo-500/30 to-indigo-500/80 dark:from-indigo-500/20 dark:to-indigo-500/60 transition-all hover:from-indigo-500/50 hover:to-indigo-600"
-                                        style={{ height: `${h}%` }}
-                                    />
-                                ))}
-                            </div>
-                            <div className="flex justify-between mt-2 text-[10px] text-zinc-400 dark:text-zinc-500">
-                                <span>12 months ago</span>
-                                <span>Now</span>
-                            </div>
+                            {connectionsGrowth.length > 0 ? (
+                                <>
+                                    <div className="flex items-end gap-1 h-16 px-1">
+                                        {connectionsGrowth.map((height, i) => (
+                                            <div
+                                                key={`${height}-${i}`}
+                                                className="flex-1 rounded-sm bg-gradient-to-t from-indigo-500/30 to-indigo-500/80 dark:from-indigo-500/20 dark:to-indigo-500/60 transition-all hover:from-indigo-500/50 hover:to-indigo-600"
+                                                style={{ height: `${height}%` }}
+                                            />
+                                        ))}
+                                    </div>
+                                    <div className="flex justify-between mt-2 text-[10px] text-zinc-400 dark:text-zinc-500">
+                                        <span>History</span>
+                                        <span>Now</span>
+                                    </div>
+                                </>
+                            ) : (
+                                <div className="rounded-xl border border-dashed border-zinc-200 dark:border-zinc-700 px-3 py-4 text-xs text-zinc-500 dark:text-zinc-400">
+                                    Historical growth chart is coming soon.
+                                </div>
+                            )}
                         </div>
 
                         {/* Recently Connected */}
@@ -416,5 +449,14 @@ export default function ConnectionsClient({
                 </div>
             )}
         </div>
-    );
+        <ConfirmDialog
+            open={!!disconnectTarget}
+            onOpenChange={(open) => { if (!open) setDisconnectTarget(null); }}
+            title="Disconnect"
+            description={`Are you sure you want to disconnect from ${disconnectTarget?.name ?? ''}?`}
+            confirmLabel="Disconnect"
+            variant="destructive"
+            onConfirm={confirmDisconnect}
+        />
+    </>);
 }

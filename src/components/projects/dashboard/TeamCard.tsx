@@ -56,6 +56,7 @@ type AvatarEntry = {
     name: string;
     role: string;
     username?: string | null;
+    sortDateMs?: number;
 };
 
 /* ── Helpers ─────────────────────────────────────────────────── */
@@ -126,14 +127,13 @@ const TeamCard = memo(function TeamCard({
                 };
             })
             .sort((a, b) => {
-                const aMs = (a as any).sortDateMs;
-                const bMs = (b as any).sortDateMs;
-                if (aMs && bMs) return bMs - aMs;
-                if (aMs) return -1;
-                if (bMs) return 1;
+                const aMs = a.sortDateMs;
+                const bMs = b.sortDateMs;
+                if (typeof aMs === "number" && typeof bMs === "number") return bMs - aMs;
+                if (typeof aMs === "number") return -1;
+                if (typeof bMs === "number") return 1;
                 return a.name.localeCompare(b.name);
-            })
-            .map(({ id, src, fallback, name, role, username }) => ({ id, src, fallback, name, role, username }));
+            });
 
         return [...ownerEntry, ...collaborators];
     }, [members, ownerName, ownerRoleLabel, project]);

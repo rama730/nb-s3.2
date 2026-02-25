@@ -3,34 +3,35 @@
 import { db } from '@/lib/db';
 import { profiles, projects, connections } from '@/lib/db/schema';
 import { createClient } from '@/lib/supabase/server';
+import { isAdminUser } from '@/lib/security/admin';
 import { eq, or } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 
 const UUID_RE =
     /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-
-function isAdminUser(user: { id: string; app_metadata?: Record<string, unknown> }) {
-    const role = typeof user.app_metadata?.role === 'string' ? user.app_metadata.role : '';
-    if (role === 'admin' || role === 'service_role') return true;
-
-    const adminIds = (process.env.ADMIN_USER_IDS || '')
-        .split(',')
-        .map((id) => id.trim())
-        .filter(Boolean);
-    return adminIds.includes(user.id);
-}
+const ACCOUNT_DELETE_CONFIRM_TEXT = 'DELETE';
 
 /**
  * Delete the current user's account and all associated data.
  * This is a DESTRUCTIVE action that cannot be undone.
  */
-export async function deleteMyAccount(): Promise<{ success: boolean; error?: string }> {
+export async function deleteMyAccount(confirmationText?: string): Promise<{ success: boolean; error?: string }> {
     try {
         const supabase = await createClient();
         const { data: { user } } = await supabase.auth.getUser();
 
         if (!user) {
             return { success: false, error: 'Not authenticated' };
+        }
+
+        const normalizedConfirmation = (confirmationText || '').trim().toUpperCase();
+        if (normalizedConfirmation !== ACCOUNT_DELETE_CONFIRM_TEXT) {
+            return { success: false, error: 'Confirmation required' };
+        }
+
+        const { error: reauthError } = await supabase.auth.reauthenticate();
+        if (reauthError) {
+            return { success: false, error: 'Please re-authenticate and retry account deletion' };
         }
 
         const userId = user.id;

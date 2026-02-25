@@ -29,27 +29,10 @@ export const getProjectDetails = async (rawProjectId: string) => {
             return null;
         }
 
-        // Parallelize fetching of relations with LIMITS
-        const includeFollowersCount = (project as any).followersCount == null;
-        const includeSavesCount = (project as any).savesCount == null;
+        const followersCount = Number((project as any).followersCount || 0);
+        const savesCount = Number((project as any).savesCount || 0);
 
-        const [followersCount, savesCount, openRoles, members] = await Promise.all([
-            // Followers Count (fallback for older DBs)
-            includeFollowersCount
-                ? db.select({ count: sql<number>`count(*)` })
-                    .from(projectFollows)
-                    .where(eq(projectFollows.projectId, project.id))
-                    .then(res => Number(res[0]?.count || 0))
-                : Promise.resolve(Number((project as any).followersCount || 0)),
-            // Saves Count (fallback for older DBs)
-            includeSavesCount
-                ? db.select({ count: sql<number>`count(*)` })
-                    .from(savedProjects)
-                    .where(eq(savedProjects.projectId, project.id))
-                    .then(res => Number(res[0]?.count || 0))
-                : Promise.resolve(Number((project as any).savesCount || 0)),
-
-            // Open Roles (usually small number, safe to fetch all)
+        const [openRoles, members] = await Promise.all([
             db.select().from(projectOpenRoles).where(eq(projectOpenRoles.projectId, project.id)),
 
             // Members (LIMIT to 20 to prevent bloat)

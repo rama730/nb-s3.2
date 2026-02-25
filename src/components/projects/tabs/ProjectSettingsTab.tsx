@@ -1,11 +1,11 @@
 "use client";
 
-import React, { useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import React, { useState, useTransition, useCallback } from "react";
 import { Settings, Globe, Bell, Archive, Trash2, AlertTriangle, Download, Info, Check, Lock, Route } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { deleteProject, updateProjectLifecycleAction, finalizeProjectAction } from "@/app/actions/project";
 import LifecycleEditor from "@/components/projects/settings/LifecycleEditor";
 import {
@@ -30,13 +30,42 @@ export default function ProjectSettingsTab({
 }: ProjectSettingsTabProps) {
     const [activeSection, setActiveSection] = useState("general");
     const [isPending, startTransition] = useTransition();
-    const router = useRouter();
 
     // Fake states for UI demo
     const [autoArchive, setAutoArchive] = useState(true);
     const [savingVisibility, setSavingVisibility] = useState(false);
     const [loadingExport, setLoadingExport] = useState(false);
     const [savingLifecycle, setSavingLifecycle] = useState(false);
+    const [confirmAction, setConfirmAction] = useState<{ title: string; description: string; action: () => void } | null>(null);
+
+    const handleFinalize = useCallback(() => {
+        startTransition(async () => {
+            try {
+                const result = await finalizeProjectAction(projectId);
+                if (result.success) {
+                    toast.success("Project finalized successfully!");
+                    onProjectUpdated();
+                } else {
+                    const errorMsg = 'error' in result ? result.error : "Failed to finalize";
+                    toast.error(errorMsg);
+                }
+            } catch {
+                toast.error("Failed to finalize project");
+            }
+        });
+    }, [projectId, onProjectUpdated]);
+
+    const handleDelete = useCallback(() => {
+        startTransition(async () => {
+            try {
+                await deleteProject(projectId);
+                toast.success("Project deleted successfully");
+            } catch (error) {
+                toast.error("Failed to delete project");
+                console.error(error);
+            }
+        });
+    }, [projectId]);
 
     // Access Restricted
     if (!isProjectOwner) {
@@ -281,25 +310,7 @@ export default function ProjectSettingsTab({
                                             <p className="text-sm text-red-800 dark:text-red-200 mt-1">Mark this project as successfully completed. This will freeze tasks and distribute reputation points.</p>
                                         </div>
                                         <Button
-                                            onClick={() => {
-                                                if (window.confirm("Are you sure you want to finalize this project? This will mark it as Completed.")) {
-                                                    startTransition(async () => {
-                                                        try {
-                                                            const result = await finalizeProjectAction(projectId);
-                                                            if (result.success) {
-                                                                toast.success("Project finalized successfully!");
-                                                                onProjectUpdated();
-                                                                router.refresh();
-                                                            } else {
-                                                                const errorMsg = 'error' in result ? result.error : "Failed to finalize";
-                                                                toast.error(errorMsg);
-                                                            }
-                                                        } catch (error) {
-                                                            toast.error("Failed to finalize project");
-                                                        }
-                                                    });
-                                                }
-                                            }}
+                                            onClick={() => setConfirmAction({ title: "Finalize Project", description: "Are you sure you want to finalize this project? This will mark it as Completed.", action: handleFinalize })}
                                             disabled={project?.status === 'completed' || isPending}
                                             className="whitespace-nowrap px-4 py-2 rounded-md bg-white border border-red-200 text-red-600 hover:bg-red-50 transition-colors text-sm font-medium"
                                         >
@@ -328,19 +339,7 @@ export default function ProjectSettingsTab({
                                         </div>
                                         <Button
                                             variant="destructive"
-                                            onClick={() => {
-                                                if (window.confirm("Are you sure you want to delete this project? This action cannot be undone.")) {
-                                                    startTransition(async () => {
-                                                        try {
-                                                            await deleteProject(projectId);
-                                                            toast.success("Project deleted successfully");
-                                                        } catch (error) {
-                                                            toast.error("Failed to delete project");
-                                                            console.error(error);
-                                                        }
-                                                    });
-                                                }
-                                            }}
+                                            onClick={() => setConfirmAction({ title: "Delete Project", description: "Are you sure you want to delete this project? This action cannot be undone.", action: handleDelete })}
                                             disabled={isPending}
                                             className="whitespace-nowrap px-4 py-2 rounded-md bg-red-600 text-white hover:bg-red-700 transition-colors text-sm font-medium"
                                         >
@@ -354,6 +353,15 @@ export default function ProjectSettingsTab({
                 )}
 
             </div>
+            <ConfirmDialog
+                open={!!confirmAction}
+                onOpenChange={(open) => { if (!open) setConfirmAction(null); }}
+                title={confirmAction?.title ?? ""}
+                description={confirmAction?.description}
+                confirmLabel="Confirm"
+                variant="destructive"
+                onConfirm={() => confirmAction?.action()}
+            />
         </div>
     );
 }

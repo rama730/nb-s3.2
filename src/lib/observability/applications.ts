@@ -1,3 +1,5 @@
+import { logger } from '@/lib/logger'
+
 type ApplicationEventName =
     | 'apply_submitted'
     | 'apply_edited'
@@ -20,7 +22,6 @@ export function trackApplicationEvent(
     payload: ApplicationEventPayload
 ) {
     try {
-        // Guard canonical telemetry fields from accidental overwrite via payload.
         const {
             scope: _ignoredScope,
             event: _ignoredEvent,
@@ -32,15 +33,12 @@ export function trackApplicationEvent(
             at?: unknown;
         });
 
-        console.info(
-            JSON.stringify({
-                ...safePayload,
-                scope: 'applications',
-                event,
-                at: new Date().toISOString(),
-            })
-        );
+        logger.metric(`applications.${event}`, {
+            module: 'applications',
+            ...safePayload,
+            at: new Date().toISOString(),
+        });
     } catch {
-        // best-effort telemetry, never block UX
+        // best-effort telemetry
     }
 }

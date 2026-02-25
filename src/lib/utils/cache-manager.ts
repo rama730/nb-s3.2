@@ -1,6 +1,28 @@
 // Cache manager for handling browser storage and caches
 
 class CacheManager {
+    private async deleteIndexedDb(name: string): Promise<void> {
+        if (typeof indexedDB === "undefined" || !name) return;
+
+        await new Promise<void>((resolve) => {
+            try {
+                const request = indexedDB.deleteDatabase(name);
+                request.onsuccess = () => resolve();
+                request.onerror = () => {
+                    console.error(`Failed to delete IndexedDB database: ${name}`);
+                    resolve();
+                };
+                request.onblocked = () => {
+                    console.warn(`IndexedDB delete blocked for: ${name}`);
+                    resolve();
+                };
+            } catch (error) {
+                console.error(`Error deleting IndexedDB database ${name}:`, error);
+                resolve();
+            }
+        });
+    }
+
     async getStorageEstimate(): Promise<{ total: number; quota: number }> {
         if (typeof navigator === "undefined" || !navigator.storage) {
             return { total: 0, quota: 0 };
@@ -34,7 +56,7 @@ class CacheManager {
             const databases = await indexedDB.databases?.() || [];
             for (const db of databases) {
                 if (db.name) {
-                    indexedDB.deleteDatabase(db.name);
+                    await this.deleteIndexedDb(db.name);
                 }
             }
         }
@@ -66,7 +88,7 @@ class CacheManager {
             const databases = await indexedDB.databases?.() || [];
             for (const db of databases) {
                 if (db.name) {
-                    indexedDB.deleteDatabase(db.name);
+                    await this.deleteIndexedDb(db.name);
                 }
             }
         }

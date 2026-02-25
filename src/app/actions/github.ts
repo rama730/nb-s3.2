@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/server';
 import { fetchContents, fetchRepoMeta, parseGithubRepo } from '@/lib/github/repo-preview';
 import { isTooLarge, shouldIgnorePath } from '@/lib/import/import-filters';
 import { normalizeGithubBranch } from '@/lib/github/repo-validation';
+import { consumeRateLimit } from '@/lib/security/rate-limit';
 
 type PreviewEntry = {
   name: string;
@@ -42,30 +43,12 @@ const TECH_PATTERNS: Record<string, string[]> = {
   'Playwright': ['playwright', '@playwright/test'],
 };
 
-const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_WINDOW_SECONDS = 60;
 const RATE_LIMIT_MAX_REQUESTS = 45;
-const PREVIEW_RATE_BUCKET = new Map<string, number[]>();
 const ANALYZE_TIMEOUT_MS = (() => {
   const v = Number(process.env.GITHUB_API_TIMEOUT_MS || 12000);
   return Number.isFinite(v) && v >= 1000 ? Math.floor(v) : 12000;
 })();
-
-function checkRateLimit(userId: string) {
-  const now = Date.now();
-  const cutoff = now - RATE_LIMIT_WINDOW_MS;
-  const existing = PREVIEW_RATE_BUCKET.get(userId) || [];
-  const next = existing.filter((ts) => ts > cutoff);
-  if (next.length >= RATE_LIMIT_MAX_REQUESTS) return false;
-  next.push(now);
-  PREVIEW_RATE_BUCKET.set(userId, next);
-  if (PREVIEW_RATE_BUCKET.size > 5000) {
-    // Opportunistic cleanup for long-running processes.
-    for (const [key, arr] of PREVIEW_RATE_BUCKET.entries()) {
-      if (arr.length === 0 || arr[arr.length - 1] < cutoff) PREVIEW_RATE_BUCKET.delete(key);
-    }
-  }
-  return true;
-}
 
 async function getAuthorizedGithubSession() {
   const supabase = await createClient();
@@ -74,7 +57,12 @@ async function getAuthorizedGithubSession() {
   if (!user) {
     return { ok: false as const, error: 'Unauthorized. Please sign in first.' };
   }
-  if (!checkRateLimit(user.id)) {
+  const rateLimit = await consumeRateLimit(
+    `github:preview:${user.id}`,
+    RATE_LIMIT_MAX_REQUESTS,
+    RATE_LIMIT_WINDOW_SECONDS,
+  );
+  if (!rateLimit.allowed) {
     return { ok: false as const, error: 'Too many GitHub requests. Please wait a minute and retry.' };
   }
   return { ok: true as const, userId: user.id, token: session?.provider_token || undefined };

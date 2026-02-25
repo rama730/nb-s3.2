@@ -1,0 +1,320 @@
+"use client";
+
+import React from "react";
+import {
+  Clock,
+  GitBranch,
+  List,
+  ListOrdered,
+  MoreHorizontal,
+  Search,
+  Star,
+  Trash2,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { cn } from "@/lib/utils";
+import type { FilesViewMode } from "@/stores/filesWorkspaceStore";
+
+interface ExplorerToolbarHostProps {
+  canEdit: boolean;
+  viewMode: FilesViewMode;
+  explorerMode: string;
+  searchQuery: string;
+  inlineSearchOpen: boolean;
+  isSearching: boolean;
+  operationsOpen: boolean;
+  isInsightsOpen: boolean;
+  uploadEnabled: boolean;
+  selectedNode: { id: string; type: "file" | "folder"; parentId?: string | null } | null;
+  selectedFolderId?: string | null;
+  savedViews: Array<{ id: string; name: string }>;
+  selectedSavedViewId: string;
+  onSetViewMode: (mode: FilesViewMode) => void;
+  onSetExplorerMode: (
+    mode: "tree" | "favorites" | "recents" | "trash" | "sourceControl" | "outline"
+  ) => void;
+  onToggleInlineSearch: () => void;
+  onSearchQueryChange: (value: string) => void;
+  onSortChange: (value: "name" | "updated" | "type") => void;
+  sort: "name" | "updated" | "type";
+  onToggleOperationsOpen: () => void;
+  onToggleInsightsOpen: () => void;
+  onSaveCurrentView: () => void;
+  onApplySavedView: (viewId: string) => void;
+  onDeleteSavedView: () => void;
+  onOpenCreateFolder: () => void;
+  onOpenCreateFile: () => void;
+  onUpload: (parentId: string | null) => void;
+}
+
+export function ExplorerToolbarHost({
+  canEdit,
+  viewMode,
+  explorerMode,
+  searchQuery,
+  inlineSearchOpen,
+  isSearching,
+  operationsOpen,
+  isInsightsOpen,
+  uploadEnabled,
+  selectedNode,
+  selectedFolderId,
+  savedViews,
+  selectedSavedViewId,
+  onSetViewMode,
+  onSetExplorerMode,
+  onToggleInlineSearch,
+  onSearchQueryChange,
+  onSortChange,
+  sort,
+  onToggleOperationsOpen,
+  onToggleInsightsOpen,
+  onSaveCurrentView,
+  onApplySavedView,
+  onDeleteSavedView,
+  onOpenCreateFolder,
+  onOpenCreateFile,
+  onUpload,
+}: ExplorerToolbarHostProps) {
+  return (
+    <>
+      <div className="flex items-center justify-between gap-2 p-2 border-b border-zinc-200 dark:border-zinc-800">
+        <div className="flex items-center gap-2 min-w-0">
+          <select
+            className="h-7 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 text-xs font-medium px-2 focus:ring-2 focus:ring-indigo-500/20 outline-none cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+            value={viewMode}
+            onChange={(e) => onSetViewMode(e.target.value as FilesViewMode)}
+            title="View mode"
+          >
+            <option value="code">Code</option>
+            <option value="assets">Assets</option>
+            <option value="all">All Files</option>
+          </select>
+        </div>
+
+        <div className="flex items-center gap-1 shrink-0">
+          <DropdownMenu modal={false}>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" title="File actions">
+                Actions
+                <MoreHorizontal className="w-3.5 h-3.5 ml-1" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-52">
+              <DropdownMenuItem
+                onSelect={(e) => {
+                  e.preventDefault();
+                  onToggleOperationsOpen();
+                }}
+              >
+                {operationsOpen ? "Hide operations center" : "Show operations center"}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={(e) => {
+                  e.preventDefault();
+                  onToggleInsightsOpen();
+                }}
+              >
+                {isInsightsOpen ? "Hide insights" : "Show insights"}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onSelect={(e) => {
+                  e.preventDefault();
+                  onSaveCurrentView();
+                }}
+              >
+                Save current view
+              </DropdownMenuItem>
+              {savedViews.length > 0 ? (
+                <>
+                  <DropdownMenuSeparator />
+                  {savedViews.map((view) => (
+                    <DropdownMenuItem
+                      key={view.id}
+                      onSelect={(e) => {
+                        e.preventDefault();
+                        onApplySavedView(view.id);
+                      }}
+                    >
+                      {selectedSavedViewId === view.id ? "✓ " : ""}
+                      {view.name}
+                    </DropdownMenuItem>
+                  ))}
+                </>
+              ) : null}
+              <DropdownMenuItem
+                disabled={!selectedSavedViewId}
+                onSelect={(e) => {
+                  e.preventDefault();
+                  onDeleteSavedView();
+                }}
+              >
+                Delete saved view
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                disabled={!canEdit}
+                onSelect={(e) => {
+                  e.preventDefault();
+                  onOpenCreateFolder();
+                }}
+              >
+                New folder
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={!canEdit}
+                onSelect={(e) => {
+                  e.preventDefault();
+                  onOpenCreateFile();
+                }}
+              >
+                New file
+              </DropdownMenuItem>
+              {uploadEnabled ? (
+                <DropdownMenuItem
+                  disabled={!canEdit}
+                  onSelect={(e) => {
+                    e.preventDefault();
+                    if (!canEdit) return;
+                    const parentId =
+                      selectedNode?.type === "folder"
+                        ? selectedNode.id
+                        : selectedNode?.parentId ?? selectedFolderId ?? null;
+                    onUpload(parentId);
+                  }}
+                >
+                  Upload file
+                </DropdownMenuItem>
+              ) : null}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </div>
+
+      <div className="px-2 py-2 border-b border-zinc-200 dark:border-zinc-800">
+        <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1 mr-auto">
+            <Button
+              type="button"
+              size="sm"
+              variant={explorerMode === "tree" ? "default" : "ghost"}
+              className={cn("h-7 w-7 p-0", explorerMode === "tree" ? "" : "text-zinc-500")}
+              onClick={() => onSetExplorerMode("tree")}
+              title="All files"
+            >
+              <List className="w-4 h-4" />
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={explorerMode === "favorites" ? "default" : "ghost"}
+              className={cn(
+                "h-7 w-7 p-0",
+                explorerMode === "favorites" ? "" : "text-zinc-500"
+              )}
+              onClick={() => onSetExplorerMode("favorites")}
+              title="Favorites"
+            >
+              <Star className="w-4 h-4" />
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={explorerMode === "recents" ? "default" : "ghost"}
+              className={cn("h-7 w-7 p-0", explorerMode === "recents" ? "" : "text-zinc-500")}
+              onClick={() => onSetExplorerMode("recents")}
+              title="Recent files"
+            >
+              <Clock className="w-4 h-4" />
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={explorerMode === "trash" ? "default" : "ghost"}
+              className={cn("h-7 w-7 p-0", explorerMode === "trash" ? "" : "text-zinc-500")}
+              onClick={() => onSetExplorerMode("trash")}
+              disabled={!canEdit}
+              title="Trash"
+            >
+              <Trash2 className="w-4 h-4" />
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={explorerMode === "sourceControl" ? "default" : "ghost"}
+              className={cn(
+                "h-7 w-7 p-0",
+                explorerMode === "sourceControl" ? "" : "text-zinc-500"
+              )}
+              onClick={() => onSetExplorerMode("sourceControl")}
+              title="Source Control"
+            >
+              <GitBranch className="w-4 h-4" />
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={explorerMode === "outline" ? "default" : "ghost"}
+              className={cn("h-7 w-7 p-0", explorerMode === "outline" ? "" : "text-zinc-500")}
+              onClick={() => onSetExplorerMode("outline")}
+              title="Outline"
+            >
+              <ListOrdered className="w-4 h-4" />
+            </Button>
+          </div>
+
+          {explorerMode !== "sourceControl" && explorerMode !== "outline" ? (
+            <>
+              <div className="flex items-center gap-1">
+                <div
+                  className={cn(
+                    "overflow-hidden transition-all duration-200 ease-out",
+                    inlineSearchOpen ? "w-[136px] opacity-100" : "w-0 opacity-0"
+                  )}
+                >
+                  <Input
+                    placeholder="Search"
+                    value={searchQuery}
+                    onChange={(e) => onSearchQueryChange(e.target.value)}
+                    className="h-7 bg-zinc-50 dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 text-xs px-2"
+                  />
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={inlineSearchOpen ? "secondary" : "ghost"}
+                  className="h-7 w-7 p-0"
+                  title="Search files"
+                  onClick={onToggleInlineSearch}
+                >
+                  <Search className="w-4 h-4" />
+                </Button>
+              </div>
+
+              <select
+                className="h-7 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 text-xs px-2 cursor-pointer outline-none focus:ring-2 focus:ring-indigo-500/20"
+                value={sort}
+                onChange={(e) => onSortChange(e.target.value as "name" | "updated" | "type")}
+              >
+                <option value="name">Name</option>
+                <option value="updated">Updated</option>
+                <option value="type">Type</option>
+              </select>
+            </>
+          ) : null}
+
+          {isSearching ? <span className="text-xs text-zinc-400">...</span> : null}
+        </div>
+      </div>
+    </>
+  );
+}

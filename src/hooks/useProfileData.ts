@@ -8,7 +8,7 @@ export const PROFILE_KEYS = {
     stats: (userId: string) => ['profile', 'stats', userId]
 };
 
-export function useProfileProjects(userId: string, initialData?: any[]) {
+export function useProfileProjects(userId: string, initialData?: any[], enabled: boolean = true) {
     const hasInitialData = Array.isArray(initialData);
     return useQuery({
         queryKey: PROFILE_KEYS.projects(userId),
@@ -16,7 +16,7 @@ export function useProfileProjects(userId: string, initialData?: any[]) {
             const result = await getProfileProjectsAction(userId);
             return result || [];
         },
-        enabled: !!userId,
+        enabled: !!userId && enabled,
         initialData: initialData,
         staleTime: 1000 * 60 * 5, // 5 min
         refetchOnMount: hasInitialData ? false : true,
@@ -24,7 +24,7 @@ export function useProfileProjects(userId: string, initialData?: any[]) {
     });
 }
 
-export function useProfileStats(userId: string, initialData?: any) {
+export function useProfileStats(userId: string, initialData?: any, enabled: boolean = true) {
     const hasInitialData = !!initialData;
     return useQuery({
         queryKey: PROFILE_KEYS.stats(userId),
@@ -32,7 +32,7 @@ export function useProfileStats(userId: string, initialData?: any) {
             const result = await getProfileStatsAction(userId);
             return result;
         },
-        enabled: !!userId,
+        enabled: !!userId && enabled,
         initialData: initialData,
         staleTime: 1000 * 60 * 2, // 2 min
         refetchOnMount: hasInitialData ? false : true,

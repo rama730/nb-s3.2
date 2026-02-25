@@ -3,7 +3,7 @@
 import React, { useEffect, useMemo, useState, useDeferredValue } from "react";
 import { ProjectNode } from "@/lib/db/schema";
 import { Button } from "@/components/ui/button";
-import { Diff, Loader2, MoreVertical, Save, Trash2, Wand2, SplitSquareHorizontal } from "lucide-react";
+import { Diff, Loader2, MoreVertical, Play, Save, Settings, Trash2, Wand2, SplitSquareHorizontal } from "lucide-react";
 import { useTheme } from "next-themes";
 import dynamic from "next/dynamic";
 import {
@@ -22,16 +22,18 @@ import {
 import { useToast } from "@/components/ui-custom/Toast";
 import MarkdownPreview from "./preview/MarkdownPreview";
 
-const CodeEditor = dynamic(() => import("./editor/MonacoCodeEditor"), {
+const CodeEditor = dynamic(() => import("./editor/CodeEditor"), {
   ssr: false,
   loading: () => (
     <div className="flex items-center justify-center h-full text-zinc-500 bg-white dark:bg-[#1e1e1e]">
       <Loader2 className="w-5 h-5 animate-spin mr-2" />
-      Initializing Monaco...
+      Loading editor...
     </div>
   ),
 });
-import { diffLines } from "diff";
+import Link from "next/link";
+import type { Change } from "diff";
+import { RunnerStatusStrip } from "./panels/RunnerStatusStrip";
 import { formatProjectFileContent, getLastNodeEvent } from "@/app/actions/files";
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 
@@ -56,6 +58,9 @@ interface FileEditorProps {
   onRetryLoad: () => void;
   onDelete: () => void;
   lastSavedAt?: number;
+  openDiffSignal?: number;
+  onRun?: () => void;
+  canRun?: boolean;
 }
 
 function getErrorMessage(error: unknown, fallback: string) {
@@ -83,6 +88,9 @@ export default function FileEditor({
   onRetryLoad,
   onDelete,
   lastSavedAt,
+  openDiffSignal,
+  onRun,
+  canRun,
 }: FileEditorProps) {
   const { theme } = useTheme();
   const isDark = theme === "dark";
@@ -104,6 +112,11 @@ export default function FileEditor({
   useEffect(() => {
       setShowPreview(false);
   }, [file.id]);
+
+  useEffect(() => {
+    if (!openDiffSignal) return;
+    setIsDiffOpen(true);
+  }, [openDiffSignal]);
 
   const [lastEvent, setLastEvent] = useState<{ type: string; at: number; by: string | null } | null>(null);
   
@@ -138,10 +151,16 @@ export default function FileEditor({
     return ["ts", "tsx", "js", "jsx", "json", "md", "css", "html", "sql"].includes(ext);
   }, [file.name]);
 
-  const diffParts = useMemo(() => {
-    if (!isDiffOpen) return [];
-    return diffLines(savedSnapshot || "", content || "");
-  }, [content, isDiffOpen, savedSnapshot]);
+  const deferredDiffContent = useDeferredValue(content);
+  const [diffParts, setDiffParts] = useState<Change[]>([]);
+  useEffect(() => {
+    if (!isDiffOpen) { setDiffParts([]); return; }
+    let cancelled = false;
+    void import("diff").then(({ diffLines }) => {
+      if (!cancelled) setDiffParts(diffLines(savedSnapshot || "", deferredDiffContent || ""));
+    });
+    return () => { cancelled = true; };
+  }, [deferredDiffContent, isDiffOpen, savedSnapshot]);
 
   useEffect(() => {
     let cancelled = false;
@@ -157,6 +176,22 @@ export default function FileEditor({
       cancelled = true;
     };
   }, [file.id, file.projectId]);
+
+  const rootRef = React.useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!canRun || !onRun) return;
+    const handler = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (target?.tagName === "INPUT" || target?.tagName === "TEXTAREA") return;
+      if (!rootRef.current?.contains(target)) return;
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+        e.preventDefault();
+        onRun();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [canRun, onRun]);
 
   const handleFormat = async () => {
     if (!canEdit) return;
@@ -181,7 +216,7 @@ export default function FileEditor({
   };
 
   return (
-    <div className="flex flex-col h-full bg-white dark:bg-[#1e1e1e]">
+    <div ref={rootRef} className="flex flex-col h-full bg-white dark:bg-[#1e1e1e]">
       {/* Header / Toolbar */}
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-[#1e1e1e]">
         <div className="flex items-center gap-2 min-w-0 overflow-hidden">
@@ -223,7 +258,32 @@ export default function FileEditor({
           ) : null}
         </div>
 
+        {canRun && (
+          <div className="hidden sm:flex items-center mx-2">
+            <RunnerStatusStrip />
+          </div>
+        )}
+
         <div className="flex items-center gap-1.5">
+          {canRun && onRun ? (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 px-2"
+              onClick={onRun}
+              title="Run (Ctrl+Enter)"
+            >
+              <Play className="w-3.5 h-3.5 mr-1.5" />
+              Run
+            </Button>
+          ) : null}
+          <Link
+            href="/settings/languages"
+            className="inline-flex items-center justify-center h-7 px-2 rounded-md border border-zinc-200 dark:border-zinc-700 bg-transparent text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-zinc-900 dark:hover:text-zinc-100 text-sm font-medium transition-colors"
+            title="Languages & runtimes"
+          >
+            <Settings className="w-3.5 h-3.5" />
+          </Link>
           <Button
             size="sm"
             onClick={onSave}

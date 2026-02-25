@@ -255,7 +255,9 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 -- HELPER FUNCTION: Update conversation updated_at on new message
 -- ============================================================================
 CREATE OR REPLACE FUNCTION update_conversation_timestamp()
-RETURNS TRIGGER AS $$
+RETURNS TRIGGER
+SET search_path = ''
+AS $$
 BEGIN
     UPDATE conversations 
     SET updated_at = NOW() 

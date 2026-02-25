@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Button from "@/components/ui-custom/Button";
-import { Download, Trash2 } from "lucide-react";
+import { Download, Plus, Shield, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { SettingsPageHeader } from "@/components/settings/ui/SettingsPageHeader";
@@ -10,7 +10,15 @@ import { SettingsSectionCard } from "@/components/settings/ui/SettingsSectionCar
 import { SettingsRow } from "@/components/settings/ui/SettingsRow";
 import { DangerZoneCard } from "@/components/settings/ui/DangerZoneCard";
 import { useToast } from "@/components/ui-custom/Toast";
-import { exportUserData, downloadUserData, deleteAccount } from "@/lib/services/settingsService";
+import {
+    addReservedUsername,
+    deleteAccount,
+    downloadUserData,
+    exportUserData,
+    listReservedUsernames,
+    removeReservedUsername,
+    type ReservedUsernameItem,
+} from "@/lib/services/settingsService";
 import CacheSettingsSection from "@/components/settings/CacheSettingsSection";
 
 export default function AccountPage() {
@@ -19,6 +27,13 @@ export default function AccountPage() {
     const [deleting, setDeleting] = useState(false);
     const [showDeleteModal, setShowDeleteModal] = useState(false);
     const [confirmText, setConfirmText] = useState("");
+    const [reservedUsernames, setReservedUsernames] = useState<ReservedUsernameItem[]>([]);
+    const [canManageReservedUsernames, setCanManageReservedUsernames] = useState(false);
+    const [loadingReservedUsernames, setLoadingReservedUsernames] = useState(false);
+    const [newReservedUsername, setNewReservedUsername] = useState("");
+    const [newReservedReason, setNewReservedReason] = useState("");
+    const [savingReservedUsername, setSavingReservedUsername] = useState(false);
+    const [removingReservedUsername, setRemovingReservedUsername] = useState<string | null>(null);
     const router = useRouter();
     const supabase = createSupabaseBrowserClient();
 
@@ -38,7 +53,7 @@ export default function AccountPage() {
     const handleDelete = async () => {
         setDeleting(true);
         try {
-            const result = await deleteAccount();
+            const result = await deleteAccount(confirmText);
 
             if (result.success) {
                 showToast("Account deleted successfully", "success");
@@ -59,6 +74,78 @@ export default function AccountPage() {
         await supabase.auth.signOut();
         showToast("Signed out successfully", "info");
         router.push("/login");
+    };
+
+    const loadReservedUsernames = async () => {
+        setLoadingReservedUsernames(true);
+        try {
+            const result = await listReservedUsernames();
+            if (!result.success) {
+                setCanManageReservedUsernames(false);
+                setReservedUsernames([]);
+                return;
+            }
+            setCanManageReservedUsernames(true);
+            setReservedUsernames(result.items);
+        } catch (error) {
+            console.error("Error loading reserved usernames:", error);
+            setCanManageReservedUsernames(false);
+            setReservedUsernames([]);
+        } finally {
+            setLoadingReservedUsernames(false);
+        }
+    };
+
+    useEffect(() => {
+        void loadReservedUsernames();
+    }, []);
+
+    const sortedReservedUsernames = useMemo(
+        () =>
+            [...reservedUsernames].sort((a, b) =>
+                a.username.localeCompare(b.username)
+            ),
+        [reservedUsernames]
+    );
+
+    const handleAddReservedUsername = async () => {
+        const username = newReservedUsername.trim().toLowerCase();
+        if (!username) return;
+        setSavingReservedUsername(true);
+        try {
+            const result = await addReservedUsername(username, newReservedReason.trim() || undefined);
+            if (!result.success) {
+                showToast(result.message || "Failed to reserve username", "error");
+                return;
+            }
+            setNewReservedUsername("");
+            setNewReservedReason("");
+            showToast("Reserved username updated", "success");
+            await loadReservedUsernames();
+        } catch (error) {
+            const message = error instanceof Error ? error.message : "Failed to reserve username";
+            showToast(message, "error");
+        } finally {
+            setSavingReservedUsername(false);
+        }
+    };
+
+    const handleRemoveReservedUsername = async (username: string) => {
+        setRemovingReservedUsername(username);
+        try {
+            const result = await removeReservedUsername(username);
+            if (!result.success) {
+                showToast(result.message || "Failed to remove reserved username", "error");
+                return;
+            }
+            showToast("Reserved username removed", "success");
+            await loadReservedUsernames();
+        } catch (error) {
+            const message = error instanceof Error ? error.message : "Failed to remove reserved username";
+            showToast(message, "error");
+        } finally {
+            setRemovingReservedUsername(null);
+        }
     };
 
     return (
@@ -90,6 +177,67 @@ export default function AccountPage() {
                 </SettingsSectionCard>
 
                 <CacheSettingsSection />
+
+                {canManageReservedUsernames && (
+                    <SettingsSectionCard
+                        title="Reserved usernames"
+                        description="Admin-only controls for onboarding username blocks."
+                    >
+                        <div className="space-y-4">
+                            <div className="grid gap-2 md:grid-cols-[1fr_1fr_auto]">
+                                <input
+                                    value={newReservedUsername}
+                                    onChange={(event) => setNewReservedUsername(event.target.value)}
+                                    placeholder="username"
+                                    aria-label="Reserved username"
+                                    className="w-full rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500/30"
+                                />
+                                <input
+                                    value={newReservedReason}
+                                    onChange={(event) => setNewReservedReason(event.target.value)}
+                                    placeholder="reason (optional)"
+                                    aria-label="Reason for reservation (optional)"
+                                    className="w-full rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500/30"
+                                />
+                                <Button
+                                    variant="outline"
+                                    onClick={handleAddReservedUsername}
+                                    disabled={savingReservedUsername || !newReservedUsername.trim()}
+                                    leftIcon={<Plus className="h-4 w-4" />}
+                                >
+                                    {savingReservedUsername ? "Saving..." : "Add"}
+                                </Button>
+                            </div>
+
+                            <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 divide-y divide-zinc-200 dark:divide-zinc-800">
+                                {loadingReservedUsernames ? (
+                                    <div className="p-3 text-sm text-zinc-500">Loading...</div>
+                                ) : sortedReservedUsernames.length === 0 ? (
+                                    <div className="p-3 text-sm text-zinc-500">No reserved usernames</div>
+                                ) : (
+                                    sortedReservedUsernames.map((item) => (
+                                        <div key={item.username} className="p-3 flex items-center justify-between gap-3">
+                                            <div className="min-w-0">
+                                                <div className="text-sm font-medium">@{item.username}</div>
+                                                <div className="text-xs text-zinc-500 truncate">
+                                                    {item.reason || "admin"}
+                                                </div>
+                                            </div>
+                                            <Button
+                                                variant="outline"
+                                                onClick={() => void handleRemoveReservedUsername(item.username)}
+                                                disabled={removingReservedUsername === item.username}
+                                                leftIcon={<Shield className="h-4 w-4" />}
+                                            >
+                                                {removingReservedUsername === item.username ? "Removing..." : "Remove"}
+                                            </Button>
+                                        </div>
+                                    ))
+                                )}
+                            </div>
+                        </div>
+                    </SettingsSectionCard>
+                )}
 
                 <DangerZoneCard description="Irreversible actions that affect your account.">
                     <div className="space-y-4">

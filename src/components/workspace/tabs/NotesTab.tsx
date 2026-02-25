@@ -2,6 +2,7 @@
 
 import { memo, useState, useEffect, useCallback, useRef } from 'react';
 import { StickyNote, Copy, Trash2, Check, Download, ListPlus } from 'lucide-react';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import type { WorkspaceProject } from '@/app/actions/workspace';
 import CreateTaskFromNoteModal from '../CreateTaskFromNoteModal';
 
@@ -51,16 +52,21 @@ function NotesTab({ projects }: NotesTabProps) {
         setTimeout(() => setCopied(false), 1500);
     }, [content]);
 
+    const [showClearConfirm, setShowClearConfirm] = useState(false);
+
     const handleClear = useCallback(() => {
         if (!content) return;
-        if (!window.confirm('Clear all notes? This cannot be undone.')) return;
+        setShowClearConfirm(true);
+    }, [content]);
+
+    const confirmClear = useCallback(() => {
         setContent('');
         try {
             localStorage.removeItem(STORAGE_KEY);
         } catch {
             // localStorage unavailable
         }
-    }, [content]);
+    }, []);
 
     const handleDownload = useCallback(() => {
         if (!content) return;
@@ -162,6 +168,15 @@ Your notes are automatically saved to this browser."
                     onClose={() => setShowCreateTask(false)}
                 />
             )}
+            <ConfirmDialog
+                open={showClearConfirm}
+                onOpenChange={setShowClearConfirm}
+                title="Clear Notes"
+                description="Clear all notes? This cannot be undone."
+                confirmLabel="Clear"
+                variant="destructive"
+                onConfirm={confirmClear}
+            />
         </div>
     );
 }

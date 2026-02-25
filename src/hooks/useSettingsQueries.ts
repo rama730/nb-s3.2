@@ -11,6 +11,19 @@ const SETTINGS_KEYS = {
     privacy: ["settings", "privacy"] as const,
 };
 
+const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = {
+    email: true,
+    push: true,
+    projects: true,
+    messages: true,
+    mentions: true,
+};
+
+const DEFAULT_PRIVACY_SETTINGS: PrivacySettings = {
+    is_private: false,
+    connection_privacy: "public",
+};
+
 // Notification preferences
 export function useNotificationPreferences() {
     const supabase = createSupabaseBrowserClient();
@@ -25,20 +38,15 @@ export function useNotificationPreferences() {
                 .from("profiles")
                 .select("notification_preferences")
                 .eq("id", user.id)
-                .single();
+                .maybeSingle();
 
-            if (error) throw error;
+            if (error) {
+                // Keep settings screens usable even if a profile row/column is unavailable.
+                console.warn("[settings] notification preferences lookup failed", error);
+                return DEFAULT_NOTIFICATION_PREFERENCES;
+            }
 
-            // Default preferences if not set
-            const defaultPrefs: NotificationPreferences = {
-                email: true,
-                push: true,
-                projects: true,
-                messages: true,
-                mentions: true,
-            };
-
-            return data?.notification_preferences || defaultPrefs;
+            return data?.notification_preferences || DEFAULT_NOTIFICATION_PREFERENCES;
         },
     });
 }
@@ -126,13 +134,16 @@ export function usePrivacySettings() {
                 .from("profiles")
                 .select("is_private, connection_privacy")
                 .eq("id", user.id)
-                .single();
+                .maybeSingle();
 
-            if (error) throw error;
+            if (error) {
+                console.warn("[settings] privacy settings lookup failed", error);
+                return DEFAULT_PRIVACY_SETTINGS;
+            }
 
             return {
-                is_private: data?.is_private || false,
-                connection_privacy: data?.connection_privacy || "public",
+                is_private: data?.is_private || DEFAULT_PRIVACY_SETTINGS.is_private,
+                connection_privacy: data?.connection_privacy || DEFAULT_PRIVACY_SETTINGS.connection_privacy,
             };
         },
     });
@@ -150,19 +161,18 @@ export function usePrefetchSettings() {
                 const { data: { user } } = await supabase.auth.getUser();
                 if (!user) return null;
 
-                const { data } = await supabase
+                const { data, error } = await supabase
                     .from("profiles")
                     .select("notification_preferences")
                     .eq("id", user.id)
-                    .single();
+                    .maybeSingle();
 
-                return data?.notification_preferences || {
-                    email: true,
-                    push: true,
-                    projects: true,
-                    messages: true,
-                    mentions: true,
-                };
+                if (error) {
+                    console.warn("[settings] notification preferences prefetch failed", error);
+                    return DEFAULT_NOTIFICATION_PREFERENCES;
+                }
+
+                return data?.notification_preferences || DEFAULT_NOTIFICATION_PREFERENCES;
             },
         });
     };
@@ -187,15 +197,20 @@ export function usePrefetchSettings() {
                 const { data: { user } } = await supabase.auth.getUser();
                 if (!user) return null;
 
-                const { data } = await supabase
+                const { data, error } = await supabase
                     .from("profiles")
                     .select("is_private, connection_privacy")
                     .eq("id", user.id)
-                    .single();
+                    .maybeSingle();
+
+                if (error) {
+                    console.warn("[settings] privacy prefetch failed", error);
+                    return DEFAULT_PRIVACY_SETTINGS;
+                }
 
                 return {
-                    is_private: data?.is_private || false,
-                    connection_privacy: data?.connection_privacy || "public",
+                    is_private: data?.is_private || DEFAULT_PRIVACY_SETTINGS.is_private,
+                    connection_privacy: data?.connection_privacy || DEFAULT_PRIVACY_SETTINGS.connection_privacy,
                 };
             },
         });

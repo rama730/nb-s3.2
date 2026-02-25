@@ -6,6 +6,7 @@
 - `rejected`
 
 `cancelled` is **not** a first-class value in `role_applications.status`.
+`none` is also **not** persisted in `role_applications.status`; it is an application-logic sentinel.
 
 ## Application Lifecycle (derived UI/API state)
 - `none`
@@ -19,6 +20,9 @@ Legacy `decisionReason='cancelled'` is normalized to lifecycle `rejected`.
 
 Application lifecycle values are centralized in:
 - `src/lib/applications/status.ts`
+
+`APPLICATION_CORE_STATUSES` in `src/lib/applications/status.ts` is a superset used by logic and includes
+`none`. Persisted `role_applications.status` values remain `pending|accepted|rejected`.
 
 ## Connection request history status
 - `pending`

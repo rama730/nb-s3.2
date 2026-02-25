@@ -29,8 +29,8 @@ export default function KanbanBoard({
     hasNextPage,
     isFetchingNextPage
 }: KanbanBoardProps) {
-    const DEFAULT_VISIBLE = 100;
-    const STEP = 50;
+    const DEFAULT_VISIBLE = 20;
+    const STEP = 20;
     const [visibleCounts, setVisibleCounts] = useState({
         todo: DEFAULT_VISIBLE,
         in_progress: DEFAULT_VISIBLE,
@@ -70,7 +70,7 @@ export default function KanbanBoard({
 
     return (
         <>
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+        <div role="region" aria-label="Kanban board" className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
             {columnConfig.map(col => {
                 const colTasks = columns[col.id as keyof typeof columns];
                 const visibleLimit = visibleCounts[col.id as keyof typeof visibleCounts] || DEFAULT_VISIBLE;
@@ -78,7 +78,7 @@ export default function KanbanBoard({
                 const hasMoreInColumn = colTasks.length > visibleLimit;
 
                 return (
-                    <div key={col.id} className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-900/50 flex flex-col transition-all">
+                    <div key={col.id} role="region" aria-label={`${col.title} column, ${colTasks.length} tasks`} className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-900/50 flex flex-col transition-all">
                         {/* Column Header */}
                         <div className="p-4 shrink-0 flex items-center justify-between border-b border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 rounded-t-xl">
                             <div className="flex items-center gap-2">
@@ -95,8 +95,8 @@ export default function KanbanBoard({
                             {visibleTasks.length > 0 ? (
                                 <>
                                 {visibleTasks.map((task) => (
+                                    <div key={task.id} style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 80px' }}>
                                     <TaskCard
-                                        key={task.id}
                                         task={task}
                                         onClick={onTaskClick}
                                         onClaim={onClaimTask}
@@ -105,9 +105,11 @@ export default function KanbanBoard({
                                         onSelect={() => toggleTaskSelection(task.id)}
                                         isBulkMode={isBulkMode}
                                     />
+                                    </div>
                                 ))}
                                 {hasMoreInColumn && (
                                     <button
+                                        aria-label={`Show more tasks in ${col.title}`}
                                         onClick={() =>
                                             setVisibleCounts((prev) => ({
                                                 ...prev,
@@ -121,8 +123,8 @@ export default function KanbanBoard({
                                 )}
                                 </>
                             ) : (
-                                <div className="h-24 flex flex-col items-center justify-center text-zinc-400 border-2 border-dashed border-zinc-200 dark:border-zinc-800 rounded-lg">
-                                    <p className="text-xs font-medium">No tasks</p>
+                                <div role="status" className="h-24 flex flex-col items-center justify-center text-zinc-400 border-2 border-dashed border-zinc-200 dark:border-zinc-800 rounded-lg">
+                                    <p className="text-xs font-medium">No tasks in {col.title.toLowerCase()}</p>
                                 </div>
                             )}
                         </div>

@@ -12,11 +12,6 @@ type SettingsItem = {
 
 const items: SettingsItem[] = [
     {
-        href: "/profile",
-        title: "Profile",
-        desc: "Public profile, avatar, and bio",
-    },
-    {
         href: "/settings/account",
         title: "Account",
         desc: "Email, export, and account actions",
@@ -48,6 +43,11 @@ const items: SettingsItem[] = [
         href: "/settings/integrations",
         title: "Integrations",
         desc: "Connected services and apps",
+    },
+    {
+        href: "/settings/languages",
+        title: "Languages",
+        desc: "Code execution runtimes and preferences",
     },
 ];
 
@@ -86,6 +86,7 @@ export default function Page() {
                     <Link
                         key={it.href}
                         href={it.href}
+                        data-testid={`settings-card-${it.title.toLowerCase()}`}
                         onPointerEnter={() => handlePrefetch(it.prefetchKey)}
                         className="group rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 hover:shadow-sm transition"
                     >

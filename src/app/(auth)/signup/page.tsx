@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/hooks/use-auth'
@@ -21,6 +21,33 @@ export default function SignupPage() {
     const [showPassword, setShowPassword] = useState(false)
     const [isLoading, setIsLoading] = useState(false)
     const [error, setError] = useState<string | null>(null)
+    const [success, setSuccess] = useState<string | null>(null)
+    const submitRequestIdRef = useRef(0)
+
+    const DUPLICATE_EMAIL_MESSAGE = 'This email has already been used to create an account'
+
+    const toErrorMessage = (authError: unknown): string => {
+        if (!authError) return 'Unable to create account'
+        const raw = typeof authError === 'object' && authError !== null && 'message' in authError
+            ? String((authError as { message?: unknown }).message || '')
+            : String(authError)
+        const normalized = raw.toLowerCase()
+
+        if (
+            normalized.includes('already registered') ||
+            normalized.includes('already been registered') ||
+            normalized.includes('already exists')
+        ) {
+            return DUPLICATE_EMAIL_MESSAGE
+        }
+        return raw || 'Unable to create account'
+    }
+
+    const isDuplicateObfuscatedResponse = (payload: unknown): boolean => {
+        const data = (payload as { data?: { user?: { identities?: unknown[] } } } | null)?.data
+        const identities = data?.user?.identities
+        return Array.isArray(identities) && identities.length === 0
+    }
 
     // Password strength indicators
     const passwordChecks = {
@@ -34,26 +61,60 @@ export default function SignupPage() {
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault()
         setError(null)
+        setSuccess(null)
 
         if (passwordStrength < 3) {
             setError('Please create a stronger password')
             return
         }
 
+        const requestId = ++submitRequestIdRef.current
         setIsLoading(true)
 
         try {
-            const { error } = await signUp(email, password, fullName)
-            if (error) {
-                setError(error.message)
-            } else {
-                // Redirect to onboarding after successful signup
-                router.push('/onboarding')
+            const signUpResult = await Promise.race([
+                signUp(email.trim(), password, fullName.trim()),
+                new Promise<never>((_, reject) => {
+                    setTimeout(() => reject(new Error('Request timeout')), 15_000)
+                }),
+            ])
+
+            if (requestId !== submitRequestIdRef.current) return
+
+            if (isDuplicateObfuscatedResponse(signUpResult)) {
+                setError(DUPLICATE_EMAIL_MESSAGE)
+                return
             }
-        } catch {
-            setError('An unexpected error occurred')
+
+            const authError = (signUpResult as { error?: unknown } | null)?.error
+            if (authError) {
+                setError(toErrorMessage(authError))
+                return
+            }
+
+            const data = (signUpResult as { data?: { session?: unknown; user?: unknown } } | null)?.data
+            if (data?.session) {
+                router.push('/onboarding')
+                return
+            }
+
+            if (data?.user) {
+                setSuccess('Account created. Please check your email and verify your account before signing in.')
+                return
+            }
+
+            setError('Unable to create account. Please try again.')
+        } catch (signupError) {
+            if (requestId !== submitRequestIdRef.current) return
+            if (signupError instanceof Error && signupError.message === 'Request timeout') {
+                setError('Signup is taking too long. Please try again.')
+            } else {
+                setError('An unexpected error occurred')
+            }
         } finally {
-            setIsLoading(false)
+            if (requestId === submitRequestIdRef.current) {
+                setIsLoading(false)
+            }
         }
     }
 
@@ -149,6 +210,11 @@ export default function SignupPage() {
                             {error && (
                                 <div className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
                                     {error}
+                                </div>
+                            )}
+                            {success && (
+                                <div className="p-3 rounded-lg bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 text-sm">
+                                    {success}
                                 </div>
                             )}
 

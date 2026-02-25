@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useAuth } from "@/lib/hooks/use-auth";
 
@@ -17,7 +17,7 @@ export function usePeopleNotifications(): UsePeopleNotificationsReturn {
     const [pendingInvites, setPendingInvites] = useState(0);
     const { user } = useAuth();
     const userId = user?.id;
-    const supabase = createSupabaseBrowserClient();
+    const supabase = useMemo(() => createSupabaseBrowserClient(), []);
 
     const refresh = useCallback(async () => {
         try {

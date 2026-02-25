@@ -6,6 +6,7 @@ import { db } from "@/lib/db";
 import { tasks } from "@/lib/db/schema";
 import { getProjectAccessById } from "@/lib/data/project-access";
 import { createClient } from "@/lib/supabase/server";
+import { consumeRateLimit } from "@/lib/security/rate-limit";
 
 async function assertTaskWriteAccess(taskId: string, projectId: string, userId: string) {
     const task = await db.query.tasks.findFirst({
@@ -47,6 +48,8 @@ export async function createCommentAction(
         if (authError || !user) {
             return { success: false, error: "Unauthorized" };
         }
+        const { allowed: cmtRlOk } = await consumeRateLimit(`task-comment:${user.id}`, 60, 60);
+        if (!cmtRlOk) return { success: false, error: "Rate limit exceeded" };
 
         const trimmedContent = content.trim();
         if (!trimmedContent) {

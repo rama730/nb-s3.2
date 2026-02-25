@@ -4,12 +4,38 @@ import { eq, or, and, desc, ne } from 'drizzle-orm'
 import { cache } from 'react'
 import type { ConnectionState } from '@/components/profile/v2/types'
 import { createClient } from '@/lib/supabase/server'
+import { canViewerAccessProfile } from '@/lib/security/profile-visibility'
+import { getProfile } from '@/lib/services/profile-service'
+export { normalizeProfile } from '@/lib/utils/normalize-profile'
+import { normalizeProfile } from '@/lib/utils/normalize-profile'
 
 // Use Drizzle for consistent data access
 export const getUserProfile = cache(async (userId: string) => {
     if (!userId) return null;
     try {
-        const [profile] = await db.select().from(profiles).where(eq(profiles.id, userId)).limit(1);
+        const [profile] = await db.select({
+            id: profiles.id,
+            email: profiles.email,
+            username: profiles.username,
+            fullName: profiles.fullName,
+            avatarUrl: profiles.avatarUrl,
+            bannerUrl: profiles.bannerUrl,
+            bio: profiles.bio,
+            headline: profiles.headline,
+            location: profiles.location,
+            website: profiles.website,
+            skills: profiles.skills,
+            interests: profiles.interests,
+            openTo: profiles.openTo,
+            availabilityStatus: profiles.availabilityStatus,
+            socialLinks: profiles.socialLinks,
+            visibility: profiles.visibility,
+            connectionsCount: profiles.connectionsCount,
+            projectsCount: profiles.projectsCount,
+            followersCount: profiles.followersCount,
+            createdAt: profiles.createdAt,
+            updatedAt: profiles.updatedAt,
+        }).from(profiles).where(eq(profiles.id, userId)).limit(1);
         return profile || null;
     } catch (error) {
         console.error('Error fetching user profile:', error);
@@ -21,24 +47,6 @@ interface ProfileDetailsOptions {
     skipHeavyData?: boolean;
 }
 
-/**
- * normalizeProfile - Architectural Purity: Single point of truth for field defaults.
- */
-function normalizeProfile(p: any) {
-    if (!p) return null;
-    return {
-        ...p,
-        socialLinks: p.socialLinks || {},
-        openTo: p.openTo || [],
-        experience: p.experience || [],
-        education: p.education || [],
-        // CamelCase ensuring for Drizzle if needed, though Drizzle handles it usually
-        connectionsCount: p.connectionsCount || 0,
-        projectsCount: p.projectsCount || 0,
-        followersCount: p.followersCount || 0,
-    };
-}
-
 export async function getProfileDetails(username?: string, options: ProfileDetailsOptions = {}) {
     const supabase = await createClient()
 
@@ -46,17 +54,38 @@ export async function getProfileDetails(username?: string, options: ProfileDetai
     const { data: { user } } = await supabase.auth.getUser();
 
     // 2. Fetch Target Profile (Optimized Parallel approach)
-    const profileData = await (username
-        ? db.query.profiles.findFirst({ where: eq(profiles.username, username) })
-        : user ? db.query.profiles.findFirst({ where: eq(profiles.id, user.id) }) : Promise.resolve(null)
-    );
+    const profileData = username
+        ? await db.query.profiles.findFirst({ where: eq(profiles.username, username) })
+        : user
+            ? await getProfile(user.id)
+            : null;
 
     if (!profileData) return null;
 
-    const shouldResolveViewerState = !!user && user.id !== profileData.id;
+    const isOwner = user?.id === profileData.id;
+    const shouldResolveViewerState = !!user && !isOwner;
+
+    const viewerConnection = shouldResolveViewerState
+        ? await db.query.connections.findFirst({
+            where: or(
+                and(eq(connections.requesterId, user!.id), eq(connections.addresseeId, profileData.id)),
+                and(eq(connections.requesterId, profileData.id), eq(connections.addresseeId, user!.id))
+            ),
+            columns: { status: true, requesterId: true },
+            orderBy: [desc(connections.updatedAt)]
+        })
+        : null;
+
+    const canViewProfile = canViewerAccessProfile(
+        profileData.visibility,
+        !!isOwner,
+        viewerConnection?.status === 'accepted'
+    );
+    if (!canViewProfile) return null;
+
     const shouldLoadProjects = !options.skipHeavyData;
     const shouldLoadMutualCount = shouldResolveViewerState && !options.skipHeavyData;
-    const canViewAllProjects = !!user && user.id === profileData.id;
+    const canViewAllProjects = !!isOwner;
 
     const projectVisibilityFilter = canViewAllProjects
         ? eq(projects.ownerId, profileData.id)
@@ -94,16 +123,7 @@ export async function getProfileDetails(username?: string, options: ProfileDetai
                 }
             })
             : Promise.resolve([]),
-        shouldResolveViewerState
-            ? db.query.connections.findFirst({
-                where: or(
-                    and(eq(connections.requesterId, user!.id), eq(connections.addresseeId, profileData.id)),
-                    and(eq(connections.requesterId, profileData.id), eq(connections.addresseeId, user!.id))
-                ),
-                columns: { status: true, requesterId: true },
-                orderBy: [desc(connections.updatedAt)]
-            })
-            : Promise.resolve(null),
+        Promise.resolve(viewerConnection),
         shouldLoadMutualCount
             ? (async () => {
                 try {
@@ -139,7 +159,7 @@ export async function getProfileDetails(username?: string, options: ProfileDetai
             mutualCount,
         },
         connectionStatus,
-        isOwner: user?.id === profileData.id,
+        isOwner: !!isOwner,
         currentUser: user,
     };
 }
@@ -156,7 +176,12 @@ export const getPublicProfileMeta = cache(async (username: string) => {
                 avatarUrl: profiles.avatarUrl,
             })
             .from(profiles)
-            .where(eq(profiles.username, username))
+            .where(
+                and(
+                    eq(profiles.username, username),
+                    eq(profiles.visibility, 'public')
+                )
+            )
             .limit(1);
 
         return profile || null;

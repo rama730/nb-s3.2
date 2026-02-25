@@ -116,7 +116,7 @@ export default function PeopleHubClient({
                                         <span>{t.label}</span>
                                         {badgeCount && (
                                             <span className="relative ml-1 flex h-5 items-center">
-                                                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-40" />
+                                                <span className="absolute inline-flex h-full w-full motion-safe:animate-ping motion-reduce:animate-none rounded-full bg-red-400 opacity-40" />
                                                 <span className="relative inline-flex items-center justify-center px-1.5 py-0.5 text-[10px] font-bold bg-red-500 text-white rounded-full min-w-[20px]">
                                                     {badgeCount > 9 ? "9+" : badgeCount}
                                                 </span>

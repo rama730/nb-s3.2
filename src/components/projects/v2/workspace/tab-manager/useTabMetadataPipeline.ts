@@ -1,0 +1,110 @@
+import { useCallback, useRef } from "react";
+import type { ProjectNode } from "@/lib/db/schema";
+import { getNodeMetadataBatch, getNodesByIds, getProjectFileSignedUrl } from "@/app/actions/files";
+import { filesFeatureFlags } from "@/lib/features/files";
+import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
+
+interface UseTabMetadataPipelineOptions {
+  projectId: string;
+  upsertNodes: (projectId: string, nodes: ProjectNode[]) => void;
+}
+
+export function useTabMetadataPipeline({
+  projectId,
+  upsertNodes,
+}: UseTabMetadataPipelineOptions) {
+  const failedLookupsRef = useRef<Set<string>>(new Set());
+  const metadataInFlightRef = useRef<Map<string, Promise<void>>>(new Map());
+  const signedUrlCacheRef = useRef<Map<string, { url: string; expiresAt: number }>>(new Map());
+  const opsInProgressRef = useRef<Set<string>>(new Set());
+
+  const ensureNodeMetadata = useCallback(
+    async (nodeIds: string[]) => {
+      if (nodeIds.length === 0) return;
+
+      const currentState = useFilesWorkspaceStore.getState();
+      const currentWs = currentState.byProjectId[projectId];
+      if (!currentWs) return;
+
+      const pending: Promise<void>[] = [];
+      const missing = nodeIds.filter(
+        (id) =>
+          !currentWs.nodesById[id] &&
+          !failedLookupsRef.current.has(id) &&
+          !metadataInFlightRef.current.has(id)
+      );
+
+      for (const id of nodeIds) {
+        const existingPromise = metadataInFlightRef.current.get(id);
+        if (existingPromise) pending.push(existingPromise);
+      }
+
+      if (missing.length > 0) {
+        const batchPromise = (async () => {
+          missing.forEach((id) => opsInProgressRef.current.add(`meta:${id}`));
+          try {
+            let nodes: ProjectNode[] = [];
+            if (filesFeatureFlags.storeBatching || filesFeatureFlags.wave2StoreBatching) {
+              const batch = await getNodeMetadataBatch(projectId, missing, {
+                includeBreadcrumbs: false,
+              });
+              if (batch.success) {
+                nodes = batch.data.nodes;
+              } else {
+                nodes = (await getNodesByIds(projectId, missing)) as ProjectNode[];
+              }
+            } else {
+              nodes = (await getNodesByIds(projectId, missing)) as ProjectNode[];
+            }
+            const foundIds = new Set(nodes.map((n) => n.id));
+            missing.forEach((id) => {
+              if (!foundIds.has(id)) failedLookupsRef.current.add(id);
+            });
+            if (nodes.length > 0) upsertNodes(projectId, nodes);
+          } finally {
+            missing.forEach((id) => {
+              opsInProgressRef.current.delete(`meta:${id}`);
+              metadataInFlightRef.current.delete(id);
+            });
+          }
+        })();
+        missing.forEach((id) => metadataInFlightRef.current.set(id, batchPromise));
+        pending.push(batchPromise);
+      }
+
+      if (pending.length > 0) {
+        await Promise.all(pending);
+      }
+    },
+    [projectId, upsertNodes]
+  );
+
+  const ensureSignedUrlForNode = useCallback(
+    async (node: ProjectNode) => {
+      if (!node?.id) return null;
+
+      const cached = signedUrlCacheRef.current.get(node.id);
+      const now = Date.now();
+      if (cached && cached.expiresAt > now + 5_000) return cached.url;
+
+      const ttlSeconds = 300;
+      const res = (await getProjectFileSignedUrl(projectId, node.id, ttlSeconds)) as {
+        url: string;
+        expiresAt: number;
+      };
+      signedUrlCacheRef.current.set(node.id, {
+        url: res.url,
+        expiresAt: res.expiresAt,
+      });
+      return res.url;
+    },
+    [projectId]
+  );
+
+  return {
+    opsInProgressRef,
+    signedUrlCacheRef,
+    ensureNodeMetadata,
+    ensureSignedUrlForNode,
+  };
+}

@@ -3,6 +3,38 @@ export const runtime = 'edge';
 import { NextResponse } from 'next/server';
 import { cacheData, getCachedData } from '@/lib/redis';
 
+const EDGE_BUCKETS_MAX = 5_000;
+const CLEANUP_INTERVAL_MS = 10_000;
+const edgeRateBuckets = new Map<string, { count: number; resetAt: number }>();
+let lastCleanup = 0;
+
+function checkEdgeRateLimit(ip: string, limit: number, windowMs: number): boolean {
+    const now = Date.now();
+
+    if (now - lastCleanup > CLEANUP_INTERVAL_MS) {
+        lastCleanup = now;
+        for (const [key, b] of edgeRateBuckets) {
+            if (b.resetAt <= now) edgeRateBuckets.delete(key);
+        }
+        if (edgeRateBuckets.size > EDGE_BUCKETS_MAX) {
+            const excess = edgeRateBuckets.size - EDGE_BUCKETS_MAX;
+            const iter = edgeRateBuckets.keys();
+            for (let i = 0; i < excess; i++) {
+                const key = iter.next().value;
+                if (key) edgeRateBuckets.delete(key);
+            }
+        }
+    }
+
+    const bucket = edgeRateBuckets.get(ip);
+    if (!bucket || bucket.resetAt <= now) {
+        edgeRateBuckets.set(ip, { count: 1, resetAt: now + windowMs });
+        return true;
+    }
+    bucket.count += 1;
+    return bucket.count <= limit;
+}
+
 const DEFAULT_PAGE = 0;
 const DEFAULT_LIMIT = 24;
 const MAX_LIMIT = 100;
@@ -17,6 +49,11 @@ function parseNonNegativeInt(value: string | null, fallback: number) {
 }
 
 export async function GET(request: Request) {
+    const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
+    if (!checkEdgeRateLimit(ip, 100, 60_000)) {
+        return NextResponse.json({ error: 'Rate limit exceeded' }, { status: 429 });
+    }
+
     const { searchParams } = new URL(request.url);
 
     const parsedPage = parseNonNegativeInt(searchParams.get('page'), DEFAULT_PAGE);
@@ -28,9 +65,15 @@ export async function GET(request: Request) {
             { status: 400 }
         );
     }
+    if (parsedLimit.value === 0) {
+        return NextResponse.json(
+            { error: 'Limit must be at least 1' },
+            { status: 400 }
+        );
+    }
 
     const page = Math.min(parsedPage.value, MAX_PAGE);
-    const limit = Math.min(Math.max(parsedLimit.value, 1), MAX_LIMIT);
+    const limit = Math.min(parsedLimit.value, MAX_LIMIT);
 
     // Construct cache key based on params
     const cacheKey = `projects:public:page:${page}:limit:${limit}`;

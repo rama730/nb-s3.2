@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import Button from "@/components/ui-custom/Button";
 import { Loader2, Trash2 } from "lucide-react";
+import { toast } from "sonner";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 
 import { parseUserAgent } from "@/lib/utils/device";
 import type { Session as SessionType } from "@/lib/types/settingsTypes";
@@ -20,23 +22,35 @@ interface SessionsListProps {
 }
 
 export function SessionsList({ initialSessions }: SessionsListProps) {
-    const [sessions, setSessions] = useState<Session[]>([]);
-    const [loading, setLoading] = useState(!initialSessions);
+    const hasInitialSessions = Array.isArray(initialSessions);
+    const [sessions, setSessions] = useState<Session[]>((initialSessions || []) as Session[]);
+    const [loading, setLoading] = useState(!hasInitialSessions);
     const [revoking, setRevoking] = useState<string | null>(null);
 
     useEffect(() => {
-        fetchSessions();
-    }, []);
+        if (!hasInitialSessions) {
+            void fetchSessions();
+        }
+    }, [hasInitialSessions]);
 
     const fetchSessions = async () => {
         try {
             const res = await fetch('/api/v1/sessions');
-            const json = await res.json();
-            if (json.success) {
-                setSessions(json.data.sessions);
+            if (!res.ok) {
+                setSessions([]);
+                return;
             }
-        } catch (error) {
-            console.error(error);
+            const contentType = res.headers.get('content-type') || '';
+            if (!contentType.includes('application/json')) {
+                setSessions([]);
+                return;
+            }
+            const json = await res.json();
+            if (json?.success) {
+                setSessions(json?.data?.sessions || []);
+            }
+        } catch {
+            setSessions([]);
         } finally {
             setLoading(false);
         }
@@ -48,14 +62,15 @@ export function SessionsList({ initialSessions }: SessionsListProps) {
             await fetch(`/api/v1/sessions/${id}`, { method: 'DELETE' });
             setSessions(prev => prev.filter(s => s.id !== id));
         } catch {
-            alert("Failed to revoke");
+            toast.error("Failed to revoke session");
         } finally {
             setRevoking(null);
         }
     };
 
+    const [showRevokeAllDialog, setShowRevokeAllDialog] = useState(false);
+
     const handleRevokeAll = async () => {
-        if (!confirm("Are you sure you want to log out of all devices?")) return;
         setRevoking('all');
         try {
             await fetch('/api/v1/sessions/all', { method: 'DELETE' });
@@ -72,7 +87,7 @@ export function SessionsList({ initialSessions }: SessionsListProps) {
             <div className="flex justify-between items-center">
                 <h4 className="font-medium">Active Sessions</h4>
                 {sessions.length > 0 && (
-                    <Button variant="outline" size="sm" onClick={handleRevokeAll} disabled={!!revoking}>
+                    <Button variant="outline" size="sm" onClick={() => setShowRevokeAllDialog(true)} disabled={!!revoking}>
                         {revoking === 'all' ? <Loader2 className="h-3 w-3 animate-spin" /> : "Log Out All Devices"}
                     </Button>
                 )}
@@ -117,6 +132,16 @@ export function SessionsList({ initialSessions }: SessionsListProps) {
                     })}
                 </div>
             )}
+
+            <ConfirmDialog
+                open={showRevokeAllDialog}
+                onOpenChange={setShowRevokeAllDialog}
+                title="Log out of all devices?"
+                description="This will end all active sessions except your current one."
+                confirmLabel="Log Out All"
+                variant="destructive"
+                onConfirm={handleRevokeAll}
+            />
         </div>
     );
 }

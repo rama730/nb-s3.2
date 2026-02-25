@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import Image from 'next/image';
 import { useChatStore } from '@/stores/chatStore';
 import { useAuth } from '@/lib/hooks/use-auth';
@@ -40,6 +40,7 @@ interface MessagesClientProps {
 
 export default function MessagesClient({ targetUserId, initialConversationId }: MessagesClientProps) {
     const { user, isLoading: authLoading } = useAuth();
+    const userId = user?.id ?? null;
     
     // Resolve draft target profile when deep-linking with userId
     const { data: fetchedTargetUser } = useTargetUser(targetUserId || null);
@@ -51,6 +52,9 @@ export default function MessagesClient({ targetUserId, initialConversationId }: 
     const upsertConversation = useChatStore(state => state.upsertConversation);
     const initializeChat = useChatStore(state => state.initialize);
     const chatInitialized = useChatStore(state => state.isInitialized);
+    const conversationsLoading = useChatStore(state => state.conversationsLoading);
+    const refreshConversations = useChatStore(state => state.refreshConversations);
+    const bootstrapRefreshKeyRef = useRef<string | null>(null);
 
     // Target User Resolution
     const targetUser = fetchedTargetUser;
@@ -67,9 +71,27 @@ export default function MessagesClient({ targetUserId, initialConversationId }: 
 
     // Handle Target User Navigation
     useEffect(() => {
-        if (authLoading || !user || chatInitialized) return;
+        if (authLoading || !userId || chatInitialized) return;
         void initializeChat();
-    }, [authLoading, user, chatInitialized, initializeChat]);
+    }, [authLoading, userId, chatInitialized, initializeChat]);
+
+    useEffect(() => {
+        if (authLoading || !userId) return;
+        if (!chatInitialized) return;
+        if (conversationsLoading) return;
+        if (conversations.length > 0) return;
+
+        if (bootstrapRefreshKeyRef.current === userId) return;
+        bootstrapRefreshKeyRef.current = userId;
+        void refreshConversations();
+    }, [
+        authLoading,
+        chatInitialized,
+        conversations.length,
+        conversationsLoading,
+        refreshConversations,
+        userId,
+    ]);
 
     useEffect(() => {
         if (initialConversationId) return;
@@ -258,6 +280,7 @@ export default function MessagesClient({ targetUserId, initialConversationId }: 
                     <div className="flex p-1 bg-zinc-100 dark:bg-zinc-900 rounded-lg">
                         <button
                             onClick={() => setActiveTab('chats')}
+                            data-testid="messages-tab-chats"
                             className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-all ${
                                 activeTab === 'chats'
                                     ? 'bg-white dark:bg-zinc-800 text-zinc-900 dark:text-white shadow-sm'
@@ -268,6 +291,7 @@ export default function MessagesClient({ targetUserId, initialConversationId }: 
                         </button>
                         <button
                             onClick={() => setActiveTab('applications')}
+                            data-testid="messages-tab-applications"
                             className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-all ${
                                 activeTab === 'applications'
                                     ? 'bg-white dark:bg-zinc-800 text-zinc-900 dark:text-white shadow-sm'
@@ -278,6 +302,7 @@ export default function MessagesClient({ targetUserId, initialConversationId }: 
                         </button>
                         <button
                             onClick={() => setActiveTab('projects')}
+                            data-testid="messages-tab-projects"
                             className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-all ${
                                 activeTab === 'projects'
                                     ? 'bg-white dark:bg-zinc-800 text-zinc-900 dark:text-white shadow-sm'

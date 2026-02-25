@@ -19,11 +19,22 @@ export function useTaskCounts(taskId: string) {
     const [isLoading, setIsLoading] = useState(true);
     const supabase = useMemo(() => createClient(), []);
     const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const isMountedRef = useRef(true);
+
+    useEffect(() => {
+        isMountedRef.current = true;
+        return () => {
+            isMountedRef.current = false;
+        };
+    }, []);
 
     const fetchCounts = useCallback(async () => {
+        if (!isMountedRef.current) return;
         if (!taskId) {
-            setCounts(EMPTY_COUNTS);
-            setIsLoading(false);
+            if (isMountedRef.current) {
+                setCounts(EMPTY_COUNTS);
+                setIsLoading(false);
+            }
             return;
         }
 
@@ -34,21 +45,27 @@ export function useTaskCounts(taskId: string) {
                 countTaskAttachments(taskId),
             ]);
 
-            setCounts({
-                subtasks: subtasks.count || 0,
-                comments: comments.count || 0,
-                files: filesCount || 0,
-            });
+            if (isMountedRef.current) {
+                setCounts({
+                    subtasks: subtasks.count || 0,
+                    comments: comments.count || 0,
+                    files: filesCount || 0,
+                });
+            }
         } catch (error) {
             console.error("Error fetching task counts:", error);
         } finally {
-            setIsLoading(false);
+            if (isMountedRef.current) {
+                setIsLoading(false);
+            }
         }
     }, [supabase, taskId]);
 
     const scheduleRefresh = useCallback(() => {
+        if (!isMountedRef.current) return;
         if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
         refreshTimerRef.current = setTimeout(() => {
+            if (!isMountedRef.current) return;
             void fetchCounts();
         }, 120);
     }, [fetchCounts]);

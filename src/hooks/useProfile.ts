@@ -1,33 +1,14 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { createClient } from '@/lib/supabase/client';
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useAuth } from '@/lib/hooks/use-auth';
 import type { Profile } from '@/lib/db/schema';
-
-// Helper to transform snake_case to camelCase
-// Duplicated for now to avoid circular dependencies if we move it to utilities
-const transformProfile = (data: any): Profile | null => {
-    if (!data) return null;
-    const isSnake = 'full_name' in data || 'avatar_url' in data;
-
-    if (isSnake) {
-        return {
-            ...data,
-            avatarUrl: data.avatar_url,
-            fullName: data.full_name,
-            bannerUrl: data.banner_url,
-            socialLinks: data.social_links || {},
-            availabilityStatus: data.availability_status,
-            openTo: data.open_to || [],
-        } as unknown as Profile;
-    }
-    return data as Profile;
-};
+import { normalizeProfile } from '@/lib/utils/normalize-profile';
 
 export const useProfile = (usernameOrId?: string, initialData?: Profile | null) => {
     const queryClient = useQueryClient();
     const { user, profile: authProfile } = useAuth();
-    const supabase = createClient();
+    const supabase = useMemo(() => createClient(), []);
 
     const targetKey = usernameOrId || user?.id;
     const isMe = user?.id && (targetKey === user.id || (!usernameOrId && user.id));
@@ -52,7 +33,7 @@ export const useProfile = (usernameOrId?: string, initialData?: Profile | null) 
 
             const { data, error } = await query.single();
             if (error) throw error;
-            return transformProfile(data);
+            return normalizeProfile(data) as Profile | null;
         },
         enabled: !!targetKey && !shouldUseContext, // Don't fetch if we have context
         staleTime: 1000 * 60 * 5,
@@ -86,7 +67,7 @@ export const useProfile = (usernameOrId?: string, initialData?: Profile | null) 
         return () => {
             supabase.removeChannel(channel);
         };
-    }, [activeProfile?.id, queryClient, targetKey, isMe]);
+    }, [activeProfile?.id, queryClient, targetKey, isMe, supabase]);
 
     return {
         profile: activeProfile || null,

@@ -1,0 +1,59 @@
+name: onboarding-release-gate
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: nb_s3
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d nb_s3"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/nb_s3
+      NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:54321
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-anon-key
+      SUPABASE_SERVICE_ROLE_KEY: ci-service-role
+      RATE_LIMIT_MODE: best-effort
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm run test:unit
+
+      - name: Push schema to clean DB
+        run: npm run db:push
+
+      - name: Apply onboarding migrations
+        run: |
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f drizzle/0033_onboarding_username_guardrails.sql
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f drizzle/0034_onboarding_reliability_and_telemetry.sql
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f drizzle/0035_onboarding_submission_integrity.sql
+
+      - name: Check onboarding SLO gate
+        run: npm run check:onboarding:slo

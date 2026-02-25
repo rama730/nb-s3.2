@@ -1,0 +1,32 @@
+import { expect, test } from "@playwright/test";
+import { hasE2ECredentials, login } from "./_helpers/auth";
+import { attachPageMonitoring } from "./_helpers/monitoring";
+
+test.describe("Public profile matrix @critical", () => {
+  test.skip(!hasE2ECredentials, "E2E_USER_EMAIL and E2E_USER_PASSWORD are required.");
+
+  test("public profile route renders for current user handle", async ({ browser }) => {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    const monitor = attachPageMonitoring(page);
+
+    await login(page);
+    await page.goto("/profile");
+
+    const handleNode = page.locator("text=/@[-_a-zA-Z0-9]+/").first();
+    await expect(handleNode).toBeVisible({ timeout: 15000 });
+
+    const handleText = ((await handleNode.textContent()) || "").trim();
+    const username = handleText.replace(/^@/, "");
+    expect(username.length).toBeGreaterThan(0);
+
+    await page.goto(`/u/${encodeURIComponent(username)}`);
+    await expect(page).toHaveURL(new RegExp(`/u/${username}$`));
+    await expect(page.getByText(new RegExp(`@${username}`, "i")).first()).toBeVisible();
+    await expect(page.getByText(/Overview|Portfolio/i).first()).toBeVisible();
+
+    await monitor.assertNoViolations();
+    monitor.detach();
+    await context.close();
+  });
+});

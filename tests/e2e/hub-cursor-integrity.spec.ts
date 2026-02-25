@@ -1,25 +1,12 @@
 import { expect, test } from '@playwright/test';
-
-const email = process.env.E2E_USER_EMAIL;
-const password = process.env.E2E_USER_PASSWORD;
-const hasE2ECredentials = !!email && !!password;
-
-async function login(page: import('@playwright/test').Page) {
-    if (!hasE2ECredentials || !email || !password) {
-        throw new Error('E2E_USER_EMAIL and E2E_USER_PASSWORD must be set for this test.');
-    }
-
-    await page.goto('/login');
-    await page.getByLabel('Email').fill(email);
-    await page.getByLabel('Password').fill(password);
-    await page.getByRole('button', { name: 'Sign in' }).click();
-    await page.waitForURL('**/hub', { timeout: 30000 });
-}
+import { hasE2ECredentials, login } from './_helpers/auth';
+import { attachPageMonitoring } from './_helpers/monitoring';
 
 test.describe('Hub cursor integrity', () => {
     test.skip(!hasE2ECredentials, 'E2E_USER_EMAIL and E2E_USER_PASSWORD are required.');
 
     test('does not render duplicate cards across first two loads', async ({ page }) => {
+        const monitor = attachPageMonitoring(page);
         await login(page);
         await page.goto('/hub');
 
@@ -34,9 +21,7 @@ test.describe('Hub cursor integrity', () => {
             initialIds.add(value);
         }
 
-        if (initialIds.size < 4) {
-            test.skip(true, 'Not enough projects for pagination validation.');
-        }
+        expect(initialIds.size).toBeGreaterThan(0);
 
         const scrollContainer = page.locator('#hub-scroll-container');
         await scrollContainer.evaluate((node) => {
@@ -59,5 +44,8 @@ test.describe('Hub cursor integrity', () => {
         expect(allIds.size).toBeGreaterThanOrEqual(initialIds.size);
         const duplicateIds = rawAfterScroll.filter((id, idx) => rawAfterScroll.indexOf(id) !== idx);
         expect(duplicateIds).toEqual([]);
+
+        await monitor.assertNoViolations();
+        monitor.detach();
     });
 });

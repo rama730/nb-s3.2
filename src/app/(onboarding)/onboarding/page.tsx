@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
+import { useQueryClient } from '@tanstack/react-query'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -10,8 +11,16 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import UsernameInput from '@/components/onboarding/UsernameInput'
-import { completeOnboarding } from '@/app/actions/onboarding'
+import {
+    clearOnboardingDraft,
+    completeOnboarding,
+    getOnboardingDraft,
+    repairOnboardingClaims,
+    saveOnboardingDraft,
+    trackOnboardingEvent,
+} from '@/app/actions/onboarding'
 import { useAuth } from '@/lib/hooks/use-auth'
+import { validateUsername } from '@/lib/validations/username'
 import {
     ArrowLeft,
     ArrowRight,
@@ -54,16 +63,78 @@ interface OnboardingData {
 }
 
 const TOTAL_STEPS = 4
-
-// Simple client-side username validation
-function isValidUsername(username: string): boolean {
-    return username.length >= 3 &&
-        username.length <= 20 &&
-        /^[a-z0-9_]+$/.test(username) &&
-        !['admin', 'edge', 'api', 'www', 'mail', 'support', 'help', 'settings', 'profile', 'login', 'signup', 'auth'].includes(username)
+const ONBOARDING_DRAFT_KEY = 'onboarding:draft:v1'
+const ONBOARDING_SUBMIT_KEY = 'onboarding:submit-key:v1'
+const EMPTY_ONBOARDING_DATA: OnboardingData = {
+    username: '',
+    fullName: '',
+    avatarUrl: '',
+    headline: '',
+    bio: '',
+    location: '',
+    website: '',
+    skills: [],
+    interests: [],
+    visibility: 'public',
 }
 
-import { useQueryClient } from '@tanstack/react-query'
+function readOnboardingDraft(): { step: number; data: Partial<OnboardingData>; updatedAt: number } | null {
+    if (typeof window === 'undefined') return null
+    try {
+        const raw = window.localStorage.getItem(ONBOARDING_DRAFT_KEY)
+        if (!raw) return null
+        const parsed = JSON.parse(raw) as { step?: unknown; data?: unknown; updatedAt?: unknown }
+        if (!parsed || typeof parsed !== 'object') return null
+
+        const step =
+            typeof parsed.step === 'number' && Number.isFinite(parsed.step)
+                ? Math.min(TOTAL_STEPS, Math.max(1, Math.floor(parsed.step)))
+                : 1
+
+        const sourceData =
+            parsed.data && typeof parsed.data === 'object'
+                ? (parsed.data as Record<string, unknown>)
+                : {}
+        const data: Partial<OnboardingData> = {}
+
+        if (typeof sourceData.username === 'string') data.username = sourceData.username
+        if (typeof sourceData.fullName === 'string') data.fullName = sourceData.fullName
+        if (typeof sourceData.avatarUrl === 'string') data.avatarUrl = sourceData.avatarUrl
+        if (typeof sourceData.headline === 'string') data.headline = sourceData.headline
+        if (typeof sourceData.bio === 'string') data.bio = sourceData.bio
+        if (typeof sourceData.location === 'string') data.location = sourceData.location
+        if (typeof sourceData.website === 'string') data.website = sourceData.website
+        if (Array.isArray(sourceData.skills)) {
+            data.skills = sourceData.skills.filter((skill): skill is string => typeof skill === 'string')
+        }
+        if (Array.isArray(sourceData.interests)) {
+            data.interests = sourceData.interests.filter((interest): interest is string => typeof interest === 'string')
+        }
+        if (
+            sourceData.visibility === 'public' ||
+            sourceData.visibility === 'connections' ||
+            sourceData.visibility === 'private'
+        ) {
+            data.visibility = sourceData.visibility
+        }
+
+        const updatedAt =
+            typeof parsed.updatedAt === 'number' && Number.isFinite(parsed.updatedAt)
+                ? parsed.updatedAt
+                : 0
+
+        return { step, data, updatedAt }
+    } catch {
+        return null
+    }
+}
+
+function generateIdempotencyKey() {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+        return `onboarding:${crypto.randomUUID()}`
+    }
+    return `onboarding:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`
+}
 
 export default function OnboardingPage() {
     const router = useRouter()
@@ -75,42 +146,68 @@ export default function OnboardingPage() {
     const [isUploadingAvatar, setIsUploadingAvatar] = useState(false)
     const [isDetectingLocation, setIsDetectingLocation] = useState(false)
     const fileInputRef = useRef<HTMLInputElement>(null)
+    const draftHydratedRef = useRef(false)
+    const draftVersionRef = useRef<number>(0)
+    const submitIdempotencyKeyRef = useRef<string>('')
     const [error, setError] = useState<string | null>(null)
 
-    const [data, setData] = useState<OnboardingData>({
-        username: '',
-        fullName: '',
-        avatarUrl: '',
-        headline: '',
-        bio: '',
-        location: '',
-        website: '',
-        skills: [],
-        interests: [],
-        visibility: 'public'
-    })
+    const [data, setData] = useState<OnboardingData>(EMPTY_ONBOARDING_DATA)
 
     // Pre-fill data from social login and ensure profile exists
     useEffect(() => {
         async function loadSocialData() {
             try {
+                const localDraft = readOnboardingDraft()
+                if (typeof window !== 'undefined' && !submitIdempotencyKeyRef.current) {
+                    const storedSubmitKey = window.localStorage.getItem(ONBOARDING_SUBMIT_KEY) || ''
+                    submitIdempotencyKeyRef.current = storedSubmitKey || generateIdempotencyKey()
+                    window.localStorage.setItem(ONBOARDING_SUBMIT_KEY, submitIdempotencyKeyRef.current)
+                }
+
                 const supabase = createClient()
                 const { data: { user } } = await supabase.auth.getUser()
 
                 if (user) {
+                    const remoteDraftResult = await getOnboardingDraft()
+                    const remoteDraftUpdatedAt =
+                        remoteDraftResult.success && remoteDraftResult.updatedAt
+                            ? new Date(remoteDraftResult.updatedAt).getTime()
+                            : 0
+                    const localDraftUpdatedAt = localDraft?.updatedAt || 0
+                    const remoteDraft =
+                        remoteDraftResult.success && remoteDraftResult.draft
+                            ? {
+                                step: remoteDraftResult.step || 1,
+                                data: remoteDraftResult.draft,
+                            }
+                            : null
+                    const preferredDraft =
+                        remoteDraft && remoteDraftUpdatedAt > localDraftUpdatedAt
+                            ? remoteDraft
+                            : localDraft
+
+                    if (preferredDraft) {
+                        setStep(preferredDraft.step)
+                        setData(prev => ({ ...prev, ...preferredDraft.data }))
+                    }
+                    if (remoteDraftResult.success) {
+                        draftVersionRef.current = remoteDraftResult.version || 0
+                    }
+
                     const metadata = user.user_metadata || {}
 
-                    // Pre-fill from social login data
+                    // Pre-fill from social login data without overwriting draft input.
                     setData(prev => ({
                         ...prev,
-                        fullName: metadata.full_name || metadata.name || '',
-                        avatarUrl: metadata.avatar_url || metadata.picture || '',
+                        fullName: prev.fullName || metadata.full_name || metadata.name || '',
+                        avatarUrl: prev.avatarUrl || metadata.avatar_url || metadata.picture || '',
                     }))
 
                     // Ensure profile record exists in database
                     const { ensureUserProfile } = await import('@/app/actions/database')
                     await ensureUserProfile()
                 }
+                draftHydratedRef.current = true
             } catch (error) {
                 console.error('Error loading user data:', error)
             } finally {
@@ -120,6 +217,70 @@ export default function OnboardingPage() {
 
         loadSocialData()
     }, [])
+
+    useEffect(() => {
+        if (isInitializing || typeof window === 'undefined') return
+        try {
+            const updatedAt = Date.now()
+            window.localStorage.setItem(
+                ONBOARDING_DRAFT_KEY,
+                JSON.stringify({
+                    step,
+                    data,
+                    updatedAt,
+                })
+            )
+        } catch (storageError) {
+            console.warn('Unable to persist onboarding draft:', storageError)
+        }
+    }, [step, data, isInitializing])
+
+    useEffect(() => {
+        if (isInitializing) return
+        if (!draftHydratedRef.current) return
+
+        const timer = window.setTimeout(() => {
+            void (async () => {
+                try {
+                    const result = await saveOnboardingDraft({
+                        step,
+                        draft: data,
+                        expectedVersion: draftVersionRef.current,
+                    })
+                    if (result.success) {
+                        draftVersionRef.current = result.version ?? draftVersionRef.current
+                        return
+                    }
+
+                    if (result.errorDetails?.code === 'DRAFT_CONFLICT') {
+                        draftVersionRef.current = result.version ?? draftVersionRef.current
+                        if (result.draft) {
+                            setData(prev => ({ ...prev, ...result.draft }))
+                        }
+                        if (typeof result.step === 'number') {
+                            setStep(result.step)
+                        }
+                        setError('Your draft was updated in another tab. Latest version has been synced.')
+                    }
+                } catch (draftError) {
+                    console.error('Unable to save onboarding draft:', draftError)
+                    setError('Unable to save draft right now. Please try again.')
+                }
+            })()
+        }, 600)
+
+        return () => {
+            window.clearTimeout(timer)
+        }
+    }, [step, data, isInitializing])
+
+    useEffect(() => {
+        if (isInitializing) return
+        void trackOnboardingEvent({
+            eventType: 'step_view',
+            step,
+        })
+    }, [step, isInitializing])
 
     const updateData = (updates: Partial<OnboardingData>) => {
         setData(prev => ({ ...prev, ...updates }))
@@ -189,11 +350,17 @@ export default function OnboardingPage() {
     }
 
     const nextStep = () => {
-        if (step < TOTAL_STEPS) setStep(step + 1)
+        if (step < TOTAL_STEPS) {
+            void trackOnboardingEvent({ eventType: 'step_continue', step })
+            setStep(step + 1)
+        }
     }
 
     const prevStep = () => {
-        if (step > 1) setStep(step - 1)
+        if (step > 1) {
+            void trackOnboardingEvent({ eventType: 'step_back', step })
+            setStep(step - 1)
+        }
     }
 
     const toggleSkill = (skill: string) => {
@@ -216,7 +383,16 @@ export default function OnboardingPage() {
 
     const handleSubmit = async () => {
         setError(null)
+        const idempotencyKey = submitIdempotencyKeyRef.current
+        if (!idempotencyKey) {
+            setError('Unable to submit yet. Please wait a moment and retry.')
+            return
+        }
         setIsLoading(true)
+        void trackOnboardingEvent({
+            eventType: 'submit_start',
+            step: TOTAL_STEPS,
+        })
 
         try {
             const result = await completeOnboarding({
@@ -230,37 +406,64 @@ export default function OnboardingPage() {
                 skills: data.skills,
                 interests: data.interests,
                 visibility: data.visibility,
+                idempotencyKey,
             })
 
             if (!result.success) {
-                setError(result.error || 'Failed to complete setup')
+                setError(result.errorDetails?.message || result.error || 'Failed to complete setup')
+                void trackOnboardingEvent({
+                    eventType: 'submit_error',
+                    step: TOTAL_STEPS,
+                    metadata: {
+                        reason: result.errorDetails?.code || result.error || 'unknown',
+                    },
+                })
                 return
+            }
+
+            if (result.needsMetadataSync) {
+                try {
+                    await repairOnboardingClaims()
+                } catch (repairError) {
+                    console.error('Unable to repair onboarding claims:', repairError)
+                }
             }
 
             const supabase = createClient()
             await Promise.allSettled([
                 supabase.auth.refreshSession(),
                 refreshProfile(),
+                clearOnboardingDraft(),
             ])
             queryClient.invalidateQueries({ queryKey: ['profile'] })
             queryClient.invalidateQueries({ queryKey: ['user'] })
+            if (typeof window !== 'undefined') {
+                window.localStorage.removeItem(ONBOARDING_DRAFT_KEY)
+                window.localStorage.removeItem(ONBOARDING_SUBMIT_KEY)
+            }
+            void trackOnboardingEvent({
+                eventType: 'submit_success',
+                step: TOTAL_STEPS,
+                metadata: { needsMetadataSync: result.needsMetadataSync === true },
+            })
             router.push('/hub')
 
         } catch {
             setError('An unexpected error occurred')
+            void trackOnboardingEvent({
+                eventType: 'submit_error',
+                step: TOTAL_STEPS,
+                metadata: { reason: 'unexpected' },
+            })
         } finally {
-            // No need to set loading false if we redirect, 
-            // but safe to do so in case redirect fails or is delayed? 
-            // Actually router.push is async but we don't await it here to block UI?
-            // Next.js router.push is void mostly. 
-            // If we are unmounting, this state update might warn, but that's acceptable for speed.
+            setIsLoading(false)
         }
     }
 
     const canProceed = () => {
         switch (step) {
             case 1:
-                return isValidUsername(data.username) && data.fullName.length >= 2
+                return validateUsername(data.username).valid && data.fullName.length >= 2
             case 2:
                 return true // Optional step
             case 3:

@@ -165,6 +165,8 @@ export function useTypingChannel(conversationId: string | null, options: { liste
 
                     // Filter self
                     const currentUser = await getCurrentUser();
+                    const entryAfterUserLookup = channelRegistry.get(conversationId);
+                    if (!entryAfterUserLookup) return;
                     if (payload.user?.id === currentUser?.id) return;
 
                     handleRegistryEvent(conversationId, payload.user, payload.isTyping);

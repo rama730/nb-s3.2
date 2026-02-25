@@ -60,6 +60,13 @@ interface SenderSnapshot {
     avatarUrl: string | null;
 }
 
+interface ProfileCacheEntry {
+    id: string;
+    username: string | null;
+    fullName: string | null;
+    avatarUrl: string | null;
+}
+
 type MessageDeliveryState = 'sending' | 'queued' | 'sent' | 'delivered' | 'read' | 'failed';
 
 function withDeliveryMetadata(
@@ -83,6 +90,29 @@ function toEpochMs(value: unknown): number {
         return Number.isNaN(ms) ? 0 : ms;
     }
     return 0;
+}
+
+const PROFILE_CACHE_MAX_SIZE = 500;
+
+function upsertProfileCacheEntry(
+    cache: Record<string, ProfileCacheEntry>,
+    profile: ProfileCacheEntry
+): Record<string, ProfileCacheEntry> {
+    if (cache[profile.id]) {
+        return {
+            ...cache,
+            [profile.id]: profile,
+        };
+    }
+
+    const next = { ...cache };
+    const keys = Object.keys(next);
+    if (keys.length >= PROFILE_CACHE_MAX_SIZE) {
+        const oldestKey = keys[0];
+        if (oldestKey) delete next[oldestKey];
+    }
+    next[profile.id] = profile;
+    return next;
 }
 
 export interface InboxApplication {
@@ -164,12 +194,7 @@ interface ChatState {
     totalUnread: number;
 
     // Profile cache (to avoid fetching on every message)
-    profileCache: Record<string, {
-        id: string;
-        username: string | null;
-        fullName: string | null;
-        avatarUrl: string | null;
-    }>;
+    profileCache: Record<string, ProfileCacheEntry>;
 
     // Popup UI state
     isPopupOpen: boolean;
@@ -1156,7 +1181,6 @@ export const useChatStore = create<ChatState>()(
             // HANDLE NEW MESSAGE (from realtime) - OPTIMIZED
             // ================================================================
             _handleNewMessage: async (rawMessage: any, viewerId?: string | null) => {
-                const state = get();
                 const conversationId = rawMessage.conversation_id || rawMessage.conversationId;
                 const senderId = rawMessage.sender_id || rawMessage.senderId;
                 const clientMessageId =
@@ -1171,8 +1195,9 @@ export const useChatStore = create<ChatState>()(
                 let sender = rawMessage.sender || null;
                 if (!sender && senderId) {
                     // Check cache first
-                    if (state.profileCache[senderId]) {
-                        sender = state.profileCache[senderId];
+                    const cachedSender = get().profileCache[senderId];
+                    if (cachedSender) {
+                        sender = cachedSender;
                     } else {
                         // Fetch from database only if not in cache
                         try {
@@ -1193,10 +1218,10 @@ export const useChatStore = create<ChatState>()(
                                 };
                                 // Cache the profile for future use
                                 set(prev => ({
-                                    profileCache: {
-                                        ...prev.profileCache,
-                                        [sender!.id]: sender!,
-                                    },
+                                    profileCache: upsertProfileCacheEntry(
+                                        prev.profileCache,
+                                        sender as ProfileCacheEntry
+                                    ),
                                 }));
                             }
                         } catch (error) {
@@ -1272,63 +1297,60 @@ export const useChatStore = create<ChatState>()(
                     attachments,
                 };
 
-                // Add to message cache if conversation is cached
-                if (state.messagesByConversation[completeMessage.conversationId]) {
-                    // Check if message already exists (avoid duplicates)
-                    const exists = state.messagesByConversation[completeMessage.conversationId].messages.some(
-                        m => m.id === completeMessage.id ||
-                            (!!completeMessage.clientMessageId && m.clientMessageId === completeMessage.clientMessageId)
-                    );
+                // Single batched state update for the new message
+                set(prev => {
+                    const patch: Partial<ChatState> = {};
 
-                    if (!exists) {
-                        set(prev => ({
-                            messagesByConversation: {
+                    // 1. Add to message cache
+                    const cachedConversation = prev.messagesByConversation[completeMessage.conversationId];
+                    if (cachedConversation) {
+                        const idSet = new Set(cachedConversation.messages.map(m => m.id));
+                        const clientIdSet = new Set(
+                            cachedConversation.messages
+                                .filter(m => m.clientMessageId)
+                                .map(m => m.clientMessageId)
+                        );
+                        const exists = idSet.has(completeMessage.id) ||
+                            (!!completeMessage.clientMessageId && clientIdSet.has(completeMessage.clientMessageId));
+
+                        if (!exists) {
+                            patch.messagesByConversation = {
                                 ...prev.messagesByConversation,
                                 [completeMessage.conversationId]: {
-                                    ...prev.messagesByConversation[completeMessage.conversationId],
-                                    messages: [
-                                        ...prev.messagesByConversation[completeMessage.conversationId].messages,
-                                        completeMessage,
-                                    ],
+                                    ...cachedConversation,
+                                    messages: [...cachedConversation.messages, completeMessage],
                                 },
-                            },
-                        }));
+                            };
+                        }
                     }
-                }
 
-                // Update unread count if not active conversation
-                if (
-                    state.activeConversationId !== completeMessage.conversationId &&
-                    (!viewerId || completeMessage.senderId !== viewerId)
-                ) {
-                    set(prev => ({
-                        unreadCounts: {
+                    // 2. Update unread count
+                    const shouldIncrementUnread =
+                        prev.activeConversationId !== completeMessage.conversationId &&
+                        (!viewerId || completeMessage.senderId !== viewerId);
+                    if (shouldIncrementUnread) {
+                        patch.unreadCounts = {
                             ...prev.unreadCounts,
                             [completeMessage.conversationId]: (prev.unreadCounts[completeMessage.conversationId] || 0) + 1,
-                        },
-                        totalUnread: prev.totalUnread + 1,
-                    }));
-                }
+                        };
+                        patch.totalUnread = prev.totalUnread + 1;
+                    }
 
-                if (completeMessage.clientMessageId) {
-                    set(prev => ({
-                        outboxByConversation: {
+                    // 3. Remove from outbox
+                    if (completeMessage.clientMessageId) {
+                        const queue = prev.outboxByConversation[completeMessage.conversationId] || [];
+                        patch.outboxByConversation = {
                             ...prev.outboxByConversation,
-                            [completeMessage.conversationId]: (prev.outboxByConversation[completeMessage.conversationId] || []).filter(
+                            [completeMessage.conversationId]: queue.filter(
                                 item => item.clientMessageId !== completeMessage.clientMessageId
                             ),
-                        },
-                    }));
-                }
+                        };
+                    }
 
-                // OPTIMIZED: Update conversation list locally instead of full refresh
-                // This eliminates the heavy N+1 query cascade
-                set(prev => {
+                    // 4. Update conversation list
                     const conversations = [...prev.conversations];
                     const convIndex = conversations.findIndex(c => c.id === completeMessage.conversationId);
-
                     if (convIndex !== -1) {
-                        // Update existing conversation
                         const conv = conversations[convIndex];
                         conversations[convIndex] = {
                             ...conv,
@@ -1341,46 +1363,46 @@ export const useChatStore = create<ChatState>()(
                                 type: completeMessage.type,
                             },
                         };
-                        // Move to top (sort by updatedAt)
                         conversations.sort((a, b) => toEpochMs(b.updatedAt) - toEpochMs(a.updatedAt));
-                    } else {
-                        // NEW CONVERSATION DETECTED: Refresh entire list to get participants/metadata
-                        // We do this in the background to not block the message delivery
-                        get().refreshConversations();
+                        patch.conversations = conversations;
                     }
 
-                    return { conversations };
-                });
-
-                set((prev) => {
+                    // 5. Update project groups
                     const groupIndex = prev.projectGroups.findIndex(
                         (group) => group.id === completeMessage.conversationId
                     );
-                    if (groupIndex === -1) return {};
+                    if (groupIndex !== -1) {
+                        const nextGroups = [...prev.projectGroups];
+                        const current = nextGroups[groupIndex];
+                        const unreadInc = shouldIncrementUnread ? 1 : 0;
+                        nextGroups[groupIndex] = {
+                            ...current,
+                            unreadCount: Math.max(0, current.unreadCount + unreadInc),
+                            lastMessage: {
+                                id: completeMessage.id,
+                                content: completeMessage.content,
+                                senderId: completeMessage.senderId,
+                                createdAt: completeMessage.createdAt,
+                                type: completeMessage.type,
+                            },
+                            updatedAt: completeMessage.createdAt,
+                        };
+                        nextGroups.sort((a, b) => toEpochMs(b.updatedAt) - toEpochMs(a.updatedAt));
+                        patch.projectGroups = nextGroups;
+                    }
 
-                    const nextGroups = [...prev.projectGroups];
-                    const current = nextGroups[groupIndex];
-                    const unreadInc =
-                        state.activeConversationId !== completeMessage.conversationId &&
-                        (!viewerId || completeMessage.senderId !== viewerId)
-                            ? 1
-                            : 0;
-
-                    nextGroups[groupIndex] = {
-                        ...current,
-                        unreadCount: Math.max(0, current.unreadCount + unreadInc),
-                        lastMessage: {
-                            id: completeMessage.id,
-                            content: completeMessage.content,
-                            senderId: completeMessage.senderId,
-                            createdAt: completeMessage.createdAt,
-                            type: completeMessage.type,
-                        },
-                        updatedAt: completeMessage.createdAt,
-                    };
-                    nextGroups.sort((a, b) => toEpochMs(b.updatedAt) - toEpochMs(a.updatedAt));
-                    return { projectGroups: nextGroups };
+                    return patch;
                 });
+
+                // Background refreshes for unknown conversations/groups (outside the batch to avoid blocking)
+                {
+                    const state = get();
+                    const convExists = state.conversations.some(c => c.id === completeMessage.conversationId);
+                    if (!convExists) void state.refreshConversations();
+
+                    const groupExists = state.projectGroups.some(g => g.id === completeMessage.conversationId);
+                    if (!groupExists) void state.fetchProjectGroups(true);
+                }
 
                 const messageMetadata = completeMessage.metadata as Record<string, unknown>;
                 if (messageMetadata?.isApplication || messageMetadata?.isApplicationUpdate) {
@@ -1467,6 +1489,13 @@ export const useChatStore = create<ChatState>()(
                     const { messages: messageList, hasMore, nextCursor } = await getMessages(conversationId);
                     const serverMessages = messageList || [];
 
+                    const serverIdSet = new Set<string>();
+                    const serverClientIdSet = new Set<string>();
+                    for (const m of serverMessages) {
+                        serverIdSet.add(m.id);
+                        if (m.clientMessageId) serverClientIdSet.add(m.clientMessageId);
+                    }
+
                     set((state) => ({
                         messagesByConversation: {
                             ...state.messagesByConversation,
@@ -1474,14 +1503,8 @@ export const useChatStore = create<ChatState>()(
                                 messages: [
                                     ...serverMessages,
                                     ...(state.messagesByConversation[conversationId]?.messages || []).filter((localMessage) => {
-                                        const hasServerTwin = serverMessages.some((serverMessage) =>
-                                            serverMessage.id === localMessage.id ||
-                                            (
-                                                !!localMessage.clientMessageId &&
-                                                serverMessage.clientMessageId === localMessage.clientMessageId
-                                            )
-                                        );
-                                        if (hasServerTwin) return false;
+                                        if (serverIdSet.has(localMessage.id)) return false;
+                                        if (localMessage.clientMessageId && serverClientIdSet.has(localMessage.clientMessageId)) return false;
                                         const deliveryState = (localMessage.metadata as Record<string, unknown> | undefined)?.deliveryState;
                                         return (
                                             localMessage.id.startsWith('temp-') ||
@@ -1854,3 +1877,5 @@ export const selectActiveDraft = (state: ChatState) => {
     if (!state.activeConversationId) return '';
     return state.draftsByConversation[state.activeConversationId] || '';
 };
+
+export const selectUnreadTotal = (state: ChatState) => state.totalUnread;

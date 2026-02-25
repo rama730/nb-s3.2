@@ -4,7 +4,7 @@ import Image from 'next/image';
 import { useChatStore } from '@/stores/chatStore';
 import { formatDistanceToNow } from 'date-fns';
 import { BellOff, MessageSquare, Search } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTypingChannel } from '@/hooks/useTypingChannel';
 import { Virtuoso } from 'react-virtuoso';
 
@@ -40,9 +40,11 @@ export function ConversationList({
     const unreadCounts = useChatStore(state => state.unreadCounts);
     const storeActiveConversationId = useChatStore(state => state.activeConversationId);
     const openConversation = useChatStore(state => state.openConversation);
+    const refreshConversations = useChatStore(state => state.refreshConversations);
     const hasMoreConversations = useChatStore(state => state.hasMoreConversations);
     const loadMoreConversations = useChatStore(state => state.loadMoreConversations);
     const [internalSearchQuery, setInternalSearchQuery] = useState('');
+    const didBootstrapRefreshRef = useRef(false);
     const effectiveSearchQuery = searchQuery ?? internalSearchQuery;
     const handleSearchChange = onSearchQueryChange ?? setInternalSearchQuery;
     const selectedConversationId = activeConversationId ?? storeActiveConversationId;
@@ -59,6 +61,16 @@ export function ConversationList({
         );
     });
 
+    useEffect(() => {
+        if (didBootstrapRefreshRef.current) return;
+        if (conversationsLoading) return;
+        if (effectiveSearchQuery.trim()) return;
+        didBootstrapRefreshRef.current = true;
+        if (conversations.length === 0) {
+            void refreshConversations();
+        }
+    }, [conversations.length, conversationsLoading, effectiveSearchQuery, refreshConversations]);
+
     if (conversationsLoading && conversations.length === 0) {
         return (
             <div className="flex-1 flex items-center justify-center">
@@ -74,6 +86,9 @@ export function ConversationList({
         return (
             <button
                 key={conv.id}
+                data-testid={`conversation-row-${conv.id}`}
+                aria-label={`Conversation with ${participant?.fullName || participant?.username || 'Unknown'}${unread > 0 ? `, ${unread} unread` : ''}`}
+                aria-current={selectedConversationId === conv.id ? 'true' : undefined}
                 onClick={() => (onConversationSelect ? onConversationSelect(conv.id) : openConversation(conv.id))}
                 className={`w-full flex items-center gap-3 p-3 transition-colors text-left border-l-2 ${
                     selectedConversationId === conv.id
@@ -140,6 +155,7 @@ export function ConversationList({
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
                         <input
                             type="text"
+                            aria-label="Search conversations"
                             placeholder="Search conversations..."
                             value={effectiveSearchQuery}
                             onChange={(e) => handleSearchChange(e.target.value)}
@@ -150,7 +166,26 @@ export function ConversationList({
             )}
 
             {/* Conversation List */}
-            <div className="flex-1 min-h-0">
+            <div
+                role="listbox"
+                aria-label="Conversations"
+                className="flex-1 min-h-0"
+                onKeyDown={(e) => {
+                    if (filteredConversations.length === 0) return;
+                    const buttons = (e.currentTarget as HTMLElement).querySelectorAll<HTMLButtonElement>('button[data-testid^="conversation-row-"]');
+                    if (!buttons.length) return;
+                    const idx = Array.from(buttons).findIndex((b) => b === document.activeElement);
+                    if (e.key === 'ArrowDown') {
+                        e.preventDefault();
+                        const next = idx < buttons.length - 1 ? idx + 1 : 0;
+                        buttons[next]?.focus();
+                    } else if (e.key === 'ArrowUp') {
+                        e.preventDefault();
+                        const prev = idx > 0 ? idx - 1 : buttons.length - 1;
+                        buttons[prev]?.focus();
+                    }
+                }}
+            >
                 {filteredConversations.length === 0 ? (
                     <div className="flex flex-col items-center justify-center h-full p-6 text-center">
                         <div className="w-16 h-16 bg-zinc-100 dark:bg-zinc-800 rounded-full flex items-center justify-center mb-4">

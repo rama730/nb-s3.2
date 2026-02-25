@@ -7,9 +7,35 @@
 import { createClient } from '@/lib/supabase/server'
 import type { Profile } from '@/lib/db/schema'
 
-// Profile cache (server-side, per-request)
+// Per-instance in-memory profile cache (shared across requests on one instance).
+// In multi-instance deployments this may serve stale data until TTL expires.
 const profileCache = new Map<string, { profile: Profile; timestamp: number }>()
 const CACHE_TTL = 60 * 1000 // 1 minute
+const PROFILE_CACHE_MAX_ENTRIES = 1000
+const PROFILE_IN_MEMORY_CACHE_ENABLED =
+    process.env.NODE_ENV !== 'production' ||
+    process.env.PROFILE_IN_MEMORY_CACHE_ENABLED === 'true' ||
+    process.env.PROFILE_CACHE_LOCAL_ENABLED === 'true'
+
+function pruneProfileCache(now = Date.now()) {
+    for (const [key, entry] of profileCache.entries()) {
+        if (now - entry.timestamp >= CACHE_TTL) {
+            profileCache.delete(key)
+        }
+    }
+
+    while (profileCache.size >= PROFILE_CACHE_MAX_ENTRIES) {
+        const oldestKey = profileCache.keys().next().value as string | undefined
+        if (!oldestKey) break
+        profileCache.delete(oldestKey)
+    }
+}
+
+function setCachedProfile(userId: string, profile: Profile, now = Date.now()) {
+    profileCache.delete(userId)
+    pruneProfileCache(now)
+    profileCache.set(userId, { profile, timestamp: now })
+}
 
 export interface ProfileUpdateData {
     username?: string
@@ -36,10 +62,18 @@ export interface ProfileUpdateData {
  * Get profile by user ID with caching
  */
 export async function getProfile(userId: string): Promise<Profile | null> {
-    // Check cache first
-    const cached = profileCache.get(userId)
-    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-        return cached.profile
+    // Check per-instance in-memory cache first.
+    const now = Date.now()
+    if (PROFILE_IN_MEMORY_CACHE_ENABLED) {
+        const cached = profileCache.get(userId)
+        if (cached && now - cached.timestamp < CACHE_TTL) {
+            profileCache.delete(userId)
+            profileCache.set(userId, cached)
+            return cached.profile
+        }
+        if (cached) {
+            profileCache.delete(userId)
+        }
     }
 
     const supabase = await createClient()
@@ -84,8 +118,9 @@ export async function getProfile(userId: string): Promise<Profile | null> {
         updatedAt: new Date(data.updated_at),
     }
 
-    // Cache the result
-    profileCache.set(userId, { profile, timestamp: Date.now() })
+    if (PROFILE_IN_MEMORY_CACHE_ENABLED) {
+        setCachedProfile(userId, profile, now)
+    }
 
     return profile
 }
@@ -134,8 +169,9 @@ export async function updateProfile(
         return { success: false, error: error.message }
     }
 
-    // Invalidate cache
-    profileCache.delete(userId)
+    if (PROFILE_IN_MEMORY_CACHE_ENABLED) {
+        profileCache.delete(userId)
+    }
 
     // If username was updated, sync to JWT claims
     if (data.username) {

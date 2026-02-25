@@ -1,12 +1,12 @@
 'use client';
 
 import { useQueryClient } from '@tanstack/react-query';
-import { useCallback } from 'react';
+import { useCallback, useMemo } from 'react';
 import { createClient } from '@/lib/supabase/client';
 
 export function useProjectPrefetch() {
     const queryClient = useQueryClient();
-    const supabase = createClient();
+    const supabase = useMemo(() => createClient(), []);
 
     const prefetchProject = useCallback(async (projectId: string) => {
         await queryClient.prefetchQuery({

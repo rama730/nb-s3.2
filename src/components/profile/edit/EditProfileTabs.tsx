@@ -15,9 +15,11 @@ import { cn } from "@/lib/utils";
 interface EditProfileTabsProps {
     profile: any;
     onChange: (updates: any) => void;
+    onSaveSection?: (section: 'general' | 'experience' | 'education' | 'skills' | 'social') => void;
+    onResetSection?: (section: 'general' | 'experience' | 'education' | 'skills' | 'social') => void;
 }
 
-export function EditProfileTabs({ profile, onChange }: EditProfileTabsProps) {
+export function EditProfileTabs({ profile, onChange, onSaveSection, onResetSection }: EditProfileTabsProps) {
     const { showToast } = useToast();
     const supabase = createSupabaseBrowserClient();
 
@@ -202,12 +204,13 @@ export function EditProfileTabs({ profile, onChange }: EditProfileTabsProps) {
     return (
         <Tabs defaultValue="general" className="w-full h-full flex flex-col">
             <div className="px-5 pt-3">
-                <TabsList className="grid w-full grid-cols-5 h-9 py-0.5">
+                <TabsList className="grid w-full grid-cols-6 h-9 py-0.5">
                     <TabsTrigger value="general" className="text-xs sm:text-sm">General</TabsTrigger>
                     <TabsTrigger value="experience" className="text-xs sm:text-sm">Exp</TabsTrigger>
                     <TabsTrigger value="education" className="text-xs sm:text-sm">Edu</TabsTrigger>
                     <TabsTrigger value="skills" className="text-xs sm:text-sm">Skills</TabsTrigger>
                     <TabsTrigger value="social" className="text-xs sm:text-sm">Social</TabsTrigger>
+                    <TabsTrigger value="preview" className="text-xs sm:text-sm">Preview</TabsTrigger>
                 </TabsList>
             </div>
 
@@ -223,7 +226,13 @@ export function EditProfileTabs({ profile, onChange }: EditProfileTabsProps) {
                         <div className="flex items-center gap-4 pl-0 relative z-10">
                             <div className="w-20 h-20 rounded-2xl bg-zinc-200 dark:bg-zinc-800 border-4 border-white dark:border-zinc-900 overflow-hidden relative group shrink-0">
                                 {formData.avatar_url ? (
-                                    <Image src={formData.avatar_url} alt="Avatar" fill className="object-cover" />
+                                    <Image
+                                        src={formData.avatar_url}
+                                        alt="Avatar"
+                                        fill
+                                        className="object-cover"
+                                        sizes="80px"
+                                    />
                                 ) : (
                                     <div className="w-full h-full flex items-center justify-center text-2xl font-bold text-zinc-400">
                                         {(formData.full_name?.[0] || formData.username?.[0] || "?").toUpperCase()}
@@ -337,6 +346,10 @@ export function EditProfileTabs({ profile, onChange }: EditProfileTabsProps) {
                             </div>
                         </div>
                     </div>
+                    <SectionActions
+                        onSave={() => onSaveSection?.('general')}
+                        onReset={() => onResetSection?.('general')}
+                    />
                 </TabsContent>
 
                 {/* --- EXPERIENCE TAB --- */}
@@ -345,6 +358,10 @@ export function EditProfileTabs({ profile, onChange }: EditProfileTabsProps) {
                         items={formData.experience}
                         onChange={(items) => updateForm('experience', items)}
                         type="experience"
+                    />
+                    <SectionActions
+                        onSave={() => onSaveSection?.('experience')}
+                        onReset={() => onResetSection?.('experience')}
                     />
                 </TabsContent>
 
@@ -355,6 +372,10 @@ export function EditProfileTabs({ profile, onChange }: EditProfileTabsProps) {
                         onChange={(items) => updateForm('education', items)}
                         type="education"
                     />
+                    <SectionActions
+                        onSave={() => onSaveSection?.('education')}
+                        onReset={() => onResetSection?.('education')}
+                    />
                 </TabsContent>
 
                 {/* --- SKILLS TAB --- */}
@@ -362,6 +383,10 @@ export function EditProfileTabs({ profile, onChange }: EditProfileTabsProps) {
                     <SkillsEditor
                         skills={formData.skills}
                         onChange={(skills) => updateForm('skills', skills)}
+                    />
+                    <SectionActions
+                        onSave={() => onSaveSection?.('skills')}
+                        onReset={() => onResetSection?.('skills')}
                     />
                 </TabsContent>
 
@@ -371,10 +396,84 @@ export function EditProfileTabs({ profile, onChange }: EditProfileTabsProps) {
                         links={formData.socialLinks}
                         onChange={(links) => updateForm('socialLinks', links)}
                     />
+                    <SectionActions
+                        onSave={() => onSaveSection?.('social')}
+                        onReset={() => onResetSection?.('social')}
+                    />
+                </TabsContent>
+
+                {/* --- PREVIEW TAB --- */}
+                <TabsContent value="preview" className="space-y-4 mt-0">
+                    <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
+                        <div className="flex items-center gap-3">
+                            <div className="relative w-14 h-14 rounded-xl overflow-hidden bg-zinc-200 dark:bg-zinc-800">
+                                {formData.avatar_url ? (
+                                    <Image
+                                        src={formData.avatar_url}
+                                        alt="Preview avatar"
+                                        fill
+                                        className="object-cover"
+                                        sizes="56px"
+                                    />
+                                ) : (
+                                    <div className="w-full h-full flex items-center justify-center text-lg font-semibold text-zinc-500">
+                                        {(formData.full_name?.[0] || formData.username?.[0] || "?").toUpperCase()}
+                                    </div>
+                                )}
+                            </div>
+                            <div className="min-w-0">
+                                <div className="font-semibold text-zinc-900 dark:text-zinc-100 truncate">
+                                    {formData.full_name || "Your name"}
+                                </div>
+                                <div className="text-xs text-zinc-500 truncate">
+                                    @{formData.username || "username"}
+                                </div>
+                                {formData.headline ? (
+                                    <div className="text-sm text-zinc-600 dark:text-zinc-300 truncate">
+                                        {formData.headline}
+                                    </div>
+                                ) : null}
+                            </div>
+                        </div>
+                        {formData.bio ? (
+                            <p className="mt-3 text-sm text-zinc-700 dark:text-zinc-300 whitespace-pre-wrap">
+                                {formData.bio}
+                            </p>
+                        ) : null}
+                        <div className="mt-3 flex flex-wrap gap-2">
+                            {(formData.skills || []).slice(0, 6).map((skill: string) => (
+                                <span
+                                    key={skill}
+                                    className="px-2.5 py-1 rounded-full text-xs border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800"
+                                >
+                                    {skill}
+                                </span>
+                            ))}
+                        </div>
+                    </div>
                 </TabsContent>
             </div>
         </Tabs>
     );
+}
+
+function SectionActions({
+    onSave,
+    onReset,
+}: {
+    onSave?: () => void;
+    onReset?: () => void;
+}) {
+    return (
+        <div className="pt-2 flex items-center justify-end gap-2">
+            <Button type="button" variant="ghost" size="sm" onClick={onReset} disabled={!onReset}>
+                Reset section
+            </Button>
+            <Button type="button" size="sm" onClick={onSave} disabled={!onSave}>
+                Save section
+            </Button>
+        </div>
+    )
 }
 
 // --- SUB COMPONENTS ---

@@ -1,5 +1,6 @@
 'use client'
 
+import React from 'react'
 import Image from 'next/image'
 import { cn } from '@/lib/utils'
 import { MapPin, Link2, Pencil, MessageSquare, UserPlus, UserCheck, UserMinus, Clock, Shield, Users } from 'lucide-react'
@@ -48,7 +49,7 @@ function PrimaryButton({
     )
 }
 
-export function ProfileHeader({
+export const ProfileHeader = React.memo(function ProfileHeader({
     profile,
     isOwner,
     isAuthenticated,
@@ -121,6 +122,7 @@ export function ProfileHeader({
                                     width={96}
                                     height={96}
                                     className="w-full h-full object-cover"
+                                    sizes="(max-width: 640px) 80px, 96px"
                                     priority={true}
                                 />
                             ) : avatarSrc && isAdaptive ? (
@@ -221,4 +223,4 @@ export function ProfileHeader({
             </div>
         </div>
     )
-}
+})

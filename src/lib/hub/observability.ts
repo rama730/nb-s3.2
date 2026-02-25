@@ -1,3 +1,5 @@
+import { logger } from '@/lib/logger'
+
 interface HubMetricEvent {
     view: string;
     viewerType: 'anon' | 'user';
@@ -18,6 +20,5 @@ const shouldEmit = () => {
 
 export function recordHubMetric(event: HubMetricEvent) {
     if (!shouldEmit()) return;
-    // Structured logs for ingestion by hosting platform log pipelines.
-    console.info('[hub-metric]', JSON.stringify(event));
+    logger.metric('hub.view', { module: 'hub', ...event });
 }

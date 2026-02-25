@@ -1,6 +1,6 @@
 import React from "react";
 import { ProjectNode } from "@/lib/db/schema";
-import { VisibleRow } from "./FileExplorer";
+import { type VisibleRow } from "./utils/buildVisibleRows";
 import { FileTreeRow } from "./FileTreeRow";
 import { Button } from "@/components/ui/button";
 import {
@@ -28,6 +28,7 @@ export interface FileTreeItemContext {
     expandedFolderIds: Record<string, boolean>;
     favorites: Record<string, boolean>;
     taskLinkCounts: Record<string, number>;
+    locksByNodeId: Record<string, { lockedBy: string; lockedByName?: string | null; expiresAt: number }>;
     mode: "default" | "select";
     canEdit: boolean;
     projectName?: string; // For empty state
@@ -129,6 +130,7 @@ export function FileTreeItem({
     const isSelected = context.selectedNodeIds.includes(node.id) || context.selectedNodeId === node.id;
     const isFavorite = !!context.favorites[node.id];
     const linkCount = context.taskLinkCounts[node.id] ?? 0;
+    const lock = context.locksByNodeId[node.id];
 
     const menu =
         context.mode === "select"
@@ -252,19 +254,31 @@ export function FileTreeItem({
             onDrop={context.onDrop}
 
             // Badge: Link Count
-             badge={linkCount > 0 ? (
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    context.onTaskLinksClick(node);
-                  }}
-                  className="text-[9px] px-1 rounded-sm bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 flex-shrink-0 font-mono hover:bg-blue-200 dark:hover:bg-blue-800/50 transition-colors"
-                  title="View linked tasks"
-                >
-                  {linkCount}
-                </button>
-              ) : null}
+             badge={
+                <div className="flex items-center gap-1">
+                  {lock ? (
+                    <span
+                      className="text-[9px] px-1 rounded-sm bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300 flex-shrink-0 font-mono"
+                      title={`Locked by ${lock.lockedByName || lock.lockedBy}`}
+                    >
+                      lock
+                    </span>
+                  ) : null}
+                  {linkCount > 0 ? (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        context.onTaskLinksClick(node);
+                      }}
+                      className="text-[9px] px-1 rounded-sm bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 flex-shrink-0 font-mono hover:bg-blue-200 dark:hover:bg-blue-800/50 transition-colors"
+                      title="View linked tasks"
+                    >
+                      {linkCount}
+                    </button>
+                  ) : null}
+                </div>
+              }
 
             // Menu (Only for trash currently based on original code logic)
             // But 'effectiveMode ===trash' logic was in FileExplorer. 

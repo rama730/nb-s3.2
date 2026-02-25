@@ -2,6 +2,7 @@
 
 import React from "react";
 import { useFilesWorkspaceStore, type EditorSymbol } from "@/stores/filesWorkspaceStore";
+import { SymbolKind } from "@/stores/files/types";
 import { cn } from "@/lib/utils";
 import { Box, Braces, Code2, Variable, FunctionSquare } from "lucide-react";
 
@@ -10,20 +11,16 @@ interface OutlinePanelProps {
   className?: string;
 }
 
-// Map monaco symbol kinds to icons
-const SymbolIcon = ({ kind }: { kind: number }) => {
-  // Monaco kinds:
-  // 5 = Class, 11 = Function, 12 = Variable, 13 = Constant, 18 = Interface, 10 = Method, ...
-  // Full mapping is complex, using simplified visual mapping.
-  // 1 = File, 2 = Module, 3 = Namespace, 4 = Package
-  // 5 = Class, 6 = Method, 7 = Property, 8 = Field, 9 = Constructor
-  // 10 = Enum, 11 = Interface, 12 = Function, 13 = Variable, 14 = Constant
-  
-  if (kind === 5 || kind === 18) return <Box className="w-3.5 h-3.5 text-orange-500" />; // Class/Interface
-  if (kind === 6 || kind === 11 || kind === 12) return <FunctionSquare className="w-3.5 h-3.5 text-purple-500" />; // Function/Method
-  if (kind === 13 || kind === 14 || kind === 7 || kind === 8) return <Variable className="w-3.5 h-3.5 text-blue-500" />; // Var/Field
-  if (kind === 10) return <Braces className="w-3.5 h-3.5 text-yellow-500" />; // Enum
-  
+const SymbolIcon = ({ kind }: { kind: SymbolKind }) => {
+  if (kind === SymbolKind.Class || kind === SymbolKind.Interface)
+    return <Box className="w-3.5 h-3.5 text-orange-500" />;
+  if (kind === SymbolKind.Method || kind === SymbolKind.Function)
+    return <FunctionSquare className="w-3.5 h-3.5 text-purple-500" />;
+  if (kind === SymbolKind.Variable || kind === SymbolKind.Constant || kind === SymbolKind.Property || kind === SymbolKind.Field)
+    return <Variable className="w-3.5 h-3.5 text-blue-500" />;
+  if (kind === SymbolKind.Enum)
+    return <Braces className="w-3.5 h-3.5 text-yellow-500" />;
+
   return <Code2 className="w-3.5 h-3.5 text-zinc-500" />;
 };
 

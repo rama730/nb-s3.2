@@ -365,7 +365,8 @@ export function usePendingRequests(limit = 20) {
                 stats: incomingOk.stats || sentOk.stats || EMPTY_STATS,
             };
         },
-        staleTime: 30_000,
+        staleTime: 45_000,
+        gcTime: 5 * 60 * 1000,
         refetchInterval: 30_000,
     });
 }

@@ -1,15 +1,9 @@
 "use client";
 
-import React, { useMemo } from "react";
-import CodeMirror from "@uiw/react-codemirror";
+import React, { useMemo, useRef, useEffect, useState } from "react";
+import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { EditorView, keymap } from "@codemirror/view";
-import { javascript } from "@codemirror/lang-javascript";
-import { python } from "@codemirror/lang-python";
-import { sql } from "@codemirror/lang-sql";
-import { css } from "@codemirror/lang-css";
-import { html } from "@codemirror/lang-html";
-import { markdown } from "@codemirror/lang-markdown";
-import { json } from "@codemirror/lang-json";
+import type { Extension } from "@codemirror/state";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { search, searchKeymap } from "@codemirror/search";
 import { showMinimap } from "@replit/codemirror-minimap";
@@ -26,31 +20,41 @@ export interface CodeEditorProps {
   wordWrap?: boolean;
   fontSize?: number;
   minimapEnabled?: boolean;
+  modelPath?: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  onSymbolsChange?: (symbols: any[]) => void;
+  scrollToLine?: number | null;
 }
 
-function getExtension(filename: string) {
-  const ext = filename.split(".").pop()?.toLowerCase();
-  switch (ext) {
-    case "ts":
-    case "tsx":
-      return javascript({ typescript: true, jsx: true });
-    case "js":
-    case "jsx":
-      return javascript({ typescript: false, jsx: true });
-    case "json":
-      return json();
-    case "css":
-      return css();
-    case "html":
-      return html();
-    case "md":
-      return markdown();
-    case "sql":
-      return sql();
-    case "py":
-      return python();
-    default:
-      return null;
+function getFileExtension(filename: string): string {
+  return filename.split(".").pop()?.toLowerCase() ?? "";
+}
+
+async function loadLanguageExtension(ext: string): Promise<Extension | null> {
+  try {
+    switch (ext) {
+      case "ts": case "tsx": case "js": case "jsx":
+        return (await import("@codemirror/lang-javascript")).javascript({
+          jsx: ext.includes("x"),
+          typescript: ext.startsWith("t"),
+        });
+      case "py":
+        return (await import("@codemirror/lang-python")).python();
+      case "sql":
+        return (await import("@codemirror/lang-sql")).sql();
+      case "css":
+        return (await import("@codemirror/lang-css")).css();
+      case "html":
+        return (await import("@codemirror/lang-html")).html();
+      case "md": case "mdx":
+        return (await import("@codemirror/lang-markdown")).markdown();
+      case "json":
+        return (await import("@codemirror/lang-json")).json();
+      default:
+        return null;
+    }
+  } catch {
+    return null;
   }
 }
 
@@ -64,11 +68,33 @@ export default function CodeEditor({
   wordWrap = true,
   fontSize = 14,
   minimapEnabled = false,
+  scrollToLine,
 }: CodeEditorProps) {
+  const editorRef = useRef<ReactCodeMirrorRef>(null);
+  const [langExtension, setLangExtension] = useState<Extension | null>(null);
+
+  const ext = getFileExtension(filename);
+  useEffect(() => {
+    let cancelled = false;
+    setLangExtension(null);
+    loadLanguageExtension(ext).then((loaded) => {
+      if (!cancelled) setLangExtension(loaded);
+    });
+    return () => { cancelled = true; };
+  }, [ext]);
+
+  useEffect(() => {
+    if (!scrollToLine || !editorRef.current?.view) return;
+    const view = editorRef.current.view;
+    const line = view.state.doc.line(Math.min(scrollToLine, view.state.doc.lines));
+    view.dispatch({
+      effects: EditorView.scrollIntoView(line.from, { y: 'center' }),
+    });
+  }, [scrollToLine]);
+
   const extensions = useMemo(() => {
-    const lang = getExtension(filename);
     return [
-      ...(lang ? [lang] : []),
+      ...(langExtension ? [langExtension] : []),
       ...(wordWrap ? [EditorView.lineWrapping] : []),
       EditorView.editable.of(!readOnly),
       search({ top: true }),
@@ -85,10 +111,11 @@ export default function CodeEditor({
           ]
         : []),
     ];
-  }, [filename, fontSize, minimapEnabled, readOnly, wordWrap]);
+  }, [langExtension, fontSize, minimapEnabled, readOnly, wordWrap]);
 
   return (
     <CodeMirror
+      ref={editorRef}
       value={value}
       onChange={(nextValue) => onChange(nextValue)}
       theme={theme === "dark" ? oneDark : undefined}

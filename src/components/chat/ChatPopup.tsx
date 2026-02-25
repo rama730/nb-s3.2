@@ -3,7 +3,7 @@
 import { useMemo } from 'react';
 import { usePathname } from 'next/navigation';
 import Image from 'next/image';
-import { useChatStore } from '@/stores/chatStore';
+import { useChatStore, selectUnreadTotal } from '@/stores/chatStore';
 import { setConversationArchived, setConversationMuted } from '@/app/actions/messaging';
 import { MessageThread } from './MessageThread';
 import { MessageInput } from './MessageInput';
@@ -36,7 +36,7 @@ export function ChatPopup() {
     const isPopupOpen = useChatStore(state => state.isPopupOpen);
     const isPopupMinimized = useChatStore(state => state.isPopupMinimized);
     const activeConversationId = useChatStore(state => state.activeConversationId);
-    const totalUnread = useChatStore(state => state.totalUnread);
+    const totalUnread = useChatStore(selectUnreadTotal);
     const conversations = useChatStore(state => state.conversations);
     const messagesByConversation = useChatStore(state => state.messagesByConversation);
 

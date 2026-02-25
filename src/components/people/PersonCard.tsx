@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { MapPin, Briefcase, Loader2, Check, Clock, UserPlus, X, Users } from "lucide-react";
@@ -18,7 +18,7 @@ interface PersonCardProps {
     variant?: "default" | "spotlight";
 }
 
-export default function PersonCard({ profile, onConnect, onDismiss, isConnecting, variant = "default" }: PersonCardProps) {
+function PersonCard({ profile, onConnect, onDismiss, isConnecting, variant = "default" }: PersonCardProps) {
     const [isHovered, setIsHovered] = useState(false);
     const [localStatus, setLocalStatus] = useState(profile.connectionStatus);
 
@@ -160,6 +160,8 @@ export default function PersonCard({ profile, onConnect, onDismiss, isConnecting
                                     "ml-auto text-[10px] px-1.5 py-0.5 rounded-full capitalize",
                                     profile.projects[0].status === "active"
                                         ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
+                                        : profile.projects[0].status === "completed"
+                                            ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
                                         : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
                                 )}>
                                     {profile.projects[0].status || "draft"}
@@ -317,3 +319,5 @@ export default function PersonCard({ profile, onConnect, onDismiss, isConnecting
         </motion.div>
     );
 }
+
+export default React.memo(PersonCard);

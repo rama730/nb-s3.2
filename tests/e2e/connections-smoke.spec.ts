@@ -1,27 +1,12 @@
 import { expect, test } from "@playwright/test";
-
-const email = process.env.E2E_USER_EMAIL;
-const password = process.env.E2E_USER_PASSWORD;
-const hasE2ECredentials = !!email && !!password;
-
-async function login(page: import("@playwright/test").Page) {
-    if (!hasE2ECredentials || !email || !password) {
-        throw new Error("E2E_USER_EMAIL and E2E_USER_PASSWORD must be set for this test.");
-    }
-
-    await page.goto("/login");
-    await page.getByLabel("Email").fill(email);
-    await page.getByLabel("Password").fill(password);
-    await page.getByRole("button", { name: "Sign in" }).click();
-    await page.waitForURL("**/hub", { timeout: 30000 });
-}
+import { hasE2ECredentials, login } from "./_helpers/auth";
+import { attachPageMonitoring } from "./_helpers/monitoring";
 
 test.describe("Connections smoke matrix", () => {
     test.skip(!hasE2ECredentials, "E2E_USER_EMAIL and E2E_USER_PASSWORD are required.");
 
     test("discover/network/requests tabs load and actions are stable", async ({ page }) => {
-        const runtimeErrors: string[] = [];
-        page.on("pageerror", (error) => runtimeErrors.push(error.message));
+        const monitor = attachPageMonitoring(page);
 
         await login(page);
 
@@ -61,6 +46,7 @@ test.describe("Connections smoke matrix", () => {
             await expect(rejectAllButton).toBeVisible();
         }
 
-        expect(runtimeErrors).toEqual([]);
+        await monitor.assertNoViolations();
+        monitor.detach();
     });
 });

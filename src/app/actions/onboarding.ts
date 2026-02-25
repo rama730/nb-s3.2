@@ -1,14 +1,39 @@
 'use server'
 
+import { db } from '@/lib/db'
+import { onboardingDrafts, onboardingEvents, onboardingSubmissions, profiles, reservedUsernames } from '@/lib/db/schema'
+import { onboardingError, type OnboardingError } from '@/lib/onboarding/errors'
+import { checkUsernameAvailabilityWithClient } from '@/lib/onboarding/username-check'
+import { consumeRateLimit } from '@/lib/security/rate-limit'
 import { createClient } from '@/lib/supabase/server'
+import type { OnboardingPayloadInput } from '@/lib/validations/onboarding'
+import { normalizeOnboardingPayload } from '@/lib/validations/onboarding'
+import { normalizeUsername, sanitizeUsernameInput, validateUsername } from '@/lib/validations/username'
+import { and, eq, inArray, isNotNull, sql } from 'drizzle-orm'
+import { headers } from 'next/headers'
 
-/**
- * Complete onboarding - save profile with username
- * Syncs username to JWT claims for fast middleware checks
- */
-export async function completeOnboarding(data: {
-    username: string
-    fullName: string
+const ONBOARDING_COMPLETE_LIMIT = 10
+const ONBOARDING_COMPLETE_WINDOW_SECONDS = 60
+const ONBOARDING_COMPLETE_IP_LIMIT = 30
+const ONBOARDING_COMPLETE_FINGERPRINT_LIMIT = 20
+const ONBOARDING_IDEMPOTENCY_MIN_CHARS = 12
+const ONBOARDING_IDEMPOTENCY_MAX_CHARS = 80
+const ONBOARDING_PROCESSING_STALE_MS = 60_000
+const ONBOARDING_STEP_MIN = 1
+const ONBOARDING_STEP_MAX = 4
+const MAX_DRAFT_TAG_ITEMS = 25
+const MAX_DRAFT_TAG_ITEM_CHARS = 32
+const MAX_DRAFT_HEADLINE_CHARS = 120
+const MAX_DRAFT_BIO_CHARS = 500
+const MAX_DRAFT_LOCATION_CHARS = 120
+const MAX_DRAFT_WEBSITE_CHARS = 200
+const MAX_DRAFT_FULL_NAME_CHARS = 80
+
+type OnboardingVisibility = 'public' | 'connections' | 'private'
+
+type DraftPayload = {
+    username?: string
+    fullName?: string
     avatarUrl?: string
     headline?: string
     bio?: string
@@ -16,151 +41,889 @@ export async function completeOnboarding(data: {
     website?: string
     skills?: string[]
     interests?: string[]
-    visibility?: 'public' | 'connections' | 'private'
-}): Promise<{ success: boolean; error?: string }> {
+    visibility?: OnboardingVisibility
+}
+
+function clampStep(step: number): number {
+    if (!Number.isFinite(step)) return ONBOARDING_STEP_MIN
+    return Math.min(ONBOARDING_STEP_MAX, Math.max(ONBOARDING_STEP_MIN, Math.floor(step)))
+}
+
+function trimOptionalString(value: unknown, maxLength: number): string | undefined {
+    if (typeof value !== 'string') return undefined
+    const normalized = value.trim().slice(0, maxLength)
+    return normalized.length > 0 ? normalized : undefined
+}
+
+function sanitizeDraftTagList(value: unknown): string[] | undefined {
+    if (!Array.isArray(value)) return undefined
+    const seen = new Set<string>()
+    const list: string[] = []
+
+    for (const item of value) {
+        if (typeof item !== 'string') continue
+        const normalized = item.trim().slice(0, MAX_DRAFT_TAG_ITEM_CHARS)
+        if (!normalized) continue
+        const key = normalized.toLowerCase()
+        if (seen.has(key)) continue
+        seen.add(key)
+        list.push(normalized)
+        if (list.length >= MAX_DRAFT_TAG_ITEMS) break
+    }
+
+    return list
+}
+
+function sanitizeOnboardingDraft(input: unknown): DraftPayload {
+    const source = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>
+    const visibility = source.visibility
+    return {
+        username: typeof source.username === 'string' ? sanitizeUsernameInput(source.username) : undefined,
+        fullName: trimOptionalString(source.fullName, MAX_DRAFT_FULL_NAME_CHARS),
+        avatarUrl: trimOptionalString(source.avatarUrl, 2000),
+        headline: trimOptionalString(source.headline, MAX_DRAFT_HEADLINE_CHARS),
+        bio: trimOptionalString(source.bio, MAX_DRAFT_BIO_CHARS),
+        location: trimOptionalString(source.location, MAX_DRAFT_LOCATION_CHARS),
+        website: trimOptionalString(source.website, MAX_DRAFT_WEBSITE_CHARS),
+        skills: sanitizeDraftTagList(source.skills),
+        interests: sanitizeDraftTagList(source.interests),
+        visibility:
+            visibility === 'public' || visibility === 'connections' || visibility === 'private'
+                ? visibility
+                : undefined,
+    }
+}
+
+function sanitizeTelemetryMetadata(input: unknown): Record<string, unknown> {
+    if (!input || typeof input !== 'object') return {}
+    const entries = Object.entries(input as Record<string, unknown>).slice(0, 20)
+    const metadata: Record<string, unknown> = {}
+    for (const [key, value] of entries) {
+        if (!key) continue
+        if (typeof value === 'string') {
+            metadata[key] = value.slice(0, 300)
+            continue
+        }
+        if (typeof value === 'number' || typeof value === 'boolean' || value === null) {
+            metadata[key] = value
+            continue
+        }
+    }
+    return metadata
+}
+
+function toLegacyErrorMessage(error: OnboardingError | undefined, fallback: string): string {
+    return error?.message || fallback
+}
+
+function parseIdempotencyKey(value: unknown): string | null {
+    if (typeof value !== 'string') return null
+    const normalized = value.trim()
+    if (normalized.length < ONBOARDING_IDEMPOTENCY_MIN_CHARS) return null
+    if (normalized.length > ONBOARDING_IDEMPOTENCY_MAX_CHARS) return null
+    if (!/^[a-zA-Z0-9:_-]+$/.test(normalized)) return null
+    return normalized
+}
+
+function buildOnboardingCompleteRateLimitKeys(params: {
+    userId: string
+    ipAddress: string
+    userAgent: string
+}) {
+    const ua = params.userAgent.toLowerCase().slice(0, 120) || 'unknown'
+    return {
+        user: `onboarding:complete:user:${params.userId}`,
+        ip: `onboarding:complete:ip:${params.ipAddress}`,
+        fingerprint: `onboarding:complete:fingerprint:${params.ipAddress}:${ua}`,
+    }
+}
+
+function mapOnboardingPersistenceError(error: unknown): OnboardingError {
+    const code = (error as { code?: string })?.code
+    if (code === '23505') {
+        return onboardingError('USERNAME_TAKEN', 'Username is already taken')
+    }
+    if (code === '23514') {
+        return onboardingError('USERNAME_INVALID', 'Username is reserved or invalid')
+    }
+    if (code === '22P02') {
+        return onboardingError('INVALID_INPUT', 'Invalid onboarding input')
+    }
+    return onboardingError('DB_ERROR', 'Unable to complete onboarding right now', true)
+}
+
+async function getViewerIdentity() {
+    const supabase = await createClient()
+    const [{ data: authData }, headerStore] = await Promise.all([
+        supabase.auth.getUser(),
+        headers(),
+    ])
+
+    const user = authData.user || null
+    const ipAddress = headerStore.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown'
+    const userAgent = headerStore.get('user-agent') || 'unknown'
+    const viewerKey = user?.id || `anon:${ipAddress}`
+
+    return {
+        supabase,
+        user,
+        ipAddress,
+        userAgent,
+        viewerKey,
+    }
+}
+
+async function syncOnboardingClaims(params: {
+    supabase: Awaited<ReturnType<typeof createClient>>
+    username: string
+    fullName: string
+    avatarUrl?: string
+}): Promise<boolean> {
+    const payload = {
+        data: {
+            username: params.username,
+            onboarded: true,
+            full_name: params.fullName,
+            avatar_url: params.avatarUrl || null,
+        },
+    }
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+        const { error } = await params.supabase.auth.updateUser(payload)
+        if (!error) return true
+        console.error('Error syncing onboarding claims (attempt):', attempt + 1, error.message)
+    }
+    return false
+}
+
+async function ensureUsernameIsAvailable(params: {
+    username: string
+    userId: string
+}) {
     try {
-        const supabase = await createClient()
+        const normalized = normalizeUsername(params.username)
+        const [reserved, conflict] = await Promise.all([
+            db.query.reservedUsernames.findFirst({
+                where: eq(reservedUsernames.username, normalized),
+                columns: { username: true },
+            }),
+            db.query.profiles.findFirst({
+                where: and(
+                    sql`lower(${profiles.username}) = ${normalized}`,
+                    sql`${profiles.id} <> ${params.userId}`,
+                    isNotNull(profiles.username)
+                ),
+                columns: { id: true },
+            }),
+        ])
 
-        // Validate username format first (synchronous)
-        if (!data.username || data.username.length < 3) {
-            return { success: false, error: 'Username must be at least 3 characters' }
-        }
-
-        if (data.username.length > 20) {
-            return { success: false, error: 'Username must be 20 characters or less' }
-        }
-
-        if (!/^[a-z0-9_]+$/.test(data.username)) {
-            return { success: false, error: 'Only lowercase letters, numbers, and underscores allowed' }
-        }
-
-        // Parallelize Auth Check and Database Availability Check ("Fast Showing")
-        const [authResult, usernameResult] = await Promise.all([
-            supabase.auth.getUser(),
-            supabase
-                .from('profiles')
-                .select('id')
-                .eq('username', data.username)
-                .maybeSingle()
-        ]);
-
-        const { data: { user }, error: authError } = authResult;
-
-        if (authError || !user) {
-            console.error('Auth error:', authError)
-            return { success: false, error: 'Session expired. Please login again.' }
-        }
-
-        // Check availability result
-        const { data: existingUser } = usernameResult;
-
-        // Ensure we don't block own user (though upsert handles it by ID, this check prevents claiming ANOTHER user's username)
-        // Note: existingUser finding might be OURSELVES if we already have a profile with this username? 
-        // Logic says: .neq('id', user.id) is hard because we don't have user.id in the parallel call yet.
-        // Optimization: We can check ID match after we get both.
-
-        if (existingUser && existingUser.id !== user.id) {
-            return { success: false, error: 'Username is already taken' }
-        }
-
-        // Update profile using upsert
-        const { error: profileError } = await supabase
-            .from('profiles')
-            .upsert({
-                id: user.id,
-                email: user.email!,
-                username: data.username,
-                full_name: data.fullName,
-                avatar_url: data.avatarUrl || user.user_metadata?.avatar_url,
-                headline: data.headline || null,
-                bio: data.bio || null,
-                location: data.location || null,
-                website: data.website || null,
-                skills: data.skills || [],
-                interests: data.interests || [],
-                visibility: data.visibility || 'public',
-                updated_at: new Date().toISOString(),
-            })
-
-        if (profileError) {
-            console.error('Error saving profile:', profileError)
-            if (profileError.code === 'PGRST205') {
-                return { success: false, error: 'Database not set up. Please run npm run db:setup' }
+        if (reserved) {
+            return {
+                ok: false as const,
+                error: onboardingError('USERNAME_RESERVED', 'This username is reserved'),
             }
-            if (profileError.code === '23505') {
-                return { success: false, error: 'Username is already taken' }
-            }
-            return { success: false, error: profileError.message }
         }
 
-        // Sync username to JWT claims for fast middleware checks
-        const { error: updateError } = await supabase.auth.updateUser({
-            data: {
-                username: data.username,
-                onboarded: true,
-                full_name: data.fullName,
-                avatar_url: data.avatarUrl || user.user_metadata?.avatar_url,
+        if (conflict) {
+            return {
+                ok: false as const,
+                error: onboardingError('USERNAME_TAKEN', 'Username is already taken'),
             }
+        }
+
+        return { ok: true as const }
+    } catch (error) {
+        console.error('Error checking username availability:', error)
+        return {
+            ok: false as const,
+            error: onboardingError('DB_ERROR', 'Unable to verify username availability', true),
+        }
+    }
+}
+
+function generateCandidateUsernames(fullName: string): string[] {
+    const normalizedName = fullName.trim().toLowerCase()
+    const parts = normalizedName
+        .split(/\s+/)
+        .map((value) => value.replace(/[^a-z0-9]/g, ''))
+        .filter(Boolean)
+
+    if (parts.length === 0) return []
+
+    const first = parts[0] || ''
+    const last = parts[parts.length - 1] || ''
+    const currentYear = String(new Date().getFullYear())
+    const currentYearShort = currentYear.slice(-2)
+
+    const rawCandidates = [
+        first,
+        `${first}${last}`,
+        `${first}_${last}`,
+        `${first}${currentYearShort}`,
+        `${first}_${currentYearShort}`,
+        `${first}${currentYear}`,
+        `${first}${Math.floor(100 + Math.random() * 900)}`,
+    ]
+
+    const unique = new Set<string>()
+    for (const candidate of rawCandidates) {
+        const sanitized = sanitizeUsernameInput(candidate)
+        if (!sanitized) continue
+        if (!validateUsername(sanitized).valid) continue
+        unique.add(sanitized)
+    }
+    return Array.from(unique)
+}
+
+async function beginOnboardingSubmission(params: {
+    userId: string
+    idempotencyKey: string
+}): Promise<
+    | { mode: 'process'; submissionId: string }
+    | { mode: 'replay'; response: { success: boolean; needsMetadataSync?: boolean; error?: OnboardingError } }
+    | { mode: 'in-progress' }
+> {
+    const now = new Date()
+    const inserted = await db
+        .insert(onboardingSubmissions)
+        .values({
+            userId: params.userId,
+            idempotencyKey: params.idempotencyKey,
+            status: 'processing',
+            response: {},
+            createdAt: now,
+            updatedAt: now,
+        })
+        .onConflictDoNothing()
+        .returning({ id: onboardingSubmissions.id })
+
+    if (inserted.length > 0) {
+        return { mode: 'process', submissionId: inserted[0].id }
+    }
+
+    const existing = await db.query.onboardingSubmissions.findFirst({
+        where: and(
+            eq(onboardingSubmissions.userId, params.userId),
+            eq(onboardingSubmissions.idempotencyKey, params.idempotencyKey)
+        ),
+        columns: {
+            id: true,
+            status: true,
+            response: true,
+            updatedAt: true,
+        },
+    })
+
+    if (!existing) {
+        return { mode: 'in-progress' }
+    }
+
+    if (existing.status === 'completed') {
+        const response = (existing.response || {}) as {
+            success?: boolean
+            needsMetadataSync?: boolean
+            error?: OnboardingError
+        }
+        return {
+            mode: 'replay',
+            response: {
+                success: response.success === true,
+                needsMetadataSync: response.needsMetadataSync === true,
+                error: response.error,
+            },
+        }
+    }
+
+    const stale = now.getTime() - existing.updatedAt.getTime() > ONBOARDING_PROCESSING_STALE_MS
+    if (!stale) {
+        return { mode: 'in-progress' }
+    }
+
+    const reacquired = await db
+        .update(onboardingSubmissions)
+        .set({
+            status: 'processing',
+            response: {},
+            updatedAt: now,
+        })
+        .where(
+            and(
+                eq(onboardingSubmissions.id, existing.id),
+                eq(onboardingSubmissions.status, 'processing')
+            )
+        )
+        .returning({ id: onboardingSubmissions.id })
+
+    if (reacquired.length === 0) {
+        return { mode: 'in-progress' }
+    }
+
+    return { mode: 'process', submissionId: reacquired[0].id }
+}
+
+async function finalizeOnboardingSubmission(params: {
+    submissionId: string
+    status: 'completed' | 'failed'
+    response: Record<string, unknown>
+}) {
+    await db
+        .update(onboardingSubmissions)
+        .set({
+            status: params.status,
+            response: params.response,
+            updatedAt: new Date(),
+        })
+        .where(eq(onboardingSubmissions.id, params.submissionId))
+}
+
+export async function completeOnboarding(
+    data: OnboardingPayloadInput & { idempotencyKey?: string }
+): Promise<{
+    success: boolean
+    error?: string
+    errorDetails?: OnboardingError
+    needsMetadataSync?: boolean
+}> {
+    let submissionId: string | null = null
+    try {
+        const normalizedUsername = normalizeUsername(data.username)
+        const usernameValidation = validateUsername(normalizedUsername)
+        if (!usernameValidation.valid) {
+            const error = onboardingError('USERNAME_INVALID', usernameValidation.message)
+            return { success: false, error: error.message, errorDetails: error }
+        }
+
+        let payload: ReturnType<typeof normalizeOnboardingPayload>
+        try {
+            payload = normalizeOnboardingPayload({ ...data, username: normalizedUsername })
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Invalid onboarding data'
+            const details = onboardingError('INVALID_INPUT', message)
+            return { success: false, error: details.message, errorDetails: details }
+        }
+
+        const { supabase, user, ipAddress, userAgent } = await getViewerIdentity()
+        if (!user) {
+            const error = onboardingError('NOT_AUTHENTICATED', 'Session expired. Please login again.')
+            return { success: false, error: error.message, errorDetails: error }
+        }
+
+        const rateKeys = buildOnboardingCompleteRateLimitKeys({
+            userId: user.id,
+            ipAddress,
+            userAgent,
+        })
+        const [userRate, ipRate, fingerprintRate] = await Promise.all([
+            consumeRateLimit(rateKeys.user, ONBOARDING_COMPLETE_LIMIT, ONBOARDING_COMPLETE_WINDOW_SECONDS),
+            consumeRateLimit(rateKeys.ip, ONBOARDING_COMPLETE_IP_LIMIT, ONBOARDING_COMPLETE_WINDOW_SECONDS),
+            consumeRateLimit(
+                rateKeys.fingerprint,
+                ONBOARDING_COMPLETE_FINGERPRINT_LIMIT,
+                ONBOARDING_COMPLETE_WINDOW_SECONDS
+            ),
+        ])
+        if (!userRate.allowed || !ipRate.allowed || !fingerprintRate.allowed) {
+            const error = onboardingError(
+                'RATE_LIMITED',
+                'Too many attempts. Please wait a minute and try again.',
+                true
+            )
+            return { success: false, error: error.message, errorDetails: error }
+        }
+
+        const idempotencyKey =
+            parseIdempotencyKey(data.idempotencyKey) ||
+            `fallback:${user.id}:${payload.username}`
+        const submission = await beginOnboardingSubmission({
+            userId: user.id,
+            idempotencyKey,
+        })
+        if (submission.mode === 'replay') {
+            if (submission.response.success) {
+                return {
+                    success: true,
+                    needsMetadataSync: submission.response.needsMetadataSync,
+                }
+            }
+            return {
+                success: false,
+                error: toLegacyErrorMessage(submission.response.error, 'Unable to complete onboarding'),
+                errorDetails: submission.response.error,
+            }
+        }
+        if (submission.mode === 'in-progress') {
+            const error = onboardingError('SUBMISSION_IN_PROGRESS', 'Your onboarding request is already processing.', true)
+            return { success: false, error: error.message, errorDetails: error }
+        }
+        submissionId = submission.submissionId
+
+        const availability = await ensureUsernameIsAvailable({
+            username: payload.username,
+            userId: user.id,
+        })
+        if (!availability.ok) {
+            if (submissionId) {
+                await finalizeOnboardingSubmission({
+                    submissionId,
+                    status: 'failed',
+                    response: { success: false, error: availability.error },
+                })
+            }
+            return {
+                success: false,
+                error: availability.error.message,
+                errorDetails: availability.error,
+            }
+        }
+
+        if (!user.email) {
+            const error = onboardingError('INVALID_INPUT', 'Account email is missing. Please re-authenticate.')
+            if (submissionId) {
+                await finalizeOnboardingSubmission({
+                    submissionId,
+                    status: 'failed',
+                    response: { success: false, error },
+                })
+            }
+            return { success: false, error: error.message, errorDetails: error }
+        }
+        const userEmail = user.email
+
+        const avatarUrl = payload.avatarUrl || user.user_metadata?.avatar_url || null
+        await db.transaction(async (tx) => {
+            await tx
+                .insert(profiles)
+                .values({
+                    id: user.id,
+                    email: userEmail,
+                    username: payload.username,
+                    fullName: payload.fullName,
+                    avatarUrl,
+                    headline: payload.headline || null,
+                    bio: payload.bio || null,
+                    location: payload.location || null,
+                    website: payload.website || null,
+                    skills: payload.skills,
+                    interests: payload.interests,
+                    visibility: payload.visibility,
+                    updatedAt: new Date(),
+                })
+                .onConflictDoUpdate({
+                    target: profiles.id,
+                    set: {
+                        email: userEmail,
+                        username: payload.username,
+                        fullName: payload.fullName,
+                        avatarUrl,
+                        headline: payload.headline || null,
+                        bio: payload.bio || null,
+                        location: payload.location || null,
+                        website: payload.website || null,
+                        skills: payload.skills,
+                        interests: payload.interests,
+                        visibility: payload.visibility,
+                        updatedAt: new Date(),
+                    },
+                })
+
+            await tx
+                .delete(onboardingDrafts)
+                .where(eq(onboardingDrafts.userId, user.id))
+
+            await tx
+                .insert(onboardingEvents)
+                .values({
+                    userId: user.id,
+                    eventType: 'submit_profile_saved',
+                    step: ONBOARDING_STEP_MAX,
+                    metadata: {
+                        visibility: payload.visibility,
+                        hasHeadline: Boolean(payload.headline),
+                        hasBio: Boolean(payload.bio),
+                        skillsCount: payload.skills.length,
+                        interestsCount: payload.interests.length,
+                    },
+                })
         })
 
-        if (updateError) {
-            console.error('Error syncing to JWT:', updateError)
-            // Don't fail - profile is saved
+        const metadataSynced = await syncOnboardingClaims({
+            supabase,
+            username: payload.username,
+            fullName: payload.fullName,
+            avatarUrl: avatarUrl || undefined,
+        })
+
+        await db.insert(onboardingEvents).values({
+            userId: user.id,
+            eventType: metadataSynced ? 'submit_success' : 'submit_success_needs_claim_sync',
+            step: ONBOARDING_STEP_MAX,
+            metadata: {
+                needsMetadataSync: !metadataSynced,
+            },
+        })
+
+        if (submissionId) {
+            await finalizeOnboardingSubmission({
+                submissionId,
+                status: 'completed',
+                response: { success: true, needsMetadataSync: !metadataSynced },
+            })
         }
 
-        return { success: true }
+        return { success: true, needsMetadataSync: !metadataSynced }
     } catch (error) {
         console.error('Error completing onboarding:', error)
-        return { success: false, error: 'An unexpected error occurred' }
+        const details = mapOnboardingPersistenceError(error)
+        if (submissionId) {
+            await finalizeOnboardingSubmission({
+                submissionId,
+                status: 'failed',
+                response: { success: false, error: details },
+            })
+        }
+        return { success: false, error: details.message, errorDetails: details }
+    }
+}
+
+export async function repairOnboardingClaims(): Promise<{ success: boolean; error?: string }> {
+    try {
+        const supabase = await createClient()
+        const { data: authData } = await supabase.auth.getUser()
+        const user = authData.user
+        if (!user) return { success: false, error: 'Not authenticated' }
+
+        const { data: profile, error: profileError } = await supabase
+            .from('profiles')
+            .select('username, full_name, avatar_url')
+            .eq('id', user.id)
+            .maybeSingle()
+
+        if (profileError) {
+            console.error('Error fetching profile for claim repair:', profileError)
+            return { success: false, error: 'Unable to read profile for metadata sync' }
+        }
+        if (!profile?.username) {
+            return { success: false, error: 'Profile username not found' }
+        }
+
+        const synced = await syncOnboardingClaims({
+            supabase,
+            username: profile.username,
+            fullName: profile.full_name || user.user_metadata?.full_name || user.email || 'User',
+            avatarUrl: profile.avatar_url || undefined,
+        })
+
+        return synced
+            ? { success: true }
+            : { success: false, error: 'Unable to sync metadata claims' }
+    } catch (error) {
+        console.error('Error repairing onboarding claims:', error)
+        return { success: false, error: 'Unable to sync metadata claims' }
     }
 }
 
 /**
- * Check if username is available
+ * Check if username is available.
  */
 export async function checkUsernameAvailability(username: string): Promise<{
     available: boolean
     message: string
+    code?: OnboardingError['code']
 }> {
-    // Format validation first
-    if (!username || username.length < 3) {
-        return { available: false, message: 'Username must be at least 3 characters' }
-    }
-
-    if (username.length > 20) {
-        return { available: false, message: 'Username must be 20 characters or less' }
-    }
-
-    if (!/^[a-z0-9_]+$/.test(username)) {
-        return { available: false, message: 'Only lowercase letters, numbers, and underscores' }
-    }
-
-    const reserved = ['admin', 'edge', 'api', 'www', 'mail', 'support', 'help', 'settings', 'profile', 'login', 'signup', 'auth', 'onboarding']
-    if (reserved.includes(username)) {
-        return { available: false, message: 'This username is reserved' }
-    }
-
     try {
-        const supabase = await createClient()
-
-        const { data, error } = await supabase
-            .from('profiles')
-            .select('id')
-            .eq('username', username)
-            .limit(1)
-
-        if (error) {
-            console.error('Error checking username:', error)
-            return { available: false, message: 'Error checking availability' }
-        }
-
-        if (data && data.length > 0) {
-            return { available: false, message: 'Username is already taken' }
-        }
-
-        return { available: true, message: 'Username is available!' }
+        const { supabase, user, viewerKey, ipAddress, userAgent } = await getViewerIdentity()
+        const result = await checkUsernameAvailabilityWithClient({
+            supabase,
+            username,
+            viewerKey,
+            viewerId: user?.id || null,
+            ipAddress,
+            userAgent,
+        })
+        return { available: result.available, message: result.message, code: result.code }
     } catch (error) {
         console.error('Error checking username:', error)
-        return { available: false, message: 'Error checking availability' }
+        return { available: false, message: 'Error checking availability', code: 'DB_ERROR' }
+    }
+}
+
+export async function getUsernameSuggestions(fullName: string): Promise<{ suggestions: string[] }> {
+    const candidates = generateCandidateUsernames(fullName).slice(0, 12)
+    if (candidates.length === 0) return { suggestions: [] }
+
+    const normalizedCandidates = candidates.map((candidate) => normalizeUsername(candidate))
+    try {
+        const [takenRows, reservedRows] = await Promise.all([
+            db
+                .select({
+                    username: sql<string>`lower(${profiles.username})`,
+                })
+                .from(profiles)
+                .where(
+                    and(
+                        isNotNull(profiles.username),
+                        inArray(sql`lower(${profiles.username})`, normalizedCandidates)
+                    )
+                ),
+            db
+                .select({ username: reservedUsernames.username })
+                .from(reservedUsernames)
+                .where(inArray(reservedUsernames.username, normalizedCandidates)),
+        ])
+
+        const taken = new Set<string>()
+        for (const row of takenRows) {
+            taken.add(normalizeUsername(row.username))
+        }
+        for (const row of reservedRows) {
+            taken.add(normalizeUsername(row.username))
+        }
+
+        const suggestions = normalizedCandidates
+            .filter((candidate) => !taken.has(candidate))
+            .slice(0, 5)
+        return { suggestions }
+    } catch (error) {
+        console.error('Error building username suggestions:', error)
+        return { suggestions: [] }
+    }
+}
+
+export async function getOnboardingDraft(): Promise<{
+    success: boolean
+    draft?: DraftPayload
+    step?: number
+    version?: number
+    updatedAt?: string
+    error?: string
+    errorDetails?: OnboardingError
+}> {
+    try {
+        const supabase = await createClient()
+        const { data: authData } = await supabase.auth.getUser()
+        const user = authData.user
+        if (!user) return { success: false, error: 'Not authenticated' }
+
+        const row = await db.query.onboardingDrafts.findFirst({
+            where: eq(onboardingDrafts.userId, user.id),
+            columns: {
+                step: true,
+                version: true,
+                draft: true,
+                updatedAt: true,
+            },
+        })
+
+        if (!row) return { success: true, step: ONBOARDING_STEP_MIN, version: 0, draft: {} }
+
+        return {
+            success: true,
+            step: clampStep(row.step),
+            version: row.version,
+            draft: sanitizeOnboardingDraft(row.draft),
+            updatedAt: row.updatedAt.toISOString(),
+        }
+    } catch (error) {
+        console.error('Error loading onboarding draft:', error)
+        const details = onboardingError('DB_ERROR', 'Unable to load onboarding draft', true)
+        return { success: false, error: details.message, errorDetails: details }
+    }
+}
+
+export async function saveOnboardingDraft(input: {
+    step: number
+    draft: DraftPayload
+    expectedVersion?: number
+}): Promise<{
+    success: boolean
+    version?: number
+    step?: number
+    draft?: DraftPayload
+    updatedAt?: string
+    error?: string
+    errorDetails?: OnboardingError
+}> {
+    try {
+        const supabase = await createClient()
+        const { data: authData } = await supabase.auth.getUser()
+        const user = authData.user
+        if (!user) {
+            const details = onboardingError('NOT_AUTHENTICATED', 'Not authenticated')
+            return { success: false, error: details.message, errorDetails: details }
+        }
+
+        const safeStep = clampStep(input.step)
+        const safeDraft = sanitizeOnboardingDraft(input.draft)
+        const updatedAt = new Date()
+
+        const current = await db.query.onboardingDrafts.findFirst({
+            where: eq(onboardingDrafts.userId, user.id),
+            columns: {
+                version: true,
+                step: true,
+                draft: true,
+                updatedAt: true,
+            },
+        })
+
+        if (!current) {
+            const inserted = await db
+                .insert(onboardingDrafts)
+                .values({
+                    userId: user.id,
+                    step: safeStep,
+                    version: 1,
+                    draft: safeDraft,
+                    updatedAt,
+                })
+                .onConflictDoNothing()
+                .returning({
+                    version: onboardingDrafts.version,
+                    step: onboardingDrafts.step,
+                    draft: onboardingDrafts.draft,
+                    updatedAt: onboardingDrafts.updatedAt,
+                })
+
+            if (inserted.length > 0) {
+                return {
+                    success: true,
+                    version: inserted[0].version,
+                    step: clampStep(inserted[0].step),
+                    draft: sanitizeOnboardingDraft(inserted[0].draft),
+                    updatedAt: inserted[0].updatedAt.toISOString(),
+                }
+            }
+        }
+
+        const latest = current || await db.query.onboardingDrafts.findFirst({
+            where: eq(onboardingDrafts.userId, user.id),
+            columns: {
+                version: true,
+                step: true,
+                draft: true,
+                updatedAt: true,
+            },
+        })
+
+        if (!latest) {
+            const details = onboardingError('DB_ERROR', 'Unable to save onboarding draft', true)
+            return { success: false, error: details.message, errorDetails: details }
+        }
+
+        const expectedVersion = typeof input.expectedVersion === 'number' ? input.expectedVersion : latest.version
+        if (expectedVersion !== latest.version) {
+            const details = onboardingError('DRAFT_CONFLICT', 'Draft changed in another session. Synced latest draft.')
+            return {
+                success: false,
+                error: details.message,
+                errorDetails: details,
+                version: latest.version,
+                step: clampStep(latest.step),
+                draft: sanitizeOnboardingDraft(latest.draft),
+                updatedAt: latest.updatedAt.toISOString(),
+            }
+        }
+
+        const nextVersion = latest.version + 1
+        const updated = await db
+            .update(onboardingDrafts)
+            .set({
+                step: safeStep,
+                draft: safeDraft,
+                version: nextVersion,
+                updatedAt,
+            })
+            .where(
+                and(
+                    eq(onboardingDrafts.userId, user.id),
+                    eq(onboardingDrafts.version, latest.version)
+                )
+            )
+            .returning({
+                version: onboardingDrafts.version,
+                step: onboardingDrafts.step,
+                draft: onboardingDrafts.draft,
+                updatedAt: onboardingDrafts.updatedAt,
+            })
+
+        if (updated.length === 0) {
+            const currentDraft = await db.query.onboardingDrafts.findFirst({
+                where: eq(onboardingDrafts.userId, user.id),
+                columns: {
+                    version: true,
+                    step: true,
+                    draft: true,
+                    updatedAt: true,
+                },
+            })
+            const details = onboardingError('DRAFT_CONFLICT', 'Draft changed in another session. Synced latest draft.')
+            return {
+                success: false,
+                error: details.message,
+                errorDetails: details,
+                version: currentDraft?.version,
+                step: currentDraft ? clampStep(currentDraft.step) : ONBOARDING_STEP_MIN,
+                draft: sanitizeOnboardingDraft(currentDraft?.draft || {}),
+                updatedAt: currentDraft?.updatedAt.toISOString(),
+            }
+        }
+
+        return {
+            success: true,
+            version: updated[0].version,
+            step: clampStep(updated[0].step),
+            draft: sanitizeOnboardingDraft(updated[0].draft),
+            updatedAt: updated[0].updatedAt.toISOString(),
+        }
+    } catch (error) {
+        console.error('Error saving onboarding draft:', error)
+        const details = onboardingError('DB_ERROR', 'Unable to save onboarding draft', true)
+        return { success: false, error: details.message, errorDetails: details }
+    }
+}
+
+export async function clearOnboardingDraft(): Promise<{ success: boolean; error?: string }> {
+    try {
+        const supabase = await createClient()
+        const { data: authData } = await supabase.auth.getUser()
+        const user = authData.user
+        if (!user) {
+            const details = onboardingError('NOT_AUTHENTICATED', 'Not authenticated')
+            return { success: false, error: details.message }
+        }
+
+        await db.delete(onboardingDrafts).where(eq(onboardingDrafts.userId, user.id))
+        return { success: true }
+    } catch (error) {
+        console.error('Error clearing onboarding draft:', error)
+        const details = onboardingError('DB_ERROR', 'Unable to clear onboarding draft', true)
+        return { success: false, error: details.message }
+    }
+}
+
+export async function trackOnboardingEvent(input: {
+    eventType: string
+    step?: number
+    metadata?: Record<string, unknown>
+}): Promise<{ success: boolean }> {
+    try {
+        const supabase = await createClient()
+        const { data: authData } = await supabase.auth.getUser()
+        const user = authData.user
+        if (!user) return { success: false }
+
+        const eventType = (input.eventType || '').trim().slice(0, 60)
+        if (!eventType) return { success: false }
+
+        await db.insert(onboardingEvents).values({
+            userId: user.id,
+            eventType,
+            step: typeof input.step === 'number' ? clampStep(input.step) : null,
+            metadata: sanitizeTelemetryMetadata(input.metadata),
+        })
+        return { success: true }
+    } catch (error) {
+        console.error('Error tracking onboarding event:', error)
+        return { success: false }
     }
 }

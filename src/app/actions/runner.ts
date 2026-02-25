@@ -475,3 +475,4 @@ export async function runProjectProfileAction(
         return { success: false as const, error: getErrorMessage(error, "Failed to run project profile") };
     }
 }
+

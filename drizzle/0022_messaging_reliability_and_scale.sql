@@ -7,7 +7,8 @@
 -- ============================================================================
 
 -- Extensions for trigram search
-CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE SCHEMA IF NOT EXISTS extensions;
+CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA extensions;
 
 -- ---------------------------------------------------------------------------
 -- Schema additions

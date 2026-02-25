@@ -2,33 +2,31 @@
 
 import { createClient } from '@/lib/supabase/server'
 import { db } from '@/lib/db'
-import { profiles, projects } from '@/lib/db/schema'
-import { eq, and, ne, desc } from 'drizzle-orm'
+import { profileAuditEvents, profiles, projects } from '@/lib/db/schema'
+import { eq, and, ne, desc, sql } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
-import { z } from 'zod'
+import { consumeRateLimit } from '@/lib/security/rate-limit'
+import {
+    normalizeProfileUpdateInput,
+    pickChangedProfileFields,
+    profileUpdateSchema,
+    type ProfileUpdateInput,
+} from '@/lib/validations/profile'
+import { clearProfileCache } from '@/lib/services/profile-service'
 
-// Validation Schema
-const profileSchema = z.object({
-    username: z.string().min(3).max(20).regex(/^[a-z0-9_]+$/, 'Only lowercase letters, numbers, and underscores allowed').optional(),
-    fullName: z.string().max(100).optional(),
-    headline: z.string().max(100).optional(),
-    bio: z.string().max(5000).optional(),
-    location: z.string().max(100).optional(),
-    website: z.string().url().or(z.literal('')).optional(),
-    avatarUrl: z.string().optional(),
-    bannerUrl: z.string().optional(),
-    skills: z.array(z.string()).optional(),
-    interests: z.array(z.string()).optional(),
-    socialLinks: z.record(z.string(), z.string()).optional(),
-    visibility: z.enum(['public', 'connections', 'private']).optional(),
-    // Updated Schema Fields
-    availabilityStatus: z.enum(['available', 'busy', 'offline', 'focusing']).optional(),
-    openTo: z.array(z.string()).optional(),
-    experience: z.array(z.any()).optional(),
-    education: z.array(z.any()).optional(),
-})
+export type UpdateProfileInput = ProfileUpdateInput
 
-export type UpdateProfileInput = z.infer<typeof profileSchema>
+const PROFILE_UPDATE_LIMIT = 30
+const PROFILE_UPDATE_WINDOW_SECONDS = 60
+const USERNAME_CHANGE_LIMIT = 5
+const USERNAME_CHANGE_WINDOW_SECONDS = 24 * 60 * 60
+const USERNAME_CHANGE_COOLDOWN_MS = 14 * 24 * 60 * 60 * 1000
+
+function toNullableString(value: string | undefined): string | null | undefined {
+    if (value === undefined) return undefined
+    const trimmed = value.trim()
+    return trimmed || null
+}
 
 export async function updateProfileAction(data: UpdateProfileInput) {
     try {
@@ -39,72 +37,244 @@ export async function updateProfileAction(data: UpdateProfileInput) {
             return { success: false, error: 'Unauthorized' }
         }
 
-        // Validate Input
-        const result = profileSchema.safeParse(data)
+        const updateRate = await consumeRateLimit(
+            `profile:update:${user.id}`,
+            PROFILE_UPDATE_LIMIT,
+            PROFILE_UPDATE_WINDOW_SECONDS
+        )
+        if (!updateRate.allowed) {
+            return { success: false, error: 'Too many profile updates. Please wait and try again.' }
+        }
+
+        const result = profileUpdateSchema.safeParse(data)
         if (!result.success) {
             return { success: false, error: result.error.issues[0].message }
         }
-        const validData = result.data
+        const validData = normalizeProfileUpdateInput(result.data)
 
-        // Check Username Uniqueness if changed
-        if (validData.username) {
+        const current = await db.query.profiles.findFirst({
+            where: eq(profiles.id, user.id),
+            columns: {
+                id: true,
+                username: true,
+                fullName: true,
+                headline: true,
+                bio: true,
+                location: true,
+                website: true,
+                avatarUrl: true,
+                bannerUrl: true,
+                skills: true,
+                interests: true,
+                socialLinks: true,
+                visibility: true,
+                availabilityStatus: true,
+                openTo: true,
+                experience: true,
+                education: true,
+                updatedAt: true,
+            },
+        })
+        if (!current) {
+            return { success: false, error: 'Profile not found' }
+        }
+
+        const patch = pickChangedProfileFields(
+            {
+                username: current.username || undefined,
+                fullName: current.fullName || undefined,
+                headline: current.headline || undefined,
+                bio: current.bio || undefined,
+                location: current.location || undefined,
+                website: current.website || undefined,
+                avatarUrl: current.avatarUrl || undefined,
+                bannerUrl: current.bannerUrl || undefined,
+                skills: current.skills || [],
+                interests: current.interests || [],
+                socialLinks: current.socialLinks || {},
+                visibility: current.visibility || undefined,
+                availabilityStatus: current.availabilityStatus || undefined,
+                openTo: current.openTo || [],
+                experience: current.experience || [],
+                education: current.education || [],
+            },
+            validData
+        )
+
+        if (Object.keys(patch).length === 0) {
+            return { success: true, updatedAt: current.updatedAt.toISOString() }
+        }
+
+        if (patch.username && patch.username !== current.username) {
+            const usernameRate = await consumeRateLimit(
+                `profile:update:username:${user.id}`,
+                USERNAME_CHANGE_LIMIT,
+                USERNAME_CHANGE_WINDOW_SECONDS
+            )
+            if (!usernameRate.allowed) {
+                return { success: false, error: 'Too many username changes. Please try again later.' }
+            }
+
+            let lastUsernameChange: { createdAt: Date } | undefined
+            try {
+                lastUsernameChange = await db.query.profileAuditEvents.findFirst({
+                    columns: { createdAt: true },
+                    where: and(
+                        eq(profileAuditEvents.userId, user.id),
+                        eq(profileAuditEvents.eventType, 'username_changed')
+                    ),
+                    orderBy: [desc(profileAuditEvents.createdAt)],
+                })
+            } catch (auditLookupError) {
+                console.error('Profile audit lookup failed; blocking username change', {
+                    userId: user.id,
+                    error: auditLookupError instanceof Error ? auditLookupError.message : String(auditLookupError),
+                })
+                return {
+                    success: false,
+                    error: 'Unable to verify username change history right now. Please try again shortly.',
+                }
+            }
+
+            if (
+                lastUsernameChange &&
+                Date.now() - lastUsernameChange.createdAt.getTime() < USERNAME_CHANGE_COOLDOWN_MS
+            ) {
+                const retryDate = new Date(lastUsernameChange.createdAt.getTime() + USERNAME_CHANGE_COOLDOWN_MS)
+                return {
+                    success: false,
+                    error: `Username can be changed again after ${retryDate.toLocaleDateString()}`,
+                }
+            }
+
             const existing = await db.query.profiles.findFirst({
                 columns: { id: true },
                 where: and(
-                    eq(profiles.username, validData.username),
+                    sql`lower(${profiles.username}) = ${patch.username.toLowerCase()}`,
                     ne(profiles.id, user.id)
-                )
+                ),
             })
-
             if (existing) {
                 return { success: false, error: 'Username is already taken' }
             }
         }
 
-        // Prepare Update Object
-        const updateData: any = {
+        const updateData: Record<string, unknown> = {
             updatedAt: new Date(),
         }
+        if (patch.username !== undefined) updateData.username = toNullableString(patch.username)
+        if (patch.fullName !== undefined) updateData.fullName = toNullableString(patch.fullName)
+        if (patch.headline !== undefined) updateData.headline = toNullableString(patch.headline)
+        if (patch.bio !== undefined) updateData.bio = toNullableString(patch.bio)
+        if (patch.location !== undefined) updateData.location = toNullableString(patch.location)
+        if (patch.website !== undefined) updateData.website = toNullableString(patch.website)
+        if (patch.avatarUrl !== undefined) updateData.avatarUrl = toNullableString(patch.avatarUrl)
+        if (patch.bannerUrl !== undefined) updateData.bannerUrl = toNullableString(patch.bannerUrl)
+        if (patch.skills !== undefined) updateData.skills = patch.skills
+        if (patch.interests !== undefined) updateData.interests = patch.interests
+        if (patch.socialLinks !== undefined) updateData.socialLinks = patch.socialLinks
+        if (patch.visibility !== undefined) updateData.visibility = patch.visibility
+        if (patch.availabilityStatus !== undefined) updateData.availabilityStatus = patch.availabilityStatus
+        if (patch.openTo !== undefined) updateData.openTo = patch.openTo
+        if (patch.experience !== undefined) updateData.experience = patch.experience
+        if (patch.education !== undefined) updateData.education = patch.education
 
-        // Explicitly map fields to ensure type safety and schema alignment
-        if (validData.username !== undefined) updateData.username = validData.username
-        if (validData.fullName !== undefined) updateData.fullName = validData.fullName
-        if (validData.headline !== undefined) updateData.headline = validData.headline
-        if (validData.bio !== undefined) updateData.bio = validData.bio
-        if (validData.location !== undefined) updateData.location = validData.location
-        if (validData.website !== undefined) updateData.website = validData.website
-        if (validData.avatarUrl !== undefined) updateData.avatarUrl = validData.avatarUrl
-        if (validData.bannerUrl !== undefined) updateData.bannerUrl = validData.bannerUrl
-        if (validData.skills !== undefined) updateData.skills = validData.skills
-        if (validData.interests !== undefined) updateData.interests = validData.interests
-        if (validData.socialLinks !== undefined) updateData.socialLinks = validData.socialLinks
-        if (validData.visibility !== undefined) updateData.visibility = validData.visibility
+        const expectedUpdatedAt = validData.expectedUpdatedAt
+            ? new Date(validData.expectedUpdatedAt)
+            : null
+        const expectedUpdatedAtIso =
+            expectedUpdatedAt && Number.isFinite(expectedUpdatedAt.getTime())
+                ? expectedUpdatedAt.toISOString()
+                : null
 
-        if (validData.availabilityStatus !== undefined) updateData.availabilityStatus = validData.availabilityStatus
-        if (validData.openTo !== undefined) updateData.openTo = validData.openTo
-        if (validData.experience !== undefined) updateData.experience = validData.experience
-        if (validData.education !== undefined) updateData.education = validData.education
+        const whereClause =
+            expectedUpdatedAtIso
+                ? and(
+                    eq(profiles.id, user.id),
+                    sql`date_trunc('milliseconds', ${profiles.updatedAt}) = date_trunc('milliseconds', ${expectedUpdatedAtIso}::timestamptz)`
+                )
+                : eq(profiles.id, user.id)
 
-        await db.update(profiles)
+        const updatedRows = await db
+            .update(profiles)
             .set(updateData)
-            .where(eq(profiles.id, user.id))
+            .where(whereClause)
+            .returning({ id: profiles.id, updatedAt: profiles.updatedAt, username: profiles.username })
 
-        // Update Auth Metadata if username/avatar/name changed
-        if (validData.username || validData.fullName || validData.avatarUrl) {
-            await supabase.auth.updateUser({
-                data: {
-                    username: validData.username,
-                    full_name: validData.fullName,
-                    avatar_url: validData.avatarUrl
+        if (updatedRows.length === 0) {
+            if (expectedUpdatedAt) {
+                return {
+                    success: false,
+                    error: 'Profile was updated elsewhere. Please refresh and retry.',
+                    code: 'PROFILE_CONFLICT',
                 }
-            })
+            }
+            return { success: false, error: 'Profile not found' }
         }
 
-        revalidatePath('/profile')
-        // We revalidate both potential paths to be safe
-        if (validData.username) revalidatePath(`/${validData.username}`)
+        const sensitiveFields: Array<{
+            key: keyof ProfileUpdateInput
+            eventType: string
+        }> = [
+            { key: 'username', eventType: 'username_changed' },
+            { key: 'visibility', eventType: 'visibility_changed' },
+            { key: 'website', eventType: 'website_changed' },
+            { key: 'availabilityStatus', eventType: 'availability_status_changed' },
+        ]
+        const auditRows = sensitiveFields
+            .filter((item) => patch[item.key] !== undefined)
+            .map((item) => ({
+                userId: user.id,
+                eventType: item.eventType,
+                previousValue: { value: (current as Record<string, unknown>)[item.key] ?? null },
+                nextValue: { value: (patch as Record<string, unknown>)[item.key] ?? null },
+                metadata: {},
+            }))
 
-        return { success: true }
+        if (auditRows.length > 0) {
+            try {
+                await db.insert(profileAuditEvents).values(auditRows)
+            } catch (auditInsertError) {
+                console.warn('Profile audit logging unavailable, skipping insert', auditInsertError)
+            }
+        }
+
+        if (patch.username || patch.fullName || patch.avatarUrl) {
+            try {
+                const authPayload = {
+                    username: patch.username ?? current.username,
+                    full_name: patch.fullName ?? current.fullName,
+                    avatar_url: patch.avatarUrl ?? current.avatarUrl,
+                }
+                const { error: authUpdateError } = await supabase.auth.updateUser({
+                    data: authPayload,
+                })
+                if (authUpdateError) {
+                    console.warn('Failed to sync auth user metadata', {
+                        userId: user.id,
+                        values: authPayload,
+                        error: authUpdateError.message,
+                    })
+                }
+            } catch (authUpdateError) {
+                console.warn('Failed to sync auth user metadata', {
+                    userId: user.id,
+                    values: {
+                        username: patch.username ?? current.username,
+                        fullName: patch.fullName ?? current.fullName,
+                        avatarUrl: patch.avatarUrl ?? current.avatarUrl,
+                    },
+                    error: authUpdateError instanceof Error ? authUpdateError.message : String(authUpdateError),
+                })
+            }
+        }
+
+        clearProfileCache(user.id)
+        revalidatePath('/profile')
+        if (current.username) revalidatePath(`/u/${current.username}`)
+        if (patch.username) revalidatePath(`/u/${patch.username}`)
+
+        return { success: true, updatedAt: updatedRows[0].updatedAt.toISOString() }
     } catch (error) {
         console.error('Error updating profile:', error)
         return { success: false, error: 'Failed to update profile' }

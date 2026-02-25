@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
+import { createVisibilityAwareInterval } from "@/lib/utils/visibility";
 import Link from "next/link";
 import Image from "next/image";
 import { Briefcase, Check, X, Loader2, Clock, ChevronDown, ChevronUp } from "lucide-react";
@@ -160,7 +161,6 @@ export default function ProjectApplicationsSection({ initialUser, initialApplica
         let cancelled = false;
 
         const refresh = async () => {
-            if (typeof document !== "undefined" && document.hidden) return;
             try {
                 const [myRes, incomingRes] = await Promise.all([
                     getMyApplicationsAction(),
@@ -175,10 +175,10 @@ export default function ProjectApplicationsSection({ initialUser, initialApplica
             }
         };
 
-        const intervalId = window.setInterval(refresh, 30000);
+        const cleanup = createVisibilityAwareInterval(refresh, 30000);
         return () => {
             cancelled = true;
-            window.clearInterval(intervalId);
+            cleanup();
         };
     }, [initialUser?.id]);
 

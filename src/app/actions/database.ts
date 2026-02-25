@@ -44,11 +44,11 @@ export async function ensureUserProfile(): Promise<{ success: boolean; hasProfil
             .from('profiles')
             .select('id, username')
             .eq('id', user.id)
-            .single()
+            .maybeSingle()
 
-        if (fetchError && fetchError.code !== 'PGRST116') {
-            // PGRST116 = no rows found, which is okay
+        if (fetchError) {
             console.error('Error fetching profile:', fetchError)
+            return { success: false, hasProfile: false }
         }
 
         // If no profile, create one
@@ -63,6 +63,22 @@ export async function ensureUserProfile(): Promise<{ success: boolean; hasProfil
                 })
 
             if (insertError) {
+                // Unique violation can happen under concurrent requests; treat as idempotent success.
+                if (insertError.code === '23505') {
+                    const { data: existingProfile, error: refetchError } = await supabase
+                        .from('profiles')
+                        .select('username')
+                        .eq('id', user.id)
+                        .maybeSingle()
+
+                    if (refetchError) {
+                        console.error('Error refetching profile after unique conflict:', refetchError)
+                        return { success: false, hasProfile: false }
+                    }
+
+                    return { success: true, hasProfile: !!existingProfile?.username }
+                }
+
                 console.error('Error creating profile:', insertError)
                 return { success: false, hasProfile: false }
             }

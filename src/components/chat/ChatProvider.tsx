@@ -5,17 +5,19 @@ import { useAuth } from '@/hooks/useAuth';
 import { useChatStore } from '@/stores/chatStore';
 import { useChatRealtime } from '@/hooks/useChatRealtime';
 import { ChatPopup } from './ChatPopup';
-
-// ============================================================================
-// CHAT PROVIDER
-// Wraps app at root layout to manage chat state and realtime subscriptions
-// ============================================================================
+import { createVisibilityAwareInterval } from '@/lib/utils/visibility';
 
 interface ChatProviderProps {
     children: React.ReactNode;
 }
 
+const DISABLE_CHAT_IN_E2E = process.env.NEXT_PUBLIC_E2E_AUTH_FALLBACK === "1";
+
 export function ChatProvider({ children }: ChatProviderProps) {
+    if (DISABLE_CHAT_IN_E2E) {
+        return <>{children}</>;
+    }
+
     const { user, isLoading } = useAuth();
     const initialize = useChatStore(state => state.initialize);
     const flushOutbox = useChatStore(state => state.flushOutbox);
@@ -28,7 +30,6 @@ export function ChatProvider({ children }: ChatProviderProps) {
     );
     const lastMediaRefreshRef = useRef<Map<string, number>>(new Map());
 
-    // Initialize chat when user is available
     useEffect(() => {
         if (user && !isLoading) {
             initialize();
@@ -36,48 +37,42 @@ export function ChatProvider({ children }: ChatProviderProps) {
         }
     }, [user, isLoading, initialize, flushOutbox]);
 
+    // Outbox flush with visibility-aware interval
     useEffect(() => {
         if (!user) return;
 
-        const onOnline = () => {
-            void flushOutbox();
-        };
+        const onOnline = () => void flushOutbox();
+        window.addEventListener('online', onOnline);
 
-        const timer = window.setInterval(() => {
+        const cleanup = createVisibilityAwareInterval(() => {
             void flushOutbox();
         }, 10_000);
 
-        window.addEventListener('online', onOnline);
         return () => {
-            window.clearInterval(timer);
+            cleanup();
             window.removeEventListener('online', onOnline);
         };
     }, [user, flushOutbox]);
 
-    // Fallback sync when websocket is temporarily disconnected.
-    // Keeps message delivery near-real-time without heavy polling.
+    // Fallback sync when websocket is temporarily disconnected
     useEffect(() => {
         if (!user || isConnected) return;
 
-        const timer = window.setInterval(() => {
-            if (typeof document !== 'undefined' && document.hidden) return;
+        const cleanup = createVisibilityAwareInterval(() => {
             void refreshConversations();
             if (activeConversationId) {
                 void refreshMessages(activeConversationId);
             }
         }, 5000);
 
-        return () => {
-            window.clearInterval(timer);
-        };
+        return () => cleanup();
     }, [user, isConnected, activeConversationId, refreshConversations, refreshMessages]);
 
-    // Refresh signed attachment URLs for the active conversation only.
-    // Keeps media valid on long-lived tabs without reloading the whole app.
+    // Refresh signed attachment URLs for the active conversation
     useEffect(() => {
         if (!user) return;
 
-        const timer = window.setInterval(() => {
+        const cleanup = createVisibilityAwareInterval(() => {
             if (!activeConversationId) return;
             const cache = activeConversationCache;
             if (!cache?.messages?.length) return;
@@ -93,20 +88,16 @@ export function ChatProvider({ children }: ChatProviderProps) {
 
             lastMediaRefreshRef.current.set(activeConversationId, now);
             void refreshMessages(activeConversationId);
-        }, 60 * 1000);
+        }, 60_000);
 
-        return () => {
-            window.clearInterval(timer);
-        };
+        return () => cleanup();
     }, [user, activeConversationId, activeConversationCache, refreshMessages]);
 
-    // Setup realtime subscription
     useChatRealtime(user?.id || null);
 
     return (
         <>
             {children}
-            {/* Chat popup is always mounted for persistence */}
             {user && <ChatPopup />}
         </>
     );

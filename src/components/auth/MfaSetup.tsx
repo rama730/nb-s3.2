@@ -3,50 +3,62 @@
 import { useState, useEffect, useCallback } from "react";
 import Button from "@/components/ui-custom/Button";
 import { Loader2, Shield, ShieldCheck, KeyRound, Trash2 } from "lucide-react";
+import { toast } from "sonner";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import type { MfaFactor } from "@/lib/types/settingsTypes";
 
 interface MfaSetupProps {
     initialFactors?: MfaFactor[];
 }
 
-export function MfaSetup({ initialFactors = [] }: MfaSetupProps) {
-    const [factors, setFactors] = useState<MfaFactor[]>(initialFactors);
-    const [loading, setLoading] = useState(!initialFactors.length);
+export function MfaSetup({ initialFactors }: MfaSetupProps) {
+    const hasInitialFactors = Array.isArray(initialFactors);
+    const [factors, setFactors] = useState<MfaFactor[]>(initialFactors ?? []);
+    const [loading, setLoading] = useState(!hasInitialFactors);
     const [enrolling, setEnrolling] = useState(false);
 
     const loadFactors = useCallback(async () => {
         try {
             const res = await fetch("/api/v1/auth/mfa/factors");
-            const json = await res.json();
-            if (json.success) {
-                setFactors(json.data.factors || []);
+            if (!res.ok) {
+                setFactors([]);
+                return;
             }
-        } catch (error) {
-            console.error("Failed to load MFA factors:", error);
+            const contentType = res.headers.get("content-type") || "";
+            if (!contentType.includes("application/json")) {
+                setFactors([]);
+                return;
+            }
+            const json = await res.json();
+            if (json?.success) {
+                setFactors(json?.data?.factors || []);
+            }
+        } catch {
+            setFactors([]);
         } finally {
             setLoading(false);
         }
     }, []);
 
     useEffect(() => {
-        if (!initialFactors.length) {
+        if (!hasInitialFactors) {
             void loadFactors();
         }
-    }, [initialFactors.length, loadFactors]);
+    }, [hasInitialFactors, loadFactors]);
 
     const handleEnroll = async () => {
         setEnrolling(true);
         try {
             // In a real app, this would open MFA enrollment flow
-            alert("MFA enrollment would open here");
+            toast.info("MFA enrollment would open here");
         } finally {
             setEnrolling(false);
         }
     };
 
-    const handleUnenroll = async (factorId: string) => {
-        if (!confirm("Are you sure you want to remove this MFA factor?")) return;
+    const [unenrollId, setUnenrollId] = useState<string | null>(null);
 
+    const handleUnenroll = async (factorId: string) => {
         try {
             const res = await fetch(`/api/v1/auth/mfa/factors/${factorId}`, {
                 method: "DELETE",
@@ -56,7 +68,7 @@ export function MfaSetup({ initialFactors = [] }: MfaSetupProps) {
             }
         } catch (error) {
             console.error("Failed to unenroll factor:", error);
-            alert("Failed to remove MFA factor");
+            toast.error("Failed to remove MFA factor");
         }
     };
 
@@ -108,7 +120,7 @@ export function MfaSetup({ initialFactors = [] }: MfaSetupProps) {
                             <Button
                                 variant="ghost"
                                 size="sm"
-                                onClick={() => handleUnenroll(factor.id)}
+                                onClick={() => setUnenrollId(factor.id)}
                             >
                                 <Trash2 className="h-4 w-4 text-red-500" />
                             </Button>
@@ -131,6 +143,16 @@ export function MfaSetup({ initialFactors = [] }: MfaSetupProps) {
                     "Set up authenticator"
                 )}
             </Button>
+
+            <ConfirmDialog
+                open={!!unenrollId}
+                onOpenChange={(open) => { if (!open) setUnenrollId(null); }}
+                title="Remove MFA factor?"
+                description="You will need to set up MFA again to re-enable it."
+                confirmLabel="Remove"
+                variant="destructive"
+                onConfirm={() => { if (unenrollId) void handleUnenroll(unenrollId); }}
+            />
         </div>
     );
 }

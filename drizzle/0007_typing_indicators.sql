@@ -23,7 +23,9 @@ CREATE INDEX IF NOT EXISTS idx_typing_conversation
 
 -- Auto-update timestamp
 CREATE OR REPLACE FUNCTION update_typing_timestamp()
-RETURNS TRIGGER AS $$
+RETURNS TRIGGER
+SET search_path = ''
+AS $$
 BEGIN
     NEW.updated_at = NOW();
     RETURN NEW;
@@ -37,7 +39,9 @@ CREATE TRIGGER typing_updated_at
 
 -- Auto-cleanup old typing indicators (older than 10 seconds)
 CREATE OR REPLACE FUNCTION cleanup_old_typing_indicators()
-RETURNS void AS $$
+RETURNS void
+SET search_path = ''
+AS $$
 BEGIN
     DELETE FROM typing_indicators 
     WHERE updated_at < NOW() - INTERVAL '10 seconds';

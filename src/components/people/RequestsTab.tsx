@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useCallback } from "react";
 import { Loader2, UserPlus, X, Check, Clock, CheckCheck, Briefcase, ChevronDown, ChevronRight } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
@@ -13,6 +13,7 @@ import {
     type RequestHistoryItem,
 } from "@/hooks/useConnections";
 import { toast } from "sonner";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { cn } from "@/lib/utils";
 import { motion, AnimatePresence } from "framer-motion";
 import ProjectApplicationsSection from "./ProjectApplicationsSection";
@@ -150,6 +151,8 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
 
     const [timelineOpen, setTimelineOpen] = useState(true);
     const [appsOpen, setAppsOpen] = useState(true);
+    const appsPanelId = "project-apps-panel";
+    const timelinePanelId = "activity-timeline-panel";
 
     const incomingRequests = useMemo(
         () => requestData?.incoming || initialRequests?.incoming || [],
@@ -210,10 +213,9 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
         });
     };
 
-    const handleAcceptAll = async () => {
-        if (incomingRequests.length === 0) return;
-        const confirmed = confirm(`Accept all ${incomingRequests.length} incoming requests?`);
-        if (!confirmed) return;
+    const [bulkAction, setBulkAction] = useState<{ type: 'accept' | 'reject' } | null>(null);
+
+    const confirmAcceptAll = useCallback(async () => {
         const pendingToast = toast.loading('Accepting all requests...');
         try {
             const result = await acceptAllIncoming.mutateAsync(incomingRequests.length);
@@ -223,12 +225,9 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
             toast.dismiss(pendingToast);
             toast.error('Failed to accept all requests');
         }
-    };
+    }, [acceptAllIncoming, incomingRequests.length]);
 
-    const handleRejectAll = async () => {
-        if (incomingRequests.length === 0) return;
-        const confirmed = confirm(`Reject all ${incomingRequests.length} incoming requests? This cannot be undone in bulk.`);
-        if (!confirmed) return;
+    const confirmRejectAll = useCallback(async () => {
         const pendingToast = toast.loading('Rejecting all requests...');
         try {
             const result = await rejectAllIncoming.mutateAsync(incomingRequests.length);
@@ -238,6 +237,16 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
             toast.dismiss(pendingToast);
             toast.error('Failed to reject all requests');
         }
+    }, [rejectAllIncoming, incomingRequests.length]);
+
+    const handleAcceptAll = () => {
+        if (incomingRequests.length === 0) return;
+        setBulkAction({ type: 'accept' });
+    };
+
+    const handleRejectAll = () => {
+        if (incomingRequests.length === 0) return;
+        setBulkAction({ type: 'reject' });
     };
 
     if (isLoading) {
@@ -535,6 +544,8 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
                 <button
                     type="button"
                     onClick={() => setAppsOpen(!appsOpen)}
+                    aria-expanded={appsOpen}
+                    aria-controls={appsPanelId}
                     className="flex items-center gap-2 mb-3 text-sm font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider hover:text-zinc-700 dark:hover:text-zinc-200 transition-colors"
                 >
                     {appsOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
@@ -544,6 +555,8 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
                 <AnimatePresence initial={false}>
                     {appsOpen && (
                         <motion.div
+                            id={appsPanelId}
+                            role="region"
                             initial={{ height: 0, opacity: 0 }}
                             animate={{ height: "auto", opacity: 1 }}
                             exit={{ height: 0, opacity: 0 }}
@@ -561,6 +574,8 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
                 <button
                     type="button"
                     onClick={() => setTimelineOpen(!timelineOpen)}
+                    aria-expanded={timelineOpen}
+                    aria-controls={timelinePanelId}
                     className="flex items-center gap-2 mb-3 text-sm font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider hover:text-zinc-700 dark:hover:text-zinc-200 transition-colors"
                 >
                     {timelineOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
@@ -570,6 +585,8 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
                 <AnimatePresence initial={false}>
                     {timelineOpen && (
                         <motion.div
+                            id={timelinePanelId}
+                            role="region"
                             initial={{ height: 0, opacity: 0 }}
                             animate={{ height: "auto", opacity: 1 }}
                             exit={{ height: 0, opacity: 0 }}
@@ -670,6 +687,17 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
                     )}
                 </AnimatePresence>
             </div>
+            <ConfirmDialog
+                open={!!bulkAction}
+                onOpenChange={(open) => { if (!open) setBulkAction(null); }}
+                title={bulkAction?.type === 'accept' ? 'Accept All Requests' : 'Reject All Requests'}
+                description={bulkAction?.type === 'accept'
+                    ? `Accept all ${incomingRequests.length} incoming requests?`
+                    : `Reject all ${incomingRequests.length} incoming requests? This cannot be undone in bulk.`}
+                confirmLabel={bulkAction?.type === 'accept' ? 'Accept All' : 'Reject All'}
+                variant={bulkAction?.type === 'reject' ? 'destructive' : 'default'}
+                onConfirm={() => bulkAction?.type === 'accept' ? confirmAcceptAll() : confirmRejectAll()}
+            />
         </div>
     );
 }

@@ -1,3 +1,5 @@
+import { normalizeProfile } from '@/lib/utils/normalize-profile'
+
 export type NormalizedProfileVM = {
   id: string;
   username?: string | null;
@@ -14,35 +16,34 @@ export type NormalizedProfileVM = {
 };
 
 export function normalizeProfileVM(profile: any): NormalizedProfileVM {
-  const p = profile || {};
-
-  const openTo: string[] =
-    (Array.isArray(p.openTo) && p.openTo) ||
-    (Array.isArray(p.open_to) && p.open_to) ||
-    (Array.isArray(p.skills) ? p.skills.slice(0, 5) : []);
-
-  const availabilityStatus =
-    p.availabilityStatus ||
-    p.availability_status ||
-    'available';
-
-  const socialLinks: Record<string, string> =
-    (p.socialLinks && typeof p.socialLinks === 'object' ? p.socialLinks : null) ||
-    (p.social_links && typeof p.social_links === 'object' ? p.social_links : null) ||
-    {};
+  const normalized = normalizeProfile(profile);
+  if (!normalized) {
+    return {
+      id: '',
+      username: null,
+      fullName: null,
+      avatarUrl: null,
+      headline: null,
+      location: null,
+      website: null,
+      profileStrength: null,
+      openTo: [],
+      availabilityStatus: 'available',
+      socialLinks: {},
+    };
+  }
 
   return {
-    id: p.id,
-    username: p.username ?? null,
-    fullName: p.fullName ?? p.full_name ?? null,
-    avatarUrl: p.avatarUrl ?? p.avatar_url ?? null,
-    headline: p.headline ?? null,
-    location: p.location ?? null,
-    website: p.website ?? null,
-    profileStrength: p.profileStrength ?? null,
-    openTo,
-    availabilityStatus,
-    socialLinks,
+    id: normalized.id,
+    username: normalized.username ?? null,
+    fullName: normalized.fullName ?? null,
+    avatarUrl: normalized.avatarUrl ?? null,
+    headline: normalized.headline ?? null,
+    location: normalized.location ?? null,
+    website: normalized.website ?? null,
+    profileStrength: normalized.profileStrength ?? null,
+    openTo: normalized.openTo,
+    availabilityStatus: normalized.availabilityStatus,
+    socialLinks: normalized.socialLinks,
   };
 }
-

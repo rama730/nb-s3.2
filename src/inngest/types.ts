@@ -14,6 +14,23 @@ type ProjectImportEvent = {
     };
 };
 
+type GitPushEvent = {
+    data: {
+        projectId: string;
+        commitMessage: string;
+        userId: string;
+    };
+};
+
+type GitPullEvent = {
+    data: {
+        projectId: string;
+        userId: string;
+    };
+};
+
 export const schemas = new EventSchemas().fromRecord<{
     "project/import": ProjectImportEvent;
+    "git/push": GitPushEvent;
+    "git/pull": GitPullEvent;
 }>();

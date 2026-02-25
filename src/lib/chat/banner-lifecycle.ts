@@ -37,11 +37,13 @@ export function getLatestApplicationEventAt(
   for (const message of messages) {
     if (!isApplicationLifecycleMessageForId(message, applicationId)) continue;
     const metadata = message.metadata || {};
-    const candidate = Math.max(
-      toTimestamp(message.createdAt) ?? 0,
-      toTimestamp(metadata.decisionAt) ?? 0,
-      toTimestamp(metadata.reopenedAt) ?? 0
-    );
+    const timestamps = [
+      toTimestamp(message.createdAt),
+      toTimestamp(metadata.decisionAt),
+      toTimestamp(metadata.reopenedAt),
+    ].filter((value): value is number => value !== null);
+    if (timestamps.length === 0) continue;
+    const candidate = Math.max(...timestamps);
     if (latest === null || candidate > latest) {
       latest = candidate;
     }

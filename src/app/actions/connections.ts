@@ -1308,6 +1308,7 @@ export async function getConnectionStats(
     try {
         const now = new Date();
         const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+        const startOfMonthIso = startOfMonth.toISOString();
         const [profileCounter, stats] = await Promise.all([
             db
                 .select({ connectionsCount: profiles.connectionsCount })
@@ -1326,12 +1327,12 @@ export async function getConnectionStats(
                 connectionsThisMonth: sql<number>`count(*) FILTER (
                     WHERE ${connections.status} = 'accepted'
                     AND (${connections.requesterId} = ${targetId} OR ${connections.addresseeId} = ${targetId})
-                    AND ${connections.updatedAt} >= ${startOfMonth}
+                    AND ${connections.updatedAt} >= ${startOfMonthIso}
                 )`,
                 connectionsGained: sql<number>`count(*) FILTER (
                     WHERE ${connections.addresseeId} = ${targetId}
                     AND ${connections.status} = 'accepted'
-                    AND ${connections.updatedAt} >= ${startOfMonth}
+                    AND ${connections.updatedAt} >= ${startOfMonthIso}
                 )`
             })
                 .from(connections)

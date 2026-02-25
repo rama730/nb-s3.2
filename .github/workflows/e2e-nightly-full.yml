@@ -1,0 +1,52 @@
+name: e2e-nightly-full
+
+on:
+  schedule:
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+jobs:
+  full-e2e:
+    runs-on: ubuntu-latest
+    if: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL != '' && secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY != '' && secrets.SUPABASE_SERVICE_ROLE_KEY != '' && secrets.DATABASE_URL != '' && secrets.E2E_USER_EMAIL != '' && secrets.E2E_USER_PASSWORD != '' }}
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      E2E_USER_EMAIL: ${{ secrets.E2E_USER_EMAIL }}
+      E2E_USER_PASSWORD: ${{ secrets.E2E_USER_PASSWORD }}
+      E2E_ONBOARDING_PASSWORD: ${{ secrets.E2E_ONBOARDING_PASSWORD }}
+      E2E_SCOPE: full
+      E2E_BROWSER_MATRIX: nightly
+      E2E_PERF_GATE: 1
+      E2E_WORKERS: 1
+      RATE_LIMIT_MODE: best-effort
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium firefox webkit
+
+      - name: E2E full nightly matrix
+        run: npm run test:e2e:nightly
+
+      - name: E2E perf gate
+        run: npm run check:e2e:perf
+
+      - name: Upload Playwright artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-artifacts-nightly
+          path: |
+            test-results
+            playwright-report

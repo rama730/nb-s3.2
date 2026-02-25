@@ -42,36 +42,31 @@ export function ProfileV2Client({
     const [activeTab, setActiveTab] = useState<ProfileTabKey>('overview')
     const [isEditModalOpen, setIsEditModalOpen] = useState(false)
     const [showConnectionsModal, setShowConnectionsModal] = useState(false)
+    const [projectsEnabled, setProjectsEnabled] = useState(initialProjects.length > 0)
     const router = useRouter()
 
-    // Lazy Load Data
-    const { data: projects, isLoading: projectsLoading } = useProfileProjects(profile.id, initialProjects.length > 0 ? initialProjects : undefined);
-    const { data: stats, isLoading: statsLoading } = useProfileStats(profile.id, initialStats);
-
-    // OPTIMISTIC STATE ("Smooth Working"):
-    // Initialized from server prop, but updated locally for instant feedback
-    const [optimisticProfile, setOptimisticProfile] = useState(profile);
-
-    // Sync if server prop changes (e.g. navigation)
     useEffect(() => {
-        setOptimisticProfile(profile);
-    }, [profile]);
+        if (projectsEnabled) return
+        if (activeTab === 'portfolio') {
+            setProjectsEnabled(true)
+            return
+        }
+        const timer = window.setTimeout(() => setProjectsEnabled(true), 120)
+        return () => window.clearTimeout(timer)
+    }, [activeTab, projectsEnabled])
 
-    // Handler for optimistic updates from children
-    const handleOptimisticUpdate = (updates: Partial<typeof profile>) => {
-        setOptimisticProfile(prev => ({ ...prev, ...updates }));
-    };
+    // Lazy Load Data
+    const { data: projects, isLoading: projectsLoading } = useProfileProjects(
+        profile.id,
+        initialProjects.length > 0 ? initialProjects : undefined,
+        projectsEnabled
+    );
+    const { data: stats, isLoading: statsLoading } = useProfileStats(profile.id, initialStats, true);
 
-    // Use simplified hooks
     const { sendRequest, acceptRequest, rejectRequest, cancelRequest, disconnect } = useConnectionMutations();
 
-    const [status, setStatus] = useState<any>(connectionStatus);
+    const status = connectionStatus;
     const [isLoading, setIsLoading] = useState(false);
-
-    // Sync with prop if it changes (e.g. from re-fetch)
-    useEffect(() => {
-        setStatus(connectionStatus);
-    }, [connectionStatus]);
 
     const resolveConnectionId = async () => {
         const result = await checkConnectionStatus(profile.id);
@@ -91,7 +86,7 @@ export function ProfileV2Client({
                     success: 'Connection request sent',
                     error: 'Failed to send request'
                 });
-                setStatus('pending_outgoing');
+                // Connection status will update on refetch
             } else if (status === 'pending_incoming') {
                 const connectionId = await resolveConnectionId();
                 await toast.promise(acceptRequest.mutateAsync(connectionId), {
@@ -99,7 +94,7 @@ export function ProfileV2Client({
                     success: 'Connection accepted',
                     error: 'Failed to accept request'
                 });
-                setStatus('accepted');
+                // Connection status will update on refetch
             }
         } catch (e) {
             console.error(e);
@@ -119,7 +114,7 @@ export function ProfileV2Client({
                     success: 'Request cancelled',
                     error: 'Failed to cancel request'
                 });
-                setStatus('none');
+                // Connection status will update on refetch
             } else if (status === 'pending_incoming') {
                 const connectionId = await resolveConnectionId();
                 await toast.promise(rejectRequest.mutateAsync(connectionId), {
@@ -127,7 +122,7 @@ export function ProfileV2Client({
                     success: 'Request declined',
                     error: 'Failed to decline request'
                 });
-                setStatus('none');
+                // Connection status will update on refetch
             } else if (status === 'accepted') {
                 const connectionId = await resolveConnectionId();
                 await toast.promise(disconnect.mutateAsync(connectionId), {
@@ -135,7 +130,6 @@ export function ProfileV2Client({
                     success: 'Disconnected',
                     error: 'Failed to disconnect'
                 });
-                setStatus('none');
             }
         } catch (e) {
             console.error(e);
@@ -144,8 +138,7 @@ export function ProfileV2Client({
         }
     };
 
-    // Helper to safely access missing schema fields
-    const safeProfile = optimisticProfile as any
+    const safeProfile = profile as any
 
     // Safe derived values
     const safeProjects = projects || [];
@@ -161,9 +154,9 @@ export function ProfileV2Client({
                 return (
                     <div className="space-y-6">
                         <AboutCard
-                            profile={optimisticProfile}
+                            profile={profile}
                             isOwner={isOwner}
-                            onBioUpdated={(bio) => handleOptimisticUpdate({ bio })}
+                            onBioUpdated={() => {}}
                         />
                         {/* Featured Projects - Pass loading state if possible or just skeleton */}
                         {projectsLoading && safeProjects.length === 0 ? (
@@ -186,7 +179,7 @@ export function ProfileV2Client({
                             />
                         </div>
                         <SkillsCard
-                            skills={optimisticProfile.skills || []}
+                            skills={profile.skills || []}
                             isOwner={isOwner}
                         />
                     </div>
@@ -209,7 +202,7 @@ export function ProfileV2Client({
             <ProfileShell
                 header={
                     <ProfileHeader
-                        profile={optimisticProfile}
+                        profile={profile}
                         isOwner={isOwner}
                         isAuthenticated={!!currentUser}
                         connectionState={status}
@@ -217,7 +210,7 @@ export function ProfileV2Client({
                         onEdit={() => setIsEditModalOpen(true)}
                         onConnectPrimary={handleConnectPrimary}
                         onConnectSecondary={handleConnectSecondary}
-                        onMessage={() => router.push(`/messages?userId=${optimisticProfile.id}`)}
+                        onMessage={() => router.push(`/messages?userId=${profile.id}`)}
                         onInvite={() => {}}
                         mutualCount={safeStats.mutualCount}
                     />
@@ -231,10 +224,10 @@ export function ProfileV2Client({
                 main={renderMainContent()}
                 rail={
                     <ProfileRightRail
-                        profile={optimisticProfile}
+                        profile={profile}
                         stats={safeStats}
                         isOwner={isOwner}
-                        socialLinks={optimisticProfile.socialLinks || []}
+                        socialLinks={profile.socialLinks || []}
                         onInvite={() => {}}
                         onConnectionsClick={() => setShowConnectionsModal(true)}
                     />
@@ -245,8 +238,8 @@ export function ProfileV2Client({
                 <EditProfileModal
                     open={isEditModalOpen}
                     onOpenChange={setIsEditModalOpen}
-                    profile={optimisticProfile}
-                    onOptimisticUpdate={handleOptimisticUpdate}
+                    profile={profile}
+                    onOptimisticUpdate={undefined}
                 />
             )}
 

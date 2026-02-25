@@ -48,7 +48,11 @@ export function MessageThread({ messages, conversationId }: MessageThreadProps) 
 
     // Auto-scroll to bottom on new messages when user is already at bottom
     useEffect(() => {
-        if (messages.length > prevMessagesLengthRef.current && isAtBottomRef.current) {
+        if (
+            messages.length > prevMessagesLengthRef.current &&
+            isAtBottomRef.current &&
+            initialBottomAppliedForConversationRef.current === conversationId
+        ) {
             virtuosoRef.current?.scrollToIndex({
                 index: 'LAST',
                 align: 'end',
@@ -56,7 +60,7 @@ export function MessageThread({ messages, conversationId }: MessageThreadProps) 
             });
         }
         prevMessagesLengthRef.current = messages.length;
-    }, [messages.length]);
+    }, [conversationId, messages.length]);
 
     // Scroll when typing users change (only if at bottom)
     useEffect(() => {
@@ -170,7 +174,6 @@ export function MessageThread({ messages, conversationId }: MessageThreadProps) 
                 style={{ height: '100%', flex: 1 }}
                 data={items}
                 initialTopMostItemIndex={initialTopMostItemIndex} // Start at bottom
-                followOutput="smooth" // Auto-scroll on new messages
                 alignToBottom // Stick to bottom on load
                 atBottomStateChange={(atBottom) => {
                     isAtBottomRef.current = atBottom;

@@ -1,9 +1,10 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useCallback } from "react";
 import { motion } from "framer-motion";
 import { X, ChevronRight, CheckSquare, MessageCircle, Paperclip, Activity, CheckCircle2, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useTaskCounts } from "@/hooks/useTaskCounts";
 import { deleteTaskAction } from "@/app/actions/project";
 import TaskStatusBadge from "./badges/TaskStatusBadge";
@@ -39,27 +40,18 @@ export default function TaskDetailPanel({
     const [activeTab, setActiveTab] = useState<"details" | "subtasks" | "comments" | "files" | "activity">("details");
     const [isDeleting, setIsDeleting] = useState(false);
     const [deleteError, setDeleteError] = useState<string | null>(null);
+    const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
     const taskId = task?.id ?? "";
     
-    // Optimized data hooks (Lazy loading logic)
-    // We only fetch counts for the tabs header initially
     const { counts } = useTaskCounts(taskId);
 
-    // Early return if no task
-    if (!task) return null;
-
-    const handleDeleteTask = async () => {
+    const confirmDeleteTask = useCallback(async () => {
         setDeleteError(null);
-        if (!confirm("Are you sure you want to delete this task? This action cannot be undone.")) {
-            return;
-        }
-
         setIsDeleting(true);
         try {
-            const result = await deleteTaskAction(task.id, projectId);
+            const result = await deleteTaskAction(task?.id ?? "", projectId);
             if (result.success) {
-                onClose(); // Close panel
-                // Task will be removed via realtime subscription
+                onClose();
             } else {
                 setDeleteError(result.error || "Failed to delete task");
                 setIsDeleting(false);
@@ -69,6 +61,13 @@ export default function TaskDetailPanel({
             setDeleteError("An error occurred while deleting the task");
             setIsDeleting(false);
         }
+    }, [task?.id, projectId, onClose]);
+
+    if (!task) return null;
+
+    const handleDeleteTask = () => {
+        setDeleteError(null);
+        setShowDeleteConfirm(true);
     };
 
     return (
@@ -184,6 +183,15 @@ export default function TaskDetailPanel({
                     )}
                 </div>
             </motion.div>
+            <ConfirmDialog
+                open={showDeleteConfirm}
+                onOpenChange={setShowDeleteConfirm}
+                title="Delete Task"
+                description="Are you sure you want to delete this task? This action cannot be undone."
+                confirmLabel="Delete"
+                variant="destructive"
+                onConfirm={confirmDeleteTask}
+            />
         </>
     );
 }

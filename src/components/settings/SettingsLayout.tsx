@@ -12,6 +12,7 @@ import {
     Shield,
     Plug,
     ChevronDown,
+    Code2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -23,12 +24,6 @@ type SettingsItem = {
 };
 
 const settingsItems: SettingsItem[] = [
-    {
-        title: "Profile",
-        href: "/profile",
-        icon: User,
-        description: "Public profile, avatar, and bio",
-    },
     {
         title: "Account",
         href: "/settings/account",
@@ -64,6 +59,12 @@ const settingsItems: SettingsItem[] = [
         href: "/settings/integrations",
         icon: Plug,
         description: "Connected services and apps",
+    },
+    {
+        title: "Languages",
+        href: "/settings/languages",
+        icon: Code2,
+        description: "Code execution runtimes and preferences",
     },
 ];
 

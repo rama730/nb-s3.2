@@ -63,6 +63,61 @@ export const profiles = pgTable('profiles', {
     projectsCountIdx: index('profiles_projects_count_idx').on(t.projectsCount),
 }))
 
+export const reservedUsernames = pgTable('reserved_usernames', {
+    username: text('username').primaryKey(),
+    reason: text('reason'),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+})
+
+export const profileAuditEvents = pgTable('profile_audit_events', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id').references(() => profiles.id, { onDelete: 'set null' }),
+    eventType: text('event_type').notNull(),
+    previousValue: jsonb('previous_value').$type<Record<string, unknown> | null>().default(null),
+    nextValue: jsonb('next_value').$type<Record<string, unknown> | null>().default(null),
+    metadata: jsonb('metadata').$type<Record<string, unknown>>().default({}).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+    userEventIdx: index('profile_audit_events_user_event_idx').on(t.userId, t.eventType, t.createdAt),
+    userCreatedIdx: index('profile_audit_events_user_created_idx').on(t.userId, t.createdAt),
+}))
+
+export const onboardingDrafts = pgTable('onboarding_drafts', {
+    userId: uuid('user_id').primaryKey().references(() => profiles.id, { onDelete: 'cascade' }),
+    step: integer('step').default(1).notNull(),
+    version: integer('version').default(1).notNull(),
+    draft: jsonb('draft').$type<Record<string, unknown>>().default({}).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+    updatedAtIdx: index('onboarding_drafts_updated_at_idx').on(t.updatedAt),
+}))
+
+export const onboardingEvents = pgTable('onboarding_events', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id').references(() => profiles.id, { onDelete: 'set null' }),
+    eventType: text('event_type').notNull(),
+    step: integer('step'),
+    metadata: jsonb('metadata').$type<Record<string, unknown>>().default({}).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+    userIdx: index('onboarding_events_user_idx').on(t.userId, t.createdAt),
+    eventIdx: index('onboarding_events_event_idx').on(t.eventType, t.createdAt),
+}))
+
+export const onboardingSubmissions = pgTable('onboarding_submissions', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
+    idempotencyKey: text('idempotency_key').notNull(),
+    status: text('status', { enum: ['processing', 'completed', 'failed'] }).default('processing').notNull(),
+    response: jsonb('response').$type<Record<string, unknown>>().default({}).notNull(),
+    claimsRepairedAt: timestamp('claims_repaired_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+    userKeyUniqueIdx: uniqueIndex('onboarding_submissions_user_key_uidx').on(t.userId, t.idempotencyKey),
+    statusUpdatedIdx: index('onboarding_submissions_status_updated_idx').on(t.status, t.updatedAt),
+}))
+
 // ============================================================================
 // CONNECTIONS TABLE
 // ============================================================================
@@ -150,6 +205,11 @@ export const projects = pgTable('projects', {
         metadata?: ImportSourceMetadata;
     }>(),
     syncStatus: text('sync_status', { enum: ['pending', 'cloning', 'indexing', 'ready', 'failed'] }).default('ready').notNull(),
+    githubRepoUrl: text('github_repo_url'),
+    githubDefaultBranch: text('github_default_branch').default('main'),
+    githubLastSyncAt: timestamp('github_last_sync_at', { withTimezone: true }),
+    githubLastCommitSha: text('github_last_commit_sha'),
+
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
@@ -358,6 +418,9 @@ export const projectNodes = pgTable('project_nodes', {
 
     // Metadata
     metadata: jsonb('metadata').$type<Record<string, unknown>>().default({}),
+
+    // Git tracking
+    gitHash: text('git_hash'),
 
     // Audit
     createdBy: uuid('created_by').references(() => profiles.id, { onDelete: 'set null' }),
@@ -949,6 +1012,16 @@ export const messageAttachmentsRelations = relations(messageAttachments, ({ one 
 // ============================================================================
 export type Profile = typeof profiles.$inferSelect
 export type NewProfile = typeof profiles.$inferInsert
+export type ReservedUsername = typeof reservedUsernames.$inferSelect
+export type NewReservedUsername = typeof reservedUsernames.$inferInsert
+export type ProfileAuditEvent = typeof profileAuditEvents.$inferSelect
+export type NewProfileAuditEvent = typeof profileAuditEvents.$inferInsert
+export type OnboardingDraft = typeof onboardingDrafts.$inferSelect
+export type NewOnboardingDraft = typeof onboardingDrafts.$inferInsert
+export type OnboardingEvent = typeof onboardingEvents.$inferSelect
+export type NewOnboardingEvent = typeof onboardingEvents.$inferInsert
+export type OnboardingSubmission = typeof onboardingSubmissions.$inferSelect
+export type NewOnboardingSubmission = typeof onboardingSubmissions.$inferInsert
 export type Connection = typeof connections.$inferSelect
 export type NewConnection = typeof connections.$inferInsert
 export type ConnectionSuggestionDismissal = typeof connectionSuggestionDismissals.$inferSelect

@@ -30,6 +30,7 @@ interface ProjectLayoutProps {
     followLoading?: boolean;
     onShare?: () => void;
     onTabHover?: (tabId: string) => void;
+    onTabLeave?: (tabId: string) => void;
 }
 
 const TABS = [
@@ -49,6 +50,7 @@ export default function ProjectLayout({
     onEdit,
     isBookmarked, onBookmark, bookmarkLoading, isFollowing, onFollow, followLoading, onShare,
     onTabHover,
+    onTabLeave,
 }: ProjectLayoutProps) {
     const [isScrolled, setIsScrolled] = useState(false);
 
@@ -217,8 +219,10 @@ export default function ProjectLayout({
                             return (
                                 <button
                                     key={tab.id}
+                                    data-testid={`project-tab-${tab.id}`}
                                     onClick={() => onTabChange(tab.id)}
                                     onMouseEnter={() => onTabHover?.(tab.id)}
+                                    onMouseLeave={() => onTabLeave?.(tab.id)}
                                     className={cn(
                                         "relative flex items-center gap-2 px-4 py-3 text-sm font-medium transition-all whitespace-nowrap",
                                         isActive

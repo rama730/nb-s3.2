@@ -10,29 +10,52 @@ interface InMemoryBucket {
     resetAt: number;
 }
 
+const LOCAL_BUCKETS_MAX = 10_000;
 const localBuckets = new Map<string, InMemoryBucket>();
 let hasLoggedLocalFallback = false;
+let hasLoggedRedisCommandFailure = false;
+
+const RATE_LIMIT_INCREMENT_SCRIPT = `
+local current = redis.call('INCR', KEYS[1])
+if current == 1 then
+  redis.call('EXPIRE', KEYS[1], tonumber(ARGV[1]))
+end
+return current
+`;
 
 type RateLimitMode = 'best-effort' | 'distributed-only';
 
 function getRateLimitMode(): RateLimitMode {
-    return process.env.RATE_LIMIT_MODE === 'distributed-only' ? 'distributed-only' : 'best-effort';
+    if (process.env.RATE_LIMIT_MODE === 'distributed-only') return 'distributed-only';
+    if (process.env.RATE_LIMIT_MODE === 'best-effort') return 'best-effort';
+    return process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test'
+        ? 'best-effort'
+        : 'distributed-only';
 }
 
-const cleanupLocalBuckets = () => {
+function cleanupLocalBuckets() {
     const now = Date.now();
     for (const [key, bucket] of localBuckets) {
         if (bucket.resetAt <= now) {
             localBuckets.delete(key);
         }
     }
-};
+    if (localBuckets.size > LOCAL_BUCKETS_MAX) {
+        const excess = localBuckets.size - LOCAL_BUCKETS_MAX;
+        const iter = localBuckets.keys();
+        for (let i = 0; i < excess; i++) {
+            const key = iter.next().value;
+            if (key) localBuckets.delete(key);
+        }
+    }
+}
 
-const getRedisClient = async () => {
+let cachedRedisClient: Awaited<ReturnType<typeof createRedisClient>> | undefined;
+
+async function createRedisClient() {
     if (!process.env.UPSTASH_REDIS_REST_URL || !process.env.UPSTASH_REDIS_REST_TOKEN) {
         return null;
     }
-
     try {
         const redisPackage = await import('@upstash/redis');
         return new redisPackage.Redis({
@@ -42,7 +65,13 @@ const getRedisClient = async () => {
     } catch {
         return null;
     }
-};
+}
+
+async function getRedisClient() {
+    if (cachedRedisClient !== undefined) return cachedRedisClient;
+    cachedRedisClient = await createRedisClient();
+    return cachedRedisClient;
+}
 
 async function consumeLocalRateLimit(identifier: string, limit: number, windowSeconds: number): Promise<RateLimitResult> {
     cleanupLocalBuckets();
@@ -76,6 +105,8 @@ export async function consumeRateLimit(
     limit: number,
     windowSeconds: number,
 ): Promise<RateLimitResult> {
+    cleanupLocalBuckets();
+
     const redis = await getRedisClient();
     const mode = getRateLimitMode();
 
@@ -102,22 +133,28 @@ export async function consumeRateLimit(
     const redisKey = `ratelimit:${identifier}:${windowBucket}`;
 
     try {
-        const count = await redis.incr(redisKey);
-        if (count === 1) {
-            await redis.expire(redisKey, windowSeconds);
-        }
+        const rawCount = await redis.eval(
+            RATE_LIMIT_INCREMENT_SCRIPT,
+            [redisKey],
+            [String(windowSeconds)],
+        );
+        const count = Number(rawCount);
+        const normalizedCount = Number.isFinite(count) ? count : 0;
 
         return {
-            allowed: count <= limit,
-            count,
+            allowed: normalizedCount <= limit,
+            count: normalizedCount,
             limit,
             resetAt: (windowBucket + 1) * windowSeconds * 1000,
         };
     } catch (error) {
-        console.warn('[rate-limit] Redis command failed, applying fallback behavior', {
-            mode,
-            error: error instanceof Error ? error.message : String(error),
-        });
+        if (!hasLoggedRedisCommandFailure) {
+            hasLoggedRedisCommandFailure = true;
+            console.warn('[rate-limit] Redis command failed, applying fallback behavior', {
+                mode,
+                error: error instanceof Error ? error.message : String(error),
+            });
+        }
         if (mode === 'distributed-only') {
             return {
                 allowed: false,

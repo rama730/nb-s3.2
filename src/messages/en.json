@@ -1,0 +1,61 @@
+{
+    "common": {
+        "loading": "Loading...",
+        "error": "Something went wrong",
+        "tryAgain": "Try again",
+        "save": "Save",
+        "cancel": "Cancel",
+        "delete": "Delete",
+        "edit": "Edit",
+        "search": "Search",
+        "noResults": "No results found",
+        "back": "Back"
+    },
+    "auth": {
+        "login": "Log in",
+        "signup": "Sign up",
+        "logout": "Log out",
+        "email": "Email",
+        "password": "Password",
+        "forgotPassword": "Forgot password?",
+        "orContinueWith": "Or continue with",
+        "google": "Continue with Google",
+        "github": "Continue with GitHub"
+    },
+    "hub": {
+        "title": "Projects Hub",
+        "noProjects": "No Projects Found",
+        "adjustFilters": "Adjust your filters or create a new project.",
+        "clearFilters": "Clear Filters",
+        "startProject": "Start New Project",
+        "viewAll": "View all",
+        "trending": "Trending",
+        "recent": "Recent"
+    },
+    "settings": {
+        "title": "Settings",
+        "account": "Account",
+        "profile": "Profile",
+        "appearance": "Appearance",
+        "notifications": "Notifications",
+        "security": "Security",
+        "sessions": "Sessions",
+        "dangerZone": "Danger Zone",
+        "deleteAccount": "Delete Account"
+    },
+    "messages": {
+        "title": "Messages",
+        "searchConversations": "Search conversations...",
+        "noMessages": "No messages yet",
+        "startConversation": "Start a conversation from someone's profile",
+        "typeMessage": "Type a message...",
+        "send": "Send"
+    },
+    "people": {
+        "title": "People",
+        "connections": "Connections",
+        "requests": "Requests",
+        "suggestions": "Suggestions",
+        "noConnections": "No connections yet"
+    }
+}

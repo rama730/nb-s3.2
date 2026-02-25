@@ -34,6 +34,9 @@ import { createClient } from "@/lib/supabase/server";
 import { getUserProfile } from "@/lib/data/profile";
 import { AuthProvider } from "@/components/providers/AuthProvider";
 import { RealtimeProvider } from "@/components/providers/RealtimeProvider";
+import { NextIntlClientProvider } from "next-intl";
+import { getMessages } from "next-intl/server";
+import "@/lib/env";
 
 export default async function RootLayout({
   children,
@@ -43,6 +46,7 @@ export default async function RootLayout({
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   const userProfile = user ? await getUserProfile(user.id) : null;
+  const messages = await getMessages();
 
   return (
     <html lang="en" suppressHydrationWarning>
@@ -68,19 +72,21 @@ export default async function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} font-sans antialiased`}
       >
-        <ThemeProvider>
-          <QueryProvider>
-            <AuthProvider initialUser={user} initialProfile={userProfile}>
-              <RealtimeProvider>
-                <ChatProvider>
-                  {children}
-                </ChatProvider>
-              </RealtimeProvider>
-            </AuthProvider>
-            <Toaster position="bottom-right" />
-            <Analytics />
-          </QueryProvider>
-        </ThemeProvider>
+        <NextIntlClientProvider messages={messages}>
+          <ThemeProvider>
+            <QueryProvider>
+              <AuthProvider initialUser={user} initialProfile={userProfile}>
+                <RealtimeProvider>
+                  <ChatProvider>
+                    {children}
+                  </ChatProvider>
+                </RealtimeProvider>
+              </AuthProvider>
+              <Toaster position="bottom-right" />
+              <Analytics />
+            </QueryProvider>
+          </ThemeProvider>
+        </NextIntlClientProvider>
       </body>
     </html>
   );
