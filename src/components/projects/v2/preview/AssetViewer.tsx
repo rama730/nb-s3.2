@@ -10,6 +10,7 @@ import {
   Info,
 } from "lucide-react";
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
+import { useShallow } from "zustand/react/shallow";
 import type { ProjectNode } from "@/lib/db/schema";
 import { Button } from "@/components/ui/button";
 import {
@@ -85,14 +86,17 @@ export default function AssetViewer({
   const [showMetadata, setShowMetadata] = useState(false);
   const filmstripRef = useRef<HTMLDivElement>(null);
 
-  const siblings = useFilesWorkspaceStore((s) => {
-    const ws = s._get(projectId);
-    const pk = parentKey(node.parentId);
-    const childIds = ws.childrenByParentId[pk] ?? [];
-    return childIds
-      .map((id) => ws.nodesById[id])
-      .filter((n): n is ProjectNode => !!n && isAssetLike(n));
-  });
+  const siblings = useFilesWorkspaceStore(
+    useShallow((s) => {
+      const ws = s._get(projectId);
+      const pk = parentKey(node.parentId);
+      const childIds = ws.childrenByParentId[pk];
+      if (!childIds) return [];
+      return childIds
+        .map((id) => ws.nodesById[id])
+        .filter((n): n is ProjectNode => !!n && isAssetLike(n));
+    })
+  );
 
   const currentIndex = useMemo(
     () => siblings.findIndex((s) => s.id === node.id),

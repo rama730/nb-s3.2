@@ -1,78 +1,86 @@
 # Database Migration Instructions
 
-## Run the Files Enhancement Migration
+This project now uses `project_nodes`-based files workspace tables and forward-only Drizzle SQL migrations.
 
-Since automated migration failed, please run this SQL manually in your
-**Supabase SQL Editor**:
+## 1) Apply migrations (canonical path)
 
-### Step 1: Navigate to Supabase SQL Editor
+Run from repo root:
 
-Go to: https://supabase.com/dashboard/project/YOUR_PROJECT_ID/sql/new
-
-### Step 2: Copy and Execute This SQL
-
-```sql
--- Files Tab Enhancement Migration
--- Adds support for custom naming, categories, descriptions, and better organization
-
--- 1. Add new columns to task_files table
-ALTER TABLE task_files 
-ADD COLUMN IF NOT EXISTS custom_name TEXT,
-ADD COLUMN IF NOT EXISTS description TEXT,
-ADD COLUMN IF NOT EXISTS category VARCHAR(50) DEFAULT 'general',
-ADD COLUMN IF NOT EXISTS tags JSONB DEFAULT '[]'::jsonb,
-ADD COLUMN IF NOT EXISTS display_order INTEGER DEFAULT 0;
-
--- 2. Create indexes for performance (critical for fast queries)
-CREATE INDEX IF NOT EXISTS idx_task_files_category ON task_files(category);
-CREATE INDEX IF NOT EXISTS idx_task_files_created_at_desc ON task_files(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_task_files_task_order ON task_files(task_id, created_at DESC);
-
--- 3. Create GIN index for JSONB tags (fast tag searches)
-CREATE INDEX IF NOT EXISTS idx_task_files_tags ON task_files USING GIN(tags);
-
--- 4. Update existing records to have custom_name = file_name if null
-UPDATE task_files 
-SET custom_name = file_name 
-WHERE custom_name IS NULL;
-
--- 5. Add comments for documentation
-COMMENT ON COLUMN task_files.custom_name IS 'User-provided display name (e.g., "Bug Report Screenshot")';
-COMMENT ON COLUMN task_files.description IS 'Optional file description';
-COMMENT ON COLUMN task_files.category IS 'File category: general, design, code, docs, media, bug-report, feature';
-COMMENT ON COLUMN task_files.tags IS 'Array of tags for flexible categorization';
-COMMENT ON COLUMN task_files.display_order IS 'Manual ordering within task (0 = chronological)';
+```bash
+npm run check:db:migration-journal
+npm run db:push
 ```
 
-### Step 3: Verify Migration
+For environments where `db:push` is restricted, apply SQL files in `drizzle/` sequentially via Supabase SQL Editor.
 
-After running the SQL, verify it worked:
+## 2) Required hardening migrations
 
-```sql
--- Check if columns were added
-SELECT 
-    column_name, 
-    data_type, 
-    column_default 
-FROM information_schema.columns 
-WHERE table_name = 'task_files' 
-AND column_name IN ('custom_name', 'description', 'category', 'tags', 'display_order');
+These migrations must be present in target environments:
 
--- Check if indexes were created
-SELECT indexname 
-FROM pg_indexes 
-WHERE tablename = 'task_files' 
-AND indexname LIKE 'idx_task_files_%';
+- `0033_onboarding_username_guardrails.sql`
+- `0041_username_rules_schema_qualification.sql`
+- `0042_schema_hardening_constraints_and_fks.sql`
+- `0043_project_files_key_policy_dual_read.sql`
+- `0044_onboarding_profile_extended_preferences.sql`
+
+They fix:
+
+- username trigger schema qualification (`public.reserved_usernames`)
+- FK `ON DELETE` policy consistency for project ownership trees
+- new integrity checks (`connections`, `project_open_roles`, `project_nodes`)
+- new scale indexes for `project_nodes`
+- dual-read/canonical-write `project-files` storage policy alignment
+- onboarding preference columns and constraints (`experience_level`, `hours_per_week`, `gender_identity`, `pronouns`)
+
+## 3) Post-migration verification
+
+Run:
+
+```bash
+npm run check:db:migration-journal
+npm run seed:e2e:fixtures
+npm run cleanup:e2e:fixtures
 ```
 
-You should see:
+Then execute smoke coverage:
 
-- 5 new columns
-- 4 new indexes
+```bash
+npx playwright test tests/e2e/files-tab-smoke.spec.ts tests/e2e/project-tabs-matrix.spec.ts
+```
 
-### Step 4: Test the Files Tab
+## 4) Quick SQL validation snippets
 
-1. Go to any project in your application
-2. Click on the "Files" tab
-3. Try uploading a file with custom naming
-4. Verify the task-grouped view displays correctly
+```sql
+-- Username guardrail function should reference public.reserved_usernames
+select pg_get_functiondef('public.enforce_profile_username_rules'::regproc);
+
+-- Integrity checks should exist
+select conname
+from pg_constraint
+where conname in (
+  'connections_no_self_check',
+  'project_open_roles_count_non_negative_check',
+  'project_open_roles_filled_non_negative_check',
+  'project_open_roles_filled_lte_count_check',
+  'project_nodes_no_self_parent_check'
+);
+
+-- FK behavior should be cascade for ownership tree tables
+select conname, confdeltype
+from pg_constraint
+where conname in (
+  'tasks_project_id_projects_id_fk',
+  'project_nodes_project_id_projects_id_fk',
+  'project_run_profiles_project_id_projects_id_fk',
+  'project_run_sessions_project_id_projects_id_fk'
+);
+```
+
+`confdeltype = 'c'` means `ON DELETE CASCADE`.
+
+## 5) Onboarding draft cleanup plan (target: June 30, 2026)
+
+- Keep dual local draft read support (`onboarding:draft:v2` + legacy `onboarding:draft:v1`) during the transition window.
+- Emit onboarding telemetry (`draft_loaded`) with `localDraftSource` to measure remaining `v1` usage.
+- After `v1` reads are <1% for 14 consecutive days, remove `v1` read fallback in code.
+- Keep new profile preference columns (`experience_level`, `hours_per_week`, `gender_identity`, `pronouns`) as canonical; do not introduce alternate legacy fields.

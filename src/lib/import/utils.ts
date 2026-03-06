@@ -6,6 +6,7 @@ import { db } from '@/lib/db';
 import { projectNodes } from '@/lib/db/schema';
 import { eq, and, inArray, isNull, sql } from 'drizzle-orm';
 import { IGNORED_DIRS, isTooLarge } from '@/lib/import/import-filters';
+import { buildProjectFileKey } from '@/lib/storage/project-file-key';
 
 export interface ScannedFile {
     relativePath: string;
@@ -310,7 +311,7 @@ export async function uploadToStorageAndDB(
             const dir = path.posix.dirname(rel);
             const parentId = dir === '.' ? null : folderMap.get(dir) || null;
             const name = path.posix.basename(rel);
-            const s3Key = `${projectId}/${rel}`;
+            const s3Key = buildProjectFileKey(projectId, rel);
             return { name, parentId, s3Key, size: file.size, mimeType: file.mimeType };
         });
 
@@ -389,7 +390,7 @@ export async function uploadToStorageAndDB(
         const results = await runWithConcurrency(batch, UPLOAD_CONCURRENCY, async (file) => {
             try {
                 const rel = normalizeRelativePath(file.relativePath);
-                const s3Key = `${projectId}/${rel}`;
+                const s3Key = buildProjectFileKey(projectId, rel);
                 const content = await fs.readFile(file.absolutePath);
                 const { error: uploadError } = await adminClient.storage
                     .from('project-files')
@@ -460,7 +461,7 @@ export async function uploadRepoFiles(
             const dir = path.posix.dirname(rel);
             const parentId = dir === '.' ? null : folderMap.get(dir) || null;
             const name = path.posix.basename(rel);
-            const s3Key = `${projectId}/${rel}`;
+            const s3Key = buildProjectFileKey(projectId, rel);
             return { name, parentId, s3Key, size: file.size, mimeType: file.mimeType };
         });
 
@@ -553,7 +554,7 @@ export async function uploadRepoFiles(
             const results = await runWithConcurrency(batch, UPLOAD_CONCURRENCY, async (f) => {
                 try {
                     const rel = normalizeRelativePath(f.relativePath);
-                    const s3Key = `${projectId}/${rel}`;
+                    const s3Key = buildProjectFileKey(projectId, rel);
                     const content = await fs.readFile(f.absolutePath);
                     const { error: uploadError } = await adminClient.storage
                         .from('project-files')
@@ -585,7 +586,7 @@ export async function uploadRepoFiles(
         const results = await runWithConcurrency(batch, UPLOAD_CONCURRENCY, async (f) => {
             try {
                 const rel = normalizeRelativePath(f.relativePath);
-                const s3Key = `${projectId}/${rel}`;
+                const s3Key = buildProjectFileKey(projectId, rel);
                 const content = await fs.readFile(f.absolutePath);
                 const { error: uploadError } = await adminClient.storage
                     .from('project-files')

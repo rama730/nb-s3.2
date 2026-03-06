@@ -15,6 +15,12 @@ export {
   DEFAULT_UI_STATE,
   ROOT_KEY,
   parentKey,
+  contentKey,
+  getFileContent,
+  setFileContent,
+  deleteFileContent,
+  clearProjectContent,
+  contentMapSize,
 } from "./files";
 
 export type {

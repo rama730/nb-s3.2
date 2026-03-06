@@ -1,13 +1,13 @@
 import { NextResponse } from 'next/server'
 import { pingDb } from '@/lib/db'
-import { consumeRateLimit } from '@/lib/security/rate-limit'
+import { consumeRateLimitForRoute } from '@/lib/security/rate-limit'
 import { getEnv } from '@/lib/env'
 
 export const dynamic = 'force-dynamic'
 
 export async function GET(request: Request) {
     const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown'
-    const { allowed } = await consumeRateLimit(`health:${ip}`, 60, 60)
+    const { allowed } = await consumeRateLimitForRoute('health', `health:${ip}`, 60, 60)
     if (!allowed) {
         return NextResponse.json({ error: 'Rate limit exceeded' }, { status: 429 })
     }

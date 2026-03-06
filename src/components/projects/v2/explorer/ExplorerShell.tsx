@@ -10,6 +10,29 @@ import {
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 import OutlinePanel from "./OutlinePanel";
 import SourceControlPanel from "./SourceControlPanel";
+import MultiFileDiffDialog from "./MultiFileDiffDialog";
+import { cn } from "@/lib/utils";
+
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from "@/components/ui/dropdown-menu";
+import {
+  FolderOpen,
+  StarOff,
+  Star,
+  FilePlus2,
+  FolderPlus,
+  Upload,
+  FolderInput,
+  Download,
+  Pencil,
+  Trash2,
+  RotateCcw,
+  Check,
+  ArrowRightLeft,
+} from "lucide-react";
 
 import {
   type ExplorerProps,
@@ -27,6 +50,7 @@ import { ExplorerToolbarHost } from "./ExplorerToolbarHost";
 import { ExplorerOperationsHost } from "./ExplorerOperationsHost";
 import { ExplorerInsightsHost } from "./ExplorerInsightsHost";
 import { ExplorerDialogsHost } from "./ExplorerDialogsHost";
+import { MultiSelectActionsBar } from "./MultiSelectActionsBar";
 import { useExplorerOperationLog } from "./useExplorerOperationLog";
 import { useExplorerMutations } from "./useExplorerMutations";
 
@@ -175,6 +199,14 @@ export default function ExplorerShell({
   >([]);
   const [insightsLoading, setInsightsLoading] = useState(false);
   const [insightsError, setInsightsError] = useState<string | null>(null);
+
+  // --- Comparison state (Phase 2e) ---
+  const [compareSourceId, setCompareSourceId] = useState<string | null>(null);
+  const [compareDialog, setCompareDialog] = useState({
+    open: false,
+    baseNode: null as ProjectNode | null,
+    compareNode: null as ProjectNode | null,
+  });
   // --- Refs ---
   const containerRef = useRef<HTMLDivElement | null>(null);
 
@@ -291,6 +323,7 @@ export default function ExplorerShell({
     openCreateInFolder,
     confirmCreate,
     openUpload,
+    openFolderUpload,
     openRename,
     confirmRename,
     openDelete,
@@ -300,6 +333,8 @@ export default function ExplorerShell({
     handleMoveFromMenu,
     handleDeleteFromMenu,
     handleUploadToFolder,
+    handleDownloadFolder,
+    uploadFilesDirectly,
     runUniqueMutation,
   } = useExplorerMutations({
     projectId,
@@ -393,6 +428,15 @@ export default function ExplorerShell({
         node.id,
         node.type === "folder" ? node.id : node.parentId ?? null
       );
+
+      // Phase 5: Shallow URL VFS Routing
+      const fullPath = getNodePath(node);
+      if (fullPath) {
+        const url = new URL(window.location.href);
+        url.searchParams.set("path", fullPath);
+        window.history.replaceState({}, "", url.toString());
+      }
+
       if (node.type === "file") {
         addRecent(projectId, node.id);
         onOpenFile(node);
@@ -426,6 +470,61 @@ export default function ExplorerShell({
     recordOperation,
   });
 
+  // --- Context Menu State ---
+  const [contextMenuState, setContextMenuState] = useState<{
+    open: boolean;
+    x: number;
+    y: number;
+    node: ProjectNode | null;
+  }>({ open: false, x: 0, y: 0, node: null });
+
+  const handleContextMenu = useCallback((node: ProjectNode, e: React.MouseEvent) => {
+    e.preventDefault();
+    setContextMenuState({ open: true, x: e.clientX, y: e.clientY, node });
+  }, []);
+
+  // --- Inline rename callbacks for tree context ---
+  const handleRenameChange = useCallback((v: string) => {
+    setRenameState((prev) => ({ ...prev, value: v }));
+  }, [setRenameState]);
+
+  const handleInlineRenameConfirm = useCallback(() => {
+    if (!renameState.nodeId) return;
+    void confirmRename();
+  }, [renameState.nodeId, confirmRename]);
+
+  const handleInlineRenameCancel = useCallback(() => {
+    setRenameState({ nodeId: null, value: "", original: "" });
+  }, [setRenameState]);
+
+  // --- Desktop file drop handler (uses uploadFilesDirectly, NOT the picker) ---
+  const handleDesktopFileDrop = useCallback(
+    (files: File[], targetFolderId: string) => {
+      if (!canEdit || !files.length) return;
+      void uploadFilesDirectly(files, targetFolderId);
+    },
+    [canEdit, uploadFilesDirectly]
+  );
+
+  // --- Folder sizes (computed from nodesById) ---
+  const folderSizes = useMemo(() => {
+    const sizes: Record<string, number> = {};
+    const nodes = nodesById as Record<string, ProjectNode>;
+    for (const id in nodes) {
+      const node = nodes[id];
+      if (node.type !== "file" || !node.parentId || !node.size) continue;
+      let cursor: string | null = node.parentId;
+      let guard = 0;
+      while (cursor && guard < 50) {
+        sizes[cursor] = (sizes[cursor] || 0) + (node.size || 0);
+        const parentNode: ProjectNode | undefined = nodes[cursor];
+        cursor = parentNode?.parentId ?? null;
+        guard++;
+      }
+    }
+    return sizes;
+  }, [nodesById]);
+
   // --- Tree context ---
   const contextValue = useTreeContext({
     projectId,
@@ -443,6 +542,16 @@ export default function ExplorerShell({
     canEdit,
     projectName: projectName || "Project",
     effectiveMode,
+    // Inline rename
+    renameNodeId: renameState.nodeId,
+    renameValue: renameState.value,
+    onRenameChange: handleRenameChange,
+    onRenameConfirm: handleInlineRenameConfirm,
+    onRenameCancel: handleInlineRenameCancel,
+    // Desktop drop
+    onDesktopFileDrop: handleDesktopFileDrop,
+    // Folder sizes
+    folderSizes,
     handleSelect,
     handleToggleFolder,
     handleDropOnFolder,
@@ -450,6 +559,8 @@ export default function ExplorerShell({
     openCreate,
     openCreateInFolder,
     handleUploadToFolder,
+    handleUploadFolderToFolder: openFolderUpload,
+    handleDownloadFolder,
     openRename,
     handleMoveFromMenu,
     handleDeleteFromMenu,
@@ -460,6 +571,7 @@ export default function ExplorerShell({
     showToast,
     recordOperation,
     setTrashNodesState,
+    onContextMenu: handleContextMenu,
   });
 
   // --- Keyboard navigation ---
@@ -702,6 +814,7 @@ export default function ExplorerShell({
         onOpenCreateFolder={() => openCreate("folder")}
         onOpenCreateFile={() => openCreate("file")}
         onUpload={openUpload}
+        onUploadFolder={openFolderUpload}
       />
 
       {/* Main content area */}
@@ -719,6 +832,7 @@ export default function ExplorerShell({
             rowsToRender={rowsToRender}
             contextValue={contextValue}
             nodesById={nodesById as Record<string, ProjectNode>}
+            childrenByParentId={childrenByParentId}
             effectiveSelectedNodeIds={effectiveSelectedNodeIds as string[]}
             selectedNodeId={selectedNodeId}
             viewMode={viewMode}
@@ -728,9 +842,180 @@ export default function ExplorerShell({
             accessError={accessError}
             onSelect={handleSelect}
             onToggleFolder={handleToggleFolder}
+            onDropOnFolder={handleDropOnFolder}
+            onDownloadFolder={handleDownloadFolder}
           />
         )}
       </div>
+
+      {/* Multi-Select Actions Bar */}
+      <MultiSelectActionsBar
+        count={effectiveSelectedNodeIds.length}
+        canEdit={canEdit}
+        onMove={() => {
+          const nodes = effectiveSelectedNodeIds
+            .map((id) => (nodesById as Record<string, ProjectNode>)[id])
+            .filter(Boolean);
+          if (nodes.length > 0) openMove(nodes);
+        }}
+        onDelete={() => {
+          const nodes = effectiveSelectedNodeIds
+            .map((id) => (nodesById as Record<string, ProjectNode>)[id])
+            .filter(Boolean);
+          if (nodes.length > 0) openDelete(nodes);
+        }}
+        onCopyPaths={async () => {
+          const paths = effectiveSelectedNodeIds
+            .map((id) => {
+              const node = (nodesById as Record<string, ProjectNode>)[id];
+              return node ? getNodePath(node) : null;
+            })
+            .filter(Boolean)
+            .join("\n");
+          try {
+            await navigator.clipboard.writeText(paths);
+            showToast(`Copied ${effectiveSelectedNodeIds.length} paths`, "success");
+          } catch {
+            showToast("Failed to copy paths", "error");
+          }
+        }}
+        onClear={() => setSelectedNodeIds(projectId, [])}
+      />
+
+      {/* Phase 5: Centralized Portal Context Menu */}
+      <DropdownMenu
+        open={contextMenuState.open}
+        onOpenChange={(open) => setContextMenuState((prev) => ({ ...prev, open }))}
+      >
+        <div
+          style={{
+            position: "fixed",
+            left: contextMenuState.x,
+            top: contextMenuState.y,
+            width: 1,
+            height: 1,
+            pointerEvents: "none",
+          }}
+        />
+        <DropdownMenuContent
+          align="start"
+          className="w-48 absolute z-50"
+          style={{ left: contextMenuState.x, top: contextMenuState.y }}
+        >
+          {contextMenuState.node && explorerMode === "trash" ? (
+            <DropdownMenuItem
+              onClick={() => {
+                contextValue.restoreNode(contextMenuState.node!.id);
+              }}
+            >
+              <RotateCcw className="w-4 h-4 mr-2" />
+              Restore
+            </DropdownMenuItem>
+          ) : contextMenuState.node ? (
+            <>
+              <DropdownMenuItem
+                onClick={() => {
+                  contextValue.openNode(contextMenuState.node!);
+                }}
+              >
+                <FolderOpen className="w-4 h-4 mr-2" />
+                Open
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => {
+                  toggleFavorite(projectId, contextMenuState.node!.id);
+                }}
+              >
+                {favorites[contextMenuState.node.id] ? (
+                  <>
+                    <StarOff className="w-4 h-4 mr-2" />
+                    Remove favorite
+                  </>
+                ) : (
+                  <>
+                    <Star className="w-4 h-4 mr-2" />
+                    Add favorite
+                  </>
+                )}
+              </DropdownMenuItem>
+              {canEdit && contextMenuState.node.type === "folder" && (
+                <>
+                  <DropdownMenuItem onClick={() => openCreateInFolder(contextMenuState.node!.id, "file")}>
+                    <FilePlus2 className="w-4 h-4 mr-2" />
+                    New file
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => openCreateInFolder(contextMenuState.node!.id, "folder")}>
+                    <FolderPlus className="w-4 h-4 mr-2" />
+                    New folder
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => handleUploadToFolder(contextMenuState.node!.id)}>
+                    <Upload className="w-4 h-4 mr-2" />
+                    Upload file
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => openFolderUpload(contextMenuState.node!.id)}>
+                    <FolderInput className="w-4 h-4 mr-2" />
+                    Upload folder
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => handleDownloadFolder(contextMenuState.node!.id)}>
+                    <Download className="w-4 h-4 mr-2" />
+                    Download ZIP
+                  </DropdownMenuItem>
+                </>
+              )}
+              {canEdit && (
+                <>
+                  <DropdownMenuItem onClick={() => openRename(contextMenuState.node!)}>
+                    <Pencil className="w-4 h-4 mr-2" />
+                    Rename
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => handleMoveFromMenu(contextMenuState.node!)}>
+                    <FolderInput className="w-4 h-4 mr-2" />
+                    Move
+                  </DropdownMenuItem>
+                  
+                  {/* Phase 2e: Multi-file Comparison */}
+                  {contextMenuState.node.type === "file" && (
+                    <>
+                      <DropdownMenuItem
+                        onClick={() => {
+                          setCompareSourceId(contextMenuState.node!.id);
+                          showToast(`Selected "${contextMenuState.node!.name}" for comparison`, "info");
+                        }}
+                      >
+                        <Check className={cn("w-4 h-4 mr-2", compareSourceId === contextMenuState.node.id ? "text-indigo-500" : "opacity-0")} />
+                        Select for Comparison
+                      </DropdownMenuItem>
+                      {compareSourceId && compareSourceId !== contextMenuState.node.id && (
+                        <DropdownMenuItem
+                          onClick={() => {
+                            const base = nodesById[compareSourceId] as ProjectNode;
+                            setCompareDialog({
+                              open: true,
+                              baseNode: base,
+                              compareNode: contextMenuState.node!,
+                            });
+                          }}
+                        >
+                          <ArrowRightLeft className="w-4 h-4 mr-2" />
+                          Compare with Selected
+                        </DropdownMenuItem>
+                      )}
+                    </>
+                  )}
+
+                  <DropdownMenuItem
+                    className="text-red-600 focus:text-red-600 dark:text-red-400 dark:focus:text-red-400"
+                    onClick={() => handleDeleteFromMenu(contextMenuState.node!)}
+                  >
+                    <Trash2 className="w-4 h-4 mr-2" />
+                    Move to trash
+                  </DropdownMenuItem>
+                </>
+              )}
+            </>
+          ) : null}
+        </DropdownMenuContent>
+      </DropdownMenu>
 
       <ExplorerOperationsHost
         operationsOpen={operationsOpen}
@@ -787,6 +1072,14 @@ export default function ExplorerShell({
         toggleFavorite={toggleFavorite}
         getNodePath={getNodePath}
         mode={mode as "default" | "select"}
+      />
+
+      {/* Phase 2e: Comparison Dialog */}
+      <MultiFileDiffDialog
+        open={compareDialog.open}
+        onOpenChange={(open) => setCompareDialog((prev) => ({ ...prev, open }))}
+        baseNode={compareDialog.baseNode}
+        compareNode={compareDialog.compareNode}
       />
     </div>
   );

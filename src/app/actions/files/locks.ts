@@ -2,7 +2,7 @@
 
 import { db } from "@/lib/db";
 import { profiles, projectNodeEvents, projectNodeLocks, projectNodes } from "@/lib/db/schema";
-import { eq, and } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 import { createClient } from "@/lib/supabase/server";
 import {
     assertProjectWriteAccess,
@@ -145,4 +145,32 @@ export async function releaseProjectNodeLock(projectId: string, nodeId: string) 
     );
 
     await recordNodeEvent(projectId, user.id, nodeId, 'lock_release', {});
+}
+
+export async function getProjectLocks(projectId: string) {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    // This is read-only metadata; allow any project member to fetch.
+    const now = new Date();
+
+    const rows = await db
+        .select({
+            nodeId: projectNodeLocks.nodeId,
+            projectId: projectNodeLocks.projectId,
+            lockedBy: projectNodeLocks.lockedBy,
+            expiresAt: projectNodeLocks.expiresAt,
+            username: profiles.username,
+            fullName: profiles.fullName,
+        })
+        .from(projectNodeLocks)
+        .leftJoin(profiles, eq(projectNodeLocks.lockedBy, profiles.id))
+        .where(and(eq(projectNodeLocks.projectId, projectId), sql`${projectNodeLocks.expiresAt} > ${now}`));
+
+    return rows.map(r => ({
+        nodeId: r.nodeId,
+        projectId: r.projectId,
+        lockedBy: r.lockedBy,
+        lockedByName: r.fullName || r.username || null,
+        expiresAt: r.expiresAt.getTime(),
+    }));
 }

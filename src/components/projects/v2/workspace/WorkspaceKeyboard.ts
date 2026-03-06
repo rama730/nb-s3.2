@@ -1,52 +1,151 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 
 interface UseWorkspaceKeyboardOptions {
   onQuickOpen: () => void;
   onCommandPalette: () => void;
   onFindInProject: () => void;
+  onToggleSidebar: () => void;
+  onToggleZenMode: () => void;
+  onQuickSwitch: () => void;
   quickOpenOpen: boolean;
   commandOpen: boolean;
   onCloseQuickOpen: () => void;
   onCloseCommand: () => void;
+  onNewFile: () => void;
+  onSave: () => void;
+  onDelete: () => void;
+  onQuickLook: () => void;
+  onShowShortcuts: () => void;
 }
 
 export function useWorkspaceKeyboard({
   onQuickOpen,
   onCommandPalette,
   onFindInProject,
+  onToggleSidebar,
+  onToggleZenMode,
+  onQuickSwitch,
   quickOpenOpen,
   commandOpen,
   onCloseQuickOpen,
   onCloseCommand,
+  onNewFile,
+  onSave,
+  onDelete,
+  onQuickLook,
+  onShowShortcuts,
 }: UseWorkspaceKeyboardOptions) {
+  // Track Cmd+K chord for zen mode (Cmd+K then Z)
+  const chordRef = useRef(false);
+  const chordTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
-      if (
+      const isEditable =
         target?.tagName === "INPUT" ||
         target?.tagName === "TEXTAREA" ||
-        target?.isContentEditable
-      ) {
+        target?.isContentEditable;
+
+      // --- Chord: Cmd+K then Z → zen mode ---
+      if (chordRef.current && e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        chordRef.current = false;
+        if (chordTimerRef.current) { clearTimeout(chordTimerRef.current); chordTimerRef.current = null; }
+        onToggleZenMode();
         return;
       }
+      chordRef.current = false;
+      if (chordTimerRef.current) { clearTimeout(chordTimerRef.current); chordTimerRef.current = null; }
+
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "k") {
+        chordRef.current = true;
+        chordTimerRef.current = setTimeout(() => { chordRef.current = false; chordTimerRef.current = null; }, 1000);
+        return;
+      }
+
+      if (isEditable) return;
+
+      // Cmd+N -> New File
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "n") {
+        e.preventDefault();
+        onNewFile();
+        return;
+      }
+      // Cmd+S -> Save
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        onSave();
+        return;
+      }
+      // Cmd+Backspace -> Delete
+      if ((e.metaKey || e.ctrlKey) && e.key === "Backspace") {
+        e.preventDefault();
+        onDelete();
+        return;
+      }
+      // Space -> Quick Look
+      if (e.key === " " && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
+        e.preventDefault();
+        onQuickLook();
+        return;
+      }
+
+      // Cmd+P → quick open
       if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "p") {
         e.preventDefault();
         onQuickOpen();
         return;
       }
+      // Cmd+Shift+P → command palette
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "p") {
         e.preventDefault();
         onCommandPalette();
         return;
       }
+      // Cmd+Shift+F → find in project
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "f") {
         e.preventDefault();
         onFindInProject();
+        return;
+      }
+      // Cmd+B → toggle sidebar
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "b") {
+        e.preventDefault();
+        onToggleSidebar();
+        return;
+      }
+      // Ctrl+Tab → quick switch recent file
+      if (e.ctrlKey && !e.metaKey && e.key === "Tab") {
+        e.preventDefault();
+        onQuickSwitch();
+        return;
+      }
+      // Cmd+/ → show shortcuts
+      if ((e.metaKey || e.ctrlKey) && e.key === "/") {
+        e.preventDefault();
+        onShowShortcuts();
+        return;
       }
     };
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onQuickOpen, onCommandPalette, onFindInProject]);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      if (chordTimerRef.current) { clearTimeout(chordTimerRef.current); chordTimerRef.current = null; }
+    };
+  }, [
+    onQuickOpen,
+    onCommandPalette,
+    onFindInProject,
+    onToggleSidebar,
+    onToggleZenMode,
+    onQuickSwitch,
+    onNewFile,
+    onSave,
+    onDelete,
+    onQuickLook,
+    onShowShortcuts
+  ]);
 
   useEffect(() => {
     const onEscape = (e: KeyboardEvent) => {

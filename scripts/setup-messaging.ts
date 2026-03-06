@@ -273,9 +273,11 @@ async function setupMessaging() {
 
         await sql`
             CREATE OR REPLACE FUNCTION update_conversation_timestamp()
-            RETURNS TRIGGER AS $$
+            RETURNS TRIGGER 
+            SET search_path = ''
+            AS $$
             BEGIN
-                UPDATE conversations SET updated_at = now() WHERE id = NEW.conversation_id;
+                UPDATE public.conversations SET updated_at = now() WHERE id = NEW.conversation_id;
                 RETURN NEW;
             END;
             $$ LANGUAGE plpgsql

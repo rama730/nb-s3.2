@@ -19,7 +19,6 @@ import {
     ChevronRight,
     Clock,
     CheckCircle2,
-    AlertCircle,
     Loader2,
     History,
 } from "lucide-react";
@@ -34,6 +33,9 @@ import {
     getGitBranches,
     getGitSyncHistory,
 } from "@/app/actions/git";
+
+const EMPTY_OBJ = {};
+
 
 type SyncEvent = {
     id: string;
@@ -90,8 +92,8 @@ export default function SourceControlPanel({
 }
 
 function FallbackPanel({ projectId, className }: { projectId: string; className?: string }) {
-    const fileStates = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.fileStates || {});
-    const nodesById = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.nodesById || {});
+    const fileStates = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.fileStates || EMPTY_OBJ);
+    const nodesById = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.nodesById || EMPTY_OBJ);
     const openTab = useFilesWorkspaceStore((s) => s.openTab);
 
     const dirtyFiles = Object.entries(fileStates)
@@ -246,14 +248,6 @@ function GitIntegrationPanel({ projectId, className }: { projectId: string; clas
         });
     }, [projectId, setGitSyncStatus, showToast, loadStatus, startTransition]);
 
-    const handleLoadBranches = useCallback(() => {
-        startTransition(async () => {
-            const result = await getGitBranches(projectId);
-            if (result.success && result.branches) {
-                setGitBranches(projectId, result.branches);
-            }
-        });
-    }, [projectId, setGitBranches, startTransition]);
 
     const handleToggleHistory = useCallback(() => {
         const next = !historyOpen;
@@ -397,7 +391,7 @@ function GitIntegrationPanel({ projectId, className }: { projectId: string; clas
                                                 >
                                                     <FileStatusIcon status={f.status} />
                                                     <span className="truncate flex-1 text-zinc-700 dark:text-zinc-300">
-                                                        {(f as any).name ?? f.nodeId.slice(0, 8)}
+                                                        {(f as { name?: string }).name ?? f.nodeId.slice(0, 8)}
                                                     </span>
                                                     <FileStatusBadge status={f.status} />
                                                 </div>
@@ -478,33 +472,41 @@ function GitIntegrationPanel({ projectId, className }: { projectId: string; clas
                                     ) : syncHistory.length === 0 ? (
                                         <p className="text-zinc-400 italic py-2">No sync history yet</p>
                                     ) : (
-                                        <div className="space-y-1">
-                                            {syncHistory.map((ev) => (
-                                                <div
-                                                    key={ev.id}
-                                                    className="flex items-start gap-2 py-1"
-                                                >
-                                                    {ev.type === "git_push" ? (
-                                                        <Upload className="w-3 h-3 text-blue-500 mt-0.5 flex-shrink-0" />
-                                                    ) : (
-                                                        <Download className="w-3 h-3 text-emerald-500 mt-0.5 flex-shrink-0" />
-                                                    )}
-                                                    <div className="flex-1 min-w-0">
-                                                        <div className="text-zinc-600 dark:text-zinc-300 truncate">
-                                                            {ev.type === "git_push" ? "Push" : "Pull"}
-                                                            {ev.metadata?.commitSha ? (
-                                                                <span className="text-zinc-400 ml-1 font-mono">
-                                                                    {String(ev.metadata.commitSha).slice(0, 7)}
-                                                                </span>
-                                                            ) : null}
+                                            <div className="space-y-4 relative pl-1">
+                                                {/* Vertical connecting line */}
+                                                <div className="absolute left-[13px] top-4 bottom-4 w-px bg-zinc-200 dark:bg-zinc-800" />
+                                                
+                                                {syncHistory.map((ev, i) => (
+                                                    <div
+                                                        key={ev.id}
+                                                        className="flex items-start gap-3 relative"
+                                                    >
+                                                        {/* Timeline Node */}
+                                                        <div className="relative z-10 flex items-center justify-center w-6 h-6 rounded-full bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 shadow-sm mt-0.5">
+                                                            {ev.type === "git_push" ? (
+                                                                <Upload className="w-3 h-3 text-blue-500" />
+                                                            ) : (
+                                                                <Download className="w-3 h-3 text-emerald-500" />
+                                                            )}
                                                         </div>
-                                                        <div className="text-[10px] text-zinc-400">
-                                                            {new Date(ev.createdAt).toLocaleString()}
+
+                                                        {/* Content */}
+                                                        <div className="flex-1 min-w-0 pt-1 pb-2">
+                                                            <div className="text-zinc-700 dark:text-zinc-300 font-medium text-xs flex items-center gap-1.5">
+                                                                {ev.type === "git_push" ? "Pushed commits" : "Pulled changes"}
+                                                                {!!ev.metadata?.commitSha && (
+                                                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded-md bg-zinc-100 dark:bg-zinc-800 text-[9px] font-mono text-zinc-500 font-normal">
+                                                                        {typeof ev.metadata.commitSha === "string" ? ev.metadata.commitSha.slice(0, 7) : String(ev.metadata.commitSha ?? "").slice(0, 7)}
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                            <div className="text-[10px] text-zinc-400 mt-0.5">
+                                                                {new Date(ev.createdAt).toLocaleString()}
+                                                            </div>
                                                         </div>
                                                     </div>
-                                                </div>
-                                            ))}
-                                        </div>
+                                                ))}
+                                            </div>
                                     )}
                                 </div>
                             )}

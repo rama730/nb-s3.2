@@ -6,7 +6,9 @@ export type FilesWorkspaceTabState = {
   id: string
   node: ProjectNode
   content: string
+  contentVersion: number
   savedSnapshot: string
+  savedSnapshotVersion: number
   isDirty: boolean
   isLoading: boolean
   isSaving: boolean

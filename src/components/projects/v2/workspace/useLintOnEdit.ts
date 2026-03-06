@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { FilesWorkspaceTabState, PaneId } from "../state/filesTabTypes";
 import { lintFileAction, getNodeDisplayPath } from "@/app/actions/lint";
-import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
+import { getFileContent, useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 
 const LINT_DEBOUNCE_MS = 500;
 const LINT_EXTS = new Set([".js", ".mjs", ".ts", ".tsx", ".jsx", ".py"]);
@@ -66,7 +66,10 @@ export function useLintOnEdit({
         if (!currentTab?.node) return;
         void (async () => {
           const filePath = await getNodeDisplayPath(projectId, nodeIdForLint);
-          if (filePath) void runLint(nodeIdForLint, currentTab.content, filePath);
+          if (filePath) {
+            const lintContent = getFileContent(projectId, nodeIdForLint);
+            void runLint(nodeIdForLint, lintContent, filePath);
+          }
         })();
         timerRef.current[paneId] = null;
       }, LINT_DEBOUNCE_MS);
@@ -83,9 +86,9 @@ export function useLintOnEdit({
     panesToRender,
     activeTabIdByPane,
     setProblems,
-    leftActiveTab?.content,
+    leftActiveTab?.contentVersion,
     leftActiveTab?.id,
-    rightActiveTab?.content,
+    rightActiveTab?.contentVersion,
     rightActiveTab?.id,
   ]);
 }

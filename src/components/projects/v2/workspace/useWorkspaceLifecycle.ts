@@ -1,11 +1,13 @@
 import { useCallback, useEffect } from "react";
 import type { ProjectNode } from "@/lib/db/schema";
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
-import { acquireProjectNodeLock, releaseProjectNodeLock } from "@/app/actions/files";
+import { acquireProjectNodeLock, releaseProjectNodeLock, getProjectLocks } from "@/app/actions/files";
 import { clearOfflineChange, listOfflineChanges } from "../hooks/useFilesOfflineQueue";
 import { recordFilesMetric } from "@/lib/files/observability";
+import { get, set } from "idb-keyval";
 import { runWithConcurrency } from "@/lib/utils/concurrency";
 import { FILES_RUNTIME_BUDGETS } from "@/lib/files/runtime-budgets";
+import { createClient } from "@/lib/supabase/client";
 
 type NodeLockResult = {
   ok: boolean;
@@ -41,25 +43,135 @@ export function useWorkspaceLifecycle({
   const setNodes = useFilesWorkspaceStore((s) => s.setNodes);
   const setFolderPayload = useFilesWorkspaceStore((s) => s.setFolderPayload);
 
+  const hydrateFromIdb = useFilesWorkspaceStore((s) => s.hydrateFromIdb);
+
   useEffect(() => {
     ensureProjectWorkspace(projectId);
+
+    // Pure Data Handling: Instant Hydration from IndexedDB Disk
+    const hydrateLocalCache = async () => {
+      try {
+        const cacheKey = `nb-s3-workspace-${projectId}`;
+        const cached = await get<{ nodesById: Record<string, ProjectNode>, childrenByParentId: Record<string, string[]> }>(cacheKey);
+
+        if (cached && Object.keys(cached.nodesById).length > 0 && hydrateFromIdb) {
+          hydrateFromIdb(projectId, cached.nodesById, cached.childrenByParentId);
+        }
+      } catch (e) {
+        console.warn("Failed to hydrate from IDB", e);
+      }
+    };
+
     if (initialFileNodes && initialFileNodes.length > 0) {
       const current =
         useFilesWorkspaceStore.getState().byProjectId[projectId]?.nodesById;
       if (!current || Object.keys(current).length === 0) {
-        setNodes(projectId, initialFileNodes);
-        const rootChildIds = initialFileNodes
-          .filter((node) => node.parentId === null)
-          .map((node) => node.id);
-        setFolderPayload(projectId, null, {
-          childIds: rootChildIds,
-          nextCursor: null,
-          hasMore: false,
-          loaded: true,
+
+        // Try injecting Local IDB first for Zero-Latency painting
+        hydrateLocalCache().then(() => {
+          // Then fall back/merge with server initial Nodes
+          setNodes(projectId, initialFileNodes);
+          const rootChildIds = initialFileNodes
+            .filter((node) => node.parentId === null)
+            .map((node) => node.id);
+          setFolderPayload(projectId, null, {
+            childIds: rootChildIds,
+            nextCursor: null,
+            hasMore: false,
+            loaded: true,
+          });
         });
       }
+    } else {
+      hydrateLocalCache();
     }
-  }, [ensureProjectWorkspace, projectId, initialFileNodes, setFolderPayload, setNodes]);
+
+    // Initial Lock Hydration: Ensure all existing locks are known instantly
+    const fetchLocks = async () => {
+      try {
+        const locks = await getProjectLocks(projectId);
+        const store = useFilesWorkspaceStore.getState();
+        locks.forEach(lock => store.setLock(projectId, lock));
+      } catch (e) {
+        console.warn("Failed to fetch initial locks", e);
+      }
+    };
+    fetchLocks();
+
+    // Phase 4: Extreme Enterprise Scale - Pure Data Fetching (Supabase Multiplayer Delta-Patching)
+    const supabase = createClient();
+
+    let realtimeBuffer: ProjectNode[] = [];
+    let deleteBuffer: string[] = [];
+    let realtimeTimeout: ReturnType<typeof setTimeout> | null = null;
+
+    const flushRealtime = () => {
+      const store = useFilesWorkspaceStore.getState();
+      if (realtimeBuffer.length > 0) {
+        store.upsertNodes(projectId, realtimeBuffer);
+        realtimeBuffer = [];
+      }
+      if (deleteBuffer.length > 0) {
+        deleteBuffer.forEach(id => store.removeNodeFromCaches(projectId, id));
+        deleteBuffer = [];
+      }
+      realtimeTimeout = null;
+    };
+
+    const realtimeChannel = supabase.channel(`public:project_nodes:${projectId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'project_nodes',
+          filter: `project_id=eq.${projectId}`
+        },
+        (payload: any) => {
+          if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+            realtimeBuffer.push(payload.new as ProjectNode);
+          } else if (payload.eventType === 'DELETE') {
+            deleteBuffer.push(payload.old.id);
+          }
+
+          if (!realtimeTimeout) {
+            realtimeTimeout = setTimeout(flushRealtime, 250);
+          }
+        }
+      )
+      .subscribe();
+
+    const locksChannel = supabase.channel(`public:project_node_locks:${projectId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'project_node_locks',
+          filter: `project_id=eq.${projectId}`
+        },
+        (payload: any) => {
+          const store = useFilesWorkspaceStore.getState();
+          if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+            store.setLock(projectId, {
+              nodeId: payload.new.node_id,
+              projectId: payload.new.project_id,
+              lockedBy: payload.new.locked_by,
+              expiresAt: new Date(payload.new.expires_at).getTime(),
+            });
+          } else if (payload.eventType === 'DELETE') {
+            store.clearLock(projectId, payload.old.node_id);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(realtimeChannel);
+      supabase.removeChannel(locksChannel);
+    };
+
+  }, [ensureProjectWorkspace, projectId, initialFileNodes, setFolderPayload, setNodes, hydrateFromIdb]);
 
   const flushOfflineQueue = useCallback(async () => {
     if (!canEdit) return;
@@ -125,7 +237,7 @@ export function useWorkspaceLifecycle({
         } finally {
           try {
             await releaseProjectNodeLock(projectId, nodeId);
-          } catch {}
+          } catch { }
         }
       });
 

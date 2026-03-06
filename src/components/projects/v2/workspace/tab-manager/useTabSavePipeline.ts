@@ -22,6 +22,10 @@ import { FILES_RUNTIME_BUDGETS } from "@/lib/files/runtime-budgets";
 import { isAssetLike, isTextLike } from "../../utils/fileKind";
 import type { ConflictDialogState, EnsureSaveResult, TabManagerSharedOptions } from "./types";
 import { getErrorMessage } from "./types";
+import {
+  getFileContent,
+  setFileContent as setDetachedContent,
+} from "@/stores/filesWorkspaceStore";
 
 const UTF8_ENCODER = new TextEncoder();
 const SAVE_ALL_CONCURRENCY = FILES_RUNTIME_BUDGETS.saveAllConcurrency;
@@ -167,7 +171,7 @@ export function useTabSavePipeline({
         if (initialTab.isSaving) return false;
         if (!initialTab.hasLock) return false;
 
-        if (isNoOpSave(initialTab.content, initialTab.savedSnapshot)) {
+        if (isNoOpSave(getFileContent(projectId, nodeId), getFileContent(projectId, `${nodeId}::saved`))) {
           storeActions.setFileState(projectId, nodeId, { isDirty: false });
           setTabById((prev) => {
             const current = prev[nodeId];
@@ -205,7 +209,8 @@ export function useTabSavePipeline({
 
         const tabForSave = tabByIdRef.current[nodeId];
         if (!tabForSave) return false;
-        const contentToSave = tabForSave.content;
+        // Phase 5: Read content from detached Map
+        const contentToSave = getFileContent(projectId, nodeId);
         const nodeToSave = tabForSave.node;
 
         if (typeof navigator !== "undefined" && !navigator.onLine) {
@@ -254,9 +259,9 @@ export function useTabSavePipeline({
                 await upsertProjectFileIndex(projectId, nodeToSave.id, contentToSave);
               }
             }
-          } catch {}
+          } catch { }
 
-          const latestContent = tabByIdRef.current[nodeId]?.content ?? contentToSave;
+          const latestContent = getFileContent(projectId, nodeId) || contentToSave;
           const postSaveState = resolvePostSaveState({
             savedContent: contentToSave,
             currentContent: latestContent,
@@ -267,6 +272,8 @@ export function useTabSavePipeline({
             isDirty: postSaveState.isDirty,
             lastSavedAt: savedAt,
           });
+          // Phase 5: Update saved snapshot in detached Map
+          setDetachedContent(projectId, `${nodeId}::saved`, postSaveState.savedSnapshot);
           setTabById((prev) => {
             const current = prev[nodeId];
             if (!current) return prev;
@@ -277,7 +284,8 @@ export function useTabSavePipeline({
                 node: updatedNode,
                 isSaving: false,
                 isDirty: postSaveState.isDirty,
-                savedSnapshot: postSaveState.savedSnapshot,
+                savedSnapshot: "",
+                savedSnapshotVersion: (current.savedSnapshotVersion ?? 0) + 1,
                 offlineQueued: false,
                 lastSavedAt: savedAt,
               },
@@ -292,7 +300,7 @@ export function useTabSavePipeline({
               { bytes: size },
               { idempotencyKey: correlationId }
             );
-          } catch {}
+          } catch { }
           recordFilesMetric("files.save.latency_ms", {
             projectId,
             correlationId,
@@ -391,10 +399,13 @@ export function useTabSavePipeline({
               await upsertProjectFileIndex(projectId, node.id, content);
             }
           }
-        } catch {}
+        } catch { }
 
         const savedAt = Date.now();
         storeActions.setFileState(projectId, node.id, { isDirty: false, lastSavedAt: savedAt });
+        // Phase 5: Store saved snapshot in detached Map
+        setDetachedContent(projectId, node.id, content);
+        setDetachedContent(projectId, `${node.id}::saved`, content);
         setTabById((prev) => {
           if (!prev[node.id]) return prev;
           return {
@@ -402,8 +413,10 @@ export function useTabSavePipeline({
             [node.id]: {
               ...prev[node.id],
               node: updatedNode,
-              content,
-              savedSnapshot: content,
+              content: "",
+              contentVersion: (prev[node.id]?.contentVersion ?? 0) + 1,
+              savedSnapshot: "",
+              savedSnapshotVersion: (prev[node.id]?.savedSnapshotVersion ?? 0) + 1,
               isDirty: false,
               isSaving: false,
               offlineQueued: false,
@@ -420,7 +433,7 @@ export function useTabSavePipeline({
             { bytes: size },
             { idempotencyKey: correlationId }
           );
-        } catch {}
+        } catch { }
 
         recordFilesMetric("files.save.latency_ms", {
           projectId,
@@ -470,7 +483,9 @@ export function useTabSavePipeline({
             id: node.id,
             node,
             content: "",
+            contentVersion: 0,
             savedSnapshot: "",
+            savedSnapshotVersion: 0,
             isDirty: false,
             isLoading: true,
             isSaving: false,
@@ -523,7 +538,7 @@ export function useTabSavePipeline({
             }));
           }
         }
-      } else if (!existing || (!existing.content && !existing.isDirty)) {
+      } else if (!existing || (!getFileContent(projectId, node.id) && !existing.isDirty)) {
         await loadFileContent(node);
       }
 
@@ -562,7 +577,7 @@ export function useTabSavePipeline({
       if (tab?.hasLock) {
         try {
           await releaseProjectNodeLock(projectId, nodeId);
-        } catch {}
+        } catch { }
         storeActions.clearLock(projectId, nodeId);
       }
       nextLockAttemptAtRef.current.delete(nodeId);
@@ -588,7 +603,7 @@ export function useTabSavePipeline({
         if (tab.hasLock) {
           try {
             await releaseProjectNodeLock(projectId, nodeId);
-          } catch {}
+          } catch { }
           storeActions.clearLock(projectId, nodeId);
         }
         setTabById((prev) => {

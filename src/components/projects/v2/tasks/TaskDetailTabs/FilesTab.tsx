@@ -4,8 +4,9 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Download, FileText, Folder, Link2, Loader2, Paperclip, Plus, Search, Trash2, Upload, X } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import type { ProjectNode } from "@/lib/db/schema";
-import { createFileNode, getProjectNodes, getTaskAttachments, linkNodeToTask, unlinkNodeFromTask } from "@/app/actions/files";
+import { createFileNode, getProjectNodes, getTaskAttachments, linkNodeToTask, unlinkNodeFromTask, getProjectRecentNodes } from "@/app/actions/files";
 import { TaskFilesExplorer } from "@/components/projects/v2/tasks/components/TaskFilesExplorer";
+import { buildProjectFileKey } from "@/lib/storage/project-file-key";
 
 interface FilesTabProps {
     taskId: string;
@@ -36,7 +37,9 @@ function appendUploadSuffix(filename: string, suffix: number) {
 
 type PickerState =
     | { open: false }
-    | { open: true; query: string; loading: boolean; results: ProjectNode[] };
+    | { open: true; query: string; loading: boolean; results: ProjectNode[]; suggestions?: ProjectNode[] };
+
+type UploadStatus = { id: string; filename: string; progress: number; status: 'uploading' | 'success' | 'error'; error?: string };
 
 export default function FilesTab({ taskId, isOwnerOrMember, projectId, taskTitle }: FilesTabProps) {
     const canEdit = isOwnerOrMember;
@@ -44,7 +47,8 @@ export default function FilesTab({ taskId, isOwnerOrMember, projectId, taskTitle
     const pickerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const [isLoading, setIsLoading] = useState(true);
-    const [isUploading, setIsUploading] = useState(false);
+    const [uploadQueue, setUploadQueue] = useState<UploadStatus[]>([]);
+    const isUploading = uploadQueue.some(item => item.status === 'uploading');
     const [attachments, setAttachments] = useState<ProjectNode[]>([]);
     const [error, setError] = useState<string | null>(null);
 
@@ -71,55 +75,97 @@ export default function FilesTab({ taskId, isOwnerOrMember, projectId, taskTitle
 
     const handleUploadAndAttach = useCallback(
         async (files: File[]) => {
-            if (!files.length) return;
-            if (!canEdit) return;
-            setIsUploading(true);
+            if (!files.length || !canEdit) return;
             setError(null);
 
-            try {
-                for (const file of files) {
+            // Create upload jobs with unique IDs
+            const jobs = files.map(f => ({
+                id: Math.random().toString(36).substring(2, 9),
+                file: f
+            }));
+
+            // Initialize queue
+            const newQueue: UploadStatus[] = jobs.map(j => ({
+                id: j.id,
+                filename: j.file.name,
+                progress: 0,
+                status: 'uploading'
+            }));
+            setUploadQueue(prev => [...prev, ...newQueue]);
+
+            const processFile = async ({ id, file }: { id: string, file: File }) => {
+                const updateStatus = (updates: Partial<UploadStatus>) => {
+                    setUploadQueue(prev => prev.map(item => 
+                        item.id === id && item.status === 'uploading' 
+                            ? { ...item, ...updates } 
+                            : item
+                    ));
+                };
+                let storagePath: string | null = null;
+                let createdNode: ProjectNode | null = null;
+
+                try {
                     const fileExt = extOf(file.name);
                     const opaque = Math.random().toString(36).slice(2);
-                    const storagePath = `projects/${projectId}/${opaque}${fileExt ? `.${fileExt}` : ""}`;
+                    storagePath = buildProjectFileKey(projectId, `${opaque}${fileExt ? `.${fileExt}` : ""}`);
+
+                    updateStatus({ progress: 20 });
 
                     const { error: uploadError } = await supabase.storage
                         .from("project-files")
                         .upload(storagePath, file, { upsert: false });
+                    
                     if (uploadError) throw uploadError;
+                    updateStatus({ progress: 60 });
 
-                    let createdNode: ProjectNode | null = null;
                     let candidateName = file.name;
-                    try {
-                        for (let attempt = 0; attempt < 5; attempt++) {
-                            try {
-                                createdNode = (await createFileNode(projectId, null, {
-                                    name: candidateName,
-                                    s3Key: storagePath,
-                                    size: file.size,
-                                    mimeType: file.type || "application/octet-stream",
-                                })) as ProjectNode;
-                                break;
-                            } catch (e: any) {
-                                if (typeof e?.message === "string" && e.message.includes("already exists in this location")) {
-                                    candidateName = appendUploadSuffix(file.name, attempt + 1);
-                                    continue;
-                                }
-                                throw e;
+                    
+                    for (let attempt = 0; attempt < 5; attempt++) {
+                        try {
+                            createdNode = (await createFileNode(projectId, null, {
+                                name: candidateName,
+                                s3Key: storagePath,
+                                size: file.size,
+                                mimeType: file.type || "application/octet-stream",
+                            })) as ProjectNode;
+                            break;
+                        } catch (e: any) {
+                            if (typeof e?.message === "string" && e.message.includes("already exists in this location")) {
+                                candidateName = appendUploadSuffix(file.name, attempt + 1);
+                                continue;
                             }
+                            throw e;
                         }
-                        if (!createdNode) throw new Error("Failed to create attachment record");
-                        await linkNodeToTask(taskId, createdNode.id);
-                    } catch (e) {
-                        // Cleanup orphan object when metadata linking fails.
-                        await supabase.storage.from("project-files").remove([storagePath]);
-                        throw e;
                     }
+                    
+                    if (!createdNode) throw new Error("Failed to create attachment record");
+                    updateStatus({ progress: 80 });
+                    
+                    await linkNodeToTask(taskId, createdNode.id);
+                    updateStatus({ progress: 100, status: 'success' });
+                    
+                } catch (e: any) {
+                    if (!createdNode && storagePath) {
+                        await supabase.storage.from("project-files").remove([storagePath]).catch(() => null);
+                    }
+                    updateStatus({ status: 'error', error: e?.message || "Upload failed" });
+                    throw e; 
+                }
+            };
+
+            try {
+                // Pure Optimization: process files in bounded chunks (max 3 at a time) to prevent connection pool exhaustion and browser overload
+                const CONCURRENCY = 3;
+                for (let i = 0; i < jobs.length; i += CONCURRENCY) {
+                    const chunk = jobs.slice(i, i + CONCURRENCY);
+                    await Promise.allSettled(chunk.map(processFile));
                 }
                 await refresh();
-            } catch (e: any) {
-                setError(e?.message || "Upload failed");
             } finally {
-                setIsUploading(false);
+                // Clear successful uploads after a short delay
+                setTimeout(() => {
+                    setUploadQueue(prev => prev.filter(item => item.status !== 'success'));
+                }, 3000);
                 if (fileInputRef.current) fileInputRef.current.value = "";
             }
         },
@@ -135,7 +181,7 @@ export default function FilesTab({ taskId, isOwnerOrMember, projectId, taskTitle
                     .createSignedUrl(node.s3Key, 3600);
                 if (urlError) throw urlError;
                 const a = document.createElement("a");
-                a.href = data.signedUrl;
+                a.href = data.url;
                 a.target = "_blank";
                 a.rel = "noopener noreferrer";
                 a.download = node.name;
@@ -161,9 +207,15 @@ export default function FilesTab({ taskId, isOwnerOrMember, projectId, taskTitle
         [canEdit, taskId]
     );
 
-    const openPicker = useCallback(() => {
-        setPicker({ open: true, query: "", loading: false, results: [] });
-    }, []);
+    const openPicker = useCallback(async () => {
+        setPicker({ open: true, query: "", loading: true, results: [], suggestions: [] });
+        try {
+            const recent = await getProjectRecentNodes(projectId, 5);
+            setPicker(p => p.open ? { ...p, loading: false, suggestions: recent } : p);
+        } catch {
+            setPicker(p => p.open ? { ...p, loading: false } : p);
+        }
+    }, [projectId]);
 
     const closePicker = useCallback(() => {
         setPicker({ open: false });
@@ -171,6 +223,10 @@ export default function FilesTab({ taskId, isOwnerOrMember, projectId, taskTitle
 
     const runPickerSearch = useCallback(
         async (query: string) => {
+            if (!query) {
+                setPicker((p) => (p.open ? { ...p, query, results: [] } : p));
+                return;
+            }
             setPicker((p) => (p.open ? { ...p, query, loading: true } : p));
             try {
                 const res = await getProjectNodes(projectId, null, query);
@@ -278,6 +334,37 @@ export default function FilesTab({ taskId, isOwnerOrMember, projectId, taskTitle
                 </div>
             </div>
 
+            {/* Upload Queue View */}
+            {uploadQueue.length > 0 && (
+                <div className="flex flex-col gap-2 mt-2">
+                    {uploadQueue.map((item) => (
+                        <div key={item.id} className="flex items-center justify-between p-2 rounded border bg-zinc-50 dark:bg-zinc-800 dark:border-zinc-700">
+                            <div className="flex flex-col min-w-0 pr-4 flex-1">
+                                <span className="text-sm font-medium text-zinc-900 dark:text-zinc-100 truncate">{item.filename}</span>
+                                {item.status === 'error' && item.error ? (
+                                    <span className="text-xs text-red-500 truncate">{item.error}</span>
+                                ) : (
+                                    <span className="text-xs text-zinc-500 mt-1">
+                                        {item.status === 'success' ? 'Uploaded' : `${item.progress}%`}
+                                    </span>
+                                )}
+                            </div>
+                            
+                            {item.status === 'uploading' && (
+                                <div className="w-24 h-1.5 bg-zinc-200 dark:bg-zinc-700 rounded-full overflow-hidden shrink-0">
+                                    <div 
+                                        className="h-full bg-indigo-600 transition-all duration-300"
+                                        style={{ width: `${item.progress}%` }}
+                                    />
+                                </div>
+                            )}
+                            {item.status === 'success' && <div className="w-4 h-4 rounded-full bg-green-500 shrink-0" />}
+                            {item.status === 'error' && <div className="w-4 h-4 rounded-full bg-red-500 shrink-0" />}
+                        </div>
+                    ))}
+                </div>
+            )}
+
             {error ? (
                 <div className="rounded-lg border border-rose-200 bg-rose-50 text-rose-700 px-3 py-2 text-sm dark:border-rose-900/40 dark:bg-rose-900/20 dark:text-rose-200">
                     {error}
@@ -287,11 +374,16 @@ export default function FilesTab({ taskId, isOwnerOrMember, projectId, taskTitle
             {/* List */}
             <div className="flex-1 min-h-[300px] flex flex-col">
                 <TaskFilesExplorer 
+                    taskId={taskId}
                     projectId={projectId}
                     linkedNodes={attachments}
                     canEdit={canEdit}
                     onUnlink={handleUnlink}
                     onOpenFile={(node) => void handleDownload(node)}
+                    onReorder={(newOrderIds) => {
+                        const newNodes = newOrderIds.map(id => attachments.find(a => a.id === id)).filter(Boolean) as ProjectNode[];
+                        setAttachments(newNodes);
+                    }}
                 />
             </div>
 
@@ -339,10 +431,51 @@ export default function FilesTab({ taskId, isOwnerOrMember, projectId, taskTitle
                                         <Loader2 className="w-4 h-4 animate-spin" />
                                         Searching…
                                     </div>
-                                ) : picker.results.length === 0 ? (
-                                    <div className="p-4 text-sm text-zinc-500">No matches</div>
-                                ) : (
+                                ) : !picker.query && picker.suggestions && picker.suggestions.length > 0 ? (
+                                    // 4e. Smart Suggestions Default View
+                                    <div className="p-2 space-y-1">
+                                        <div className="px-3 py-2 text-xs font-semibold text-zinc-500 uppercase tracking-wider">
+                                            Recently Updated Files
+                                        </div>
+                                        {picker.suggestions.map((n: ProjectNode) => (
+                                            <div key={n.id} className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors">
+                                                <div className="min-w-0">
+                                                    <div className="text-sm font-medium text-zinc-900 dark:text-zinc-100 truncate flex items-center gap-2">
+                                                        <FileText className="w-4 h-4 text-zinc-400 flex-shrink-0" />
+                                                        {n.name}
+                                                    </div>
+                                                    <div className="text-xs text-zinc-500 mt-0.5">
+                                                        {formatBytes(n.size)} • Modified {new Date(n.updatedAt!).toLocaleDateString()}
+                                                    </div>
+                                                </div>
+                                                <button
+                                                    type="button"
+                                                    disabled={!canEdit || attachments.some((a) => a.id === n.id)}
+                                                    onClick={() => void attachExisting(n.id)}
+                                                    className={[
+                                                        "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors border",
+                                                        canEdit && !attachments.some((a) => a.id === n.id)
+                                                            ? "bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300"
+                                                            : "bg-zinc-100 border-transparent text-zinc-400 cursor-not-allowed dark:bg-zinc-800/50",
+                                                    ].join(" ")}
+                                                >
+                                                    {attachments.some((a) => a.id === n.id) ? (
+                                                        <span className="text-emerald-600 dark:text-emerald-500">Attached</span>
+                                                    ) : (
+                                                        <>
+                                                            <Plus className="w-3.5 h-3.5" />
+                                                            Attach
+                                                        </>
+                                                    )}
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : picker.query && picker.results.length === 0 ? (
+                                    <div className="p-4 text-sm text-zinc-500">No matches found for &quot;{picker.query}&quot;</div>
+                                ) : picker.query ? (
                                     <div className="divide-y divide-zinc-200 dark:divide-zinc-800">
+                                        <div className="px-5 py-2 text-xs font-semibold text-zinc-500 bg-zinc-50 dark:bg-zinc-900/50">Search Results</div>
                                         {picker.results.map((n) => (
                                             <div key={n.id} className="flex items-center justify-between gap-3 px-4 py-3">
                                                 <div className="min-w-0">
@@ -354,31 +487,36 @@ export default function FilesTab({ taskId, isOwnerOrMember, projectId, taskTitle
                                                         )}
                                                         {n.name}
                                                     </div>
-                                                    <div className="text-xs text-zinc-500">
+                                                    <div className="text-xs text-zinc-500 mt-0.5">
                                                         {n.type === "folder" ? "Folder" : formatBytes(n.size)}
                                                     </div>
                                                 </div>
-                                                {attachments.some((a) => a.id === n.id) ? (
-                                                    <div className="text-xs text-emerald-600 dark:text-emerald-400 font-medium">
-                                                        Already attached
-                                                    </div>
-                                                ) : null}
                                                 <button
                                                     type="button"
                                                     disabled={!canEdit || attachments.some((a) => a.id === n.id)}
                                                     onClick={() => void attachExisting(n.id)}
                                                     className={[
-                                                        "inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors",
+                                                        "inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors border",
                                                         canEdit && !attachments.some((a) => a.id === n.id)
-                                                            ? "bg-indigo-600 text-white hover:bg-indigo-700"
-                                                            : "bg-zinc-200 text-zinc-500 cursor-not-allowed dark:bg-zinc-800 dark:text-zinc-400",
+                                                            ? "bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300"
+                                                            : "bg-zinc-100 border-transparent text-zinc-400 cursor-not-allowed dark:bg-zinc-800/50",
                                                     ].join(" ")}
                                                 >
-                                                    <Plus className="w-4 h-4" />
-                                                    Attach
+                                                    {attachments.some((a) => a.id === n.id) ? (
+                                                        <span className="text-emerald-600 dark:text-emerald-500">Attached</span>
+                                                    ) : (
+                                                        <>
+                                                            <Plus className="w-4 h-4" />
+                                                            Attach
+                                                        </>
+                                                    )}
                                                 </button>
                                             </div>
                                         ))}
+                                    </div>
+                                ) : (
+                                    <div className="p-8 text-center text-zinc-500 text-sm">
+                                        Search for files or select from recent suggestions above.
                                     </div>
                                 )}
                             </div>

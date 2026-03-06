@@ -141,6 +141,223 @@
       "when": 1770194148233,
       "tag": "0019_demonic_bloodscream",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1772054852931,
+      "tag": "0020_damp_shatterstar",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1772055163731,
+      "tag": "0021_faithful_warstar",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1772396802419,
+      "tag": "0022_handy_tombstone",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1772646841349,
+      "tag": "0023_little_quasimodo",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1772652624676,
+      "tag": "0003_messaging",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1772652624677,
+      "tag": "0004_chat_storage",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1772652624678,
+      "tag": "0005_enable_connections_realtime",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1772652624679,
+      "tag": "0006_messages_performance_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1772652624680,
+      "tag": "0022_messaging_reliability_and_scale",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1772652624681,
+      "tag": "0023_message_attachments_storage_path",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1772652624682,
+      "tag": "0024_attachment_upload_sessions",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1772652624683,
+      "tag": "0025_message_actions_edit_delete",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1772652624684,
+      "tag": "0026_project_members_unique",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1772652624685,
+      "tag": "0027_task_node_links_unique",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1772652624686,
+      "tag": "0028_project_follow_counts",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1772652624687,
+      "tag": "0029_workspace_layout",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1772652624688,
+      "tag": "0030_message_reply_and_preview",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1772652624689,
+      "tag": "0031_connection_suggestion_dismissals",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1772652624690,
+      "tag": "0032_project_runner_sessions",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1772652624691,
+      "tag": "0033_onboarding_username_guardrails",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1772652624692,
+      "tag": "0034_onboarding_reliability_and_telemetry",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1772652624693,
+      "tag": "0035_onboarding_submission_integrity",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1772652624694,
+      "tag": "0036_onboarding_claims_repair_queue",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1772652624695,
+      "tag": "0037_onboarding_submissions_updated_at_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1772652624696,
+      "tag": "0038_profile_audit_events",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1772652624697,
+      "tag": "0039_files_workspace_scale_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1772652624698,
+      "tag": "0040_projects_github_columns",
+      "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1772652624699,
+      "tag": "0041_username_rules_schema_qualification",
+      "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1772652970490,
+      "tag": "0042_schema_hardening_constraints_and_fks",
+      "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1772755200000,
+      "tag": "0043_project_files_key_policy_dual_read",
+      "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1772758800000,
+      "tag": "0044_onboarding_profile_extended_preferences",
+      "breakpoints": true
     }
   ]
 }

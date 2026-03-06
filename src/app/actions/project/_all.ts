@@ -1,9 +1,10 @@
 'use server';
 
 import { db } from '@/lib/db';
-import { projects, projectFollows, savedProjects, projectOpenRoles, roleApplications, conversations, conversationParticipants, messages, projectNodes, projectMembers, profiles, tasks, projectSprints, taskNodeLinks, taskSubtasks } from '@/lib/db/schema';
+import { projects, projectFollows, savedProjects, projectOpenRoles, roleApplications, conversations, conversationParticipants, messages, projectNodes, projectMembers, profiles, tasks, projectSprints, taskNodeLinks, taskSubtasks, tags, projectTags, skills, projectSkills } from '@/lib/db/schema';
 import { eq, and, sql, inArray, isNotNull, isNull, desc } from 'drizzle-orm';
 import { createClient, createAdminClient } from '@/lib/supabase/server';
+import { redis } from '@/lib/redis';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { CreateProjectInput } from '@/lib/validations/project';
@@ -374,6 +375,33 @@ export async function createProjectAction(input: CreateProjectInput & { slug?: s
                         );
                     }
 
+                    // 6. Insert Tags and Skills into Junction Tables
+                    const tagsArray = input.tags || [];
+                    for (const tagName of tagsArray) {
+                        const slug = tagName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+                        if (!slug) continue;
+                        let [tag] = await tx.select().from(tags).where(eq(tags.slug, slug)).limit(1);
+                        if (!tag) {
+                            try { [tag] = await tx.insert(tags).values({ name: tagName, slug }).returning(); } catch (e) {
+                                [tag] = await tx.select().from(tags).where(eq(tags.slug, slug)).limit(1);
+                            }
+                        }
+                        if (tag) await tx.insert(projectTags).values({ projectId: newProject.id, tagId: tag.id }).onConflictDoNothing();
+                    }
+
+                    const skillsArray = input.technologies_used || [];
+                    for (const skillName of skillsArray) {
+                        const slug = skillName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+                        if (!slug) continue;
+                        let [skill] = await tx.select().from(skills).where(eq(skills.slug, slug)).limit(1);
+                        if (!skill) {
+                            try { [skill] = await tx.insert(skills).values({ name: skillName, slug }).returning(); } catch (e) {
+                                [skill] = await tx.select().from(skills).where(eq(skills.slug, slug)).limit(1);
+                            }
+                        }
+                        if (skill) await tx.insert(projectSkills).values({ projectId: newProject.id, skillId: skill.id }).onConflictDoNothing();
+                    }
+
                     return newProject;
                 });
 
@@ -512,10 +540,16 @@ export async function updateProject(projectId: string, data: any) {
         else if (raw.project_type !== undefined) updateValues.category = raw.project_type;
         else if (raw.custom_project_type !== undefined) updateValues.category = raw.custom_project_type;
 
-        // Tags / Skills
-        if (raw.tags !== undefined) updateValues.tags = raw.tags;
-        if (raw.skills !== undefined) updateValues.skills = raw.skills;
-        else if (raw.technologies_used !== undefined) updateValues.skills = raw.technologies_used;
+        // Tags / Skills parsing
+        let tagsArray: string[] = [];
+        let skillsArray: string[] = [];
+
+        if (raw.tags !== undefined) tagsArray = Array.isArray(raw.tags) ? raw.tags : [];
+        if (raw.skills !== undefined) skillsArray = Array.isArray(raw.skills) ? raw.skills : [];
+        else if (raw.technologies_used !== undefined) skillsArray = Array.isArray(raw.technologies_used) ? raw.technologies_used : [];
+
+        if (raw.tags !== undefined) updateValues.tags = tagsArray; // Keep JSONB arrays in sync for backward compat
+        if (raw.skills !== undefined || raw.technologies_used !== undefined) updateValues.skills = skillsArray;
 
         // Lifecycle
         if (raw.lifecycleStages !== undefined) updateValues.lifecycleStages = raw.lifecycleStages;
@@ -525,6 +559,42 @@ export async function updateProject(projectId: string, data: any) {
         else if (raw.current_stage_index !== undefined) updateValues.currentStageIndex = raw.current_stage_index;
 
         await tx.update(projects).set(updateValues).where(eq(projects.id, projectId));
+
+        // Sync Junction Tables for normalized relational search
+        if (raw.tags !== undefined) {
+            await tx.delete(projectTags).where(eq(projectTags.projectId, projectId));
+            for (const tagName of tagsArray) {
+                const slug = tagName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+                if (!slug) continue;
+                let [tag] = await tx.select().from(tags).where(eq(tags.slug, slug)).limit(1);
+                if (!tag) {
+                    try {
+                        [tag] = await tx.insert(tags).values({ name: tagName, slug }).returning();
+                    } catch (e) {
+                        // Concurrent insert collision safe fallback
+                        [tag] = await tx.select().from(tags).where(eq(tags.slug, slug)).limit(1);
+                    }
+                }
+                if (tag) await tx.insert(projectTags).values({ projectId, tagId: tag.id }).onConflictDoNothing();
+            }
+        }
+
+        if (raw.skills !== undefined || raw.technologies_used !== undefined) {
+            await tx.delete(projectSkills).where(eq(projectSkills.projectId, projectId));
+            for (const skillName of skillsArray) {
+                const slug = skillName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+                if (!slug) continue;
+                let [skill] = await tx.select().from(skills).where(eq(skills.slug, slug)).limit(1);
+                if (!skill) {
+                    try {
+                        [skill] = await tx.insert(skills).values({ name: skillName, slug }).returning();
+                    } catch (e) {
+                        [skill] = await tx.select().from(skills).where(eq(skills.slug, slug)).limit(1);
+                    }
+                }
+                if (skill) await tx.insert(projectSkills).values({ projectId, skillId: skill.id }).onConflictDoNothing();
+            }
+        }
 
         // Update Roles
         if (roles && Array.isArray(roles)) {
@@ -594,10 +664,9 @@ export async function deleteProject(projectId: string) {
 
     const s3Keys = fileNodes.map(n => n.s3Key!).filter(Boolean);
 
-    // 2. Comprehensive Cleanup Transaction
+    // 2. Soft-Delete Transaction (avoids cascade locks at 1M+ scale)
     await db.transaction(async (tx) => {
         // A. Update application messages to show "project_deleted" status
-        // This is a simple, non-blocking metadata update for chat UI
         await tx.execute(sql`
             UPDATE ${messages}
             SET metadata = jsonb_set(
@@ -608,18 +677,20 @@ export async function deleteProject(projectId: string) {
             WHERE metadata->>'projectId' = ${projectId}
         `);
 
-        // B. Delete the project (cascades to projectMembers, nodes, roles, applications, etc.)
-        await tx.delete(projects).where(eq(projects.id, projectId));
+        // B. Soft-delete the project (sets deletedAt instead of hard DELETE)
+        await tx.update(projects)
+            .set({ deletedAt: new Date() })
+            .where(eq(projects.id, projectId));
+
+        // C. Soft-delete all child nodes
+        await tx.update(projectNodes)
+            .set({ deletedAt: new Date() })
+            .where(eq(projectNodes.projectId, projectId));
 
         // Keep denormalized profile stats in sync.
         await tx.update(profiles)
             .set({ projectsCount: sql`GREATEST(0, ${profiles.projectsCount} - 1)` })
             .where(eq(profiles.id, user.id));
-
-        // C. Delete the project group conversation if it exists
-        if (project.conversationId) {
-            await tx.delete(conversations).where(eq(conversations.id, project.conversationId));
-        }
     });
 
     // 3. Delete files from S3 Storage (Best Effort, outside transaction)
@@ -893,6 +964,13 @@ export async function toggleProjectFollowAction(projectId: string, shouldFollow:
 
 export async function incrementProjectViewAction(projectId: string): Promise<{ success: boolean; viewCount?: number; error?: string }> {
     try {
+        if (redis) {
+            // High-throughput async increment in Redis buffer
+            // A background cron/worker (Inngest) will flush 'project:views' to DB
+            await redis.hincrby('project:views', projectId, 1);
+            return { success: true };
+        }
+
         const [updated] = await db.update(projects)
             .set({ viewCount: sql`${projects.viewCount} + 1` })
             .where(eq(projects.id, projectId))

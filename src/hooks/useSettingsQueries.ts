@@ -91,16 +91,22 @@ export function useSecurityData() {
     return useQuery({
         queryKey: SETTINGS_KEYS.security,
         queryFn: async (): Promise<SecurityData> => {
-            // Fetch security data from API
-            const res = await fetch("/api/v1/security");
-            if (!res.ok) throw new Error("Failed to fetch security data");
-            const json = await res.json();
-            return json.data || {
+            const defaults: SecurityData = {
                 mfaFactors: [],
                 passkeys: [],
                 sessions: [],
                 loginHistory: [],
             };
+            try {
+                const res = await fetch("/api/v1/security");
+                if (!res.ok) return defaults;
+                const contentType = res.headers.get("content-type") || "";
+                if (!contentType.includes("application/json")) return defaults;
+                const json = await res.json();
+                return json.data || defaults;
+            } catch {
+                return defaults;
+            }
         },
     });
 }
@@ -108,14 +114,25 @@ export function useSecurityData() {
 export function useChangePassword() {
     return useMutation({
         mutationFn: async ({ currentPassword, newPassword }: { currentPassword: string; newPassword: string }) => {
-            const res = await fetch("/api/v1/auth/change-password", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ currentPassword, newPassword }),
-            });
+            try {
+                const res = await fetch("/api/v1/auth/change-password", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ currentPassword, newPassword }),
+                });
 
-            const json = await res.json();
-            return json;
+                if (!res.ok) {
+                    return { success: false, message: "Password change is not available yet" };
+                }
+                const contentType = res.headers.get("content-type") || "";
+                if (!contentType.includes("application/json")) {
+                    return { success: false, message: "Password change is not available yet" };
+                }
+                const json = await res.json();
+                return json;
+            } catch {
+                return { success: false, message: "Password change is not available yet" };
+            }
         },
     });
 }
@@ -181,10 +198,17 @@ export function usePrefetchSettings() {
         queryClient.prefetchQuery({
             queryKey: SETTINGS_KEYS.security,
             queryFn: async () => {
-                const res = await fetch("/api/v1/security");
-                if (!res.ok) return { mfaFactors: [], passkeys: [], sessions: [], loginHistory: [] };
-                const json = await res.json();
-                return json.data;
+                const defaults = { mfaFactors: [], passkeys: [], sessions: [], loginHistory: [] };
+                try {
+                    const res = await fetch("/api/v1/security");
+                    if (!res.ok) return defaults;
+                    const contentType = res.headers.get("content-type") || "";
+                    if (!contentType.includes("application/json")) return defaults;
+                    const json = await res.json();
+                    return json.data || defaults;
+                } catch {
+                    return defaults;
+                }
             },
         });
     };

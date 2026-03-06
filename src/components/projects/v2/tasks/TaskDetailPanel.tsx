@@ -61,7 +61,7 @@ export default function TaskDetailPanel({
             setDeleteError("An error occurred while deleting the task");
             setIsDeleting(false);
         }
-    }, [task?.id, projectId, onClose]);
+    }, [task, projectId, onClose]);
 
     if (!task) return null;
 

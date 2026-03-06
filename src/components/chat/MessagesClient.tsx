@@ -346,7 +346,7 @@ export default function MessagesClient({ targetUserId, initialConversationId }: 
                 {/* Content: Search Results or Conversation List/Application List */}
                 <div className="flex-1 min-h-0 overflow-hidden">
                     {activeTab === 'applications' ? (
-                        <div className="h-full overflow-y-auto">
+                        <div className="h-full overflow-y-auto custom-scrollbar">
                             <ApplicationList />
                         </div>
                     ) : activeTab === 'projects' ? (
@@ -364,8 +364,8 @@ export default function MessagesClient({ targetUserId, initialConversationId }: 
                                 <p className="text-sm text-zinc-500">No messages found</p>
                             </div>
                         ) : (
-                            <div className="h-full overflow-y-auto">
-                                <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                            <div className="h-full overflow-y-auto custom-scrollbar">
+                                <div className="space-y-1">
                                     {searchResults.map((item) => {
                                         const { message, conversationId } = item;
                                         // Use local or hydrated conversation

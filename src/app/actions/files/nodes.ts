@@ -136,6 +136,29 @@ export async function getProjectNodes(
     return { nodes, nextCursor };
 }
 
+export async function getProjectTreeFlat(projectId: string): Promise<ProjectNode[]> {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+
+    if (!projectId) return [];
+    await assertProjectReadAccess(projectId, user?.id ?? null);
+
+    // Smart threshold: load everything as a flat tree for projects up to 20K nodes.
+    // For larger projects, return empty so the frontend falls back to paginated loading.
+    const MAX_FLAT_TREE_NODES = 20_000;
+
+    const nodes = await db.query.projectNodes.findMany({
+        where: and(
+            eq(projectNodes.projectId, projectId),
+            isNull(projectNodes.deletedAt)
+        ),
+        orderBy: (pn, { asc }) => [asc(pn.path)],
+        limit: MAX_FLAT_TREE_NODES,
+    });
+
+    return nodes;
+}
+
 export async function getProjectNodesSafe(
     projectId: string,
     parentId: string | null = null,
@@ -295,6 +318,43 @@ export async function getBreadcrumbs(projectId: string, folderId: string | null)
 
     if (!folderId) return [];
 
+    const folder = await db.query.projectNodes.findFirst({
+        where: and(eq(projectNodes.id, folderId), eq(projectNodes.projectId, projectId)),
+        columns: { path: true }
+    });
+
+    // Materialized Path O(1) query
+    if (folder && folder.path && folder.path !== '/') {
+        const parts = folder.path.split('/').filter(Boolean);
+        const pathsToFetch: string[] = [];
+        let cur = "";
+        for (const p of parts) {
+            cur += "/" + p;
+            pathsToFetch.push(cur);
+        }
+
+        if (pathsToFetch.length > 0) {
+            const rows = await db.query.projectNodes.findMany({
+                where: and(
+                    eq(projectNodes.projectId, projectId),
+                    isNull(projectNodes.deletedAt),
+                    inArray(projectNodes.path, pathsToFetch)
+                ),
+                columns: { id: true, name: true, parentId: true, path: true }
+            });
+
+            // Sort by path length to ensure root-to-leaf order
+            rows.sort((a, b) => (a.path?.length || 0) - (b.path?.length || 0));
+
+            return rows.map((r) => ({
+                id: r.id,
+                name: r.name,
+                parentId: r.parentId,
+            }));
+        }
+    }
+
+    // Fallback for unmigrated legacy rows
     const rows = await db.execute<{ id: string; name: string; parent_id: string | null }>(sql`
         WITH RECURSIVE ancestors AS (
             SELECT id, name, parent_id
@@ -411,4 +471,24 @@ export async function getProjectNodesWithCounts(
             message: error instanceof Error ? error.message : "Failed to load folder payload",
         };
     }
+}
+
+export async function getProjectRecentNodes(projectId: string, limit: number = 5): Promise<ProjectNode[]> {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error("Unauthorized");
+    await assertProjectReadAccess(projectId, user.id);
+
+    // Fetch the most recently updated files (excluding folders)
+    const nodes = await db.query.projectNodes.findMany({
+        where: and(
+            eq(projectNodes.projectId, projectId),
+            eq(projectNodes.type, 'file'),
+            isNull(projectNodes.deletedAt)
+        ),
+        orderBy: (nodes, { desc }) => [desc(nodes.updatedAt)],
+        limit,
+    });
+
+    return nodes;
 }

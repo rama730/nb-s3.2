@@ -1,10 +1,11 @@
 "use client";
 
 import React, { useMemo, useState } from "react";
-import { AlertCircle, AlertTriangle, CheckCircle2, File, Info } from "lucide-react";
+import { AlertCircle, AlertTriangle, CheckCircle2, File, Info, Wand2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { Problem } from "@/stores/files/types";
+import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 
 type Severity = "error" | "warning" | "info";
 
@@ -28,12 +29,14 @@ const SEVERITY_TEXT: Record<Severity, string> = {
   info: "text-blue-500",
 };
 
-export function ProblemsTab({ problems = [], onNavigateToFile }: ProblemsTabProps) {
+export function ProblemsTab({ projectId, problems = [], onNavigateToFile }: ProblemsTabProps) {
   const [filters, setFilters] = useState<Record<Severity, boolean>>({
     error: true,
     warning: true,
     info: true,
   });
+  
+  const applyQuickFix = useFilesWorkspaceStore((s) => s.applyQuickFix);
 
   const toggleFilter = (sev: Severity) =>
     setFilters((prev) => ({ ...prev, [sev]: !prev[sev] }));
@@ -110,25 +113,43 @@ export function ProblemsTab({ problems = [], onNavigateToFile }: ProblemsTabProp
                   <span className="text-zinc-400 ml-auto shrink-0">{fileProblems.length}</span>
                 </div>
                 {fileProblems.map((problem) => (
-                  <button
+                  <div
                     key={problem.id}
-                    className="w-full text-left flex items-start gap-2 px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-900 transition-colors"
-                    onClick={() => onNavigateToFile?.(problem.nodeId, problem.line)}
+                    className="w-full flex items-start gap-2 px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-900 transition-colors group"
                   >
-                    {SEVERITY_ICON[problem.severity]}
-                    <div className="min-w-0 flex-1">
-                      <span className="text-xs text-zinc-800 dark:text-zinc-200">{problem.message}</span>
-                      {problem.source && (
-                        <span className="text-[10px] text-zinc-400 ml-1.5">[{problem.source}]</span>
-                      )}
-                    </div>
+                    <button
+                      className="flex items-start gap-2 flex-1 text-left min-w-0"
+                      onClick={() => onNavigateToFile?.(problem.nodeId, problem.line)}
+                    >
+                      <div className="mt-0.5">{SEVERITY_ICON[problem.severity]}</div>
+                      <div className="min-w-0 flex-1">
+                        <span className="text-xs text-zinc-800 dark:text-zinc-200">{problem.message}</span>
+                        {problem.source && (
+                          <span className="text-[10px] text-zinc-400 ml-1.5">[{problem.source}]</span>
+                        )}
+                      </div>
+                    </button>
+                    
+                    {problem.fix && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-5 px-1.5 text-[10px] gap-1 opacity-0 group-hover:opacity-100 shrink-0 text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/40"
+                        onClick={() => applyQuickFix(projectId, problem.id)}
+                        title={problem.fix.label}
+                      >
+                        <Wand2 className="w-3 h-3" />
+                        Fix
+                      </Button>
+                    )}
+
                     {problem.line != null && (
-                      <span className={cn("text-[11px] shrink-0 tabular-nums", SEVERITY_TEXT[problem.severity])}>
+                      <span className={cn("text-[11px] shrink-0 tabular-nums self-center text-right ml-1", SEVERITY_TEXT[problem.severity])}>
                         Ln {problem.line}
                         {problem.column != null ? `:${problem.column}` : ""}
                       </span>
                     )}
-                  </button>
+                  </div>
                 ))}
               </div>
             ))}

@@ -3,6 +3,7 @@
 import React from "react";
 import { cn } from "@/lib/utils";
 import { SortableContext, horizontalListSortingStrategy } from "@dnd-kit/sortable";
+import { Virtuoso } from "react-virtuoso";
 import { DraggableTab } from "../DraggableTab";
 import { BreadcrumbBar } from "../navigation/BreadcrumbBar";
 import FileEditor from "../FileEditor";
@@ -10,6 +11,7 @@ import AssetViewer from "../preview/AssetViewer";
 import { isAssetLike } from "../utils/fileKind";
 import type { ProjectNode } from "@/lib/db/schema";
 import type { FilesWorkspaceTabState, PaneId } from "../state/filesTabTypes";
+import { getFileContent } from "@/stores/filesWorkspaceStore";
 
 interface EditorPaneProps {
   projectId: string;
@@ -38,6 +40,7 @@ interface EditorPaneProps {
   conflictDiffSignal: number;
   onRun?: () => void;
   canRun?: boolean;
+  gitChangedFiles: Array<{ nodeId: string; status: "modified" | "added" | "deleted" }>;
 }
 
 export default function EditorPane({
@@ -67,46 +70,129 @@ export default function EditorPane({
   conflictDiffSignal,
   onRun,
   canRun,
+  gitChangedFiles,
 }: EditorPaneProps) {
   const activeTab = activeTabId ? tabById[activeTabId] : null;
+
+  // Phase 5: Read content from detached Map (O(1), no React diffing)
+  const contentForEditor = React.useMemo(() => {
+    if (!activeTabId) return "";
+    // contentVersion dependency triggers re-compute without storing the string in state
+    const _v = activeTab?.contentVersion;
+    return getFileContent(projectId, activeTabId);
+  }, [projectId, activeTabId, activeTab?.contentVersion]);
+
+  // Item 3: Auto-toggle minimap for files > 200 lines
+  const isLargeFile = React.useMemo(() => {
+    if (!contentForEditor) return false;
+    let count = 0;
+    for (let i = 0; i < contentForEditor.length; i++) {
+      if (contentForEditor.charCodeAt(i) === 10) count++;
+      if (count > 200) return true;
+    }
+    return false;
+  }, [contentForEditor]);
+
+  // Phase 5: Read saved snapshot from detached Map for diff view
+  const savedSnapshotForEditor = React.useMemo(() => {
+    if (!activeTabId) return "";
+    const _v = activeTab?.savedSnapshotVersion;
+    return getFileContent(projectId, `${activeTabId}::saved`);
+  }, [projectId, activeTabId, activeTab?.savedSnapshotVersion]);
+
+  // Stable object ref: only changes when isLargeFile or prefs actually change
+  const effectivePrefs = React.useMemo(
+    () => ({ ...prefs, minimap: isLargeFile }),
+    [prefs, isLargeFile]
+  );
+
+  const gitStatus = React.useMemo(() => {
+    if (!activeTabId) return null;
+    return gitChangedFiles.find((f) => f.nodeId === activeTabId)?.status ?? null;
+  }, [activeTabId, gitChangedFiles]);
 
   return (
     <div className="flex flex-col h-full overflow-hidden" style={{ width }}>
       {/* Tabs */}
       <div
         className={cn(
-          "flex items-center gap-1 border-b border-zinc-200 dark:border-zinc-800 bg-white/70 dark:bg-zinc-950/70 backdrop-blur px-2 py-1 overflow-x-auto",
+          "flex items-center gap-1 border-b border-zinc-200 dark:border-zinc-800 bg-white/70 dark:bg-zinc-950/70 backdrop-blur px-2 py-1 overflow-hidden whitespace-nowrap",
           paneId === "right" && "border-l border-zinc-200 dark:border-zinc-800"
         )}
         onMouseDown={setActivePane}
       >
         <SortableContext items={tabIds} strategy={horizontalListSortingStrategy}>
-          {tabIds.length === 0 ? (
-            <div className="px-2 py-1 text-xs text-zinc-400">No tabs</div>
-          ) : (
-            tabIds.map((id) => {
-              const tab = tabById[id];
-              const name = tab?.node?.name || id;
-              const isActive = id === activeTabId;
-              const isDirty = !!tab?.isDirty;
-              const pinned = !!pinnedById[id];
-              return (
-                <DraggableTab
-                  key={id}
-                  id={id}
-                  name={name}
-                  isActive={isActive}
-                  isDirty={isDirty}
-                  isPinned={pinned}
-                  onActivate={() => setActiveTab(id)}
-                  onClose={() => onCloseTab(id)}
-                  onPin={(p) => onPinTab(id, p)}
-                  onCloseOthers={() => onCloseOthers(id)}
-                  onCloseToRight={() => onCloseToRight(id)}
-                />
-              );
-            })
-          )}
+          {(() => {
+            const pinnedIds = tabIds.filter((id) => !!pinnedById[id]);
+            const unpinnedIds = tabIds.filter((id) => !pinnedById[id]);
+            const hasBothSections = pinnedIds.length > 0 && unpinnedIds.length > 0;
+
+            if (tabIds.length === 0) {
+              return <div className="px-2 py-1 text-xs text-zinc-400">No tabs</div>;
+            }
+
+            return (
+              <>
+                {pinnedIds.map((id) => {
+                  const tab = tabById[id];
+                  const name = tab?.node?.name || id;
+                  const isActive = id === activeTabId;
+                  const isDirty = !!tab?.isDirty;
+                  return (
+                    <DraggableTab
+                      key={id}
+                      id={id}
+                      name={name}
+                      isActive={isActive}
+                      isDirty={isDirty}
+                      isPinned
+                      compact={!isActive}
+                      onActivate={() => setActiveTab(id)}
+                      onClose={() => onCloseTab(id)}
+                      onPin={(p) => onPinTab(id, p)}
+                      onCloseOthers={() => onCloseOthers(id)}
+                      onCloseToRight={() => onCloseToRight(id)}
+                    />
+                  );
+                })}
+                {hasBothSections && (
+                  <div className="w-px h-4 bg-zinc-300 dark:bg-zinc-600 mx-1 flex-shrink-0" />
+                )}
+                {unpinnedIds.length > 0 && (
+                  <div className="flex-1 min-w-0 self-stretch flex items-center relative">
+                    <Virtuoso
+                      horizontalDirection
+                      data={unpinnedIds}
+                      style={{ height: "34px", width: "100%" }}
+                      itemContent={(index, id) => {
+                        const tab = tabById[id];
+                        const name = tab?.node?.name || id;
+                        const isActive = id === activeTabId;
+                        const isDirty = !!tab?.isDirty;
+                        return (
+                          <div className="mr-1 h-full flex items-center mt-0.5">
+                            <DraggableTab
+                              key={id}
+                              id={id}
+                              name={name}
+                              isActive={isActive}
+                              isDirty={isDirty}
+                              isPinned={false}
+                              onActivate={() => setActiveTab(id)}
+                              onClose={() => onCloseTab(id)}
+                              onPin={(p) => onPinTab(id, p)}
+                              onCloseOthers={() => onCloseOthers(id)}
+                              onCloseToRight={() => onCloseToRight(id)}
+                            />
+                          </div>
+                        );
+                      }}
+                    />
+                  </div>
+                )}
+              </>
+            );
+          })()}
         </SortableContext>
       </div>
 
@@ -134,8 +220,8 @@ export default function EditorPane({
           ) : (
             <FileEditor
               file={activeTab.node}
-              content={activeTab.content}
-              savedSnapshot={activeTab.savedSnapshot}
+              content={contentForEditor}
+              savedSnapshot={savedSnapshotForEditor}
               isDirty={activeTab.isDirty}
               isLoading={activeTab.isLoading}
               isSaving={activeTab.isSaving}
@@ -144,10 +230,10 @@ export default function EditorPane({
               canEdit={canEdit && activeTab.hasLock}
               lockInfo={activeTab.lockInfo}
               offlineQueued={activeTab.offlineQueued}
-              lineNumbers={prefs.lineNumbers}
-              wordWrap={prefs.wordWrap}
-              fontSize={prefs.fontSize}
-              minimapEnabled={prefs.minimap}
+              lineNumbers={effectivePrefs.lineNumbers}
+              wordWrap={effectivePrefs.wordWrap}
+              fontSize={effectivePrefs.fontSize}
+              minimapEnabled={effectivePrefs.minimap}
               lastSavedAt={activeTab.lastSavedAt}
               onChange={(next) => onChange(activeTab.id, next)}
               onSave={() => onSave(activeTab.id)}
@@ -160,6 +246,8 @@ export default function EditorPane({
               }
               onRun={onRun}
               canRun={canRun}
+              gitStatus={gitStatus}
+              tabId={activeTab.id}
             />
           )
         ) : (

@@ -4,22 +4,22 @@ import React, { useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { MapPin, Briefcase, Loader2, Check, Clock, UserPlus, X, Users } from "lucide-react";
-import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { profileHref } from "@/lib/routing/identifiers";
 import type { SuggestedProfile } from "@/app/actions/connections";
 
-interface PersonCardProps {
+export interface PersonCardProps {
     profile: SuggestedProfile;
     onConnect: (userId: string) => Promise<void>;
     onDismiss?: (userId: string) => Promise<void>;
     isConnecting?: boolean;
-    /** Render as a large spotlight card */
-    variant?: "default" | "spotlight";
+    /** Render as either a compact grid card or a full recommended dossier */
+    variant?: "compact" | "recommended";
+    /** True if this card renders above the fold, forces NextJS priority image loading */
+    priority?: boolean;
 }
 
-function PersonCard({ profile, onConnect, onDismiss, isConnecting, variant = "default" }: PersonCardProps) {
-    const [isHovered, setIsHovered] = useState(false);
+function PersonCard({ profile, onConnect, onDismiss, isConnecting, variant = "compact", priority = false }: PersonCardProps) {
     const [localStatus, setLocalStatus] = useState(profile.connectionStatus);
 
     useEffect(() => {
@@ -69,255 +69,253 @@ function PersonCard({ profile, onConnect, onDismiss, isConnecting, variant = "de
     const getButtonStyles = () => {
         switch (localStatus) {
             case 'connected':
-                return 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 cursor-default';
+                return 'bg-green-50 text-green-600 dark:bg-green-900/20 dark:text-green-400 cursor-default hover:bg-green-50 dark:hover:bg-green-900/20';
             case 'pending_sent':
-                return 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400 cursor-default';
+                return 'bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400 cursor-default hover:bg-zinc-100 dark:hover:bg-zinc-800';
             case 'pending_received':
             default:
-                return 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white hover:from-indigo-700 hover:to-purple-700 shadow-md shadow-indigo-500/20';
+                return 'bg-indigo-600 text-white hover:bg-indigo-700'; // Flat indigo matching Hub headers
         }
     };
 
-    const isSpotlight = variant === "spotlight";
+    const getAvatarRingStyle = () => {
+        switch (localStatus) {
+            case 'connected': return 'ring-green-500';
+            case 'pending_received': return 'ring-indigo-500';
+            case 'pending_sent': return 'ring-yellow-500';
+            default: return 'ring-zinc-200 dark:ring-zinc-700';
+        }
+    };
 
-    // ---------- SPOTLIGHT VARIANT ----------
-    if (isSpotlight) {
+    const isRecommended = variant === "recommended";
+
+    if (isRecommended) {
         return (
-            <motion.div
-                initial={{ opacity: 0, y: 12 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="relative rounded-2xl bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl border border-zinc-200/60 dark:border-white/10 overflow-hidden hover:shadow-2xl hover:-translate-y-0.5 transition-all duration-300 min-w-[320px] max-w-[380px] shrink-0"
-            >
-                {/* Gradient accent top */}
-                <div className="absolute top-0 inset-x-0 h-1 bg-gradient-to-r from-indigo-500 to-purple-500" />
-
-                {onDismiss && (
-                    <button
-                        type="button"
-                        onClick={handleDismiss}
-                        className="absolute right-3 top-4 z-10 rounded-full p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200 transition-colors"
-                        aria-label={`Dismiss ${profile.fullName || "suggestion"}`}
-                    >
-                        <X className="w-4 h-4" />
-                    </button>
-                )}
-
-                <Link href={profileHref(profile)} className="block p-5">
-                    <div className="flex items-start gap-4">
-                        {profile.avatarUrl ? (
-                            <Image
-                                src={profile.avatarUrl}
-                                alt={profile.fullName || profile.username || "User"}
-                                width={64}
-                                height={64}
-                                className="w-16 h-16 rounded-full object-cover flex-shrink-0 ring-2 ring-indigo-500/20"
-                            />
-                        ) : (
-                            <div className="w-16 h-16 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-2xl font-semibold flex-shrink-0 ring-2 ring-indigo-500/20">
-                                {(profile.fullName || profile.username || "U")[0]?.toUpperCase()}
-                            </div>
-                        )}
-                        <div className="flex-1 min-w-0">
-                            <h3 className="font-semibold text-zinc-900 dark:text-zinc-100 truncate text-base">
-                                {profile.fullName || profile.username || "User"}
-                            </h3>
-                            {profile.headline && (
-                                <p className="text-sm text-zinc-600 dark:text-zinc-400 line-clamp-2 mt-0.5">
-                                    {profile.headline}
-                                </p>
-                            )}
-                            {profile.location && (
-                                <p className="text-xs text-zinc-500 flex items-center gap-1 mt-1.5">
-                                    <MapPin className="w-3 h-3" />
-                                    {profile.location}
-                                </p>
-                            )}
-                        </div>
-                    </div>
-
-                    {/* Recommendation + Mutual */}
-                    <div className="flex items-center gap-3 mt-4">
-                        {profile.mutualConnections != null && profile.mutualConnections > 0 && (
-                            <span className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-500/10 px-2 py-1 rounded-full">
-                                <Users className="w-3 h-3" />
-                                {profile.mutualConnections} mutual
-                            </span>
-                        )}
-                        {profile.recommendationReason && (
-                            <span className="text-xs text-zinc-500 dark:text-zinc-400">
-                                💡 {profile.recommendationReason}
-                            </span>
-                        )}
-                    </div>
-
-                    {/* Featured project */}
-                    {profile.projects && profile.projects.length > 0 && (
-                        <div className="mt-3 pt-3 border-t border-zinc-100 dark:border-zinc-800">
-                            <div className="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
-                                <Briefcase className="w-3.5 h-3.5" />
-                                <span className="font-medium truncate">{profile.projects[0].title}</span>
-                                <span className={cn(
-                                    "ml-auto text-[10px] px-1.5 py-0.5 rounded-full capitalize",
-                                    profile.projects[0].status === "active"
-                                        ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
-                                        : profile.projects[0].status === "completed"
-                                            ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
-                                        : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
-                                )}>
-                                    {profile.projects[0].status || "draft"}
-                                </span>
-                            </div>
-                        </div>
+            <div className="relative flex flex-col rounded-2xl bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl border border-zinc-200/60 dark:border-white/5 overflow-hidden transition-all duration-200 hover:border-indigo-500/30">
+                
+                {/* Header Strip & Dismiss */}
+                <div className="flex items-center justify-between px-4 pt-4 pb-2">
+                    <span className="text-[10px] font-bold tracking-wider text-indigo-600 dark:text-indigo-400 uppercase">
+                        Recommended For You
+                    </span>
+                    {onDismiss && (
+                        <button
+                            type="button"
+                            onClick={handleDismiss}
+                            className="rounded-full p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200 transition-colors"
+                            aria-label={`Dismiss ${profile.fullName || "suggestion"}`}
+                        >
+                            <X className="w-4 h-4" />
+                        </button>
                     )}
+                </div>
+
+                <Link href={profileHref(profile)} className="flex flex-col group/link">
+                    {/* Zone 1: Identity */}
+                    <div className="px-4 pb-4">
+                        <div className="flex items-start gap-4">
+                            {profile.avatarUrl ? (
+                                <Image
+                                    src={profile.avatarUrl}
+                                    alt={profile.fullName || profile.username || "User"}
+                                    width={56}
+                                    height={56}
+                                    className={cn("w-14 h-14 rounded-full object-cover flex-shrink-0 ring-2 ring-offset-2 dark:ring-offset-zinc-900", getAvatarRingStyle())}
+                                    priority={priority}
+                                />
+                            ) : (
+                                <div className={cn("w-14 h-14 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-xl font-semibold flex-shrink-0 ring-2 ring-offset-2 dark:ring-offset-zinc-900", getAvatarRingStyle())}>
+                                    {(profile.fullName || profile.username || "U")[0]?.toUpperCase()}
+                                </div>
+                            )}
+                            <div className="flex-1 min-w-0">
+                                <h3 className="font-semibold text-zinc-900 dark:text-zinc-100 truncate text-sm group-hover/link:text-indigo-600 dark:group-hover/link:text-indigo-400 transition-colors">
+                                    {profile.fullName || profile.username || "User"}
+                                </h3>
+                                {(profile.username || profile.fullName) && (
+                                    <p className="text-xs text-zinc-500 truncate mt-0.5">
+                                        @{profile.username || (profile.fullName?.toLowerCase().replace(/\s+/g, ''))}
+                                    </p>
+                                )}
+                                <div className="h-4 mt-1">
+                                    {profile.headline ? (
+                                        <p className="text-xs text-zinc-600 dark:text-zinc-400 line-clamp-1">
+                                            {profile.headline}
+                                        </p>
+                                    ) : null}
+                                </div>
+                                <div className="h-4 mt-1">
+                                    {profile.location ? (
+                                        <p className="text-[11px] text-zinc-500 flex items-center gap-1">
+                                            <MapPin className="w-3 h-3" />
+                                            {profile.location}
+                                        </p>
+                                    ) : null}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="h-[1px] bg-zinc-100 dark:bg-zinc-800/50 w-full" />
+
+                    {/* Zone 2: Signals & Connection Strength */}
+                    <div className="px-4 py-3 bg-zinc-50/50 dark:bg-zinc-800/20">
+                        <div className="text-[10px] uppercase font-bold text-zinc-400 tracking-wider mb-2">Connection Strength</div>
+                        <div className="h-[36px] flex flex-col justify-center gap-1.5">
+                            {(profile.mutualConnections != null && profile.mutualConnections > 0) || profile.recommendationReason ? (
+                                <>
+                                    {profile.mutualConnections != null && profile.mutualConnections > 0 && (
+                                        <div className="flex items-center gap-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300">
+                                            <Users className="w-3.5 h-3.5 text-indigo-500" />
+                                            {profile.mutualConnections} Mutual Connections
+                                        </div>
+                                    )}
+                                    {profile.recommendationReason && (
+                                        <div className="flex items-center gap-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300 truncate">
+                                            <span className="text-[10px]">💡</span>
+                                            {profile.recommendationReason}
+                                        </div>
+                                    )}
+                                </>
+                            ) : (
+                                <div className="text-xs text-zinc-400 italic">Suggested by network</div>
+                            )}
+                        </div>
+                    </div>
+
+                    <div className="h-[1px] bg-zinc-100 dark:bg-zinc-800/50 w-full" />
+
+                    {/* Zone 3: Featured Project */}
+                    <div className="px-4 py-3">
+                         <div className="text-[10px] uppercase font-bold text-zinc-400 tracking-wider mb-2">Current Focus</div>
+                         <div className="h-[28px]">
+                            {profile.projects && profile.projects.length > 0 ? (
+                                <div className="flex items-center justify-between text-xs bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg px-2.5 py-1.5">
+                                    <div className="flex items-center gap-1.5 min-w-0 pr-2">
+                                        <Briefcase className="w-3.5 h-3.5 text-zinc-400 flex-shrink-0" />
+                                        <span className="font-medium text-zinc-700 dark:text-zinc-300 truncate">{profile.projects[0].title}</span>
+                                    </div>
+                                    <span className={cn(
+                                        "text-[10px] px-2 py-0.5 rounded-full capitalize whitespace-nowrap flex-shrink-0",
+                                        profile.projects[0].status === "active"
+                                            ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
+                                            : profile.projects[0].status === "completed"
+                                                ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
+                                            : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
+                                    )}>
+                                        {profile.projects[0].status || "draft"}
+                                    </span>
+                                </div>
+                            ) : (
+                                <div className="text-xs text-zinc-400 italic flex items-center h-full px-1">Available for opportunities</div>
+                            )}
+                         </div>
+                    </div>
                 </Link>
 
-                <div className="px-5 pb-5">
+                {/* Zone 4: Action */}
+                <div className="px-4 pb-4 mt-auto">
                     <button
                         onClick={handleConnect}
                         disabled={isConnecting || localStatus === 'connected' || localStatus === 'pending_sent'}
                         className={cn(
-                            "w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all",
+                            "w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all shadow-sm ring-1 ring-inset ring-transparent",
                             getButtonStyles(),
-                            (isConnecting || localStatus === 'connected' || localStatus === 'pending_sent') && "opacity-80"
+                            (isConnecting || localStatus === 'connected' || localStatus === 'pending_sent') && "opacity-90 shadow-none hover:ring-transparent"
                         )}
                     >
                         {getButtonContent()}
                     </button>
                 </div>
-            </motion.div>
+            </div>
         );
     }
 
-    // ---------- DEFAULT VARIANT ----------
+    // ---------- COMPACT VARIANT ----------
     return (
-        <motion.div
-            onMouseEnter={() => setIsHovered(true)}
-            onMouseLeave={() => setIsHovered(false)}
-            layout
-            className="relative rounded-2xl bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl border border-zinc-200/60 dark:border-white/5 overflow-hidden hover:shadow-2xl hover:-translate-y-0.5 transition-all duration-300"
-        >
-            {onDismiss && (
-                <AnimatePresence>
-                    {isHovered && (
-                        <motion.button
-                            initial={{ opacity: 0, scale: 0.8 }}
-                            animate={{ opacity: 1, scale: 1 }}
-                            exit={{ opacity: 0, scale: 0.8 }}
-                            type="button"
-                            onClick={handleDismiss}
-                            className="absolute right-3 top-3 z-10 rounded-full p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-200 transition-colors"
-                            aria-label={`Dismiss ${profile.fullName || profile.username || "suggestion"}`}
-                        >
-                            <X className="w-4 h-4" />
-                        </motion.button>
-                    )}
-                </AnimatePresence>
-            )}
-            <Link href={profileHref(profile)} className="block p-4">
-                {/* Main Content */}
-                <div className="flex items-start gap-3">
-                    {profile.avatarUrl ? (
-                        <Image
-                            src={profile.avatarUrl}
-                            alt={profile.fullName || profile.username || "User"}
-                            width={56}
-                            height={56}
-                            className="w-14 h-14 rounded-full object-cover flex-shrink-0"
-                        />
-                    ) : (
-                        <div className="w-14 h-14 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-xl font-semibold flex-shrink-0">
-                            {(profile.fullName || profile.username || "U")[0]?.toUpperCase()}
+        <div className="relative flex flex-col h-[200px] rounded-2xl bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl border border-zinc-200/60 dark:border-white/5 overflow-hidden transition-all duration-200 hover:border-indigo-500/30 group">
+            <Link href={profileHref(profile)} className="flex-1 flex flex-col p-4 group/link focus:outline-none focus:ring-2 focus:ring-inset focus:ring-indigo-500">
+                <div className="flex items-start justify-between">
+                    <div className="flex items-start gap-3 flex-1 min-w-0">
+                        {profile.avatarUrl ? (
+                            <Image
+                                src={profile.avatarUrl}
+                                alt={profile.fullName || profile.username || "User"}
+                                width={48}
+                                height={48}
+                                className={cn("w-12 h-12 rounded-full object-cover flex-shrink-0 ring-2 ring-offset-2 dark:ring-offset-zinc-900", getAvatarRingStyle())}
+                                priority={priority}
+                            />
+                        ) : (
+                            <div className={cn("w-12 h-12 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-lg font-bold flex-shrink-0 ring-2 ring-offset-2 dark:ring-offset-zinc-900", getAvatarRingStyle())}>
+                                {(profile.fullName || profile.username || "U")[0]?.toUpperCase()}
+                            </div>
+                        )}
+                        
+                        <div className="flex-1 min-w-0 pt-0.5 group-hover/link:text-indigo-600 dark:group-hover/link:text-indigo-400 transition-colors">
+                            <h3 className="font-semibold text-zinc-900 dark:text-zinc-100 truncate text-sm leading-tight pr-6 relative">
+                                {profile.fullName || profile.username || "User"}
+                                {onDismiss && (
+                                    <button
+                                        type="button"
+                                        onClick={handleDismiss}
+                                        className="absolute -right-2 top-1/2 -translate-y-1/2 p-1.5 text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 opacity-0 group-hover:opacity-100 transition-opacity"
+                                        aria-label={`Dismiss ${profile.fullName || profile.username || "suggestion"}`}
+                                    >
+                                        <X className="w-3.5 h-3.5" />
+                                    </button>
+                                )}
+                            </h3>
+                            <p className="text-[11px] text-zinc-500 truncate mt-0.5">
+                                @{profile.username || (profile.fullName?.toLowerCase().replace(/\s+/g, ''))}
+                            </p>
                         </div>
-                    )}
-                    <div className="flex-1 min-w-0">
-                        <h3 className="font-semibold text-zinc-900 dark:text-zinc-100 truncate">
-                            {profile.fullName || profile.username || "User"}
-                        </h3>
-                        {profile.headline && (
-                            <p className="text-sm text-zinc-600 dark:text-zinc-400 line-clamp-1 mt-0.5">
-                                {profile.headline}
-                            </p>
-                        )}
-                        {profile.location && (
-                            <p className="text-xs text-zinc-500 dark:text-zinc-500 flex items-center gap-1 mt-1">
-                                <MapPin className="w-3 h-3" />
-                                {profile.location}
-                            </p>
-                        )}
                     </div>
                 </div>
 
-                {/* Tags row: mutual connections + recommendation */}
-                <div className="flex items-center gap-2 mt-3 flex-wrap">
-                    {profile.mutualConnections != null && profile.mutualConnections > 0 && (
-                        <span className="inline-flex items-center gap-1 text-[11px] font-medium text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-500/10 px-2 py-0.5 rounded-full">
-                            <Users className="w-3 h-3" />
-                            {profile.mutualConnections} mutual
-                        </span>
-                    )}
-                    {profile.recommendationReason && (
-                        <span className="text-[11px] text-zinc-500 dark:text-zinc-400 truncate">
-                            💡 {profile.recommendationReason}
-                        </span>
-                    )}
+                <div className="mt-3 flex-1">
+                    <div className="h-[20px]">
+                        {profile.headline ? (
+                            <p className="text-xs text-zinc-600 dark:text-zinc-400 line-clamp-1">
+                                {profile.headline}
+                            </p>
+                        ) : null}
+                    </div>
+                    <div className="h-[20px] mt-1">
+                        {profile.location ? (
+                            <p className="text-[11px] text-zinc-500 flex items-center gap-1">
+                                <MapPin className="w-3 h-3" />
+                                {profile.location}
+                            </p>
+                        ) : null}
+                    </div>
                 </div>
-
-                {/* Expandable Projects Section */}
-                <AnimatePresence>
-                    {isHovered && profile.projects && profile.projects.length > 0 && (
-                        <motion.div
-                            initial={{ height: 0, opacity: 0 }}
-                            animate={{ height: "auto", opacity: 1 }}
-                            exit={{ height: 0, opacity: 0 }}
-                            transition={{ duration: 0.2, ease: "easeInOut" }}
-                            className="overflow-hidden"
-                        >
-                            <div className="mt-3 pt-3 border-t border-zinc-100 dark:border-zinc-800">
-                                <div className="flex items-center gap-1.5 text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-2">
-                                    <Briefcase className="w-3.5 h-3.5" />
-                                    Projects
-                                </div>
-                                <div className="space-y-1.5">
-                                    {profile.projects.slice(0, 3).map((proj) => (
-                                        <div key={proj.id} className="flex items-center justify-between text-sm">
-                                            <span className="text-zinc-700 dark:text-zinc-300 truncate">
-                                                {proj.title}
-                                            </span>
-                                            <span className={cn(
-                                                "text-xs px-2 py-0.5 rounded-full capitalize",
-                                                proj.status === "active"
-                                                    ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
-                                                    : proj.status === "completed"
-                                                        ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
-                                                        : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
-                                            )}>
-                                                {proj.status || "draft"}
-                                            </span>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-                        </motion.div>
-                    )}
-                </AnimatePresence>
             </Link>
 
-            {/* Connect Button */}
             <div className="px-4 pb-4">
                 <button
                     onClick={handleConnect}
                     disabled={isConnecting || localStatus === 'connected' || localStatus === 'pending_sent'}
                     className={cn(
-                        "w-full flex items-center justify-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all",
+                        "w-full flex items-center justify-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all shadow-sm ring-1 ring-inset ring-transparent",
                         getButtonStyles(),
-                        (isConnecting || localStatus === 'connected' || localStatus === 'pending_sent') && "opacity-80"
+                        (isConnecting || localStatus === 'connected' || localStatus === 'pending_sent') && "opacity-90 shadow-none hover:ring-transparent"
                     )}
                 >
                     {getButtonContent()}
                 </button>
             </div>
-        </motion.div>
+        </div>
     );
 }
 
-export default React.memo(PersonCard);
+const areCardsEqual = (prevProps: PersonCardProps, nextProps: PersonCardProps) => {
+    return (
+        prevProps.profile.id === nextProps.profile.id &&
+        prevProps.profile.connectionStatus === nextProps.profile.connectionStatus &&
+        prevProps.isConnecting === nextProps.isConnecting &&
+        prevProps.variant === nextProps.variant
+    );
+};
+
+export default React.memo(PersonCard, areCardsEqual);

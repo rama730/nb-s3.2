@@ -183,8 +183,6 @@ const SORT_LABELS: Record<SortKey, string> = {
 };
 
 export default function AssetGallery({
-  projectId: _projectId,
-  folderId: _folderId,
   nodes,
   onOpenAsset,
   onOpenFolder,

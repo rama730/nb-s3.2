@@ -77,7 +77,7 @@ export default function MarkdownPreview({ content, className }: MarkdownPreviewP
       <Suspense fallback={<div className="text-sm text-zinc-500">Loading preview...</div>}>
         <LazyReactMarkdown
           remarkPlugins={remarkPlugins}
-          components={markdownComponents as any}
+          components={markdownComponents as unknown as Record<string, React.FC>}
         >
           {content}
         </LazyReactMarkdown>

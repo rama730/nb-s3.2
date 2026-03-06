@@ -1,4 +1,3 @@
-// @ts-nocheck
 import * as dotenv from 'dotenv';
 import postgres from 'postgres';
 import { fileURLToPath } from 'url';
@@ -30,7 +29,7 @@ const ONBOARDING_FIXTURE_EMAILS = [
 ];
 
 async function cleanup() {
-  await sql.begin(async (tx) => {
+  await sql.begin(async (tx: any) => {
     const runPattern = `%${RUN_ID}%`;
 
     await tx`
@@ -54,7 +53,7 @@ async function cleanup() {
       select id from profiles where email = any(${onboardingFixtureEmails(ONBOARDING_FIXTURE_EMAILS)})
     `;
 
-    const onboardingIds = onboardingUsers.map((u) => u.id);
+    const onboardingIds = onboardingUsers.map((u: { id: string }) => u.id);
     if (onboardingIds.length > 0) {
       await tx`delete from onboarding_events where user_id = any(${onboardingIds})`;
       await tx`delete from onboarding_submissions where user_id = any(${onboardingIds})`;

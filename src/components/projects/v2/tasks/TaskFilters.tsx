@@ -58,14 +58,14 @@ export default function TaskFilters({
                 className={cn(
                     "inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-sm font-medium transition-colors",
                     hasActiveFilters
-                        ? "bg-blue-50 border-blue-200 text-blue-700 dark:bg-blue-900/20 dark:border-blue-800 dark:text-blue-300"
+                        ? "bg-indigo-50 border-indigo-200 text-indigo-700 dark:bg-indigo-900/20 dark:border-indigo-800 dark:text-indigo-300"
                         : "bg-white border-zinc-200 text-zinc-700 hover:bg-zinc-50 dark:bg-zinc-900 dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-800"
                 )}
             >
                 <Filter className="w-4 h-4" />
                 <span>Filter</span>
                 {hasActiveFilters && (
-                    <span className="flex items-center justify-center min-w-5 h-5 px-1 text-xs font-bold rounded-full bg-blue-100 text-blue-700 dark:bg-blue-800 dark:text-blue-200">
+                    <span className="flex items-center justify-center min-w-5 h-5 px-1 text-xs font-bold rounded-full bg-indigo-100 text-indigo-700 dark:bg-indigo-800 dark:text-indigo-200">
                         {activeCount || (scope !== 'all' ? 1 : 0)}
                     </span>
                 )}
@@ -91,7 +91,7 @@ export default function TaskFilters({
                                         setReorderMode?.(false);
                                         setViewMode('board');
                                     }}
-                                    className="text-xs text-blue-600 hover:text-blue-700 font-medium"
+                                    className="text-xs text-indigo-600 hover:text-indigo-700 font-medium"
                                 >
                                     Reset all
                                 </button>

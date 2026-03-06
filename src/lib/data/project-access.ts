@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { projects, projectMembers } from "@/lib/db/schema";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 
 type Visibility = "public" | "private" | "unlisted" | string | null | undefined;
 type Status = "draft" | "active" | "completed" | "archived" | string | null | undefined;
@@ -49,7 +49,7 @@ export async function getProjectAccessById(projectId: string, userId: string | n
             slug: projects.slug,
         })
         .from(projects)
-        .where(eq(projects.id, projectId))
+        .where(and(eq(projects.id, projectId), isNull(projects.deletedAt)))
         .limit(1);
 
     if (!project) {

@@ -8,7 +8,7 @@ import {
     deleteNodeSchema,
 } from '../../src/lib/validations/files'
 
-const validId = '00000000-0000-0000-0000-000000000001'
+const validId = '123e4567-e89b-42d3-a456-426614174000'
 
 describe('nodeNameSchema', () => {
     it('accepts valid names', () => {

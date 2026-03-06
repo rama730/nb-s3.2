@@ -59,7 +59,7 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'Invalid username format';
     END IF;
 
-    IF EXISTS (SELECT 1 FROM reserved_usernames WHERE username = NEW.username) THEN
+    IF EXISTS (SELECT 1 FROM public.reserved_usernames WHERE username = NEW.username) THEN
         RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'Username is reserved';
     END IF;
 
@@ -189,6 +189,43 @@ CHECK (
   )
 ) NOT VALID;
 
+ALTER TABLE profiles
+ADD COLUMN IF NOT EXISTS experience_level text;
+ALTER TABLE profiles
+ADD COLUMN IF NOT EXISTS hours_per_week text;
+ALTER TABLE profiles
+ADD COLUMN IF NOT EXISTS gender_identity text;
+ALTER TABLE profiles
+ADD COLUMN IF NOT EXISTS pronouns text;
+
+ALTER TABLE profiles DROP CONSTRAINT IF EXISTS profiles_experience_level_check;
+ALTER TABLE profiles ADD CONSTRAINT profiles_experience_level_check
+CHECK (
+  experience_level IS NULL
+  OR experience_level IN ('student', 'junior', 'mid', 'senior', 'lead', 'founder')
+) NOT VALID;
+
+ALTER TABLE profiles DROP CONSTRAINT IF EXISTS profiles_hours_per_week_check;
+ALTER TABLE profiles ADD CONSTRAINT profiles_hours_per_week_check
+CHECK (
+  hours_per_week IS NULL
+  OR hours_per_week IN ('lt_5', 'h_5_10', 'h_10_20', 'h_20_40', 'h_40_plus')
+) NOT VALID;
+
+ALTER TABLE profiles DROP CONSTRAINT IF EXISTS profiles_gender_identity_check;
+ALTER TABLE profiles ADD CONSTRAINT profiles_gender_identity_check
+CHECK (
+  gender_identity IS NULL
+  OR gender_identity IN ('male', 'female', 'non_binary', 'prefer_not_to_say', 'other')
+) NOT VALID;
+
+ALTER TABLE profiles DROP CONSTRAINT IF EXISTS profiles_pronouns_length_check;
+ALTER TABLE profiles ADD CONSTRAINT profiles_pronouns_length_check
+CHECK (
+  pronouns IS NULL
+  OR char_length(trim(pronouns)) <= 60
+) NOT VALID;
+
 CREATE OR REPLACE VIEW onboarding_slo_daily WITH (security_invoker = true) AS
 WITH base AS (
   SELECT
@@ -212,6 +249,20 @@ SELECT
 FROM base
 GROUP BY day
 ORDER BY day DESC;
+
+CREATE OR REPLACE VIEW onboarding_funnel_dimensions_daily WITH (security_invoker = true) AS
+SELECT
+  date_trunc('day', created_at)::date AS day,
+  event_type,
+  COALESCE(step, 0) AS step,
+  metadata->>'availabilityStatus' AS availability_status,
+  metadata->>'messagePrivacy' AS message_privacy,
+  metadata->>'visibility' AS visibility,
+  COUNT(*) AS event_count
+FROM onboarding_events
+WHERE created_at >= now() - interval '30 days'
+GROUP BY 1, 2, 3, 4, 5, 6
+ORDER BY day DESC, event_type, step;
 
 -- Connection queries (user's connections)
 CREATE INDEX IF NOT EXISTS idx_connections_requester ON connections(requester_id);
@@ -585,12 +636,40 @@ CREATE POLICY project_files_read ON storage.objects
 FOR SELECT
 USING (
   bucket_id = 'project-files'
-  AND split_part(name, '/', 1) = 'projects'
   AND (
-    EXISTS (SELECT 1 FROM projects p WHERE p.id::text = split_part(name, '/', 2) AND p.owner_id = auth.uid())
+    (
+      split_part(name, '/', 1) = 'projects'
+      AND split_part(name, '/', 2) <> ''
+      AND split_part(name, '/', 3) <> ''
+      AND EXISTS (
+        SELECT 1 FROM projects p
+        WHERE p.id::text = split_part(name, '/', 2)
+          AND p.owner_id = auth.uid()
+      )
+    )
+    OR (
+      split_part(name, '/', 1) <> 'projects'
+      AND split_part(name, '/', 1) <> ''
+      AND split_part(name, '/', 2) <> ''
+      AND EXISTS (
+        SELECT 1 FROM projects p
+        WHERE p.id::text = split_part(name, '/', 1)
+          AND p.owner_id = auth.uid()
+      )
+    )
     OR EXISTS (
       SELECT 1 FROM project_members m
-      WHERE m.project_id::text = split_part(name, '/', 2) AND m.user_id = auth.uid()
+      WHERE m.user_id = auth.uid()
+        AND (
+          (
+            split_part(name, '/', 1) = 'projects'
+            AND m.project_id::text = split_part(name, '/', 2)
+          )
+          OR (
+            split_part(name, '/', 1) <> 'projects'
+            AND m.project_id::text = split_part(name, '/', 1)
+          )
+        )
     )
   )
 );
@@ -600,11 +679,23 @@ CREATE POLICY project_files_public_read ON storage.objects
 FOR SELECT
 USING (
   bucket_id = 'project-files'
-  AND split_part(name, '/', 1) = 'projects'
   AND EXISTS (
     SELECT 1 FROM projects p
-    WHERE p.id::text = split_part(name, '/', 2)
-      AND p.visibility = 'public'
+    WHERE p.visibility = 'public'
+      AND (
+        (
+          split_part(name, '/', 1) = 'projects'
+          AND split_part(name, '/', 2) <> ''
+          AND split_part(name, '/', 3) <> ''
+          AND p.id::text = split_part(name, '/', 2)
+        )
+        OR (
+          split_part(name, '/', 1) <> 'projects'
+          AND split_part(name, '/', 1) <> ''
+          AND split_part(name, '/', 2) <> ''
+          AND p.id::text = split_part(name, '/', 1)
+        )
+      )
   )
 );
 
@@ -613,23 +704,27 @@ CREATE POLICY project_files_write ON storage.objects
 FOR ALL
 USING (
   bucket_id = 'project-files'
-  AND split_part(name, '/', 1) = 'projects'
+  AND split_part(name, '/', 1) <> 'projects'
+  AND split_part(name, '/', 1) <> ''
+  AND split_part(name, '/', 2) <> ''
   AND (
-    EXISTS (SELECT 1 FROM projects p WHERE p.id::text = split_part(name, '/', 2) AND p.owner_id = auth.uid())
+    EXISTS (SELECT 1 FROM projects p WHERE p.id::text = split_part(name, '/', 1) AND p.owner_id = auth.uid())
     OR EXISTS (
       SELECT 1 FROM project_members m
-      WHERE m.project_id::text = split_part(name, '/', 2) AND m.user_id = auth.uid() AND m.role <> 'viewer'
+      WHERE m.project_id::text = split_part(name, '/', 1) AND m.user_id = auth.uid() AND m.role <> 'viewer'
     )
   )
 )
 WITH CHECK (
   bucket_id = 'project-files'
-  AND split_part(name, '/', 1) = 'projects'
+  AND split_part(name, '/', 1) <> 'projects'
+  AND split_part(name, '/', 1) <> ''
+  AND split_part(name, '/', 2) <> ''
   AND (
-    EXISTS (SELECT 1 FROM projects p WHERE p.id::text = split_part(name, '/', 2) AND p.owner_id = auth.uid())
+    EXISTS (SELECT 1 FROM projects p WHERE p.id::text = split_part(name, '/', 1) AND p.owner_id = auth.uid())
     OR EXISTS (
       SELECT 1 FROM project_members m
-      WHERE m.project_id::text = split_part(name, '/', 2) AND m.user_id = auth.uid() AND m.role <> 'viewer'
+      WHERE m.project_id::text = split_part(name, '/', 1) AND m.user_id = auth.uid() AND m.role <> 'viewer'
     )
   )
 );
@@ -978,3 +1073,541 @@ CREATE POLICY "Users can manage their dismissals" ON connection_suggestion_dismi
 FOR ALL
 USING (user_id = auth.uid())
 WITH CHECK (user_id = auth.uid());
+-- ============================================================================
+-- SUPABASE AI ADVISOR REMEDIATIONS (PERFORMANCE & CORRECTNESS)
+-- ============================================================================
+
+-- 1. ADD MISSING PRIMARY KEYS
+-- The dm_pairs table was flagged for missing a primary key.
+ALTER TABLE public.dm_pairs 
+ADD COLUMN IF NOT EXISTS id uuid DEFAULT gen_random_uuid() PRIMARY KEY;
+
+-- 2. RLS INITPLAN OPTIMIZATION (auth.uid() wrappers)
+-- Wrapping auth.uid() in a stable function forces PostgreSQL to evaluate it ONCE
+-- per query (initplan) rather than once per row, drastically improving RLS performance
+-- when selecting multiple rows.
+CREATE OR REPLACE FUNCTION public.get_auth_uid()
+RETURNS uuid 
+LANGUAGE sql STABLE
+SET search_path = ''
+AS $$
+  SELECT nullif(current_setting('request.jwt.claim.sub', true), '')::uuid;
+$$;
+
+-- Note: We are not rewriting all 60 existing RLS policies in this script yet.
+-- Using the wrapper function in new policies or when modifying existing complex policies
+-- is the best practice. For this immediate fix, the wrapper is made available.
+
+-- 3. ADD COVERING INDEXES FOR FOREIGN KEYS
+-- The advisor flags foreign keys that lack an index, leading to slow cascade deletes and joins.
+CREATE INDEX IF NOT EXISTS idx_tasks_creator_id ON public.tasks(creator_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_sprint_id ON public.tasks(sprint_id);
+CREATE INDEX IF NOT EXISTS idx_task_subtasks_task_id ON public.task_subtasks(task_id);
+CREATE INDEX IF NOT EXISTS idx_task_node_links_created_by ON public.task_node_links(created_by);
+CREATE INDEX IF NOT EXISTS idx_task_node_links_node_id ON public.task_node_links(node_id);
+CREATE INDEX IF NOT EXISTS idx_task_node_links_task_id ON public.task_node_links(task_id);
+CREATE INDEX IF NOT EXISTS idx_saved_projects_project_id ON public.saved_projects(project_id);
+CREATE INDEX IF NOT EXISTS idx_saved_projects_user_id ON public.saved_projects(user_id);
+CREATE INDEX IF NOT EXISTS idx_role_applications_project_id ON public.role_applications(project_id);
+CREATE INDEX IF NOT EXISTS idx_role_applications_decision_by ON public.role_applications(decision_by);
+CREATE INDEX IF NOT EXISTS idx_role_applications_applicant_id ON public.role_applications(applicant_id);
+CREATE INDEX IF NOT EXISTS idx_role_applications_role_id ON public.role_applications(role_id);
+CREATE INDEX IF NOT EXISTS idx_project_sprints_project_id ON public.project_sprints(project_id);
+CREATE INDEX IF NOT EXISTS idx_project_run_sessions_project_id ON public.project_run_sessions(project_id);
+CREATE INDEX IF NOT EXISTS idx_project_run_sessions_profile_id ON public.project_run_sessions(profile_id);
+CREATE INDEX IF NOT EXISTS idx_project_run_sessions_started_by ON public.project_run_sessions(started_by);
+CREATE INDEX IF NOT EXISTS idx_project_run_profiles_project_id ON public.project_run_profiles(project_id);
+CREATE INDEX IF NOT EXISTS idx_project_run_profiles_created_by ON public.project_run_profiles(created_by);
+CREATE INDEX IF NOT EXISTS idx_project_run_logs_project_id ON public.project_run_logs(project_id);
+CREATE INDEX IF NOT EXISTS idx_project_run_logs_session_id ON public.project_run_logs(session_id);
+CREATE INDEX IF NOT EXISTS idx_project_run_diagnostics_project_id ON public.project_run_diagnostics(project_id);
+CREATE INDEX IF NOT EXISTS idx_project_run_diagnostics_session_id ON public.project_run_diagnostics(session_id);
+CREATE INDEX IF NOT EXISTS idx_project_run_diagnostics_node_id ON public.project_run_diagnostics(node_id);
+CREATE INDEX IF NOT EXISTS idx_project_open_roles_project_id ON public.project_open_roles(project_id);
+CREATE INDEX IF NOT EXISTS idx_project_nodes_project_id ON public.project_nodes(project_id);
+CREATE INDEX IF NOT EXISTS idx_project_nodes_parent_id ON public.project_nodes(parent_id);
+CREATE INDEX IF NOT EXISTS idx_project_nodes_created_by ON public.project_nodes(created_by);
+CREATE INDEX IF NOT EXISTS idx_project_nodes_deleted_by ON public.project_nodes(deleted_by);
+CREATE INDEX IF NOT EXISTS idx_project_node_locks_project_id ON public.project_node_locks(project_id);
+CREATE INDEX IF NOT EXISTS idx_project_node_locks_node_id ON public.project_node_locks(node_id);
+CREATE INDEX IF NOT EXISTS idx_project_node_locks_locked_by ON public.project_node_locks(locked_by);
+CREATE INDEX IF NOT EXISTS idx_project_node_events_project_id ON public.project_node_events(project_id);
+CREATE INDEX IF NOT EXISTS idx_project_node_events_node_id ON public.project_node_events(node_id);
+CREATE INDEX IF NOT EXISTS idx_project_node_events_actor_id ON public.project_node_events(actor_id);
+CREATE INDEX IF NOT EXISTS idx_project_members_user_id ON public.project_members(user_id);
+CREATE INDEX IF NOT EXISTS idx_project_members_project_id ON public.project_members(project_id);
+CREATE INDEX IF NOT EXISTS idx_project_follows_user_id ON public.project_follows(user_id);
+CREATE INDEX IF NOT EXISTS idx_project_follows_project_id ON public.project_follows(project_id);
+CREATE INDEX IF NOT EXISTS idx_project_file_index_project_id ON public.project_file_index(project_id);
+CREATE INDEX IF NOT EXISTS idx_project_file_index_node_id ON public.project_file_index(node_id);
+CREATE INDEX IF NOT EXISTS idx_profile_audit_events_user_id ON public.profile_audit_events(user_id);
+CREATE INDEX IF NOT EXISTS idx_onboarding_submissions_user_id ON public.onboarding_submissions(user_id);
+CREATE INDEX IF NOT EXISTS idx_onboarding_events_user_id ON public.onboarding_events(user_id);
+CREATE INDEX IF NOT EXISTS idx_onboarding_drafts_user_id ON public.onboarding_drafts(user_id);
+CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON public.messages(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_messages_sender_id ON public.messages(sender_id);
+CREATE INDEX IF NOT EXISTS idx_messages_reply_to_message_id ON public.messages(reply_to_message_id);
+CREATE INDEX IF NOT EXISTS idx_message_hidden_for_users_message_id ON public.message_hidden_for_users(message_id);
+CREATE INDEX IF NOT EXISTS idx_message_hidden_for_users_user_id ON public.message_hidden_for_users(user_id);
+CREATE INDEX IF NOT EXISTS idx_message_edit_logs_message_id ON public.message_edit_logs(message_id);
+CREATE INDEX IF NOT EXISTS idx_message_edit_logs_editor_id ON public.message_edit_logs(editor_id);
+CREATE INDEX IF NOT EXISTS idx_message_attachments_message_id ON public.message_attachments(message_id);
+CREATE INDEX IF NOT EXISTS idx_conversation_participants_conversation_id ON public.conversation_participants(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_conversation_participants_user_id ON public.conversation_participants(user_id);
+CREATE INDEX IF NOT EXISTS idx_connections_requester_id ON public.connections(requester_id);
+CREATE INDEX IF NOT EXISTS idx_connections_addressee_id ON public.connections(addressee_id);
+CREATE INDEX IF NOT EXISTS idx_connection_suggestion_dismissals_user_id ON public.connection_suggestion_dismissals(user_id);
+CREATE INDEX IF NOT EXISTS idx_connection_suggestion_dismissals_dismissed_profile_id ON public.connection_suggestion_dismissals(dismissed_profile_id);
+CREATE INDEX IF NOT EXISTS idx_attachment_uploads_user_id ON public.attachment_uploads(user_id);
+CREATE INDEX IF NOT EXISTS idx_attachment_uploads_conversation_id ON public.attachment_uploads(conversation_id);
+
+-- ============================================================================
+-- PURE OPTIMIZATION RLS POLICIES FOR SECURITY ADVISOR FLAGGED TABLES
+-- ============================================================================
+
+-- 4. ROLE APPLICATIONS & SAVED PROJECTS & OPEN ROLES & SPRINTS & DISMISSALS & COLLECTIONS & FOLLOWS
+ALTER TABLE role_applications ENABLE ROW LEVEL SECURITY;
+ALTER TABLE saved_projects ENABLE ROW LEVEL SECURITY;
+ALTER TABLE connection_suggestion_dismissals ENABLE ROW LEVEL SECURITY;
+ALTER TABLE collections ENABLE ROW LEVEL SECURITY;
+ALTER TABLE collection_projects ENABLE ROW LEVEL SECURITY;
+ALTER TABLE project_follows ENABLE ROW LEVEL SECURITY;
+ALTER TABLE project_open_roles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE project_sprints ENABLE ROW LEVEL SECURITY;
+
+-- Role Applications
+DROP POLICY IF EXISTS "Users can view applications for their projects or their own" ON role_applications;
+CREATE POLICY "Users can view applications for their projects or their own" ON role_applications
+FOR SELECT
+USING (
+  applicant_id = auth.uid() OR
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid()) OR
+  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid() AND m.role IN ('owner', 'admin'))
+);
+
+DROP POLICY IF EXISTS "Users can create their own applications" ON role_applications;
+CREATE POLICY "Users can create their own applications" ON role_applications
+FOR INSERT
+WITH CHECK (applicant_id = auth.uid());
+
+DROP POLICY IF EXISTS "Users can update their own applications or project admins can manage" ON role_applications;
+CREATE POLICY "Users can update their own applications or project admins can manage" ON role_applications
+FOR UPDATE
+USING (
+  applicant_id = auth.uid() OR
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid()) OR
+  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid() AND m.role IN ('owner', 'admin'))
+);
+
+-- Saved Projects
+DROP POLICY IF EXISTS "Users can manage their saved projects" ON saved_projects;
+CREATE POLICY "Users can manage their saved projects" ON saved_projects
+FOR ALL
+USING (user_id = auth.uid())
+WITH CHECK (user_id = auth.uid());
+
+-- Connection Suggestion Dismissals
+DROP POLICY IF EXISTS "Users can manage their connection dismissals" ON connection_suggestion_dismissals;
+CREATE POLICY "Users can manage their connection dismissals" ON connection_suggestion_dismissals
+FOR ALL
+USING (user_id = auth.uid())
+WITH CHECK (user_id = auth.uid());
+
+-- Collections
+DROP POLICY IF EXISTS "Users can view public collections or their own" ON collections;
+CREATE POLICY "Users can view public collections or their own" ON collections
+FOR SELECT
+USING (owner_id = auth.uid());
+
+DROP POLICY IF EXISTS "Users can manage their own collections" ON collections;
+CREATE POLICY "Users can manage their own collections" ON collections
+FOR ALL
+USING (owner_id = auth.uid())
+WITH CHECK (owner_id = auth.uid());
+
+-- Collection Projects
+DROP POLICY IF EXISTS "Users can view projects in public collections or their own" ON collection_projects;
+CREATE POLICY "Users can view projects in public collections or their own" ON collection_projects
+FOR SELECT
+USING (
+  EXISTS (SELECT 1 FROM collections c WHERE c.id = collection_id AND c.owner_id = auth.uid())
+);
+
+DROP POLICY IF EXISTS "Users can manage projects in their collections" ON collection_projects;
+CREATE POLICY "Users can manage projects in their collections" ON collection_projects
+FOR ALL
+USING (EXISTS (SELECT 1 FROM collections c WHERE c.id = collection_id AND c.owner_id = auth.uid()))
+WITH CHECK (EXISTS (SELECT 1 FROM collections c WHERE c.id = collection_id AND c.owner_id = auth.uid()));
+
+-- Project Follows
+DROP POLICY IF EXISTS "Users can manage their project follows" ON project_follows;
+CREATE POLICY "Users can manage their project follows" ON project_follows
+FOR ALL
+USING (user_id = auth.uid())
+WITH CHECK (user_id = auth.uid());
+
+-- Project Open Roles
+DROP POLICY IF EXISTS "Open roles are viewable by everyone" ON project_open_roles;
+CREATE POLICY "Open roles are viewable by everyone" ON project_open_roles
+FOR SELECT
+USING (true);
+
+DROP POLICY IF EXISTS "Project admins can manage open roles" ON project_open_roles;
+CREATE POLICY "Project admins can manage open roles" ON project_open_roles
+FOR ALL
+USING (
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid()) OR
+  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid() AND m.role IN ('owner', 'admin'))
+)
+WITH CHECK (
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid()) OR
+  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid() AND m.role IN ('owner', 'admin'))
+);
+
+-- Project Sprints
+DROP POLICY IF EXISTS "Sprints are viewable by project members or if public" ON project_sprints;
+CREATE POLICY "Sprints are viewable by project members or if public" ON project_sprints
+FOR SELECT
+USING (
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND (p.owner_id = auth.uid() OR p.visibility = 'public')) OR
+  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid())
+);
+
+DROP POLICY IF EXISTS "Project admins can manage sprints" ON project_sprints;
+CREATE POLICY "Project admins can manage sprints" ON project_sprints
+FOR ALL
+USING (
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid()) OR
+  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid() AND m.role IN ('owner', 'admin', 'member'))
+)
+WITH CHECK (
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid()) OR
+  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid() AND m.role IN ('owner', 'admin', 'member'))
+);
+
+
+-- 5. TASK COMMENTS & LIKES
+ALTER TABLE task_comments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE task_comment_likes ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Comments are viewable by users who can see the task" ON task_comments;
+CREATE POLICY "Comments are viewable by users who can see the task" ON task_comments
+FOR SELECT
+USING (
+  EXISTS (
+    SELECT 1 FROM tasks t JOIN projects p ON t.project_id = p.id
+    WHERE t.id = task_id AND (p.owner_id = auth.uid() OR p.visibility = 'public' OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = p.id AND m.user_id = auth.uid()))
+  )
+);
+
+DROP POLICY IF EXISTS "Users can manage their own comments" ON task_comments;
+CREATE POLICY "Users can manage their own comments" ON task_comments
+FOR ALL
+USING (user_id = auth.uid())
+WITH CHECK (user_id = auth.uid());
+
+DROP POLICY IF EXISTS "Likes are viewable by users who can see the comment task" ON task_comment_likes;
+CREATE POLICY "Likes are viewable by users who can see the comment task" ON task_comment_likes
+FOR SELECT
+USING (
+  EXISTS (
+    SELECT 1 FROM task_comments tc JOIN tasks t ON tc.task_id = t.id JOIN projects p ON t.project_id = p.id
+    WHERE tc.id = comment_id AND (p.owner_id = auth.uid() OR p.visibility = 'public' OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = p.id AND m.user_id = auth.uid()))
+  )
+);
+
+DROP POLICY IF EXISTS "Users can manage their own likes" ON task_comment_likes;
+CREATE POLICY "Users can manage their own likes" ON task_comment_likes
+FOR ALL
+USING (user_id = auth.uid())
+WITH CHECK (user_id = auth.uid());
+
+
+-- 6. RUNNER LOGS & SESSIONS & PROFILES (SENSITIVE COLUMNS)
+ALTER TABLE project_run_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE project_run_profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE project_run_diagnostics ENABLE ROW LEVEL SECURITY;
+ALTER TABLE project_run_sessions ENABLE ROW LEVEL SECURITY;
+
+-- We want to strictly lock down run diagnostic and log tables containing `session_id`
+-- Only users who are members of that project should be allowed to interact.
+
+DROP POLICY IF EXISTS "Project runners can view sessions" ON project_run_sessions;
+CREATE POLICY "Project runners can view sessions" ON project_run_sessions
+FOR SELECT
+USING (
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid()) OR
+  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid())
+);
+
+DROP POLICY IF EXISTS "Project runners can manage sessions" ON project_run_sessions;
+CREATE POLICY "Project runners can manage sessions" ON project_run_sessions
+FOR ALL
+USING (
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid()) OR
+  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid())
+)
+WITH CHECK (
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid()) OR
+  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid())
+);
+
+DROP POLICY IF EXISTS "Project runners can view run profiles" ON project_run_profiles;
+CREATE POLICY "Project runners can view run profiles" ON project_run_profiles
+FOR SELECT
+USING (
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid()) OR
+  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid())
+);
+
+DROP POLICY IF EXISTS "Project runners can manage run profiles" ON project_run_profiles;
+CREATE POLICY "Project runners can manage run profiles" ON project_run_profiles
+FOR ALL
+USING (
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid()) OR
+  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid())
+)
+WITH CHECK (
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid()) OR
+  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid())
+);
+
+-- STRICT RLS ON SENSITIVE TABLES (project_run_diagnostics, project_run_logs)
+DROP POLICY IF EXISTS "Project runners can view run diagnostics" ON project_run_diagnostics;
+CREATE POLICY "Project runners can view run diagnostics" ON project_run_diagnostics
+FOR SELECT
+USING (
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid()) OR
+  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid())
+);
+
+DROP POLICY IF EXISTS "Project runners can insert run diagnostics" ON project_run_diagnostics;
+CREATE POLICY "Project runners can insert run diagnostics" ON project_run_diagnostics
+FOR INSERT
+WITH CHECK (
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid()) OR
+  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid())
+);
+
+DROP POLICY IF EXISTS "Project runners can view run logs" ON project_run_logs;
+CREATE POLICY "Project runners can view run logs" ON project_run_logs
+FOR SELECT
+USING (
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid()) OR
+  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid())
+);
+
+DROP POLICY IF EXISTS "Project runners can insert run logs" ON project_run_logs;
+CREATE POLICY "Project runners can insert run logs" ON project_run_logs
+FOR INSERT
+WITH CHECK (
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid()) OR
+  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid())
+);
+
+
+CREATE TABLE "interests" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"name" text NOT NULL,
+	"slug" text NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "interests_name_unique" UNIQUE("name"),
+	CONSTRAINT "interests_slug_unique" UNIQUE("slug")
+);
+--> statement-breakpoint
+CREATE TABLE "profile_interests" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"profile_id" uuid NOT NULL,
+	"interest_id" uuid NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "profile_skills" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"profile_id" uuid NOT NULL,
+	"skill_id" uuid NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "project_skills" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"project_id" uuid NOT NULL,
+	"skill_id" uuid NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "project_tags" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"project_id" uuid NOT NULL,
+	"tag_id" uuid NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "skills" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"name" text NOT NULL,
+	"slug" text NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "skills_name_unique" UNIQUE("name"),
+	CONSTRAINT "skills_slug_unique" UNIQUE("slug")
+);
+--> statement-breakpoint
+CREATE TABLE "tags" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"name" text NOT NULL,
+	"slug" text NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "tags_name_unique" UNIQUE("name"),
+	CONSTRAINT "tags_slug_unique" UNIQUE("slug")
+);
+--> statement-breakpoint
+ALTER TABLE "project_node_events" DROP CONSTRAINT "project_node_events_project_id_projects_id_fk";
+--> statement-breakpoint
+ALTER TABLE "project_nodes" DROP CONSTRAINT "project_nodes_project_id_projects_id_fk";
+--> statement-breakpoint
+ALTER TABLE "project_run_diagnostics" DROP CONSTRAINT "project_run_diagnostics_session_id_project_run_sessions_id_fk";
+--> statement-breakpoint
+ALTER TABLE "project_run_diagnostics" DROP CONSTRAINT "project_run_diagnostics_project_id_projects_id_fk";
+--> statement-breakpoint
+ALTER TABLE "project_run_logs" DROP CONSTRAINT "project_run_logs_session_id_project_run_sessions_id_fk";
+--> statement-breakpoint
+ALTER TABLE "project_run_logs" DROP CONSTRAINT "project_run_logs_project_id_projects_id_fk";
+--> statement-breakpoint
+ALTER TABLE "project_run_profiles" DROP CONSTRAINT "project_run_profiles_project_id_projects_id_fk";
+--> statement-breakpoint
+ALTER TABLE "project_run_sessions" DROP CONSTRAINT "project_run_sessions_project_id_projects_id_fk";
+--> statement-breakpoint
+ALTER TABLE "tasks" DROP CONSTRAINT "tasks_project_id_projects_id_fk";
+--> statement-breakpoint
+ALTER TABLE "profiles" ADD COLUMN "deleted_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "project_nodes" ADD COLUMN "path" text DEFAULT '/' NOT NULL;--> statement-breakpoint
+ALTER TABLE "projects" ADD COLUMN "deleted_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "tasks" ADD COLUMN "deleted_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "profile_interests" ADD CONSTRAINT "profile_interests_profile_id_profiles_id_fk" FOREIGN KEY ("profile_id") REFERENCES "public"."profiles"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "profile_interests" ADD CONSTRAINT "profile_interests_interest_id_interests_id_fk" FOREIGN KEY ("interest_id") REFERENCES "public"."interests"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "profile_skills" ADD CONSTRAINT "profile_skills_profile_id_profiles_id_fk" FOREIGN KEY ("profile_id") REFERENCES "public"."profiles"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "profile_skills" ADD CONSTRAINT "profile_skills_skill_id_skills_id_fk" FOREIGN KEY ("skill_id") REFERENCES "public"."skills"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "project_skills" ADD CONSTRAINT "project_skills_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "project_skills" ADD CONSTRAINT "project_skills_skill_id_skills_id_fk" FOREIGN KEY ("skill_id") REFERENCES "public"."skills"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "project_tags" ADD CONSTRAINT "project_tags_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "project_tags" ADD CONSTRAINT "project_tags_tag_id_tags_id_fk" FOREIGN KEY ("tag_id") REFERENCES "public"."tags"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "interests_name_search_idx" ON "interests" USING gin ("name" gin_trgm_ops);--> statement-breakpoint
+CREATE UNIQUE INDEX "profile_interests_unique_idx" ON "profile_interests" USING btree ("profile_id","interest_id");--> statement-breakpoint
+CREATE INDEX "profile_interests_interest_idx" ON "profile_interests" USING btree ("interest_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "profile_skills_unique_idx" ON "profile_skills" USING btree ("profile_id","skill_id");--> statement-breakpoint
+CREATE INDEX "profile_skills_skill_idx" ON "profile_skills" USING btree ("skill_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "project_skills_unique_idx" ON "project_skills" USING btree ("project_id","skill_id");--> statement-breakpoint
+CREATE INDEX "project_skills_skill_idx" ON "project_skills" USING btree ("skill_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "project_tags_unique_idx" ON "project_tags" USING btree ("project_id","tag_id");--> statement-breakpoint
+CREATE INDEX "project_tags_tag_idx" ON "project_tags" USING btree ("tag_id");--> statement-breakpoint
+CREATE INDEX "skills_name_search_idx" ON "skills" USING gin ("name" gin_trgm_ops);--> statement-breakpoint
+CREATE INDEX "tags_name_search_idx" ON "tags" USING gin ("name" gin_trgm_ops);--> statement-breakpoint
+ALTER TABLE "project_node_events" ADD CONSTRAINT "project_node_events_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "project_nodes" ADD CONSTRAINT "project_nodes_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "project_run_diagnostics" ADD CONSTRAINT "project_run_diagnostics_session_id_project_run_sessions_id_fk" FOREIGN KEY ("session_id") REFERENCES "public"."project_run_sessions"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "project_run_diagnostics" ADD CONSTRAINT "project_run_diagnostics_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "project_run_logs" ADD CONSTRAINT "project_run_logs_session_id_project_run_sessions_id_fk" FOREIGN KEY ("session_id") REFERENCES "public"."project_run_sessions"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "project_run_logs" ADD CONSTRAINT "project_run_logs_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "project_run_profiles" ADD CONSTRAINT "project_run_profiles_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "project_run_sessions" ADD CONSTRAINT "project_run_sessions_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "tasks" ADD CONSTRAINT "tasks_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "project_nodes_path_idx" ON "project_nodes" USING btree ("path");-- scripts/setup-partitioning.sql
+
+-- 1. project_node_events
+DROP TABLE IF EXISTS project_node_events CASCADE;
+CREATE TABLE project_node_events (
+    id UUID DEFAULT gen_random_uuid(),
+    project_id UUID NOT NULL REFERENCES projects(id),
+    node_id UUID REFERENCES project_nodes(id) ON DELETE SET NULL,
+    actor_id UUID REFERENCES profiles(id) ON DELETE SET NULL,
+    type TEXT NOT NULL,
+    metadata JSONB DEFAULT '{}',
+    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    PRIMARY KEY (id, created_at)
+) PARTITION BY RANGE (created_at);
+
+-- Create current partitions
+CREATE TABLE project_node_events_2026_01 PARTITION OF project_node_events FOR VALUES FROM ('2026-01-01') TO ('2026-02-01');
+CREATE TABLE project_node_events_2026_02 PARTITION OF project_node_events FOR VALUES FROM ('2026-02-01') TO ('2026-03-01');
+CREATE TABLE project_node_events_2026_03 PARTITION OF project_node_events FOR VALUES FROM ('2026-03-01') TO ('2026-04-01');
+CREATE TABLE project_node_events_2026_04 PARTITION OF project_node_events FOR VALUES FROM ('2026-04-01') TO ('2026-05-01');
+CREATE TABLE project_node_events_2026_05 PARTITION OF project_node_events FOR VALUES FROM ('2026-05-01') TO ('2026-06-01');
+CREATE TABLE project_node_events_2026_06 PARTITION OF project_node_events FOR VALUES FROM ('2026-06-01') TO ('2026-07-01');
+CREATE TABLE project_node_events_2026_07 PARTITION OF project_node_events FOR VALUES FROM ('2026-07-01') TO ('2026-08-01');
+CREATE TABLE project_node_events_2026_08 PARTITION OF project_node_events FOR VALUES FROM ('2026-08-01') TO ('2026-09-01');
+CREATE TABLE project_node_events_2026_09 PARTITION OF project_node_events FOR VALUES FROM ('2026-09-01') TO ('2026-10-01');
+CREATE TABLE project_node_events_2026_10 PARTITION OF project_node_events FOR VALUES FROM ('2026-10-01') TO ('2026-11-01');
+CREATE TABLE project_node_events_2026_11 PARTITION OF project_node_events FOR VALUES FROM ('2026-11-01') TO ('2026-12-01');
+CREATE TABLE project_node_events_2026_12 PARTITION OF project_node_events FOR VALUES FROM ('2026-12-01') TO ('2027-01-01');
+-- Default to catch anything else
+CREATE TABLE project_node_events_default PARTITION OF project_node_events DEFAULT;
+
+CREATE INDEX project_node_events_project_idx ON project_node_events(project_id, created_at);
+CREATE INDEX project_node_events_node_idx ON project_node_events(node_id, created_at);
+
+
+-- 2. project_run_logs
+DROP TABLE IF EXISTS project_run_logs CASCADE;
+CREATE TABLE project_run_logs (
+    id UUID DEFAULT gen_random_uuid(),
+    session_id UUID NOT NULL REFERENCES project_run_sessions(id),
+    project_id UUID NOT NULL REFERENCES projects(id),
+    stream TEXT DEFAULT 'stdout' NOT NULL,
+    line_number INTEGER DEFAULT 0 NOT NULL,
+    message TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    PRIMARY KEY (id, created_at)
+) PARTITION BY RANGE (created_at);
+
+CREATE TABLE project_run_logs_2026_01 PARTITION OF project_run_logs FOR VALUES FROM ('2026-01-01') TO ('2026-02-01');
+CREATE TABLE project_run_logs_2026_02 PARTITION OF project_run_logs FOR VALUES FROM ('2026-02-01') TO ('2026-03-01');
+CREATE TABLE project_run_logs_2026_03 PARTITION OF project_run_logs FOR VALUES FROM ('2026-03-01') TO ('2026-04-01');
+CREATE TABLE project_run_logs_2026_04 PARTITION OF project_run_logs FOR VALUES FROM ('2026-04-01') TO ('2026-05-01');
+CREATE TABLE project_run_logs_2026_05 PARTITION OF project_run_logs FOR VALUES FROM ('2026-05-01') TO ('2026-06-01');
+CREATE TABLE project_run_logs_2026_06 PARTITION OF project_run_logs FOR VALUES FROM ('2026-06-01') TO ('2026-07-01');
+CREATE TABLE project_run_logs_2026_07 PARTITION OF project_run_logs FOR VALUES FROM ('2026-07-01') TO ('2026-08-01');
+CREATE TABLE project_run_logs_2026_08 PARTITION OF project_run_logs FOR VALUES FROM ('2026-08-01') TO ('2026-09-01');
+CREATE TABLE project_run_logs_2026_09 PARTITION OF project_run_logs FOR VALUES FROM ('2026-09-01') TO ('2026-10-01');
+CREATE TABLE project_run_logs_2026_10 PARTITION OF project_run_logs FOR VALUES FROM ('2026-10-01') TO ('2026-11-01');
+CREATE TABLE project_run_logs_2026_11 PARTITION OF project_run_logs FOR VALUES FROM ('2026-11-01') TO ('2026-12-01');
+CREATE TABLE project_run_logs_2026_12 PARTITION OF project_run_logs FOR VALUES FROM ('2026-12-01') TO ('2027-01-01');
+CREATE TABLE project_run_logs_default PARTITION OF project_run_logs DEFAULT;
+
+CREATE INDEX project_run_logs_session_idx ON project_run_logs(session_id, line_number);
+CREATE INDEX project_run_logs_project_idx ON project_run_logs(project_id, created_at);
+
+
+-- 3. project_run_diagnostics
+DROP TABLE IF EXISTS project_run_diagnostics CASCADE;
+CREATE TABLE project_run_diagnostics (
+    id UUID DEFAULT gen_random_uuid(),
+    session_id UUID NOT NULL REFERENCES project_run_sessions(id),
+    project_id UUID NOT NULL REFERENCES projects(id),
+    node_id UUID REFERENCES project_nodes(id) ON DELETE SET NULL,
+    file_path TEXT,
+    line INTEGER,
+    "column" INTEGER,
+    severity TEXT DEFAULT 'error' NOT NULL,
+    source TEXT,
+    code TEXT,
+    message TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    PRIMARY KEY (id, created_at)
+) PARTITION BY RANGE (created_at);
+
+CREATE TABLE project_run_diagnostics_2026_01 PARTITION OF project_run_diagnostics FOR VALUES FROM ('2026-01-01') TO ('2026-02-01');
+CREATE TABLE project_run_diagnostics_2026_02 PARTITION OF project_run_diagnostics FOR VALUES FROM ('2026-02-01') TO ('2026-03-01');
+CREATE TABLE project_run_diagnostics_2026_03 PARTITION OF project_run_diagnostics FOR VALUES FROM ('2026-03-01') TO ('2026-04-01');
+CREATE TABLE project_run_diagnostics_2026_04 PARTITION OF project_run_diagnostics FOR VALUES FROM ('2026-04-01') TO ('2026-05-01');
+CREATE TABLE project_run_diagnostics_2026_05 PARTITION OF project_run_diagnostics FOR VALUES FROM ('2026-05-01') TO ('2026-06-01');
+CREATE TABLE project_run_diagnostics_2026_06 PARTITION OF project_run_diagnostics FOR VALUES FROM ('2026-06-01') TO ('2026-07-01');
+CREATE TABLE project_run_diagnostics_2026_07 PARTITION OF project_run_diagnostics FOR VALUES FROM ('2026-07-01') TO ('2026-08-01');
+CREATE TABLE project_run_diagnostics_2026_08 PARTITION OF project_run_diagnostics FOR VALUES FROM ('2026-08-01') TO ('2026-09-01');
+CREATE TABLE project_run_diagnostics_2026_09 PARTITION OF project_run_diagnostics FOR VALUES FROM ('2026-09-01') TO ('2026-10-01');
+CREATE TABLE project_run_diagnostics_2026_10 PARTITION OF project_run_diagnostics FOR VALUES FROM ('2026-10-01') TO ('2026-11-01');
+CREATE TABLE project_run_diagnostics_2026_11 PARTITION OF project_run_diagnostics FOR VALUES FROM ('2026-11-01') TO ('2026-12-01');
+CREATE TABLE project_run_diagnostics_2026_12 PARTITION OF project_run_diagnostics FOR VALUES FROM ('2026-12-01') TO ('2027-01-01');
+CREATE TABLE project_run_diagnostics_default PARTITION OF project_run_diagnostics DEFAULT;
+
+CREATE INDEX project_run_diagnostics_session_idx ON project_run_diagnostics(session_id, severity);
+CREATE INDEX project_run_diagnostics_project_idx ON project_run_diagnostics(project_id, created_at);

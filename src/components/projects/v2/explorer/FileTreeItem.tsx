@@ -12,11 +12,6 @@ import {
     Pencil,
     Plus,
     RotateCcw,
-    Star,
-    StarOff,
-    Trash2,
-    Upload,
-    FolderInput,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
@@ -32,6 +27,19 @@ export interface FileTreeItemContext {
     mode: "default" | "select";
     canEdit: boolean;
     projectName?: string; // For empty state
+
+    // Inline rename
+    renameNodeId: string | null;
+    renameValue: string;
+    onRenameChange: (v: string) => void;
+    onRenameConfirm: () => void;
+    onRenameCancel: () => void;
+
+    // Desktop drop upload
+    onDesktopFileDrop?: (files: File[], targetFolderId: string) => void;
+
+    // Folder sizes
+    folderSizes: Record<string, number>;
     
     // Handlers
     onToggle: (node: ProjectNode) => void;
@@ -43,6 +51,8 @@ export interface FileTreeItemContext {
     openCreate: (kind: "file" | "folder") => void;
     createInFolder: (folderId: string | null, kind: "file" | "folder") => void;
     uploadToFolder: (folderId: string | null) => void;
+    uploadFolderToFolder: (folderId: string | null) => void;
+    downloadFolder: (folderId: string) => void;
     openNode: (node: ProjectNode) => void;
     renameNode: (node: ProjectNode) => void;
     moveNode: (node: ProjectNode) => void;
@@ -50,6 +60,7 @@ export interface FileTreeItemContext {
     toggleFavorite: (nodeId: string) => void;
     restoreNode: (nodeId: string) => void; // For Trash context
     onTaskLinksClick: (node: ProjectNode) => void;
+    onContextMenu: (node: ProjectNode, e: React.MouseEvent) => void;
     isTrashMode: boolean;
 }
 
@@ -93,10 +104,13 @@ export function FileTreeItem({
     // Loading Row
     if (row.kind === "loading") {
       return (
-        <div className="flex items-center h-[22px]">
+        <div className="flex items-center h-[22px] pointer-events-none opacity-60">
           {guides}
           <div className="w-4 h-full" />
-          <Loader2 className="w-3 h-3 text-zinc-400 animate-spin ml-2" />
+          <div className="flex items-center gap-2 ml-1 mt-0.5 w-full max-w-[140px]">
+             <div className="w-3.5 h-3.5 rounded-[3px] bg-zinc-200 dark:bg-zinc-700 animate-pulse shrink-0" />
+             <div className="h-2.5 bg-zinc-200 dark:bg-zinc-700 rounded-[2px] animate-pulse w-full" />
+          </div>
         </div>
       );
     }
@@ -131,105 +145,11 @@ export function FileTreeItem({
     const isFavorite = !!context.favorites[node.id];
     const linkCount = context.taskLinkCounts[node.id] ?? 0;
     const lock = context.locksByNodeId[node.id];
+    const isRenaming = context.renameNodeId === node.id;
+    const isFolder = node.type === "folder";
+    const folderSize = isFolder ? context.folderSizes[node.id] : undefined;
 
-    const menu =
-        context.mode === "select"
-            ? null
-            : context.isTrashMode ? (
-                <DropdownMenuItem
-                    onClick={(e) => {
-                        e.stopPropagation();
-                        context.restoreNode(node.id);
-                    }}
-                >
-                    <RotateCcw className="w-4 h-4 mr-2" />
-                    Restore
-                </DropdownMenuItem>
-            ) : (
-                <>
-                    <DropdownMenuItem
-                        onClick={(e) => {
-                            e.stopPropagation();
-                            context.openNode(node);
-                        }}
-                    >
-                        <FolderOpen className="w-4 h-4 mr-2" />
-                        Open
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                        onClick={(e) => {
-                            e.stopPropagation();
-                            context.toggleFavorite(node.id);
-                        }}
-                    >
-                        {isFavorite ? <StarOff className="w-4 h-4 mr-2" /> : <Star className="w-4 h-4 mr-2" />}
-                        {isFavorite ? "Remove favorite" : "Add favorite"}
-                    </DropdownMenuItem>
-                    {context.canEdit && node.type === "folder" ? (
-                        <>
-                            <DropdownMenuItem
-                                onClick={(e) => {
-                                    e.stopPropagation();
-                                    context.createInFolder(node.id, "file");
-                                }}
-                            >
-                                <FilePlus2 className="w-4 h-4 mr-2" />
-                                New file
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                                onClick={(e) => {
-                                    e.stopPropagation();
-                                    context.createInFolder(node.id, "folder");
-                                }}
-                            >
-                                <FolderPlus className="w-4 h-4 mr-2" />
-                                New folder
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                                onClick={(e) => {
-                                    e.stopPropagation();
-                                    context.uploadToFolder(node.id);
-                                }}
-                            >
-                                <Upload className="w-4 h-4 mr-2" />
-                                Upload file
-                            </DropdownMenuItem>
-                        </>
-                    ) : null}
-                    {context.canEdit ? (
-                        <>
-                            <DropdownMenuItem
-                                onClick={(e) => {
-                                    e.stopPropagation();
-                                    context.renameNode(node);
-                                }}
-                            >
-                                <Pencil className="w-4 h-4 mr-2" />
-                                Rename
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                                onClick={(e) => {
-                                    e.stopPropagation();
-                                    context.moveNode(node);
-                                }}
-                            >
-                                <FolderInput className="w-4 h-4 mr-2" />
-                                Move
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                                className="text-red-600 focus:text-red-600 dark:text-red-400 dark:focus:text-red-400"
-                                onClick={(e) => {
-                                    e.stopPropagation();
-                                    context.deleteNode(node);
-                                }}
-                            >
-                                <Trash2 className="w-4 h-4 mr-2" />
-                                Move to trash
-                            </DropdownMenuItem>
-                        </>
-                    ) : null}
-                </>
-            );
+    // Removed inline Context Menu memory hog - now delegates globally to O(1) Portal
 
     return (
         <FileTreeRow 
@@ -241,11 +161,23 @@ export function FileTreeItem({
             isInSelectionMode={context.mode === "select"}
             isSelectedInMode={context.mode === "select" ? context.selectedNodeIds.includes(node.id) : false}
             
+            // Inline rename
+            isRenaming={isRenaming}
+            renameValue={isRenaming ? context.renameValue : undefined}
+            onRenameChange={isRenaming ? context.onRenameChange : undefined}
+            onRenameConfirm={isRenaming ? context.onRenameConfirm : undefined}
+            onRenameCancel={isRenaming ? context.onRenameCancel : undefined}
+
+            // Desktop drop upload
+            onDesktopDrop={context.onDesktopFileDrop}
+            
             // Interaction
             onToggle={context.onToggle}
             onSelect={context.onSelect}
             onContextMenu={(e) => {
                 e.preventDefault();
+                e.stopPropagation();
+                context.onContextMenu(node, e);
             }}
             
             // Drag
@@ -253,9 +185,17 @@ export function FileTreeItem({
             onDragEnd={context.onDragEnd}
             onDrop={context.onDrop}
 
-            // Badge: Link Count
-             badge={
+            // Badge: Link Count + Folder Size
+            badge={
                 <div className="flex items-center gap-1">
+                  {isFolder && folderSize !== undefined && folderSize > 0 ? (
+                    <span
+                      className="text-[9px] px-1 rounded-sm bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400 flex-shrink-0 font-mono tabular-nums"
+                      title={`${folderSize.toLocaleString()} bytes total`}
+                    >
+                      {folderSize < 1024 ? `${folderSize} B` : folderSize < 1048576 ? `${(folderSize / 1024).toFixed(0)}K` : `${(folderSize / 1048576).toFixed(1)}M`}
+                    </span>
+                  ) : null}
                   {lock ? (
                     <span
                       className="text-[9px] px-1 rounded-sm bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300 flex-shrink-0 font-mono"
@@ -278,12 +218,7 @@ export function FileTreeItem({
                     </button>
                   ) : null}
                 </div>
-              }
-
-            // Menu (Only for trash currently based on original code logic)
-            // But 'effectiveMode ===trash' logic was in FileExplorer. 
-            // We pass isTrashMode in context.
-            menu={menu}
+            }
         />
     );
 }

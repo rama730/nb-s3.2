@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { createVisibilityAwareInterval } from "@/lib/utils/visibility";
 import Link from "next/link";
 import Image from "next/image";

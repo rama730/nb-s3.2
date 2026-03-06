@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import { Users, UserPlus } from "lucide-react";
+import { Users, UserPlus, Plus, LayoutGrid, List, CheckSquare } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { AnimatePresence } from "framer-motion";
 import { useRealtimeTasks } from "@/hooks/useRealtimeTasks";
 import { createTaskAction } from "@/app/actions/project";
@@ -140,20 +141,47 @@ export default function TasksTab({
     
     return (
         <div className="space-y-4 relative">
-            {/* Sticky Header */}
-            <div className="sticky top-0 z-40 bg-zinc-50/95 dark:bg-zinc-900/95 backdrop-blur-sm border-b border-zinc-200 dark:border-zinc-800 pb-4 -mx-6 px-6 pt-0 -mt-2">
-                <div className="h-4"></div> 
-                <div className="flex items-start justify-between gap-4">
-                    <div>
-                        <div className="flex items-center gap-2">
-                            <h2 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">Task Board</h2>
-                        </div>
-                        <div className="mt-1 text-sm text-zinc-500">
-                            <span className="font-medium text-zinc-900 dark:text-zinc-100">{filteredTasks.length}</span> visible
-                        </div>
+            {/* Sticky Header — matches Hub page header style */}
+            <div className="sticky top-0 z-40 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-sm rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm px-5 py-4">
+                <div className="flex items-center justify-between gap-4">
+                    <div className="flex-1">
+                        <h2 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">Task Board</h2>
+                        <p className="mt-0.5 text-sm text-zinc-500">
+                            <span className="font-medium text-zinc-900 dark:text-zinc-100">{filteredTasks.length}</span>{" "}
+                            {filteredTasks.length === 1 ? "task" : "tasks"} visible
+                        </p>
                     </div>
 
                     <div className="flex items-center gap-2">
+                        {/* View Mode Toggle — Hub-style pill group */}
+                        <div className="flex items-center bg-zinc-100 dark:bg-zinc-800 rounded-lg p-1">
+                            <button
+                                onClick={() => setViewMode('board')}
+                                className={cn(
+                                    "p-2 rounded-md transition-colors",
+                                    viewMode === 'board'
+                                        ? "bg-white dark:bg-zinc-700 shadow-sm text-indigo-600"
+                                        : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+                                )}
+                                title="Board view"
+                            >
+                                <LayoutGrid className="w-4 h-4" />
+                            </button>
+                            <button
+                                onClick={() => setViewMode('list')}
+                                className={cn(
+                                    "p-2 rounded-md transition-colors",
+                                    viewMode === 'list'
+                                        ? "bg-white dark:bg-zinc-700 shadow-sm text-indigo-600"
+                                        : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+                                )}
+                                title="List view"
+                            >
+                                <List className="w-4 h-4" />
+                            </button>
+                        </div>
+
+                        {/* Filter — kept from TaskFilters */}
                         <TaskFilters
                             viewMode={viewMode}
                             setViewMode={setViewMode}
@@ -169,11 +197,14 @@ export default function TasksTab({
                             activeCount={0}
                             selectedCount={selectedTaskIds.size}
                         />
+
+                        {/* New Task — Hub-style indigo rounded-xl */}
                         <button
                             onClick={() => setShowCreateModal(true)}
-                            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors text-sm font-medium whitespace-nowrap shadow-sm"
+                            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-medium transition-colors"
                         >
-                            New Task
+                            <Plus className="w-4 h-4" />
+                            <span className="hidden sm:inline">New Task</span>
                         </button>
                     </div>
                 </div>

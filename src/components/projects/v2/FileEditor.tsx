@@ -3,7 +3,7 @@
 import React, { useEffect, useMemo, useState, useDeferredValue } from "react";
 import { ProjectNode } from "@/lib/db/schema";
 import { Button } from "@/components/ui/button";
-import { Diff, Loader2, MoreVertical, Play, Save, Settings, Trash2, Wand2, SplitSquareHorizontal } from "lucide-react";
+import { Diff, List, Loader2, MoreVertical, Play, Save, Settings, Trash2, Wand2, SplitSquareHorizontal } from "lucide-react";
 import { useTheme } from "next-themes";
 import dynamic from "next/dynamic";
 import {
@@ -36,6 +36,7 @@ import type { Change } from "diff";
 import { RunnerStatusStrip } from "./panels/RunnerStatusStrip";
 import { formatProjectFileContent, getLastNodeEvent } from "@/app/actions/files";
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
+import type { EditorSymbol } from "@/stores/files/types";
 
 interface FileEditorProps {
   file: ProjectNode;
@@ -61,10 +62,56 @@ interface FileEditorProps {
   openDiffSignal?: number;
   onRun?: () => void;
   canRun?: boolean;
+  gitStatus?: "modified" | "added" | "deleted" | null;
+  tabId?: string;
 }
 
 function getErrorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
+}
+
+// 2d: Symbol sidebar item — recursive for nested symbols
+function SymbolItem({
+  symbol,
+  projectId,
+  nodeId,
+  depth,
+  onScrollTo,
+}: {
+  symbol: EditorSymbol;
+  projectId: string;
+  nodeId: string;
+  depth: number;
+  onScrollTo: (projectId: string, nodeId: string, line: number) => void;
+}) {
+  const kind = symbol.kind as unknown as number;
+  const kindIcon = kind === 5 || kind === 11 ? "◇" : kind === 6 || kind === 12 ? "ƒ" : "·";
+
+  return (
+    <>
+      <button
+        type="button"
+        className="w-full flex items-center gap-1 px-2 py-0.5 text-left text-[11px] text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 truncate transition-colors"
+        style={{ paddingLeft: `${8 + depth * 12}px` }}
+        onClick={() => onScrollTo(projectId, nodeId, symbol.range.startLineNumber)}
+        title={`${symbol.name} (line ${symbol.range.startLineNumber})`}
+      >
+        <span className="text-[10px] text-zinc-400 w-3 flex-shrink-0">{kindIcon}</span>
+        <span className="truncate">{symbol.name}</span>
+        <span className="text-[9px] text-zinc-400 ml-auto flex-shrink-0 tabular-nums">{symbol.range.startLineNumber}</span>
+      </button>
+      {symbol.children?.map((child, idx) => (
+        <SymbolItem
+          key={`${child.name}-${idx}`}
+          symbol={child}
+          projectId={projectId}
+          nodeId={nodeId}
+          depth={depth + 1}
+          onScrollTo={onScrollTo}
+        />
+      ))}
+    </>
+  );
 }
 
 export default function FileEditor({
@@ -91,6 +138,8 @@ export default function FileEditor({
   openDiffSignal,
   onRun,
   canRun,
+  gitStatus,
+  tabId,
 }: FileEditorProps) {
   const { theme } = useTheme();
   const isDark = theme === "dark";
@@ -99,6 +148,31 @@ export default function FileEditor({
   const [isFormatting, setIsFormatting] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const { showToast } = useToast();
+  const [symbolsOpen, setSymbolsOpen] = React.useState(false);
+
+  // 2d: Symbol outline from store
+  const activeFileSymbols = useFilesWorkspaceStore(
+    (s) => s.byProjectId[file.projectId]?.activeFileSymbols || []
+  );
+  const requestScrollTo = useFilesWorkspaceStore((s) => s.requestScrollTo);
+
+  // 2c: Sticky scroll context — find the enclosing symbol for cursor position
+  const [cursorLine, setCursorLine] = React.useState<number | null>(null);
+  const stickyScope = React.useMemo(() => {
+    if (cursorLine === null || !activeFileSymbols.length) return null;
+    // Find the deepest symbol containing cursor
+    const findScope = (syms: typeof activeFileSymbols): string | null => {
+      for (let i = syms.length - 1; i >= 0; i--) {
+        const s = syms[i];
+        if (cursorLine >= s.range.startLineNumber && cursorLine <= s.range.endLineNumber) {
+          const childScope = s.children ? findScope(s.children) : null;
+          return childScope ? `${s.name} › ${childScope}` : s.name;
+        }
+      }
+      return null;
+    };
+    return findScope(activeFileSymbols);
+  }, [cursorLine, activeFileSymbols]);
 
   // Defer content for preview to avoid typing lag
   const deferredContent = useDeferredValue(content);
@@ -267,6 +341,7 @@ export default function FileEditor({
         <div className="flex items-center gap-1.5">
           {canRun && onRun ? (
             <Button
+              data-testid="files-editor-run"
               size="sm"
               variant="outline"
               className="h-7 px-2"
@@ -285,6 +360,7 @@ export default function FileEditor({
             <Settings className="w-3.5 h-3.5" />
           </Link>
           <Button
+            data-testid="files-editor-save"
             size="sm"
             onClick={onSave}
             disabled={!canEdit || isSaving || !isDirty}
@@ -303,6 +379,7 @@ export default function FileEditor({
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
+                data-testid="files-editor-actions"
                 size="sm"
                 variant="outline"
                 className="h-7 px-2"
@@ -362,13 +439,54 @@ export default function FileEditor({
                   {showPreview ? "Hide preview" : "Show preview"}
                 </DropdownMenuItem>
               ) : null}
+              <DropdownMenuItem
+                onSelect={(e) => {
+                  e.preventDefault();
+                  setSymbolsOpen((prev) => !prev);
+                }}
+              >
+                <List className="w-3.5 h-3.5 mr-2" />
+                {symbolsOpen ? "Hide symbols" : "Symbols"}
+              </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
       </div>
 
-      {/* Editor Area */}
-      <div className="flex-1 relative overflow-hidden min-h-0">
+      {/* 2c: Sticky Scroll Symbol Header */}
+      {stickyScope && (
+        <div className="flex items-center gap-2 px-3 py-1 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50/80 dark:bg-zinc-900/80 backdrop-blur-sm">
+          <span className="text-[11px] text-zinc-500 dark:text-zinc-400 font-mono truncate">
+            {stickyScope}
+          </span>
+        </div>
+      )}
+
+      {/* Editor Area + Symbol Sidebar */}
+      <div className="flex-1 relative overflow-hidden min-h-0 flex">
+        {/* 2d: Symbol outline sidebar */}
+        {symbolsOpen && activeFileSymbols.length > 0 && (
+          <div className="w-48 flex-shrink-0 border-r border-zinc-200 dark:border-zinc-800 overflow-y-auto bg-zinc-50/50 dark:bg-zinc-900/50">
+            <div className="px-2 py-1.5 text-[10px] font-semibold text-zinc-500 uppercase tracking-wider border-b border-zinc-100 dark:border-zinc-800">
+              Symbols
+            </div>
+            <div className="py-1">
+              {activeFileSymbols.map((sym, idx) => (
+                <SymbolItem
+                  key={`${sym.name}-${idx}`}
+                  symbol={sym}
+                  projectId={file.projectId}
+                  nodeId={file.id}
+                  depth={0}
+                  onScrollTo={requestScrollTo}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Editor content */}
+        <div className="flex-1 overflow-hidden min-h-0 min-w-0">
         {isLoading ? (
           <div className="flex items-center justify-center h-full text-zinc-500">
             <Loader2 className="w-5 h-5 animate-spin mr-2" />
@@ -404,6 +522,9 @@ export default function FileEditor({
                 minimapEnabled={minimapEnabled}
                 onSymbolsChange={(syms) => setActiveFileSymbols(file.projectId, syms)}
                 scrollToLine={scrollToLine}
+                onCursorChange={setCursorLine}
+                gitStatus={gitStatus}
+                tabId={tabId}
               />
             </div>
           </div>
@@ -424,6 +545,9 @@ export default function FileEditor({
                             minimapEnabled={minimapEnabled}
                             onSymbolsChange={(syms) => setActiveFileSymbols(file.projectId, syms)}
                             scrollToLine={scrollToLine}
+                            onCursorChange={setCursorLine}
+                            gitStatus={gitStatus}
+                            tabId={tabId}
                           />
                     </div>
                     <div className="w-1/2 h-full">
@@ -444,9 +568,12 @@ export default function FileEditor({
                 minimapEnabled={minimapEnabled}
                 onSymbolsChange={(syms) => setActiveFileSymbols(file.projectId, syms)}
                 scrollToLine={scrollToLine}
+                gitStatus={gitStatus}
+                tabId={tabId}
               />
             )
         )}
+        </div>
       </div>
 
       <Dialog open={isDiffOpen} onOpenChange={setIsDiffOpen}>

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { sendMessageSchema, editMessageSchema, deleteMessageSchema } from '../../src/lib/validations/messaging'
 
 describe('sendMessageSchema', () => {
-    const validId = '00000000-0000-0000-0000-000000000001'
+    const validId = '123e4567-e89b-42d3-a456-426614174000'
 
     it('passes with valid text message', () => {
         const result = sendMessageSchema.safeParse({
@@ -62,7 +62,7 @@ describe('sendMessageSchema', () => {
             conversationId: validId,
             content: 'msg',
             attachmentIds: Array.from({ length: 11 }, (_, i) =>
-                `00000000-0000-0000-0000-${String(i).padStart(12, '0')}`
+                `123e4567-e89b-42d3-a456-${String(i).padStart(12, '0')}`
             ),
         })
         assert.equal(result.success, false)
@@ -72,7 +72,7 @@ describe('sendMessageSchema', () => {
 describe('editMessageSchema', () => {
     it('passes with valid input', () => {
         const result = editMessageSchema.safeParse({
-            messageId: '00000000-0000-0000-0000-000000000001',
+            messageId: '123e4567-e89b-42d3-a456-426614174001',
             content: 'Updated!',
         })
         assert.equal(result.success, true)
@@ -80,7 +80,7 @@ describe('editMessageSchema', () => {
 
     it('rejects empty content', () => {
         const result = editMessageSchema.safeParse({
-            messageId: '00000000-0000-0000-0000-000000000001',
+            messageId: '123e4567-e89b-42d3-a456-426614174001',
             content: '',
         })
         assert.equal(result.success, false)
@@ -90,7 +90,7 @@ describe('editMessageSchema', () => {
 describe('deleteMessageSchema', () => {
     it('defaults scope to everyone', () => {
         const result = deleteMessageSchema.safeParse({
-            messageId: '00000000-0000-0000-0000-000000000001',
+            messageId: '123e4567-e89b-42d3-a456-426614174002',
         })
         assert.equal(result.success, true)
         if (result.success) {
@@ -100,7 +100,7 @@ describe('deleteMessageSchema', () => {
 
     it('accepts me scope', () => {
         const result = deleteMessageSchema.safeParse({
-            messageId: '00000000-0000-0000-0000-000000000001',
+            messageId: '123e4567-e89b-42d3-a456-426614174002',
             scope: 'me',
         })
         assert.equal(result.success, true)

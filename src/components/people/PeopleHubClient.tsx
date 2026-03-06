@@ -83,10 +83,10 @@ export default function PeopleHubClient({
 
     return (
         <div className="bg-zinc-50 dark:bg-black min-h-screen">
-            {/* Sticky Tabs Bar - Minimal */}
-            <div className="sticky top-16 z-30 bg-zinc-50/80 dark:bg-black/80 backdrop-blur-xl border-b border-zinc-200/60 dark:border-white/5">
-                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2">
-                    <div className="inline-flex items-center p-1 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-sm border border-zinc-200/60 dark:border-white/10 rounded-2xl shadow-sm">
+            {/* Sticky Tabs Header — single card with buttons */}
+            <div className="sticky top-16 z-30 pt-2 pb-3">
+                <div className="flex justify-center">
+                    <div className="inline-flex items-center p-1 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-sm">
                         {visibleTabs.map((t) => {
                             const Icon = t.icon;
                             const selected = activeTab === t.key;
@@ -107,7 +107,7 @@ export default function PeopleHubClient({
                                     {selected && (
                                         <motion.div
                                             layoutId="activePeopleTab"
-                                            className="absolute inset-0 bg-gradient-to-r from-indigo-500/10 to-purple-500/10 dark:from-indigo-500/20 dark:to-purple-500/20 rounded-xl shadow-sm ring-1 ring-indigo-500/20 dark:ring-indigo-400/20"
+                                            className="absolute inset-0 bg-white dark:bg-zinc-700 rounded-xl shadow-sm ring-1 ring-zinc-200/60 dark:ring-zinc-600/40"
                                             transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
                                         />
                                     )}
@@ -123,11 +123,6 @@ export default function PeopleHubClient({
                                             </span>
                                         )}
                                     </span>
-                                    {selected && (
-                                        <span className="relative z-10 text-xs text-indigo-600/70 dark:text-indigo-400/70 hidden sm:inline ml-1">
-                                            {t.hint}
-                                        </span>
-                                    )}
                                 </button>
                             );
                         })}

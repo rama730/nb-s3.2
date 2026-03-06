@@ -9,34 +9,21 @@ import { getProfile } from '@/lib/services/profile-service'
 export { normalizeProfile } from '@/lib/utils/normalize-profile'
 import { normalizeProfile } from '@/lib/utils/normalize-profile'
 
-// Use Drizzle for consistent data access
+// Pure Optimization: Use Supabase SELECT * which only returns columns that
+// actually exist in the live DB — immune to Drizzle schema/DB drift.
+// AuthProvider.transformProfile already handles the snake_case → camelCase mapping.
 export const getUserProfile = cache(async (userId: string) => {
     if (!userId) return null;
     try {
-        const [profile] = await db.select({
-            id: profiles.id,
-            email: profiles.email,
-            username: profiles.username,
-            fullName: profiles.fullName,
-            avatarUrl: profiles.avatarUrl,
-            bannerUrl: profiles.bannerUrl,
-            bio: profiles.bio,
-            headline: profiles.headline,
-            location: profiles.location,
-            website: profiles.website,
-            skills: profiles.skills,
-            interests: profiles.interests,
-            openTo: profiles.openTo,
-            availabilityStatus: profiles.availabilityStatus,
-            socialLinks: profiles.socialLinks,
-            visibility: profiles.visibility,
-            connectionsCount: profiles.connectionsCount,
-            projectsCount: profiles.projectsCount,
-            followersCount: profiles.followersCount,
-            createdAt: profiles.createdAt,
-            updatedAt: profiles.updatedAt,
-        }).from(profiles).where(eq(profiles.id, userId)).limit(1);
-        return profile || null;
+        const supabase = await createClient();
+        const { data, error } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', userId)
+            .maybeSingle();
+
+        if (error || !data) return null;
+        return data;
     } catch (error) {
         console.error('Error fetching user profile:', error);
         return null;

@@ -115,6 +115,7 @@ export const createExplorerSlice: StateCreator<FilesWorkspaceState, [], [], Expl
               ...ws.expandedFolderIds,
               [folderId]: next,
             },
+            treeVersion: ws.treeVersion + 1,
           },
         },
       };
@@ -202,19 +203,19 @@ export const createExplorerSlice: StateCreator<FilesWorkspaceState, [], [], Expl
       );
       const nextViews = existing
         ? ws.savedViews.map((view) =>
-            view.id === existing.id
-              ? { ...view, name: cleanName, config, createdAt: now }
-              : view
-          )
+          view.id === existing.id
+            ? { ...view, name: cleanName, config, createdAt: now }
+            : view
+        )
         : [
-            {
-              id: `${now}-${Math.random().toString(36).slice(2, 8)}`,
-              name: cleanName,
-              createdAt: now,
-              config,
-            },
-            ...ws.savedViews,
-          ];
+          {
+            id: `${now}-${Math.random().toString(36).slice(2, 8)}`,
+            name: cleanName,
+            createdAt: now,
+            config,
+          },
+          ...ws.savedViews,
+        ];
 
       return {
         byProjectId: {

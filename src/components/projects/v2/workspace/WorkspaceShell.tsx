@@ -3,6 +3,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { useSearchParams } from "next/navigation";
+import { cn } from "@/lib/utils";
+import { X } from "lucide-react";
 import type { ProjectNode } from "@/lib/db/schema";
 import { useToast } from "@/components/ui-custom/Toast";
 const FileExplorer = dynamic(() => import("../explorer/FileExplorer"), { ssr: false });
@@ -26,8 +28,15 @@ import { WorkspacePaneHost } from "./WorkspacePaneHost";
 import { WorkspaceModalsHost } from "./WorkspaceModalsHost";
 import { WorkspaceBottomPanelHost } from "./WorkspaceBottomPanelHost";
 import { useWorkspaceUiState } from "./useWorkspaceUiState";
+import {
+  getFileContent,
+  setFileContent as setDetachedContent,
+} from "@/stores/filesWorkspaceStore";
 import { useWorkspaceLayoutState } from "./useWorkspaceLayoutState";
+import { useCursorPresence } from "./useCursorPresence";
 import { useWorkspacePane } from "./useWorkspacePane";
+import { StatusBar } from "./StatusBar";
+import { KeyboardShortcuts } from "./KeyboardShortcuts";
 
 const EMPTY_ARRAY: string[] = [];
 const DEFAULT_PANES = {
@@ -130,10 +139,25 @@ export default function WorkspaceShell({
   const bottomPanelCollapsed = useFilesWorkspaceStore(
     (s) => s.byProjectId[projectId]?.ui?.bottomPanelCollapsed ?? true
   );
+  const sidebarWidth = useFilesWorkspaceStore(
+    (s) => s.byProjectId[projectId]?.ui?.sidebarWidth ?? 290
+  );
+  const sidebarCollapsed = useFilesWorkspaceStore(
+    (s) => s.byProjectId[projectId]?.ui?.sidebarCollapsed ?? false
+  );
+  const zenMode = useFilesWorkspaceStore(
+    (s) => s.byProjectId[projectId]?.ui?.zenMode ?? false
+  );
+  const gitChangedFiles = useFilesWorkspaceStore(
+    (s) => s.byProjectId[projectId]?.git?.changedFiles || EMPTY_ARRAY
+  );
   const toggleBottomPanel = useFilesWorkspaceStore((s) => s.toggleBottomPanel);
   const setBottomPanelTab = useFilesWorkspaceStore((s) => s.setBottomPanelTab);
   const setLastExecutionOutput = useFilesWorkspaceStore((s) => s.setLastExecutionOutput);
   const setLastExecutionSettingsHref = useFilesWorkspaceStore((s) => s.setLastExecutionSettingsHref);
+  const setSidebarWidth = useFilesWorkspaceStore((s) => s.setSidebarWidth);
+  const toggleSidebar = useFilesWorkspaceStore((s) => s.toggleSidebar);
+  const toggleZenMode = useFilesWorkspaceStore((s) => s.toggleZenMode);
   const selectedNodeId = useFilesWorkspaceStore(
     (s) => s.byProjectId[projectId]?.selectedNodeId ?? null
   );
@@ -183,6 +207,13 @@ export default function WorkspaceShell({
     tabById,
   });
 
+  // Phase 5: Binary-Packed WebSocket Cursor Presence
+  const { remoteCursors, broadcastCursor, cursorVersion } = useCursorPresence({
+    projectId,
+    currentUserId: currentUserId ?? "",
+    enabled: !!currentUserId,
+  });
+
   // Lock manager
   const { acquireLockForNode, nextLockAttemptAtRef } = useLockManager({
     projectId,
@@ -219,6 +250,8 @@ export default function WorkspaceShell({
     recentFileIds,
     setRecentFileIds,
   } = useWorkspaceUiState();
+
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
   // Tab manager
   const {
@@ -286,7 +319,10 @@ export default function WorkspaceShell({
     const activeTabId = activeTabIdByPane[activePane];
     if (!activeTabId) return;
     const tab = tabById[activeTabId];
-    if (!tab?.content) return;
+    if (!tab) return;
+    // Phase 5: Read content from detached Map
+    const content = getFileContent(projectId, activeTabId);
+    if (!content) return;
 
     if (bottomPanelCollapsed) toggleBottomPanel(projectId);
     setBottomPanelTab(projectId, "output");
@@ -296,7 +332,7 @@ export default function WorkspaceShell({
       .split("\n")
       .map((s) => s.trim())
       .filter((s) => s !== "");
-    const result = await runFileWithContent(projectId, activeFilePath, tab.content, {
+    const result = await runFileWithContent(projectId, activeFilePath, content, {
       stdinLines: stdinLines.length > 0 ? stdinLines : undefined,
     });
     const logs = result.success ? [...result.logs, "Code execution successful."] : result.logs;
@@ -430,17 +466,87 @@ export default function WorkspaceShell({
   const handleKeyboardFindInProject = useCallback(() => {
     setFindOpen(true);
   }, [setFindOpen]);
+  const handleKeyboardShowShortcuts = useCallback(() => {
+    setShortcutsOpen(true);
+  }, [setShortcutsOpen]);
   const handleKeyboardCloseQuickOpen = useCallback(() => setQuickOpenOpen(false), [setQuickOpenOpen]);
   const handleKeyboardCloseCommand = useCallback(() => setCommandOpen(false), [setCommandOpen]);
+
+  // Sidebar resize
+  const sidebarDragRef = useRef<{ startX: number; startW: number } | null>(null);
+  const [isSidebarDragging, setIsSidebarDragging] = useState(false);
+
+  useEffect(() => {
+    if (!isSidebarDragging) return;
+    const onMouseMove = (e: MouseEvent) => {
+      if (!sidebarDragRef.current) return;
+      const delta = e.clientX - sidebarDragRef.current.startX;
+      setSidebarWidth(projectId, sidebarDragRef.current.startW + delta);
+    };
+    const onMouseUp = () => {
+      sidebarDragRef.current = null;
+      setIsSidebarDragging(false);
+    };
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+    return () => {
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+    };
+  }, [isSidebarDragging, projectId, setSidebarWidth]);
+
+  const handleSidebarResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    sidebarDragRef.current = { startX: e.clientX, startW: sidebarWidth };
+    setIsSidebarDragging(true);
+  }, [sidebarWidth]);
+
+  const handleToggleSidebar = useCallback(() => toggleSidebar(projectId), [projectId, toggleSidebar]);
+  const handleToggleZenMode = useCallback(() => toggleZenMode(projectId), [projectId, toggleZenMode]);
+  const handleQuickSwitch = useCallback(() => {
+    setQuickOpenOpen(true);
+    setQuickOpenQuery("");
+  }, [setQuickOpenOpen, setQuickOpenQuery]);
+
+  const handleKeyboardNewFile = useCallback(() => {
+    setCommandOpen(true);
+    setCommandQuery("Create File");
+  }, [setCommandOpen, setCommandQuery]);
+
+  const handleKeyboardSave = useCallback(() => {
+    const activeTabId = activeTabIdByPane[activePane];
+    if (activeTabId) saveTab(activeTabId);
+  }, [activeTabIdByPane, activePane, saveTab]);
+
+  const handleKeyboardDelete = useCallback(() => {
+    const activeTabId = activeTabIdByPane[activePane];
+    if (activeTabId) deleteFile(activeTabId);
+  }, [activeTabIdByPane, activePane, deleteFile]);
+
+  const handleKeyboardQuickLook = useCallback(() => {
+    const activeId = activeTabIdByPane[activePane] || useFilesWorkspaceStore.getState().byProjectId[projectId]?.selectedNodeId;
+    if (activeId) {
+      setQuickOpenOpen(true);
+      setQuickOpenQuery(nodesById[activeId]?.name || "");
+    }
+  }, [activeTabIdByPane, activePane, projectId, setQuickOpenOpen, setQuickOpenQuery, nodesById]);
 
   useWorkspaceKeyboard({
     onQuickOpen: handleKeyboardQuickOpen,
     onCommandPalette: handleKeyboardCommandPalette,
     onFindInProject: handleKeyboardFindInProject,
+    onToggleSidebar: handleToggleSidebar,
+    onToggleZenMode: handleToggleZenMode,
+    onQuickSwitch: handleQuickSwitch,
     quickOpenOpen,
     commandOpen,
     onCloseQuickOpen: handleKeyboardCloseQuickOpen,
     onCloseCommand: handleKeyboardCloseCommand,
+    onNewFile: handleKeyboardNewFile,
+    onSave: handleKeyboardSave,
+    onDelete: handleKeyboardDelete,
+    onQuickLook: handleKeyboardQuickLook,
+    onShowShortcuts: handleKeyboardShowShortcuts,
   });
 
   // Recent file persistence
@@ -558,6 +664,16 @@ export default function WorkspaceShell({
               },
             ]
           : []),
+        {
+          id: "toggle-sidebar",
+          label: sidebarCollapsed ? "Show Sidebar (⌘B)" : "Hide Sidebar (⌘B)",
+          run: () => toggleSidebar(projectId),
+        },
+        {
+          id: "toggle-zen",
+          label: zenMode ? "Exit Zen Mode (⌘K Z)" : "Enter Zen Mode (⌘K Z)",
+          run: () => toggleZenMode(projectId),
+        },
       ] as Array<{ id: string; label: string; run: () => void }>,
     [
       activeFilePath,
@@ -567,8 +683,12 @@ export default function WorkspaceShell({
       setFindOpen,
       setSplitEnabled,
       setViewMode,
+      sidebarCollapsed,
       splitEnabled,
       toggleBottomPanel,
+      toggleSidebar,
+      toggleZenMode,
+      zenMode,
     ]
   );
 
@@ -606,9 +726,19 @@ export default function WorkspaceShell({
   }, [fileNodes, nodesById, nodePathById, quickOpenQuery, recentFileIds]);
 
   return (
-    <div className="flex-1 w-full min-h-0 flex bg-white dark:bg-zinc-950 overflow-hidden rounded-lg border border-zinc-200 dark:border-zinc-800 shadow-sm relative isolate">
-      {/* Explorer */}
-      <div className="w-[290px] flex-shrink-0 border-r border-zinc-200 dark:border-zinc-800 flex flex-col h-full bg-zinc-50/50 dark:bg-zinc-900/50 relative z-10">
+    <div className={cn(
+      "flex-1 w-full min-h-0 flex bg-white dark:bg-zinc-950 overflow-hidden relative isolate",
+      isSidebarDragging && "select-none"
+    )}>
+      {/* Explorer — resizable + collapsible */}
+      {/* Explorer — resizable + collapsible */}
+      <div
+        className={cn(
+          "flex-shrink-0 border-r border-zinc-200 dark:border-zinc-800 flex flex-col h-full bg-zinc-50/50 dark:bg-zinc-900/50 relative z-10 transition-all duration-300 ease-in-out overflow-hidden",
+          (sidebarCollapsed || zenMode) ? "w-0 opacity-0 border-none" : "opacity-100"
+        )}
+        style={{ width: (sidebarCollapsed || zenMode) ? 0 : sidebarWidth }}
+      >
         <FileExplorer
           projectId={projectId}
           projectName={projectName}
@@ -620,6 +750,14 @@ export default function WorkspaceShell({
         />
       </div>
 
+      {/* Sidebar resize handle */}
+      {(!sidebarCollapsed && !zenMode) && (
+        <div
+          className="w-[3px] cursor-col-resize hover:bg-blue-500/40 active:bg-blue-500/60 transition-colors flex-shrink-0 z-20"
+          onMouseDown={handleSidebarResizeStart}
+        />
+      )}
+
       {/* Workspace */}
       <div className="flex-1 overflow-hidden bg-white dark:bg-zinc-950 flex flex-col h-full relative">
         <div
@@ -630,61 +768,89 @@ export default function WorkspaceShell({
           }}
         />
 
-        <WorkspaceToolbarHost
-          projectId={projectId}
-          canEdit={canEdit}
-          viewMode={viewMode}
-          splitEnabled={splitEnabled}
-          bottomPanelCollapsed={bottomPanelCollapsed}
-          headerSearchOpen={headerSearchOpen}
-          headerSearchQuery={headerSearchQuery}
-          dirtyTabIds={dirtyTabIds}
-          wave1SaveAllEnabled={filesFeatureFlags.wave1SaveAll}
-          onToggleHeaderSearch={() => {
-            setHeaderSearchOpen((prev) => !prev);
-            if (headerSearchOpen) setHeaderSearchQuery("");
-          }}
-          onHeaderSearchQueryChange={setHeaderSearchQuery}
-          onHeaderSearchKeyDown={(e) => {
-            if (e.key === "Escape") {
-              setHeaderSearchOpen(false);
-              setHeaderSearchQuery("");
-              return;
-            }
-            if (e.key === "Enter") {
-              e.preventDefault();
+        {!zenMode && (
+          <WorkspaceToolbarHost
+            projectId={projectId}
+            canEdit={canEdit}
+            viewMode={viewMode}
+            splitEnabled={splitEnabled}
+            bottomPanelCollapsed={bottomPanelCollapsed}
+            headerSearchOpen={headerSearchOpen}
+            headerSearchQuery={headerSearchQuery}
+            dirtyTabIds={dirtyTabIds}
+            wave1SaveAllEnabled={filesFeatureFlags.wave1SaveAll}
+            onToggleHeaderSearch={() => {
+              setHeaderSearchOpen((prev) => !prev);
+              if (headerSearchOpen) setHeaderSearchQuery("");
+            }}
+            onHeaderSearchQueryChange={setHeaderSearchQuery}
+            onHeaderSearchKeyDown={(e) => {
+              if (e.key === "Escape") {
+                setHeaderSearchOpen(false);
+                setHeaderSearchQuery("");
+                return;
+              }
+              if (e.key === "Enter") {
+                e.preventDefault();
+                setQuickOpenOpen(true);
+                setQuickOpenQuery(headerSearchQuery.trim());
+              }
+            }}
+            onSaveAllDirtyTabs={() => void handleSaveAllDirtyTabs()}
+            onSetViewMode={(mode) => setViewMode(projectId, mode)}
+            onToggleBottomPanel={() => toggleBottomPanel(projectId)}
+            onOpenQuickOpen={() => {
               setQuickOpenOpen(true);
-              setQuickOpenQuery(headerSearchQuery.trim());
+              setQuickOpenQuery("");
+            }}
+            onOpenFindInProject={() => setFindOpen(true)}
+            onOpenCommandPalette={() => {
+              setCommandOpen(true);
+              setCommandQuery("");
+            }}
+            onToggleSplit={() => setSplitEnabled(projectId, !splitEnabled)}
+            onToggleLineNumbers={() => setPrefs(projectId, { lineNumbers: !prefs.lineNumbers })}
+            onToggleWordWrap={() => setPrefs(projectId, { wordWrap: !prefs.wordWrap })}
+            onToggleMinimap={() => setPrefs(projectId, { minimap: !prefs.minimap })}
+            onFontSizeDecrease={() =>
+              setPrefs(projectId, {
+                fontSize: Math.max(12, prefs.fontSize - 1),
+              })
             }
-          }}
-          onSaveAllDirtyTabs={() => void handleSaveAllDirtyTabs()}
-          onSetViewMode={(mode) => setViewMode(projectId, mode)}
-          onToggleBottomPanel={() => toggleBottomPanel(projectId)}
-          onOpenQuickOpen={() => {
-            setQuickOpenOpen(true);
-            setQuickOpenQuery("");
-          }}
-          onOpenFindInProject={() => setFindOpen(true)}
-          onOpenCommandPalette={() => {
-            setCommandOpen(true);
-            setCommandQuery("");
-          }}
-          onToggleSplit={() => setSplitEnabled(projectId, !splitEnabled)}
-          onToggleLineNumbers={() => setPrefs(projectId, { lineNumbers: !prefs.lineNumbers })}
-          onToggleWordWrap={() => setPrefs(projectId, { wordWrap: !prefs.wordWrap })}
-          onToggleMinimap={() => setPrefs(projectId, { minimap: !prefs.minimap })}
-          onFontSizeDecrease={() =>
-            setPrefs(projectId, {
-              fontSize: Math.max(12, prefs.fontSize - 1),
-            })
-          }
-          onFontSizeIncrease={() =>
-            setPrefs(projectId, {
-              fontSize: Math.min(20, prefs.fontSize + 1),
-            })
-          }
-          prefs={prefs}
-        />
+            onFontSizeIncrease={() =>
+              setPrefs(projectId, {
+                fontSize: Math.min(20, prefs.fontSize + 1),
+              })
+            }
+            prefs={prefs}
+          />
+        )}
+
+        {/* Transition for Zen Mode Toolbar */}
+        {zenMode && (
+          <div className="absolute top-4 right-4 z-[60] flex items-center gap-2 animate-in fade-in slide-in-from-top-2 duration-300">
+            <button
+              onClick={() => toggleZenMode(projectId)}
+              className={cn(
+                "px-3 py-1.5 rounded-full border border-zinc-200 dark:border-zinc-800 shadow-lg",
+                "bg-white/80 dark:bg-zinc-900/80 backdrop-blur-md text-xs font-medium",
+                "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-all",
+                "hover:scale-105 active:scale-95 flex items-center gap-2"
+              )}
+            >
+              <X className="w-3.5 h-3.5" />
+              Exit Zen Mode
+              <kbd className="hidden sm:inline-flex px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-[10px]">
+                Cmd+K Z
+              </kbd>
+            </button>
+          </div>
+        )}
+
+        <div className={cn(
+          "flex-1 flex flex-col min-h-0 bg-white dark:bg-zinc-950 transition-all duration-500 ease-in-out relative z-10",
+          zenMode ? "m-0 rounded-none shadow-none" : ""
+        )}>
 
         <WorkspacePaneHost
           projectId={projectId}
@@ -712,11 +878,20 @@ export default function WorkspaceShell({
           onCloseToRight={(paneId, tabId) => closeTabsToRight(projectId, paneId, tabId)}
           onTabChange={(id, next) => {
             const current = tabByIdRef.current[id];
-            if (!current || current.content === next) return;
+            if (!current) return;
+            // Phase 5: Compare against detached map, not React state
+            const currentContent = getFileContent(projectId, id);
+            if (currentContent === next) return;
+            setDetachedContent(projectId, id, next);
             setFileState(projectId, id, { content: next, isDirty: true });
             setTabById((prev) => ({
               ...prev,
-              [id]: { ...prev[id], content: next, isDirty: true },
+              [id]: {
+                ...prev[id],
+                content: "",
+                contentVersion: (prev[id]?.contentVersion ?? 0) + 1,
+                isDirty: true,
+              },
             }));
           }}
           onSaveTab={(id) => void saveTab(id)}
@@ -740,6 +915,7 @@ export default function WorkspaceShell({
           onStartResize={startResize}
           leftOrderedTabIds={leftOrderedTabIds}
           rightOrderedTabIds={rightOrderedTabIds}
+          gitChangedFiles={gitChangedFiles}
         />
 
         <WorkspaceModalsHost
@@ -770,18 +946,32 @@ export default function WorkspaceShell({
           tabByIdRef={tabByIdRef}
         />
 
-        <WorkspaceBottomPanelHost
-          projectId={projectId}
-          canEdit={canEdit}
-          problems={problems}
-          activeFilePath={activeFilePath}
-          activePane={activePane}
-          activeTabIdByPane={activeTabIdByPane}
-          tabById={tabById}
-          nodesById={nodesById}
-          onRunActiveFile={() => void runActiveFile()}
-          onOpenNode={openFileInPane}
-        />
+        {!zenMode && (
+          <WorkspaceBottomPanelHost
+            projectId={projectId}
+            canEdit={canEdit}
+            problems={problems}
+            activeFilePath={activeFilePath}
+            activePane={activePane}
+            activeTabIdByPane={activeTabIdByPane}
+            tabById={tabById}
+            nodesById={nodesById}
+            onRunActiveFile={() => void runActiveFile()}
+            onOpenNode={openFileInPane}
+          />
+        )}
+
+        {!zenMode && (
+          <StatusBar
+            projectId={projectId}
+            activePane={activePane}
+            activeTabId={activeTabIdByPane[activePane] ?? null}
+            tabById={tabById}
+          />
+        )}
+
+        <KeyboardShortcuts open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
+        </div>
       </div>
 
       {/* Syncing Overlay */}

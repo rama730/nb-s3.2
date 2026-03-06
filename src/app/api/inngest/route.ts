@@ -4,6 +4,9 @@ import { inngest } from "../../../inngest/client";
 import { projectImport } from "../../../inngest/functions/project-import";
 import { onboardingClaimsRepair } from "../../../inngest/functions/onboarding-claims-repair";
 import { gitPush, gitPull, lockCleanup } from "../../../inngest/functions/git-sync";
+import { flushProjectViews } from "../../../inngest/functions/flush-views";
+import { reconcileProjectFiles } from "../../../inngest/functions/project-files-reconciliation";
+import { migrateProjectFileLegacyKeys } from "../../../inngest/functions/project-files-key-migration";
 
 export const { GET, POST, PUT } = serve({
     client: inngest,
@@ -13,5 +16,8 @@ export const { GET, POST, PUT } = serve({
         gitPush,
         gitPull,
         lockCleanup,
+        flushProjectViews,
+        reconcileProjectFiles,
+        migrateProjectFileLegacyKeys,
     ],
 });

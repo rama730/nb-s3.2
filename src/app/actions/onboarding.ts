@@ -2,6 +2,24 @@
 
 import { db } from '@/lib/db'
 import { onboardingDrafts, onboardingEvents, onboardingSubmissions, profiles, reservedUsernames } from '@/lib/db/schema'
+import {
+    ONBOARDING_AVAILABILITY_VALUES,
+    ONBOARDING_EXPERIENCE_LEVEL_VALUES,
+    ONBOARDING_GENDER_VALUES,
+    ONBOARDING_HOURS_PER_WEEK_VALUES,
+    ONBOARDING_MESSAGE_PRIVACY_VALUES,
+    ONBOARDING_SOCIAL_KEYS,
+    ONBOARDING_TOTAL_STEPS,
+    ONBOARDING_VISIBILITY_VALUES,
+    type OnboardingAvailabilityStatus,
+    type OnboardingExperienceLevel,
+    type OnboardingGenderIdentity,
+    type OnboardingHoursPerWeek,
+    type OnboardingMessagePrivacy,
+    type OnboardingSocialLinks,
+    type OnboardingVisibility,
+} from '@/lib/onboarding/contracts'
+import { onboardingEventInputSchema, type OnboardingEventInput } from '@/lib/onboarding/events'
 import { onboardingError, type OnboardingError } from '@/lib/onboarding/errors'
 import { checkUsernameAvailabilityWithClient } from '@/lib/onboarding/username-check'
 import { consumeRateLimit } from '@/lib/security/rate-limit'
@@ -20,16 +38,17 @@ const ONBOARDING_IDEMPOTENCY_MIN_CHARS = 12
 const ONBOARDING_IDEMPOTENCY_MAX_CHARS = 80
 const ONBOARDING_PROCESSING_STALE_MS = 60_000
 const ONBOARDING_STEP_MIN = 1
-const ONBOARDING_STEP_MAX = 4
+const ONBOARDING_STEP_MAX = ONBOARDING_TOTAL_STEPS
 const MAX_DRAFT_TAG_ITEMS = 25
+const MAX_DRAFT_OPEN_TO_ITEMS = 12
 const MAX_DRAFT_TAG_ITEM_CHARS = 32
 const MAX_DRAFT_HEADLINE_CHARS = 120
 const MAX_DRAFT_BIO_CHARS = 500
 const MAX_DRAFT_LOCATION_CHARS = 120
 const MAX_DRAFT_WEBSITE_CHARS = 200
+const MAX_DRAFT_PRONOUNS_CHARS = 60
+const MAX_DRAFT_SOCIAL_URL_CHARS = 200
 const MAX_DRAFT_FULL_NAME_CHARS = 80
-
-type OnboardingVisibility = 'public' | 'connections' | 'private'
 
 type DraftPayload = {
     username?: string
@@ -41,6 +60,14 @@ type DraftPayload = {
     website?: string
     skills?: string[]
     interests?: string[]
+    openTo?: string[]
+    availabilityStatus?: OnboardingAvailabilityStatus
+    messagePrivacy?: OnboardingMessagePrivacy
+    socialLinks?: OnboardingSocialLinks
+    experienceLevel?: OnboardingExperienceLevel
+    hoursPerWeek?: OnboardingHoursPerWeek
+    genderIdentity?: OnboardingGenderIdentity
+    pronouns?: string
     visibility?: OnboardingVisibility
 }
 
@@ -53,6 +80,22 @@ function trimOptionalString(value: unknown, maxLength: number): string | undefin
     if (typeof value !== 'string') return undefined
     const normalized = value.trim().slice(0, maxLength)
     return normalized.length > 0 ? normalized : undefined
+}
+
+function trimOptionalUrl(value: unknown, maxLength: number): string | undefined {
+    if (typeof value !== 'string') return undefined
+    const normalized = value.trim().slice(0, maxLength)
+    if (!normalized) return undefined
+    if (/^https?:\/\//i.test(normalized)) return normalized
+    return `https://${normalized}`
+}
+
+function sanitizeEnum<T extends string>(
+    value: unknown,
+    allowed: readonly T[]
+): T | undefined {
+    if (typeof value !== 'string') return undefined
+    return allowed.includes(value as T) ? (value as T) : undefined
 }
 
 function sanitizeDraftTagList(value: unknown): string[] | undefined {
@@ -74,9 +117,58 @@ function sanitizeDraftTagList(value: unknown): string[] | undefined {
     return list
 }
 
+function sanitizeDraftOpenToList(value: unknown): string[] | undefined {
+    if (!Array.isArray(value)) return undefined
+    const seen = new Set<string>()
+    const list: string[] = []
+    for (const item of value) {
+        if (typeof item !== 'string') continue
+        const normalized = item.trim().slice(0, MAX_DRAFT_TAG_ITEM_CHARS)
+        if (!normalized) continue
+        const key = normalized.toLowerCase()
+        if (seen.has(key)) continue
+        seen.add(key)
+        list.push(normalized)
+        if (list.length >= MAX_DRAFT_OPEN_TO_ITEMS) break
+    }
+    return list
+}
+
+function sanitizeDraftSocialLinks(value: unknown): OnboardingSocialLinks | undefined {
+    if (!value || typeof value !== 'object') return undefined
+    const source = value as Record<string, unknown>
+    const result: OnboardingSocialLinks = {}
+    for (const key of ONBOARDING_SOCIAL_KEYS) {
+        const normalized = trimOptionalUrl(source[key], MAX_DRAFT_SOCIAL_URL_CHARS)
+        if (!normalized) continue
+        result[key] = normalized
+    }
+    return Object.keys(result).length > 0 ? result : {}
+}
+
 function sanitizeOnboardingDraft(input: unknown): DraftPayload {
     const source = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>
     const visibility = source.visibility
+    const availabilityStatus = sanitizeEnum(
+        source.availabilityStatus,
+        ONBOARDING_AVAILABILITY_VALUES
+    )
+    const messagePrivacy = sanitizeEnum(
+        source.messagePrivacy,
+        ONBOARDING_MESSAGE_PRIVACY_VALUES
+    )
+    const experienceLevel = sanitizeEnum(
+        source.experienceLevel,
+        ONBOARDING_EXPERIENCE_LEVEL_VALUES
+    )
+    const hoursPerWeek = sanitizeEnum(
+        source.hoursPerWeek,
+        ONBOARDING_HOURS_PER_WEEK_VALUES
+    )
+    const genderIdentity = sanitizeEnum(
+        source.genderIdentity,
+        ONBOARDING_GENDER_VALUES
+    )
     return {
         username: typeof source.username === 'string' ? sanitizeUsernameInput(source.username) : undefined,
         fullName: trimOptionalString(source.fullName, MAX_DRAFT_FULL_NAME_CHARS),
@@ -84,13 +176,20 @@ function sanitizeOnboardingDraft(input: unknown): DraftPayload {
         headline: trimOptionalString(source.headline, MAX_DRAFT_HEADLINE_CHARS),
         bio: trimOptionalString(source.bio, MAX_DRAFT_BIO_CHARS),
         location: trimOptionalString(source.location, MAX_DRAFT_LOCATION_CHARS),
-        website: trimOptionalString(source.website, MAX_DRAFT_WEBSITE_CHARS),
+        website: trimOptionalUrl(source.website, MAX_DRAFT_WEBSITE_CHARS),
         skills: sanitizeDraftTagList(source.skills),
         interests: sanitizeDraftTagList(source.interests),
-        visibility:
-            visibility === 'public' || visibility === 'connections' || visibility === 'private'
-                ? visibility
-                : undefined,
+        openTo: sanitizeDraftOpenToList(source.openTo),
+        availabilityStatus,
+        messagePrivacy,
+        socialLinks: sanitizeDraftSocialLinks(source.socialLinks),
+        experienceLevel,
+        hoursPerWeek,
+        genderIdentity,
+        pronouns: trimOptionalString(source.pronouns, MAX_DRAFT_PRONOUNS_CHARS),
+        visibility: ONBOARDING_VISIBILITY_VALUES.includes(visibility as OnboardingVisibility)
+            ? (visibility as OnboardingVisibility)
+            : undefined,
     }
 }
 
@@ -238,6 +337,34 @@ async function ensureUsernameIsAvailable(params: {
             ok: false as const,
             error: onboardingError('DB_ERROR', 'Unable to verify username availability', true),
         }
+    }
+}
+
+function buildProfileOnboardingValues(params: {
+    userEmail: string
+    payload: ReturnType<typeof normalizeOnboardingPayload>
+    avatarUrl: string | null
+}) {
+    return {
+        email: params.userEmail,
+        username: params.payload.username,
+        fullName: params.payload.fullName,
+        avatarUrl: params.avatarUrl,
+        headline: params.payload.headline || null,
+        bio: params.payload.bio || null,
+        location: params.payload.location || null,
+        website: params.payload.website || null,
+        skills: params.payload.skills,
+        interests: params.payload.interests,
+        openTo: params.payload.openTo,
+        availabilityStatus: params.payload.availabilityStatus,
+        messagePrivacy: params.payload.messagePrivacy,
+        socialLinks: params.payload.socialLinks,
+        experienceLevel: params.payload.experienceLevel || null,
+        hoursPerWeek: params.payload.hoursPerWeek || null,
+        genderIdentity: params.payload.genderIdentity || null,
+        pronouns: params.payload.pronouns || null,
+        visibility: params.payload.visibility,
     }
 }
 
@@ -490,38 +617,23 @@ export async function completeOnboarding(
         const userEmail = user.email
 
         const avatarUrl = payload.avatarUrl || user.user_metadata?.avatar_url || null
+        const profileValues = buildProfileOnboardingValues({
+            userEmail,
+            payload,
+            avatarUrl,
+        })
         await db.transaction(async (tx) => {
             await tx
                 .insert(profiles)
                 .values({
                     id: user.id,
-                    email: userEmail,
-                    username: payload.username,
-                    fullName: payload.fullName,
-                    avatarUrl,
-                    headline: payload.headline || null,
-                    bio: payload.bio || null,
-                    location: payload.location || null,
-                    website: payload.website || null,
-                    skills: payload.skills,
-                    interests: payload.interests,
-                    visibility: payload.visibility,
+                    ...profileValues,
                     updatedAt: new Date(),
                 })
                 .onConflictDoUpdate({
                     target: profiles.id,
                     set: {
-                        email: userEmail,
-                        username: payload.username,
-                        fullName: payload.fullName,
-                        avatarUrl,
-                        headline: payload.headline || null,
-                        bio: payload.bio || null,
-                        location: payload.location || null,
-                        website: payload.website || null,
-                        skills: payload.skills,
-                        interests: payload.interests,
-                        visibility: payload.visibility,
+                        ...profileValues,
                         updatedAt: new Date(),
                     },
                 })
@@ -538,8 +650,16 @@ export async function completeOnboarding(
                     step: ONBOARDING_STEP_MAX,
                     metadata: {
                         visibility: payload.visibility,
+                        availabilityStatus: payload.availabilityStatus,
+                        messagePrivacy: payload.messagePrivacy,
                         hasHeadline: Boolean(payload.headline),
                         hasBio: Boolean(payload.bio),
+                        hasPronouns: Boolean(payload.pronouns),
+                        hasGenderIdentity: Boolean(payload.genderIdentity),
+                        hasExperienceLevel: Boolean(payload.experienceLevel),
+                        hasHoursPerWeek: Boolean(payload.hoursPerWeek),
+                        socialLinksCount: Object.keys(payload.socialLinks || {}).length,
+                        openToCount: payload.openTo.length,
                         skillsCount: payload.skills.length,
                         interestsCount: payload.interests.length,
                     },
@@ -732,7 +852,7 @@ export async function getOnboardingDraft(): Promise<{
 
 export async function saveOnboardingDraft(input: {
     step: number
-    draft: DraftPayload
+    draft: Partial<DraftPayload>
     expectedVersion?: number
 }): Promise<{
     success: boolean
@@ -753,7 +873,7 @@ export async function saveOnboardingDraft(input: {
         }
 
         const safeStep = clampStep(input.step)
-        const safeDraft = sanitizeOnboardingDraft(input.draft)
+        const incomingDraftPatch = sanitizeOnboardingDraft(input.draft)
         const updatedAt = new Date()
 
         const current = await db.query.onboardingDrafts.findFirst({
@@ -767,6 +887,7 @@ export async function saveOnboardingDraft(input: {
         })
 
         if (!current) {
+            const safeDraft = sanitizeOnboardingDraft(incomingDraftPatch)
             const inserted = await db
                 .insert(onboardingDrafts)
                 .values({
@@ -824,6 +945,11 @@ export async function saveOnboardingDraft(input: {
             }
         }
 
+        const mergedDraftInput = {
+            ...((latest.draft as Record<string, unknown>) || {}),
+            ...incomingDraftPatch,
+        }
+        const safeDraft = sanitizeOnboardingDraft(mergedDraftInput)
         const nextVersion = latest.version + 1
         const updated = await db
             .update(onboardingDrafts)
@@ -902,9 +1028,9 @@ export async function clearOnboardingDraft(): Promise<{ success: boolean; error?
 }
 
 export async function trackOnboardingEvent(input: {
-    eventType: string
+    eventType: OnboardingEventInput['eventType']
     step?: number
-    metadata?: Record<string, unknown>
+    metadata?: Record<string, string | number | boolean | null>
 }): Promise<{ success: boolean }> {
     try {
         const supabase = await createClient()
@@ -912,14 +1038,15 @@ export async function trackOnboardingEvent(input: {
         const user = authData.user
         if (!user) return { success: false }
 
-        const eventType = (input.eventType || '').trim().slice(0, 60)
-        if (!eventType) return { success: false }
+        const parsed = onboardingEventInputSchema.safeParse(input)
+        if (!parsed.success) return { success: false }
+        const payload = parsed.data
 
         await db.insert(onboardingEvents).values({
             userId: user.id,
-            eventType,
-            step: typeof input.step === 'number' ? clampStep(input.step) : null,
-            metadata: sanitizeTelemetryMetadata(input.metadata),
+            eventType: payload.eventType,
+            step: typeof payload.step === 'number' ? clampStep(payload.step) : null,
+            metadata: sanitizeTelemetryMetadata(payload.metadata),
         })
         return { success: true }
     } catch (error) {

@@ -1,6 +1,7 @@
 import type { StateCreator } from "zustand";
 import type { FilesWorkspaceState, UiState } from "./types";
 import { defaultWorkspace } from "./types";
+import { getFileContent } from "./contentMap";
 
 export interface UiSlice {
   setBottomPanelTab: (projectId: string, tab: UiState["bottomPanelTab"]) => void;
@@ -13,13 +14,19 @@ export interface UiSlice {
   setLastExecutionSettingsHref: (projectId: string, href: string | null) => void;
   setStdinInputText: (projectId: string, text: string) => void;
   setProblems: (projectId: string, problems: import("./types").Problem[]) => void;
+  clearProblems: (projectId: string) => void;
+  applyQuickFix: (projectId: string, problemId: string) => void;
   setDebugOutput: (projectId: string, lines: string[]) => void;
   appendDebugOutput: (projectId: string, lines: string[]) => void;
   clearDebugOutput: (projectId: string) => void;
   pushCommandToHistory: (projectId: string, command: string) => void;
+  setSidebarWidth: (projectId: string, width: number) => void;
+  toggleSidebar: (projectId: string) => void;
+  toggleZenMode: (projectId: string) => void;
+  setOutputFilterMode: (projectId: string, mode: "all" | "out" | "err") => void;
 }
 
-export const createUiSlice: StateCreator<FilesWorkspaceState, [], [], UiSlice> = (set) => ({
+export const createUiSlice: StateCreator<FilesWorkspaceState, [], [], UiSlice> = (set, get) => ({
   setBottomPanelTab: (projectId, tab) =>
     set((state) => {
       const ws = state.byProjectId[projectId] ?? defaultWorkspace();
@@ -160,6 +167,54 @@ export const createUiSlice: StateCreator<FilesWorkspaceState, [], [], UiSlice> =
       };
     }),
 
+  clearProblems: (projectId: string) =>
+    set((state) => {
+      const ws = state.byProjectId[projectId] ?? defaultWorkspace();
+      return {
+        byProjectId: {
+          ...state.byProjectId,
+          [projectId]: {
+            ...ws,
+            ui: { ...ws.ui, problems: [] },
+          },
+        },
+      };
+    }),
+
+  applyQuickFix: (projectId: string, problemId: string) =>
+    set((state) => {
+      const ws = state.byProjectId[projectId];
+      if (!ws) return state;
+
+      const problems = ws.ui.problems || [];
+      const problemIndex = problems.findIndex((p) => p.id === problemId);
+      if (problemIndex === -1) return state;
+
+      const problem = problems[problemIndex];
+      // 3c: Apply the quick fix
+      if (problem?.fix && problem.fix.action === "replace") {
+        const content = getFileContent(projectId, problem.nodeId);
+        if (content.includes(problem.fix.targetString)) {
+          const newContent = content.replace(problem.fix.targetString, problem.fix.replacement);
+          get().setFileState(projectId, problem.nodeId, { content: newContent, isDirty: true });
+        }
+      }
+
+      // Remove the problem from the list after fixing
+      const nextProblems = [...problems];
+      nextProblems.splice(problemIndex, 1);
+
+      return {
+        byProjectId: {
+          ...state.byProjectId,
+          [projectId]: {
+            ...ws,
+            ui: { ...ws.ui, problems: nextProblems },
+          },
+        },
+      };
+    }),
+
   setDebugOutput: (projectId, lines) =>
     set((state) => {
       const ws = state.byProjectId[projectId] ?? defaultWorkspace();
@@ -219,6 +274,68 @@ export const createUiSlice: StateCreator<FilesWorkspaceState, [], [], UiSlice> =
           [projectId]: {
             ...ws,
             ui: { ...ws.ui, commandHistory: next },
+          },
+        },
+      };
+    }),
+
+  setSidebarWidth: (projectId, width) =>
+    set((state) => {
+      const ws = state.byProjectId[projectId] ?? defaultWorkspace();
+      return {
+        byProjectId: {
+          ...state.byProjectId,
+          [projectId]: {
+            ...ws,
+            ui: { ...ws.ui, sidebarWidth: Math.max(180, Math.min(600, width)) },
+          },
+        },
+      };
+    }),
+
+  toggleSidebar: (projectId) =>
+    set((state) => {
+      const ws = state.byProjectId[projectId] ?? defaultWorkspace();
+      return {
+        byProjectId: {
+          ...state.byProjectId,
+          [projectId]: {
+            ...ws,
+            ui: { ...ws.ui, sidebarCollapsed: !ws.ui.sidebarCollapsed },
+          },
+        },
+      };
+    }),
+
+  toggleZenMode: (projectId) =>
+    set((state) => {
+      const ws = state.byProjectId[projectId] ?? defaultWorkspace();
+      const entering = !ws.ui.zenMode;
+      return {
+        byProjectId: {
+          ...state.byProjectId,
+          [projectId]: {
+            ...ws,
+            ui: {
+              ...ws.ui,
+              zenMode: entering,
+              sidebarCollapsed: entering ? true : false,
+              bottomPanelCollapsed: entering ? true : ws.ui.bottomPanelCollapsed,
+            },
+          },
+        },
+      };
+    }),
+
+  setOutputFilterMode: (projectId, mode) =>
+    set((state) => {
+      const ws = state.byProjectId[projectId] ?? defaultWorkspace();
+      return {
+        byProjectId: {
+          ...state.byProjectId,
+          [projectId]: {
+            ...ws,
+            ui: { ...ws.ui, outputFilterMode: mode },
           },
         },
       };

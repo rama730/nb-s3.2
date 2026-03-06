@@ -3,6 +3,15 @@ import type { ProjectNode } from "@/lib/db/schema";
 import type { FilesWorkspaceState, FileState, WorkspacePane } from "./types";
 import { defaultWorkspace, parentKey } from "./types";
 import { FILES_RUNTIME_BUDGETS, clampNumber } from "@/lib/files/runtime-budgets";
+import { set as idbSet } from "idb-keyval";
+import { setFileContent, getFileContent, deleteFileContent } from "./contentMap";
+
+function syncIdbCache(projectId: string, nodesById: Record<string, ProjectNode>, childrenByParentId: Record<string, string[]>) {
+  void idbSet(`nb-s3-workspace-${projectId}`, {
+    nodesById,
+    childrenByParentId
+  }).catch(e => console.warn("Failed to save IDB cache", e));
+}
 
 export interface FilesSlice {
   upsertNodes: (projectId: string, nodes: ProjectNode[]) => void;
@@ -25,11 +34,17 @@ export interface FilesSlice {
   setTaskLinkCounts: (projectId: string, counts: Record<string, number>) => void;
   setNodes: (projectId: string, nodes: ProjectNode[]) => void;
   setFileState: (projectId: string, nodeId: string, state: Partial<FileState>) => void;
+  hydrateFromIdb: (
+    projectId: string,
+    nodesById: Record<string, ProjectNode>,
+    childrenByParentId: Record<string, string[]>
+  ) => void;
 }
 
-function evictLruIfNeeded(
+export function evictLruIfNeeded(
   fileStates: Record<string, FileState>,
-  maxEntries: number
+  maxEntries: number,
+  projectId?: string
 ): Record<string, FileState> {
   const entries = Object.entries(fileStates);
   if (entries.length <= maxEntries) return fileStates;
@@ -43,6 +58,17 @@ function evictLruIfNeeded(
   const nonDirty = sorted.filter(([, s]) => !s.isDirty);
   const budget = Math.max(0, maxEntries - toKeep.length);
   const kept = nonDirty.slice(Math.max(0, nonDirty.length - budget));
+  const keptIds = new Set([...toKeep, ...kept].map(([id]) => id));
+
+  // Phase 5: Clean up detached Map entries for evicted nodes
+  if (projectId) {
+    for (const [id] of sorted) {
+      if (!keptIds.has(id)) {
+        deleteFileContent(projectId, id);
+        deleteFileContent(projectId, `${id}::saved`);
+      }
+    }
+  }
 
   for (const [id, s] of [...toKeep, ...kept]) {
     result[id] = s;
@@ -50,7 +76,20 @@ function evictLruIfNeeded(
   return result;
 }
 
-function estimateVisibleRowsBudget(ws: FilesWorkspaceState["byProjectId"][string] | undefined) {
+function enforceNodesBudget(nodesById: Record<string, ProjectNode>, budget: number = 5000): Record<string, ProjectNode> {
+  const keys = Object.keys(nodesById);
+  if (keys.length <= budget) return nodesById;
+
+  // Keep the most recently inserted keys
+  const keysToKeep = keys.slice(keys.length - budget);
+  const result: Record<string, ProjectNode> = {};
+  for (const k of keysToKeep) {
+    result[k] = nodesById[k];
+  }
+  return result;
+}
+
+export function estimateVisibleRowsBudget(ws: FilesWorkspaceState["byProjectId"][string] | undefined) {
   if (!ws) return FILES_RUNTIME_BUDGETS.fileCacheFallbackEntries;
   const selectedParentKey = parentKey(ws.selectedFolderId ?? null);
   const selectedFolderCount = ws.childrenByParentId[selectedParentKey]?.length ?? 0;
@@ -80,10 +119,16 @@ export const createFilesSlice: StateCreator<FilesWorkspaceState, [], [], FilesSl
         }
       }
       if (!changed) return state;
+      const limitedNodesById = enforceNodesBudget(nextById, 5000);
+
+      const newWs = { ...ws, nodesById: limitedNodesById, treeVersion: ws.treeVersion + 1 };
+
+      syncIdbCache(projectId, limitedNodesById, ws.childrenByParentId);
+
       return {
         byProjectId: {
           ...state.byProjectId,
-          [projectId]: { ...ws, nodesById: nextById, treeVersion: ws.treeVersion + 1 },
+          [projectId]: newWs,
         },
       };
     }),
@@ -92,12 +137,16 @@ export const createFilesSlice: StateCreator<FilesWorkspaceState, [], [], FilesSl
     set((state) => {
       const ws = state.byProjectId[projectId] ?? defaultWorkspace();
       const key = parentKey(parentId);
+      const nextChildren = { ...ws.childrenByParentId, [key]: Array.from(new Set(childIds)) };
+
+      syncIdbCache(projectId, ws.nodesById, nextChildren);
+
       return {
         byProjectId: {
           ...state.byProjectId,
           [projectId]: {
             ...ws,
-            childrenByParentId: { ...ws.childrenByParentId, [key]: childIds },
+            childrenByParentId: nextChildren,
             treeVersion: ws.treeVersion + 1,
           },
         },
@@ -108,12 +157,16 @@ export const createFilesSlice: StateCreator<FilesWorkspaceState, [], [], FilesSl
     set((state) => {
       const ws = state.byProjectId[projectId] ?? defaultWorkspace();
       const key = parentKey(parentId);
+      const nextChildren = { ...ws.childrenByParentId, [key]: Array.from(new Set(payload.childIds)) };
+
+      syncIdbCache(projectId, ws.nodesById, nextChildren);
+
       return {
         byProjectId: {
           ...state.byProjectId,
           [projectId]: {
             ...ws,
-            childrenByParentId: { ...ws.childrenByParentId, [key]: payload.childIds },
+            childrenByParentId: nextChildren,
             loadedChildren: payload.loaded
               ? { ...ws.loadedChildren, [key]: true }
               : ws.loadedChildren,
@@ -133,21 +186,26 @@ export const createFilesSlice: StateCreator<FilesWorkspaceState, [], [], FilesSl
       const key = parentKey(parentId);
       const nextById = { ...ws.nodesById };
       for (const n of nodes) nextById[n.id] = n;
+      const limitedNodesById = enforceNodesBudget(nextById, 5000);
+      const nextChildren = { ...ws.childrenByParentId, [key]: Array.from(new Set(childIds)) };
+
+      syncIdbCache(projectId, limitedNodesById, nextChildren);
+
       return {
         byProjectId: {
           ...state.byProjectId,
           [projectId]: {
             ...ws,
-            nodesById: nextById,
-            childrenByParentId: { ...ws.childrenByParentId, [key]: childIds },
+            nodesById: limitedNodesById,
+            childrenByParentId: nextChildren,
             loadedChildren: payload?.loaded
               ? { ...ws.loadedChildren, [key]: true }
               : ws.loadedChildren,
             folderMeta: payload
               ? {
-                  ...ws.folderMeta,
-                  [key]: { nextCursor: payload.nextCursor, hasMore: payload.hasMore },
-                }
+                ...ws.folderMeta,
+                [key]: { nextCursor: payload.nextCursor, hasMore: payload.hasMore },
+              }
               : ws.folderMeta,
             treeVersion: ws.treeVersion + 1,
           },
@@ -212,11 +270,17 @@ export const createFilesSlice: StateCreator<FilesWorkspaceState, [], [], FilesSl
       const nextFileStates = { ...ws.fileStates };
       delete nextFileStates[nodeId];
 
+      // Phase 5: Clean up detached Map entries
+      deleteFileContent(projectId, nodeId);
+      deleteFileContent(projectId, `${nodeId}::saved`);
+
       const closeFromPane = (pane: WorkspacePane) => ({
         ...pane,
         openTabIds: pane.openTabIds.filter((id) => id !== nodeId),
         activeTabId: pane.activeTabId === nodeId ? null : pane.activeTabId,
       });
+
+      syncIdbCache(projectId, nextById, nextChildren);
 
       return {
         byProjectId: {
@@ -272,10 +336,14 @@ export const createFilesSlice: StateCreator<FilesWorkspaceState, [], [], FilesSl
         }
       }
 
+      const limitedNodesById = enforceNodesBudget(nodesById, 5000);
+
+      syncIdbCache(projectId, limitedNodesById, childrenByParentId);
+
       return {
         byProjectId: {
           ...state.byProjectId,
-          [projectId]: { ...ws, nodesById, childrenByParentId, treeVersion: ws.treeVersion + 1 },
+          [projectId]: { ...ws, nodesById: limitedNodesById, childrenByParentId, treeVersion: ws.treeVersion + 1 },
         },
       };
     }),
@@ -285,25 +353,64 @@ export const createFilesSlice: StateCreator<FilesWorkspaceState, [], [], FilesSl
       const ws = state.byProjectId[projectId];
       if (!ws) return state;
 
-      const prev = ws.fileStates[nodeId] || { content: "", isDirty: false };
+      const prev = ws.fileStates[nodeId] || { content: "", contentVersion: 0, isDirty: false };
       const now = Date.now();
-      const next = { ...prev, ...fileState, lastAccessedAt: now };
-      const contentUnchanged =
-        prev.content === next.content &&
+
+      // Phase 5: Route content to detached Map, keep Zustand lightweight
+      const hasContentUpdate = fileState.content !== undefined;
+      if (hasContentUpdate) {
+        setFileContent(projectId, nodeId, fileState.content!);
+      }
+
+      const nextVersion = hasContentUpdate
+        ? (prev.contentVersion ?? 0) + 1
+        : (prev.contentVersion ?? 0);
+
+      const next: FileState = {
+        ...prev,
+        ...fileState,
+        content: "",  // Always empty in store — content lives in detached Map
+        contentVersion: nextVersion,
+        lastAccessedAt: now,
+      };
+
+      // Detect actual state change for early bailout
+      const stateUnchanged =
+        !hasContentUpdate &&
         prev.isDirty === next.isDirty &&
         prev.lastSavedAt === next.lastSavedAt;
-      if (contentUnchanged && prev.lastAccessedAt && now - prev.lastAccessedAt < 5_000) {
+      if (stateUnchanged && prev.lastAccessedAt && now - prev.lastAccessedAt < 5_000) {
         return state;
       }
 
       const maxEntries = estimateVisibleRowsBudget(ws);
-      const nextFileStates = evictLruIfNeeded({ ...ws.fileStates, [nodeId]: next }, maxEntries);
+      const nextFileStates = evictLruIfNeeded({ ...ws.fileStates, [nodeId]: next }, maxEntries, projectId);
       return {
         byProjectId: {
           ...state.byProjectId,
           [projectId]: {
             ...ws,
             fileStates: nextFileStates,
+          },
+        },
+      };
+    }),
+
+  hydrateFromIdb: (projectId, nodesById, childrenByParentId) =>
+    set((state) => {
+      const ws = state.byProjectId[projectId];
+      if (!ws) return state;
+      // We only hydrate if we don't already have live data loaded to prevent overwriting new socket updates
+      if (Object.keys(ws.nodesById).length > 0) return state;
+
+      return {
+        byProjectId: {
+          ...state.byProjectId,
+          [projectId]: {
+            ...ws,
+            nodesById,
+            childrenByParentId,
+            treeVersion: ws.treeVersion + 1,
           },
         },
       };

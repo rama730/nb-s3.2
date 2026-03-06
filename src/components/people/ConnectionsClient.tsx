@@ -12,6 +12,7 @@ import { formatDistanceToNow } from "date-fns";
 import { VirtuosoGrid } from "react-virtuoso";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import PersonCard from "@/components/people/PersonCard";
 import { cn } from "@/lib/utils";
 import { profileHref } from "@/lib/routing/identifiers";
 import { useConnections, useConnectionStats, useConnectionMutations } from "@/hooks/useConnections";
@@ -46,7 +47,7 @@ export default function ConnectionsClient({
 
     const GridList = useMemo(() => {
         const Component = forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>((props, ref) => (
-            <div {...props} ref={ref} className="space-y-3 pb-8" />
+            <div {...props} ref={ref} className="grid gap-4 grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 pb-8" />
         ));
         Component.displayName = "ConnectionsListLayout";
         return Component;
@@ -54,7 +55,7 @@ export default function ConnectionsClient({
 
     const GridItem = useMemo(() => {
         const Component = forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>((props, ref) => (
-            <div {...props} ref={ref} />
+            <div {...props} ref={ref} className="h-[200px]" />
         ));
         Component.displayName = "ConnectionsListItem";
         return Component;
@@ -244,6 +245,7 @@ export default function ConnectionsClient({
                         <div style={{ minHeight: 400 }}>
                             <VirtuosoGrid
                                 useWindowScroll
+                                increaseViewportBy={600}
                                 data={connections}
                                 endReached={() => {
                                     if (hasNextPage && !isFetchingNextPage) {
@@ -254,84 +256,70 @@ export default function ConnectionsClient({
                                     List: GridList,
                                     Item: GridItem,
                                     Footer: () => isFetchingNextPage ? (
-                                        <div className="flex justify-center py-4">
+                                        <div className="col-span-full flex justify-center py-4">
                                             <Loader2 className="w-6 h-6 animate-spin text-zinc-400" />
                                         </div>
                                     ) : null
                                 }}
-                                itemContent={(_, conn) => {
+                                itemContent={(index, conn) => {
                                     const user = conn.otherUser;
                                     if (!user) {
                                         return (
-                                            <div className="rounded-2xl border border-zinc-200/60 dark:border-white/5 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl p-4">
+                                            <div className="rounded-2xl border border-zinc-200/60 dark:border-white/5 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl p-4 h-full">
                                                 <p className="text-sm text-zinc-500 dark:text-zinc-400">Connection unavailable.</p>
                                             </div>
                                         );
                                     }
                                     const isProcessing = disconnect.isPending && disconnect.variables === conn.id;
 
+                                    // Map the partial user obj to the expected SuggestedProfile format
+                                    const mappedProfile = {
+                                        id: user.id,
+                                        username: user.username,
+                                        fullName: user.fullName,
+                                        avatarUrl: user.avatarUrl,
+                                        headline: user.headline,
+                                        location: null, // location not returned by accepted connections yet
+                                        connectionStatus: 'connected' as const,
+                                        canConnect: false
+                                    };
+
                                     return (
-                                        <div className="group rounded-2xl border border-zinc-200/60 dark:border-white/5 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl p-4 hover:shadow-lg hover:border-indigo-200/60 dark:hover:border-indigo-500/20 transition-all">
-                                            <div className="flex items-center gap-4">
-                                                <Link href={profileHref(user)} className="flex-shrink-0">
-                                                    {user.avatarUrl ? (
-                                                        <Image
-                                                            src={user.avatarUrl}
-                                                            alt={user.fullName || user.username || "User"}
-                                                            width={48}
-                                                            height={48}
-                                                            className="w-12 h-12 rounded-full object-cover"
-                                                        />
+                                        <div className="relative h-full group">
+                                            <PersonCard 
+                                                profile={mappedProfile}
+                                                onConnect={async () => {}} 
+                                                variant="compact" 
+                                            />
+                                            {/* Action Overlay for existing connections */}
+                                            <div className="absolute top-2 right-2 flex items-center gap-1 opacity-100 lg:opacity-0 group-hover:opacity-100 transition-opacity z-20">
+                                                <button
+                                                    onClick={(e) => {
+                                                        e.preventDefault();
+                                                        e.stopPropagation();
+                                                        handleMessage(user.id);
+                                                    }}
+                                                    className="p-1.5 rounded-full bg-white/90 dark:bg-zinc-800/90 shadow-sm border border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-all"
+                                                    title="Message"
+                                                >
+                                                    <MessageSquare className="w-3.5 h-3.5" />
+                                                </button>
+                                                <button
+                                                    onClick={(e) => {
+                                                        e.preventDefault();
+                                                        e.stopPropagation();
+                                                        handleDisconnect(conn.id, user.fullName || user.username || "this user");
+                                                    }}
+                                                    disabled={isProcessing}
+                                                    className="p-1.5 rounded-full bg-white/90 dark:bg-zinc-800/90 shadow-sm border border-zinc-200 dark:border-zinc-700 text-zinc-400 hover:text-red-500 transition-all disabled:opacity-50"
+                                                    title="Disconnect"
+                                                >
+                                                    {isProcessing ? (
+                                                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
                                                     ) : (
-                                                        <div className="w-12 h-12 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white font-semibold">
-                                                            {(user.fullName || user.username || "U")[0]?.toUpperCase()}
-                                                        </div>
+                                                        <X className="w-3.5 h-3.5" />
                                                     )}
-                                                </Link>
-                                                <div className="flex-1 min-w-0">
-                                                    <Link
-                                                        href={profileHref(user)}
-                                                        className="font-semibold text-zinc-900 dark:text-zinc-100 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors block truncate"
-                                                    >
-                                                        {user.fullName || user.username || "User"}
-                                                    </Link>
-                                                    <div className="flex items-center gap-2 text-sm text-zinc-500 dark:text-zinc-400">
-                                                        {user.username && <span className="truncate">@{user.username}</span>}
-                                                        {user.headline && (
-                                                            <>
-                                                                <span className="text-zinc-300 dark:text-zinc-700">·</span>
-                                                                <span className="truncate">{user.headline}</span>
-                                                            </>
-                                                        )}
-                                                    </div>
-                                                    {conn.updatedAt && (
-                                                        <p className="text-xs text-zinc-400 dark:text-zinc-500 mt-0.5">
-                                                            Connected {formatDistanceToNow(new Date(conn.updatedAt), { addSuffix: true })}
-                                                        </p>
-                                                    )}
-                                                </div>
-                                                {/* Action buttons */}
-                                                <div className="flex items-center gap-2 flex-shrink-0">
-                                                    <button
-                                                        onClick={() => handleMessage(user.id)}
-                                                        className="p-2.5 rounded-xl border border-zinc-200/60 dark:border-white/10 text-zinc-600 dark:text-zinc-400 hover:bg-indigo-50 dark:hover:bg-indigo-500/10 hover:text-indigo-600 dark:hover:text-indigo-400 hover:border-indigo-200 dark:hover:border-indigo-500/30 transition-all"
-                                                        title="Message"
-                                                    >
-                                                        <MessageSquare className="w-4 h-4" />
-                                                    </button>
-                                                    <button
-                                                        onClick={() => handleDisconnect(conn.id, user.fullName || user.username || "this user")}
-                                                        disabled={isProcessing}
-                                                        className="p-2.5 rounded-xl border border-zinc-200/60 dark:border-white/10 text-zinc-400 hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-500 hover:border-red-200 dark:hover:border-red-500/30 transition-all disabled:opacity-50"
-                                                        title="Disconnect"
-                                                    >
-                                                        {isProcessing ? (
-                                                            <Loader2 className="w-4 h-4 animate-spin" />
-                                                        ) : (
-                                                            <X className="w-4 h-4" />
-                                                        )}
-                                                    </button>
-                                                </div>
+                                                </button>
                                             </div>
                                         </div>
                                     );

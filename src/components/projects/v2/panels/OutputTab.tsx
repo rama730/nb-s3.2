@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Copy, Download, Eraser, FileOutput, Lock, Play, Search, Unlock } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
@@ -70,18 +71,28 @@ function AnsiLine({ text, isError, searchQuery }: { text: string; isError?: bool
 export function OutputTab({ projectId, onRun }: OutputTabProps) {
   const lines = useFilesWorkspaceStore((s) => s._get(projectId).ui.lastExecutionOutput);
   const lastExecutionSettingsHref = useFilesWorkspaceStore((s) => s._get(projectId).ui.lastExecutionSettingsHref ?? null);
+  const outputMode = useFilesWorkspaceStore((s) => s._get(projectId).ui.outputFilterMode);
+  
   const setLastExecutionOutput = useFilesWorkspaceStore((s) => s.setLastExecutionOutput);
   const setLastExecutionSettingsHref = useFilesWorkspaceStore((s) => s.setLastExecutionSettingsHref);
+  const setOutputMode = useFilesWorkspaceStore((s) => s.setOutputFilterMode);
+
   const [scrollLock, setScrollLock] = useState(false);
   const [copied, setCopied] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
 
   const filteredLines = useMemo(() => {
-    if (!searchQuery.trim()) return lines;
+    let result = lines;
+    // 1. Output mode filter
+    if (outputMode === "err") result = result.filter(isErrorLine);
+    else if (outputMode === "out") result = result.filter((l) => !isErrorLine(l));
+    
+    // 2. Search filter
+    if (!searchQuery.trim()) return result;
     const q = searchQuery.trim().toLowerCase();
-    return lines.filter((line) => line.toLowerCase().includes(q));
-  }, [lines, searchQuery]);
+    return result.filter((line) => line.toLowerCase().includes(q));
+  }, [lines, searchQuery, outputMode]);
 
   useEffect(() => {
     if (scrollLock) return;
@@ -117,17 +128,42 @@ export function OutputTab({ projectId, onRun }: OutputTabProps) {
   return (
       <div className="flex flex-col h-full">
         <div className="flex items-center gap-1 px-2 py-1 border-b border-zinc-200 dark:border-zinc-800 shrink-0">
-          <span className="text-xs text-zinc-500 mr-auto">Output</span>
+          <span className="text-xs text-zinc-500 mr-2">Output</span>
+          
+          {/* 3a: Output mode toggles */}
+          {lines.length > 0 && (
+            <div className="flex items-center bg-zinc-100 dark:bg-zinc-800 p-0.5 rounded mr-auto">
+              <button
+                className={cn("px-2 py-0.5 text-[10px] rounded transition-colors font-medium", outputMode === "all" ? "bg-white dark:bg-zinc-700 text-zinc-900 dark:text-zinc-100 shadow-sm" : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300")}
+                onClick={() => setOutputMode(projectId, "all")}
+              >
+                All
+              </button>
+              <button
+                className={cn("px-2 py-0.5 text-[10px] rounded transition-colors font-medium", outputMode === "out" ? "bg-white dark:bg-zinc-700 text-zinc-900 dark:text-zinc-100 shadow-sm" : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300")}
+                onClick={() => setOutputMode(projectId, "out")}
+              >
+                Output
+              </button>
+              <button
+                className={cn("px-2 py-0.5 text-[10px] rounded transition-colors font-medium", outputMode === "err" ? "bg-white dark:bg-zinc-700 text-red-600 dark:text-red-400 shadow-sm" : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300")}
+                onClick={() => setOutputMode(projectId, "err")}
+              >
+                Errors
+              </button>
+            </div>
+          )}
+
           {lines.length > 0 && onRun && (
             <Button variant="ghost" size="sm" className="h-6 px-1.5 gap-1" onClick={onRun} title="Run again">
               <Play className="w-3 h-3" />
-              Run again
+              Run
             </Button>
           )}
           {lines.length > 0 && lastExecutionSettingsHref && (
             <Link href={lastExecutionSettingsHref}>
               <Button variant="ghost" size="sm" className="h-6 px-1.5" title="Open Languages settings">
-                Open Languages
+                Language
               </Button>
             </Link>
           )}

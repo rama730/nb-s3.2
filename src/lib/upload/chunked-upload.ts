@@ -1,5 +1,7 @@
 'use client';
 
+import { buildProjectFileKey } from '@/lib/storage/project-file-key';
+
 /**
  * Progressive folder upload with real-time progress.
  * Uses direct browser-to-S3 uploads via presigned URLs.
@@ -53,7 +55,7 @@ export async function uploadFolder(
         if (signal?.aborted) throw new Error('Upload cancelled');
         const file = files[i];
         const relativePath = file.webkitRelativePath || file.name;
-        const s3Key = `${projectId}/${relativePath}`;
+        const s3Key = buildProjectFileKey(projectId, relativePath);
 
         try {
             const presignedUrl = await getPresignedUrl(s3Key, file.type || 'application/octet-stream');

@@ -11,6 +11,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { FileIcon } from "./explorer/FileIcons";
 
 interface DraggableTabProps {
   id: string;
@@ -18,6 +19,7 @@ interface DraggableTabProps {
   isActive: boolean;
   isDirty: boolean;
   isPinned: boolean;
+  compact?: boolean;
   onActivate: () => void;
   onClose: () => void;
   onPin: (pinned: boolean) => void;
@@ -31,6 +33,7 @@ export function DraggableTab({
   isActive,
   isDirty,
   isPinned,
+  compact,
   onActivate,
   onClose,
   onPin,
@@ -46,12 +49,52 @@ export function DraggableTab({
     isDragging,
   } = useSortable({ id });
 
+  const [confirmingClose, setConfirmingClose] = React.useState(false);
+
+  // Auto-dismiss confirm prompt if file becomes non-dirty (e.g. auto-save)
+  React.useEffect(() => {
+    if (!isDirty) setConfirmingClose(false);
+  }, [isDirty]);
+
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
     zIndex: isDragging ? 50 : "auto",
     opacity: isDragging ? 0.5 : 1,
   };
+
+  const handleClose = () => {
+    if (isDirty) {
+      setConfirmingClose(true);
+    } else {
+      onClose();
+    }
+  };
+
+  // Compact mode: Just icon + pin for inactive pinned tabs
+  if (compact) {
+    return (
+      <div
+        ref={setNodeRef}
+        style={style}
+        {...attributes}
+        {...listeners}
+        className={cn(
+          "group flex items-center gap-0.5 px-1.5 py-1.5 rounded-md text-xs border transition-colors cursor-default select-none",
+          "bg-transparent border-transparent text-zinc-500 hover:bg-zinc-50 dark:hover:bg-zinc-900/50"
+        )}
+        title={name}
+        onMouseDown={(e) => {
+          if ((e.target as HTMLElement).closest("button")) return;
+          onActivate();
+        }}
+      >
+        <FileIcon name={name} isFolder={false} className="w-3.5 h-3.5 flex-shrink-0" />
+        <Pin className="w-2.5 h-2.5 text-zinc-400" />
+        {isDirty && <span className="w-1.5 h-1.5 rounded-full bg-amber-500 flex-shrink-0" />}
+      </div>
+    );
+  }
 
   return (
     <div
@@ -79,7 +122,28 @@ export function DraggableTab({
       
       {isDirty ? <span className="w-2 h-2 rounded-full bg-amber-500 flex-shrink-0" /> : null}
 
-      <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+      {/* Inline unsaved close confirmation */}
+      {confirmingClose ? (
+        <div className="flex items-center gap-1 animate-in fade-in zoom-in-95 duration-100">
+          <button
+            type="button"
+            className="px-1.5 py-0.5 text-[10px] rounded bg-indigo-500 text-white hover:bg-indigo-600 transition-colors font-semibold"
+            onClick={(e) => { e.stopPropagation(); onClose(); }}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            Discard
+          </button>
+          <button
+            type="button"
+            className="px-1.5 py-0.5 text-[10px] rounded bg-zinc-200 dark:bg-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-300 dark:hover:bg-zinc-600 transition-colors"
+            onClick={(e) => { e.stopPropagation(); setConfirmingClose(false); }}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            Cancel
+          </button>
+        </div>
+      ) : (
+        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button 
@@ -100,7 +164,7 @@ export function DraggableTab({
               <DropdownMenuItem onClick={() => onCloseOthers()}>
                 Close others
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => onClose()}>
+              <DropdownMenuItem onClick={() => handleClose()}>
                 Close
               </DropdownMenuItem>
             </DropdownMenuContent>
@@ -110,14 +174,15 @@ export function DraggableTab({
             className="w-5 h-5 inline-flex items-center justify-center rounded hover:bg-zinc-200/60 dark:hover:bg-zinc-700/60"
             onClick={(e) => {
                 e.stopPropagation();
-                onClose();
+                handleClose();
             }}
             onMouseDown={(e) => e.stopPropagation()} // Stop DnD
             aria-label="Close tab"
           >
             <X className="w-3 h-3" />
           </button>
-      </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -54,6 +54,7 @@ interface WorkspacePaneHostProps {
   onStartResize: (event: React.MouseEvent) => void;
   leftOrderedTabIds: string[];
   rightOrderedTabIds: string[];
+  gitChangedFiles: Array<{ nodeId: string; status: "modified" | "added" | "deleted" }>;
 }
 
 export function WorkspacePaneHost({
@@ -93,6 +94,7 @@ export function WorkspacePaneHost({
   onStartResize,
   leftOrderedTabIds,
   rightOrderedTabIds,
+  gitChangedFiles,
 }: WorkspacePaneHostProps) {
   const nothingOpen =
     panes.left.openTabIds.length === 0 && (!splitEnabled || panes.right.openTabIds.length === 0);
@@ -128,6 +130,7 @@ export function WorkspacePaneHost({
             conflictDiffSignal={conflictDiffSignal}
             onRun={activePane === "left" ? onRunActiveFile : undefined}
             canRun={activePane === "left" && !!activeFilePath}
+            gitChangedFiles={gitChangedFiles}
           />
 
           {splitEnabled ? (
@@ -166,6 +169,7 @@ export function WorkspacePaneHost({
               conflictDiffSignal={conflictDiffSignal}
               onRun={activePane === "right" ? onRunActiveFile : undefined}
               canRun={activePane === "right" && !!activeFilePath}
+              gitChangedFiles={gitChangedFiles}
             />
           ) : null}
         </DndContext>

@@ -3,10 +3,11 @@
 import { db } from "@/lib/db";
 import { projectFileIndex, projectNodeEvents, projectNodeLocks, projectNodes } from "@/lib/db/schema";
 import type { ProjectNode } from "@/lib/db/schema";
-import { eq, and, isNull, isNotNull, ilike, inArray } from "drizzle-orm";
+import { eq, and, or, isNull, isNotNull, ilike, inArray, sql } from "drizzle-orm";
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { consumeRateLimit } from "@/lib/security/rate-limit";
+import { buildProjectFileKey } from "@/lib/storage/project-file-key";
 import {
     assertProjectWriteAccess,
     assertValidParentFolder,
@@ -22,6 +23,15 @@ import {
     escapeLikePattern,
 } from "./_constants";
 
+async function getParentPath(tx: any, projectId: string, parentId: string | null): Promise<string> {
+    if (!parentId) return "";
+    const parent = await tx.query.projectNodes.findFirst({
+        where: and(eq(projectNodes.id, parentId), eq(projectNodes.projectId, projectId)),
+        columns: { path: true }
+    });
+    return parent?.path || "";
+}
+
 export async function createFolder(projectId: string, parentId: string | null, name: string) {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
@@ -36,11 +46,15 @@ export async function createFolder(projectId: string, parentId: string | null, n
     const node = await db.transaction(async (tx) => {
         await assertValidParentFolder(projectId, parentId, tx);
         await assertUniqueSiblingName(projectId, parentId, safeName, tx);
+        const parentPath = await getParentPath(tx, projectId, parentId);
+        const nodePath = `${parentPath}/${safeName}`;
+
         const [created] = await tx.insert(projectNodes).values({
             projectId,
             parentId,
             type: 'folder',
             name: safeName,
+            path: nodePath,
             createdBy: user.id,
         }).returning();
         return created;
@@ -70,11 +84,15 @@ export async function createFileNode(projectId: string, parentId: string | null,
     const node = await db.transaction(async (tx) => {
         await assertValidParentFolder(projectId, parentId, tx);
         await assertUniqueSiblingName(projectId, parentId, safeName, tx);
+        const parentPath = await getParentPath(tx, projectId, parentId);
+        const nodePath = `${parentPath}/${safeName}`;
+
         const [created] = await tx.insert(projectNodes).values({
             projectId,
             parentId,
             type: 'file',
             name: safeName,
+            path: nodePath,
             s3Key: file.s3Key,
             size: file.size,
             mimeType: file.mimeType,
@@ -103,7 +121,7 @@ export async function renameNode(nodeId: string, newName: string, projectId: str
         await assertNodeNotLockedByAnotherUser(projectId, nodeId, user.id, tx);
         const current = await tx.query.projectNodes.findFirst({
             where: and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId)),
-            columns: { id: true, parentId: true, metadata: true, deletedAt: true },
+            columns: { id: true, parentId: true, metadata: true, deletedAt: true, path: true, type: true },
         });
 
         if (!current || current.deletedAt) throw new Error("File not found");
@@ -112,10 +130,25 @@ export async function renameNode(nodeId: string, newName: string, projectId: str
         if (isSystemFolder) throw new Error("Cannot rename system folder");
 
         await assertUniqueSiblingName(projectId, current.parentId ?? null, safeName, tx, nodeId);
+
+        const parentPath = await getParentPath(tx, projectId, current.parentId ?? null);
+        const newPath = `${parentPath}/${safeName}`;
+        const oldPath = current.path;
+
         const [updated] = await tx.update(projectNodes)
-            .set({ name: safeName, updatedAt: new Date() })
+            .set({ name: safeName, path: newPath, updatedAt: new Date() })
             .where(and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId)))
             .returning();
+
+        // If it's a folder, update all descendants paths
+        if (current.type === 'folder' && oldPath) {
+            await tx.execute(sql`
+                UPDATE project_nodes 
+                SET path = ${newPath} || SUBSTRING(path FROM ${oldPath.length + 1})
+                WHERE project_id = ${projectId} AND path LIKE ${oldPath + '/%'}
+            `);
+        }
+
         return updated;
     });
 
@@ -151,10 +184,23 @@ export async function moveNode(nodeId: string, newParentId: string | null, proje
 
         await assertUniqueSiblingName(projectId, newParentId, current.name, tx, nodeId);
 
+        const newParentPath = await getParentPath(tx, projectId, newParentId);
+        const newPath = `${newParentPath}/${current.name}`;
+        const oldPath = current.path;
+
         const [updated] = await tx.update(projectNodes)
-            .set({ parentId: newParentId, updatedAt: new Date() })
+            .set({ parentId: newParentId, path: newPath, updatedAt: new Date() })
             .where(and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId)))
             .returning();
+
+        if (current.type === 'folder' && oldPath) {
+            await tx.execute(sql`
+                UPDATE project_nodes 
+                SET path = ${newPath} || SUBSTRING(path FROM ${oldPath.length + 1})
+                WHERE project_id = ${projectId} AND path LIKE ${oldPath + '/%'}
+            `);
+        }
+
         return updated;
     });
 
@@ -471,4 +517,178 @@ export async function deleteNode(nodeId: string, projectId: string) {
 
     await recordNodeEvent(projectId, user.id, nodeId, 'delete', {});
     revalidatePath(`/projects/${projectId}`);
+}
+
+export async function bulkCreateFolderTree(
+    projectId: string,
+    targetParentId: string | null,
+    files: { path: string; name: string; size: number; mimeType: string }[]
+) {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error("Unauthorized");
+    const { allowed } = await consumeRateLimit(`files:${user.id}`, 60, 60);
+    if (!allowed) throw new Error("Rate limit exceeded");
+    await assertProjectWriteAccess(projectId, user.id);
+
+    if (files.length === 0) return [];
+    if (files.length > 5000) throw new Error("Maximum 5000 files allowed per bulk upload block.");
+
+    // 1. Parse all implicit folders from the file paths
+    const folderPaths = new Set<string>();
+    for (const f of files) {
+        const parts = f.path.split('/');
+        parts.pop(); // Remove the file name
+        let cur = "";
+        for (const p of parts) {
+            cur = cur ? `${cur}/${p}` : p;
+            folderPaths.add(cur);
+        }
+    }
+
+    // Sort folders by depth so we create parents before children
+    const sortedFolders = Array.from(folderPaths).sort((a, b) => a.split('/').length - b.split('/').length);
+
+    return await db.transaction(async (tx) => {
+        await assertValidParentFolder(projectId, targetParentId, tx);
+
+        // Map: virtual path -> physical node ID
+        const pathToId = new Map<string, string>();
+        if (targetParentId) {
+            pathToId.set("", targetParentId);
+        }
+
+        // 2. Resolve / Create all folders layer by layer (Strict O(Depth) operations)
+        const foldersByDepth: Record<number, string[]> = {};
+        for (const folderPath of sortedFolders) {
+            const depth = folderPath.split('/').length;
+            if (!foldersByDepth[depth]) foldersByDepth[depth] = [];
+            foldersByDepth[depth].push(folderPath);
+        }
+        const maxDepth = Math.max(0, ...Object.keys(foldersByDepth).map(Number));
+
+        for (let depth = 1; depth <= maxDepth; depth++) {
+            const paths = foldersByDepth[depth];
+            if (!paths || paths.length === 0) continue;
+
+            const nodesToFindOrCreate = paths.map(path => {
+                const parts = path.split('/');
+                const name = parts[parts.length - 1];
+                const safeName = normalizeNodeName(name);
+                const parentVirtualPath = parts.slice(0, -1).join('/');
+                const parentId = targetParentId
+                    ? (parentVirtualPath ? pathToId.get(parentVirtualPath) : targetParentId)
+                    : (parentVirtualPath ? pathToId.get(parentVirtualPath) : null);
+                return { path, safeName, parentId: parentId || null };
+            });
+
+            const parentIdsAtDepth = Array.from(new Set(nodesToFindOrCreate.map(n => n.parentId).filter(Boolean))) as string[];
+            const namesAtDepth = Array.from(new Set(nodesToFindOrCreate.map(n => n.safeName)));
+
+            let existingFolders: { id: string, name: string, parentId: string | null }[] = [];
+
+            if (namesAtDepth.length > 0) {
+                // Find existing folders at this exact depth level
+                const conditions = [
+                    eq(projectNodes.projectId, projectId),
+                    eq(projectNodes.type, 'folder'),
+                    isNull(projectNodes.deletedAt),
+                    inArray(projectNodes.name, namesAtDepth)
+                ];
+
+                if (parentIdsAtDepth.length > 0) {
+                    const hasNullParent = nodesToFindOrCreate.some(n => n.parentId === null);
+                    if (hasNullParent) {
+                        conditions.push(or(inArray(projectNodes.parentId, parentIdsAtDepth), isNull(projectNodes.parentId))!);
+                    } else {
+                        conditions.push(inArray(projectNodes.parentId, parentIdsAtDepth));
+                    }
+                } else {
+                    conditions.push(isNull(projectNodes.parentId));
+                }
+
+                existingFolders = await tx.query.projectNodes.findMany({
+                    where: and(...conditions),
+                    columns: { id: true, name: true, parentId: true }
+                });
+            }
+
+            const newFolderInserts: (typeof projectNodes.$inferInsert)[] = [];
+            const newFolderPaths: string[] = [];
+
+            for (const node of nodesToFindOrCreate) {
+                const existing = existingFolders.find(e => e.name === node.safeName && e.parentId === node.parentId);
+                if (existing) {
+                    pathToId.set(node.path, existing.id);
+                } else {
+                    newFolderInserts.push({
+                        projectId,
+                        parentId: node.parentId,
+                        type: 'folder',
+                        name: node.safeName,
+                        createdBy: user.id
+                    });
+                    newFolderPaths.push(node.path);
+                }
+            }
+
+            if (newFolderInserts.length > 0) {
+                const chunkSize = 500;
+                for (let i = 0; i < newFolderInserts.length; i += chunkSize) {
+                    const chunk = newFolderInserts.slice(i, i + chunkSize);
+                    const inserted = await tx.insert(projectNodes).values(chunk).returning({ id: projectNodes.id });
+                    for (let j = 0; j < chunk.length; j++) {
+                        pathToId.set(newFolderPaths[i + j], inserted[j].id);
+                    }
+                }
+            }
+        }
+
+        // 3. Batch insert all files in one massive query
+        const fileInserts: (typeof projectNodes.$inferInsert)[] = [];
+        const resultMappings: { path: string; fileId: string; s3Key: string; name: string }[] = [];
+
+        for (const f of files) {
+            const parts = f.path.split('/');
+            const name = parts.pop() || "unknown";
+            const safeName = normalizeNodeName(name);
+            const parentVirtualPath = parts.join('/');
+
+            const parentId = targetParentId ? (parentVirtualPath ? pathToId.get(parentVirtualPath) : targetParentId) : (parentVirtualPath ? pathToId.get(parentVirtualPath) : null);
+            const fileExt = safeName.includes(".") ? safeName.split(".").pop() : "bin";
+            const s3Key = buildProjectFileKey(projectId, `${Math.random().toString(36).substring(2)}.${fileExt}`);
+
+            fileInserts.push({
+                projectId,
+                parentId: parentId || null,
+                type: 'file',
+                name: safeName,
+                s3Key: s3Key,
+                size: f.size,
+                mimeType: f.mimeType,
+                createdBy: user.id
+            });
+        }
+
+        // Drizzle allows massive batch inserts
+        if (fileInserts.length > 0) {
+            // Chunk inserts if extremely large (e.g. > 1000 parameters)
+            const chunkSize = 500;
+            for (let i = 0; i < fileInserts.length; i += chunkSize) {
+                const chunk = fileInserts.slice(i, i + chunkSize);
+                const inserted = await tx.insert(projectNodes).values(chunk).returning({ id: projectNodes.id, s3Key: projectNodes.s3Key, name: projectNodes.name });
+
+                for (let j = 0; j < chunk.length; j++) {
+                    resultMappings.push({
+                        path: files[i + j].path,
+                        fileId: inserted[j].id,
+                        s3Key: inserted[j].s3Key!,
+                        name: inserted[j].name
+                    });
+                }
+            }
+        }
+
+        return resultMappings;
+    });
 }

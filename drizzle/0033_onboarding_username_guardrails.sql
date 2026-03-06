@@ -55,7 +55,7 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'Invalid username format';
     END IF;
 
-    IF EXISTS (SELECT 1 FROM reserved_usernames WHERE username = NEW.username) THEN
+    IF EXISTS (SELECT 1 FROM public.reserved_usernames WHERE username = NEW.username) THEN
         RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'Username is reserved';
     END IF;
 

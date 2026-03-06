@@ -1,4 +1,3 @@
-// @ts-nocheck
 import * as dotenv from 'dotenv';
 import postgres from 'postgres';
 import { fileURLToPath } from 'url';
@@ -69,6 +68,44 @@ const HUB_PROJECT_FIXTURES = [
     },
 ];
 
+async function ensureUsernameGuardrailObjects() {
+    await sql`
+        create table if not exists public.reserved_usernames (
+            username text primary key,
+            reason text,
+            created_at timestamptz not null default now()
+        )
+    `;
+
+    await sql`
+        create or replace function public.enforce_profile_username_rules()
+        returns trigger
+        language plpgsql
+        set search_path = ''
+        as $$
+        begin
+            if new.username is null then
+                return new;
+            end if;
+
+            new.username := lower(trim(new.username));
+
+            if new.username !~ '^[a-z0-9_]{3,20}$' then
+                raise exception using errcode = '23514', message = 'Invalid username format';
+            end if;
+
+            if exists (
+                select 1 from public.reserved_usernames where username = new.username
+            ) then
+                raise exception using errcode = '23514', message = 'Username is reserved';
+            end if;
+
+            return new;
+        end;
+        $$;
+    `;
+}
+
 async function ensureTargetUserProfileId(email: string): Promise<string> {
     const existingProfile = await sql<{ id: string }[]>`
         select id
@@ -105,9 +142,10 @@ async function ensureTargetUserProfileId(email: string): Promise<string> {
 }
 
 async function seedFixtures() {
+    await ensureUsernameGuardrailObjects();
     const targetUserId = await ensureTargetUserProfileId(TARGET_EMAIL);
 
-    await sql.begin(async (tx) => {
+    await sql.begin(async (tx: any) => {
         await tx`
             insert into profiles (id, email, username, full_name, created_at, updated_at)
             values (

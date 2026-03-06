@@ -23,6 +23,44 @@ import {
 
 const PROJECT_SCALE_TTL_MS = 30_000;
 const projectScaleCache = new Map<string, { count: number; ts: number }>();
+const FILE_WRITE_ERROR_CODES = {
+    KEY_FORMAT_INVALID: "KEY_FORMAT_INVALID",
+    STORAGE_WRITE_FAILED: "STORAGE_WRITE_FAILED",
+    DB_WRITE_FAILED: "DB_WRITE_FAILED",
+    ROLLBACK_FAILED: "ROLLBACK_FAILED",
+} as const;
+
+type FileWriteErrorCode = (typeof FILE_WRITE_ERROR_CODES)[keyof typeof FILE_WRITE_ERROR_CODES];
+
+type FileWriteFailure = {
+    success: false;
+    code: FileWriteErrorCode;
+    error: string;
+};
+
+type PlannedStorageWrite = {
+    nodeName: string;
+    s3Key: string;
+    prevContent: string;
+    nextContent: string;
+};
+
+function failFileWrite(code: FileWriteErrorCode, error: string): FileWriteFailure {
+    return { success: false, code, error };
+}
+
+async function rollbackStorageWrites(
+    entries: PlannedStorageWrite[],
+    writeEntry: (s3Key: string, content: string) => Promise<{ error: { message?: string } | null }>
+): Promise<{ ok: true } | { ok: false; failedNodeName: string }> {
+    for (const entry of entries.reverse()) {
+        const rollbackResult = await writeEntry(entry.s3Key, entry.prevContent);
+        if (rollbackResult.error) {
+            return { ok: false, failedNodeName: entry.nodeName };
+        }
+    }
+    return { ok: true };
+}
 
 export async function upsertProjectFileIndex(projectId: string, nodeId: string, content: string) {
     const supabase = await createClient();
@@ -347,10 +385,7 @@ export async function applyProjectSearchReplace(
 
         totalBackupBytes += current.length;
         if (totalBackupBytes > MAX_BATCH_REPLACE_TOTAL_BYTES) {
-            return {
-                success: false as const,
-                error: "Replace payload too large. Select fewer files.",
-            };
+            return failFileWrite(FILE_WRITE_ERROR_CODES.DB_WRITE_FAILED, "Replace payload too large. Select fewer files.");
         }
 
         planned.push({
@@ -376,10 +411,19 @@ export async function applyProjectSearchReplace(
     for (const entry of planned) {
         const { error } = await writeEntry(entry.s3Key, entry.nextContent);
         if (error) {
-            for (const previous of appliedStorage.reverse()) {
-                await writeEntry(previous.s3Key, previous.prevContent);
+            const rolledBack = await rollbackStorageWrites(appliedStorage, writeEntry);
+            if (!rolledBack.ok) {
+                logger.warn("files.replace.storage.rollback_failed", {
+                    projectId,
+                    failedNodeName: rolledBack.failedNodeName,
+                    originalNodeName: entry.nodeName,
+                });
+                return failFileWrite(
+                    FILE_WRITE_ERROR_CODES.ROLLBACK_FAILED,
+                    `Failed writing ${entry.nodeName}; rollback failed at ${rolledBack.failedNodeName}`
+                );
             }
-            return { success: false as const, error: `Failed writing ${entry.nodeName}` };
+            return failFileWrite(FILE_WRITE_ERROR_CODES.STORAGE_WRITE_FAILED, `Failed writing ${entry.nodeName}`);
         }
         appliedStorage.push(entry);
     }
@@ -417,10 +461,18 @@ export async function applyProjectSearchReplace(
             }
         });
     } catch {
-        for (const entry of planned.reverse()) {
-            await writeEntry(entry.s3Key, entry.prevContent);
+        const rolledBack = await rollbackStorageWrites(planned, writeEntry);
+        if (!rolledBack.ok) {
+            logger.warn("files.replace.db.rollback_failed", {
+                projectId,
+                failedNodeName: rolledBack.failedNodeName,
+            });
+            return failFileWrite(
+                FILE_WRITE_ERROR_CODES.ROLLBACK_FAILED,
+                `Failed to persist replace operation; rollback failed at ${rolledBack.failedNodeName}.`
+            );
         }
-        return { success: false as const, error: "Failed to persist replace operation." };
+        return failFileWrite(FILE_WRITE_ERROR_CODES.DB_WRITE_FAILED, "Failed to persist replace operation.");
     }
 
     const changedNodeIds = planned.map((entry) => entry.nodeId);
@@ -441,13 +493,13 @@ export async function rollbackProjectSearchReplace(
     const entries = Array.from(new Map((backups || []).map((item) => [item.nodeId, item])).values())
         .slice(0, MAX_BATCH_REPLACE_FILES);
     if (entries.length === 0) {
-        return { success: false as const, error: "Nothing to rollback." };
+        return failFileWrite(FILE_WRITE_ERROR_CODES.DB_WRITE_FAILED, "Nothing to rollback.");
     }
 
     let totalBytes = 0;
     for (const entry of entries) totalBytes += entry.content?.length || 0;
     if (totalBytes > MAX_BATCH_REPLACE_TOTAL_BYTES) {
-        return { success: false as const, error: "Rollback payload too large." };
+        return failFileWrite(FILE_WRITE_ERROR_CODES.DB_WRITE_FAILED, "Rollback payload too large.");
     }
 
     const nodes = await db
@@ -510,10 +562,19 @@ export async function rollbackProjectSearchReplace(
     for (const entry of planned) {
         const { error } = await writeEntry(entry.s3Key, entry.nextContent);
         if (error) {
-            for (const previous of appliedStorage.reverse()) {
-                await writeEntry(previous.s3Key, previous.prevContent);
+            const rolledBack = await rollbackStorageWrites(appliedStorage, writeEntry);
+            if (!rolledBack.ok) {
+                logger.warn("files.rollback.storage.rollback_failed", {
+                    projectId,
+                    failedNodeName: rolledBack.failedNodeName,
+                    originalNodeName: entry.nodeName,
+                });
+                return failFileWrite(
+                    FILE_WRITE_ERROR_CODES.ROLLBACK_FAILED,
+                    `Failed restoring ${entry.nodeName}; rollback failed at ${rolledBack.failedNodeName}`
+                );
             }
-            return { success: false as const, error: `Failed restoring ${entry.nodeName}` };
+            return failFileWrite(FILE_WRITE_ERROR_CODES.STORAGE_WRITE_FAILED, `Failed restoring ${entry.nodeName}`);
         }
         appliedStorage.push(entry);
     }
@@ -551,10 +612,18 @@ export async function rollbackProjectSearchReplace(
             }
         });
     } catch {
-        for (const entry of planned.reverse()) {
-            await writeEntry(entry.s3Key, entry.prevContent);
+        const rolledBack = await rollbackStorageWrites(planned, writeEntry);
+        if (!rolledBack.ok) {
+            logger.warn("files.rollback.db.rollback_failed", {
+                projectId,
+                failedNodeName: rolledBack.failedNodeName,
+            });
+            return failFileWrite(
+                FILE_WRITE_ERROR_CODES.ROLLBACK_FAILED,
+                `Failed to persist rollback operation; rollback failed at ${rolledBack.failedNodeName}.`
+            );
         }
-        return { success: false as const, error: "Failed to persist rollback operation." };
+        return failFileWrite(FILE_WRITE_ERROR_CODES.DB_WRITE_FAILED, "Failed to persist rollback operation.");
     }
 
     const restoredNodeIds = planned.map((entry) => entry.nodeId);

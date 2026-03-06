@@ -1,6 +1,19 @@
 import type { StateCreator } from "zustand";
 import type { FilesWorkspaceState, WorkspacePane } from "./types";
 import { defaultWorkspace } from "./types";
+import { evictLruIfNeeded, estimateVisibleRowsBudget } from "./filesSlice";
+import { deleteFileContent } from "./contentMap";
+
+function gcClosedTabs(ws: FilesWorkspaceState["byProjectId"][string], projectId: string, closedIds: string[]) {
+  for (const id of closedIds) {
+    const isDirty = ws.fileStates[id]?.isDirty;
+    const isOpen = ws.panes.left.openTabIds.includes(id) || ws.panes.right.openTabIds.includes(id);
+    if (!isDirty && !isOpen) {
+      deleteFileContent(projectId, id);
+      deleteFileContent(projectId, `${id}::saved`);
+    }
+  }
+}
 
 export interface WorkspaceSlice {
   setSplitEnabled: (projectId: string, enabled: boolean) => void;
@@ -70,14 +83,21 @@ export const createWorkspaceSlice: StateCreator<FilesWorkspaceState, [], [], Wor
         pane.activeTabId === nodeId
           ? openTabIds[openTabIds.length - 1] ?? null
           : pane.activeTabId;
+      const nextWs = {
+        ...ws,
+        tabsVersion: ws.tabsVersion + 1,
+        panes: { ...ws.panes, [paneId]: { ...pane, openTabIds, activeTabId } },
+      };
+
+      gcClosedTabs(nextWs, projectId, [nodeId]);
+
+      const budget = estimateVisibleRowsBudget(nextWs);
+      nextWs.fileStates = evictLruIfNeeded(nextWs.fileStates, budget, projectId);
+
       return {
         byProjectId: {
           ...state.byProjectId,
-          [projectId]: {
-            ...ws,
-            tabsVersion: ws.tabsVersion + 1,
-            panes: { ...ws.panes, [paneId]: { ...pane, openTabIds, activeTabId } },
-          },
+          [projectId]: nextWs,
         },
       };
     }),
@@ -103,17 +123,27 @@ export const createWorkspaceSlice: StateCreator<FilesWorkspaceState, [], [], Wor
       const openTabIds = pane.openTabIds.filter(
         (id) => id === keepNodeId || ws.pinnedByTabId[id]
       );
+      const closedIds = pane.openTabIds.filter(
+        (id) => id !== keepNodeId && !ws.pinnedByTabId[id]
+      );
+      const nextWs = {
+        ...ws,
+        tabsVersion: ws.tabsVersion + 1,
+        panes: {
+          ...ws.panes,
+          [paneId]: { ...pane, openTabIds, activeTabId: keepNodeId },
+        },
+      };
+
+      gcClosedTabs(nextWs, projectId, closedIds);
+
+      const budget = estimateVisibleRowsBudget(nextWs);
+      nextWs.fileStates = evictLruIfNeeded(nextWs.fileStates, budget, projectId);
+
       return {
         byProjectId: {
           ...state.byProjectId,
-          [projectId]: {
-            ...ws,
-            tabsVersion: ws.tabsVersion + 1,
-            panes: {
-              ...ws.panes,
-              [paneId]: { ...pane, openTabIds, activeTabId: keepNodeId },
-            },
-          },
+          [projectId]: nextWs,
         },
       };
     }),
@@ -124,22 +154,30 @@ export const createWorkspaceSlice: StateCreator<FilesWorkspaceState, [], [], Wor
       const pane = ws.panes[paneId];
       const idx = pane.openTabIds.indexOf(fromNodeId);
       if (idx === -1) return state;
+      const closedIds = pane.openTabIds.slice(idx + 1);
       const openTabIds = pane.openTabIds.slice(0, idx + 1);
       const activeTabId =
         pane.activeTabId && openTabIds.includes(pane.activeTabId)
           ? pane.activeTabId
           : fromNodeId;
+      const nextWs = {
+        ...ws,
+        tabsVersion: ws.tabsVersion + 1,
+        panes: {
+          ...ws.panes,
+          [paneId]: { ...pane, openTabIds, activeTabId },
+        },
+      };
+
+      gcClosedTabs(nextWs, projectId, closedIds);
+
+      const budget = estimateVisibleRowsBudget(nextWs);
+      nextWs.fileStates = evictLruIfNeeded(nextWs.fileStates, budget, projectId);
+
       return {
         byProjectId: {
           ...state.byProjectId,
-          [projectId]: {
-            ...ws,
-            tabsVersion: ws.tabsVersion + 1,
-            panes: {
-              ...ws.panes,
-              [paneId]: { ...pane, openTabIds, activeTabId },
-            },
-          },
+          [projectId]: nextWs,
         },
       };
     }),

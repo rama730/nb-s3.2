@@ -53,6 +53,7 @@ interface ExplorerToolbarHostProps {
   onOpenCreateFolder: () => void;
   onOpenCreateFile: () => void;
   onUpload: (parentId: string | null) => void;
+  onUploadFolder: (parentId: string | null) => void;
 }
 
 export function ExplorerToolbarHost({
@@ -83,12 +84,14 @@ export function ExplorerToolbarHost({
   onOpenCreateFolder,
   onOpenCreateFile,
   onUpload,
+  onUploadFolder,
 }: ExplorerToolbarHostProps) {
   return (
     <>
       <div className="flex items-center justify-between gap-2 p-2 border-b border-zinc-200 dark:border-zinc-800">
         <div className="flex items-center gap-2 min-w-0">
           <select
+            data-testid="files-explorer-view-mode"
             className="h-7 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 text-xs font-medium px-2 focus:ring-2 focus:ring-indigo-500/20 outline-none cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
             value={viewMode}
             onChange={(e) => onSetViewMode(e.target.value as FilesViewMode)}
@@ -103,7 +106,13 @@ export function ExplorerToolbarHost({
         <div className="flex items-center gap-1 shrink-0">
           <DropdownMenu modal={false}>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" title="File actions">
+              <Button
+                data-testid="files-explorer-actions-trigger"
+                variant="ghost"
+                size="sm"
+                className="h-7 px-2 text-xs"
+                title="File actions"
+              >
                 Actions
                 <MoreHorizontal className="w-3.5 h-3.5 ml-1" />
               </Button>
@@ -124,6 +133,33 @@ export function ExplorerToolbarHost({
                 }}
               >
                 {isInsightsOpen ? "Hide insights" : "Show insights"}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onSelect={(e) => {
+                  e.preventDefault();
+                  onSetExplorerMode("sourceControl");
+                }}
+              >
+                {explorerMode === "sourceControl" ? "✓ " : ""}Source Control
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={(e) => {
+                  e.preventDefault();
+                  onSetExplorerMode("outline");
+                }}
+              >
+                {explorerMode === "outline" ? "✓ " : ""}Outline
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={(e) => { e.preventDefault(); onSortChange("name"); }}>
+                {sort === "name" ? "✓ " : ""}Sort by Name
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={(e) => { e.preventDefault(); onSortChange("updated"); }}>
+                {sort === "updated" ? "✓ " : ""}Sort by Updated
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={(e) => { e.preventDefault(); onSortChange("type"); }}>
+                {sort === "type" ? "✓ " : ""}Sort by Type
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
@@ -180,20 +216,36 @@ export function ExplorerToolbarHost({
                 New file
               </DropdownMenuItem>
               {uploadEnabled ? (
-                <DropdownMenuItem
-                  disabled={!canEdit}
-                  onSelect={(e) => {
-                    e.preventDefault();
-                    if (!canEdit) return;
-                    const parentId =
-                      selectedNode?.type === "folder"
-                        ? selectedNode.id
-                        : selectedNode?.parentId ?? selectedFolderId ?? null;
-                    onUpload(parentId);
-                  }}
-                >
-                  Upload file
-                </DropdownMenuItem>
+                <>
+                  <DropdownMenuItem
+                    disabled={!canEdit}
+                    onSelect={(e) => {
+                      e.preventDefault();
+                      if (!canEdit) return;
+                      const parentId =
+                        selectedNode?.type === "folder"
+                          ? selectedNode.id
+                          : selectedNode?.parentId ?? selectedFolderId ?? null;
+                      onUpload(parentId);
+                    }}
+                  >
+                    Upload file
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    disabled={!canEdit}
+                    onSelect={(e) => {
+                      e.preventDefault();
+                      if (!canEdit) return;
+                      const parentId =
+                        selectedNode?.type === "folder"
+                          ? selectedNode.id
+                          : selectedNode?.parentId ?? selectedFolderId ?? null;
+                      onUploadFolder(parentId);
+                    }}
+                  >
+                    Upload folder
+                  </DropdownMenuItem>
+                </>
               ) : null}
             </DropdownMenuContent>
           </DropdownMenu>
@@ -201,9 +253,10 @@ export function ExplorerToolbarHost({
       </div>
 
       <div className="px-2 py-2 border-b border-zinc-200 dark:border-zinc-800">
-        <div className="flex items-center gap-1.5">
-          <div className="flex items-center gap-1 mr-auto">
+        <div className="flex items-center w-full min-w-0">
+          <div className="flex items-center gap-1 shrink-0">
             <Button
+              data-testid="files-explorer-mode-tree"
               type="button"
               size="sm"
               variant={explorerMode === "tree" ? "default" : "ghost"}
@@ -214,6 +267,7 @@ export function ExplorerToolbarHost({
               <List className="w-4 h-4" />
             </Button>
             <Button
+              data-testid="files-explorer-mode-favorites"
               type="button"
               size="sm"
               variant={explorerMode === "favorites" ? "default" : "ghost"}
@@ -227,6 +281,7 @@ export function ExplorerToolbarHost({
               <Star className="w-4 h-4" />
             </Button>
             <Button
+              data-testid="files-explorer-mode-recents"
               type="button"
               size="sm"
               variant={explorerMode === "recents" ? "default" : "ghost"}
@@ -237,6 +292,7 @@ export function ExplorerToolbarHost({
               <Clock className="w-4 h-4" />
             </Button>
             <Button
+              data-testid="files-explorer-mode-trash"
               type="button"
               size="sm"
               variant={explorerMode === "trash" ? "default" : "ghost"}
@@ -247,72 +303,39 @@ export function ExplorerToolbarHost({
             >
               <Trash2 className="w-4 h-4" />
             </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant={explorerMode === "sourceControl" ? "default" : "ghost"}
-              className={cn(
-                "h-7 w-7 p-0",
-                explorerMode === "sourceControl" ? "" : "text-zinc-500"
-              )}
-              onClick={() => onSetExplorerMode("sourceControl")}
-              title="Source Control"
-            >
-              <GitBranch className="w-4 h-4" />
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant={explorerMode === "outline" ? "default" : "ghost"}
-              className={cn("h-7 w-7 p-0", explorerMode === "outline" ? "" : "text-zinc-500")}
-              onClick={() => onSetExplorerMode("outline")}
-              title="Outline"
-            >
-              <ListOrdered className="w-4 h-4" />
-            </Button>
           </div>
 
-          {explorerMode !== "sourceControl" && explorerMode !== "outline" ? (
-            <>
-              <div className="flex items-center gap-1">
+          <div className="flex-1 min-w-0 flex items-center justify-end ml-2">
+            {explorerMode !== "sourceControl" && explorerMode !== "outline" ? (
+              <div className="flex items-center min-w-0 justify-end w-full max-w-[200px]">
                 <div
                   className={cn(
-                    "overflow-hidden transition-all duration-200 ease-out",
-                    inlineSearchOpen ? "w-[136px] opacity-100" : "w-0 opacity-0"
+                    "overflow-hidden transition-all duration-200 ease-out flex-1",
+                    inlineSearchOpen ? "opacity-100" : "max-w-0 opacity-0"
                   )}
                 >
                   <Input
-                    placeholder="Search"
+                    placeholder="Search..."
                     value={searchQuery}
                     onChange={(e) => onSearchQueryChange(e.target.value)}
-                    className="h-7 bg-zinc-50 dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 text-xs px-2"
+                    className="h-7 bg-zinc-50 dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 text-xs px-2 w-full"
                   />
                 </div>
                 <Button
+                  data-testid="files-explorer-search-toggle"
                   type="button"
                   size="sm"
                   variant={inlineSearchOpen ? "secondary" : "ghost"}
-                  className="h-7 w-7 p-0"
+                  className="h-7 w-7 p-0 shrink-0 ml-1"
                   title="Search files"
                   onClick={onToggleInlineSearch}
                 >
                   <Search className="w-4 h-4" />
                 </Button>
               </div>
-
-              <select
-                className="h-7 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 text-xs px-2 cursor-pointer outline-none focus:ring-2 focus:ring-indigo-500/20"
-                value={sort}
-                onChange={(e) => onSortChange(e.target.value as "name" | "updated" | "type")}
-              >
-                <option value="name">Name</option>
-                <option value="updated">Updated</option>
-                <option value="type">Type</option>
-              </select>
-            </>
-          ) : null}
-
-          {isSearching ? <span className="text-xs text-zinc-400">...</span> : null}
+            ) : null}
+            {isSearching ? <span className="text-xs text-zinc-400 ml-2 shrink-0">...</span> : null}
+          </div>
         </div>
       </div>
     </>

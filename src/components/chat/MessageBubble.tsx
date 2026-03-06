@@ -62,7 +62,7 @@ export function MessageBubble({ message, showAvatar = true }: MessageBubbleProps
     const isPinned = Boolean(metadata?.pinned);
     const isApplication = metadata?.isApplication === true;
     const applicationStatus = typeof metadata?.status === 'string' ? metadata.status : null;
-    const [activeMediaIndex, setActiveMediaIndex] = useState<number | null>(null);
+    const [activeAttachmentId, setActiveAttachmentId] = useState<string | null>(null);
     const [isEditing, setIsEditing] = useState(false);
     const [draftContent, setDraftContent] = useState(message.content || '');
     const [isActionLoading, setIsActionLoading] = useState(false);
@@ -257,14 +257,18 @@ export function MessageBubble({ message, showAvatar = true }: MessageBubbleProps
                             {mediaAttachments.length > 0 && (
                                 <MediaAttachmentGrid
                                     attachments={mediaAttachments}
-                                    onOpenMedia={(index) => setActiveMediaIndex(index)}
+                                    onOpenMedia={(id) => setActiveAttachmentId(id)}
                                 />
                             )}
 
                             {fileAttachments.length > 0 && (
                                 <div className="mb-1 space-y-1">
                                     {fileAttachments.map((attachment) => (
-                                        <FileAttachmentCard key={attachment.id} attachment={attachment} />
+                                        <FileAttachmentCard 
+                                            key={attachment.id} 
+                                            attachment={attachment} 
+                                            onPreview={attachment.filename.toLowerCase().endsWith('.pdf') ? () => setActiveAttachmentId(attachment.id) : undefined}
+                                        />
                                     ))}
                                 </div>
                             )}
@@ -446,11 +450,11 @@ export function MessageBubble({ message, showAvatar = true }: MessageBubbleProps
                 </div>
             </div>
 
-            {activeMediaIndex !== null && (
+            {activeAttachmentId && (
                 <MediaViewerModal
-                    attachments={mediaAttachments}
-                    initialIndex={activeMediaIndex}
-                    onClose={() => setActiveMediaIndex(null)}
+                    attachments={attachments}
+                    initialAttachmentId={activeAttachmentId}
+                    onClose={() => setActiveAttachmentId(null)}
                 />
             )}
         </div>
@@ -477,7 +481,7 @@ function MessageTextContent({
                     const match = trimmed.match(/^([A-Za-z][A-Za-z ]{1,24}):\s*(.+)$/);
                     if (!match) {
                         return (
-                            <p key={`app-line-${index}`} className="whitespace-pre-wrap break-words leading-relaxed">
+                            <p key={`app-line-${index}`} className="whitespace-pre-wrap break-words break-all leading-relaxed">
                                 {renderTextWithMentions(trimmed, isOwn)}
                             </p>
                         );
@@ -487,7 +491,7 @@ function MessageTextContent({
                     const value = match[2].trim();
                     const isUrl = /^https?:\/\//i.test(value);
                     return (
-                        <p key={`app-meta-${index}`} className="whitespace-pre-wrap break-words leading-relaxed">
+                        <p key={`app-meta-${index}`} className="whitespace-pre-wrap break-words break-all leading-relaxed">
                             <span className="font-semibold">{label}: </span>
                             {isUrl ? (
                                 <a
@@ -519,7 +523,7 @@ function MessageTextContent({
                         isOwn={isOwn}
                     />
                 ) : (
-                    <p key={`text-${index}`} className="whitespace-pre-wrap break-words leading-relaxed">
+                    <p key={`text-${index}`} className="whitespace-pre-wrap break-words break-all leading-relaxed">
                         {renderTextWithMentions(segment.content, isOwn)}
                     </p>
                 )
@@ -631,7 +635,7 @@ function MediaAttachmentGrid({
     onOpenMedia,
 }: {
     attachments: ChatAttachment[];
-    onOpenMedia: (index: number) => void;
+    onOpenMedia: (id: string) => void;
 }) {
     const visibleAttachments = attachments.slice(0, 4);
     const overflowCount = attachments.length - visibleAttachments.length;
@@ -648,7 +652,7 @@ function MediaAttachmentGrid({
                     attachment={attachment}
                     isSingle={isSingle}
                     overlayLabel={index === visibleAttachments.length - 1 && overflowCount > 0 ? `+${overflowCount}` : null}
-                    onClick={() => onOpenMedia(index)}
+                    onClick={() => onOpenMedia(attachment.id)}
                 />
             ))}
         </div>
@@ -703,7 +707,26 @@ function MediaAttachmentTile({
     );
 }
 
-function FileAttachmentCard({ attachment }: { attachment: ChatAttachment }) {
+function FileAttachmentCard({ attachment, onPreview }: { attachment: ChatAttachment, onPreview?: () => void }) {
+    if (onPreview) {
+        return (
+            <button
+                type="button"
+                onClick={onPreview}
+                className="w-full text-left flex items-center gap-3 p-3 bg-zinc-100 dark:bg-zinc-800 rounded-lg hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-colors"
+            >
+                <div className="w-10 h-10 bg-blue-100 dark:bg-blue-900/30 rounded-lg flex items-center justify-center">
+                    <File className="w-5 h-5 text-blue-600" />
+                </div>
+                <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-zinc-900 dark:text-white truncate">{attachment.filename}</p>
+                    {attachment.sizeBytes && (
+                        <p className="text-xs text-zinc-500">{formatFileSize(attachment.sizeBytes)}</p>
+                    )}
+                </div>
+            </button>
+        );
+    }
     return (
         <a
             href={attachment.url}
@@ -727,24 +750,28 @@ function FileAttachmentCard({ attachment }: { attachment: ChatAttachment }) {
 
 function MediaViewerModal({
     attachments,
-    initialIndex,
+    initialAttachmentId,
     onClose,
 }: {
     attachments: ChatAttachment[];
-    initialIndex: number;
+    initialAttachmentId: string;
     onClose: () => void;
 }) {
     const videoRef = useRef<HTMLVideoElement | null>(null);
-    const [currentIndex, setCurrentIndex] = useState(initialIndex);
+    const initialIdx = useMemo(() => {
+        const idx = attachments.findIndex((a) => a.id === initialAttachmentId);
+        return idx !== -1 ? idx : 0;
+    }, [attachments, initialAttachmentId]);
+    const [currentIndex, setCurrentIndex] = useState(initialIdx);
     const [zoomLevel, setZoomLevel] = useState(1);
     const [videoSpeed, setVideoSpeed] = useState(1);
     const currentAttachment = attachments[currentIndex];
     const hasMultiple = attachments.length > 1;
 
     useEffect(() => {
-        setCurrentIndex(initialIndex);
+        setCurrentIndex(initialIdx);
         setZoomLevel(1);
-    }, [initialIndex]);
+    }, [initialIdx]);
 
     useEffect(() => {
         if (!videoRef.current) return;
@@ -847,7 +874,14 @@ function MediaViewerModal({
                             autoPlay
                             playsInline
                             preload="metadata"
-                            className="max-h-[82vh] w-auto rounded-lg bg-black"
+                            className="max-h-[82vh] w-auto rounded-lg bg-black cursor-pointer"
+                        />
+                    ) : currentAttachment.filename.toLowerCase().endsWith('.pdf') ? (
+                        <iframe
+                            key={currentAttachment.id}
+                            src={`${currentAttachment.url}#view=FitH`}
+                            className="w-full h-[82vh] rounded-lg bg-white"
+                            title={currentAttachment.filename}
                         />
                     ) : (
                         <Image
@@ -857,7 +891,7 @@ function MediaViewerModal({
                             width={1200}
                             height={900}
                             unoptimized
-                            className="max-h-[82vh] w-auto rounded-lg"
+                            className="max-h-[82vh] w-auto rounded-lg select-none"
                             style={{ transform: `scale(${zoomLevel})`, transformOrigin: 'center center' }}
                         />
                     )}

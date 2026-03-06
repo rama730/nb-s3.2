@@ -128,11 +128,11 @@ export function BottomPanel({
   return (
     <div
       ref={panelRef}
+      style={{ height: collapsed ? COLLAPSED_HEIGHT : height }}
       className={cn(
         "border-t border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 flex flex-col shrink-0",
-        isDragging && "select-none"
+        isDragging ? "select-none" : "transition-[height] duration-150 ease-out"
       )}
-      style={{ height: collapsed ? COLLAPSED_HEIGHT : height }}
     >
       {/* Drag handle */}
       {!collapsed && (
@@ -150,6 +150,7 @@ export function BottomPanel({
           return (
             <button
               key={tab.id}
+              data-testid={`files-bottom-panel-tab-${tab.id}`}
               className={cn(
                 "flex items-center gap-1 px-2 h-[27px] text-[11px] font-medium rounded-t transition-colors",
                 isActive
@@ -171,6 +172,7 @@ export function BottomPanel({
 
         <div className="ml-auto flex items-center gap-0.5">
           <Button
+            data-testid="files-bottom-panel-toggle"
             variant="ghost"
             size="sm"
             className="h-6 w-6 p-0"
@@ -181,6 +183,7 @@ export function BottomPanel({
           </Button>
           {!collapsed && (
             <Button
+              data-testid="files-bottom-panel-close"
               variant="ghost"
               size="sm"
               className="h-6 w-6 p-0"
@@ -196,8 +199,24 @@ export function BottomPanel({
         </div>
       </div>
 
-      {/* Shared Input strip — visible for Terminal, Output, etc. */}
-      {!collapsed && (
+      {/* Shared Input strip — visible for Terminal, Output, etc. conditionally */}
+      {!collapsed && (() => {
+        // Only show the input box if the file content seems to ask for input
+        let needsInput = false;
+        if (activeFileContent) {
+          const content = activeFileContent;
+          if (activeFilePath?.endsWith('.py') && /input\s*\(/.test(content)) needsInput = true;
+          if (activeFilePath?.endsWith('.java') && /new\s+Scanner\s*\(/.test(content)) needsInput = true;
+          if (activeFilePath?.endsWith('.js') && /readline|prompt/.test(content)) needsInput = true;
+          if (activeFilePath?.endsWith('.ts') && /readline|prompt/.test(content)) needsInput = true;
+          if (activeFilePath?.endsWith('.cpp') || activeFilePath?.endsWith('.c') || activeFilePath?.endsWith('.cc')) {
+            if (/cin\s*>>|scanf/.test(content)) needsInput = true;
+          }
+        }
+        
+        if (!needsInput) return null;
+
+        return (
         <div
           className="shrink-0 px-2 py-1.5 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-900/50"
           title="Provide values for Python input() calls — one per line"
@@ -228,7 +247,8 @@ export function BottomPanel({
             )}
           />
         </div>
-      )}
+        );
+      })()}
 
       {/* Tab content — only the active tab renders */}
       {!collapsed && (

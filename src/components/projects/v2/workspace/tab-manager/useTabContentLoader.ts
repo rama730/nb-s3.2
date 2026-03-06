@@ -5,6 +5,10 @@ import type { FilesWorkspaceTabState } from "../../state/filesTabTypes";
 import { FILES_RUNTIME_BUDGETS } from "@/lib/files/runtime-budgets";
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 import { getErrorMessage } from "./types";
+import {
+  getFileContent,
+  setFileContent as setDetachedContent,
+} from "@/stores/filesWorkspaceStore";
 
 interface UseTabContentLoaderOptions {
   projectId: string;
@@ -47,7 +51,9 @@ export function useTabContentLoader({
             id: node.id,
             node,
             content: "",
+            contentVersion: 0,
             savedSnapshot: "",
+            savedSnapshotVersion: 0,
             isDirty: false,
             isLoading: true,
             isSaving: false,
@@ -67,18 +73,28 @@ export function useTabContentLoader({
       const cached = ws?.fileStates?.[node.id];
 
       if (cached) {
-        setTabById((prev) => ({
-          ...prev,
-          [node.id]: {
-            ...prev[node.id],
-            content: cached.content,
-            isDirty: cached.isDirty,
-            lastSavedAt: cached.lastSavedAt,
-            savedSnapshot: cached.content,
-            isLoading: false,
-          },
-        }));
-        if (cached.content !== undefined || cached.isDirty) {
+        // Phase 5: Read content from detached Map instead of Zustand state
+        const cachedContent = getFileContent(projectId, node.id);
+        const hasContent = cachedContent.length > 0 || cached.isDirty;
+        if (hasContent) {
+          // Initialize saved snapshot so isNoOpSave works on first save
+          setDetachedContent(projectId, `${node.id}::saved`, cachedContent);
+          setTabById((prev) => {
+            const prevTab = prev[node.id];
+            return {
+              ...prev,
+              [node.id]: {
+                ...prevTab,
+                content: "",
+                contentVersion: (prevTab?.contentVersion ?? 0) + 1,
+                isDirty: cached.isDirty,
+                lastSavedAt: cached.lastSavedAt,
+                savedSnapshot: "",
+                savedSnapshotVersion: (prevTab?.savedSnapshotVersion ?? 0) + 1,
+                isLoading: false,
+              },
+            };
+          });
           opsInProgressRef.current.delete(node.id);
           return;
         }
@@ -95,18 +111,26 @@ export function useTabContentLoader({
 
         setFileState(projectId, node.id, { content: text, isDirty: false });
 
-        setTabById((prev) => ({
-          ...prev,
-          [node.id]: {
-            ...prev[node.id],
-            node,
-            content: text,
-            savedSnapshot: text,
-            isLoading: false,
-            isDirty: false,
-            error: null,
-          },
-        }));
+        // Phase 5: Store in detached Map + initialize saved snapshot
+        setDetachedContent(projectId, node.id, text);
+        setDetachedContent(projectId, `${node.id}::saved`, text);
+        setTabById((prev) => {
+          const prevTab = prev[node.id];
+          return {
+            ...prev,
+            [node.id]: {
+              ...prevTab,
+              node,
+              content: "",
+              contentVersion: (prevTab?.contentVersion ?? 0) + 1,
+              savedSnapshot: "",
+              savedSnapshotVersion: (prevTab?.savedSnapshotVersion ?? 0) + 1,
+              isLoading: false,
+              isDirty: false,
+              error: null,
+            },
+          };
+        });
       } catch (e: unknown) {
         const latestToken = loadTokenRef.current.get(node.id);
         if (latestToken !== nextToken) return;

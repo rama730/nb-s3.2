@@ -4,6 +4,7 @@ import { defaultWorkspace } from "./types";
 
 export interface LocksSlice {
   setLock: (projectId: string, lock: SoftLock) => void;
+  setLocks: (projectId: string, locks: SoftLock[]) => void;
   clearLock: (projectId: string, nodeId: string) => void;
 }
 
@@ -27,6 +28,35 @@ export const createLocksSlice: StateCreator<FilesWorkspaceState, [], [], LocksSl
             ...ws,
             locksByNodeId: { ...ws.locksByNodeId, [lock.nodeId]: lock },
           },
+        },
+      };
+    }),
+
+  setLocks: (projectId, locks) =>
+    set((state) => {
+      const ws = state.byProjectId[projectId] ?? defaultWorkspace();
+      const nextLocks = { ...ws.locksByNodeId };
+      let changed = false;
+
+      for (const l of locks) {
+        const prev = nextLocks[l.nodeId];
+        if (
+          !prev ||
+          prev.lockedBy !== l.lockedBy ||
+          prev.lockedByName !== l.lockedByName ||
+          prev.expiresAt !== l.expiresAt
+        ) {
+          nextLocks[l.nodeId] = l;
+          changed = true;
+        }
+      }
+
+      if (!changed) return state;
+
+      return {
+        byProjectId: {
+          ...state.byProjectId,
+          [projectId]: { ...ws, locksByNodeId: nextLocks },
         },
       };
     }),

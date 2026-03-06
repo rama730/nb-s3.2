@@ -107,10 +107,10 @@ export function useAutoSave({
     panesToRender,
     saveTab,
     effectiveAutosaveDelayMs,
-    leftActiveTab?.content,
+    leftActiveTab?.contentVersion,
     leftActiveTab?.isDirty,
     leftActiveTab?.isSaving,
-    rightActiveTab?.content,
+    rightActiveTab?.contentVersion,
     rightActiveTab?.isDirty,
     rightActiveTab?.isSaving,
   ]);

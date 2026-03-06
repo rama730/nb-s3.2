@@ -69,7 +69,12 @@ export async function updateProfileAction(data: UpdateProfileInput) {
                 socialLinks: true,
                 visibility: true,
                 availabilityStatus: true,
+                messagePrivacy: true,
                 openTo: true,
+                experienceLevel: true,
+                hoursPerWeek: true,
+                genderIdentity: true,
+                pronouns: true,
                 experience: true,
                 education: true,
                 updatedAt: true,
@@ -94,7 +99,12 @@ export async function updateProfileAction(data: UpdateProfileInput) {
                 socialLinks: current.socialLinks || {},
                 visibility: current.visibility || undefined,
                 availabilityStatus: current.availabilityStatus || undefined,
+                messagePrivacy: current.messagePrivacy || undefined,
                 openTo: current.openTo || [],
+                experienceLevel: current.experienceLevel || null,
+                hoursPerWeek: current.hoursPerWeek || null,
+                genderIdentity: current.genderIdentity || null,
+                pronouns: current.pronouns || null,
                 experience: current.experience || [],
                 education: current.education || [],
             },
@@ -175,7 +185,12 @@ export async function updateProfileAction(data: UpdateProfileInput) {
         if (patch.socialLinks !== undefined) updateData.socialLinks = patch.socialLinks
         if (patch.visibility !== undefined) updateData.visibility = patch.visibility
         if (patch.availabilityStatus !== undefined) updateData.availabilityStatus = patch.availabilityStatus
+        if (patch.messagePrivacy !== undefined) updateData.messagePrivacy = patch.messagePrivacy
         if (patch.openTo !== undefined) updateData.openTo = patch.openTo
+        if (patch.experienceLevel !== undefined) updateData.experienceLevel = patch.experienceLevel
+        if (patch.hoursPerWeek !== undefined) updateData.hoursPerWeek = patch.hoursPerWeek
+        if (patch.genderIdentity !== undefined) updateData.genderIdentity = patch.genderIdentity
+        if (patch.pronouns !== undefined) updateData.pronouns = patch.pronouns
         if (patch.experience !== undefined) updateData.experience = patch.experience
         if (patch.education !== undefined) updateData.education = patch.education
 

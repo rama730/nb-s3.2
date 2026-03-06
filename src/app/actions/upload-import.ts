@@ -5,6 +5,7 @@ import { projects, projectNodes } from '@/lib/db/schema';
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { createClient } from '@/lib/supabase/server';
 import { revalidatePath } from 'next/cache';
+import { buildProjectFileKey } from '@/lib/storage/project-file-key';
 
 export type UploadManifestEntry = {
   relativePath: string;
@@ -227,7 +228,7 @@ export async function registerUploadedFolderAction(projectId: string, manifest: 
         const name = parts[parts.length - 1]!;
         const dir = parts.length > 1 ? parts.slice(0, -1).join('/') : '';
         const parentId = dir ? folderIdByPath.get(dir) ?? null : null;
-        const s3Key = `${projectId}/${f.relativePath}`;
+        const s3Key = buildProjectFileKey(projectId, f.relativePath);
         return {
           name,
           parentId,

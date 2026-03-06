@@ -56,6 +56,10 @@ export interface ProfileUpdateData {
     openTo?: string[]
     availabilityStatus?: 'available' | 'busy' | 'offline' | 'focusing'
     messagePrivacy?: 'everyone' | 'connections'
+    experienceLevel?: 'student' | 'junior' | 'mid' | 'senior' | 'lead' | 'founder' | null
+    hoursPerWeek?: 'lt_5' | 'h_5_10' | 'h_10_20' | 'h_20_40' | 'h_40_plus' | null
+    genderIdentity?: 'male' | 'female' | 'non_binary' | 'prefer_not_to_say' | 'other' | null
+    pronouns?: string | null
 }
 
 /**
@@ -110,10 +114,15 @@ export async function getProfile(userId: string): Promise<Profile | null> {
         openTo: data.open_to || [],
         availabilityStatus: data.availability_status || 'available',
         messagePrivacy: data.message_privacy || 'connections',
+        experienceLevel: data.experience_level || null,
+        hoursPerWeek: data.hours_per_week || null,
+        genderIdentity: data.gender_identity || null,
+        pronouns: data.pronouns || null,
         workspaceLayout: data.workspace_layout ?? null,
         connectionsCount: data.connections_count ?? 0,
         projectsCount: data.projects_count ?? 0,
         followersCount: data.followers_count ?? 0,
+        deletedAt: data.deleted_at ?? null,
         createdAt: new Date(data.created_at),
         updatedAt: new Date(data.updated_at),
     }
@@ -159,6 +168,10 @@ export async function updateProfile(
     if (data.openTo !== undefined) updateData.open_to = data.openTo
     if (data.availabilityStatus !== undefined) updateData.availability_status = data.availabilityStatus
     if (data.messagePrivacy !== undefined) updateData.message_privacy = data.messagePrivacy
+    if (data.experienceLevel !== undefined) updateData.experience_level = data.experienceLevel
+    if (data.hoursPerWeek !== undefined) updateData.hours_per_week = data.hoursPerWeek
+    if (data.genderIdentity !== undefined) updateData.gender_identity = data.genderIdentity
+    if (data.pronouns !== undefined) updateData.pronouns = data.pronouns
 
     const { error } = await supabase
         .from('profiles')

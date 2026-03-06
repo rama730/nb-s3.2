@@ -2,8 +2,9 @@
 
 import { useState, useMemo, memo, useEffect, useCallback } from 'react';
 import dynamic from 'next/dynamic';
+import Link from 'next/link';
 import { motion } from 'framer-motion';
-import { Search, Sparkles, Filter } from 'lucide-react';
+import { Search, Sparkles, Filter, CheckSquare, X } from 'lucide-react';
 import { useToast } from '@/components/ui-custom/Toast';
 import { VirtuosoGrid } from 'react-virtuoso';
 import { useQueryClient } from '@tanstack/react-query';
@@ -21,6 +22,7 @@ import ProjectCardSkeleton from '@/components/projects/ProjectCardSkeleton';
 import CollectionsSidebar from '@/components/hub/CollectionsSidebar';
 import HubHeader from '@/components/hub/HubHeader';
 import { HubErrorBoundary } from '@/components/hub/HubErrorBoundary';
+import { getCollectionProjectsAction } from '@/app/actions/collection';
 
 // Constants & Types
 import {
@@ -89,6 +91,9 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
     const [showNotificationSettings, setShowNotificationSettings] = useState(false);
     const [showComparisonModal, setShowComparisonModal] = useState(false);
     const [showAddToCollectionModal, setShowAddToCollectionModal] = useState(false);
+    const [collectionProjectIds, setCollectionProjectIds] = useState<string[]>([]);
+    const [profileChecklistItems, setProfileChecklistItems] = useState<string[]>([]);
+    const [showProfileChecklist, setShowProfileChecklist] = useState(false);
 
     // --- Derived Data ---
     const searchParams = useSearchParams();
@@ -111,6 +116,30 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
     const { data: myFollowedProjects } = useUserFollowedProjects(currentUser?.id);
     const { seenIds, hideSeen, setHideSeen, markSeen, clearSeen } = useHubSessionSeen();
 
+    useEffect(() => {
+        if (filterView === FILTER_VIEWS.COLLECTION && selectedCollectionId) {
+            getCollectionProjectsAction(selectedCollectionId).then((res) => {
+                if (res.success && res.projectIds) {
+                    setCollectionProjectIds(res.projectIds);
+                }
+            });
+        }
+    }, [filterView, selectedCollectionId]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        try {
+            const raw = window.localStorage.getItem('onboarding:profile-strength:v1');
+            if (!raw) return;
+            const parsed = JSON.parse(raw) as { createdAt?: number; items?: string[] };
+            if (!Array.isArray(parsed.items) || parsed.items.length === 0) return;
+            setProfileChecklistItems(parsed.items.slice(0, 5));
+            setShowProfileChecklist(true);
+        } catch {
+            // ignore invalid local data
+        }
+    }, []);
+
     // Construct Filters
     const currentFilters = useMemo(() => {
         const effectiveSort =
@@ -124,9 +153,9 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
             tech: selectedTech,
             sort: effectiveSort,
             search, // Connected Global Search
-            includedIds: undefined,
+            includedIds: filterView === FILTER_VIEWS.COLLECTION && selectedCollectionId ? collectionProjectIds : undefined,
         };
-    }, [filterView, statusFilter, typeFilter, selectedTech, sortBy, search]);
+    }, [filterView, statusFilter, typeFilter, selectedTech, sortBy, search, selectedCollectionId, collectionProjectIds]);
 
     // --- Data Fetching ---
     const {
@@ -295,6 +324,43 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
                                     />
                                 </div>
                             </div>
+
+                            {showProfileChecklist && profileChecklistItems.length > 0 && (
+                                <div className="rounded-2xl border border-emerald-200 bg-emerald-50/70 dark:border-emerald-800 dark:bg-emerald-950/30 p-4">
+                                    <div className="flex items-start justify-between gap-4">
+                                        <div className="space-y-2">
+                                            <p className="text-sm font-semibold flex items-center gap-2 text-emerald-800 dark:text-emerald-300">
+                                                <CheckSquare className="w-4 h-4" />
+                                                Profile strength checklist
+                                            </p>
+                                            <ul className="text-sm text-emerald-900/90 dark:text-emerald-200/90 space-y-1">
+                                                {profileChecklistItems.map((item) => (
+                                                    <li key={item}>- {item}</li>
+                                                ))}
+                                            </ul>
+                                            <Link
+                                                href="/profile"
+                                                className="inline-flex items-center rounded-md border border-emerald-300 bg-white px-3 py-1.5 text-xs font-medium text-emerald-800 hover:bg-emerald-100 dark:border-emerald-700 dark:bg-emerald-950 dark:text-emerald-200"
+                                            >
+                                                Complete profile details
+                                            </Link>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            className="rounded-md p-1 text-emerald-700 hover:bg-emerald-100 dark:text-emerald-300 dark:hover:bg-emerald-900"
+                                            aria-label="Dismiss profile checklist"
+                                            onClick={() => {
+                                                setShowProfileChecklist(false);
+                                                if (typeof window !== 'undefined') {
+                                                    window.localStorage.removeItem('onboarding:profile-strength:v1');
+                                                }
+                                            }}
+                                        >
+                                            <X className="w-4 h-4" />
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
 
                             <div className="flex flex-wrap items-center gap-2">
                                 <button

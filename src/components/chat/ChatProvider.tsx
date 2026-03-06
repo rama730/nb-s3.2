@@ -17,6 +17,10 @@ export function ChatProvider({ children }: ChatProviderProps) {
     if (DISABLE_CHAT_IN_E2E) {
         return <>{children}</>;
     }
+    return <ChatProviderInner>{children}</ChatProviderInner>;
+}
+
+function ChatProviderInner({ children }: ChatProviderProps) {
 
     const { user, isLoading } = useAuth();
     const initialize = useChatStore(state => state.initialize);

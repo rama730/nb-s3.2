@@ -1,5 +1,5 @@
 import { cache } from 'react';
-import { and, asc, desc, eq, ilike, inArray, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, ilike, inArray, isNull, or, sql, type SQL } from 'drizzle-orm';
 import { FILTER_VIEWS, SORT_OPTIONS, type FilterView } from '@/constants/hub';
 import { db } from '@/lib/db';
 import { profiles, projectFollows, projectMembers, projectOpenRoles, projects, savedProjects } from '@/lib/db/schema';
@@ -204,8 +204,8 @@ const buildTermMatchConditions = (terms: string[]) => {
         conditions.push(
             ilike(projects.title, pattern),
             ilike(projects.description, pattern),
-            sql<boolean>`lower(coalesce(${projects.skills}::text, '[]')) LIKE ${pattern}`,
-            sql<boolean>`lower(coalesce(${projects.tags}::text, '[]')) LIKE ${pattern}`,
+            sql<boolean>`EXISTS (SELECT 1 FROM project_skills ps JOIN skills s ON ps.skill_id = s.id WHERE ps.project_id = ${projects.id} AND s.name ILIKE ${pattern})`,
+            sql<boolean>`EXISTS (SELECT 1 FROM project_tags pt JOIN tags t ON pt.tag_id = t.id WHERE pt.project_id = ${projects.id} AND t.name ILIKE ${pattern})`,
             sql<boolean>`lower(coalesce(${projects.category}, '')) LIKE ${pattern}`,
         );
     }
@@ -225,8 +225,8 @@ const buildRecommendationRelevanceExpr = (terms: string[]) => {
         return sql<number>`(
             CASE WHEN lower(coalesce(${projects.title}, '')) LIKE ${pattern} THEN ${weights.recommendation.titleMatch} ELSE 0 END +
             CASE WHEN lower(coalesce(${projects.description}, '')) LIKE ${pattern} THEN ${weights.recommendation.descriptionMatch} ELSE 0 END +
-            CASE WHEN lower(coalesce(${projects.skills}::text, '[]')) LIKE ${pattern} THEN ${weights.recommendation.skillsMatch} ELSE 0 END +
-            CASE WHEN lower(coalesce(${projects.tags}::text, '[]')) LIKE ${pattern} THEN ${weights.recommendation.tagsMatch} ELSE 0 END +
+            CASE WHEN EXISTS (SELECT 1 FROM project_skills ps JOIN skills s ON ps.skill_id = s.id WHERE ps.project_id = ${projects.id} AND s.name ILIKE ${pattern}) THEN ${weights.recommendation.skillsMatch} ELSE 0 END +
+            CASE WHEN EXISTS (SELECT 1 FROM project_tags pt JOIN tags t ON pt.tag_id = t.id WHERE pt.project_id = ${projects.id} AND t.name ILIKE ${pattern}) THEN ${weights.recommendation.tagsMatch} ELSE 0 END +
             CASE WHEN lower(coalesce(${projects.category}, '')) LIKE ${pattern} THEN ${weights.recommendation.categoryMatch} ELSE 0 END
         )`;
     });
@@ -239,10 +239,12 @@ const buildBaseConditions = (
     view: FilterView,
     viewerId: string | null,
 ): SQL<unknown>[] => {
-    const conditions: SQL<unknown>[] =
-        view === FILTER_VIEWS.MY_PROJECTS && viewerId
-            ? []
-            : [eq(projects.visibility, 'public')];
+    // CRITICAL: Always exclude soft-deleted projects from every hub query
+    const conditions: SQL<unknown>[] = [isNull(projects.deletedAt)];
+
+    if (view !== FILTER_VIEWS.MY_PROJECTS || !viewerId) {
+        conditions.push(eq(projects.visibility, 'public'));
+    }
 
     if (filters.status && filters.status !== 'all') {
         conditions.push(eq(projects.status, filters.status as 'draft' | 'active' | 'completed' | 'archived'));
@@ -265,7 +267,7 @@ const buildBaseConditions = (
     const selectedTechTerms = dedupeTerms(filters.tech, MAX_TECH_TERMS);
     if (selectedTechTerms.length > 0) {
         const techConditions = selectedTechTerms.map((term) =>
-            sql<boolean>`lower(coalesce(${projects.skills}::text, '[]')) LIKE ${likePattern(term)}`,
+            sql<boolean>`EXISTS (SELECT 1 FROM project_skills ps JOIN skills s ON ps.skill_id = s.id WHERE ps.project_id = ${projects.id} AND s.name ILIKE ${likePattern(term)})`,
         );
         conditions.push(or(...techConditions)!);
     }
@@ -689,12 +691,33 @@ const hydrateProjects = async (
             }),
         db
             .select({
-                member: projectMembers,
-                user: profiles,
+                member: {
+                    id: projectMembers.id,
+                    projectId: projectMembers.projectId,
+                    userId: projectMembers.userId,
+                    role: projectMembers.role,
+                    joinedAt: projectMembers.joinedAt,
+                },
+                user: {
+                    id: profiles.id,
+                    username: profiles.username,
+                    fullName: profiles.fullName,
+                    avatarUrl: profiles.avatarUrl,
+                },
             })
             .from(projectMembers)
             .leftJoin(profiles, eq(projectMembers.userId, profiles.id))
-            .where(inArray(projectMembers.projectId, projectIds)),
+            .where(inArray(projectMembers.projectId, projectIds))
+            .catch((error) => {
+                const message = error instanceof Error ? error.message : String(error);
+                if (
+                    message.toLowerCase().includes('project_members') &&
+                    message.toLowerCase().includes('does not exist')
+                ) {
+                    return [];
+                }
+                throw error;
+            }),
         hasFollowersCountColumn
             ? Promise.resolve([])
             : db
@@ -734,7 +757,10 @@ const hydrateProjects = async (
 
     const membersMap = new Map<
         string,
-        Array<{ member: typeof projectMembers.$inferSelect; user: typeof profiles.$inferSelect | null }>
+        Array<{
+            member: { id: string; projectId: string; userId: string; role: string; joinedAt: Date };
+            user: { id: string; username: string | null; fullName: string | null; avatarUrl: string | null } | null;
+        }>
     >();
     members.forEach((member) => {
         if (!membersMap.has(member.member.projectId)) membersMap.set(member.member.projectId, []);
@@ -755,9 +781,9 @@ const hydrateProjects = async (
 
         const normalizedStatus: Project['status'] =
             project.status === 'draft' ||
-            project.status === 'active' ||
-            project.status === 'completed' ||
-            project.status === 'archived'
+                project.status === 'active' ||
+                project.status === 'completed' ||
+                project.status === 'archived'
                 ? project.status
                 : 'draft';
 

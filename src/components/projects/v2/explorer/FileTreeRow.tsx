@@ -2,19 +2,63 @@ import React from "react";
 import {
     ChevronRight,
     ChevronDown,
-    MoreVertical,
     CheckSquare,
     Square,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FileIcon } from "./FileIcons";
 import { ProjectNode } from "@/lib/db/schema";
-import {
-    DropdownMenu,
-    DropdownMenuContent,
-    DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 
+// ─── Inline Rename Input ─────────────────────────────────────────────
+function InlineRenameInput({
+    value,
+    onChange,
+    onConfirm,
+    onCancel,
+}: {
+    value: string;
+    onChange: (v: string) => void;
+    onConfirm: () => void;
+    onCancel: () => void;
+}) {
+    const inputRef = React.useRef<HTMLInputElement>(null);
+    const cancelledRef = React.useRef(false);
+
+    React.useEffect(() => {
+        const el = inputRef.current;
+        if (!el) return;
+        el.focus();
+        // Select filename without extension
+        const dotIdx = value.lastIndexOf(".");
+        el.setSelectionRange(0, dotIdx > 0 ? dotIdx : value.length);
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+    return (
+        <input
+            ref={inputRef}
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            onKeyDown={(e) => {
+                e.stopPropagation();
+                if (e.key === "Enter") { e.preventDefault(); onConfirm(); }
+                if (e.key === "Escape") {
+                    e.preventDefault();
+                    cancelledRef.current = true;
+                    onCancel();
+                }
+            }}
+            onBlur={() => {
+                // Skip onConfirm if Escape was pressed (race condition guard)
+                if (cancelledRef.current) return;
+                onConfirm();
+            }}
+            onClick={(e) => e.stopPropagation()}
+            className="text-sm bg-white dark:bg-zinc-900 border border-indigo-400 dark:border-indigo-500 rounded px-1 py-0 outline-none ring-1 ring-indigo-300/50 w-full min-w-[60px] mr-auto"
+        />
+    );
+}
+
+// ─── FileTreeRow ─────────────────────────────────────────────────────
 interface FileTreeRowProps {
     node: ProjectNode;
     indentationGuides: boolean[];
@@ -23,10 +67,19 @@ interface FileTreeRowProps {
     isInSelectionMode?: boolean;
     isSelectedInMode?: boolean;
     canEdit: boolean;
+
+    // Inline rename
+    isRenaming?: boolean;
+    renameValue?: string;
+    onRenameChange?: (v: string) => void;
+    onRenameConfirm?: () => void;
+    onRenameCancel?: () => void;
     
     // Slots
     badge?: React.ReactNode;
-    menu?: React.ReactNode;
+
+    // Desktop drop upload
+    onDesktopDrop?: (files: File[], targetFolderId: string) => void;
 
     // Actions
     onToggle: (node: ProjectNode) => void;
@@ -46,7 +99,8 @@ function arePropsEqual(prev: FileTreeRowProps, next: FileTreeRowProps) {
         prev.isSelectedInMode !== next.isSelectedInMode ||
         prev.canEdit !== next.canEdit ||
         prev.badge !== next.badge || 
-        prev.menu !== next.menu ||
+        prev.isRenaming !== next.isRenaming ||
+        prev.renameValue !== next.renameValue ||
         prev.onToggle !== next.onToggle ||
         prev.onSelect !== next.onSelect ||
         prev.onContextMenu !== next.onContextMenu ||
@@ -73,8 +127,13 @@ export const FileTreeRow = React.memo(function FileTreeRow({
     isInSelectionMode,
     isSelectedInMode,
     canEdit,
+    isRenaming,
+    renameValue,
+    onRenameChange,
+    onRenameConfirm,
+    onRenameCancel,
     badge,
-    menu,
+    onDesktopDrop,
     onToggle,
     onSelect,
     onContextMenu,
@@ -84,12 +143,21 @@ export const FileTreeRow = React.memo(function FileTreeRow({
 }: FileTreeRowProps) {
     const isFolder = node.type === "folder";
 
+    const [dropHighlight, setDropHighlight] = React.useState(false);
+
+    const handleMouseEnter = () => {
+        if (isRenaming) return;
+    };
+
+    const handleMouseLeave = () => {
+    };
+
     const guides = indentationGuides.map((active, i) => (
         <div
             key={i}
             className={cn(
                 "w-4 h-full flex-shrink-0 border-l transition-colors",
-                active ? "border-zinc-200 dark:border-zinc-800" : "border-transparent"
+                active ? "border-zinc-300 dark:border-zinc-700" : "border-transparent"
             )}
         />
     ));
@@ -97,20 +165,24 @@ export const FileTreeRow = React.memo(function FileTreeRow({
     return (
         <div
             className={cn(
-                "group flex items-center h-[22px] min-w-0 cursor-pointer select-none transition-colors pr-2",
+                "group relative flex items-center h-[22px] min-w-0 cursor-pointer select-none transition-colors pr-2",
                 isSelected
-                    ? "bg-indigo-50 dark:bg-indigo-900/20"
-                    : "hover:bg-zinc-100 dark:hover:bg-zinc-800/50"
+                    ? "bg-indigo-50 dark:bg-indigo-900/20 border-l-2 border-l-indigo-500"
+                    : "hover:bg-zinc-100 dark:hover:bg-zinc-800/50 border-l-2 border-l-transparent",
+                dropHighlight && "ring-2 ring-inset ring-indigo-400 bg-indigo-50/60 dark:bg-indigo-900/30"
             )}
             style={{ paddingLeft: 0 }} 
             onClick={(e) => {
+                if (isRenaming) return;
                 e.stopPropagation();
                 onSelect(node, e);
             }}
+            onMouseEnter={handleMouseEnter}
+            onMouseLeave={handleMouseLeave}
             onContextMenu={onContextMenu}
-            draggable={canEdit}
+            draggable={canEdit && !isRenaming}
             onDragStart={(e) => {
-                if (!canEdit) return;
+                if (!canEdit || isRenaming) return;
                 e.dataTransfer.setData("application/x-nb-node", node.id);
                 e.dataTransfer.effectAllowed = "move";
                 onDragStart(node.id);
@@ -118,11 +190,27 @@ export const FileTreeRow = React.memo(function FileTreeRow({
             onDragEnd={onDragEnd}
             onDragOver={(e) => {
                 e.preventDefault();
-                e.dataTransfer.dropEffect = "move";
+                // Accept desktop file drops on folders
+                if (isFolder && e.dataTransfer.types.includes("Files")) {
+                    e.dataTransfer.dropEffect = "copy";
+                    if (!dropHighlight) setDropHighlight(true);
+                } else {
+                    e.dataTransfer.dropEffect = "move";
+                }
             }}
+            onDragLeave={() => setDropHighlight(false)}
             onDrop={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
+                setDropHighlight(false);
+ 
+                // Desktop file drop → upload into this folder
+                if (isFolder && e.dataTransfer.files.length > 0 && onDesktopDrop) {
+                    const files = Array.from(e.dataTransfer.files);
+                    onDesktopDrop(files, node.id);
+                    return;
+                }
+ 
                 const draggedId = e.dataTransfer.getData("application/x-nb-node");
                 if (draggedId) {
                      onDrop(node.id, draggedId);
@@ -151,7 +239,7 @@ export const FileTreeRow = React.memo(function FileTreeRow({
                     )
                 ) : null}
             </div>
-
+ 
             {isInSelectionMode && (
                 <div className="mr-2">
                     {isSelectedInMode ? (
@@ -161,37 +249,26 @@ export const FileTreeRow = React.memo(function FileTreeRow({
                     )}
                 </div>
             )}
-
+ 
             <FileIcon name={node.name} isFolder={isFolder} isOpen={isExpanded} className="w-4 h-4 mr-2 flex-shrink-0 text-zinc-500" />
             
-            <span className={cn(
-                "text-sm whitespace-nowrap overflow-hidden text-ellipsis mr-auto",
-                isSelected ? "text-indigo-700 dark:text-indigo-300 font-medium" : "text-zinc-700 dark:text-zinc-300"
-            )}>
-                {node.name}
-            </span>
-
+            {isRenaming && onRenameChange && onRenameConfirm && onRenameCancel ? (
+                <InlineRenameInput
+                    value={renameValue ?? ""}
+                    onChange={onRenameChange}
+                    onConfirm={onRenameConfirm}
+                    onCancel={onRenameCancel}
+                />
+            ) : (
+                <span className={cn(
+                    "text-sm whitespace-nowrap overflow-hidden text-ellipsis mr-auto",
+                    isSelected ? "text-indigo-700 dark:text-indigo-300 font-medium" : "text-zinc-700 dark:text-zinc-300"
+                )}>
+                    {node.name}
+                </span>
+            )}
+ 
             {badge}
-
-            <div
-                className={cn(
-                    "transition-opacity flex items-center ml-2",
-                    isSelected ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
-                )}
-            >
-                {menu ? (
-                     <DropdownMenu>
-                         <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
-                             <button className="h-5 w-5 flex items-center justify-center rounded-sm hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-500">
-                                 <MoreVertical className="w-3.5 h-3.5" />
-                             </button>
-                         </DropdownMenuTrigger>
-                         <DropdownMenuContent align="end" className="w-48">
-                             {menu}
-                         </DropdownMenuContent>
-                     </DropdownMenu>
-                ) : null}
-            </div>
         </div>
     );
 }, arePropsEqual);

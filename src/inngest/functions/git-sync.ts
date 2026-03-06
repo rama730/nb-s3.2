@@ -9,6 +9,7 @@ import { mkdtemp, rm, readFile, writeFile, mkdir } from "fs/promises";
 import { join, relative, dirname } from "path";
 import { readdirSync, statSync } from "fs";
 import { createHash } from "crypto";
+import { buildProjectFileKey } from "@/lib/storage/project-file-key";
 
 function computeFileHash(content: Buffer): string {
     return createHash("sha256").update(content).digest("hex");
@@ -289,7 +290,7 @@ export const gitPull = inngest.createFunction(
                         const parentId = await ensureFolder(dir);
                         const fileName = filePath.split("/").pop() ?? filePath;
 
-                        const s3Key = `${projectId}/${crypto.randomUUID()}/${fileName}`;
+                        const s3Key = buildProjectFileKey(projectId, `${crypto.randomUUID()}/${fileName}`);
                         await adminClient.storage
                             .from("project-files")
                             .upload(s3Key, content, {

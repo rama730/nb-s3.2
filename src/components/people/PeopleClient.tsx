@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Search, Users, Loader2, SlidersHorizontal } from "lucide-react";
+import { Search, Users, Loader2, SlidersHorizontal, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { useDebounce } from "use-debounce";
 import { VirtuosoGrid } from "react-virtuoso";
@@ -19,8 +19,9 @@ const GridList = forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>
 ));
 GridList.displayName = "DiscoverGridList";
 
+// Forced fixed height on the grid container for pure virtualization optimization
 const GridItem = forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>((props, ref) => (
-    <div {...props} ref={ref} className="h-full" />
+    <div {...props} ref={ref} className="h-[200px]" />
 ));
 GridItem.displayName = "DiscoverGridItem";
 
@@ -42,13 +43,14 @@ export default function PeopleClient({ initialUser }: PeopleClientProps) {
         [data],
     );
 
-    // Split: first 3 high-priority as spotlight, rest as stream
-    const spotlightProfiles = useMemo(
-        () => (debouncedSearch ? [] : profiles.slice(0, 3)),
+    // Split: Top tier goes to recommended horizontally, bottom tier goes to vertical stream grid
+    // Only show recommended tier if not actively searching
+    const recommendedProfiles = useMemo(
+        () => (debouncedSearch ? [] : profiles.slice(0, 6)),
         [profiles, debouncedSearch],
     );
     const streamProfiles = useMemo(
-        () => (debouncedSearch ? profiles : profiles.slice(3)),
+        () => (debouncedSearch ? profiles : profiles.slice(6)),
         [profiles, debouncedSearch],
     );
 
@@ -75,16 +77,16 @@ export default function PeopleClient({ initialUser }: PeopleClientProps) {
             <div className="space-y-6">
                 {/* Search skeleton */}
                 <div className="h-12 bg-zinc-200/50 dark:bg-zinc-800/50 rounded-2xl animate-pulse" />
-                {/* Spotlight skeleton */}
+                {/* Recommended skeleton */}
                 <div className="flex gap-4 overflow-hidden">
                     {[1, 2, 3].map(i => (
-                        <div key={i} className="h-52 w-80 rounded-2xl bg-zinc-200/50 dark:bg-zinc-800/50 animate-pulse shrink-0" />
+                        <div key={i} className="h-[240px] w-80 rounded-2xl bg-zinc-200/50 dark:bg-zinc-800/50 animate-pulse shrink-0" />
                     ))}
                 </div>
                 {/* Grid skeleton */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                     {[1, 2, 3, 4, 5, 6, 7, 8].map(i => (
-                        <div key={i} className="h-48 rounded-2xl bg-zinc-200/50 dark:bg-zinc-800/50 animate-pulse" />
+                        <div key={i} className="h-[200px] rounded-2xl bg-zinc-200/50 dark:bg-zinc-800/50 animate-pulse" />
                     ))}
                 </div>
             </div>
@@ -94,7 +96,7 @@ export default function PeopleClient({ initialUser }: PeopleClientProps) {
     return (
         <div>
             {/* Hero Search Bar */}
-            <div className="mb-8">
+            <div className="mb-8 relative z-20">
                 <div className="relative">
                     <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 w-5 h-5 text-zinc-400" />
                     <input
@@ -102,14 +104,14 @@ export default function PeopleClient({ initialUser }: PeopleClientProps) {
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
                         placeholder="Search people by name, skills, interests, location..."
-                        className="w-full pl-12 pr-14 py-3.5 rounded-2xl border border-zinc-200/60 dark:border-white/10 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl text-base focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500/40 transition-all placeholder:text-zinc-400"
+                        className="w-full pl-12 pr-14 py-3.5 rounded-2xl border border-zinc-200/60 dark:border-white/10 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl text-base focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500/40 transition-all shadow-sm placeholder:text-zinc-400"
                         aria-label="Search people"
                     />
                     <button
                         type="button"
                         disabled
                         title="Filters coming soon"
-                        className="absolute right-3 top-1/2 -translate-y-1/2 p-2 rounded-xl text-zinc-400 opacity-60 cursor-not-allowed"
+                        className="absolute right-3 top-1/2 -translate-y-1/2 p-2 rounded-xl text-zinc-400 opacity-60 cursor-not-allowed hidden md:block" // Hidden on mobile for cleaner look
                         aria-label="Filters (coming soon)"
                     >
                         <SlidersHorizontal className="w-4 h-4" />
@@ -129,34 +131,37 @@ export default function PeopleClient({ initialUser }: PeopleClientProps) {
                 </div>
             ) : (
                 <>
-                    {/* ── SPOTLIGHT SECTION ── */}
-                    {spotlightProfiles.length > 0 && (
-                        <div className="mb-8">
-                            <div className="flex items-center gap-2 mb-4">
-                                <h2 className="text-sm font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
-                                    People You Should Meet
+                    {/* ── TIER 1: RECOMMENDED SECTION ── */}
+                    {recommendedProfiles.length > 0 && (
+                        <div className="mb-10">
+                            <div className="flex items-center gap-2 mb-4 px-1">
+                                <Sparkles className="w-4 h-4 text-indigo-500" />
+                                <h2 className="text-sm font-bold text-zinc-800 dark:text-zinc-200 tracking-tight">
+                                    Top Picks For You
                                 </h2>
-                                <div className="flex-1 h-px bg-zinc-200/60 dark:bg-zinc-800" />
+                                <div className="flex-1 h-px bg-zinc-200/60 dark:bg-zinc-800 ml-4" />
                             </div>
-                            <div className="flex gap-4 overflow-x-auto pb-2 scrollbar-thin scrollbar-thumb-zinc-300 dark:scrollbar-thumb-zinc-700">
-                                {spotlightProfiles.map((profile) => (
-                                    <PersonCard
-                                        key={profile.id}
-                                        profile={profile}
-                                        onConnect={handleConnect}
-                                        onDismiss={handleDismiss}
-                                        variant="spotlight"
-                                    />
+                            
+                            <div className="flex gap-4 overflow-x-auto pb-4 pt-1 px-1 -mx-1 snap-x snap-mandatory scrollbar-thin scrollbar-thumb-zinc-300 dark:scrollbar-thumb-zinc-700">
+                                {recommendedProfiles.map((profile) => (
+                                    <div key={profile.id} className="min-w-[300px] max-w-[320px] shrink-0 snap-start">
+                                        <PersonCard
+                                            profile={profile}
+                                            onConnect={handleConnect}
+                                            onDismiss={handleDismiss}
+                                            variant="recommended"
+                                        />
+                                    </div>
                                 ))}
                             </div>
                         </div>
                     )}
 
-                    {/* ── STREAM GRID ── */}
+                    {/* ── TIER 2: STREAM GRID ── */}
                     {streamProfiles.length > 0 && (
                         <>
-                            {spotlightProfiles.length > 0 && (
-                                <div className="flex items-center gap-2 mb-4">
+                            {recommendedProfiles.length > 0 && (
+                                <div className="flex items-center gap-2 mb-4 px-1">
                                     <h2 className="text-sm font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
                                         More People
                                     </h2>
@@ -166,6 +171,7 @@ export default function PeopleClient({ initialUser }: PeopleClientProps) {
                             <div style={{ minHeight: 400 }}>
                                 <VirtuosoGrid
                                     useWindowScroll
+                                    increaseViewportBy={600}
                                     data={streamProfiles}
                                     endReached={() => {
                                         if (hasNextPage && !isFetchingNextPage) {
@@ -181,11 +187,13 @@ export default function PeopleClient({ initialUser }: PeopleClientProps) {
                                             </div>
                                         ) : null,
                                     }}
-                                    itemContent={(_, profile) => (
+                                    itemContent={(index, profile) => (
                                         <PersonCard
                                             profile={profile}
                                             onConnect={handleConnect}
                                             onDismiss={handleDismiss}
+                                            variant="compact"
+                                            priority={index < 8}
                                         />
                                     )}
                                 />
@@ -193,13 +201,13 @@ export default function PeopleClient({ initialUser }: PeopleClientProps) {
                         </>
                     )}
 
-                    {/* If we only have spotlight but no stream, and there's more to load */}
+                    {/* If we only have recommended but no stream, and there's more to load */}
                     {streamProfiles.length === 0 && hasNextPage && (
                         <div className="mt-6 text-center">
                             <button
                                 onClick={() => fetchNextPage()}
                                 disabled={isFetchingNextPage}
-                                className="px-6 py-2.5 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-sm border border-zinc-200/60 dark:border-white/10 rounded-xl text-sm font-medium hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors disabled:opacity-50"
+                                className="px-6 py-2.5 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-sm border border-zinc-200/60 dark:border-white/10 rounded-xl text-sm font-medium hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors disabled:opacity-50 shadow-sm"
                             >
                                 {isFetchingNextPage ? "Loading..." : "Load More"}
                             </button>

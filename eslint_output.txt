@@ -1,0 +1,134 @@
+
+/Users/chrama/Downloads/nb-s3/src/components/chat/ChatProvider.tsx
+  21:33  error  React Hook "useAuth" is called conditionally. React Hooks must be called in the exact same order in every component render          react-hooks/rules-of-hooks
+  22:24  error  React Hook "useChatStore" is called conditionally. React Hooks must be called in the exact same order in every component render     react-hooks/rules-of-hooks
+  23:25  error  React Hook "useChatStore" is called conditionally. React Hooks must be called in the exact same order in every component render     react-hooks/rules-of-hooks
+  24:29  error  React Hook "useChatStore" is called conditionally. React Hooks must be called in the exact same order in every component render     react-hooks/rules-of-hooks
+  25:34  error  React Hook "useChatStore" is called conditionally. React Hooks must be called in the exact same order in every component render     react-hooks/rules-of-hooks
+  26:25  error  React Hook "useChatStore" is called conditionally. React Hooks must be called in the exact same order in every component render     react-hooks/rules-of-hooks
+  27:34  error  React Hook "useChatStore" is called conditionally. React Hooks must be called in the exact same order in every component render     react-hooks/rules-of-hooks
+  28:37  error  React Hook "useChatStore" is called conditionally. React Hooks must be called in the exact same order in every component render     react-hooks/rules-of-hooks
+  31:33  error  React Hook "useRef" is called conditionally. React Hooks must be called in the exact same order in every component render           react-hooks/rules-of-hooks
+  33:5   error  React Hook "useEffect" is called conditionally. React Hooks must be called in the exact same order in every component render        react-hooks/rules-of-hooks
+  41:5   error  React Hook "useEffect" is called conditionally. React Hooks must be called in the exact same order in every component render        react-hooks/rules-of-hooks
+  58:5   error  React Hook "useEffect" is called conditionally. React Hooks must be called in the exact same order in every component render        react-hooks/rules-of-hooks
+  72:5   error  React Hook "useEffect" is called conditionally. React Hooks must be called in the exact same order in every component render        react-hooks/rules-of-hooks
+  96:5   error  React Hook "useChatRealtime" is called conditionally. React Hooks must be called in the exact same order in every component render  react-hooks/rules-of-hooks
+
+/Users/chrama/Downloads/nb-s3/src/components/hub/AddToCollectionModal.tsx
+  22:5   warning  'currentUser' is defined but never used   @typescript-eslint/no-unused-vars
+  25:52  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/chrama/Downloads/nb-s3/src/components/hub/CollectionsSidebar.tsx
+  33:52  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/chrama/Downloads/nb-s3/src/components/projects/v2/editor/CodeEditor.tsx
+  24:3  warning  Unused eslint-disable directive (no problems were reported from '@typescript-eslint/no-explicit-any')
+
+/Users/chrama/Downloads/nb-s3/src/components/projects/v2/explorer/ExplorerBatchOps.tsx
+    3:17  warning  'useCallback' is defined but never used  @typescript-eslint/no-unused-vars
+  140:3   warning  'canEdit' is defined but never used      @typescript-eslint/no-unused-vars
+
+/Users/chrama/Downloads/nb-s3/src/components/projects/v2/explorer/ExplorerContextMenu.tsx
+  136:5  error    Compilation Skipped: Existing memoization could not be preserved
+
+React Compiler has skipped optimizing this component because the existing manual memoization could not be preserved. The inferred dependencies did not match the manually specified dependencies, which could cause the value to change more or less frequently than expected. The inferred dependency was `handleDownloadFolder`, but the source dependencies were [nodesById, selectedNodeId, effectiveSelectedNodeIds, expandedFolderIds, favorites, taskLinkCounts, locksByNodeId, mode, canEdit, projectName, effectiveMode, projectId, handleSelect, handleToggleFolder, handleDropOnFolder, handleLoadMore, openCreate, openCreateInFolder, handleUploadToFolder, handleUploadFolderToFolder, handleOpenNodeFromMenu, openRename, handleMoveFromMenu, handleDeleteFromMenu, handleTaskLinksClick, toggleFavorite, restoreNode]. Inferred different dependency than source.
+
+/Users/chrama/Downloads/nb-s3/src/components/projects/v2/explorer/ExplorerContextMenu.tsx:136:5
+  134 |
+  135 |   return useMemo(
+> 136 |     (): FileTreeItemContext => ({
+      |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+> 137 |       nodesById,
+      | ^^^^^^^^^^^^^^^^
+> 138 |       selectedNodeId: selectedNodeId ?? null,
+      …
+      | ^^^^^^^^^^^^^^^^
+> 168 |       restoreNode,
+      | ^^^^^^^^^^^^^^^^
+> 169 |     }),
+      | ^^^^^^^ Could not preserve existing manual memoization
+  170 |     [
+  171 |       nodesById,
+  172 |       selectedNodeId,  react-hooks/preserve-manual-memoization
+  170:5  warning  React Hook useMemo has a missing dependency: 'handleDownloadFolder'. Either include it or remove the dependency array                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        react-hooks/exhaustive-deps
+
+/Users/chrama/Downloads/nb-s3/src/components/projects/v2/explorer/ExplorerSearch.tsx
+  114:16  warning  '_err' is defined but never used  @typescript-eslint/no-unused-vars
+
+/Users/chrama/Downloads/nb-s3/src/components/projects/v2/explorer/ExplorerToolbarHost.tsx
+  6:3  warning  'GitBranch' is defined but never used    @typescript-eslint/no-unused-vars
+  8:3  warning  'ListOrdered' is defined but never used  @typescript-eslint/no-unused-vars
+
+/Users/chrama/Downloads/nb-s3/src/components/projects/v2/explorer/ExplorerTree.tsx
+    5:84  warning  'Film' is defined but never used              @typescript-eslint/no-unused-vars
+    5:90  warning  'Music' is defined but never used             @typescript-eslint/no-unused-vars
+  264:3   warning  'onDownloadFolder' is defined but never used  @typescript-eslint/no-unused-vars
+  372:36  warning  'idx' is defined but never used               @typescript-eslint/no-unused-vars
+  398:64  warning  Unexpected any. Specify a different type      @typescript-eslint/no-explicit-any
+
+/Users/chrama/Downloads/nb-s3/src/components/projects/v2/explorer/FileGridItem.tsx
+  23:10  warning  Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` or a custom image loader to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
+  64:14  warning  'err' is defined but never used                                                                                                                                                                                                                                                          @typescript-eslint/no-unused-vars
+
+/Users/chrama/Downloads/nb-s3/src/components/projects/v2/explorer/SourceControlPanel.tsx
+   22:5   warning  'AlertCircle' is defined but never used                  @typescript-eslint/no-unused-vars
+  252:11  warning  'handleLoadBranches' is assigned a value but never used  @typescript-eslint/no-unused-vars
+  403:64  warning  Unexpected any. Specify a different type                 @typescript-eslint/no-explicit-any
+
+/Users/chrama/Downloads/nb-s3/src/components/projects/v2/preview/AssetGallery.tsx
+  186:14  warning  '_projectId' is defined but never used  @typescript-eslint/no-unused-vars
+  187:13  warning  '_folderId' is defined but never used   @typescript-eslint/no-unused-vars
+
+/Users/chrama/Downloads/nb-s3/src/components/projects/v2/preview/MarkdownPreview.tsx
+  80:45  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/chrama/Downloads/nb-s3/src/components/projects/v2/tasks/TaskDetailPanel.tsx
+  48:43  error  Compilation Skipped: Existing memoization could not be preserved
+
+React Compiler has skipped optimizing this component because the existing manual memoization could not be preserved. The inferred dependencies did not match the manually specified dependencies, which could cause the value to change more or less frequently than expected. The inferred dependency was `task`, but the source dependencies were [task?.id, projectId, onClose]. Inferred less specific property than source.
+
+/Users/chrama/Downloads/nb-s3/src/components/projects/v2/tasks/TaskDetailPanel.tsx:48:43
+  46 |     const { counts } = useTaskCounts(taskId);
+  47 |
+> 48 |     const confirmDeleteTask = useCallback(async () => {
+     |                                           ^^^^^^^^^^^^^
+> 49 |         setDeleteError(null);
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+> 50 |         setIsDeleting(true);
+     …
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+> 63 |         }
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+> 64 |     }, [task?.id, projectId, onClose]);
+     | ^^^^^^ Could not preserve existing manual memoization
+  65 |
+  66 |     if (!task) return null;
+  67 |  react-hooks/preserve-manual-memoization
+
+/Users/chrama/Downloads/nb-s3/src/components/projects/v2/workspace/StatusBar.tsx
+  53:29  error  Compilation Skipped: Existing memoization could not be preserved
+
+React Compiler has skipped optimizing this component because the existing manual memoization could not be preserved. The inferred dependencies did not match the manually specified dependencies, which could cause the value to change more or less frequently than expected. The inferred dependency was `activeTab.content`, but the source dependencies were [activeTab?.content]. Inferred different dependency than source.
+
+/Users/chrama/Downloads/nb-s3/src/components/projects/v2/workspace/StatusBar.tsx:53:29
+  51 |   const activeTab = activeTabId ? tabById[activeTabId] : null;
+  52 |
+> 53 |   const lineCount = useMemo(() => {
+     |                             ^^^^^^^
+> 54 |     if (!activeTab?.content) return 0;
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+> 55 |     return activeTab.content.split("\n").length;
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+> 56 |   }, [activeTab?.content]);
+     | ^^^^ Could not preserve existing manual memoization
+  57 |
+  58 |   const lang = useMemo(() => getLang(activeTab?.node?.name), [activeTab?.node?.name]);
+  59 |  react-hooks/preserve-manual-memoization
+
+/Users/chrama/Downloads/nb-s3/src/lib/onboarding/username-check.ts
+  43:1  warning  Unused eslint-disable directive (no problems were reported from '@typescript-eslint/no-explicit-any')
+
+✖ 41 problems (17 errors, 24 warnings)
+  0 errors and 2 warnings potentially fixable with the `--fix` option.
+

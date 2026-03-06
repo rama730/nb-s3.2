@@ -259,7 +259,7 @@ RETURNS TRIGGER
 SET search_path = ''
 AS $$
 BEGIN
-    UPDATE conversations 
+    UPDATE public.conversations 
     SET updated_at = NOW() 
     WHERE id = NEW.conversation_id;
     RETURN NEW;

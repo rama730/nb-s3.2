@@ -12,6 +12,12 @@ test('normalizeOnboardingPayload sanitizes optional fields and dedupes tags', ()
         website: 'https://example.com',
         skills: ['React', 'react', 'TypeScript'],
         interests: ['AI', 'ai', 'Open Source'],
+        openTo: ['Freelance', 'freelance', 'Mentorship'],
+        socialLinks: {
+            github: 'github.com/builder',
+            portfolio: 'https://builder.dev',
+        },
+        pronouns: '  they/them  ',
         visibility: 'public',
     })
 
@@ -19,6 +25,9 @@ test('normalizeOnboardingPayload sanitizes optional fields and dedupes tags', ()
     assert.equal(payload.fullName, 'Builder User')
     assert.deepEqual(payload.skills, ['React', 'TypeScript'])
     assert.deepEqual(payload.interests, ['AI', 'Open Source'])
+    assert.deepEqual(payload.openTo, ['Freelance', 'Mentorship'])
+    assert.equal(payload.socialLinks.github, 'https://github.com/builder')
+    assert.equal(payload.pronouns, 'they/them')
 })
 
 test('normalizeOnboardingPayload rejects invalid website protocol', () => {

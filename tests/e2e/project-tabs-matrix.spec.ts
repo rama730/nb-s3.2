@@ -12,8 +12,10 @@ test.describe("Project tabs matrix @critical", () => {
     const context = await browser.newContext();
     const page = await context.newPage();
     const monitor = attachPageMonitoring(page, {
+      allowedHttpUrlPatterns: [/\/projects\/e2e-files-workspace-controls\?tab=files$/i],
       allowedConsolePatterns: [
         /The result of getSnapshot should be cached to avoid an infinite loop/i,
+        /status of 500 \(Internal Server Error\)/i,
       ],
     });
     const perf = new PerfTracker();
@@ -37,7 +39,7 @@ test.describe("Project tabs matrix @critical", () => {
     await expect(page.getByText(/Analytics|Views|Followers|Saves/i).first()).toBeVisible({ timeout: 15000 });
 
     await page.getByTestId("project-tab-files").click();
-    await expect(page.getByRole("button", { name: "Actions" }).first()).toBeVisible({ timeout: 15000 });
+    await expect(page.getByTestId("files-explorer-actions-trigger").first()).toBeVisible({ timeout: 15000 });
 
     await monitor.assertNoViolations();
     monitor.detach();

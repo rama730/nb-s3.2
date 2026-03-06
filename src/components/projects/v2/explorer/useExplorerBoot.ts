@@ -4,6 +4,7 @@ import {
   getProjectNodes,
   getProjectBatchNodes,
   getTaskLinkCounts,
+  getProjectTreeFlat,
 } from "@/app/actions/files";
 import { filesParentKey, useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 import type { ProjectNode } from "@/lib/db/schema";
@@ -11,6 +12,9 @@ import { filesFeatureFlags } from "@/lib/features/files";
 import { getErrorMessage } from "./explorerTypes";
 import { FILES_RUNTIME_BUDGETS } from "@/lib/files/runtime-budgets";
 import { recordFilesMetric } from "@/lib/files/observability";
+
+const EMPTY_OBJ = {};
+
 
 export function useExplorerBoot(options: {
   projectId: string;
@@ -24,10 +28,10 @@ export function useExplorerBoot(options: {
   const [accessError, setAccessError] = useState<string | null>(null);
 
   const expandedFolderIds = useFilesWorkspaceStore(
-    (s) => s.byProjectId[projectId]?.expandedFolderIds || {}
+    (s) => s.byProjectId[projectId]?.expandedFolderIds || EMPTY_OBJ
   );
   const loadedChildren = useFilesWorkspaceStore(
-    (s) => s.byProjectId[projectId]?.loadedChildren || {}
+    (s) => s.byProjectId[projectId]?.loadedChildren || EMPTY_OBJ
   );
 
   const upsertNodes = useFilesWorkspaceStore((s) => s.upsertNodes);
@@ -190,7 +194,39 @@ export function useExplorerBoot(options: {
 
     if (!bootedRef.current && !alreadyLoaded) {
       bootedRef.current = true;
-      await loadFolderContent(null, "refresh");
+
+      try {
+        // Materialized Path Flat Tree Load
+        const allNodes = await getProjectTreeFlat(projectId);
+
+        if (allNodes && allNodes.length > 0) {
+          upsertNodes(projectId, allNodes);
+
+          const grouped: Record<string, string[]> = {};
+          allNodes.forEach(n => {
+            const parentKey = filesParentKey(n.parentId);
+            if (!grouped[parentKey]) grouped[parentKey] = [];
+            grouped[parentKey].push(n.id);
+          });
+
+          Object.entries(grouped).forEach(([parentKey, childIds]) => {
+            const pid = parentKey === "__root__" ? null : parentKey;
+            setChildren(projectId, pid, childIds);
+            markChildrenLoaded(projectId, pid);
+            setFolderMeta(projectId, pid, { nextCursor: null, hasMore: false });
+          });
+
+          // Also mark root as loaded if it was empty
+          if (!grouped["__root__"]) markChildrenLoaded(projectId, null);
+        } else {
+          // If project is completely empty (no system root yet), fallback to loadFolderContent 
+          // because it has the `ensureSystemRootFolder` auto-creation logic.
+          await loadFolderContent(null, "refresh");
+        }
+      } catch (e) {
+        console.error("Flat tree load failed, falling back to paginated loader", e);
+        await loadFolderContent(null, "refresh");
+      }
 
       const updatedWs = useFilesWorkspaceStore.getState().byProjectId[projectId];
       const rootChildren = updatedWs.childrenByParentId[filesParentKey(null)] || [];
@@ -260,10 +296,11 @@ export function useExplorerBoot(options: {
 
         Object.entries(grouped).forEach(([key, children]) => {
           const pid = key === "__root__" ? null : key;
+          const uniqueChildIds = Array.from(new Set(children.map((n) => n.id)));
           setChildren(
             projectId,
             pid,
-            children.map((n) => n.id)
+            uniqueChildIds
           );
           markChildrenLoaded(projectId, pid);
           setFolderMeta(projectId, pid, { nextCursor: null, hasMore: false });

@@ -10,10 +10,12 @@ import {
   createFileNode,
   createFolder,
   renameNode,
+  bulkCreateFolderTree,
 } from "@/app/actions/files";
 import { filesParentKey, useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 import type { ExplorerOperation } from "./explorerTypes";
 import { getErrorMessage } from "./explorerTypes";
+import { buildProjectFileKey } from "@/lib/storage/project-file-key";
 
 interface UseExplorerMutationsOptions {
   projectId: string;
@@ -154,7 +156,7 @@ export function useExplorerMutations({
         }
 
         const fileExt = name.includes(".") ? name.split(".").pop() : "txt";
-        const storagePath = `projects/${projectId}/${Math.random().toString(36).substring(2)}.${fileExt}`;
+        const storagePath = buildProjectFileKey(projectId, `${Math.random().toString(36).substring(2)}.${fileExt}`);
         const supabase = getSupabase();
         const emptyBlob = new Blob([""], { type: "text/plain" });
         const { error: uploadError } = await supabase.storage.from("project-files").upload(storagePath, emptyBlob);
@@ -183,13 +185,13 @@ export function useExplorerMutations({
         status: "success",
         undo: canEdit
           ? {
-              label: "Undo",
-              run: async () => {
-                await bulkTrashNodes([createdNode.id], projectId);
-                useFilesWorkspaceStore.getState().removeNodeFromCaches(projectId, createdNode.id);
-                await loadFolderContent(parentId, "refresh");
-              },
-            }
+            label: "Undo",
+            run: async () => {
+              await bulkTrashNodes([createdNode.id], projectId);
+              useFilesWorkspaceStore.getState().removeNodeFromCaches(projectId, createdNode.id);
+              await loadFolderContent(parentId, "refresh");
+            },
+          }
           : undefined,
       });
       setCreateDialog({ open: false });
@@ -238,10 +240,11 @@ export function useExplorerMutations({
             let failed = 0;
 
             for (const file of files) {
+              let filePath: string | null = null;
               try {
                 const ext = file.name.split(".").pop() || "bin";
                 const fileName = `${Math.random().toString(36).slice(2)}.${ext}`;
-                const filePath = `projects/${projectId}/${fileName}`;
+                filePath = buildProjectFileKey(projectId, fileName);
                 const { error } = await supabase.storage.from("project-files").upload(filePath, file);
                 if (error) throw error;
 
@@ -253,6 +256,9 @@ export function useExplorerMutations({
                 })) as ProjectNode;
                 createdNodes.push(node);
               } catch {
+                if (filePath) {
+                  await supabase.storage.from("project-files").remove([filePath]).catch(() => null);
+                }
                 failed += 1;
               }
             }
@@ -311,6 +317,131 @@ export function useExplorerMutations({
       showToast,
       toggleExpanded,
       upsertNodes,
+    ]
+  );
+
+  const openFolderUpload = useCallback(
+    (parentId: string | null) => {
+      if (!canEdit) return;
+      const input = document.createElement("input");
+      input.type = "file";
+      input.webkitdirectory = true;
+      input.multiple = true;
+
+      input.onchange = async () => {
+        const files = Array.from(input.files || []);
+        if (files.length === 0) return;
+
+        try {
+          showToast(`Scanning ${files.length} structural files...`, "info");
+          const payloadNodes = files
+            .map((f) => ({
+              path: f.webkitRelativePath || f.name,
+              name: f.name,
+              size: f.size,
+              mimeType: f.type || "application/octet-stream"
+            }))
+            .filter((node) => {
+              // Pure optimization: silently discard system clutter that explodes DB rows
+              if (node.name === ".DS_Store" || node.path.includes("__MACOSX") || node.path.includes("/.git/")) return false;
+              return true;
+            });
+
+          if (payloadNodes.length === 0) return;
+
+          // 1. O(depth) Bulk Upsert to build entire structure layout & reserve s3 keys
+          // We chunk the payload to prevent Next.js 413 Payload Too Large errors
+          const CHUNK_SIZE = 2000;
+          const mappedFiles: { path: string; fileId: string; s3Key: string; name: string }[] = [];
+
+          for (let i = 0; i < payloadNodes.length; i += CHUNK_SIZE) {
+            const chunk = payloadNodes.slice(i, i + CHUNK_SIZE);
+            if (payloadNodes.length > CHUNK_SIZE) {
+              showToast(`Registering database nodes ${i + 1} to ${Math.min(i + CHUNK_SIZE, payloadNodes.length)}...`, "info");
+            }
+            const mappedChunk = await bulkCreateFolderTree(projectId, parentId, chunk);
+            if (mappedChunk) {
+              mappedFiles.push(...mappedChunk);
+            }
+          }
+          if (mappedFiles.length === 0) return;
+
+          // 2. Fetch session JWT for Worker
+          const supabase = getSupabase();
+          const { data: { session } } = await supabase.auth.getSession();
+          if (!session) {
+            showToast("Authentication required for upload.", "error");
+            return;
+          }
+
+          // 3. Connect to Web Worker to bypass main JS loop limits
+          const worker = new Worker(new URL('./upload.worker.ts', import.meta.url));
+
+          const uploadNodes = files.map((f) => {
+            const mapping = mappedFiles.find((m) => m.path === (f.webkitRelativePath || f.name));
+            return mapping ? { file: f, s3Key: mapping.s3Key, fileId: mapping.fileId, path: mapping.path } : null;
+          }).filter(Boolean);
+
+          showToast(`Uploading ${uploadNodes.length} items in background UI daemon...`, "info");
+
+          worker.postMessage({
+            uploadNodes,
+            supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL,
+            supabaseAnonKey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+            bucketName: "project-files",
+            jwt: session.access_token
+          });
+
+          worker.onmessage = async (e) => {
+            if (e.data.type === "done") {
+              worker.terminate();
+              const failedFileIds = Array.isArray(e.data.results)
+                ? e.data.results
+                    .filter((result: { fileId?: string; success?: boolean }) => result?.success === false && !!result?.fileId)
+                    .map((result: { fileId: string }) => result.fileId)
+                : [];
+
+              if (failedFileIds.length > 0) {
+                try {
+                  await bulkTrashNodes(failedFileIds, projectId);
+                } catch (cleanupError) {
+                  console.warn("Failed to cleanup failed upload placeholders", cleanupError);
+                }
+              }
+
+              if (e.data.failed > 0) {
+                showToast(`Folder uploaded with ${e.data.failed} errors.`, "warning");
+                recordOperation({ label: `Folder partial upload: ${e.data.failed} failed`, status: "error" });
+              } else {
+                showToast(`Successfully uploaded folder (${e.data.success} files).`, "success");
+                recordOperation({ label: `Folder upload: ${e.data.success} files`, status: "success" });
+              }
+              // Let React refresh the entire directory tree safely
+              loadFolderContent(parentId, "refresh").then(() => {
+                if (parentId) toggleExpanded(projectId, parentId, true);
+              });
+            }
+          };
+
+          worker.onerror = (err) => {
+            showToast("Fatal upload worker process error", "error");
+          };
+
+        } catch (err) {
+          showToast(`Upload failed: ${getErrorMessage(err, "Unknown error")}`, "error");
+        }
+      };
+
+      input.click();
+    },
+    [
+      canEdit,
+      getSupabase,
+      loadFolderContent,
+      projectId,
+      recordOperation,
+      showToast,
+      toggleExpanded
     ]
   );
 
@@ -474,25 +605,25 @@ export function useExplorerMutations({
         status: "success",
         undo: movedCount
           ? {
-              label: "Undo",
-              run: async () => {
-                const groupedByParent: Record<string, string[]> = {};
-                for (const [id, parentId] of originalParentByNode.entries()) {
-                  const key = parentId ?? "__root__";
-                  if (!groupedByParent[key]) groupedByParent[key] = [];
-                  groupedByParent[key].push(id);
+            label: "Undo",
+            run: async () => {
+              const groupedByParent: Record<string, string[]> = {};
+              for (const [id, parentId] of originalParentByNode.entries()) {
+                const key = parentId ?? "__root__";
+                if (!groupedByParent[key]) groupedByParent[key] = [];
+                groupedByParent[key].push(id);
+              }
+              for (const [parentKey, ids] of Object.entries(groupedByParent)) {
+                const parentId = parentKey === "__root__" ? null : parentKey;
+                if (ids.length > 0) {
+                  await bulkMoveNodes(ids, parentId, projectId);
+                  await loadFolderContent(parentId, "refresh");
                 }
-                for (const [parentKey, ids] of Object.entries(groupedByParent)) {
-                  const parentId = parentKey === "__root__" ? null : parentKey;
-                  if (ids.length > 0) {
-                    await bulkMoveNodes(ids, parentId, projectId);
-                    await loadFolderContent(parentId, "refresh");
-                  }
-                }
-                if (target !== null) await loadFolderContent(target, "refresh");
-                else await loadFolderContent(null, "refresh");
-              },
-            }
+              }
+              if (target !== null) await loadFolderContent(target, "refresh");
+              else await loadFolderContent(null, "refresh");
+            },
+          }
           : undefined,
       });
       setMoveDialog({ open: false, nodes: [], targetFolderId: null });
@@ -533,16 +664,16 @@ export function useExplorerMutations({
         status: "success",
         undo: result
           ? {
-              label: "Undo",
-              run: async () => {
-                await bulkRestoreNodes(nodeIds, projectId);
-                const staleParents = new Set<string | null>();
-                for (const node of nodes) staleParents.add(node.parentId ?? null);
-                await Promise.all(
-                  Array.from(staleParents).map((pid) => loadFolderContent(pid, "refresh"))
-                );
-              },
-            }
+            label: "Undo",
+            run: async () => {
+              await bulkRestoreNodes(nodeIds, projectId);
+              const staleParents = new Set<string | null>();
+              for (const node of nodes) staleParents.add(node.parentId ?? null);
+              await Promise.all(
+                Array.from(staleParents).map((pid) => loadFolderContent(pid, "refresh"))
+              );
+            },
+          }
           : undefined,
       });
       setDeleteDialog({ open: false, nodes: [] });
@@ -574,6 +705,189 @@ export function useExplorerMutations({
     [canEdit, openUpload]
   );
 
+  const handleDownloadFolder = useCallback(
+    async (folderId: string | null) => {
+      showToast("Preparing secure download channels...", "info");
+      const supabase = getSupabase();
+
+      const flatFilePaths: string[] = [];
+      const walkForPaths = (pid: string | null) => {
+        const childIds = childrenByParentId[pid === null ? "__root__" : filesParentKey(pid)] || [];
+        for (const id of childIds) {
+          const node = nodesById[id];
+          if (!node) continue;
+          if (node.type === "file" && node.s3Key) {
+            flatFilePaths.push(node.s3Key);
+          } else if (node.type === "folder") {
+            walkForPaths(node.id);
+          }
+        }
+      };
+      walkForPaths(folderId);
+
+      if (flatFilePaths.length === 0) {
+        showToast("No files to download", "warning");
+        return;
+      }
+
+      // 1-Hour Presigned URLs bypass RLS limits for pure client-side zipping
+      const { data: signedUrlData, error } = await supabase.storage
+        .from("project-files")
+        .createSignedUrls(flatFilePaths, 3600);
+
+      if (error || !signedUrlData) {
+        showToast("Failed to generate secure download tokens", "error");
+        return;
+      }
+
+      const signedUrlMap: Record<string, string> = {};
+
+      // Re-map the S3 Keys to their Node IDs for the worker
+      for (const signed of signedUrlData) {
+        if (signed.error) continue;
+        const matchingNode = Object.values(nodesById).find(n => n.s3Key === signed.path);
+        if (matchingNode) {
+          signedUrlMap[matchingNode.id] = signed.signedUrl;
+        }
+      }
+
+      showToast("Starting client-side ZIP compilation...", "success");
+
+      const worker = new Worker(new URL('./utils/download.worker.ts', import.meta.url));
+
+      worker.onmessage = (e: MessageEvent<any>) => {
+        const result = e.data;
+        if (result.error) {
+          showToast(`Download failed: ${result.error}`, "error");
+          worker.terminate();
+        } else if (result.blob) {
+          const url = URL.createObjectURL(result.blob);
+          const a = document.createElement("a");
+          a.href = url;
+
+          const rootNodeName = folderId && nodesById[folderId] ? nodesById[folderId].name : "Project Files";
+          a.download = `${rootNodeName}_Export.zip`;
+
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+
+          showToast("Folder downloaded successfully!", "success");
+          worker.terminate();
+        } else if (result.progress) {
+          // Can be hooked into global progress monitor if needed
+        }
+      };
+
+      worker.postMessage({
+        jobId: `dl-${folderId || "root"}`,
+        projectId,
+        projectName: "Project Files",
+        nodesById,
+        childrenByParentId,
+        targetFolderId: folderId,
+        signedUrls: signedUrlMap
+      });
+
+    },
+    [childrenByParentId, nodesById, getSupabase, projectId, showToast]
+  );
+
+  // Direct file upload (for desktop drag-and-drop — no picker dialog)
+  const uploadFilesDirectly = useCallback(
+    async (files: File[], parentId: string | null) => {
+      if (!canEdit || files.length === 0) return;
+
+      const mutationKey = `upload-direct:${projectId}:${parentId ?? "root"}:${files
+        .map((f) => f.name)
+        .sort()
+        .join(",")}`;
+      try {
+        const result = await runUniqueMutation(mutationKey, async () => {
+          const supabase = getSupabase();
+          const createdNodes: ProjectNode[] = [];
+          let failed = 0;
+
+          for (const file of files) {
+            let filePath: string | null = null;
+            try {
+              const ext = file.name.split(".").pop() || "bin";
+              const fileName = `${Math.random().toString(36).slice(2)}.${ext}`;
+              filePath = buildProjectFileKey(projectId, fileName);
+              const { error } = await supabase.storage.from("project-files").upload(filePath, file);
+              if (error) throw error;
+
+              const node = (await createFileNode(projectId, parentId, {
+                name: file.name,
+                s3Key: filePath,
+                size: file.size,
+                mimeType: file.type || "application/octet-stream",
+              })) as ProjectNode;
+              createdNodes.push(node);
+            } catch {
+              if (filePath) {
+                await supabase.storage.from("project-files").remove([filePath]).catch(() => null);
+              }
+              failed += 1;
+            }
+          }
+
+          if (createdNodes.length > 0) {
+            upsertNodes(projectId, createdNodes);
+            const parentKey = filesParentKey(parentId);
+            const currentChildren = childrenByParentId[parentKey] || [];
+            const nextChildren = [...currentChildren];
+            for (const node of createdNodes) {
+              if (!nextChildren.includes(node.id)) nextChildren.push(node.id);
+            }
+            setChildren(projectId, parentId, nextChildren);
+
+            if (parentId) toggleExpanded(projectId, parentId, true);
+            await loadFolderContent(parentId, "refresh");
+          }
+
+          return { createdNodes, failed };
+        });
+
+        if (!result) return;
+        const { createdNodes, failed } = result;
+        if (createdNodes.length > 0) {
+          onOpenFile(createdNodes[0]);
+          const msg =
+            failed > 0
+              ? `Uploaded ${createdNodes.length} file(s), ${failed} failed`
+              : `Uploaded ${createdNodes.length} file(s)`;
+          showToast(msg, failed > 0 ? "info" : "success");
+          recordOperation({
+            label: msg,
+            status: failed > 0 ? "error" : "success",
+          });
+        } else {
+          showToast("Upload failed", "error");
+          recordOperation({ label: "Upload failed", status: "error" });
+        }
+      } catch (e: unknown) {
+        showToast(`Upload failed: ${getErrorMessage(e, "Unknown error")}`, "error");
+        recordOperation({ label: "Upload failed", status: "error" });
+      }
+    },
+    [
+      canEdit,
+      childrenByParentId,
+      getSupabase,
+      loadFolderContent,
+      onOpenFile,
+      projectId,
+      recordOperation,
+      runUniqueMutation,
+      setChildren,
+      showToast,
+      toggleExpanded,
+      upsertNodes,
+    ]
+  );
+
   return {
     createDialog,
     setCreateDialog,
@@ -587,6 +901,7 @@ export function useExplorerMutations({
     openCreateInFolder,
     confirmCreate,
     openUpload,
+    openFolderUpload,
     openRename,
     confirmRename,
     resolveActionNodes,
@@ -597,6 +912,8 @@ export function useExplorerMutations({
     handleMoveFromMenu,
     handleDeleteFromMenu,
     handleUploadToFolder,
+    handleDownloadFolder,
+    uploadFilesDirectly,
     runUniqueMutation,
   };
 }

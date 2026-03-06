@@ -92,6 +92,7 @@ export function WorkspaceToolbarHost({
       <div className="flex items-center gap-1.5">
         {wave1SaveAllEnabled ? (
           <Button
+            data-testid="files-workspace-save-all"
             size="sm"
             variant="outline"
             className="h-7 px-2 text-xs"
@@ -104,7 +105,12 @@ export function WorkspaceToolbarHost({
         ) : null}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button size="sm" variant="outline" className="h-7 px-2 text-xs">
+            <Button
+              data-testid="files-workspace-view-mode"
+              size="sm"
+              variant="outline"
+              className="h-7 px-2 text-xs"
+            >
               <Layers className="w-3.5 h-3.5 mr-1.5" />
               {viewMode === "code" ? "Code" : viewMode === "assets" ? "Assets" : "All"}
             </Button>
@@ -117,6 +123,7 @@ export function WorkspaceToolbarHost({
         </DropdownMenu>
 
         <Button
+          data-testid="files-workspace-toolbar-search-toggle"
           size="sm"
           variant="outline"
           className="h-7 w-7 p-0"
@@ -129,6 +136,7 @@ export function WorkspaceToolbarHost({
         <WorkspaceGitToolbar projectId={projectId} canEdit={canEdit} />
 
         <Button
+          data-testid="files-workspace-toolbar-panel-toggle"
           size="sm"
           variant={!bottomPanelCollapsed ? "secondary" : "outline"}
           className="h-7 px-2 text-xs"
@@ -141,7 +149,12 @@ export function WorkspaceToolbarHost({
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button size="sm" variant="outline" className="h-7 px-2 text-xs">
+            <Button
+              data-testid="files-workspace-toolbar-menu"
+              size="sm"
+              variant="outline"
+              className="h-7 px-2 text-xs"
+            >
               <MoreVertical className="w-3.5 h-3.5 mr-1.5" />
               Workspace
             </Button>

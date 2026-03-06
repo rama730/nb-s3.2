@@ -7,9 +7,18 @@ import assert from 'node:assert/strict'
 delete process.env.UPSTASH_REDIS_REST_URL
 delete process.env.UPSTASH_REDIS_REST_TOKEN
 
-const { consumeRateLimit } = await import('../../src/lib/security/rate-limit')
+let consumeRateLimit: (key: string, limit: number, windowSeconds: number) => Promise<{
+    allowed: boolean
+    count: number
+    limit: number
+    resetAt: number
+}>
 
 describe('consumeRateLimit (local fallback)', () => {
+    before(async () => {
+        ;({ consumeRateLimit } = await import('../../src/lib/security/rate-limit'))
+    })
+
     it('allows requests within the limit', async () => {
         const key = `test-allow-${Date.now()}`
         const result = await consumeRateLimit(key, 5, 60)

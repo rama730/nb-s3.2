@@ -45,6 +45,7 @@ test('buildVisibleRows invalidates cache when treeVersion changes', () => {
     loadedChildren: { [filesParentKey(null)]: true },
     expandedFolderIds: {},
     folderMeta: {},
+    sortedChildrenByParentId: {},
   }
 
   const rowsV1 = buildVisibleRows({ ...base, treeVersion: 1, nodesById: nodesByIdV1 })
@@ -73,6 +74,7 @@ test('buildVisibleRows caches for same structural key', () => {
     loadedChildren: { [filesParentKey(null)]: true },
     expandedFolderIds: {},
     folderMeta: {},
+    sortedChildrenByParentId: {},
   })
 
   const rowsB = buildVisibleRows({
@@ -87,6 +89,7 @@ test('buildVisibleRows caches for same structural key', () => {
     loadedChildren: { [filesParentKey(null)]: true },
     expandedFolderIds: {},
     folderMeta: {},
+    sortedChildrenByParentId: {},
   })
 
   assert.equal(rowsA, rowsB)
@@ -110,6 +113,7 @@ test('buildVisibleRows expires stale cache entries by TTL', () => {
       loadedChildren: { [filesParentKey(null)]: true },
       expandedFolderIds: {},
       folderMeta: {},
+      sortedChildrenByParentId: {},
     }
 
     const first = buildVisibleRows(params)
@@ -139,6 +143,7 @@ test('buildVisibleRows evicts least-recently-used keys when budget is exceeded',
       loadedChildren: { [filesParentKey(null)]: true },
       expandedFolderIds: {},
       folderMeta: {},
+      sortedChildrenByParentId: {},
     })
 
     const firstRows = buildVisibleRows(makeParams(0))

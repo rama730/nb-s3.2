@@ -23,7 +23,26 @@ end
 return current
 `;
 
-type RateLimitMode = 'best-effort' | 'distributed-only';
+export type RateLimitMode = 'best-effort' | 'distributed-only';
+export type RateLimitFallback = 'deny' | 'local' | 'allow';
+
+type RateLimitRoutePolicy = {
+    mode?: RateLimitMode;
+    fallback?: RateLimitFallback;
+};
+
+export const RATE_LIMIT_ROUTE_POLICIES: Record<string, RateLimitRoutePolicy> = {
+    default: {},
+    health: { mode: 'best-effort', fallback: 'allow' },
+    ready: { mode: 'best-effort', fallback: 'allow' },
+    publicRead: { mode: 'best-effort', fallback: 'local' },
+};
+
+export type ConsumeRateLimitOptions = {
+    mode?: RateLimitMode;
+    fallback?: RateLimitFallback;
+    route?: keyof typeof RATE_LIMIT_ROUTE_POLICIES;
+};
 
 function getRateLimitMode(): RateLimitMode {
     if (process.env.RATE_LIMIT_MODE === 'distributed-only') return 'distributed-only';
@@ -31,6 +50,17 @@ function getRateLimitMode(): RateLimitMode {
     return process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test'
         ? 'best-effort'
         : 'distributed-only';
+}
+
+function defaultFallbackForMode(mode: RateLimitMode): RateLimitFallback {
+    return mode === 'distributed-only' ? 'deny' : 'local';
+}
+
+function resolveConsumeOptions(options?: ConsumeRateLimitOptions): { mode: RateLimitMode; fallback: RateLimitFallback } {
+    const routePolicy = options?.route ? RATE_LIMIT_ROUTE_POLICIES[options.route] : undefined;
+    const mode = options?.mode ?? routePolicy?.mode ?? getRateLimitMode();
+    const fallback = options?.fallback ?? routePolicy?.fallback ?? defaultFallbackForMode(mode);
+    return { mode, fallback };
 }
 
 function cleanupLocalBuckets() {
@@ -104,21 +134,35 @@ export async function consumeRateLimit(
     identifier: string,
     limit: number,
     windowSeconds: number,
+    options?: ConsumeRateLimitOptions,
 ): Promise<RateLimitResult> {
     cleanupLocalBuckets();
 
     const redis = await getRedisClient();
-    const mode = getRateLimitMode();
+    const { mode, fallback } = resolveConsumeOptions(options);
 
     if (!redis) {
         if (!hasLoggedLocalFallback) {
             hasLoggedLocalFallback = true;
-            const behavior = mode === 'distributed-only' ? 'blocking all requests' : 'using in-memory fallback';
+            const behavior = fallback === 'deny'
+                ? 'blocking all requests'
+                : fallback === 'allow'
+                    ? 'allowing requests'
+                    : 'using in-memory fallback';
             console.warn(`[rate-limit] Redis unavailable, ${behavior}`, {
                 mode,
+                fallback,
             });
         }
-        if (mode === 'distributed-only') {
+        if (fallback === 'allow') {
+            return {
+                allowed: true,
+                count: 1,
+                limit,
+                resetAt: Date.now() + windowSeconds * 1000,
+            };
+        }
+        if (fallback === 'deny') {
             return {
                 allowed: false,
                 count: 0,
@@ -152,10 +196,19 @@ export async function consumeRateLimit(
             hasLoggedRedisCommandFailure = true;
             console.warn('[rate-limit] Redis command failed, applying fallback behavior', {
                 mode,
+                fallback,
                 error: error instanceof Error ? error.message : String(error),
             });
         }
-        if (mode === 'distributed-only') {
+        if (fallback === 'allow') {
+            return {
+                allowed: true,
+                count: 1,
+                limit,
+                resetAt: Date.now() + windowSeconds * 1000,
+            };
+        }
+        if (fallback === 'deny') {
             return {
                 allowed: false,
                 count: 0,
@@ -165,4 +218,17 @@ export async function consumeRateLimit(
         }
         return consumeLocalRateLimit(identifier, limit, windowSeconds);
     }
+}
+
+export async function consumeRateLimitForRoute(
+    route: keyof typeof RATE_LIMIT_ROUTE_POLICIES,
+    identifier: string,
+    limit: number,
+    windowSeconds: number,
+    overrides?: Omit<ConsumeRateLimitOptions, 'route'>,
+): Promise<RateLimitResult> {
+    return consumeRateLimit(identifier, limit, windowSeconds, {
+        route,
+        ...overrides,
+    });
 }

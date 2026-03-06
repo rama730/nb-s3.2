@@ -152,3 +152,12 @@ export {
   ROOT_KEY,
   parentKey,
 } from "./types";
+
+export {
+  contentKey,
+  getFileContent,
+  setFileContent,
+  deleteFileContent,
+  clearProjectContent,
+  contentMapSize,
+} from "./contentMap";

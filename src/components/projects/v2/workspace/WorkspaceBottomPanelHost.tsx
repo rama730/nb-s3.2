@@ -5,6 +5,7 @@ import type { ProjectNode } from "@/lib/db/schema";
 import type { Problem } from "@/stores/files/types";
 import type { FilesWorkspaceTabState, PaneId } from "../state/filesTabTypes";
 import { BottomPanel } from "../panels/BottomPanel";
+import { getFileContent } from "@/stores/filesWorkspaceStore";
 
 interface WorkspaceBottomPanelHostProps {
   projectId: string;
@@ -41,7 +42,7 @@ export function WorkspaceBottomPanelHost({
       activeFileContent={
         (() => {
           const id = activeTabIdByPane[activePane];
-          return id ? tabById[id]?.content : undefined;
+          return id ? getFileContent(projectId, id) || undefined : undefined;
         })()
       }
       onNavigateToFile={(nodeId) => {

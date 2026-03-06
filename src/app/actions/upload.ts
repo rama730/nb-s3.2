@@ -2,22 +2,23 @@
 
 import { createAdminClient, createClient } from '@/lib/supabase/server';
 import { assertProjectWriteAccess } from '@/app/actions/files';
+import { isCanonicalProjectFileKey, parseProjectFileKey } from '@/lib/storage/project-file-key';
 
-const UUID_RE =
-    /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 const MAX_BATCH_UPLOAD_KEYS = 200;
 
-function extractProjectIdFromKey(key: string): string | null {
-    const clean = (key || '').trim().replace(/^\/+/, '');
-    const first = clean.split('/')[0] || '';
-    return UUID_RE.test(first) ? first : null;
-}
+const UPLOAD_ERROR_CODES = {
+    KEY_FORMAT_INVALID: 'KEY_FORMAT_INVALID',
+} as const;
 
 async function assertUploadAccessForKey(key: string, userId: string) {
-    const projectId = extractProjectIdFromKey(key);
-    if (!projectId) {
-        throw new Error('Invalid upload key');
+    const parsed = parseProjectFileKey(key);
+    if (!parsed) {
+        throw new Error(UPLOAD_ERROR_CODES.KEY_FORMAT_INVALID);
     }
+    if (!isCanonicalProjectFileKey(key)) {
+        throw new Error(UPLOAD_ERROR_CODES.KEY_FORMAT_INVALID);
+    }
+    const projectId = parsed.projectId;
     await assertProjectWriteAccess(projectId, userId);
     return projectId;
 }
@@ -33,7 +34,7 @@ async function assertUploadAccessForKey(key: string, userId: string) {
 export async function getUploadPresignedUrl(
     key: string,
     contentType: string
-): Promise<{ url: string } | { error: string }> {
+): Promise<{ url: string } | { error: string; code?: string }> {
     try {
         const authClient = await createClient();
         const { data: { user } } = await authClient.auth.getUser();
@@ -56,6 +57,9 @@ export async function getUploadPresignedUrl(
 
         return { url: data.signedUrl };
     } catch (e) {
+        if (e instanceof Error && e.message === UPLOAD_ERROR_CODES.KEY_FORMAT_INVALID) {
+            return { error: 'Invalid upload key format', code: UPLOAD_ERROR_CODES.KEY_FORMAT_INVALID };
+        }
         console.error('Presigned URL error:', e);
         return { error: 'Internal server error' };
     }
@@ -67,7 +71,7 @@ export async function getUploadPresignedUrl(
  */
 export async function getBatchUploadUrls(
     keys: { key: string; contentType: string }[]
-): Promise<{ urls: Record<string, string> } | { error: string }> {
+): Promise<{ urls: Record<string, string> } | { error: string; code?: string }> {
     try {
         const authClient = await createClient();
         const { data: { user } } = await authClient.auth.getUser();
@@ -82,16 +86,17 @@ export async function getBatchUploadUrls(
             return { error: `Too many files in one request. Max ${MAX_BATCH_UPLOAD_KEYS}.` };
         }
 
-        const firstProjectId = extractProjectIdFromKey(keys[0]?.key || '');
-        if (!firstProjectId) {
-            return { error: 'Invalid upload key' };
+        const firstParsed = parseProjectFileKey(keys[0]?.key || '');
+        if (!firstParsed || !isCanonicalProjectFileKey(keys[0]?.key || '')) {
+            return { error: 'Invalid upload key format', code: UPLOAD_ERROR_CODES.KEY_FORMAT_INVALID };
         }
+        const firstProjectId = firstParsed.projectId;
 
         // Ensure all keys belong to the same project
         for (const item of keys) {
-            const pid = extractProjectIdFromKey(item.key);
-            if (!pid || pid !== firstProjectId) {
-                return { error: 'Invalid upload key' };
+            const parsed = parseProjectFileKey(item.key);
+            if (!parsed || !isCanonicalProjectFileKey(item.key) || parsed.projectId !== firstProjectId) {
+                return { error: 'Invalid upload key format', code: UPLOAD_ERROR_CODES.KEY_FORMAT_INVALID };
             }
         }
 

@@ -27,6 +27,7 @@ function attachOnboardingMonitoring(page: import('@playwright/test').Page) {
 }
 const FIXTURE_EMAILS = {
     happy: process.env.E2E_ONBOARDING_HAPPY_EMAIL || 'codex.onboarding.happy@example.com',
+    legacy: process.env.E2E_ONBOARDING_LEGACY_EMAIL || 'codex.onboarding.legacy@example.com',
     reserved: process.env.E2E_ONBOARDING_RESERVED_EMAIL || 'codex.onboarding.reserved@example.com',
     collision: process.env.E2E_ONBOARDING_COLLISION_EMAIL || 'codex.onboarding.collision@example.com',
     rateLimit: process.env.E2E_ONBOARDING_RATELIMIT_EMAIL || 'codex.onboarding.ratelimit@example.com',
@@ -165,14 +166,55 @@ test.describe('Onboarding smoke', () => {
         await page.locator('#username').fill(username)
         await expect(page.getByText('Username is available')).toBeVisible({ timeout: 15000 })
         await page.getByRole('button', { name: 'Continue' }).click()
+        await page.getByText('Male', { exact: true }).click()
+        await page.getByLabel('Pronouns (optional)').fill('he/him')
+        await page.getByRole('tab', { name: 'Work prefs' }).click()
+        await page.getByLabel('Experience level').selectOption('mid')
+        await page.getByLabel('Availability per week').selectOption('h_10_20')
+        await page.getByText('Freelance projects', { exact: true }).click()
+        await page.getByText('Available', { exact: true }).first().click()
+        await page.getByRole('tab', { name: 'Social' }).click()
+        await page.getByLabel('GitHub URL').fill('github.com/onboarding-happy')
         await page.getByRole('button', { name: 'Continue' }).click()
         await page.getByText('React', { exact: true }).click()
         await page.getByRole('button', { name: 'Continue' }).click()
+        await page.getByText('Everyone', { exact: true }).click()
         await page.getByRole('button', { name: 'Complete Setup' }).click()
 
         await expect
             .poll(() => new URL(page.url()).pathname, { timeout: 20000 })
             .toBe('/hub')
+
+        await monitor.assertNoViolations()
+        monitor.detach()
+        await context.close()
+    })
+
+    test('legacy local draft key remains compatible', async ({ browser }) => {
+        const email = FIXTURE_EMAILS.legacy
+        await ensureOnboardingFixture(email)
+
+        const context = await browser.newContext()
+        const page = await context.newPage()
+        const monitor = attachOnboardingMonitoring(page)
+
+        await login(page, email)
+        await page.evaluate(() => {
+            localStorage.removeItem('onboarding:draft:v2')
+            localStorage.setItem('onboarding:draft:v1', JSON.stringify({
+                step: 2,
+                data: {
+                    fullName: 'Legacy Draft User',
+                    pronouns: 'they/them',
+                    availabilityStatus: 'busy',
+                },
+                updatedAt: Date.now(),
+            }))
+        })
+        await page.reload()
+
+        await expect(page.getByText('Step 2 of 4')).toBeVisible({ timeout: 10000 })
+        await expect(page.getByLabel('Pronouns (optional)')).toHaveValue('they/them')
 
         await monitor.assertNoViolations()
         monitor.detach()
@@ -274,6 +316,7 @@ test.describe('Onboarding smoke', () => {
         await page.locator('#username').fill(username)
         await expect(page.getByText('Username is available')).toBeVisible({ timeout: 15000 })
         await page.getByRole('button', { name: 'Continue' }).click()
+        await page.getByRole('tab', { name: 'Social' }).click()
         await page.getByRole('button', { name: 'Continue' }).click()
         await page.getByText('React', { exact: true }).click()
         await page.getByRole('button', { name: 'Continue' }).click()

@@ -1,6 +1,6 @@
 import { db } from '@/lib/db';
 import { projects, projectFollows, projectOpenRoles, profiles, projectMembers, savedProjects } from '@/lib/db/schema';
-import { eq, desc, sql } from 'drizzle-orm';
+import { eq, desc, sql, and, isNull } from 'drizzle-orm';
 import { cache } from 'react';
 
 // Removing cache for debug
@@ -17,7 +17,7 @@ export const getProjectDetails = async (rawProjectId: string) => {
 
         // Optimized: Fetch Project & Owner first
         const project = await db.query.projects.findFirst({
-            where: conditions,
+            where: and(conditions, isNull(projects.deletedAt)),
             with: {
                 owner: true,
                 // Remove deep fetches from here
@@ -38,8 +38,19 @@ export const getProjectDetails = async (rawProjectId: string) => {
             // Members (LIMIT to 20 to prevent bloat)
             // Frontend should use dedicated "Team" tab or infinite scroll for full list
             db.select({
-                member: projectMembers,
-                user: profiles
+                member: {
+                    id: projectMembers.id,
+                    projectId: projectMembers.projectId,
+                    userId: projectMembers.userId,
+                    role: projectMembers.role,
+                    joinedAt: projectMembers.joinedAt,
+                },
+                user: {
+                    id: profiles.id,
+                    username: profiles.username,
+                    fullName: profiles.fullName,
+                    avatarUrl: profiles.avatarUrl,
+                },
             })
                 .from(projectMembers)
                 .leftJoin(profiles, eq(projectMembers.userId, profiles.id))
@@ -98,7 +109,7 @@ export const getPopularProjectIds = cache(async (limit: number = 20) => {
     const data = await db
         .select({ id: projects.id })
         .from(projects)
-        .where(eq(projects.visibility, 'public'))
+        .where(and(eq(projects.visibility, 'public'), isNull(projects.deletedAt)))
         .orderBy(desc(projects.viewCount))
         .limit(limit);
 

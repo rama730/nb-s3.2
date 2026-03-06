@@ -12,6 +12,7 @@ import {
     type ConnectionRequestHistoryStatus,
 } from '@/lib/applications/status';
 import { APPLICATION_BANNER_HIDE_AFTER_MS } from '@/lib/chat/banner-lifecycle';
+import { cacheData, getCachedData } from '@/lib/redis';
 
 // ============================================================================
 // TYPES
@@ -36,7 +37,7 @@ export interface SuggestedProfile {
     canConnect?: boolean;
     mutualConnections?: number;
     recommendationReason?: string;
-    projects: Array<{ id: string; title: string; status: string | null }>;
+    projects?: Array<{ id: string; title: string; status: string | null }>;
 }
 
 export type ConnectionsFeedTab = 'network' | 'requests_incoming' | 'requests_sent' | 'discover';
@@ -63,9 +64,9 @@ type DiscoverFeedItem = {
     location: string | null;
     connectionStatus: SuggestedProfile['connectionStatus'];
     canConnect: boolean;
-    mutualConnections: number;
-    recommendationReason: string;
-    projects: SuggestedProfile['projects'];
+    mutualConnections?: number;
+    recommendationReason?: string;
+    projects?: SuggestedProfile['projects'];
 };
 
 type RequestFeedItem = {
@@ -332,21 +333,21 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
             if (seenNetworkUserIds.has(row.profileId)) return acc;
             seenNetworkUserIds.add(row.profileId);
             acc.push({
-            id: row.id,
-            type: 'network' as const,
-            requesterId: row.requesterId,
-            addresseeId: row.addresseeId,
-            status: row.status,
-            createdAt: row.createdAt,
-            updatedAt: row.updatedAt,
-            otherUser: {
-                id: row.profileId,
-                username: row.username,
-                fullName: row.fullName,
-                avatarUrl: row.avatarUrl,
-                headline: row.headline,
-                location: row.location,
-            },
+                id: row.id,
+                type: 'network' as const,
+                requesterId: row.requesterId,
+                addresseeId: row.addresseeId,
+                status: row.status,
+                createdAt: row.createdAt,
+                updatedAt: row.updatedAt,
+                otherUser: {
+                    id: row.profileId,
+                    username: row.username,
+                    fullName: row.fullName,
+                    avatarUrl: row.avatarUrl,
+                    headline: row.headline,
+                    location: row.location,
+                },
             });
             return acc;
         }, []).slice(0, limit);
@@ -423,21 +424,21 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
             if (seenRequestUserIds.has(userId)) return acc;
             seenRequestUserIds.add(userId);
             acc.push({
-            id: row.id,
-            type: tab,
-            requesterId: row.requesterId,
-            addresseeId: row.addresseeId,
-            status: row.status,
-            createdAt: row.createdAt,
-            updatedAt: row.updatedAt,
-            user: {
-                id: isIncoming ? row.requesterId : row.addresseeId,
-                username: row.username,
-                fullName: row.fullName,
-                avatarUrl: row.avatarUrl,
-                headline: row.headline,
-                location: row.location,
-            },
+                id: row.id,
+                type: tab,
+                requesterId: row.requesterId,
+                addresseeId: row.addresseeId,
+                status: row.status,
+                createdAt: row.createdAt,
+                updatedAt: row.updatedAt,
+                user: {
+                    id: isIncoming ? row.requesterId : row.addresseeId,
+                    username: row.username,
+                    fullName: row.fullName,
+                    avatarUrl: row.avatarUrl,
+                    headline: row.headline,
+                    location: row.location,
+                },
             });
             return acc;
         }, []).slice(0, limit);
@@ -454,6 +455,21 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
         ? Number(input.cursor.slice(2))
         : 0;
     const safeOffset = Number.isFinite(discoverOffset) && discoverOffset > 0 ? Math.min(discoverOffset, 1000) : 0;
+
+    // PURE OPTIMIZATION: Split heavy vs light queries based on offset
+    const isHeavyLoad = safeOffset === 0 && !searchPattern;
+    const cacheKey = `connections:feed:discover:${user.id}:${safeOffset}`;
+
+    // Redis Buffer Cache for Light Explore Load
+    if (!isHeavyLoad && !searchPattern) {
+        try {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const cachedResult = await getCachedData<any>(cacheKey);
+            if (cachedResult) return cachedResult;
+        } catch (e) {
+            console.error("Redis Cache error:", e);
+        }
+    }
 
     const meProfile = await db
         .select({
@@ -489,6 +505,7 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
         );
     }
 
+    // Ultra-light profile fetch
     const candidates = await db
         .select({
             id: profiles.id,
@@ -497,9 +514,10 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
             avatarUrl: profiles.avatarUrl,
             headline: profiles.headline,
             location: profiles.location,
-            skills: profiles.skills,
-            interests: profiles.interests,
+            skills: isHeavyLoad ? profiles.skills : sql`NULL::text[]`, // Only fetch JSON/Arrays if heavy
+            interests: isHeavyLoad ? profiles.interests : sql`NULL::text[]`,
             createdAt: profiles.createdAt,
+            connectionsCount: profiles.connectionsCount,
         })
         .from(profiles)
         .where(and(...candidateBaseConditions))
@@ -518,24 +536,36 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
         };
     }
 
-    const [existingConnections, candidateProjects] = await Promise.all([
-        db
-            .select({
-                id: connections.id,
-                requesterId: connections.requesterId,
-                addresseeId: connections.addresseeId,
-                status: connections.status,
-                createdAt: connections.createdAt,
-                updatedAt: connections.updatedAt,
-            })
-            .from(connections)
-            .where(
-                or(
-                    and(eq(connections.requesterId, user.id), inArray(connections.addresseeId, candidateIds)),
-                    and(eq(connections.addresseeId, user.id), inArray(connections.requesterId, candidateIds)),
-                ),
+    // Always need connection status
+    const existingConnections = await db
+        .select({
+            id: connections.id,
+            requesterId: connections.requesterId,
+            addresseeId: connections.addresseeId,
+            status: connections.status,
+            createdAt: connections.createdAt,
+            updatedAt: connections.updatedAt,
+        })
+        .from(connections)
+        .where(
+            or(
+                and(eq(connections.requesterId, user.id), inArray(connections.addresseeId, candidateIds)),
+                and(eq(connections.addresseeId, user.id), inArray(connections.requesterId, candidateIds)),
             ),
-        db
+        );
+
+    const connectionByCandidate = new Map<string, { status: typeof connections.$inferSelect.status; requesterId: string; id: string }>();
+    for (const conn of existingConnections) {
+        const candidateId = conn.requesterId === user.id ? conn.addresseeId : conn.requesterId;
+        connectionByCandidate.set(candidateId, { status: conn.status, requesterId: conn.requesterId, id: conn.id });
+    }
+
+    let candidateProjects: Array<{ ownerId: string; id: string; title: string; status: string | null }> = [];
+    const mutualCounts = new Map<string, number>();
+
+    // Heavy querying ONLY for infinite scroll page 1 (Recommendations)
+    if (isHeavyLoad) {
+        const fetchedProjects = await db
             .select({
                 ownerId: projects.ownerId,
                 id: projects.id,
@@ -544,73 +574,87 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
             })
             .from(projects)
             .where(inArray(projects.ownerId, candidateIds))
-            .orderBy(desc(projects.createdAt)),
-    ]);
+            .orderBy(desc(projects.createdAt));
+        candidateProjects = fetchedProjects;
 
-    const myPeerRows = await db
-        .select({
-            peerId: sql<string>`CASE
-                WHEN ${connections.requesterId} = ${user.id} THEN ${connections.addresseeId}
-                ELSE ${connections.requesterId}
-            END`,
-        })
-        .from(connections)
-        .where(
-            and(
-                eq(connections.status, 'accepted'),
-                or(eq(connections.requesterId, user.id), eq(connections.addresseeId, user.id)),
-            ),
-        )
-        .limit(1000);
-    const myPeerIds = myPeerRows.map((row) => row.peerId);
-
-    const mutualCounts = new Map<string, number>();
-    if (myPeerIds.length > 0) {
-        const candidateIdSet = new Set(candidateIds);
-        const mutualRows = await db
+        const myPeerRows = await db
             .select({
-                requesterId: connections.requesterId,
-                addresseeId: connections.addresseeId,
+                peerId: sql<string>`CASE
+                    WHEN ${connections.requesterId} = ${user.id} THEN ${connections.addresseeId}
+                    ELSE ${connections.requesterId}
+                END`,
             })
             .from(connections)
             .where(
                 and(
                     eq(connections.status, 'accepted'),
-                    or(
-                        and(inArray(connections.requesterId, candidateIds), inArray(connections.addresseeId, myPeerIds)),
-                        and(inArray(connections.addresseeId, candidateIds), inArray(connections.requesterId, myPeerIds)),
-                    ),
+                    or(eq(connections.requesterId, user.id), eq(connections.addresseeId, user.id)),
                 ),
-            );
+            )
+            .limit(1000);
+        const myPeerIds = myPeerRows.map((row) => row.peerId);
 
-        for (const row of mutualRows) {
-            const candidateId = candidateIdSet.has(row.requesterId) ? row.requesterId : row.addresseeId;
-            mutualCounts.set(candidateId, (mutualCounts.get(candidateId) || 0) + 1);
+        if (myPeerIds.length > 0) {
+            const candidateIdSet = new Set(candidateIds);
+            const mutualRows = await db
+                .select({
+                    requesterId: connections.requesterId,
+                    addresseeId: connections.addresseeId,
+                })
+                .from(connections)
+                .where(
+                    and(
+                        eq(connections.status, 'accepted'),
+                        or(
+                            and(inArray(connections.requesterId, candidateIds), inArray(connections.addresseeId, myPeerIds)),
+                            and(inArray(connections.addresseeId, candidateIds), inArray(connections.requesterId, myPeerIds)),
+                        ),
+                    ),
+                );
+
+            for (const row of mutualRows) {
+                const candidateId = candidateIdSet.has(row.requesterId) ? row.requesterId : row.addresseeId;
+                mutualCounts.set(candidateId, (mutualCounts.get(candidateId) || 0) + 1);
+            }
         }
     }
 
     const projectsByOwner = new Map<string, Array<{ id: string; title: string; status: string | null }>>();
-    for (const project of candidateProjects) {
-        if (!projectsByOwner.has(project.ownerId)) {
-            projectsByOwner.set(project.ownerId, []);
+    if (isHeavyLoad) {
+        for (const project of candidateProjects) {
+            if (!projectsByOwner.has(project.ownerId)) {
+                projectsByOwner.set(project.ownerId, []);
+            }
+            const ownerProjects = projectsByOwner.get(project.ownerId)!;
+            if (ownerProjects.length < 3) {
+                ownerProjects.push({ id: project.id, title: project.title, status: project.status });
+            }
         }
-        const ownerProjects = projectsByOwner.get(project.ownerId)!;
-        if (ownerProjects.length < 3) {
-            ownerProjects.push({ id: project.id, title: project.title, status: project.status });
-        }
-    }
-
-    const connectionByCandidate = new Map<string, { status: typeof connections.$inferSelect.status; requesterId: string; id: string }>();
-    for (const conn of existingConnections) {
-        const candidateId = conn.requesterId === user.id ? conn.addresseeId : conn.requesterId;
-        connectionByCandidate.set(candidateId, { status: conn.status, requesterId: conn.requesterId, id: conn.id });
     }
 
     const scored = candidates.map((candidate) => {
         const conn = connectionByCandidate.get(candidate.id);
+        const status = conn?.status === 'accepted'
+            ? 'connected'
+            : conn?.status === 'pending'
+                ? (conn.requesterId === user.id ? 'pending_sent' : 'pending_received')
+                : 'none';
+        const canConnect = status === 'none';
+
+        if (!isHeavyLoad) {
+            return {
+                ...candidate,
+                score: candidate.connectionsCount || 0, // Fallback sorting for light load
+                status,
+                canConnect,
+                mutual: 0,
+                recommendationReason: undefined,
+            };
+        }
+
         const candidateSignals = new Set<string>([
-            ...((candidate.skills || []).map((v) => v.toLowerCase())),
-            ...((candidate.interests || []).map((v) => v.toLowerCase())),
+            ...(((candidate.skills as string[]) || []).map((v) => v.toLowerCase())),
+            ...(((candidate.interests as string[]) || []).map((v) => v.toLowerCase())),
         ]);
         let overlap = 0;
         for (const signal of candidateSignals) {
@@ -620,13 +664,6 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
         const recency = Math.max(0, 365 - (Date.now() - new Date(candidate.createdAt).getTime()) / (1000 * 60 * 60 * 24));
         const score = overlap * 5 + mutual * 3 + recency * 0.03;
 
-        const status = conn?.status === 'accepted'
-            ? 'connected'
-            : conn?.status === 'pending'
-                ? (conn.requesterId === user.id ? 'pending_sent' : 'pending_received')
-                : 'none';
-
-        const canConnect = status === 'none';
         const recommendationReason = overlap > 0
             ? 'Skills match'
             : mutual > 0
@@ -643,7 +680,9 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
         };
     });
 
-    scored.sort((a, b) => b.score - a.score || +new Date(b.createdAt) - +new Date(a.createdAt));
+    if (isHeavyLoad) {
+        scored.sort((a, b) => b.score - a.score || +new Date(b.createdAt) - +new Date(a.createdAt));
+    }
     const hasMore = scored.length > limit;
     const items = scored.slice(0, limit).map((candidate) => ({
         id: candidate.id,
@@ -655,13 +694,23 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
         location: candidate.location,
         connectionStatus: candidate.status as SuggestedProfile['connectionStatus'],
         canConnect: candidate.canConnect,
-        mutualConnections: candidate.mutual,
-        recommendationReason: candidate.recommendationReason,
-        projects: projectsByOwner.get(candidate.id) || [],
+        mutualConnections: isHeavyLoad ? candidate.mutual : undefined,
+        recommendationReason: isHeavyLoad ? candidate.recommendationReason : undefined,
+        projects: isHeavyLoad ? projectsByOwner.get(candidate.id) || [] : undefined,
     }));
 
     const nextCursor = hasMore ? `o:${safeOffset + limit}` : null;
-    return { success: true as const, items, hasMore, nextCursor, stats };
+    const finalResult = { success: true as const, items, hasMore, nextCursor, stats };
+
+    if (!isHeavyLoad && !searchPattern) {
+        try {
+            await cacheData(cacheKey, finalResult, 15 * 60); // 15 mins TTL
+        } catch (e) {
+            console.error("Redis Cache Write error:", e);
+        }
+    }
+
+    return finalResult;
 }
 
 export async function getConnectionRequestHistory(limit: number = 80): Promise<{

@@ -31,6 +31,16 @@ export function useTreeContext(options: {
   canEdit: boolean;
   projectName: string;
   effectiveMode: string;
+  // Inline rename
+  renameNodeId: string | null;
+  renameValue: string;
+  onRenameChange: (v: string) => void;
+  onRenameConfirm: () => void;
+  onRenameCancel: () => void;
+  // Desktop drop upload
+  onDesktopFileDrop?: (files: File[], targetFolderId: string) => void;
+  // Folder sizes
+  folderSizes: Record<string, number>;
   handleSelect: (node: ProjectNode, e?: React.MouseEvent) => void;
   handleToggleFolder: (node: ProjectNode) => Promise<void>;
   handleDropOnFolder: (targetId: string, draggedId: string) => Promise<void>;
@@ -38,6 +48,8 @@ export function useTreeContext(options: {
   openCreate: (kind: "file" | "folder") => void;
   openCreateInFolder: (folderId: string | null, kind: "file" | "folder") => void;
   handleUploadToFolder: (folderId: string | null) => void;
+  handleUploadFolderToFolder: (folderId: string | null) => void;
+  handleDownloadFolder: (folderId: string) => void;
   openRename: (node: ProjectNode) => void;
   handleMoveFromMenu: (node: ProjectNode) => void;
   handleDeleteFromMenu: (node: ProjectNode) => void;
@@ -48,6 +60,7 @@ export function useTreeContext(options: {
   showToast: (msg: string, type: "success" | "error" | "info") => void;
   recordOperation: (op: Omit<ExplorerOperation, "id" | "at">) => void;
   setTrashNodesState: React.Dispatch<React.SetStateAction<ProjectNode[]>>;
+  onContextMenu: (node: ProjectNode, e: React.MouseEvent) => void;
 }): FileTreeItemContext {
   const {
     projectId,
@@ -69,6 +82,8 @@ export function useTreeContext(options: {
     openCreate,
     openCreateInFolder,
     handleUploadToFolder,
+    handleUploadFolderToFolder,
+    handleDownloadFolder,
     openRename,
     handleMoveFromMenu,
     handleDeleteFromMenu,
@@ -79,6 +94,17 @@ export function useTreeContext(options: {
     showToast,
     recordOperation,
     setTrashNodesState,
+    onContextMenu,
+  } = options;
+
+  const {
+    renameNodeId,
+    renameValue,
+    onRenameChange,
+    onRenameConfirm,
+    onRenameCancel,
+    onDesktopFileDrop,
+    folderSizes,
   } = options;
 
   const handleOpenNodeFromMenu = useCallback(
@@ -142,8 +168,22 @@ export function useTreeContext(options: {
       projectName: projectName || "Project",
       isTrashMode: effectiveMode === "trash",
 
+      // Inline rename
+      renameNodeId,
+      renameValue,
+      onRenameChange,
+      onRenameConfirm,
+      onRenameCancel,
+
+      // Desktop drop
+      onDesktopFileDrop,
+
+      // Folder sizes
+      folderSizes,
+
       onToggle: (node: ProjectNode) => void handleToggleFolder(node),
       onSelect: (node: ProjectNode, e?: React.MouseEvent) => handleSelect(node, e),
+      onContextMenu,
       onDragStart: () => {},
       onDragEnd: () => {},
       onDrop: (targetId: string, draggedId: string) =>
@@ -153,6 +193,8 @@ export function useTreeContext(options: {
       createInFolder: (folderId: string | null, kind: "file" | "folder") =>
         openCreateInFolder(folderId, kind),
       uploadToFolder: (folderId: string | null) => handleUploadToFolder(folderId),
+      uploadFolderToFolder: (folderId: string | null) => handleUploadFolderToFolder(folderId),
+      downloadFolder: (folderId: string) => handleDownloadFolder(folderId),
       openNode: (node: ProjectNode) => handleOpenNodeFromMenu(node),
       renameNode: (node: ProjectNode) => openRename(node),
       moveNode: (node: ProjectNode) => handleMoveFromMenu(node),
@@ -174,13 +216,23 @@ export function useTreeContext(options: {
       projectName,
       effectiveMode,
       projectId,
+      renameNodeId,
+      renameValue,
+      onRenameChange,
+      onRenameConfirm,
+      onRenameCancel,
+      onDesktopFileDrop,
+      folderSizes,
       handleSelect,
       handleToggleFolder,
       handleDropOnFolder,
       handleLoadMore,
+      onContextMenu,
       openCreate,
       openCreateInFolder,
       handleUploadToFolder,
+      handleUploadFolderToFolder,
+      handleDownloadFolder,
       handleOpenNodeFromMenu,
       openRename,
       handleMoveFromMenu,

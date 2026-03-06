@@ -70,6 +70,7 @@ export type WorkspacePane = {
 
 // ─── Collaboration ───────────────────────────────────────────────────
 export type SoftLock = {
+  projectId?: string;
   nodeId: string;
   lockedBy: string;
   lockedByName?: string | null;
@@ -79,6 +80,7 @@ export type SoftLock = {
 // ─── File cache ──────────────────────────────────────────────────────
 export type FileState = {
   content: string;
+  contentVersion: number;
   isDirty: boolean;
   lastSavedAt?: number;
   lastAccessedAt?: number;
@@ -116,6 +118,9 @@ export type UiState = {
   bottomPanelTab: "terminal" | "output" | "problems" | "debug";
   bottomPanelHeight: number;
   bottomPanelCollapsed: boolean;
+  sidebarWidth: number;
+  sidebarCollapsed: boolean;
+  zenMode: boolean;
   searchReplaceOpen: boolean;
   commandPaletteOpen: boolean;
   quickOpenOpen: boolean;
@@ -130,7 +135,9 @@ export type UiState = {
   debugOutput: string[];
   /** Terminal command history (max 50). */
   commandHistory: string[];
-}
+  /** Persisted output mode filter */
+  outputFilterMode: "all" | "out" | "err";
+};
 
 export interface Problem {
   id: string;
@@ -141,6 +148,12 @@ export interface Problem {
   severity: "error" | "warning" | "info";
   message: string;
   source?: "execution" | "linter";
+  fix?: {
+    label: string;
+    action: "replace";
+    targetString: string;
+    replacement: string;
+  };
 }
 
 // ─── Per-project workspace state ─────────────────────────────────────
@@ -244,6 +257,11 @@ export type FilesWorkspaceState = {
   removeNodeFromCaches: (projectId: string, nodeId: string) => void;
   setTaskLinkCounts: (projectId: string, counts: Record<string, number>) => void;
   setNodes: (projectId: string, nodes: ProjectNode[]) => void;
+  hydrateFromIdb: (
+    projectId: string,
+    nodesById: Record<string, ProjectNode>,
+    childrenByParentId: Record<string, string[]>
+  ) => void;
 
   // file state actions
   setFileState: (projectId: string, nodeId: string, state: Partial<FileState>) => void;
@@ -300,10 +318,16 @@ export type FilesWorkspaceState = {
   setQuickOpenOpen: (projectId: string, open: boolean) => void;
   setStdinInputText: (projectId: string, text: string) => void;
   setProblems: (projectId: string, problems: Problem[]) => void;
+  clearProblems: (projectId: string) => void;
+  applyQuickFix: (projectId: string, problemId: string) => void;
   setDebugOutput: (projectId: string, lines: string[]) => void;
   appendDebugOutput: (projectId: string, lines: string[]) => void;
   clearDebugOutput: (projectId: string) => void;
   pushCommandToHistory: (projectId: string, command: string) => void;
+  setSidebarWidth: (projectId: string, width: number) => void;
+  toggleSidebar: (projectId: string) => void;
+  toggleZenMode: (projectId: string) => void;
+  setOutputFilterMode: (projectId: string, mode: "all" | "out" | "err") => void;
 };
 
 // ─── Defaults ────────────────────────────────────────────────────────
@@ -337,6 +361,9 @@ export const DEFAULT_UI_STATE: UiState = {
   bottomPanelTab: "terminal",
   bottomPanelHeight: 200,
   bottomPanelCollapsed: true,
+  sidebarWidth: 290,
+  sidebarCollapsed: false,
+  zenMode: false,
   searchReplaceOpen: false,
   commandPaletteOpen: false,
   quickOpenOpen: false,
@@ -346,6 +373,7 @@ export const DEFAULT_UI_STATE: UiState = {
   problems: [],
   debugOutput: [],
   commandHistory: [],
+  outputFilterMode: "all",
 };
 
 export const ROOT_KEY = "__root__";

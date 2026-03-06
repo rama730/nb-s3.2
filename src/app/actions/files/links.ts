@@ -95,13 +95,74 @@ export async function getTaskAttachments(taskId: string) {
         .select({
             node: projectNodes,
             linkedAt: taskNodeLinks.linkedAt,
+            order: taskNodeLinks.order,
+            annotation: taskNodeLinks.annotation,
         })
         .from(taskNodeLinks)
         .innerJoin(projectNodes, eq(taskNodeLinks.nodeId, projectNodes.id))
         .where(and(eq(taskNodeLinks.taskId, taskId), eq(projectNodes.projectId, projectId), isNull(projectNodes.deletedAt)))
-        .orderBy(desc(taskNodeLinks.linkedAt));
+        .orderBy(taskNodeLinks.order, desc(taskNodeLinks.linkedAt));
 
-    return rows.map((r) => r.node);
+    return rows.map((r) => ({
+        ...r.node,
+        linkedAt: r.linkedAt,
+        order: r.order,
+        annotation: r.annotation,
+    }));
+}
+
+export async function updateTaskNodeLink(taskId: string, nodeId: string, updates: { order?: number, annotation?: string | null }) {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error("Unauthorized");
+
+    const projectId = await getTaskProjectId(taskId);
+    await assertProjectWriteAccess(projectId, user.id);
+
+    // Ensure node belongs to same project and is not deleted
+    const node = await db.query.projectNodes.findFirst({
+        where: and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId), isNull(projectNodes.deletedAt)),
+        columns: { id: true }
+    });
+    if (!node) throw new Error("File not found");
+
+    if (Object.keys(updates).length === 0) return;
+
+    await db.update(taskNodeLinks)
+        .set(updates)
+        .where(and(eq(taskNodeLinks.taskId, taskId), eq(taskNodeLinks.nodeId, nodeId)));
+}
+
+export async function updateTaskNodeLinksOrder(taskId: string, updates: { nodeId: string, order: number }[]) {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error("Unauthorized");
+
+    const projectId = await getTaskProjectId(taskId);
+    await assertProjectWriteAccess(projectId, user.id);
+
+    if (!updates || updates.length === 0) return;
+
+    // Secure the node ids to ensure they exist and belong to the project
+    const nodeIds = updates.map(u => u.nodeId);
+    const nodes = await db.query.projectNodes.findMany({
+        where: and(inArray(projectNodes.id, nodeIds), eq(projectNodes.projectId, projectId), isNull(projectNodes.deletedAt)),
+        columns: { id: true }
+    });
+
+    const validNodeIds = new Set(nodes.map(n => n.id));
+    const validUpdates = updates.filter(u => validNodeIds.has(u.nodeId));
+
+    if (validUpdates.length === 0) return;
+
+    // Execute updates in parallel on the DB, single network request from client
+    await Promise.all(
+        validUpdates.map(u =>
+            db.update(taskNodeLinks)
+                .set({ order: u.order })
+                .where(and(eq(taskNodeLinks.taskId, taskId), eq(taskNodeLinks.nodeId, u.nodeId)))
+        )
+    );
 }
 
 export async function countTaskAttachments(taskId: string) {
