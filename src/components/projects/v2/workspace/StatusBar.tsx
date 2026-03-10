@@ -45,12 +45,13 @@ function getLang(fileName?: string): string {
 
 interface StatusBarProps {
   projectId: string;
+  projectName?: string;
   activePane: PaneId;
   activeTabId: string | null;
   tabById: Record<string, FilesWorkspaceTabState>;
 }
 
-export function StatusBar({ projectId, activePane, activeTabId, tabById }: StatusBarProps) {
+export function StatusBar({ projectId, projectName, activePane, activeTabId, tabById }: StatusBarProps) {
   const activeTab = activeTabId ? tabById[activeTabId] : null;
 
   // Phase 5: Read content from detached Map for line count
@@ -101,7 +102,7 @@ export function StatusBar({ projectId, activePane, activeTabId, tabById }: Statu
           )}
         </div>
         <div className="flex items-center gap-1.5 opacity-90 truncate max-w-[200px]">
-          <span className="opacity-60">nb-s3 /</span>
+          <span className="opacity-60">{projectName || "Project"} /</span>
           <span>{activeTab.node?.name ?? "Untitled"}</span>
         </div>
       </div>

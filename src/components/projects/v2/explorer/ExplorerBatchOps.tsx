@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -189,7 +189,9 @@ export function CreateDialog({
             <Button variant="outline" onClick={() => setCreateDialog({ open: false })}>
               Cancel
             </Button>
-            <Button onClick={() => void confirmCreate()}>Create</Button>
+            <Button onClick={() => void confirmCreate()} disabled={!canEdit}>
+              Create
+            </Button>
           </DialogFooter>
         </DialogContent>
       ) : null}

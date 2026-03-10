@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useRef, useEffect, useState } from "react";
+import React, { useMemo, useRef, useEffect, useState, useCallback } from "react";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { EditorView, keymap } from "@codemirror/view";
 import { cn } from "@/lib/utils";
@@ -78,7 +78,29 @@ export default function CodeEditor({
 }: CodeEditorProps) {
   const editorRef = useRef<ReactCodeMirrorRef>(null);
   const [langExtension, setLangExtension] = useState<Extension | null>(null);
+  const [isEditorReady, setIsEditorReady] = useState(false);
   const minimapSupported = false;
+
+  const dispatchCursorMoved = useCallback(
+    (view: EditorView, targetTabId?: string) => {
+      if (!targetTabId) return;
+      const pos = view.state.selection.main.head;
+      const line = view.state.doc.lineAt(pos);
+      const lineNumber = line.number;
+      const column = pos - line.from + 1;
+
+      if (onCursorChange) {
+        onCursorChange(lineNumber);
+      }
+
+      window.dispatchEvent(
+        new CustomEvent("cursor-moved", {
+          detail: { line: lineNumber, column, tabId: targetTabId },
+        })
+      );
+    },
+    [onCursorChange]
+  );
 
   const ext = getFileExtension(filename);
   useEffect(() => {
@@ -120,38 +142,18 @@ export default function CodeEditor({
       // Cursor position tracking for sticky scroll
       EditorView.updateListener.of((update) => {
         if (update.selectionSet) {
-          const pos = update.state.selection.main.head;
-          const line = update.state.doc.lineAt(pos);
-          const lineNumber = line.number;
-          const column = pos - line.from + 1;
-
-          if (onCursorChange) {
-            onCursorChange(lineNumber);
-          }
-
-          // Phase 6e: Transient status bar update via custom event
-          window.dispatchEvent(
-            new CustomEvent("cursor-moved", {
-              detail: { line: lineNumber, column, tabId },
-            })
-          );
+          dispatchCursorMoved(update.view, tabId);
         }
       }),
     ];
-  }, [langExtension, fontSize, minimapEnabled, onCursorChange, readOnly, wordWrap, tabId]);
+  }, [langExtension, fontSize, minimapEnabled, readOnly, wordWrap, tabId, dispatchCursorMoved]);
 
-  // Phase 6e: Dispatch initial position on mount or tab change
+  // Dispatch initial cursor position when editor is ready and tab changes
   useEffect(() => {
-    if (!editorRef.current?.view || !tabId) return;
+    if (!isEditorReady || !editorRef.current?.view || !tabId) return;
     const view = editorRef.current.view;
-    const pos = view.state.selection.main.head;
-    const line = view.state.doc.lineAt(pos);
-    window.dispatchEvent(
-      new CustomEvent("cursor-moved", {
-        detail: { line: line.number, column: pos - line.from + 1, tabId },
-      })
-    );
-  }, [tabId, langExtension]); // Re-run when lang loads as it affects view ready state
+    dispatchCursorMoved(view, tabId);
+  }, [tabId, isEditorReady, dispatchCursorMoved]);
 
   return (
     <div className="relative h-full w-full flex flex-row overflow-hidden">
@@ -168,6 +170,10 @@ export default function CodeEditor({
       )}
       <CodeMirror
         ref={editorRef}
+        onCreateEditor={(view) => {
+          setIsEditorReady(true);
+          dispatchCursorMoved(view, tabId);
+        }}
         value={value}
         onChange={(nextValue) => onChange(nextValue)}
         theme={theme === "dark" ? oneDark : undefined}

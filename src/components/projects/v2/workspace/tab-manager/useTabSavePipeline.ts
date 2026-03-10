@@ -209,8 +209,12 @@ export function useTabSavePipeline({
 
         const tabForSave = tabByIdRef.current[nodeId];
         if (!tabForSave) return false;
-        // Phase 5: Read content from detached Map
-        const contentToSave = getFileContent(projectId, nodeId);
+        // Phase 5: Read content from detached Map, fallback to tab content
+        const contentToSave = getFileContent(projectId, nodeId) ?? tabForSave.content;
+        if (contentToSave === undefined || contentToSave === null) {
+          if (!opts?.silent) showToast("No content to save", "error");
+          return false;
+        }
         const nodeToSave = tabForSave.node;
 
         if (typeof navigator !== "undefined" && !navigator.onLine) {

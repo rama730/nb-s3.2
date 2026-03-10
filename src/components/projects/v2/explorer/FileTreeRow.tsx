@@ -164,6 +164,8 @@ export const FileTreeRow = React.memo(function FileTreeRow({
 
     return (
         <div
+            data-workspace-file-item="true"
+            data-node-id={node.id}
             className={cn(
                 "group relative flex items-center h-[22px] min-w-0 cursor-pointer select-none transition-colors pr-2",
                 isSelected
@@ -191,12 +193,18 @@ export const FileTreeRow = React.memo(function FileTreeRow({
             onDragOver={(e) => {
                 e.preventDefault();
                 // Accept desktop file drops on folders
-                if (isFolder && e.dataTransfer.types.includes("Files")) {
+                const hasFiles = e.dataTransfer.types.includes("Files");
+                const hasNodeDrag =
+                    e.dataTransfer.types.includes("application/x-nb-node") ||
+                    e.dataTransfer.types.includes("text/plain");
+                if (isFolder && hasFiles) {
                     e.dataTransfer.dropEffect = "copy";
-                    if (!dropHighlight) setDropHighlight(true);
+                } else if (isFolder && hasNodeDrag) {
+                    e.dataTransfer.dropEffect = "move";
                 } else {
                     e.dataTransfer.dropEffect = "move";
                 }
+                if (isFolder && (hasFiles || hasNodeDrag) && !dropHighlight) setDropHighlight(true);
             }}
             onDragLeave={() => setDropHighlight(false)}
             onDrop={(e) => {

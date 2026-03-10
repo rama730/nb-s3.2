@@ -197,9 +197,9 @@ export function useExplorerBoot(options: {
 
       try {
         // Materialized Path Flat Tree Load
-        const allNodes = await getProjectTreeFlat(projectId);
+        const { nodes: allNodes, isComplete } = await getProjectTreeFlat(projectId);
 
-        if (allNodes && allNodes.length > 0) {
+        if (isComplete && allNodes && allNodes.length > 0) {
           upsertNodes(projectId, allNodes);
 
           const grouped: Record<string, string[]> = {};
@@ -211,7 +211,8 @@ export function useExplorerBoot(options: {
 
           Object.entries(grouped).forEach(([parentKey, childIds]) => {
             const pid = parentKey === "__root__" ? null : parentKey;
-            setChildren(projectId, pid, childIds);
+            const dedupedChildIds = Array.from(new Set(childIds));
+            setChildren(projectId, pid, dedupedChildIds);
             markChildrenLoaded(projectId, pid);
             setFolderMeta(projectId, pid, { nextCursor: null, hasMore: false });
           });

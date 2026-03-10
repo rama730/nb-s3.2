@@ -112,6 +112,11 @@ export function useLockManager({
                 lockedByName: res.lock.lockedByName,
                 expiresAt: res.lock.expiresAt,
               });
+              recordFilesMetric("files.lock.acquire_ms", {
+                projectId,
+                nodeId: node.id,
+                value: Math.round(performance.now() - startedAt),
+              });
             } else if (!res.ok && res.lock) {
               // Conflict detected after optimistic update - revert to server state
               // Pure Optimization: Backoff retry logic to prevent infinite render loops
@@ -142,12 +147,6 @@ export function useLockManager({
             acquiringNodesRef.current.delete(node.id);
           }
         })();
-
-        recordFilesMetric("files.lock.acquire_ms", {
-          projectId,
-          nodeId: node.id,
-          value: Math.round(performance.now() - startedAt),
-        });
       } catch {
         scheduleNextLockAttempt(node.id);
         setTabById((prev) => ({
@@ -209,8 +208,8 @@ export function useLockManager({
             changed = true;
           }
         } else if (isNoneOnServer && tab.hasLock && tab.lockInfo) {
-          // We think someone else has it, but server says it's free
-          next[id] = { ...tab, lockInfo: null };
+          // We think we hold the lock with confirmed server info, but server says it's gone (expired/evicted)
+          next[id] = { ...tab, hasLock: false, lockInfo: null };
           changed = true;
         }
       }

@@ -16,6 +16,7 @@ import { FileIcon } from "./explorer/FileIcons";
 interface DraggableTabProps {
   id: string;
   name: string;
+  title?: string;
   isActive: boolean;
   isDirty: boolean;
   isPinned: boolean;
@@ -30,6 +31,7 @@ interface DraggableTabProps {
 export function DraggableTab({
   id,
   name,
+  title,
   isActive,
   isDirty,
   isPinned,
@@ -71,6 +73,18 @@ export function DraggableTab({
     }
   };
 
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      onActivate();
+      return;
+    }
+    if (event.key === "Delete") {
+      event.preventDefault();
+      handleClose();
+    }
+  };
+
   // Compact mode: Just icon + pin for inactive pinned tabs
   if (compact) {
     return (
@@ -79,18 +93,23 @@ export function DraggableTab({
         style={style}
         {...attributes}
         {...listeners}
+        role="tab"
+        aria-selected={isActive}
+        aria-label={title || name}
+        tabIndex={isActive ? 0 : -1}
         className={cn(
           "group flex items-center gap-0.5 px-1.5 py-1.5 rounded-md text-xs border transition-colors cursor-default select-none",
           "bg-transparent border-transparent text-zinc-500 hover:bg-zinc-50 dark:hover:bg-zinc-900/50"
         )}
-        title={name}
+        title={title || name}
         onMouseDown={(e) => {
           if ((e.target as HTMLElement).closest("button")) return;
           onActivate();
         }}
+        onKeyDown={handleKeyDown}
       >
         <FileIcon name={name} isFolder={false} className="w-3.5 h-3.5 flex-shrink-0" />
-        <Pin className="w-2.5 h-2.5 text-zinc-400" />
+        {isPinned && <Pin className="w-2.5 h-2.5 text-zinc-400" />}
         {isDirty && <span className="w-1.5 h-1.5 rounded-full bg-amber-500 flex-shrink-0" />}
       </div>
     );
@@ -102,18 +121,23 @@ export function DraggableTab({
       style={style}
       {...attributes}
       {...listeners}
+      role="tab"
+      aria-selected={isActive}
+      aria-label={title || name}
+      tabIndex={isActive ? 0 : -1}
       className={cn(
         "group flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium border transition-colors cursor-default select-none",
         isActive
           ? "bg-zinc-100 dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700 text-zinc-900 dark:text-zinc-100"
           : "bg-transparent border-transparent text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-900/50"
       )}
-      title={name}
+      title={title || name}
       onMouseDown={(e) => {
         // Prevent activation if clicking close button
         if ((e.target as HTMLElement).closest("button")) return;
         onActivate();
       }}
+      onKeyDown={handleKeyDown}
     >
       <span className="truncate max-w-[160px] text-left">
         {name}
@@ -149,6 +173,7 @@ export function DraggableTab({
               <button 
                 className="w-5 h-5 inline-flex items-center justify-center rounded hover:bg-zinc-200/60 dark:hover:bg-zinc-700/60"
                 onMouseDown={(e) => e.stopPropagation()} // Stop DnD
+                aria-label={`Tab actions for ${name}`}
               >
                 <MoreVertical className="w-3 h-3" />
               </button>

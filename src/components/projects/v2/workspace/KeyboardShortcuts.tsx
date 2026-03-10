@@ -84,16 +84,20 @@ export const KeyboardShortcuts = memo(function KeyboardShortcuts({ open, onOpenC
                     </span>
                     <div className="flex items-center gap-1">
                       {item.keys.map((k, i) => (
-                        <kbd
-                          key={i}
-                          className={cn(
-                            "inline-flex items-center justify-center h-5 px-1.5 min-w-[20px] rounded",
-                            "text-[11px] font-sans font-medium bg-zinc-100 dark:bg-zinc-800",
-                            "border border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300 shadow-sm"
-                          )}
-                        >
-                          {k}
-                        </kbd>
+                        k === "or" ? (
+                          <span key={i} className="text-xs text-zinc-400 font-medium px-1">or</span>
+                        ) : (
+                          <kbd
+                            key={i}
+                            className={cn(
+                              "inline-flex items-center justify-center h-5 px-1.5 min-w-[20px] rounded",
+                              "text-[11px] font-sans font-medium bg-zinc-100 dark:bg-zinc-800",
+                              "border border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300 shadow-sm"
+                            )}
+                          >
+                            {k}
+                          </kbd>
+                        )
                       ))}
                     </div>
                   </div>

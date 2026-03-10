@@ -63,6 +63,10 @@ export default function WorkspaceSearchReplace({
   const findInFlightRef = useRef<Map<string, Promise<Array<{ nodeId: string; snippet: string }>>>>(
     new Map()
   );
+  const findRequestIdRef = useRef(0);
+  const previewRequestIdRef = useRef(0);
+  const refreshRequestIdRef = useRef(0);
+  const mutationRequestIdRef = useRef(0);
   const previewInFlightRef = useRef<
     Map<
       string,
@@ -75,10 +79,13 @@ export default function WorkspaceSearchReplace({
   useEffect(() => {
     const q = findQuery.trim();
     if (!q) {
+      findRequestIdRef.current += 1;
       setFindResults([]);
+      setFindLoading(false);
       return;
     }
     let cancelled = false;
+    const requestId = ++findRequestIdRef.current;
     const t = setTimeout(async () => {
       if (cancelled) return;
       const startedAt = performance.now();
@@ -94,7 +101,7 @@ export default function WorkspaceSearchReplace({
           }));
         if (!inFlight) findInFlightRef.current.set(q, queryPromise);
         const results = await queryPromise;
-        if (cancelled) return;
+        if (cancelled || requestId !== findRequestIdRef.current) return;
         setFindResults(results);
         await ensureNodeMetadata(results.map((r: { nodeId: string }) => r.nodeId));
         recordFilesMetric("files.search.latency_ms", {
@@ -102,21 +109,34 @@ export default function WorkspaceSearchReplace({
           value: Math.round(performance.now() - startedAt),
           extra: { queryLength: q.length, resultCount: results.length, surface: "find" },
         });
+      } catch (error) {
+        if (!cancelled && requestId === findRequestIdRef.current) {
+          setFindResults([]);
+          showToast("Failed to search project files", "error");
+        }
+        console.warn("Workspace find query failed", {
+          projectId,
+          queryLength: q.length,
+          error: error instanceof Error ? error.message : String(error),
+        });
       } finally {
-        if (!cancelled) setFindLoading(false);
+        if (!cancelled && requestId === findRequestIdRef.current) setFindLoading(false);
       }
     }, 200);
     return () => { cancelled = true; clearTimeout(t); };
-  }, [ensureNodeMetadata, findQuery, projectId]);
+  }, [ensureNodeMetadata, findQuery, projectId, showToast]);
 
   useEffect(() => {
     const q = findQuery.trim();
     if (!q || q.length < 2) {
+      previewRequestIdRef.current += 1;
       setReplacePreviewItems([]);
       setSelectedReplaceNodeIds([]);
+      setReplacePreviewLoading(false);
       return;
     }
     let cancelled = false;
+    const requestId = ++previewRequestIdRef.current;
     const t = setTimeout(async () => {
       if (cancelled) return;
       const startedAt = performance.now();
@@ -131,7 +151,7 @@ export default function WorkspaceSearchReplace({
           });
         if (!inFlight) previewInFlightRef.current.set(previewKey, previewPromise);
         const res = await previewPromise;
-        if (cancelled) return;
+        if (cancelled || requestId !== previewRequestIdRef.current) return;
         if (res.success) {
           setReplacePreviewItems(res.items);
           const validIds = new Set(res.items.map((item) => item.nodeId));
@@ -153,16 +173,30 @@ export default function WorkspaceSearchReplace({
             surface: "replace-preview",
           },
         });
+      } catch (error) {
+        if (!cancelled && requestId === previewRequestIdRef.current) {
+          setReplacePreviewItems([]);
+          setSelectedReplaceNodeIds([]);
+          showToast("Failed to build replace preview", "error");
+        }
+        console.warn("Workspace replace preview failed", {
+          projectId,
+          queryLength: q.length,
+          error: error instanceof Error ? error.message : String(error),
+        });
       } finally {
-        if (!cancelled) setReplacePreviewLoading(false);
+        if (!cancelled && requestId === previewRequestIdRef.current) {
+          setReplacePreviewLoading(false);
+        }
       }
     }, 250);
     return () => { cancelled = true; clearTimeout(t); };
-  }, [ensureNodeMetadata, findQuery, projectId, replaceQuery]);
+  }, [ensureNodeMetadata, findQuery, projectId, replaceQuery, showToast]);
 
   const refreshFindReplaceData = useCallback(
     async (query: string, replacement: string) => {
       const trimmed = query.trim();
+      const requestId = ++refreshRequestIdRef.current;
       if (!trimmed) {
         setFindResults([]);
         setReplacePreviewItems([]);
@@ -173,10 +207,12 @@ export default function WorkspaceSearchReplace({
         searchProjectFileIndex(projectId, trimmed, 50),
         previewProjectSearchReplace(projectId, trimmed, replacement, 80),
       ]);
+      if (requestId !== refreshRequestIdRef.current) return;
       setFindResults(findRows as Array<{ nodeId: string; snippet: string }>);
       await ensureNodeMetadata(
         (findRows as Array<{ nodeId: string; snippet: string }>).map((row) => row.nodeId)
       );
+      if (requestId !== refreshRequestIdRef.current) return;
       if (previewRes.success) {
         setReplacePreviewItems(previewRes.items);
         setSelectedReplaceNodeIds(
@@ -207,12 +243,14 @@ export default function WorkspaceSearchReplace({
     }
 
     setReplaceApplying(true);
+    const mutationId = ++mutationRequestIdRef.current;
     try {
       const res = await applyProjectSearchReplace(projectId, {
         query: q,
         replacement: replaceQuery,
         nodeIds,
       });
+      if (mutationId !== mutationRequestIdRef.current) return;
       if (!res.success) {
         showToast(res.error || "Replace failed", "error");
         return;
@@ -238,7 +276,9 @@ export default function WorkspaceSearchReplace({
       await refreshFindReplaceData(q, replaceQuery);
       showToast(`Replaced text in ${res.changedNodeIds.length} files`, "success");
     } finally {
-      setReplaceApplying(false);
+      if (mutationId === mutationRequestIdRef.current) {
+        setReplaceApplying(false);
+      }
     }
   }, [
     canEdit,
@@ -263,8 +303,10 @@ export default function WorkspaceSearchReplace({
       return;
     }
     setReplaceApplying(true);
+    const mutationId = ++mutationRequestIdRef.current;
     try {
       const res = await rollbackProjectSearchReplace(projectId, lastReplaceBackup);
+      if (mutationId !== mutationRequestIdRef.current) return;
       if (!res.success) {
         showToast(res.error || "Rollback failed", "error");
         return;
@@ -288,7 +330,9 @@ export default function WorkspaceSearchReplace({
         "success"
       );
     } finally {
-      setReplaceApplying(false);
+      if (mutationId === mutationRequestIdRef.current) {
+        setReplaceApplying(false);
+      }
     }
   }, [
     canEdit,
@@ -304,11 +348,18 @@ export default function WorkspaceSearchReplace({
   ]);
 
   const handleClose = useCallback(() => {
+    findRequestIdRef.current += 1;
+    previewRequestIdRef.current += 1;
+    refreshRequestIdRef.current += 1;
+    mutationRequestIdRef.current += 1;
     setFindQuery("");
     setReplaceQuery("");
     setFindResults([]);
     setReplacePreviewItems([]);
     setSelectedReplaceNodeIds([]);
+    setFindLoading(false);
+    setReplacePreviewLoading(false);
+    setReplaceApplying(false);
     onClose();
   }, [onClose]);
 

@@ -11,7 +11,8 @@ import {
 } from "@/components/ui/dialog";
 import { Loader2, ArrowRightLeft } from "lucide-react";
 import type { ProjectNode } from "@/lib/db/schema";
-import { getFileContent } from "@/stores/filesWorkspaceStore";
+import { getFileContent, setFileContent } from "@/stores/filesWorkspaceStore";
+import { getProjectFileContent } from "@/app/actions/files/content";
 import type { Change } from "diff";
 
 interface MultiFileDiffDialogProps {
@@ -29,25 +30,45 @@ export default function MultiFileDiffDialog({
 }: MultiFileDiffDialogProps) {
     const [diffParts, setDiffParts] = useState<Change[]>([]);
     const [isLoading, setIsLoading] = useState(false);
+    const [contentError, setContentError] = useState<string | null>(null);
 
     useEffect(() => {
         if (!open || !baseNode || !compareNode) {
             setDiffParts([]);
+            setIsLoading(false);
+            setContentError(null);
             return;
         }
 
         let cancelled = false;
         setIsLoading(true);
+        setContentError(null);
 
-        const baseContent = getFileContent(baseNode.projectId, baseNode.id) || "";
-        const compareContent = getFileContent(compareNode.projectId, compareNode.id) || "";
+        const loadNodeContent = async (node: ProjectNode): Promise<string> => {
+            const cached = getFileContent(node.projectId, node.id);
+            // Detached map returns "" when missing; treat non-empty or known zero-byte files as ready.
+            if (cached !== "" || node.size === 0) return cached;
+            const loaded = await getProjectFileContent(node.projectId, node.id);
+            setFileContent(node.projectId, node.id, loaded);
+            return loaded;
+        };
 
-        void import("diff").then(({ diffLines }) => {
-            if (cancelled) return;
-            const parts = diffLines(baseContent, compareContent);
-            setDiffParts(parts);
-            setIsLoading(false);
-        });
+        void Promise.all([loadNodeContent(baseNode), loadNodeContent(compareNode)])
+            .then(async ([baseContent, compareContent]) => {
+                const { diffLines } = await import("diff");
+                if (cancelled) return;
+                const parts = diffLines(baseContent, compareContent);
+                setDiffParts(parts);
+            })
+            .catch((error) => {
+                if (cancelled) return;
+                console.error("Failed to compute file diff", error);
+                setDiffParts([]);
+                setContentError(error instanceof Error ? error.message : "Content unavailable");
+            })
+            .finally(() => {
+                if (!cancelled) setIsLoading(false);
+            });
 
         return () => {
             cancelled = true;
@@ -78,6 +99,11 @@ export default function MultiFileDiffDialog({
                         <div className="flex flex-col items-center justify-center p-20 gap-3 text-zinc-500">
                              <Loader2 className="w-6 h-6 animate-spin" />
                              <span className="text-sm">Calculating differences...</span>
+                        </div>
+                    ) : contentError ? (
+                        <div className="flex flex-col items-center justify-center p-20 gap-2 text-zinc-500">
+                            <span className="text-sm font-medium">Content unavailable</span>
+                            <span className="text-xs text-zinc-400">{contentError}</span>
                         </div>
                     ) : (
                         <pre className="text-[11px] font-mono p-4 leading-6">

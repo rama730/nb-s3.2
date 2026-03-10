@@ -2,7 +2,7 @@
 
 import React, { useMemo, useState, useEffect, useRef } from "react";
 import { Virtuoso, VirtuosoGrid } from "react-virtuoso";
-import { FolderPlus, Loader2, ChevronRight, Home, X, FileText, Image as ImageIcon, Film, Music, Eye } from "lucide-react";
+import { FolderPlus, Loader2, ChevronRight, Home, X, FileText, Image as ImageIcon, Eye } from "lucide-react";
 import { FileTreeItem, type FileTreeItemContext } from "./FileTreeItem";
 import { FileGridItem } from "./FileGridItem";
 import type { ProjectNode } from "@/lib/db/schema";
@@ -79,12 +79,30 @@ export function useVisibleRows(params: {
 
   const [sortedChildren, setSortedChildren] = useState<Record<string, string[]>>({});
   const workerRef = useRef<Worker | null>(null);
+  const latestJobRef = useRef<string>("");
+  const latestChildrenRef = useRef<Record<string, string[]>>({});
 
   // Initialize Worker
   useEffect(() => {
     workerRef.current = new Worker(new URL('./utils/sort.worker.ts', import.meta.url));
-    workerRef.current.onmessage = (e: MessageEvent<{ sortedChildrenByParentId: Record<string, string[]> }>) => {
+    workerRef.current.onmessage = (e: MessageEvent<{ jobId: string; sortedChildrenByParentId: Record<string, string[]> }>) => {
+      if (e.data.jobId !== latestJobRef.current) return;
       setSortedChildren(e.data.sortedChildrenByParentId);
+    };
+    workerRef.current.onerror = (event) => {
+      const jobIdAtError = latestJobRef.current;
+      console.error("[ExplorerTree] sort worker error", {
+        jobId: jobIdAtError,
+        message: event.message,
+        fileName: event.filename,
+        line: event.lineno,
+        column: event.colno,
+      });
+      // Apply fallback only when this is still the active job; ignore stale race.
+      queueMicrotask(() => {
+        if (jobIdAtError !== latestJobRef.current) return;
+        setSortedChildren(latestChildrenRef.current);
+      });
     };
     return () => {
       workerRef.current?.terminate();
@@ -94,8 +112,11 @@ export function useVisibleRows(params: {
   // Dispatch Sort Payload
   useEffect(() => {
     if (workerRef.current) {
+      const jobId = `${projectId}-${treeVersion}-${sort}-${foldersFirst}`;
+      latestJobRef.current = jobId;
+      latestChildrenRef.current = childrenByParentId;
       workerRef.current.postMessage({
-        jobId: `${projectId}-${treeVersion}-${sort}-${foldersFirst}`,
+        jobId,
         nodesById,
         childrenByParentId,
         sort,
@@ -261,7 +282,6 @@ export function ExplorerTree({
   onSelect,
   onToggleFolder,
   onDropOnFolder,
-  onDownloadFolder,
 }: {
   rowsToRender: VisibleRow[];
   contextValue: FileTreeItemContext;
@@ -277,7 +297,6 @@ export function ExplorerTree({
   onSelect: (node: ProjectNode, e?: React.MouseEvent) => void;
   onToggleFolder: (node: ProjectNode) => void;
   onDropOnFolder?: (folderId: string, draggedId: string) => void;
-  onDownloadFolder: (folderId: string) => void;
 }) {
   const [currentAssetFolderId, setCurrentAssetFolderId] = useState<string | null>(null);
   const [gridSize, setGridSize] = useState<"small" | "default" | "large">("default");
@@ -369,7 +388,7 @@ export function ExplorerTree({
             <Home className="w-4 h-4" />
           </button>
           
-          {breadcrumbs.map((crumb, idx) => (
+          {breadcrumbs.map((crumb) => (
             <React.Fragment key={crumb.id}>
               <ChevronRight className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
               <button
@@ -395,7 +414,12 @@ export function ExplorerTree({
               <label className="text-[10px] font-medium text-zinc-500 uppercase">Scale</label>
               <select
                 value={gridSize}
-                onChange={(e) => setGridSize(e.target.value as any)}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  if (next === "small" || next === "default" || next === "large") {
+                    setGridSize(next);
+                  }
+                }}
                 className="text-xs bg-transparent border-none text-zinc-700 dark:text-zinc-300 cursor-pointer focus:ring-0 appearance-none outline-none"
               >
                 <option value="small">Small</option>

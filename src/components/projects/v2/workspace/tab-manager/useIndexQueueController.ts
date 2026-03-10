@@ -12,53 +12,89 @@ interface UseIndexQueueControllerOptions {
 }
 
 export function useIndexQueueController({ projectId }: UseIndexQueueControllerOptions) {
-  const indexQueueRef = useRef<Array<() => Promise<void>>>([]);
+  const indexQueueRef = useRef<string[]>([]);
+  const queuedNodeIdsRef = useRef<Set<string>>(new Set());
+  const activeNodeIdsRef = useRef<Set<string>>(new Set());
+  const pendingContentByNodeRef = useRef<Map<string, string>>(new Map());
   const activeIndexJobsRef = useRef(0);
+  const pumpScheduledRef = useRef(false);
   const indexQueueRuntimeStateRef = useRef(createInitialIndexQueueState());
 
   const pumpIndexQueue = useCallback(() => {
-    const run = () => {
+    const schedulePump = () => {
+      if (pumpScheduledRef.current) return;
+      pumpScheduledRef.current = true;
+      queueMicrotask(() => {
+        pumpScheduledRef.current = false;
+        runPump();
+      });
+    };
+
+    const runPump = () => {
       const targetConcurrency = getIndexQueueConcurrency(
         indexQueueRef.current.length,
         indexQueueRuntimeStateRef.current
       );
+      const maxStartsThisTick = Math.max(1, targetConcurrency * 2);
+      let started = 0;
       while (
         activeIndexJobsRef.current < targetConcurrency &&
-        indexQueueRef.current.length > 0
+        indexQueueRef.current.length > 0 &&
+        started < maxStartsThisTick
       ) {
-        const job = indexQueueRef.current.shift();
-        if (!job) break;
+        const nodeId = indexQueueRef.current.shift();
+        if (!nodeId) break;
+        queuedNodeIdsRef.current.delete(nodeId);
+        const content = pendingContentByNodeRef.current.get(nodeId);
+        if (typeof content !== "string") continue;
+
+        started += 1;
         activeIndexJobsRef.current += 1;
+        activeNodeIdsRef.current.add(nodeId);
         const startedAt = performance.now();
-        void job()
+        void upsertProjectFileIndex(projectId, nodeId, content)
           .then(() => {
             updateIndexQueueRuntimeState(indexQueueRuntimeStateRef.current, {
               latencyMs: performance.now() - startedAt,
               success: true,
             });
           })
-          .catch(() => {
+          .catch((error) => {
             updateIndexQueueRuntimeState(indexQueueRuntimeStateRef.current, {
               latencyMs: performance.now() - startedAt,
               success: false,
             });
+            console.warn("Index queue job failed", {
+              projectId,
+              nodeId,
+              error: error instanceof Error ? error.message : String(error),
+            });
           })
           .finally(() => {
             activeIndexJobsRef.current -= 1;
-            run();
+            activeNodeIdsRef.current.delete(nodeId);
+            const latest = pendingContentByNodeRef.current.get(nodeId);
+            if (latest !== content && !queuedNodeIdsRef.current.has(nodeId)) {
+              queuedNodeIdsRef.current.add(nodeId);
+              indexQueueRef.current.push(nodeId);
+            } else if (latest === content) {
+              pendingContentByNodeRef.current.delete(nodeId);
+            }
+            schedulePump();
           });
       }
     };
-    run();
-  }, []);
+
+    schedulePump();
+  }, [projectId]);
 
   const enqueueIndexUpdate = useCallback(
     (nodeId: string, content: string) => {
-      indexQueueRef.current.push(async () => {
-        try {
-          await upsertProjectFileIndex(projectId, nodeId, content);
-        } catch {}
-      });
+      pendingContentByNodeRef.current.set(nodeId, content);
+      if (!queuedNodeIdsRef.current.has(nodeId) && !activeNodeIdsRef.current.has(nodeId)) {
+        queuedNodeIdsRef.current.add(nodeId);
+        indexQueueRef.current.push(nodeId);
+      }
       recordFilesMetric("files.index.queue.depth", {
         projectId,
         nodeId,
@@ -66,7 +102,7 @@ export function useIndexQueueController({ projectId }: UseIndexQueueControllerOp
       });
       pumpIndexQueue();
     },
-    [projectId]
+    [projectId, pumpIndexQueue]
   );
 
   return {

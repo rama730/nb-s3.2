@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import Image from "next/image";
 import { ProjectNode } from "@/lib/db/schema";
 import { FileText, Folder, Film, Image as ImageIcon, Music } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -19,8 +20,19 @@ function GridThumbnail({ projectId, nodeId }: { projectId: string; nodeId: strin
   }, [projectId, nodeId]);
 
   if (!url) return <ImageIcon className="w-8 h-8 text-purple-300 animate-pulse delay-150" />;
-  
-  return <img src={url} alt="Thumbnail" className="w-full h-full object-cover rounded-md" loading="lazy" />;
+
+  return (
+    <div className="relative w-full h-full">
+      <Image
+        src={url}
+        alt="Thumbnail"
+        fill
+        className="object-cover rounded-md"
+        sizes="64px"
+        unoptimized
+      />
+    </div>
+  );
 }
 
 interface FileGridItemProps {
@@ -44,13 +56,24 @@ export const FileGridItem = React.memo(function FileGridItem({
   
   const hoverTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Clear hover timer on unmount to prevent firing after component is gone
+  React.useEffect(() => {
+    return () => {
+      if (hoverTimerRef.current) {
+        clearTimeout(hoverTimerRef.current);
+        hoverTimerRef.current = null;
+      }
+    };
+  }, []);
+
   const handleDragStart = (e: React.DragEvent) => {
     e.dataTransfer.setData("application/vnd.code-explorer-nodes", JSON.stringify([node.id]));
     e.dataTransfer.effectAllowed = "move";
   };
 
   const handleMouseEnter = () => {
-    if (isFolder || !isAssetLike(node)) return;
+    const isImageAsset = node.mimeType?.startsWith("image/");
+    if (isFolder || !isAssetLike(node) || isImageAsset) return;
     hoverTimerRef.current = setTimeout(() => {
       // Phase 5: Predictive Hover Pre-Fetching
       getProjectFileSignedUrl(node.projectId, node.id, 3600).catch(() => {});
@@ -58,7 +81,10 @@ export const FileGridItem = React.memo(function FileGridItem({
   };
 
   const handleMouseLeave = () => {
-    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    if (hoverTimerRef.current) {
+      clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -75,7 +101,7 @@ export const FileGridItem = React.memo(function FileGridItem({
       if (Array.isArray(data) && data[0] && data[0] !== node.id) {
           onDropOnFolder(node.id, data[0]);
       }
-    } catch (err) {}
+    } catch {}
   };
   
   const getIcon = () => {

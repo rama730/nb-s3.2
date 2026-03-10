@@ -9,11 +9,13 @@ interface UseTabMetadataPipelineOptions {
   upsertNodes: (projectId: string, nodes: ProjectNode[]) => void;
 }
 
+const LOOKUP_FAILURE_TTL_MS = 60_000;
+
 export function useTabMetadataPipeline({
   projectId,
   upsertNodes,
 }: UseTabMetadataPipelineOptions) {
-  const failedLookupsRef = useRef<Set<string>>(new Set());
+  const failedLookupsRef = useRef<Map<string, number>>(new Map());
   const metadataInFlightRef = useRef<Map<string, Promise<void>>>(new Map());
   const signedUrlCacheRef = useRef<Map<string, { url: string; expiresAt: number }>>(new Map());
   const opsInProgressRef = useRef<Set<string>>(new Set());
@@ -21,6 +23,11 @@ export function useTabMetadataPipeline({
   const ensureNodeMetadata = useCallback(
     async (nodeIds: string[]) => {
       if (nodeIds.length === 0) return;
+
+      const now = Date.now();
+      for (const [id, expiresAt] of failedLookupsRef.current.entries()) {
+        if (expiresAt <= now) failedLookupsRef.current.delete(id);
+      }
 
       const currentState = useFilesWorkspaceStore.getState();
       const currentWs = currentState.byProjectId[projectId];
@@ -58,9 +65,21 @@ export function useTabMetadataPipeline({
             }
             const foundIds = new Set(nodes.map((n) => n.id));
             missing.forEach((id) => {
-              if (!foundIds.has(id)) failedLookupsRef.current.add(id);
+              if (!foundIds.has(id)) {
+                failedLookupsRef.current.set(id, Date.now() + LOOKUP_FAILURE_TTL_MS);
+                return;
+              }
+              failedLookupsRef.current.delete(id);
             });
             if (nodes.length > 0) upsertNodes(projectId, nodes);
+          } catch (error) {
+            const failureExpiry = Date.now() + LOOKUP_FAILURE_TTL_MS;
+            missing.forEach((id) => failedLookupsRef.current.set(id, failureExpiry));
+            console.warn("Failed to fetch node metadata batch", {
+              projectId,
+              count: missing.length,
+              error: error instanceof Error ? error.message : String(error),
+            });
           } finally {
             missing.forEach((id) => {
               opsInProgressRef.current.delete(`meta:${id}`);

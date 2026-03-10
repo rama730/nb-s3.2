@@ -1,28 +1,18 @@
-import { createClient } from "@supabase/supabase-js";
 import * as tus from "tus-js-client";
 
 self.onmessage = async (e: MessageEvent) => {
-    const { uploadNodes, supabaseUrl, supabaseAnonKey, bucketName, jwt } = e.data as {
+    const { uploadNodes, supabaseUrl, bucketName, jwt, jobId } = e.data as {
         uploadNodes: { file: File; s3Key: string; fileId: string; path: string }[];
         supabaseUrl: string;
-        supabaseAnonKey: string;
         bucketName: string;
         jwt: string; // The user's auth token
+        jobId?: string;
     };
 
     if (!uploadNodes || uploadNodes.length === 0) {
-        self.postMessage({ type: "done", success: 0, failed: 0 });
+        self.postMessage({ type: "done", success: 0, failed: 0, jobId });
         return;
     }
-
-    // Create a custom supabase client using the provided URL, Key, and JWT
-    const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-        global: {
-            headers: {
-                Authorization: `Bearer ${jwt}`
-            }
-        }
-    });
 
     const MAX_CONCURRENCY = 5;
     let active = 0;
@@ -65,6 +55,7 @@ self.onmessage = async (e: MessageEvent) => {
                     active--;
                     self.postMessage({
                         type: "progress",
+                        jobId,
                         completed: successCount + failCount,
                         total,
                         success: successCount,
@@ -77,6 +68,7 @@ self.onmessage = async (e: MessageEvent) => {
                     active--;
                     self.postMessage({
                         type: "progress",
+                        jobId,
                         completed: successCount + failCount,
                         total,
                         success: successCount,
@@ -96,11 +88,18 @@ self.onmessage = async (e: MessageEvent) => {
 
         self.postMessage({
             type: "done",
+            jobId,
             success: successCount,
             failed: failCount,
             results
         });
     };
 
-    pump();
+    pump().catch((err) => {
+        self.postMessage({
+            type: "error",
+            jobId,
+            message: err?.message || "Upload failed unexpectedly",
+        });
+    });
 };

@@ -3,9 +3,7 @@
 import React from "react";
 import {
   Clock,
-  GitBranch,
   List,
-  ListOrdered,
   MoreHorizontal,
   Search,
   Star,

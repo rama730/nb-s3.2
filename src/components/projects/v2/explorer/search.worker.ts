@@ -1,3 +1,8 @@
+import type {
+    SearchWorkerRequest,
+    SearchWorkerResponse,
+} from "./workerContracts";
+
 let invertedIndex: Record<string, Set<string>> = {};
 let documentMap: Record<string, { name: string }> = {};
 const queryCache = new Map<string, Set<string>>();
@@ -12,7 +17,7 @@ function generateTriGrams(text: string): string[] {
     return grams;
 }
 
-self.addEventListener("message", (e) => {
+self.addEventListener("message", (e: MessageEvent<SearchWorkerRequest>) => {
     const { type, payload } = e.data;
 
     // Phase 5: O(1) Web-Worker Inverted Search Index
@@ -30,66 +35,82 @@ self.addEventListener("message", (e) => {
                 invertedIndex[gram].add(id);
             }
         }
-        self.postMessage({ type: "INDEX_COMPLETE", count: Object.keys(documentMap).length });
+        self.postMessage({ type: "INDEX_COMPLETE", count: Object.keys(documentMap).length } as SearchWorkerResponse);
     }
 
     if (type === "SEARCH") {
-        const { query, federated } = payload;
+        const { query, federated, requestId, jobId } = payload;
+        const effectiveJobId = jobId ?? requestId ?? 0;
 
-        // 1. Process Backend Federated Search 
-        let orderedIds: string[] = [];
-        let snippets: Record<string, string> = {};
+        try {
+            // 1. Process Backend Federated Search
+            let orderedIds: string[] = [];
+            let snippets: Record<string, string> = {};
 
-        if (federated && Array.isArray(federated)) {
-            orderedIds = federated.map((item: any) => item.nodeId);
-            snippets = Object.fromEntries(
-                federated.map((item: any) => [item.nodeId, item.snippet])
-            );
-        }
+            if (federated && Array.isArray(federated)) {
+                orderedIds = federated.map((item) => item.nodeId);
+                snippets = Object.fromEntries(
+                    federated.map((item) => [item.nodeId, item.snippet])
+                );
+            }
 
-        // O(1) dedup Set to avoid O(N) includes() inside the loop
-        const seen = new Set(orderedIds);
+            // O(1) dedup Set to avoid O(N) includes() inside the loop
+            const seen = new Set(orderedIds);
 
-        // 2. Pure O(1) Tri-gram Local Intersection
-        if (query && query.length >= 2) {
-            const normalizedQuery = query.toLowerCase().replace(/[^a-z0-9]/g, '');
-            let localMatches: Set<string> | null = null;
+            // 2. Pure O(1) Tri-gram Local Intersection
+            if (query && query.length >= 2) {
+                const normalizedQuery = query.toLowerCase().replace(/[^a-z0-9]/g, '');
+                let localMatches: Set<string> | null = null;
 
-            if (queryCache.has(normalizedQuery)) {
-                localMatches = queryCache.get(normalizedQuery)!;
-            } else {
-                const queryGrams = generateTriGrams(query);
-                for (const gram of queryGrams) {
-                    const matches = invertedIndex[gram] || new Set();
-                    if (localMatches === null) {
-                        localMatches = new Set(matches);
-                    } else {
-                        const intersected = new Set<string>();
-                        for (const id of localMatches) {
-                            if (matches.has(id)) intersected.add(id);
+                if (queryCache.has(normalizedQuery)) {
+                    localMatches = queryCache.get(normalizedQuery)!;
+                } else {
+                    const queryGrams = generateTriGrams(normalizedQuery);
+                    for (const gram of queryGrams) {
+                        const matches = invertedIndex[gram] || new Set();
+                        if (localMatches === null) {
+                            localMatches = new Set(matches);
+                        } else {
+                            const intersected = new Set<string>();
+                            for (const id of localMatches) {
+                                if (matches.has(id)) intersected.add(id);
+                            }
+                            localMatches = intersected;
                         }
-                        localMatches = intersected;
+                    }
+                    if (localMatches) {
+                        if (queryCache.size > 100) {
+                            const firstKey = queryCache.keys().next().value;
+                            if (firstKey) queryCache.delete(firstKey);
+                        }
+                        queryCache.set(normalizedQuery, localMatches);
                     }
                 }
+
                 if (localMatches) {
-                    if (queryCache.size > 100) {
-                        const firstKey = queryCache.keys().next().value;
-                        if (firstKey) queryCache.delete(firstKey);
+                    for (const id of localMatches) {
+                        if (!seen.has(id)) {
+                            orderedIds.push(id);
+                            seen.add(id);
+                        }
                     }
-                    queryCache.set(normalizedQuery, localMatches);
                 }
             }
 
-            if (localMatches) {
-                for (const id of localMatches) {
-                    if (!seen.has(id)) {
-                        orderedIds.push(id);
-                        seen.add(id);
-                    }
-                }
-            }
+            self.postMessage({
+                type: "SEARCH_COMPLETE",
+                orderedIds,
+                snippets,
+                jobId: effectiveJobId,
+                requestId: effectiveJobId,
+            } as SearchWorkerResponse);
+        } catch (error) {
+            self.postMessage({
+                type: "SEARCH_ERROR",
+                jobId: effectiveJobId,
+                requestId: effectiveJobId,
+                error: error instanceof Error ? error.message : "Search worker failed",
+            } as SearchWorkerResponse);
         }
-
-        self.postMessage({ type: "SEARCH_COMPLETE", orderedIds, snippets });
     }
 });

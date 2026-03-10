@@ -12,7 +12,7 @@ import { getGitStatus } from "@/app/actions/git";
 import { findNodeByPathAny } from "@/app/actions/files";
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 import type { FilesViewMode } from "@/stores/filesWorkspaceStore";
-import { filesFeatureFlags } from "@/lib/features/files";
+import { filesFeatureFlags, isFilesHardeningEnabled } from "@/lib/features/files";
 import type { FilesWorkspaceTabState, PaneId } from "../state/filesTabTypes";
 import WorkspaceSyncOverlay from "./WorkspaceSyncOverlay";
 import { useWorkspaceKeyboard } from "./WorkspaceKeyboard";
@@ -23,7 +23,6 @@ import { useWorkspaceLifecycle } from "./useWorkspaceLifecycle";
 import { useTabManager } from "./WorkspaceTabManager";
 import { runFileWithContent } from "@/lib/runner/runFile";
 import { parseStderrToProblems } from "@/app/actions/parseStderrToProblems";
-import { WorkspaceToolbarHost } from "./WorkspaceToolbarHost";
 import { WorkspacePaneHost } from "./WorkspacePaneHost";
 import { WorkspaceModalsHost } from "./WorkspaceModalsHost";
 import { WorkspaceBottomPanelHost } from "./WorkspaceBottomPanelHost";
@@ -78,11 +77,37 @@ export default function WorkspaceShell({
   initialOpenColumn,
 }: ProjectFilesWorkspaceProps & { initialFileNodes?: ProjectNode[] }) {
   const canEdit = isOwnerOrMember;
+  const filesHardeningEnabled = isFilesHardeningEnabled(currentUserId ?? null);
   const { showToast } = useToast();
   const searchParams = useSearchParams();
 
   // Sync state (received from WorkspaceSyncOverlay via callback)
   const [syncState, setSyncState] = useState(initialSyncStatus);
+  const [startupStage, setStartupStage] = useState<"explorer" | "editor" | "diagnostics">(
+    filesHardeningEnabled ? "explorer" : "diagnostics"
+  );
+  const shouldMountEditor = startupStage !== "explorer";
+  const shouldMountDiagnostics = startupStage === "diagnostics";
+
+  useEffect(() => {
+    if (!filesHardeningEnabled) {
+      setStartupStage("diagnostics");
+      return;
+    }
+    let cancelled = false;
+    setStartupStage("explorer");
+    const editorTimer = window.setTimeout(() => {
+      if (!cancelled) setStartupStage("editor");
+    }, 50);
+    const diagnosticsTimer = window.setTimeout(() => {
+      if (!cancelled) setStartupStage("diagnostics");
+    }, 220);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(editorTimer);
+      window.clearTimeout(diagnosticsTimer);
+    };
+  }, [filesHardeningEnabled, projectId]);
 
   // Store selectors
   const leftOpenTabIds = useFilesWorkspaceStore(
@@ -243,10 +268,6 @@ export default function WorkspaceShell({
     setCommandOpen,
     commandQuery,
     setCommandQuery,
-    headerSearchOpen,
-    setHeaderSearchOpen,
-    headerSearchQuery,
-    setHeaderSearchQuery,
     recentFileIds,
     setRecentFileIds,
   } = useWorkspaceUiState();
@@ -257,7 +278,6 @@ export default function WorkspaceShell({
   const {
     conflictDialog,
     setConflictDialog,
-    dirtyTabIds,
     fileNodes,
     nodePathById,
     nodesById,
@@ -270,7 +290,6 @@ export default function WorkspaceShell({
     saveContentDirect,
     loadFileContent,
     ensureNodeMetadata,
-    handleSaveAllDirtyTabs,
   } = useTabManager({
     projectId,
     currentUserId,
@@ -375,6 +394,7 @@ export default function WorkspaceShell({
   });
 
   const deepLinkHandledRef = useRef<string | null>(null);
+  const deepLinkRequestIdRef = useRef(0);
   useEffect(() => {
     const pathFromQuery = initialOpenPath ?? searchParams?.get("path") ?? null;
     if (!pathFromQuery) return;
@@ -396,25 +416,33 @@ export default function WorkspaceShell({
     const deepLinkKey = `${projectId}:${normalizedPath.join("/")}:${line ?? 0}:${column ?? 0}`;
     if (deepLinkHandledRef.current === deepLinkKey) return;
     deepLinkHandledRef.current = deepLinkKey;
+    const requestId = ++deepLinkRequestIdRef.current;
+    let cancelled = false;
 
     void (async () => {
       try {
         const node = await findNodeByPathAny(projectId, normalizedPath);
-        if (!node) return;
+        if (!node || cancelled || requestId !== deepLinkRequestIdRef.current) return;
         if (node.type === "folder") {
           setSelectedNode(projectId, node.id, node.parentId ?? null);
           toggleExpanded(projectId, node.id, true);
           return;
         }
         await openFileInPane(node, "left");
+        if (cancelled || requestId !== deepLinkRequestIdRef.current) return;
         setSelectedNode(projectId, node.id, node.parentId ?? null);
         if (line) {
           requestScrollTo(projectId, node.id, line);
         }
       } catch (error) {
-        console.error("Failed to open files deep link", error);
+        if (!cancelled && requestId === deepLinkRequestIdRef.current) {
+          console.error("Failed to open files deep link", error);
+        }
       }
     })();
+    return () => {
+      cancelled = true;
+    };
   }, [
     initialOpenPath,
     initialOpenLine,
@@ -430,7 +458,7 @@ export default function WorkspaceShell({
   // Autosave
   useAutoSave({
     projectId,
-    canEdit,
+    canEdit: canEdit && shouldMountEditor,
     panesToRender,
     activeTabIdByPane,
     tabByIdRef,
@@ -446,7 +474,7 @@ export default function WorkspaceShell({
   // Lint on edit (debounced 500ms)
   useLintOnEdit({
     projectId,
-    canEdit,
+    canEdit: canEdit && shouldMountDiagnostics,
     panesToRender,
     activeTabIdByPane,
     tabByIdRef,
@@ -580,7 +608,12 @@ export default function WorkspaceShell({
   const gitBootstrapRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
-    if (!filesFeatureFlags.wave4GitIntegration || gitBootstrapRef.current.has(projectId))
+    if (
+      !filesHardeningEnabled ||
+      !shouldMountDiagnostics ||
+      !filesFeatureFlags.wave4GitIntegration ||
+      gitBootstrapRef.current.has(projectId)
+    )
       return;
     gitBootstrapRef.current.add(projectId);
     let cancelled = false;
@@ -614,6 +647,8 @@ export default function WorkspaceShell({
       setGitStatusLoaded(projectId, true);
     };
   }, [
+    filesHardeningEnabled,
+    shouldMountDiagnostics,
     projectId,
     setGitRepo,
     setGitChangedFiles,
@@ -768,64 +803,6 @@ export default function WorkspaceShell({
           }}
         />
 
-        {!zenMode && (
-          <WorkspaceToolbarHost
-            projectId={projectId}
-            canEdit={canEdit}
-            viewMode={viewMode}
-            splitEnabled={splitEnabled}
-            bottomPanelCollapsed={bottomPanelCollapsed}
-            headerSearchOpen={headerSearchOpen}
-            headerSearchQuery={headerSearchQuery}
-            dirtyTabIds={dirtyTabIds}
-            wave1SaveAllEnabled={filesFeatureFlags.wave1SaveAll}
-            onToggleHeaderSearch={() => {
-              setHeaderSearchOpen((prev) => !prev);
-              if (headerSearchOpen) setHeaderSearchQuery("");
-            }}
-            onHeaderSearchQueryChange={setHeaderSearchQuery}
-            onHeaderSearchKeyDown={(e) => {
-              if (e.key === "Escape") {
-                setHeaderSearchOpen(false);
-                setHeaderSearchQuery("");
-                return;
-              }
-              if (e.key === "Enter") {
-                e.preventDefault();
-                setQuickOpenOpen(true);
-                setQuickOpenQuery(headerSearchQuery.trim());
-              }
-            }}
-            onSaveAllDirtyTabs={() => void handleSaveAllDirtyTabs()}
-            onSetViewMode={(mode) => setViewMode(projectId, mode)}
-            onToggleBottomPanel={() => toggleBottomPanel(projectId)}
-            onOpenQuickOpen={() => {
-              setQuickOpenOpen(true);
-              setQuickOpenQuery("");
-            }}
-            onOpenFindInProject={() => setFindOpen(true)}
-            onOpenCommandPalette={() => {
-              setCommandOpen(true);
-              setCommandQuery("");
-            }}
-            onToggleSplit={() => setSplitEnabled(projectId, !splitEnabled)}
-            onToggleLineNumbers={() => setPrefs(projectId, { lineNumbers: !prefs.lineNumbers })}
-            onToggleWordWrap={() => setPrefs(projectId, { wordWrap: !prefs.wordWrap })}
-            onToggleMinimap={() => setPrefs(projectId, { minimap: !prefs.minimap })}
-            onFontSizeDecrease={() =>
-              setPrefs(projectId, {
-                fontSize: Math.max(12, prefs.fontSize - 1),
-              })
-            }
-            onFontSizeIncrease={() =>
-              setPrefs(projectId, {
-                fontSize: Math.min(20, prefs.fontSize + 1),
-              })
-            }
-            prefs={prefs}
-          />
-        )}
-
         {/* Transition for Zen Mode Toolbar */}
         {zenMode && (
           <div className="absolute top-4 right-4 z-[60] flex items-center gap-2 animate-in fade-in slide-in-from-top-2 duration-300">
@@ -852,71 +829,97 @@ export default function WorkspaceShell({
           zenMode ? "m-0 rounded-none shadow-none" : ""
         )}>
 
-        <WorkspacePaneHost
-          projectId={projectId}
-          canEdit={canEdit}
-          splitEnabled={splitEnabled}
-          splitRatio={splitRatio}
-          activePane={activePane}
-          panes={panes}
-          pinnedByTabId={pinnedByTabId}
-          tabById={tabById}
-          prefs={prefs}
-          conflictNodeId={conflictDialog.nodeId}
-          conflictDiffSignal={conflictDialog.diffSignal}
-          activeFilePath={activeFilePath}
-          sensors={sensors}
-          nodesById={nodesById}
-          selectedNodeId={selectedNodeId}
-          rootNodes={rootNodes}
-          viewMode={viewMode}
-          onDragEnd={handleDragEnd}
-          onSetActivePane={setActivePane}
-          onCloseTab={(paneId, tabId) => void closeTab(paneId, tabId)}
-          onPinTab={(paneId, tabId, pinned) => pinTab(projectId, paneId, tabId, pinned)}
-          onCloseOthers={(paneId, tabId) => closeOtherTabs(projectId, paneId, tabId)}
-          onCloseToRight={(paneId, tabId) => closeTabsToRight(projectId, paneId, tabId)}
-          onTabChange={(id, next) => {
-            const current = tabByIdRef.current[id];
-            if (!current) return;
-            // Phase 5: Compare against detached map, not React state
-            const currentContent = getFileContent(projectId, id);
-            if (currentContent === next) return;
-            setDetachedContent(projectId, id, next);
-            setFileState(projectId, id, { content: next, isDirty: true });
-            setTabById((prev) => ({
-              ...prev,
-              [id]: {
-                ...prev[id],
-                content: "",
-                contentVersion: (prev[id]?.contentVersion ?? 0) + 1,
-                isDirty: true,
-              },
-            }));
-          }}
-          onSaveTab={(id) => void saveTab(id)}
-          onRetryLoad={(id) => {
-            const node = nodesById[id];
-            if (node) void loadFileContent(node);
-          }}
-          onDeleteTab={(id) => void deleteFile(id)}
-          onCrumbClick={(folderId) => {
-            setSelectedNode(projectId, folderId, folderId);
-            toggleExpanded(projectId, folderId, true);
-          }}
-          onNavigatePathNode={(node, paneId) => void openFileInPane(node, paneId)}
-          onNavigateToAsset={(node, paneId) => void openFileInPane(node, paneId)}
-          onRunActiveFile={() => void runActiveFile()}
-          onOpenAsset={(node) => void openFileInPane(node, activePane)}
-          onOpenFolderFromGallery={(folderId) => {
-            setSelectedNode(projectId, folderId, folderId);
-            toggleExpanded(projectId, folderId, true);
-          }}
-          onStartResize={startResize}
-          leftOrderedTabIds={leftOrderedTabIds}
-          rightOrderedTabIds={rightOrderedTabIds}
-          gitChangedFiles={gitChangedFiles}
-        />
+        {shouldMountEditor ? (
+          <WorkspacePaneHost
+            projectId={projectId}
+            canEdit={canEdit}
+            splitEnabled={splitEnabled}
+            splitRatio={splitRatio}
+            activePane={activePane}
+            panes={panes}
+            pinnedByTabId={pinnedByTabId}
+            tabById={tabById}
+            prefs={prefs}
+            bottomPanelCollapsed={bottomPanelCollapsed}
+            conflictNodeId={conflictDialog.nodeId}
+            conflictDiffSignal={conflictDialog.diffSignal}
+            activeFilePath={activeFilePath}
+            sensors={sensors}
+            nodesById={nodesById}
+            selectedNodeId={selectedNodeId}
+            rootNodes={rootNodes}
+            viewMode={viewMode}
+            onDragEnd={handleDragEnd}
+            onSetActivePane={setActivePane}
+            onCloseTab={(paneId, tabId) => void closeTab(paneId, tabId)}
+            onPinTab={(paneId, tabId, pinned) => pinTab(projectId, paneId, tabId, pinned)}
+            onCloseOthers={(paneId, tabId) => closeOtherTabs(projectId, paneId, tabId)}
+            onCloseToRight={(paneId, tabId) => closeTabsToRight(projectId, paneId, tabId)}
+            onTabChange={(id, next) => {
+              const current = tabByIdRef.current[id];
+              if (!current) return;
+              // Phase 5: Compare against detached map, not React state
+              const currentContent = getFileContent(projectId, id);
+              if (currentContent === next) return;
+              setDetachedContent(projectId, id, next);
+              setFileState(projectId, id, { content: next, isDirty: true });
+              setTabById((prev) => ({
+                ...prev,
+                [id]: {
+                  ...prev[id],
+                  content: "",
+                  contentVersion: (prev[id]?.contentVersion ?? 0) + 1,
+                  isDirty: true,
+                },
+              }));
+            }}
+            onSaveTab={(id) => void saveTab(id)}
+            onRetryLoad={(id) => {
+              const node = nodesById[id];
+              if (node) void loadFileContent(node);
+            }}
+            onDeleteTab={(id) => void deleteFile(id)}
+            onNavigateToAsset={(node, paneId) => void openFileInPane(node, paneId)}
+            onRunActiveFile={() => void runActiveFile()}
+            onOpenAsset={(node) => void openFileInPane(node, activePane)}
+            onOpenFolderFromGallery={(folderId) => {
+              setSelectedNode(projectId, folderId, folderId);
+              toggleExpanded(projectId, folderId, true);
+            }}
+            onStartResize={startResize}
+            onToggleBottomPanel={() => toggleBottomPanel(projectId)}
+            onOpenQuickOpen={() => {
+              setQuickOpenOpen(true);
+              setQuickOpenQuery("");
+            }}
+            onOpenFindInProject={() => setFindOpen(true)}
+            onOpenCommandPalette={() => {
+              setCommandOpen(true);
+              setCommandQuery("");
+            }}
+            onToggleSplit={() => setSplitEnabled(projectId, !splitEnabled)}
+            onToggleLineNumbers={() => setPrefs(projectId, { lineNumbers: !prefs.lineNumbers })}
+            onToggleWordWrap={() => setPrefs(projectId, { wordWrap: !prefs.wordWrap })}
+            onToggleMinimap={() => setPrefs(projectId, { minimap: !prefs.minimap })}
+            onFontSizeDecrease={() =>
+              setPrefs(projectId, {
+                fontSize: Math.max(12, prefs.fontSize - 1),
+              })
+            }
+            onFontSizeIncrease={() =>
+              setPrefs(projectId, {
+                fontSize: Math.min(20, prefs.fontSize + 1),
+              })
+            }
+            leftOrderedTabIds={leftOrderedTabIds}
+            rightOrderedTabIds={rightOrderedTabIds}
+            gitChangedFiles={gitChangedFiles}
+          />
+        ) : (
+          <div className="flex-1 min-h-0 grid place-items-center text-sm text-zinc-500 dark:text-zinc-400">
+            Preparing editor...
+          </div>
+        )}
 
         <WorkspaceModalsHost
           projectId={projectId}
@@ -946,7 +949,7 @@ export default function WorkspaceShell({
           tabByIdRef={tabByIdRef}
         />
 
-        {!zenMode && (
+        {!zenMode && shouldMountDiagnostics && (
           <WorkspaceBottomPanelHost
             projectId={projectId}
             canEdit={canEdit}
@@ -964,6 +967,7 @@ export default function WorkspaceShell({
         {!zenMode && (
           <StatusBar
             projectId={projectId}
+            projectName={projectName}
             activePane={activePane}
             activeTabId={activeTabIdByPane[activePane] ?? null}
             tabById={tabById}

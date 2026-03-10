@@ -66,8 +66,11 @@ self.onmessage = async (e: MessageEvent<DownloadWorkerPayload>) => {
                     loadedFiles++;
                     self.postMessage({ jobId, progress: { loaded: loadedFiles, total: totalFiles, filename: file.name } } as DownloadWorkerResult);
                 } catch (fetchErr) {
-                    console.warn(`Failed to download ${file.name}`, fetchErr);
-                    zipData[`_failed_${file.name}.txt`] = strToU8(`Failed to download this file. Error: ${fetchErr}`);
+                    console.warn("Failed to download file", { fileName: file.name, error: fetchErr });
+                    const safeName = file.name.replace(/\//g, '_');
+                    zipData[`_failed_${safeName}.txt`] = strToU8(`Failed to download: ${file.name}\nError: ${fetchErr}`);
+                    loadedFiles++;
+                    self.postMessage({ jobId, progress: { loaded: loadedFiles, total: totalFiles, filename: `(failed) ${file.name}` } } as DownloadWorkerResult);
                 }
             }));
         }
@@ -76,10 +79,20 @@ self.onmessage = async (e: MessageEvent<DownloadWorkerPayload>) => {
         self.postMessage({ jobId, progress: { loaded: totalFiles, total: totalFiles, filename: "Zipping..." } } as DownloadWorkerResult);
 
         zip(zipData, { level: 4 }, (err, data) => {
-            if (err) throw err;
+            try {
+                if (err) {
+                    self.postMessage({ jobId, error: err.message || "Zip compression failed" } as DownloadWorkerResult);
+                    return;
+                }
 
-            const zipBlob = new Blob([new Uint8Array(data)], { type: "application/zip" });
-            self.postMessage({ jobId, blob: zipBlob } as DownloadWorkerResult);
+                const zipBlob = new Blob([new Uint8Array(data)], { type: "application/zip" });
+                self.postMessage({ jobId, blob: zipBlob } as DownloadWorkerResult);
+            } catch (callbackErr: any) {
+                self.postMessage({
+                    jobId,
+                    error: callbackErr?.message || "Zip callback failed unexpectedly",
+                } as DownloadWorkerResult);
+            }
         });
 
     } catch (err: any) {

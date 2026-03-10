@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 import { useToast } from "@/components/ui-custom/Toast";
 import { filesFeatureFlags } from "@/lib/features/files";
+import { isFilesHardeningEnabled } from "@/lib/features/files";
+import { useAuth } from "@/hooks/useAuth";
 import {
   getGitStatus,
   pushToGitHub,
@@ -22,6 +24,8 @@ export function WorkspaceGitToolbar({
   projectId,
   canEdit,
 }: WorkspaceGitToolbarProps) {
+  const { user } = useAuth();
+  const filesHardeningEnabled = isFilesHardeningEnabled(user?.id ?? null);
   const { showToast } = useToast();
 
   const git = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.git);
@@ -116,7 +120,7 @@ export function WorkspaceGitToolbar({
     }
   }, [canEdit, loadStatus, projectId, setGitSyncStatus, showToast]);
 
-  if (!filesFeatureFlags.wave4GitIntegration) return null;
+  if (!filesHardeningEnabled || !filesFeatureFlags.wave4GitIntegration) return null;
 
   if (!connected) {
     return (

@@ -139,8 +139,8 @@ export function TerminalTab({ projectId, canEdit, activeFilePath }: TerminalTabP
   const handleSubmit = useCallback(
     (e: React.FormEvent) => {
       e.preventDefault();
-      const cmd = isSearchingHistory && historySearchQuery
-        ? (commandHistory.filter((c) => c.includes(historySearchQuery)).pop() ?? inputValue.trim())
+      const cmd = isSearchingHistory && historySearchQuery.trim()
+        ? (commandHistory.filter((c) => c.includes(historySearchQuery)).pop() ?? "")
         : inputValue.trim();
       if (!cmd) return;
       pushCommandToHistory(projectId, cmd);
@@ -359,9 +359,18 @@ export function TerminalTab({ projectId, canEdit, activeFilePath }: TerminalTabP
               placeholder="Type a command… (Ctrl+R to search history)"
               className="flex-1 bg-transparent text-xs font-mono px-2 py-2 outline-none text-zinc-800 dark:text-zinc-200 placeholder:text-zinc-400"
             />
-            <Button type="submit" variant="ghost" size="sm" className="h-7 px-2 mr-1" disabled={!inputValue.trim() && !isSearchingHistory}>
-              <Play className="w-3 h-3" />
-            </Button>
+            {(() => {
+              let matchedCmd = "";
+              if (isSearchingHistory && historySearchQuery.trim()) {
+                matchedCmd = commandHistory.filter((c) => c.includes(historySearchQuery)).pop() || "";
+              }
+              const isDisabled = !inputValue.trim() && (!isSearchingHistory || !historySearchQuery.trim() || !matchedCmd);
+              return (
+                <Button type="submit" variant="ghost" size="sm" className="h-7 px-2 mr-1" disabled={isDisabled}>
+                  <Play className="w-3 h-3" />
+                </Button>
+              );
+            })()}
           </form>
         </div>
       )}

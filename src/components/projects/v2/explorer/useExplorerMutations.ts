@@ -16,6 +16,8 @@ import { filesParentKey, useFilesWorkspaceStore } from "@/stores/filesWorkspaceS
 import type { ExplorerOperation } from "./explorerTypes";
 import { getErrorMessage } from "./explorerTypes";
 import { buildProjectFileKey } from "@/lib/storage/project-file-key";
+import { runWithConcurrency } from "@/lib/utils/concurrency";
+import { FILES_RUNTIME_BUDGETS } from "@/lib/files/runtime-budgets";
 
 interface UseExplorerMutationsOptions {
   projectId: string;
@@ -238,8 +240,9 @@ export function useExplorerMutations({
             const supabase = getSupabase();
             const createdNodes: ProjectNode[] = [];
             let failed = 0;
+            const uploadConcurrency = Math.max(1, FILES_RUNTIME_BUDGETS.saveAllConcurrency);
 
-            for (const file of files) {
+            await runWithConcurrency(files, uploadConcurrency, async (file) => {
               let filePath: string | null = null;
               try {
                 const ext = file.name.split(".").pop() || "bin";
@@ -261,7 +264,7 @@ export function useExplorerMutations({
                 }
                 failed += 1;
               }
-            }
+            });
 
             if (createdNodes.length > 0) {
               upsertNodes(projectId, createdNodes);
@@ -332,6 +335,7 @@ export function useExplorerMutations({
         const files = Array.from(input.files || []);
         if (files.length === 0) return;
 
+        const mappedFiles: { path: string; fileId: string; s3Key: string; name: string }[] = [];
         try {
           showToast(`Scanning ${files.length} structural files...`, "info");
           const payloadNodes = files
@@ -352,7 +356,6 @@ export function useExplorerMutations({
           // 1. O(depth) Bulk Upsert to build entire structure layout & reserve s3 keys
           // We chunk the payload to prevent Next.js 413 Payload Too Large errors
           const CHUNK_SIZE = 2000;
-          const mappedFiles: { path: string; fileId: string; s3Key: string; name: string }[] = [];
 
           for (let i = 0; i < payloadNodes.length; i += CHUNK_SIZE) {
             const chunk = payloadNodes.slice(i, i + CHUNK_SIZE);
@@ -375,30 +378,59 @@ export function useExplorerMutations({
           }
 
           // 3. Connect to Web Worker to bypass main JS loop limits
-          const worker = new Worker(new URL('./upload.worker.ts', import.meta.url));
+          const performCleanup = async (w?: Worker) => {
+            if (w) w.terminate();
+            if (mappedFiles.length > 0) {
+              const fileIds = mappedFiles.map((m) => m.fileId);
+              try {
+                await bulkTrashNodes(fileIds, projectId);
+              } catch (cleanupError) {
+                console.warn("Failed to cleanup upload placeholders", cleanupError);
+              }
+            }
+          };
 
-          const uploadNodes = files.map((f) => {
-            const mapping = mappedFiles.find((m) => m.path === (f.webkitRelativePath || f.name));
-            return mapping ? { file: f, s3Key: mapping.s3Key, fileId: mapping.fileId, path: mapping.path } : null;
-          }).filter(Boolean);
+          const worker = new Worker(new URL('./upload.worker.ts', import.meta.url));
+          const uploadJobId =
+            typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+              ? crypto.randomUUID()
+              : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+          const mappingByPath = new Map(mappedFiles.map((entry) => [entry.path, entry]));
+          const uploadNodes = files
+            .map((file) => {
+              const mapping = mappingByPath.get(file.webkitRelativePath || file.name);
+              if (!mapping) return null;
+              return { file, s3Key: mapping.s3Key, fileId: mapping.fileId, path: mapping.path };
+            })
+            .filter((item): item is { file: File; s3Key: string; fileId: string; path: string } => item !== null);
 
           showToast(`Uploading ${uploadNodes.length} items in background UI daemon...`, "info");
 
           worker.postMessage({
+            jobId: uploadJobId,
             uploadNodes,
             supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL,
-            supabaseAnonKey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
             bucketName: "project-files",
             jwt: session.access_token
           });
 
           worker.onmessage = async (e) => {
+            if (e.data?.jobId && e.data.jobId !== uploadJobId) return;
+
+            if (e.data.type === "error") {
+              await performCleanup(worker);
+              showToast(`Folder upload failed: ${e.data.message || "Unexpected worker error"}`, "error");
+              recordOperation({ label: "Folder upload failed (worker error)", status: "error" });
+              return;
+            }
+
             if (e.data.type === "done") {
               worker.terminate();
               const failedFileIds = Array.isArray(e.data.results)
                 ? e.data.results
-                    .filter((result: { fileId?: string; success?: boolean }) => result?.success === false && !!result?.fileId)
-                    .map((result: { fileId: string }) => result.fileId)
+                  .filter((result: { fileId?: string; success?: boolean }) => result?.success === false && !!result?.fileId)
+                  .map((result: { fileId: string }) => result.fileId)
                 : [];
 
               if (failedFileIds.length > 0) {
@@ -424,10 +456,19 @@ export function useExplorerMutations({
           };
 
           worker.onerror = (err) => {
+            void performCleanup(worker);
             showToast("Fatal upload worker process error", "error");
+            recordOperation({ label: "Folder upload failed (worker crash)", status: "error" });
           };
 
         } catch (err) {
+          // Note: performCleanup is defined inside try, but if it fails before worker creation, 
+          // we might still need to cleanup mappedFiles if they were created.
+          // However, mappedFiles is in scope here.
+          if (typeof mappedFiles !== 'undefined' && mappedFiles.length > 0) {
+            const fileIds = mappedFiles.map((m) => m.fileId);
+            await bulkTrashNodes(fileIds, projectId).catch(() => null);
+          }
           showToast(`Upload failed: ${getErrorMessage(err, "Unknown error")}`, "error");
         }
       };
@@ -711,19 +752,58 @@ export function useExplorerMutations({
       const supabase = getSupabase();
 
       const flatFilePaths: string[] = [];
-      const walkForPaths = (pid: string | null) => {
-        const childIds = childrenByParentId[pid === null ? "__root__" : filesParentKey(pid)] || [];
+      const visitedFolderIds = new Set<string>();
+      const ensureFolderChildrenLoaded = async (pid: string | null) => {
+        const key = filesParentKey(pid);
+        let refreshAttempts = 0;
+        let appendPasses = 0;
+        while (true) {
+          const ws = useFilesWorkspaceStore.getState().byProjectId[projectId];
+          const childIds = ws?.childrenByParentId?.[key];
+          const isLoaded = !!ws?.loadedChildren?.[key];
+          const hasMore = !!ws?.folderMeta?.[key]?.hasMore;
+          const hasChildrenList = Array.isArray(childIds);
+
+          if (!isLoaded || !hasChildrenList) {
+            if (refreshAttempts >= 1) break;
+            refreshAttempts += 1;
+            await loadFolderContent(pid, "refresh");
+            continue;
+          }
+
+          if (hasMore) {
+            if (appendPasses >= 100) break;
+            appendPasses += 1;
+            await loadFolderContent(pid, "append");
+            continue;
+          }
+          break;
+        }
+      };
+
+      const walkForPaths = async (pid: string | null): Promise<void> => {
+        const folderVisitKey = pid ?? "__root__";
+        if (visitedFolderIds.has(folderVisitKey)) return;
+        visitedFolderIds.add(folderVisitKey);
+        await ensureFolderChildrenLoaded(pid);
+
+        const ws = useFilesWorkspaceStore.getState().byProjectId[projectId];
+        const childIds = ws?.childrenByParentId?.[filesParentKey(pid)] || [];
         for (const id of childIds) {
-          const node = nodesById[id];
+          const node = ws?.nodesById?.[id];
           if (!node) continue;
           if (node.type === "file" && node.s3Key) {
             flatFilePaths.push(node.s3Key);
           } else if (node.type === "folder") {
-            walkForPaths(node.id);
+            await walkForPaths(node.id);
           }
         }
       };
-      walkForPaths(folderId);
+      await walkForPaths(folderId);
+
+      const latestWs = useFilesWorkspaceStore.getState().byProjectId[projectId];
+      const latestNodesById = latestWs?.nodesById ?? nodesById;
+      const latestChildrenByParentId = latestWs?.childrenByParentId ?? childrenByParentId;
 
       if (flatFilePaths.length === 0) {
         showToast("No files to download", "warning");
@@ -741,14 +821,16 @@ export function useExplorerMutations({
       }
 
       const signedUrlMap: Record<string, string> = {};
+      const nodeIdByS3Key = new Map<string, string>();
+      for (const node of Object.values(latestNodesById)) {
+        if (node.s3Key) nodeIdByS3Key.set(node.s3Key, node.id);
+      }
 
       // Re-map the S3 Keys to their Node IDs for the worker
       for (const signed of signedUrlData) {
         if (signed.error) continue;
-        const matchingNode = Object.values(nodesById).find(n => n.s3Key === signed.path);
-        if (matchingNode) {
-          signedUrlMap[matchingNode.id] = signed.signedUrl;
-        }
+        const matchingNodeId = nodeIdByS3Key.get(signed.path);
+        if (matchingNodeId) signedUrlMap[matchingNodeId] = signed.signedUrl;
       }
 
       showToast("Starting client-side ZIP compilation...", "success");
@@ -765,7 +847,7 @@ export function useExplorerMutations({
           const a = document.createElement("a");
           a.href = url;
 
-          const rootNodeName = folderId && nodesById[folderId] ? nodesById[folderId].name : "Project Files";
+          const rootNodeName = folderId && latestNodesById[folderId] ? latestNodesById[folderId].name : "Project Files";
           a.download = `${rootNodeName}_Export.zip`;
 
           document.body.appendChild(a);
@@ -781,17 +863,17 @@ export function useExplorerMutations({
       };
 
       worker.postMessage({
-        jobId: `dl-${folderId || "root"}`,
-        projectId,
-        projectName: "Project Files",
-        nodesById,
-        childrenByParentId,
-        targetFolderId: folderId,
-        signedUrls: signedUrlMap
-      });
+          jobId: `dl-${folderId || "root"}`,
+          projectId,
+          projectName: "Project Files",
+          nodesById: latestNodesById,
+          childrenByParentId: latestChildrenByParentId,
+          targetFolderId: folderId,
+          signedUrls: signedUrlMap
+        });
 
     },
-    [childrenByParentId, nodesById, getSupabase, projectId, showToast]
+    [childrenByParentId, nodesById, getSupabase, loadFolderContent, projectId, showToast]
   );
 
   // Direct file upload (for desktop drag-and-drop — no picker dialog)

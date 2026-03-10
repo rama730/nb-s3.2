@@ -27,6 +27,7 @@ interface WorkspacePaneHostProps {
     fontSize: number;
     minimap: boolean;
   };
+  bottomPanelCollapsed: boolean;
   conflictNodeId: string | null;
   conflictDiffSignal: number;
   activeFilePath?: string;
@@ -45,13 +46,21 @@ interface WorkspacePaneHostProps {
   onSaveTab: (tabId: string) => void;
   onRetryLoad: (tabId: string) => void;
   onDeleteTab: (tabId: string) => void;
-  onCrumbClick: (folderId: string) => void;
-  onNavigatePathNode: (node: ProjectNode, paneId: PaneId) => void;
   onNavigateToAsset: (node: ProjectNode, paneId: PaneId) => void;
   onRunActiveFile: () => void;
   onOpenAsset: (node: ProjectNode) => void;
   onOpenFolderFromGallery: (folderId: string) => void;
   onStartResize: (event: React.MouseEvent) => void;
+  onToggleBottomPanel: () => void;
+  onOpenQuickOpen: () => void;
+  onOpenFindInProject: () => void;
+  onOpenCommandPalette: () => void;
+  onToggleSplit: () => void;
+  onToggleLineNumbers: () => void;
+  onToggleWordWrap: () => void;
+  onToggleMinimap: () => void;
+  onFontSizeDecrease: () => void;
+  onFontSizeIncrease: () => void;
   leftOrderedTabIds: string[];
   rightOrderedTabIds: string[];
   gitChangedFiles: Array<{ nodeId: string; status: "modified" | "added" | "deleted" }>;
@@ -67,6 +76,7 @@ export function WorkspacePaneHost({
   pinnedByTabId,
   tabById,
   prefs,
+  bottomPanelCollapsed,
   conflictNodeId,
   conflictDiffSignal,
   activeFilePath,
@@ -85,13 +95,21 @@ export function WorkspacePaneHost({
   onSaveTab,
   onRetryLoad,
   onDeleteTab,
-  onCrumbClick,
-  onNavigatePathNode,
   onNavigateToAsset,
   onRunActiveFile,
   onOpenAsset,
   onOpenFolderFromGallery,
   onStartResize,
+  onToggleBottomPanel,
+  onOpenQuickOpen,
+  onOpenFindInProject,
+  onOpenCommandPalette,
+  onToggleSplit,
+  onToggleLineNumbers,
+  onToggleWordWrap,
+  onToggleMinimap,
+  onFontSizeDecrease,
+  onFontSizeIncrease,
   leftOrderedTabIds,
   rightOrderedTabIds,
   gitChangedFiles,
@@ -123,9 +141,20 @@ export function WorkspacePaneHost({
             onSave={onSaveTab}
             onRetryLoad={onRetryLoad}
             onDelete={onDeleteTab}
-            onCrumbClick={onCrumbClick}
-            onNavigatePathNode={(node) => onNavigatePathNode(node, "left")}
             onNavigateToAsset={(node) => onNavigateToAsset(node, "left")}
+            showGlobalControls={!splitEnabled || activePane === "left"}
+            splitEnabled={splitEnabled}
+            bottomPanelCollapsed={bottomPanelCollapsed}
+            onToggleBottomPanel={onToggleBottomPanel}
+            onOpenQuickOpen={onOpenQuickOpen}
+            onOpenFindInProject={onOpenFindInProject}
+            onOpenCommandPalette={onOpenCommandPalette}
+            onToggleSplit={onToggleSplit}
+            onToggleLineNumbers={onToggleLineNumbers}
+            onToggleWordWrap={onToggleWordWrap}
+            onToggleMinimap={onToggleMinimap}
+            onFontSizeDecrease={onFontSizeDecrease}
+            onFontSizeIncrease={onFontSizeIncrease}
             conflictDiffNodeId={conflictNodeId}
             conflictDiffSignal={conflictDiffSignal}
             onRun={activePane === "left" ? onRunActiveFile : undefined}
@@ -162,9 +191,20 @@ export function WorkspacePaneHost({
               onSave={onSaveTab}
               onRetryLoad={onRetryLoad}
               onDelete={onDeleteTab}
-              onCrumbClick={onCrumbClick}
-              onNavigatePathNode={(node) => onNavigatePathNode(node, "right")}
               onNavigateToAsset={(node) => onNavigateToAsset(node, "right")}
+              showGlobalControls={activePane === "right"}
+              splitEnabled={splitEnabled}
+              bottomPanelCollapsed={bottomPanelCollapsed}
+              onToggleBottomPanel={onToggleBottomPanel}
+              onOpenQuickOpen={onOpenQuickOpen}
+              onOpenFindInProject={onOpenFindInProject}
+              onOpenCommandPalette={onOpenCommandPalette}
+              onToggleSplit={onToggleSplit}
+              onToggleLineNumbers={onToggleLineNumbers}
+              onToggleWordWrap={onToggleWordWrap}
+              onToggleMinimap={onToggleMinimap}
+              onFontSizeDecrease={onFontSizeDecrease}
+              onFontSizeIncrease={onFontSizeIncrease}
               conflictDiffNodeId={conflictNodeId}
               conflictDiffSignal={conflictDiffSignal}
               onRun={activePane === "right" ? onRunActiveFile : undefined}

@@ -5,16 +5,9 @@ import { FileTreeRow } from "./FileTreeRow";
 import { Button } from "@/components/ui/button";
 import {
     ChevronDown,
-    FilePlus2,
-    FolderOpen,
-    FolderPlus,
-    Loader2,
-    Pencil,
     Plus,
-    RotateCcw,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 
 export interface FileTreeItemContext {
     nodesById: Record<string, ProjectNode>;
@@ -142,7 +135,6 @@ export function FileTreeItem({
     const expanded = !!context.expandedFolderIds[node.id];
     // Multi-select check + Single select check
     const isSelected = context.selectedNodeIds.includes(node.id) || context.selectedNodeId === node.id;
-    const isFavorite = !!context.favorites[node.id];
     const linkCount = context.taskLinkCounts[node.id] ?? 0;
     const lock = context.locksByNodeId[node.id];
     const isRenaming = context.renameNodeId === node.id;

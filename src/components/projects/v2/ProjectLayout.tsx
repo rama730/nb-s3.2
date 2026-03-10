@@ -27,11 +27,9 @@ interface ProjectLayoutProps {
     onTabChange: (tabId: string) => void;
     followersCount?: number;
     viewCount?: number;
-    savesCount?: number;
+
     onEdit?: () => void;
-    isBookmarked?: boolean;
-    onBookmark?: () => void;
-    bookmarkLoading?: boolean;
+
     isFollowing?: boolean;
     onFollow?: () => void;
     followLoading?: boolean;
@@ -43,18 +41,35 @@ export default function ProjectLayout({
     children, project, isOwner, activeTab, onTabChange,
     followersCount,
     viewCount,
-    savesCount,
     onEdit,
-    isBookmarked, onBookmark, bookmarkLoading, isFollowing, onFollow, followLoading, onShare,
+    isFollowing, onFollow, followLoading, onShare,
     onTabHover,
 }: ProjectLayoutProps) {
     const [isScrolled, setIsScrolled] = useState(false);
 
-    // Detect scroll for sticky header shadow
+    // Detect route-root scroll for sticky header shadow.
     useEffect(() => {
-        const handleScroll = () => setIsScrolled(window.scrollY > 10);
-        window.addEventListener("scroll", handleScroll);
-        return () => window.removeEventListener("scroll", handleScroll);
+        const routeRoot = document.querySelector<HTMLElement>('[data-scroll-root="route"]');
+        const scrollTarget: HTMLElement | Window = routeRoot ?? window;
+        let rafId = 0;
+
+        const handleScroll = () => {
+            if (rafId) return;
+            rafId = requestAnimationFrame(() => {
+                const scrollTop = routeRoot ? routeRoot.scrollTop : window.scrollY;
+                const nextScrolled = scrollTop > 10;
+                setIsScrolled((prev) => (prev === nextScrolled ? prev : nextScrolled));
+                rafId = 0;
+            });
+        };
+
+        scrollTarget.addEventListener("scroll", handleScroll as EventListener, { passive: true });
+        handleScroll();
+
+        return () => {
+            scrollTarget.removeEventListener("scroll", handleScroll as EventListener);
+            if (rafId) cancelAnimationFrame(rafId);
+        };
     }, []);
 
     return (
@@ -98,7 +113,6 @@ export default function ProjectLayout({
                                 <ProjectStatsBar
                                     viewCount={viewCount ?? project?.viewCount ?? project?.view_count ?? 0}
                                     followersCount={followersCount ?? 0}
-                                    savesCount={savesCount}
                                 />
                             </div>
                         </div>
@@ -116,27 +130,6 @@ export default function ProjectLayout({
                                     Edit
                                 </button>
                             )}
-
-                            {/* Saved (Bookmark) */}
-                            <button
-                                onClick={onBookmark}
-                                className={cn(
-                                    "p-2 rounded-md transition-all flex items-center gap-1.5 text-sm font-medium disabled:opacity-60 disabled:cursor-not-allowed",
-                                    isBookmarked
-                                        ? "text-amber-600 bg-amber-50 dark:bg-amber-900/20"
-                                        : "text-zinc-500 hover:text-amber-600 hover:bg-zinc-50 dark:bg-zinc-900 dark:hover:bg-zinc-800"
-                                )}
-                                title={isBookmarked ? "Unsave Project" : "Save Project"}
-                                disabled={bookmarkLoading}
-                                aria-busy={bookmarkLoading}
-                            >
-                                {bookmarkLoading ? (
-                                    <Loader2 className="w-4 h-4 animate-spin" />
-                                ) : (
-                                    <Bookmark className={cn("w-4 h-4", isBookmarked && "fill-current")} />
-                                )}
-                                <span className="hidden sm:inline-block">{isBookmarked ? "Saved" : "Save"}</span>
-                            </button>
 
                             {/* Follow */}
                             <button
@@ -177,7 +170,7 @@ export default function ProjectLayout({
 
             {/* Bottom Row: Navigation Tabs (STICKY) */}
             <div className={cn(
-                "sticky top-[var(--header-height,64px)] z-30 bg-white/80 dark:bg-zinc-950/80 backdrop-blur-md border-b border-zinc-200 dark:border-zinc-800 transition-[top,box-shadow] duration-300 ease-in-out",
+                "sticky top-[var(--header-height,56px)] z-30 bg-white/80 dark:bg-zinc-950/80 backdrop-blur-md border-b border-zinc-200 dark:border-zinc-800 transition-[top,box-shadow] duration-300 ease-in-out",
                 isScrolled && "shadow-sm"
             )}>
                 <div className="max-w-7xl mx-auto">

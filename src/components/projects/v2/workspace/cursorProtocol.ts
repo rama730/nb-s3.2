@@ -5,13 +5,13 @@
  * compressed binary payloads via Supabase Realtime Broadcast. This simulates
  * WebTransport-style UDP by aggressively dropping stale frames.
  *
- * Protocol: Each cursor frame is a compact binary payload (22 bytes max):
- *   [userId:8][nodeIdHash:4][line:2][col:2][selStart:2][selEnd:2][flags:1][ts:1]
+ * Protocol: Each cursor frame is a compact binary payload (20 bytes):
+ *   [userHash:4][nodeHash:4][line:2][col:2][selStart:2][selEnd:2][ts:4]
  *
  * Why Binary:
  * - JSON cursor events are ~200 bytes each. With 50 concurrent users at 60fps,
  *   that's 600KB/s of JSON parsing overhead on the main thread.
- * - Binary payloads at 22 bytes × 50 users × 4fps (throttled) = 4.4KB/s.
+ * - Binary payloads at 20 bytes × 50 users × 4fps (throttled) = 4KB/s.
  *   This is a 136× bandwidth reduction!
  *
  * Frame Dropping:
@@ -143,11 +143,14 @@ export function createCursorThrottle(
 export function createPresenceManager() {
     const cursors: CursorPresenceMap = new Map();
     const userHashToId = new Map<number, string>();
+    const userHashToName = new Map<number, string>();
     const nodeHashToId = new Map<number, string>();
     let gcTimer: ReturnType<typeof setInterval> | null = null;
 
     function registerUser(userId: string, userName?: string) {
-        userHashToId.set(fnv1a(userId), userId);
+        const hash = fnv1a(userId);
+        userHashToId.set(hash, userId);
+        if (userName) userHashToName.set(hash, userName);
     }
 
     function registerNode(nodeId: string) {
@@ -165,14 +168,16 @@ export function createPresenceManager() {
 
         // Drop stale frames
         const now = Date.now();
-        const frameAge = (now & 0xffffffff) - decoded.timestamp;
-        if (frameAge > STALE_FRAME_MS && frameAge > 0) return null;
+        const now32 = now >>> 0;
+        const frameAge = (now32 - decoded.timestamp) >>> 0;
+        if (frameAge > STALE_FRAME_MS) return null;
 
         const userId = userHashToId.get(decoded.userHash) ?? `user-${decoded.userHash}`;
         const nodeId = nodeHashToId.get(decoded.nodeHash) ?? "";
 
         const frame: CursorFrame = {
             userId,
+            userName: userHashToName.get(decoded.userHash),
             nodeId,
             line: decoded.line,
             column: decoded.column,
@@ -202,6 +207,7 @@ export function createPresenceManager() {
         gcTimer = null;
         cursors.clear();
         userHashToId.clear();
+        userHashToName.clear();
         nodeHashToId.clear();
     }
 

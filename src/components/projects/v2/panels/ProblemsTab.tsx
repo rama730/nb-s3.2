@@ -1,11 +1,12 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
-import { AlertCircle, AlertTriangle, CheckCircle2, File, Info, Wand2 } from "lucide-react";
+import React, { useCallback, useMemo, useState } from "react";
+import { AlertCircle, AlertTriangle, CheckCircle2, File, Info, Loader2, Wand2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { Problem } from "@/stores/files/types";
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
+import { useToast } from "@/components/ui-custom/Toast";
 
 type Severity = "error" | "warning" | "info";
 
@@ -30,13 +31,33 @@ const SEVERITY_TEXT: Record<Severity, string> = {
 };
 
 export function ProblemsTab({ projectId, problems = [], onNavigateToFile }: ProblemsTabProps) {
+  const { showToast } = useToast();
   const [filters, setFilters] = useState<Record<Severity, boolean>>({
     error: true,
     warning: true,
     info: true,
   });
+  const [fixingProblemIds, setFixingProblemIds] = useState<Record<string, boolean>>({});
   
   const applyQuickFix = useFilesWorkspaceStore((s) => s.applyQuickFix);
+
+  const handleApplyQuickFix = useCallback(async (problem: Problem) => {
+    if (!problem.fix || fixingProblemIds[problem.id]) return;
+    setFixingProblemIds((prev) => ({ ...prev, [problem.id]: true }));
+    try {
+      await Promise.resolve(applyQuickFix(projectId, problem.id));
+      showToast("Quick fix applied", "success");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to apply quick fix";
+      showToast(message, "error");
+    } finally {
+      setFixingProblemIds((prev) => {
+        const next = { ...prev };
+        delete next[problem.id];
+        return next;
+      });
+    }
+  }, [applyQuickFix, fixingProblemIds, projectId, showToast]);
 
   const toggleFilter = (sev: Severity) =>
     setFilters((prev) => ({ ...prev, [sev]: !prev[sev] }));
@@ -135,11 +156,21 @@ export function ProblemsTab({ projectId, problems = [], onNavigateToFile }: Prob
                         variant="ghost"
                         size="sm"
                         className="h-5 px-1.5 text-[10px] gap-1 opacity-0 group-hover:opacity-100 shrink-0 text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/40"
-                        onClick={() => applyQuickFix(projectId, problem.id)}
+                        onClick={() => void handleApplyQuickFix(problem)}
                         title={problem.fix.label}
+                        disabled={!!fixingProblemIds[problem.id]}
                       >
-                        <Wand2 className="w-3 h-3" />
-                        Fix
+                        {fixingProblemIds[problem.id] ? (
+                          <>
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                            Applying
+                          </>
+                        ) : (
+                          <>
+                            <Wand2 className="w-3 h-3" />
+                            Fix
+                          </>
+                        )}
                       </Button>
                     )}
 

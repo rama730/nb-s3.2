@@ -9,6 +9,7 @@ import {
 } from "@/app/actions/files";
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 import type { ProjectNode } from "@/lib/db/schema";
+import type { SearchWorkerResponse } from "./workerContracts";
 
 export function useExplorerSearch(options: {
   projectId: string;
@@ -32,10 +33,81 @@ export function useExplorerSearch(options: {
   const searchSnippetsRef = useRef<Record<string, string | null>>({});
   const workerRef = useRef<Worker | null>(null);
 
+  const latestStateRef = useRef({ projectId, upsertNodes, setTaskLinkCounts });
   useEffect(() => {
-    workerRef.current = new Worker(new URL("./search.worker.ts", import.meta.url));
+    latestStateRef.current = { projectId, upsertNodes, setTaskLinkCounts };
+  }, [projectId, upsertNodes, setTaskLinkCounts]);
+
+  useEffect(() => {
+    const worker = new Worker(new URL("./search.worker.ts", import.meta.url));
+    workerRef.current = worker;
+
+    const handler = async (e: MessageEvent<SearchWorkerResponse>) => {
+      if (e.data.type === "SEARCH_ERROR") {
+        const responseJobId = e.data.jobId ?? e.data.requestId;
+        if (responseJobId !== searchRequestIdRef.current) return;
+        console.warn("[ExplorerSearch] search worker error", { jobId: responseJobId, error: e.data.error });
+        setIsSearching(false);
+        return;
+      }
+
+      if (e.data.type !== "SEARCH_COMPLETE") return;
+      const responseJobId = e.data.jobId ?? e.data.requestId;
+      const { orderedIds, snippets } = e.data;
+      if (responseJobId !== searchRequestIdRef.current) return;
+
+      const {
+        projectId: pid,
+        upsertNodes: upsert,
+        setTaskLinkCounts: stlc,
+      } = latestStateRef.current;
+
+      searchSnippetsRef.current = snippets;
+
+      const latestNodesByIdBeforeHydrate =
+        useFilesWorkspaceStore.getState().byProjectId[pid]?.nodesById || {};
+      const missing = orderedIds.filter((id: string) => !latestNodesByIdBeforeHydrate[id]);
+
+      if (missing.length > 0) {
+        const hydrated = (await getNodesByIds(pid, missing)) as ProjectNode[];
+        if (responseJobId !== searchRequestIdRef.current) return;
+        if (hydrated.length > 0) upsert(pid, hydrated);
+      }
+
+      const latestNodesById = useFilesWorkspaceStore.getState().byProjectId[pid]?.nodesById || {};
+      const orderedNodes = orderedIds
+        .map((id: string) => latestNodesById[id])
+        .filter((node: ProjectNode | undefined): node is ProjectNode => !!node);
+      setSearchResults(orderedNodes);
+
+      const fileIds = orderedNodes
+        .filter((n: ProjectNode) => n.type === "file")
+        .map((n: ProjectNode) => n.id);
+      if (fileIds.length) {
+        const counts = await getTaskLinkCounts(pid, fileIds);
+        if (responseJobId !== searchRequestIdRef.current) return;
+        stlc(pid, counts);
+      }
+
+      if (responseJobId === searchRequestIdRef.current) {
+        setIsSearching(false);
+      }
+    };
+
+    worker.addEventListener("message", handler);
+    worker.onerror = (event) => {
+      console.error("[ExplorerSearch] worker runtime error", {
+        message: event.message,
+        fileName: event.filename,
+        line: event.lineno,
+        column: event.colno,
+      });
+      setIsSearching(false);
+    };
+
     return () => {
-      workerRef.current?.terminate();
+      worker.removeEventListener("message", handler);
+      worker.terminate();
     };
   }, []);
 
@@ -84,43 +156,12 @@ export function useExplorerSearch(options: {
         }
 
         if (workerRef.current) {
-          workerRef.current.onmessage = async (e) => {
-            if (e.data.type !== "SEARCH_COMPLETE") return;
-            if (requestId !== searchRequestIdRef.current) return;
-            const { orderedIds, snippets } = e.data;
-            searchSnippetsRef.current = snippets;
-
-            const latestNodesByIdBeforeHydrate =
-              useFilesWorkspaceStore.getState().byProjectId[projectId]?.nodesById || {};
-            const missing = orderedIds.filter((id: string) => !latestNodesByIdBeforeHydrate[id]);
-            
-            if (missing.length > 0) {
-              const hydrated = (await getNodesByIds(projectId, missing)) as ProjectNode[];
-              if (requestId !== searchRequestIdRef.current) return;
-              if (hydrated.length > 0) upsertNodes(projectId, hydrated);
-            }
-
-            const latestNodesById =
-              useFilesWorkspaceStore.getState().byProjectId[projectId]?.nodesById || {};
-            const orderedNodes = orderedIds
-              .map((id: string) => latestNodesById[id])
-              .filter((node: ProjectNode | undefined): node is ProjectNode => !!node);
-            setSearchResults(orderedNodes);
-
-            const fileIds = orderedNodes.filter((n: ProjectNode) => n.type === "file").map((n: ProjectNode) => n.id);
-            if (fileIds.length) {
-              const counts = await getTaskLinkCounts(projectId, fileIds);
-              if (requestId !== searchRequestIdRef.current) return;
-              setTaskLinkCounts(projectId, counts);
-            }
-            
-            if (requestId === searchRequestIdRef.current) {
-              setIsSearching(false);
-            }
-          };
-          workerRef.current.postMessage({ type: "SEARCH", payload: { query: q, federated } });
+          workerRef.current.postMessage({
+            type: "SEARCH",
+            payload: { query: q, federated, requestId, jobId: requestId },
+          });
         }
-      } catch (_err) {
+      } catch {
         if (requestId === searchRequestIdRef.current) {
           setIsSearching(false);
         }

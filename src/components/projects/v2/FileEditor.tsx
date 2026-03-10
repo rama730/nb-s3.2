@@ -3,8 +3,8 @@
 import React, { useEffect, useMemo, useState, useDeferredValue } from "react";
 import { ProjectNode } from "@/lib/db/schema";
 import { Button } from "@/components/ui/button";
-import { Diff, List, Loader2, MoreVertical, Play, Save, Settings, Trash2, Wand2, SplitSquareHorizontal } from "lucide-react";
-import { useTheme } from "next-themes";
+import { Copy, Diff, List, Loader2, MoreVertical, Play, Save, Settings, Trash2, Wand2, SplitSquareHorizontal } from "lucide-react";
+import { useTheme } from "@/components/providers/theme-provider";
 import dynamic from "next/dynamic";
 import {
   Dialog,
@@ -141,8 +141,8 @@ export default function FileEditor({
   gitStatus,
   tabId,
 }: FileEditorProps) {
-  const { theme } = useTheme();
-  const isDark = theme === "dark";
+  const { resolvedTheme } = useTheme();
+  const isDark = resolvedTheme === "dark";
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [isDiffOpen, setIsDiffOpen] = useState(false);
   const [isFormatting, setIsFormatting] = useState(false);
@@ -289,6 +289,16 @@ export default function FileEditor({
     }
   };
 
+  const handleCopyPath = async () => {
+    const pathToCopy = file.path || file.name;
+    try {
+      await navigator.clipboard.writeText(pathToCopy);
+      showToast("Path copied", "success");
+    } catch {
+      showToast("Failed to copy path", "error");
+    }
+  };
+
   return (
     <div ref={rootRef} className="flex flex-col h-full bg-white dark:bg-[#1e1e1e]">
       {/* Header / Toolbar */}
@@ -390,6 +400,15 @@ export default function FileEditor({
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-44">
+              <DropdownMenuItem
+                onSelect={(e) => {
+                  e.preventDefault();
+                  void handleCopyPath();
+                }}
+              >
+                <Copy className="w-3.5 h-3.5 mr-2" />
+                Copy path
+              </DropdownMenuItem>
               <DropdownMenuItem
                 onSelect={(e) => {
                   e.preventDefault();

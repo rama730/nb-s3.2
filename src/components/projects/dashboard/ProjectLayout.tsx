@@ -5,7 +5,7 @@ import { motion } from "framer-motion";
 import Link from "next/link";
 import {
     LayoutDashboard, ListTodo, FolderOpen,
-    Settings, Share2, ChevronLeft, Bookmark, Bell, Timer, BarChart3, Edit, Loader2
+    Settings, Share2, ChevronLeft, Bell, Timer, BarChart3, Edit, Loader2
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Project } from "@/types/hub";
@@ -20,11 +20,8 @@ interface ProjectLayoutProps {
     onTabChange: (tabId: string) => void;
     followersCount?: number;
     viewCount?: number;
-    savesCount?: number;
+
     onEdit?: () => void;
-    isBookmarked?: boolean;
-    onBookmark?: () => void;
-    bookmarkLoading?: boolean;
     isFollowing?: boolean;
     onFollow?: () => void;
     followLoading?: boolean;
@@ -46,41 +43,46 @@ export default function ProjectLayout({
     children, project, isOwner, activeTab, onTabChange,
     followersCount,
     viewCount,
-    savesCount,
+
     onEdit,
-    isBookmarked, onBookmark, bookmarkLoading, isFollowing, onFollow, followLoading, onShare,
+    isFollowing, onFollow, followLoading, onShare,
     onTabHover,
     onTabLeave,
 }: ProjectLayoutProps) {
     const [isScrolled, setIsScrolled] = useState(false);
+    const [tabsReady, setTabsReady] = useState(false);
 
-    // Detect scroll for sticky header shadow - throttled with rAF for performance
+    // Detect route scroll for sticky header shadow - throttled with rAF for performance
     useEffect(() => {
+        const routeRoot = document.querySelector<HTMLElement>('[data-scroll-root="route"]');
+        const scrollTarget: HTMLElement | Window = routeRoot ?? window;
         let rafId = 0;
-        let lastScrollY = window.scrollY;
 
         const handleScroll = () => {
             // Skip if already scheduled
             if (rafId) return;
 
             rafId = requestAnimationFrame(() => {
-                const scrollY = window.scrollY;
+                const scrollY = routeRoot ? routeRoot.scrollTop : window.scrollY;
                 // Only update state if threshold crossed
                 const shouldBeScrolled = scrollY > 10;
-                if ((shouldBeScrolled && !isScrolled) || (!shouldBeScrolled && isScrolled)) {
-                    setIsScrolled(shouldBeScrolled);
-                }
-                lastScrollY = scrollY;
+                setIsScrolled((prev) => (prev === shouldBeScrolled ? prev : shouldBeScrolled));
                 rafId = 0;
             });
         };
 
-        window.addEventListener("scroll", handleScroll, { passive: true });
+        scrollTarget.addEventListener("scroll", handleScroll as EventListener, { passive: true });
+        handleScroll();
+
         return () => {
-            window.removeEventListener("scroll", handleScroll);
+            scrollTarget.removeEventListener("scroll", handleScroll as EventListener);
             if (rafId) cancelAnimationFrame(rafId);
         };
-    }, [isScrolled]);
+    }, []);
+
+    useEffect(() => {
+        setTabsReady(true);
+    }, []);
 
     const isFilesTab = activeTab === "files";
 
@@ -128,7 +130,7 @@ export default function ProjectLayout({
                                 <ProjectStatsBar
                                     viewCount={viewCount ?? (project as any)?.viewCount ?? 0}
                                     followersCount={followersCount ?? (project as any)?.followersCount ?? 0}
-                                    savesCount={savesCount ?? (project as any)?.savesCount}
+
                                 />
                             </div>
                         </div>
@@ -138,6 +140,7 @@ export default function ProjectLayout({
                             {/* Edit (Owner) */}
                             {isOwner && onEdit && (
                                 <button
+                                    type="button"
                                     onClick={onEdit}
                                     className="hidden sm:flex items-center gap-1.5 px-3 py-2 rounded-md bg-indigo-600 text-white hover:bg-indigo-700 transition-colors text-sm font-medium shadow-sm"
                                     title="Edit Project"
@@ -147,29 +150,9 @@ export default function ProjectLayout({
                                 </button>
                             )}
 
-                            {/* Saved (Bookmark) */}
-                            <button
-                                onClick={onBookmark}
-                                className={cn(
-                                    "p-2 rounded-md transition-all flex items-center gap-1.5 text-sm font-medium disabled:opacity-60 disabled:cursor-not-allowed",
-                                    isBookmarked
-                                        ? "text-amber-600 bg-amber-50 dark:bg-amber-900/20"
-                                        : "text-zinc-500 hover:text-amber-600 hover:bg-zinc-50 dark:bg-zinc-900 dark:hover:bg-zinc-800"
-                                )}
-                                title={isBookmarked ? "Unsave Project" : "Save Project"}
-                                disabled={bookmarkLoading}
-                                aria-busy={bookmarkLoading}
-                            >
-                                {bookmarkLoading ? (
-                                    <Loader2 className="w-4 h-4 animate-spin" />
-                                ) : (
-                                    <Bookmark className={cn("w-4 h-4", isBookmarked && "fill-current")} />
-                                )}
-                                <span className="hidden sm:inline-block">{isBookmarked ? "Saved" : "Save"}</span>
-                            </button>
-
                             {/* Follow */}
                             <button
+                                type="button"
                                 onClick={onFollow}
                                 className={cn(
                                     "p-2 rounded-md transition-all flex items-center gap-1.5 text-sm font-medium disabled:opacity-60 disabled:cursor-not-allowed",
@@ -194,6 +177,7 @@ export default function ProjectLayout({
 
                             {/* Share */}
                             <button
+                                type="button"
                                 onClick={onShare}
                                 className="p-2 text-zinc-400 hover:text-zinc-900 dark:text-zinc-50 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:bg-zinc-900 dark:hover:bg-zinc-800 rounded-md transition-colors"
                                 title="Share Project"
@@ -208,9 +192,11 @@ export default function ProjectLayout({
             {/* Bottom Row: Navigation Tabs (sticky) */}
             <div className={cn(
                 "z-30 bg-white/80 dark:bg-zinc-950/80 backdrop-blur-md border-b border-zinc-200 dark:border-zinc-800 transition-shadow duration-300 ease-in-out shrink-0",
-                isFilesTab ? "relative" : "sticky top-14",
+                isFilesTab ? "relative" : "sticky",
                 isScrolled && !isFilesTab && "shadow-sm"
-            )}>
+            )}
+                style={isFilesTab ? undefined : { top: 'var(--header-height, 56px)' }}
+            >
                 <div className="max-w-7xl mx-auto">
                     <div className="flex items-center px-4 overflow-x-auto scrollbar-hide -mb-px">
                         {TABS.map((tab) => {
@@ -219,12 +205,15 @@ export default function ProjectLayout({
                             return (
                                 <button
                                     key={tab.id}
+                                    type="button"
                                     data-testid={`project-tab-${tab.id}`}
+                                    data-active={isActive ? "true" : "false"}
                                     onClick={() => onTabChange(tab.id)}
                                     onMouseEnter={() => onTabHover?.(tab.id)}
                                     onMouseLeave={() => onTabLeave?.(tab.id)}
+                                    disabled={!tabsReady}
                                     className={cn(
-                                        "relative flex items-center gap-2 px-4 py-3 text-sm font-medium transition-all whitespace-nowrap",
+                                        "relative flex items-center gap-2 px-4 py-3 text-sm font-medium transition-all whitespace-nowrap disabled:opacity-60 disabled:cursor-not-allowed",
                                         isActive
                                             ? "text-indigo-600 dark:text-indigo-400"
                                             : "text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200"

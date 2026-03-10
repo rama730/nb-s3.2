@@ -357,6 +357,24 @@ export default function ExplorerShell({
     recordOperation,
   });
 
+  const getNodePath = useCallback(
+    (node: ProjectNode | null | undefined) => {
+      if (!node) return "";
+      const parts: string[] = [node.name];
+      let cursor = node.parentId;
+      let guard = 0;
+      while (cursor && guard < 256) {
+        const parent = (nodesById as Record<string, ProjectNode>)[cursor];
+        if (!parent) break;
+        parts.unshift(parent.name);
+        cursor = parent.parentId;
+        guard += 1;
+      }
+      return parts.join("/");
+    },
+    [nodesById]
+  );
+
   // --- Selection ---
   const handleSelect = useCallback(
     (node: ProjectNode, e?: React.MouseEvent) => {
@@ -451,6 +469,7 @@ export default function ExplorerShell({
       setSelectedNodeIds,
       addRecent,
       onOpenFile,
+      getNodePath,
       controlledSelectedNodeIds,
       onSelectionChange,
     ]
@@ -514,12 +533,22 @@ export default function ExplorerShell({
       const node = nodes[id];
       if (node.type !== "file" || !node.parentId || !node.size) continue;
       let cursor: string | null = node.parentId;
-      let guard = 0;
-      while (cursor && guard < 50) {
+      let depth = 0;
+      const visited = new Set<string>();
+      while (cursor) {
+        if (visited.has(cursor)) {
+          console.warn(`Cycle detected in folder hierarchy for node ${node.id} at ${cursor}`);
+          break;
+        }
+        if (depth >= 50) {
+          console.warn(`Folder size computation truncated at depth 50 for node ${node.id}`);
+          break;
+        }
+        visited.add(cursor);
         sizes[cursor] = (sizes[cursor] || 0) + (node.size || 0);
         const parentNode: ProjectNode | undefined = nodes[cursor];
         cursor = parentNode?.parentId ?? null;
-        guard++;
+        depth++;
       }
     }
     return sizes;
@@ -584,24 +613,6 @@ export default function ExplorerShell({
   }, [rowsToRender]);
 
   const selectedIndex = selectedNodeId ? rowIndexById.get(selectedNodeId) : undefined;
-
-  const getNodePath = useCallback(
-    (node: ProjectNode | null | undefined) => {
-      if (!node) return "";
-      const parts: string[] = [node.name];
-      let cursor = node.parentId;
-      let guard = 0;
-      while (cursor && guard < 256) {
-        const parent = (nodesById as Record<string, ProjectNode>)[cursor];
-        if (!parent) break;
-        parts.unshift(parent.name);
-        cursor = parent.parentId;
-        guard += 1;
-      }
-      return parts.join("/");
-    },
-    [nodesById]
-  );
 
   const focusRow = (index: number) => {
     const row = rowsToRender[index];
@@ -843,7 +854,6 @@ export default function ExplorerShell({
             onSelect={handleSelect}
             onToggleFolder={handleToggleFolder}
             onDropOnFolder={handleDropOnFolder}
-            onDownloadFolder={handleDownloadFolder}
           />
         )}
       </div>
@@ -879,7 +889,12 @@ export default function ExplorerShell({
             showToast("Failed to copy paths", "error");
           }
         }}
-        onClear={() => setSelectedNodeIds(projectId, [])}
+        onClear={() => {
+          setSelectedNodeIds(projectId, []);
+          if (isSelectionMode) {
+            onSelectionChange?.([]);
+          }
+        }}
       />
 
       {/* Phase 5: Centralized Portal Context Menu */}

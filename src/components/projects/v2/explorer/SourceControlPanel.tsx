@@ -4,6 +4,8 @@ import React, { useState, useCallback, useTransition } from "react";
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 import { cn } from "@/lib/utils";
 import { filesFeatureFlags } from "@/lib/features/files";
+import { isFilesHardeningEnabled } from "@/lib/features/files";
+import { useAuth } from "@/hooks/useAuth";
 import {
     GitBranch,
     FileText,
@@ -30,7 +32,6 @@ import {
     getGitStatus,
     pushToGitHub,
     pullFromGitHub,
-    getGitBranches,
     getGitSyncHistory,
 } from "@/app/actions/git";
 
@@ -84,7 +85,10 @@ export default function SourceControlPanel({
     projectId: string;
     className?: string;
 }) {
-    if (!filesFeatureFlags.wave4GitIntegration) {
+    const { user } = useAuth();
+    const filesHardeningEnabled = isFilesHardeningEnabled(user?.id ?? null);
+
+    if (!filesHardeningEnabled || !filesFeatureFlags.wave4GitIntegration) {
         return <FallbackPanel projectId={projectId} className={className} />;
     }
 
@@ -134,7 +138,6 @@ function GitIntegrationPanel({ projectId, className }: { projectId: string; clas
     const setGitSyncStatus = useFilesWorkspaceStore((s) => s.setGitSyncStatus);
     const setGitChangedFiles = useFilesWorkspaceStore((s) => s.setGitChangedFiles);
     const setGitCommitMessage = useFilesWorkspaceStore((s) => s.setGitCommitMessage);
-    const setGitBranches = useFilesWorkspaceStore((s) => s.setGitBranches);
     const setGitLastSync = useFilesWorkspaceStore((s) => s.setGitLastSync);
     const setGitStatusLoaded = useFilesWorkspaceStore((s) => s.setGitStatusLoaded);
     const clearGitState = useFilesWorkspaceStore((s) => s.clearGitState);
@@ -476,7 +479,7 @@ function GitIntegrationPanel({ projectId, className }: { projectId: string; clas
                                                 {/* Vertical connecting line */}
                                                 <div className="absolute left-[13px] top-4 bottom-4 w-px bg-zinc-200 dark:bg-zinc-800" />
                                                 
-                                                {syncHistory.map((ev, i) => (
+                                                {syncHistory.map((ev) => (
                                                     <div
                                                         key={ev.id}
                                                         className="flex items-start gap-3 relative"
