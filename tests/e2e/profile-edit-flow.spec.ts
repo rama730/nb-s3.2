@@ -50,6 +50,11 @@ test.describe("Profile edit flow", () => {
         await saveButton.click();
         const settledSaveResponse = await saveResponse;
         expect(settledSaveResponse.status()).toBe(200);
+        const contentType = settledSaveResponse.headers()["content-type"] || "";
+        if (contentType.includes("application/json")) {
+            const payload = await settledSaveResponse.json();
+            expect(payload?.success).toBeTruthy();
+        }
         await expect(editModal).toBeHidden({ timeout: 15000 });
 
         await page.reload({ waitUntil: "domcontentloaded" });

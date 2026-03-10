@@ -6,9 +6,9 @@ type PerfSample = {
   valueMs: number;
 };
 
-const ENABLED = process.env.E2E_PERF_GATE === '1';
-const RUN_ID = process.env.E2E_RUN_ID || 'local';
+const ENABLED = process.env.E2E_PERF_GATE !== '0';
 const PERF_DIR = path.join(process.cwd(), 'test-results', 'perf');
+const PERF_RUN_ID_FILE = path.join(process.cwd(), '.e2e-last-run-id');
 
 const THRESHOLDS: Record<string, number> = {
   'route.interactive.core': 2000,
@@ -16,6 +16,11 @@ const THRESHOLDS: Record<string, number> = {
   'files.open': 1200,
   'files.save': 800,
   'ui.search.interaction': 100,
+  'project.detail.shell.interactive': 1200,
+  'project.detail.tab.switch': 350,
+  'project.detail.application.submit': 700,
+  'project.detail.application.decision': 900,
+  'project.detail.files.tab.open': 1000,
 };
 
 function percentile(values: number[], p: number): number {
@@ -25,11 +30,31 @@ function percentile(values: number[], p: number): number {
   return sorted[index] || 0;
 }
 
+function resolveRunId() {
+  const explicit = process.env.E2E_RUN_ID?.trim();
+  if (explicit) return explicit;
+  if (!fs.existsSync(PERF_RUN_ID_FILE)) return null;
+  const fromFile = fs.readFileSync(PERF_RUN_ID_FILE, 'utf8').trim();
+  return fromFile || null;
+}
+
 function readSamples(): PerfSample[] {
   if (!fs.existsSync(PERF_DIR)) return [];
+  const runId = resolveRunId();
+  if (!runId) {
+    throw new Error(
+      `[e2e-perf] Missing E2E_RUN_ID and no persisted run id at ${PERF_RUN_ID_FILE}. Run prod E2E first.`,
+    );
+  }
   const files = fs.readdirSync(PERF_DIR).filter((name) => name.endsWith('.jsonl'));
-  const selected = files.filter((name) => name.includes(RUN_ID));
-  const target = selected.length > 0 ? selected : files;
+  const selected = files.filter((name) => name.includes(runId));
+  if (selected.length === 0) {
+    const available = files.length > 0 ? files.join(', ') : '(none)';
+    throw new Error(
+      `[e2e-perf] No perf files found matching E2E_RUN_ID='${runId}' in ${PERF_DIR}. Available files: ${available}`,
+    );
+  }
+  const target = selected;
 
   const samples: PerfSample[] = [];
   for (const file of target) {
@@ -53,14 +78,15 @@ function readSamples(): PerfSample[] {
 
 function main() {
   if (!ENABLED) {
-    console.log('E2E perf gate disabled (set E2E_PERF_GATE=1 to enable).');
+    console.log('E2E perf gate disabled (set E2E_PERF_GATE=0 only for local ad-hoc runs).');
     return;
   }
 
   const samples = readSamples();
   if (samples.length === 0) {
-    console.log('No E2E perf samples found; skipping gate.');
-    return;
+    throw new Error(
+      'No E2E perf samples found. Run critical E2E with perf instrumentation before evaluating the perf gate.',
+    );
   }
 
   const grouped = new Map<string, number[]>();

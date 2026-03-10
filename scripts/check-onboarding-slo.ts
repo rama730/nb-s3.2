@@ -20,6 +20,18 @@ async function main() {
     }
     const sql = postgres(databaseUrl, { max: 1 })
     try {
+        const relationCheck = await sql<{ rel: string | null }[]>`
+            SELECT to_regclass('public.onboarding_slo_daily')::text AS rel
+        `
+        if (!relationCheck[0]?.rel) {
+            console.error(
+                'Onboarding SLO view "public.onboarding_slo_daily" is missing. ' +
+                'Apply the latest migrations (including drizzle/0035_onboarding_submission_integrity.sql) ' +
+                'or run the setup SQL before running this check.'
+            )
+            process.exit(1)
+        }
+
         const rows = await sql<{
             day: string
             submit_starts: number
@@ -46,12 +58,18 @@ async function main() {
         const latest = rows[0]
         const successRate = Number(latest.submit_success_rate)
         const errors = Number(latest.submit_errors)
+        const submitStarts = Number(latest.submit_starts)
 
         console.log('Onboarding SLO latest day:', latest.day)
         console.log('submit_starts=', latest.submit_starts)
         console.log('submit_successes=', latest.submit_successes)
         console.log('submit_errors=', latest.submit_errors)
         console.log('submit_success_rate=', successRate)
+
+        if (!Number.isFinite(submitStarts) || submitStarts <= 0) {
+            console.log('No onboarding submit_start events for latest day; skipping threshold enforcement.')
+            return
+        }
 
         if (Number.isFinite(successRate) && successRate < MIN_SUCCESS_RATE) {
             console.error(`Onboarding success rate ${successRate} is below ${MIN_SUCCESS_RATE}`)
@@ -70,7 +88,14 @@ async function main() {
 main().catch((error) => {
     const message = error instanceof Error ? error.message : String(error)
     const stack = error instanceof Error ? error.stack : undefined
-    console.error('Failed to check onboarding SLO:', message)
+    if (/onboarding_slo_daily/i.test(message) && /does not exist/i.test(message)) {
+        console.error(
+            'Failed to check onboarding SLO: relation "onboarding_slo_daily" is missing. ' +
+            'Run migrations/setup to create the SLO view first.'
+        )
+    } else {
+        console.error('Failed to check onboarding SLO:', message)
+    }
     if (stack) {
         console.error(stack)
     }

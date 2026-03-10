@@ -23,7 +23,17 @@ function readMigrationTags(): string[] {
 }
 
 function readJournal(): JournalFile {
-  return JSON.parse(fs.readFileSync(journalPath, "utf8")) as JournalFile;
+  try {
+    return JSON.parse(fs.readFileSync(journalPath, "utf8")) as JournalFile;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+      console.error(`Migration journal file not found at ${journalPath}: ${message}`);
+      process.exit(1);
+    }
+    console.error(`Failed to read or parse migration journal at ${journalPath}: ${message}`);
+    process.exit(1);
+  }
 }
 
 function checkNoDuplicateTags(entries: JournalEntry[]): string[] {

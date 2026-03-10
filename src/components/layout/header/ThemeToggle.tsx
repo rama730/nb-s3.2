@@ -1,55 +1,37 @@
 "use client";
 
-import { Moon, Sun, Laptop } from "lucide-react";
-import { useTheme } from "next-themes";
-import { useEffect, useState, useCallback, useRef } from "react";
+import { ChevronDown, Laptop, Moon, Sun } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuLabel,
+    DropdownMenuSeparator,
+    DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { useTheme } from "@/components/providers/theme-provider";
 
 export default function ThemeToggle() {
-    const { theme, resolvedTheme, setTheme } = useTheme();
+    const { theme, resolvedTheme, setThemeWithTransition } = useTheme();
     const [mounted, setMounted] = useState(false);
-    const isTransitioningRef = useRef(false);
 
     useEffect(() => {
         setMounted(true);
     }, []);
 
-    const prefersReducedMotion = useCallback(() => {
-        try {
-            if (document.documentElement.hasAttribute("data-reduce-motion")) return true;
-            return window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false;
-        } catch {
-            return false;
-        }
-    }, []);
-
-    const withThemeTransition = useCallback(async (apply: () => void | Promise<void>) => {
-        if (isTransitioningRef.current) return;
-        isTransitioningRef.current = true;
-        const root = document.documentElement;
-        root.classList.add("theme-transition");
-
-        try {
-            const canUseViewTransition = !!(document as any).startViewTransition && !prefersReducedMotion();
-            if (!canUseViewTransition) {
-                await apply();
-                return;
-            }
-
-            const transition = (document as any).startViewTransition(() => apply());
-            await transition.finished;
-        } finally {
-            // Keep the transition class only briefly; prevents “always-on” transitions.
-            window.setTimeout(() => root.classList.remove("theme-transition"), 220);
-            isTransitioningRef.current = false;
-        }
-    }, [prefersReducedMotion]);
-
-    const toggleLightDark = useCallback(async () => {
-        const current = (resolvedTheme === "dark" ? "dark" : "light");
+    const quickToggleTheme = useCallback(() => {
+        const current = resolvedTheme === "dark" ? "dark" : "light";
         const next = current === "dark" ? "light" : "dark";
-        await withThemeTransition(() => setTheme(next));
-    }, [resolvedTheme, setTheme, withThemeTransition]);
+        void setThemeWithTransition(next);
+    }, [resolvedTheme, setThemeWithTransition]);
+
+    const icon = useMemo(() => {
+        if (theme === "dark") return <Moon className="w-5 h-5 text-zinc-600 dark:text-zinc-300" />;
+        if (theme === "light") return <Sun className="w-5 h-5 text-zinc-600 dark:text-zinc-300" />;
+        return <Laptop className="w-5 h-5 text-zinc-600 dark:text-zinc-300" />;
+    }, [theme]);
 
     if (!mounted) {
         return (
@@ -63,22 +45,48 @@ export default function ThemeToggle() {
         );
     }
 
-    const currentIcon = (() => {
-        switch (theme) {
-            case 'dark': return <Moon className="w-5 h-5 text-zinc-600 dark:text-zinc-400" />;
-            case 'light': return <Sun className="w-5 h-5 text-zinc-600 dark:text-zinc-400" />;
-            default: return <Laptop className="w-5 h-5 text-zinc-600 dark:text-zinc-400" />;
-        }
-    })();
-
     return (
-        <button
-            onClick={() => void toggleLightDark()}
-            className="relative p-2 rounded-lg hover:bg-zinc-100 dark:bg-zinc-900 dark:hover:bg-zinc-800 transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
-            aria-label="Toggle theme"
-            title={`Theme: ${theme} (${resolvedTheme})`}
-        >
-            {currentIcon}
-        </button>
+        <div className="inline-flex items-center overflow-hidden rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
+            <button
+                type="button"
+                onClick={quickToggleTheme}
+                className="relative p-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+                aria-label="Quick toggle theme"
+                title={`Theme: ${theme} (${resolvedTheme})`}
+            >
+                {icon}
+            </button>
+
+            <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                    <button
+                        type="button"
+                        className="h-full border-l border-zinc-200 dark:border-zinc-800 px-1.5 py-2 text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+                        aria-label="Choose theme mode"
+                    >
+                        <ChevronDown className="w-4 h-4" />
+                    </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-44">
+                    <DropdownMenuLabel>Theme Mode</DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onClick={() => void setThemeWithTransition("light")}>
+                        <Sun className="w-4 h-4" />
+                        Light
+                        {theme === "light" ? <span className="ml-auto text-[10px] uppercase text-indigo-600">Active</span> : null}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => void setThemeWithTransition("dark")}>
+                        <Moon className="w-4 h-4" />
+                        Dark
+                        {theme === "dark" ? <span className="ml-auto text-[10px] uppercase text-indigo-600">Active</span> : null}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => void setThemeWithTransition("system")}>
+                        <Laptop className="w-4 h-4" />
+                        System
+                        {theme === "system" ? <span className="ml-auto text-[10px] uppercase text-indigo-600">Active</span> : null}
+                    </DropdownMenuItem>
+                </DropdownMenuContent>
+            </DropdownMenu>
+        </div>
     );
 }

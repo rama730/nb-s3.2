@@ -6,7 +6,14 @@ import { ThemeProvider } from "@/components/providers/theme-provider";
 import { ChatProvider } from "@/components/chat/ChatProvider";
 import { Toaster } from "@/components/ui/sonner";
 import { Analytics } from "@vercel/analytics/react";
+import { AuthProvider } from "@/components/providers/AuthProvider";
+import { RealtimeProvider } from "@/components/providers/RealtimeProvider";
+import { NextIntlClientProvider } from "next-intl";
+import { getMessages } from "next-intl/server";
+import "@/lib/env";
 import "./globals.css";
+import { getViewerProfileContext } from "@/lib/server/viewer-context";
+import { buildThemePrehydrateScript } from "@/lib/theme/appearance";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -18,11 +25,17 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+const THEME_PREHYDRATE_SCRIPT = buildThemePrehydrateScript();
+
 export const metadata: Metadata = {
   title: "Edge - Professional Social Network",
   description: "Connect, collaborate, and build amazing projects with professionals worldwide",
   keywords: ["professional network", "collaboration", "projects", "social media"],
   authors: [{ name: "Edge Team" }],
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
+    { media: "(prefers-color-scheme: dark)", color: "#0a0a0a" },
+  ],
   openGraph: {
     title: "Edge - Professional Social Network",
     description: "Connect, collaborate, and build amazing projects with professionals worldwide",
@@ -30,56 +43,28 @@ export const metadata: Metadata = {
   },
 };
 
-import { createClient } from "@/lib/supabase/server";
-import { getUserProfile } from "@/lib/data/profile";
-import { AuthProvider } from "@/components/providers/AuthProvider";
-import { RealtimeProvider } from "@/components/providers/RealtimeProvider";
-import { NextIntlClientProvider } from "next-intl";
-import { getMessages } from "next-intl/server";
-import "@/lib/env";
-
 export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  const userProfile = user ? await getUserProfile(user.id) : null;
+  const { user, profile } = await getViewerProfileContext();
   const messages = await getMessages();
 
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        <Script
-          id="theme-prehydrate"
-          strategy="beforeInteractive"
-        >{`(() => {
-  try {
-    const root = document.documentElement;
-    const stored = localStorage.getItem('theme') || 'system';
-    const resolved = stored === 'system'
-      ? (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
-      : stored;
-    const isDark = resolved === 'dark';
-    root.classList.toggle('dark', isDark);
-    root.style.colorScheme = isDark ? 'dark' : 'light';
-  } catch (_) {
-    // no-op
-  }
-})();`}</Script>
+        <Script id="theme-prehydrate" strategy="beforeInteractive">
+          {THEME_PREHYDRATE_SCRIPT}
+        </Script>
       </head>
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} font-sans antialiased`}
-      >
+      <body className={`${geistSans.variable} ${geistMono.variable} font-sans antialiased`}>
         <NextIntlClientProvider messages={messages}>
           <ThemeProvider>
             <QueryProvider>
-              <AuthProvider initialUser={user} initialProfile={userProfile}>
+              <AuthProvider initialUser={user} initialProfile={profile}>
                 <RealtimeProvider>
-                  <ChatProvider>
-                    {children}
-                  </ChatProvider>
+                  <ChatProvider>{children}</ChatProvider>
                 </RealtimeProvider>
               </AuthProvider>
               <Toaster position="bottom-right" />
@@ -91,4 +76,3 @@ export default async function RootLayout({
     </html>
   );
 }
-

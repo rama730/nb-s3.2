@@ -1,6 +1,6 @@
 import { db } from "../src/lib/db";
 import { projectNodes, projects, tags, projectTags, skills, projectSkills, profiles, profileSkills, profileInterests, interests } from "../src/lib/db/schema";
-import { eq, isNull } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 
 async function backfillTags() {
     console.log("Backfilling project tags and skills...");
@@ -18,7 +18,15 @@ async function backfillTags() {
 
                 let [tag] = await db.select().from(tags).where(eq(tags.slug, slug)).limit(1);
                 if (!tag) {
-                    try { [tag] = await db.insert(tags).values({ name: t, slug }).returning(); } catch { }
+                    try {
+                        [tag] = await db.insert(tags).values({ name: t, slug }).returning();
+                    } catch (err: any) {
+                        if (err?.code === '23505') {
+                            [tag] = await db.select().from(tags).where(eq(tags.slug, slug)).limit(1);
+                        } else {
+                            console.error("Failed to insert tag", { tag: t, slug, error: err });
+                        }
+                    }
                 }
                 if (tag) {
                     await db.insert(projectTags).values({ projectId: p.id, tagId: tag.id }).onConflictDoNothing();
@@ -35,7 +43,15 @@ async function backfillTags() {
 
                 let [skill] = await db.select().from(skills).where(eq(skills.slug, slug)).limit(1);
                 if (!skill) {
-                    try { [skill] = await db.insert(skills).values({ name: s, slug }).returning(); } catch { }
+                    try {
+                        [skill] = await db.insert(skills).values({ name: s, slug }).returning();
+                    } catch (err: any) {
+                        if (err?.code === '23505') {
+                            [skill] = await db.select().from(skills).where(eq(skills.slug, slug)).limit(1);
+                        } else {
+                            console.error("Failed to insert project skill", { skill: s, slug, error: err });
+                        }
+                    }
                 }
                 if (skill) {
                     await db.insert(projectSkills).values({ projectId: p.id, skillId: skill.id }).onConflictDoNothing();
@@ -60,7 +76,15 @@ async function backfillProfileJSONB() {
                 if (!slug) continue;
                 let [skill] = await db.select().from(skills).where(eq(skills.slug, slug)).limit(1);
                 if (!skill) {
-                    try { [skill] = await db.insert(skills).values({ name: s, slug }).returning(); } catch { }
+                    try {
+                        [skill] = await db.insert(skills).values({ name: s, slug }).returning();
+                    } catch (err: any) {
+                        if (err?.code === '23505') {
+                            [skill] = await db.select().from(skills).where(eq(skills.slug, slug)).limit(1);
+                        } else {
+                            console.error("Failed to insert profile skill", { skill: s, slug, error: err });
+                        }
+                    }
                 }
                 if (skill) {
                     await db.insert(profileSkills).values({ profileId: p.id, skillId: skill.id }).onConflictDoNothing();
@@ -75,7 +99,15 @@ async function backfillProfileJSONB() {
                 if (!slug) continue;
                 let [intr] = await db.select().from(interests).where(eq(interests.slug, slug)).limit(1);
                 if (!intr) {
-                    try { [intr] = await db.insert(interests).values({ name: interest, slug }).returning(); } catch { }
+                    try {
+                        [intr] = await db.insert(interests).values({ name: interest, slug }).returning();
+                    } catch (err: any) {
+                        if (err?.code === '23505') {
+                            [intr] = await db.select().from(interests).where(eq(interests.slug, slug)).limit(1);
+                        } else {
+                            console.error("Failed to insert interest", { interest, slug, error: err });
+                        }
+                    }
                 }
                 if (intr) {
                     await db.insert(profileInterests).values({ profileId: p.id, interestId: intr.id }).onConflictDoNothing();
@@ -90,9 +122,7 @@ async function backfillProfileJSONB() {
 async function backfillPaths() {
     console.log("Backfilling Project Nodes materialized paths...");
 
-    // Nodes missing a path OR empty string path (if we created it empty accidentally during pushing migration)
-    const missingNodes = await db.select().from(projectNodes).where(isNull(projectNodes.path));
-    // Wait, Drizzle default for missing texts if NOT NULL might be empty string. We should get ALL nodes, and build a map.
+    // Fetch all nodes to build paths in memory (handles both NULL and empty string paths)
     const allNodesList = await db.select().from(projectNodes);
 
     // We'll build the tree in memory mapping node_id to path locally.
@@ -134,7 +164,7 @@ async function backfillPaths() {
             db.update(projectNodes).set({ path: u.path }).where(eq(projectNodes.id, u.id))
         ));
         updateCount += batch.length;
-        if (i % 500 === 0) console.log(`Processed ${updateCount} / ${updates.length}`);
+        if ((i / BATCH_SIZE) % 10 === 0) console.log(`Processed ${updateCount} / ${updates.length}`);
     }
 
     console.log(`Finished updating ${updateCount} materialized paths.`);
@@ -146,10 +176,11 @@ async function main() {
         await backfillProfileJSONB();
         await backfillPaths();
         console.log("Migration and data backfill fully completed.");
+        process.exit(0);
     } catch (e) {
         console.error("Migration failed:", e);
+        process.exit(1);
     }
-    process.exit(0);
 }
 
 main();

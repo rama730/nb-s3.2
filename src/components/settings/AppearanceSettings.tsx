@@ -1,18 +1,19 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useTheme, useAppearance } from '@/components/providers/theme-provider';
+import { useTheme, useAppearance, useReducedMotionPreference } from '@/components/providers/theme-provider';
 import { Moon, Sun, Monitor, Type, Zap } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { SettingsPageHeader } from "@/components/settings/ui/SettingsPageHeader";
 
 export default function AppearanceSettings() {
-    const { theme, setTheme } = useTheme();
+    const { theme, resolvedTheme, setThemeWithTransition } = useTheme();
     const {
         accentColor, setAccentColor,
         density, setDensity,
         reduceMotion, setReduceMotion
     } = useAppearance();
+    const prefersReducedMotion = useReducedMotionPreference();
 
     const [mounted, setMounted] = useState(false);
     type AccentColorValue = Parameters<typeof setAccentColor>[0];
@@ -40,7 +41,8 @@ export default function AppearanceSettings() {
                     {(['light', 'dark', 'system'] as const).map((mode) => (
                         <button
                             key={mode}
-                            onClick={() => setTheme(mode)}
+                            data-testid={`appearance-theme-${mode}`}
+                            onClick={() => void setThemeWithTransition(mode)}
                             className={`
                                 relative p-4 rounded-xl border-2 text-left transition-all duration-200
                                 ${theme === mode
@@ -61,11 +63,15 @@ export default function AppearanceSettings() {
                                 <motion.div
                                     layoutId="mode-check"
                                     className="absolute top-4 right-4 w-4 h-4 rounded-full bg-indigo-600 border-2 border-white dark:border-zinc-950"
+                                    transition={prefersReducedMotion ? { duration: 0 } : { duration: 0.18, ease: 'easeOut' }}
                                 />
                             )}
                         </button>
                     ))}
                 </div>
+                <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                    Effective theme right now: <span className="font-medium capitalize">{resolvedTheme}</span>
+                </p>
             </section>
 
             <hr className="border-zinc-200 dark:border-zinc-800" />

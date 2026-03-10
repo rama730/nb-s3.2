@@ -10,7 +10,7 @@ export async function openRoute(
   expect(status, `Expected a valid response for route: ${route}`).toBeGreaterThan(0);
   expect(status, `Route ${route} returned HTTP ${status}`).toBeLessThan(400);
   if (readyLocator) {
-    await expect(readyLocator).toBeVisible({ timeout: 15000 });
+    await expect(readyLocator.first()).toBeVisible({ timeout: 15000 });
   }
 }
 

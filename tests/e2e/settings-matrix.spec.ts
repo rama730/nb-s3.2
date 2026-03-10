@@ -56,6 +56,12 @@ test.describe("Settings matrix @critical", () => {
 
     await page.goto("/settings/appearance");
     await expect(page.getByRole("heading", { name: "Appearance" })).toBeVisible();
+    const htmlRoot = page.locator("html");
+    await page.getByTestId("appearance-theme-dark").click();
+    await expect(htmlRoot).toHaveClass(/dark/);
+    await page.reload();
+    await expect(htmlRoot).toHaveClass(/dark/);
+    await page.getByTestId("appearance-theme-system").click();
 
     await page.goto("/settings/integrations");
     await expect(page.getByRole("heading", { name: "Integrations", level: 1 })).toBeVisible();

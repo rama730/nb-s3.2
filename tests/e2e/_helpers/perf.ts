@@ -53,12 +53,18 @@ export async function measure<T>(
   fn: () => Promise<T>,
   maxMs?: number,
 ): Promise<T> {
-  const start = performance.now();
-  const result = await fn();
-  const elapsed = performance.now() - start;
-  tracker.mark(metric, elapsed);
+  const { result, elapsedMs } = await measureWithTiming(fn);
+  tracker.mark(metric, elapsedMs);
   if (typeof maxMs === "number") {
-    await tracker.assertUnder(metric, elapsed, maxMs);
+    await tracker.assertUnder(metric, elapsedMs, maxMs);
   }
   return result;
+}
+
+export async function measureWithTiming<T>(
+  fn: () => Promise<T>,
+): Promise<{ result: T; elapsedMs: number }> {
+  const start = performance.now();
+  const result = await fn();
+  return { result, elapsedMs: performance.now() - start };
 }

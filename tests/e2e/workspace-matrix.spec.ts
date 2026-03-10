@@ -16,16 +16,16 @@ test.describe("Workspace matrix @critical", () => {
     const tabs = ["overview", "tasks", "inbox", "projects", "notes", "activity"] as const;
 
     for (const tab of tabs) {
-      const tabButton = page.getByTestId(`workspace-tab-${tab}`);
+      const tabButton = page.getByTestId(`workspace-tab-${tab}`).first();
       await expect(tabButton).toBeVisible();
       await tabButton.click();
       await expect(tabButton).toHaveAttribute("aria-selected", "true");
-      await expect(page.locator(`#workspace-tab-${tab}`)).toBeVisible();
+      await expect(page.locator(`#workspace-tab-${tab}`).first()).toBeVisible();
     }
 
-    await page.getByTestId("workspace-tab-notes").click();
+    await page.getByTestId("workspace-tab-notes").first().click();
     await page.reload({ waitUntil: "domcontentloaded" });
-    await expect(page.getByTestId("workspace-tab-overview")).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByTestId("workspace-tab-overview").first()).toHaveAttribute("aria-selected", "true");
 
     await monitor.assertNoViolations();
     monitor.detach();

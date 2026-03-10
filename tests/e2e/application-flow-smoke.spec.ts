@@ -14,7 +14,9 @@ test.describe("Application flow smoke", () => {
         const perf = new PerfTracker();
         await login(page);
 
-        await measure(perf, "route.interactive.core", () => page.goto("/messages"));
+        await measure(perf, "route.interactive.core", () =>
+            page.goto("/messages", { waitUntil: "domcontentloaded" })
+        );
         await page.getByRole("button", { name: "Applications" }).click();
 
         const applicationRows = page

@@ -281,6 +281,48 @@ async function setupDatabase() {
         await sql`CREATE INDEX IF NOT EXISTS onboarding_submissions_repair_queue_idx ON onboarding_submissions(status, claims_repaired_at, updated_at)`
         console.log('  ✅ onboarding_submissions')
 
+        await sql.unsafe(`
+            CREATE OR REPLACE VIEW onboarding_slo_daily WITH (security_invoker = true) AS
+            WITH base AS (
+                SELECT
+                    date_trunc('day', created_at) AS day,
+                    event_type
+                FROM onboarding_events
+                WHERE created_at >= now() - interval '30 days'
+            )
+            SELECT
+                day::date AS day,
+                count(*) FILTER (WHERE event_type = 'submit_start') AS submit_starts,
+                count(*) FILTER (WHERE event_type = 'submit_success') AS submit_successes,
+                count(*) FILTER (WHERE event_type = 'submit_error') AS submit_errors,
+                CASE
+                    WHEN count(*) FILTER (WHERE event_type = 'submit_start') = 0 THEN NULL::numeric
+                    ELSE (
+                        count(*) FILTER (WHERE event_type = 'submit_success')::numeric
+                        / count(*) FILTER (WHERE event_type = 'submit_start')::numeric
+                    )
+                END AS submit_success_rate
+            FROM base
+            GROUP BY day
+            ORDER BY day DESC
+        `)
+        await sql.unsafe(`
+            CREATE OR REPLACE VIEW onboarding_funnel_dimensions_daily WITH (security_invoker = true) AS
+            SELECT
+                date_trunc('day', created_at)::date AS day,
+                event_type,
+                COALESCE(step, 0) AS step,
+                metadata->>'availabilityStatus' AS availability_status,
+                metadata->>'messagePrivacy' AS message_privacy,
+                metadata->>'visibility' AS visibility,
+                COUNT(*) AS event_count
+            FROM onboarding_events
+            WHERE created_at >= now() - interval '30 days'
+            GROUP BY 1, 2, 3, 4, 5, 6
+            ORDER BY day DESC, event_type, step
+        `)
+        console.log('  ✅ onboarding analytics views')
+
         await sql`ALTER TABLE profiles VALIDATE CONSTRAINT profiles_username_format_check`
         console.log('  ✅ profiles_username_format_check validated')
 

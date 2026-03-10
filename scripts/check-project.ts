@@ -8,11 +8,11 @@ async function main() {
     console.log("Checking IDs:", ids);
 
     for (const id of ids) {
-        console.log(`Checking ID: ${id}`);
+        console.log("Checking ID", { id });
         const result = await db.query.projects.findFirst({
             where: eq(projects.id, id)
         });
-        console.log(`Result for ${id}:`, result ? "FOUND" : "NOT FOUND");
+        console.log("Project lookup result", { id, status: result ? "FOUND" : "NOT FOUND" });
         if (result) {
             console.log("Title:", result.title);
             console.log("Owner ID:", result.ownerId);

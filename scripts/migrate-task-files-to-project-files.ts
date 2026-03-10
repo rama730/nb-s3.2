@@ -287,7 +287,12 @@ async function main() {
       if ((i + 1) % 20 === 0) console.log(`… ${idx} (migrated=${migrated}, skipped=${skipped}, failed=${failed})`);
     } catch (e: any) {
       failed++;
-      console.error(`❌ ${idx} failed (legacyId=${f.id} path=${f.file_path}):`, e?.message || e);
+      console.error("Migration row failed", {
+        index: idx,
+        legacyId: f.id,
+        filePath: f.file_path,
+        error: e?.message || e,
+      });
     }
   }
 
@@ -305,4 +310,3 @@ main()
   .finally(async () => {
     await sql.end();
   });
-

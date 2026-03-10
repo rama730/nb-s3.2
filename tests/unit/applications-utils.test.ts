@@ -36,6 +36,28 @@ test('normalizeApplicationMessageText normalizes link + availability and de-dupl
     assert.equal(occurrences, 1);
 });
 
+test('normalizeApplicationMessageText preserves descriptive lines with inline links', () => {
+    const raw = `
+        My profile is github.com/example and I can contribute fast.
+        linkedin.com/in/example
+    `;
+
+    const normalized = normalizeApplicationMessageText(raw);
+    assert.match(normalized, /My profile is github\.com\/example and I can contribute fast\./);
+    assert.match(normalized, /LinkedIn: https:\/\/linkedin\.com\/in\/example/);
+});
+
+test('normalizeApplicationMessageText normalizes labeled bare links safely', () => {
+    const raw = `
+        GitHub: github.com/example/repo
+        Portfolio: https://example.dev/work
+    `;
+
+    const normalized = normalizeApplicationMessageText(raw);
+    assert.match(normalized, /GitHub: https:\/\/github\.com\/example\/repo/);
+    assert.match(normalized, /Portfolio: https:\/\/example\.dev\/work/);
+});
+
 test('resolveLifecycleStatus handles known terminal reasons', () => {
     assert.equal(resolveLifecycleStatus('pending', null), 'pending');
     assert.equal(resolveLifecycleStatus('accepted', null), 'accepted');

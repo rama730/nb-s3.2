@@ -49,24 +49,30 @@
 :root {
   --radius: 0.625rem;
   color-scheme: light dark;
+  --theme-primary-light: oklch(0.62 0.18 274);
+  --theme-primary-dark: oklch(0.72 0.15 274);
+  --theme-ring-light: oklch(0.67 0.16 274);
+  --theme-ring-dark: oklch(0.75 0.12 274);
+  --theme-accent-surface-light: oklch(0.96 0.02 274);
+  --theme-accent-surface-dark: oklch(0.31 0.03 274);
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
   --card-foreground: oklch(0.145 0 0);
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
+  --primary: var(--theme-primary-light);
   --primary-foreground: oklch(0.985 0 0);
   --secondary: oklch(0.97 0 0);
   --secondary-foreground: oklch(0.205 0 0);
   --muted: oklch(0.97 0 0);
   --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
+  --accent: var(--theme-accent-surface-light);
   --accent-foreground: oklch(0.205 0 0);
   --destructive: oklch(0.577 0.245 27.325);
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
+  --ring: var(--theme-ring-light);
   --chart-1: oklch(0.646 0.222 41.116);
   --chart-2: oklch(0.6 0.118 184.704);
   --chart-3: oklch(0.398 0.07 227.392);
@@ -80,6 +86,101 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+
+  --app-scrollbar-size: 8px;
+  --app-scrollbar-radius: 9999px;
+  --app-scrollbar-track: transparent;
+  --app-scrollbar-thumb: oklch(0.5 0 0 / 28%);
+  --app-scrollbar-thumb-hover: oklch(0.5 0 0 / 44%);
+  --app-scrollbar-thumb-hidden: transparent;
+
+  --ui-control-height-sm: 1.9rem;
+  --ui-control-height: 2.25rem;
+  --ui-control-height-lg: 2.55rem;
+  --ui-control-px-sm: 0.625rem;
+  --ui-control-px: 0.875rem;
+  --ui-control-px-lg: 1rem;
+}
+
+:root[data-density="compact"] {
+  --ui-control-height-sm: 1.75rem;
+  --ui-control-height: 2rem;
+  --ui-control-height-lg: 2.25rem;
+  --ui-control-px-sm: 0.5rem;
+  --ui-control-px: 0.75rem;
+  --ui-control-px-lg: 0.875rem;
+}
+
+:root[data-density="default"] {
+  --ui-control-height-sm: 1.9rem;
+  --ui-control-height: 2.25rem;
+  --ui-control-height-lg: 2.55rem;
+  --ui-control-px-sm: 0.625rem;
+  --ui-control-px: 0.875rem;
+  --ui-control-px-lg: 1rem;
+}
+
+:root[data-density="comfortable"] {
+  --ui-control-height-sm: 2rem;
+  --ui-control-height: 2.4rem;
+  --ui-control-height-lg: 2.75rem;
+  --ui-control-px-sm: 0.75rem;
+  --ui-control-px: 1rem;
+  --ui-control-px-lg: 1.125rem;
+}
+
+:root[data-accent="indigo"] {
+  --theme-primary-light: oklch(0.62 0.18 274);
+  --theme-primary-dark: oklch(0.72 0.15 274);
+  --theme-ring-light: oklch(0.67 0.16 274);
+  --theme-ring-dark: oklch(0.75 0.12 274);
+  --theme-accent-surface-light: oklch(0.96 0.02 274);
+  --theme-accent-surface-dark: oklch(0.31 0.03 274);
+}
+
+:root[data-accent="purple"] {
+  --theme-primary-light: oklch(0.64 0.2 312);
+  --theme-primary-dark: oklch(0.74 0.17 312);
+  --theme-ring-light: oklch(0.68 0.18 312);
+  --theme-ring-dark: oklch(0.76 0.14 312);
+  --theme-accent-surface-light: oklch(0.96 0.03 312);
+  --theme-accent-surface-dark: oklch(0.31 0.04 312);
+}
+
+:root[data-accent="green"] {
+  --theme-primary-light: oklch(0.66 0.17 151);
+  --theme-primary-dark: oklch(0.75 0.14 151);
+  --theme-ring-light: oklch(0.69 0.15 151);
+  --theme-ring-dark: oklch(0.77 0.11 151);
+  --theme-accent-surface-light: oklch(0.96 0.02 151);
+  --theme-accent-surface-dark: oklch(0.31 0.03 151);
+}
+
+:root[data-accent="orange"] {
+  --theme-primary-light: oklch(0.69 0.18 52);
+  --theme-primary-dark: oklch(0.79 0.14 52);
+  --theme-ring-light: oklch(0.72 0.16 52);
+  --theme-ring-dark: oklch(0.79 0.12 52);
+  --theme-accent-surface-light: oklch(0.97 0.03 52);
+  --theme-accent-surface-dark: oklch(0.33 0.04 52);
+}
+
+:root[data-accent="pink"] {
+  --theme-primary-light: oklch(0.66 0.2 358);
+  --theme-primary-dark: oklch(0.75 0.16 358);
+  --theme-ring-light: oklch(0.69 0.18 358);
+  --theme-ring-dark: oklch(0.77 0.13 358);
+  --theme-accent-surface-light: oklch(0.96 0.03 358);
+  --theme-accent-surface-dark: oklch(0.32 0.04 358);
+}
+
+:root[data-accent="teal"] {
+  --theme-primary-light: oklch(0.65 0.14 205);
+  --theme-primary-dark: oklch(0.74 0.12 205);
+  --theme-ring-light: oklch(0.68 0.13 205);
+  --theme-ring-dark: oklch(0.76 0.1 205);
+  --theme-accent-surface-light: oklch(0.96 0.02 205);
+  --theme-accent-surface-dark: oklch(0.31 0.03 205);
 }
 
 .dark {
@@ -89,18 +190,18 @@
   --card-foreground: oklch(0.985 0 0);
   --popover: oklch(0.205 0 0);
   --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
+  --primary: var(--theme-primary-dark);
   --primary-foreground: oklch(0.205 0 0);
   --secondary: oklch(0.269 0 0);
   --secondary-foreground: oklch(0.985 0 0);
   --muted: oklch(0.269 0 0);
   --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
+  --accent: var(--theme-accent-surface-dark);
   --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.704 0.191 22.216);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
+  --ring: var(--theme-ring-dark);
   --chart-1: oklch(0.488 0.243 264.376);
   --chart-2: oklch(0.696 0.17 162.48);
   --chart-3: oklch(0.769 0.188 70.08);
@@ -114,6 +215,15 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
+
+  --app-scrollbar-thumb: oklch(0.68 0 0 / 28%);
+  --app-scrollbar-thumb-hover: oklch(0.8 0 0 / 44%);
+}
+
+@media (pointer: coarse) {
+  :root {
+    --app-scrollbar-size: 12px;
+  }
 }
 
 @layer base {
@@ -131,7 +241,10 @@
    to avoid animating the entire DOM. */
 html.theme-transition,
 html.theme-transition body {
-  transition: background-color 200ms ease, color 200ms ease, border-color 200ms ease;
+  transition:
+    background-color 200ms ease,
+    color 200ms ease,
+    border-color 200ms ease;
 }
 
 html.theme-transition * {
@@ -143,6 +256,7 @@ html.theme-transition * {
   html.theme-transition body {
     transition: none !important;
   }
+
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
@@ -151,40 +265,73 @@ html.theme-transition * {
   }
 }
 
-/* Custom "Edge Layer" Scrollbar */
-/* Placed outside @layer utilities to ensure global application, especially for Safari */
-
-/* Global smooth scrolling */
 @media (prefers-reduced-motion: no-preference) {
   html {
     scroll-behavior: smooth;
   }
 }
 
-/* Scoped scrollbar styling — apply .custom-scrollbar to containers that need it */
-.custom-scrollbar::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-}
-
-.custom-scrollbar::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.custom-scrollbar::-webkit-scrollbar-thumb {
-  background-color: var(--border);
-  border-radius: 9999px;
-  border: 3px solid transparent;
-  background-clip: content-box;
-  transition: background-color 0.2s ease;
-}
-
-.custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background-color: var(--muted-foreground);
-}
-
-/* Firefox */
-.custom-scrollbar {
+.app-scroll {
   scrollbar-width: thin;
-  scrollbar-color: var(--border) transparent;
+  scrollbar-color: var(--app-scrollbar-thumb-hidden) var(--app-scrollbar-track);
+}
+
+.app-scroll-y {
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.app-scroll-x {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.app-scroll-both {
+  overflow: auto;
+}
+
+.app-scroll-gutter {
+  scrollbar-gutter: stable both-edges;
+}
+
+.app-scroll:hover,
+.app-scroll:focus-within {
+  scrollbar-color: var(--app-scrollbar-thumb) var(--app-scrollbar-track);
+}
+
+.app-scroll.app-scroll-always {
+  scrollbar-color: var(--app-scrollbar-thumb) var(--app-scrollbar-track);
+}
+
+.app-scroll.app-scroll-hidden {
+  scrollbar-width: none;
+}
+
+.app-scroll::-webkit-scrollbar {
+  width: var(--app-scrollbar-size);
+  height: var(--app-scrollbar-size);
+}
+
+.app-scroll::-webkit-scrollbar-track {
+  background: var(--app-scrollbar-track);
+}
+
+.app-scroll::-webkit-scrollbar-thumb {
+  background-color: var(--app-scrollbar-thumb-hidden);
+  border-radius: var(--app-scrollbar-radius);
+}
+
+.app-scroll:hover::-webkit-scrollbar-thumb,
+.app-scroll:focus-within::-webkit-scrollbar-thumb {
+  background-color: var(--app-scrollbar-thumb);
+}
+
+.app-scroll::-webkit-scrollbar-thumb:hover,
+.app-scroll.app-scroll-always::-webkit-scrollbar-thumb {
+  background-color: var(--app-scrollbar-thumb-hover);
+}
+
+.app-scroll.app-scroll-hidden::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
