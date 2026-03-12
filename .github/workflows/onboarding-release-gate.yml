@@ -30,7 +30,7 @@ jobs:
       SUPABASE_SERVICE_ROLE_KEY: ci-service-role
       RATE_LIMIT_MODE: best-effort
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: actions/setup-node@v4
         with:

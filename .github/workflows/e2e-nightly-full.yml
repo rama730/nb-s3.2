@@ -23,7 +23,7 @@ jobs:
       E2E_WORKERS: 1
       RATE_LIMIT_MODE: best-effort
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: actions/setup-node@v4
         with:
