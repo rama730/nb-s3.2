@@ -48,12 +48,43 @@ function formatBytes(bytes?: number | null) {
 function PreviewTooltip({ node, children, projectId }: { node: ProjectNode, children: React.ReactNode, projectId: string }) {
     const isImage = node.name.match(/\.(jpeg|jpg|gif|png|webp|svg)$/i);
     const [url, setUrl] = useState<string | null>(null);
+    const [fileUrlError, setFileUrlError] = useState<string | null>(null);
+    const isMountedRef = useRef(true);
+    const activePreviewRequestRef = useRef(0);
+
+    useEffect(() => {
+        activePreviewRequestRef.current += 1;
+        setUrl(null);
+        setFileUrlError(null);
+    }, [node.id, projectId]);
+
+    useEffect(() => {
+        return () => {
+            isMountedRef.current = false;
+        };
+    }, []);
 
     return (
         <Tooltip delayDuration={600} onOpenChange={(open) => {
-            if (open && isImage && !url && node.s3Key) {
-                getProjectFileSignedUrl(projectId, node.s3Key).then(res => setUrl(res.url)).catch(() => {});
-            }
+            const shouldFetchPreview = open && !!isImage && !url && !!node.s3Key;
+            if (!shouldFetchPreview) return;
+
+            const requestId = ++activePreviewRequestRef.current;
+            const fetchPreviewUrl = async () => {
+                try {
+                    setFileUrlError(null);
+                    const res = await getProjectFileSignedUrl(projectId, node.s3Key!);
+                    if (!isMountedRef.current || activePreviewRequestRef.current !== requestId) return;
+                    setUrl(res.url);
+                } catch (error) {
+                    if (!isMountedRef.current || activePreviewRequestRef.current !== requestId) return;
+                    setUrl(null);
+                    setFileUrlError(error instanceof Error ? error.message : "Preview unavailable");
+                    console.error("Failed to load preview signed URL", error);
+                }
+            };
+
+            void fetchPreviewUrl();
         }}>
             <TooltipTrigger asChild>
                 {children}
@@ -63,7 +94,11 @@ function PreviewTooltip({ node, children, projectId }: { node: ProjectNode, chil
                     <span className="font-semibold text-xs truncate max-w-[200px]">{node.name}</span>
                     <span className="text-[10px] text-zinc-500">{formatBytes(node.size)}</span>
                     {isImage && (
-                        url ? (
+                        fileUrlError ? (
+                            <div className="mt-2 w-[200px] h-24 flex items-center justify-center bg-zinc-100 dark:bg-zinc-800 rounded text-[11px] text-zinc-500 text-center px-3">
+                                Preview unavailable
+                            </div>
+                        ) : url ? (
                             <img src={url} alt={node.name} className="mt-2 rounded max-w-[200px] max-h-32 object-contain bg-zinc-50 dark:bg-zinc-900 border border-transparent dark:border-zinc-800" />
                         ) : (
                             <div className="mt-2 w-[200px] h-24 flex items-center justify-center bg-zinc-100 dark:bg-zinc-800 rounded animate-pulse">
@@ -128,6 +163,13 @@ type VisibleRow =
     | { kind: "loading"; level: number; indentationGuides: boolean[] }
     | { kind: "empty" };
 
+function sameLinkedNodesContent(
+    a: (ProjectNode & { order?: number; annotation?: string | null })[],
+    b: (ProjectNode & { order?: number; annotation?: string | null })[],
+) {
+    return JSON.stringify(a) === JSON.stringify(b);
+}
+
 export function TaskFilesExplorer({
     taskId,
     projectId,
@@ -141,9 +183,22 @@ export function TaskFilesExplorer({
     
     // Manage local optimistic ordering and annotations to prevent jank
     const [localNodes, setLocalNodes] = useState(linkedNodes);
+    const [annotationDrafts, setAnnotationDrafts] = useState<Record<string, string>>({});
+    const pendingOptimisticRef = useRef(0);
+    const linkedNodesRef = useRef(linkedNodes);
+
     useEffect(() => {
-        setLocalNodes(linkedNodes);
+        linkedNodesRef.current = linkedNodes;
     }, [linkedNodes]);
+
+    const syncLocalNodesFromProps = useCallback(() => {
+        if (pendingOptimisticRef.current > 0) return;
+        setLocalNodes((prev) => (sameLinkedNodesContent(prev, linkedNodesRef.current) ? prev : linkedNodesRef.current));
+    }, []);
+
+    useEffect(() => {
+        syncLocalNodesFromProps();
+    }, [linkedNodes, syncLocalNodesFromProps]);
     
     // --- Context Menu State ---
     const [contextMenuState, setContextMenuState] = useState<{
@@ -253,11 +308,19 @@ export function TaskFilesExplorer({
 
     const handleAnnotationChange = async (nodeId: string, val: string) => {
         const value = val.trim();
+        const previousAnnotation = localNodes.find((n) => n.id === nodeId)?.annotation;
+        pendingOptimisticRef.current += 1;
         setLocalNodes(prev => prev.map(n => n.id === nodeId ? { ...n, annotation: value || null } : n));
         try {
             await updateTaskNodeLink(taskId, nodeId, { annotation: value || null });
         } catch (e: any) {
-             showToast(e.message || "Failed to save annotation", "error");
+            setLocalNodes((prev) =>
+                prev.map((n) => (n.id === nodeId ? { ...n, annotation: previousAnnotation } : n))
+            );
+            showToast(e.message || "Failed to save annotation", "error");
+        } finally {
+            pendingOptimisticRef.current = Math.max(0, pendingOptimisticRef.current - 1);
+            syncLocalNodesFromProps();
         }
     };
 
@@ -269,6 +332,8 @@ export function TaskFilesExplorer({
         const newIndex = localNodes.findIndex(n => n.id === over.id);
 
         if (oldIndex !== -1 && newIndex !== -1) {
+            const previousNodes = localNodes;
+            pendingOptimisticRef.current += 1;
             const newNodes = arrayMove(localNodes, oldIndex, newIndex).map((n, i) => ({ ...n, order: i }));
             setLocalNodes(newNodes);
             
@@ -281,7 +346,14 @@ export function TaskFilesExplorer({
                 const updates = newNodes.map(n => ({ nodeId: n.id, order: n.order ?? 0 }));
                 await updateTaskNodeLinksOrder(taskId, updates);
             } catch (e: any) {
+                setLocalNodes(previousNodes);
+                if (onReorder) {
+                    onReorder(previousNodes.map(n => n.id));
+                }
                 showToast("Failed to preserve file order", "error");
+            } finally {
+                pendingOptimisticRef.current = Math.max(0, pendingOptimisticRef.current - 1);
+                syncLocalNodesFromProps();
             }
         }
     };
@@ -369,10 +441,20 @@ export function TaskFilesExplorer({
                                     type="text"
                                     maxLength={255}
                                     placeholder="Add reference note..."
-                                    defaultValue={row.annotation || ""}
+                                    value={annotationDrafts[node.id] ?? (row.annotation || "")}
+                                    onChange={(e) => {
+                                        const nextValue = e.target.value;
+                                        setAnnotationDrafts(prev => ({ ...prev, [node.id]: nextValue }));
+                                    }}
                                     onBlur={(e) => {
-                                        if (e.target.value !== (row.annotation || "")) {
-                                            void handleAnnotationChange(node.id, e.target.value);
+                                        const nextValue = e.target.value;
+                                        setAnnotationDrafts(prev => {
+                                            const next = { ...prev };
+                                            delete next[node.id];
+                                            return next;
+                                        });
+                                        if (nextValue.trim() !== (row.annotation || "").trim()) {
+                                            void handleAnnotationChange(node.id, nextValue);
                                         }
                                     }}
                                     onKeyDown={(e) => {

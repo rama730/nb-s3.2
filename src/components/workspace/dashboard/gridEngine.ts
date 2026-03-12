@@ -52,49 +52,69 @@ export function getWidgetAtCell(widgets: WidgetPlacement[], col: number, row: nu
     return null;
 }
 
+function sortWidgetsStable(widgets: WidgetPlacement[]): WidgetPlacement[] {
+    return [...widgets].sort((a, b) => {
+        if (a.row !== b.row) return a.row - b.row;
+        if (a.col !== b.col) return a.col - b.col;
+        return a.widgetId.localeCompare(b.widgetId);
+    });
+}
+
+function overlapsAny(placement: WidgetPlacement, widgets: WidgetPlacement[]): boolean {
+    return widgets.some((widget) => doWidgetsOverlap(widget, placement));
+}
+
 /**
- * Resolve collisions by pushing overlapping widgets downward.
- * This is a simple, predictable strategy (same as Grafana/GridStack).
- * Returns the new widgets array with resolved positions.
+ * Deterministic layout resolution:
+ * 1) keep the mutated widget anchored at its requested position
+ * 2) compact all other widgets upward where possible
+ * 3) validate bounds/constraints atomically
  */
-function resolveCollisions(
+function resolveLayoutWithCompaction(
     widgets: WidgetPlacement[],
-    movedWidgetId: string
-): WidgetPlacement[] {
-    const result = [...widgets.map(w => ({ ...w }))];
-    const movedWidget = result.find(w => w.widgetId === movedWidgetId);
-    if (!movedWidget) return result;
+    anchorWidgetId: string
+): WidgetPlacement[] | null {
+    const cloned = widgets.map((widget) => ({ ...widget }));
+    const anchor = cloned.find((widget) => widget.widgetId === anchorWidgetId);
+    if (!anchor) return null;
+    if (!isWithinBounds(anchor) || !isWithinSizeConstraints(anchor)) return null;
 
-    // Keep pushing colliding widgets down until no overlaps remain
-    // Max iterations = widget count * GRID_ROWS_MAX to prevent infinite loops
-    const maxIterations = result.length * GRID_ROWS_MAX;
-    let iteration = 0;
+    const placed: WidgetPlacement[] = [anchor];
+    const others = sortWidgetsStable(cloned.filter((widget) => widget.widgetId !== anchorWidgetId));
 
-    let hasCollision = true;
-    while (hasCollision && iteration < maxIterations) {
-        hasCollision = false;
-        iteration++;
+    for (const original of others) {
+        if (!isWithinSizeConstraints(original)) return null;
+        let candidate = { ...original };
 
-        for (const other of result) {
-            if (other.widgetId === movedWidgetId) continue;
-            if (doWidgetsOverlap(movedWidget, other)) {
-                // Push the other widget below the moved widget
-                other.row = movedWidget.row + movedWidget.rowSpan;
-                hasCollision = true;
-
-                // Now recursively check if this pushed widget collides with others
-                for (const another of result) {
-                    if (another.widgetId === other.widgetId) continue;
-                    if (another.widgetId === movedWidgetId) continue;
-                    if (doWidgetsOverlap(other, another)) {
-                        another.row = other.row + other.rowSpan;
-                    }
-                }
-            }
+        // Compact upward first
+        while (candidate.row > 0) {
+            const upward = { ...candidate, row: candidate.row - 1 };
+            if (!isWithinBounds(upward) || overlapsAny(upward, placed)) break;
+            candidate = upward;
         }
+
+        // If still overlapping, push downward until we find a valid slot
+        while (overlapsAny(candidate, placed)) {
+            candidate = { ...candidate, row: candidate.row + 1 };
+            if (!isWithinBounds(candidate)) return null;
+        }
+
+        placed.push(candidate);
     }
 
-    return result;
+    return sortWidgetsStable(placed);
+}
+
+function replaceWidget(
+    layout: WorkspaceLayout,
+    widgetId: string,
+    replacement: WidgetPlacement
+): WorkspaceLayout | null {
+    const rest = layout.widgets.filter((widget) => widget.widgetId !== widgetId);
+    const resolved = resolveLayoutWithCompaction([replacement, ...rest], widgetId);
+    if (!resolved) return null;
+    if (resolved.some((widget) => !isWithinBounds(widget) || !isWithinSizeConstraints(widget))) return null;
+    return { ...layout, widgets: resolved };
 }
 
 /**
@@ -122,13 +142,9 @@ export function placeWidget(
 
     if (!isWithinBounds(newWidget)) return null;
 
-    // Resolve collisions with existing widgets
-    const newWidgets = resolveCollisions([...layout.widgets, newWidget], widgetId);
-
-    // Validate all are still in bounds
-    if (newWidgets.some(w => !isWithinBounds(w))) return null;
-
-    return { ...layout, widgets: newWidgets };
+    const resolved = resolveLayoutWithCompaction([...layout.widgets, newWidget], widgetId);
+    if (!resolved) return null;
+    return { ...layout, widgets: resolved };
 }
 
 /**
@@ -166,13 +182,7 @@ export function resizeWidget(
     if (!isWithinBounds(newWidget)) return null;
     if (!isWithinSizeConstraints(newWidget)) return null;
 
-    // Replace the widget and resolve collisions
-    const otherWidgets = layout.widgets.filter(w => w.widgetId !== widgetId);
-    const newWidgets = resolveCollisions([newWidget, ...otherWidgets], widgetId);
-
-    if (newWidgets.some(w => !isWithinBounds(w))) return null;
-
-    return { ...layout, widgets: newWidgets };
+    return replaceWidget(layout, widgetId, newWidget);
 }
 
 /**
@@ -196,13 +206,7 @@ export function moveWidget(
 
     if (!isWithinBounds(movedWidget)) return null;
 
-    // Replace the widget and resolve collisions
-    const otherWidgets = layout.widgets.filter(w => w.widgetId !== widgetId);
-    const newWidgets = resolveCollisions([movedWidget, ...otherWidgets], widgetId);
-
-    if (newWidgets.some(w => !isWithinBounds(w))) return null;
-
-    return { ...layout, widgets: newWidgets };
+    return replaceWidget(layout, widgetId, movedWidget);
 }
 
 /**

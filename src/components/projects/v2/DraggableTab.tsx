@@ -173,7 +173,7 @@ export function DraggableTab({
               <button 
                 className="w-5 h-5 inline-flex items-center justify-center rounded hover:bg-zinc-200/60 dark:hover:bg-zinc-700/60"
                 onMouseDown={(e) => e.stopPropagation()} // Stop DnD
-                aria-label={`Tab actions for ${name}`}
+                aria-label={`Tab actions for ${title || name}`}
               >
                 <MoreVertical className="w-3 h-3" />
               </button>

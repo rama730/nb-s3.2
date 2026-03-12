@@ -3,6 +3,7 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useMemo } from 'react';
 import { createClient } from '@/lib/supabase/client';
+import { queryKeys } from '@/lib/query-keys';
 
 export function useProjectPrefetch() {
     const queryClient = useQueryClient();
@@ -10,12 +11,27 @@ export function useProjectPrefetch() {
 
     const prefetchProject = useCallback(async (projectId: string) => {
         await queryClient.prefetchQuery({
-            queryKey: ['project', projectId],
+            queryKey: queryKeys.hub.projectPrefetch(projectId),
             queryFn: async () => {
                 const { data, error } = await supabase
                     .from('projects')
                     .select(`
-            *,
+            id,
+            owner_id,
+            title,
+            slug,
+            key,
+            short_description,
+            description,
+            status,
+            visibility,
+            cover_image,
+            current_stage_index,
+            followers_count,
+            saves_count,
+            view_count,
+            created_at,
+            updated_at,
             profiles:owner_id (
               id,
               username,

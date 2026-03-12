@@ -1,7 +1,8 @@
 import type { StateCreator } from "zustand";
-import type { FilesWorkspaceState, UiState } from "./types";
+import type { FileState, FilesWorkspaceState, UiState } from "./types";
 import { defaultWorkspace } from "./types";
-import { getFileContent } from "./contentMap";
+import { getFileContent, setFileContent } from "./contentMap";
+import { estimateVisibleRowsBudget, evictLruIfNeeded } from "./filesSlice";
 
 export interface UiSlice {
   setBottomPanelTab: (projectId: string, tab: UiState["bottomPanelTab"]) => void;
@@ -26,7 +27,7 @@ export interface UiSlice {
   setOutputFilterMode: (projectId: string, mode: "all" | "out" | "err") => void;
 }
 
-export const createUiSlice: StateCreator<FilesWorkspaceState, [], [], UiSlice> = (set, get) => ({
+export const createUiSlice: StateCreator<FilesWorkspaceState, [], [], UiSlice> = (set) => ({
   setBottomPanelTab: (projectId, tab) =>
     set((state) => {
       const ws = state.byProjectId[projectId] ?? defaultWorkspace();
@@ -193,26 +194,72 @@ export const createUiSlice: StateCreator<FilesWorkspaceState, [], [], UiSlice> =
       const problem = problems[problemIndex];
       // 3c: Apply the quick fix
       if (problem?.fix && problem.fix.action === "replace") {
+        const target = problem.fix.targetString;
+        const replacement = problem.fix.replacement;
+        if (typeof replacement !== "string") {
+          console.warn("Quick fix replacement is invalid", {
+            projectId,
+            problemId,
+            nodeId: problem.nodeId,
+          });
+          return state;
+        }
         const content = getFileContent(projectId, problem.nodeId);
-        if (content.includes(problem.fix.targetString)) {
-          const newContent = content.replace(problem.fix.targetString, problem.fix.replacement);
-          get().setFileState(projectId, problem.nodeId, { content: newContent, isDirty: true });
+        if (target) {
+          const newContent = content.replaceAll(target, replacement);
+          if (newContent !== content) {
+            setFileContent(projectId, problem.nodeId, newContent);
+
+            const prevFileState: FileState = ws.fileStates[problem.nodeId] || {
+              content: "",
+              contentVersion: 0,
+              isDirty: false,
+            };
+            const now = Date.now();
+            const nextFileState: FileState = {
+              ...prevFileState,
+              content: "",
+              contentVersion: (prevFileState.contentVersion ?? 0) + 1,
+              isDirty: true,
+              lastAccessedAt: now,
+            };
+            const maxEntries = estimateVisibleRowsBudget(ws);
+            const nextFileStates = evictLruIfNeeded(
+              { ...ws.fileStates, [problem.nodeId]: nextFileState },
+              maxEntries,
+              projectId,
+            );
+
+            const nextProblems = [...problems];
+            nextProblems.splice(problemIndex, 1);
+
+            return {
+              byProjectId: {
+                ...state.byProjectId,
+                [projectId]: {
+                  ...ws,
+                  fileStates: nextFileStates,
+                  ui: { ...ws.ui, problems: nextProblems },
+                },
+              },
+            };
+          } else {
+            console.warn("Quick fix had no effect", {
+              projectId,
+              problemId,
+              nodeId: problem.nodeId,
+              target,
+            });
+          }
+        } else {
+          console.warn("Quick fix target string is empty", {
+            projectId,
+            problemId,
+            nodeId: problem.nodeId,
+          });
         }
       }
-
-      // Remove the problem from the list after fixing
-      const nextProblems = [...problems];
-      nextProblems.splice(problemIndex, 1);
-
-      return {
-        byProjectId: {
-          ...state.byProjectId,
-          [projectId]: {
-            ...ws,
-            ui: { ...ws.ui, problems: nextProblems },
-          },
-        },
-      };
+      return state;
     }),
 
   setDebugOutput: (projectId, lines) =>
@@ -320,7 +367,8 @@ export const createUiSlice: StateCreator<FilesWorkspaceState, [], [], UiSlice> =
               ...ws.ui,
               zenMode: entering,
               sidebarCollapsed: entering ? true : false,
-              bottomPanelCollapsed: entering ? true : ws.ui.bottomPanelCollapsed,
+              bottomPanelCollapsed: entering ? true : (ws.ui._prevBottomPanelCollapsed ?? false),
+              _prevBottomPanelCollapsed: entering ? ws.ui.bottomPanelCollapsed : undefined,
             },
           },
         },

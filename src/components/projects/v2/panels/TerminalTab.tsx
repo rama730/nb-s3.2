@@ -94,7 +94,7 @@ export function TerminalTab({ projectId, canEdit, activeFilePath }: TerminalTabP
       addSession(projectId, session);
 
       if (!isExecutable) {
-        appendOutput(projectId, id, "Type a command like: python main.py or node index.js");
+        appendOutput(projectId, id, "Waiting for output. Type a command like: python main.py or node index.js");
         setRunning(projectId, id, false);
         return;
       }

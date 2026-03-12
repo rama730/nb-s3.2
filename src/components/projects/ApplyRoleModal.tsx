@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Briefcase, Clock3, Info, Link2, Loader2, Sparkles, Users } from "lucide-react";
 import { toast } from "sonner";
 import { applyToRoleAction } from "@/app/actions/applications";
+import { logger } from "@/lib/logger";
 import {
     Dialog,
     DialogContent,
@@ -76,6 +77,15 @@ function formatTypedLinkLine(rawValue: string) {
         const label = getLinkTypeLabel(firstToken);
         return `${label}: ${trimmed}`;
     }
+}
+
+function hashText(input: string) {
+    let hash = 2166136261;
+    for (let i = 0; i < input.length; i += 1) {
+        hash ^= input.charCodeAt(i);
+        hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(16);
 }
 
 export default function ApplyRoleModal({
@@ -290,18 +300,78 @@ export default function ApplyRoleModal({
             return;
         }
 
+        const startedAt = performance.now();
+        const requestId = `apply-submit:${project.id}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
         setIsSubmitting(true);
         try {
-            const result = await applyToRoleAction(project.id, roleId, finalMessage);
+            const idempotencyKey = `apply:${project.id}:${roleId}:${hashText(finalMessage)}`;
+            const result = await applyToRoleAction(project.id, roleId, finalMessage, { idempotencyKey });
             if (!result.success) {
+                const durationMs = Math.round(performance.now() - startedAt);
+                logger.metric("applications.apply.result", {
+                    module: "project-apply-modal",
+                    projectId: project.id,
+                    roleId,
+                    idempotencyKey,
+                    applicationTraceId: result.applicationTraceId || null,
+                    errorCode: result.errorCode || "UNKNOWN",
+                    result: "failure",
+                    durationMs,
+                    requestId,
+                });
+                logger.metric("project.detail.application.submit", {
+                    interaction: "application.submit",
+                    projectId: project.id,
+                    roleId,
+                    applicationTraceId: result.applicationTraceId || null,
+                    requestId,
+                    durationMs,
+                    result: "failure",
+                    errorCode: result.errorCode || "UNKNOWN",
+                });
                 toast.error(result.error || "Failed to submit application");
                 return;
             }
 
+            const durationMs = Math.round(performance.now() - startedAt);
+            logger.metric("applications.apply.result", {
+                module: "project-apply-modal",
+                projectId: project.id,
+                roleId,
+                idempotencyKey,
+                applicationTraceId: result.applicationTraceId || null,
+                applicationId: result.applicationId || null,
+                idempotent: !!result.idempotent,
+                result: "success",
+                durationMs,
+                requestId,
+            });
+            logger.metric("project.detail.application.submit", {
+                interaction: "application.submit",
+                projectId: project.id,
+                roleId,
+                applicationTraceId: result.applicationTraceId || null,
+                applicationId: result.applicationId || null,
+                idempotent: !!result.idempotent,
+                requestId,
+                durationMs,
+                result: "success",
+            });
             toast.success("Application submitted successfully");
             onSuccess?.();
             resetAndClose();
         } catch (err) {
+            const durationMs = Math.round(performance.now() - startedAt);
+            logger.metric("project.detail.application.submit", {
+                interaction: "application.submit",
+                projectId: project.id,
+                roleId,
+                requestId,
+                durationMs,
+                result: "failure",
+                errorCode: "UNEXPECTED_ERROR",
+                message: err instanceof Error ? err.message : "Unknown error",
+            });
             console.error("Apply to role failed:", err);
             toast.error(err instanceof Error ? err.message : "Something went wrong");
         } finally {

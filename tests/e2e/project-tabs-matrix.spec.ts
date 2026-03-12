@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { hasE2ECredentials, login } from "./_helpers/auth";
 import { attachPageMonitoring } from "./_helpers/monitoring";
-import { PerfTracker, measureWithTiming } from "./_helpers/perf";
+import { PerfTracker, markNavigationMetrics, measureWithTiming } from "./_helpers/perf";
 
 const fixtureProjectSlug = process.env.E2E_FILES_PROJECT_SLUG || "e2e-files-workspace-controls";
 const filesTabUrl = `/projects/${fixtureProjectSlug}?tab=files`;
@@ -49,6 +49,7 @@ test.describe("Project tabs matrix @critical", () => {
     const { elapsedMs: projectShellMs } = await measureWithTiming(() =>
       page.goto(`/projects/${fixtureProjectSlug}`, { waitUntil: "domcontentloaded" })
     );
+    await markNavigationMetrics(perf, page, `/projects/${fixtureProjectSlug}`);
     perf.mark("route.interactive.core", projectShellMs, `/projects/${fixtureProjectSlug}`);
     perf.mark("project.detail.shell.interactive", projectShellMs, `/projects/${fixtureProjectSlug}`);
 

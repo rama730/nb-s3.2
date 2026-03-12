@@ -96,7 +96,10 @@ export function decodeCursorFrame(data: Uint8Array): {
 
 const BROADCAST_THROTTLE_MS = 16; // ~60fps cap
 const STALE_FRAME_MS = 100; // Drop frames older than 100ms
+const CLOCK_SKEW_MS = 50; // Allow small sender/receiver clock skew
 const PRESENCE_TIMEOUT_MS = 10_000; // Remove users after 10s of silence
+const UINT32_MS_MOD = 0x1_0000_0000;
+const HALF_UINT32_MS_MOD = UINT32_MS_MOD / 2;
 
 /**
  * Creates a throttled cursor broadcaster.
@@ -168,9 +171,15 @@ export function createPresenceManager() {
 
         // Drop stale frames
         const now = Date.now();
-        const now32 = now >>> 0;
-        const frameAge = (now32 - decoded.timestamp) >>> 0;
-        if (frameAge > STALE_FRAME_MS) return null;
+        const base = now - (now % UINT32_MS_MOD);
+        let senderTimestampMs = base + (decoded.timestamp >>> 0);
+        // Unwrap 32-bit sender timestamp to the closest wall-clock time around `now`.
+        if (senderTimestampMs - now > HALF_UINT32_MS_MOD) senderTimestampMs -= UINT32_MS_MOD;
+        if (now - senderTimestampMs > HALF_UINT32_MS_MOD) senderTimestampMs += UINT32_MS_MOD;
+
+        const signedDeltaMs = now - senderTimestampMs;
+        const frameAge = signedDeltaMs < 0 ? 0 : signedDeltaMs;
+        if (signedDeltaMs < -CLOCK_SKEW_MS || frameAge > STALE_FRAME_MS) return null;
 
         const userId = userHashToId.get(decoded.userHash) ?? `user-${decoded.userHash}`;
         const nodeId = nodeHashToId.get(decoded.nodeHash) ?? "";

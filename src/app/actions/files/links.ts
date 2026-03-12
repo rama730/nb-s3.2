@@ -155,14 +155,14 @@ export async function updateTaskNodeLinksOrder(taskId: string, updates: { nodeId
 
     if (validUpdates.length === 0) return;
 
-    // Execute updates in parallel on the DB, single network request from client
-    await Promise.all(
-        validUpdates.map(u =>
-            db.update(taskNodeLinks)
+    // Execute updates atomically within a transaction
+    await db.transaction(async (tx) => {
+        for (const u of validUpdates) {
+            await tx.update(taskNodeLinks)
                 .set({ order: u.order })
-                .where(and(eq(taskNodeLinks.taskId, taskId), eq(taskNodeLinks.nodeId, u.nodeId)))
-        )
-    );
+                .where(and(eq(taskNodeLinks.taskId, taskId), eq(taskNodeLinks.nodeId, u.nodeId)));
+        }
+    });
 }
 
 export async function countTaskAttachments(taskId: string) {

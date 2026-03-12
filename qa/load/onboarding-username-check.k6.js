@@ -25,10 +25,10 @@ export const options = {
     },
 };
 
-export default function () {
+export default function onboardingUsernameCheck() {
     const suffix = `${String(__VU).padStart(4, '0')}${String(__ITER).padStart(8, '0')}`;
     const username = `load_${suffix}`;
-    const url = `${BASE_URL}/api/onboarding/username-check?username=${encodeURIComponent(username)}`;
+    const url = `${BASE_URL}/api/v1/onboarding/username-check?username=${encodeURIComponent(username)}`;
 
     const response = http.get(url, {
         headers: {

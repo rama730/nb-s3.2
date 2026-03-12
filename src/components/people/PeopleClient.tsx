@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Search, Users, Loader2, SlidersHorizontal, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { useDebounce } from "use-debounce";
@@ -28,6 +28,14 @@ GridItem.displayName = "DiscoverGridItem";
 export default function PeopleClient({ initialUser }: PeopleClientProps) {
     const [searchQuery, setSearchQuery] = useState("");
     const [debouncedSearch] = useDebounce(searchQuery, 300);
+    const [routeScrollParent, setRouteScrollParent] = useState<HTMLElement | null>(() => {
+        if (typeof document === 'undefined') return null;
+        return document.querySelector<HTMLElement>('[data-scroll-root="route"]');
+    });
+
+    useEffect(() => {
+        setRouteScrollParent(document.querySelector<HTMLElement>('[data-scroll-root="route"]'));
+    }, []);
 
     const {
         data,
@@ -142,17 +150,23 @@ export default function PeopleClient({ initialUser }: PeopleClientProps) {
                                 <div className="flex-1 h-px bg-zinc-200/60 dark:bg-zinc-800 ml-4" />
                             </div>
                             
-                            <div className="flex gap-4 overflow-x-auto pb-4 pt-1 px-1 -mx-1 snap-x snap-mandatory scrollbar-thin scrollbar-thumb-zinc-300 dark:scrollbar-thumb-zinc-700">
-                                {recommendedProfiles.map((profile) => (
-                                    <div key={profile.id} className="min-w-[300px] max-w-[320px] shrink-0 snap-start">
-                                        <PersonCard
-                                            profile={profile}
-                                            onConnect={handleConnect}
-                                            onDismiss={handleDismiss}
-                                            variant="recommended"
-                                        />
-                                    </div>
-                                ))}
+                            <div className="relative group">
+                                {/* Gradient Masks for endless edge effect */}
+                                <div className="absolute left-0 top-0 bottom-0 w-8 bg-gradient-to-r from-zinc-50 dark:from-zinc-950 to-transparent z-10 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity" />
+                                <div className="absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-zinc-50 dark:from-zinc-950 to-transparent z-10 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity" />
+                                
+                                <div className="flex gap-4 overflow-x-auto pb-4 pt-1 px-1 -mx-1 snap-x snap-mandatory">
+                                    {recommendedProfiles.map((profile) => (
+                                        <div key={profile.id} className="min-w-[300px] max-w-[320px] shrink-0 snap-start relative z-0">
+                                            <PersonCard
+                                                profile={profile}
+                                                onConnect={handleConnect}
+                                                onDismiss={handleDismiss}
+                                                variant="recommended"
+                                            />
+                                        </div>
+                                    ))}
+                                </div>
                             </div>
                         </div>
                     )}
@@ -170,7 +184,7 @@ export default function PeopleClient({ initialUser }: PeopleClientProps) {
                             )}
                             <div style={{ minHeight: 400 }}>
                                 <VirtuosoGrid
-                                    useWindowScroll
+                                    customScrollParent={routeScrollParent ?? undefined}
                                     increaseViewportBy={600}
                                     data={streamProfiles}
                                     endReached={() => {

@@ -191,11 +191,11 @@ export default function ProjectLayout({
 
             {/* Bottom Row: Navigation Tabs (sticky) */}
             <div className={cn(
-                "z-30 bg-white/80 dark:bg-zinc-950/80 backdrop-blur-md border-b border-zinc-200 dark:border-zinc-800 transition-shadow duration-300 ease-in-out shrink-0",
+                "z-30 bg-white dark:bg-zinc-950 border-b border-zinc-200 dark:border-zinc-800 transition-shadow duration-300 ease-in-out shrink-0",
                 isFilesTab ? "relative" : "sticky",
                 isScrolled && !isFilesTab && "shadow-sm"
             )}
-                style={isFilesTab ? undefined : { top: 'var(--header-height, 56px)' }}
+                style={isFilesTab ? undefined : { top: 0 }}
             >
                 <div className="max-w-7xl mx-auto">
                     <div className="flex items-center px-4 overflow-x-auto scrollbar-hide -mb-px">

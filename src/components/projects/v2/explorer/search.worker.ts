@@ -41,6 +41,7 @@ self.addEventListener("message", (e: MessageEvent<SearchWorkerRequest>) => {
     if (type === "SEARCH") {
         const { query, federated, requestId, jobId } = payload;
         const effectiveJobId = jobId ?? requestId ?? 0;
+        const responseRequestId = requestId ?? effectiveJobId;
 
         try {
             // 1. Process Backend Federated Search
@@ -58,8 +59,8 @@ self.addEventListener("message", (e: MessageEvent<SearchWorkerRequest>) => {
             const seen = new Set(orderedIds);
 
             // 2. Pure O(1) Tri-gram Local Intersection
-            if (query && query.length >= 2) {
-                const normalizedQuery = query.toLowerCase().replace(/[^a-z0-9]/g, '');
+            const normalizedQuery = query.toLowerCase().replace(/[^a-z0-9]/g, '');
+            if (normalizedQuery.length >= 2) {
                 let localMatches: Set<string> | null = null;
 
                 if (queryCache.has(normalizedQuery)) {
@@ -102,13 +103,13 @@ self.addEventListener("message", (e: MessageEvent<SearchWorkerRequest>) => {
                 orderedIds,
                 snippets,
                 jobId: effectiveJobId,
-                requestId: effectiveJobId,
+                requestId: responseRequestId,
             } as SearchWorkerResponse);
         } catch (error) {
             self.postMessage({
                 type: "SEARCH_ERROR",
                 jobId: effectiveJobId,
-                requestId: effectiveJobId,
+                requestId: responseRequestId,
                 error: error instanceof Error ? error.message : "Search worker failed",
             } as SearchWorkerResponse);
         }

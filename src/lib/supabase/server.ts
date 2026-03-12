@@ -1,6 +1,6 @@
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
-import { buildE2EFallbackUser, E2E_AUTH_COOKIE, isE2EAuthFallbackEnabled } from '@/lib/e2e/auth-fallback'
+import { resolveSupabasePublicEnv, resolveSupabaseServiceEnv } from '@/lib/supabase/env'
 
 const SERVER_AUTH_LOOKUP_TIMEOUT_MS = 3500
 const AUTH_COOKIE_MARKERS = ['auth-token', 'sb-access-token', 'sb-refresh-token']
@@ -43,10 +43,11 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: str
 
 export async function createClient() {
     const cookieStore = await cookies()
+    const env = resolveSupabasePublicEnv('supabase.server')
 
     const client = createServerClient(
-        process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+        env.url,
+        env.anonKey,
         {
             cookies: {
                 getAll() {
@@ -68,16 +69,6 @@ export async function createClient() {
 
     const originalGetUser = client.auth.getUser.bind(client.auth)
     const wrappedGetUser = async () => {
-        const fallbackUserId = isE2EAuthFallbackEnabled()
-            ? cookieStore.get(E2E_AUTH_COOKIE)?.value?.trim()
-            : null
-        if (fallbackUserId) {
-            return {
-                data: { user: buildE2EFallbackUser(fallbackUserId) },
-                error: null,
-            }
-        }
-
         // Signed-out requests should not block on network auth lookups.
         if (!hasAnyAuthCookie(cookieStore)) {
             return {
@@ -112,9 +103,10 @@ export async function createClient() {
 export const createSupabaseServerClient = createClient
 
 export async function createAdminClient() {
+    const env = resolveSupabaseServiceEnv('supabase.admin')
     return createServerClient(
-        process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.SUPABASE_SERVICE_ROLE_KEY!,
+        env.url,
+        env.serviceRoleKey,
         {
             cookies: {
                 getAll() { return [] },

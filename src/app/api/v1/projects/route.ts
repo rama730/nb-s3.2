@@ -1,7 +1,9 @@
 export const runtime = 'edge';
 
-import { NextResponse } from 'next/server';
+import { jsonError, jsonSuccess } from '@/app/api/v1/_envelope';
+import { fetchWithBoundedRetry } from '@/app/api/v1/_shared';
 import { cacheData, getCachedData } from '@/lib/redis';
+import { logger } from '@/lib/logger';
 
 const EDGE_BUCKETS_MAX = 5_000;
 const CLEANUP_INTERVAL_MS = 10_000;
@@ -40,6 +42,53 @@ const DEFAULT_LIMIT = 24;
 const MAX_LIMIT = 100;
 const MAX_PAGE = 10_000;
 
+function getRequestId(request: Request) {
+    const fromHeader = request.headers.get('x-request-id')?.trim();
+    return fromHeader && fromHeader.length > 0 ? fromHeader : crypto.randomUUID();
+}
+
+function getRequestPath(request: Request) {
+    try {
+        return new URL(request.url).pathname;
+    } catch {
+        return '/api/v1/projects';
+    }
+}
+
+function logProjectsRequest(
+    request: Request,
+    params: {
+        requestId: string;
+        startedAt: number;
+        status: number;
+        success: boolean;
+        errorCode?: string;
+        errorMessage?: string;
+        errorStack?: string;
+    },
+) {
+    const durationMs = Date.now() - params.startedAt;
+    logger.info('api.v1.request', {
+        requestId: params.requestId,
+        route: getRequestPath(request),
+        action: 'projects.get',
+        durationMs,
+        status: params.status,
+        success: params.success,
+        errorCode: params.errorCode ?? null,
+        errorMessage: params.errorMessage ?? null,
+        errorStack: params.errorStack ?? null,
+    });
+    logger.metric('api.latency', {
+        requestId: params.requestId,
+        route: getRequestPath(request),
+        action: 'projects.get',
+        durationMs,
+        status: params.status,
+        success: params.success,
+    });
+}
+
 function parseNonNegativeInt(value: string | null, fallback: number) {
     if (value === null || value.trim() === '') return { ok: true as const, value: fallback };
     if (!/^\d+$/.test(value)) return { ok: false as const };
@@ -49,9 +98,18 @@ function parseNonNegativeInt(value: string | null, fallback: number) {
 }
 
 export async function GET(request: Request) {
+    const startedAt = Date.now();
+    const requestId = getRequestId(request);
     const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
     if (!checkEdgeRateLimit(ip, 100, 60_000)) {
-        return NextResponse.json({ error: 'Rate limit exceeded' }, { status: 429 });
+        logProjectsRequest(request, {
+            requestId,
+            startedAt,
+            status: 429,
+            success: false,
+            errorCode: 'RATE_LIMITED',
+        });
+        return jsonError('Rate limit exceeded', 429, 'RATE_LIMITED');
     }
 
     const { searchParams } = new URL(request.url);
@@ -60,16 +118,24 @@ export async function GET(request: Request) {
     const parsedLimit = parseNonNegativeInt(searchParams.get('limit'), DEFAULT_LIMIT);
 
     if (!parsedPage.ok || !parsedLimit.ok) {
-        return NextResponse.json(
-            { error: 'Invalid pagination parameters' },
-            { status: 400 }
-        );
+        logProjectsRequest(request, {
+            requestId,
+            startedAt,
+            status: 400,
+            success: false,
+            errorCode: 'BAD_REQUEST',
+        });
+        return jsonError('Invalid pagination parameters', 400, 'BAD_REQUEST');
     }
     if (parsedLimit.value === 0) {
-        return NextResponse.json(
-            { error: 'Limit must be at least 1' },
-            { status: 400 }
-        );
+        logProjectsRequest(request, {
+            requestId,
+            startedAt,
+            status: 400,
+            success: false,
+            errorCode: 'BAD_REQUEST',
+        });
+        return jsonError('Limit must be at least 1', 400, 'BAD_REQUEST');
     }
 
     const page = Math.min(parsedPage.value, MAX_PAGE);
@@ -82,41 +148,105 @@ export async function GET(request: Request) {
     try {
         const cached = await getCachedData(cacheKey);
         if (cached) {
-            return NextResponse.json({
-                data: cached,
-                source: 'redis-edge-cache'
-            }, {
+            logger.metric('cache.hit_rate', {
+                requestId,
+                route: getRequestPath(request),
+                cache: 'redis',
+                key: 'projects.public',
+                hit: true,
+            });
+            logProjectsRequest(request, {
+                requestId,
+                startedAt,
+                status: 200,
+                success: true,
+            });
+            return jsonSuccess(
+                {
+                    projects: cached,
+                    source: 'redis-edge-cache',
+                },
+                undefined,
+                {
                 headers: {
                     'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=300',
                     'X-Edge-Region': 'global'
                 }
-            });
+                },
+            );
         }
+        logger.metric('cache.hit_rate', {
+            requestId,
+            route: getRequestPath(request),
+            cache: 'redis',
+            key: 'projects.public',
+            hit: false,
+        });
     } catch (error) {
         console.warn('Projects cache read failed, continuing without cache', error);
     }
 
-    // 2. Fetch from DB if miss
-    // Note: getHubProjects uses Drizzle which might need 'neon-serverless' for Edge 
-    // OR we just use standard fetch to Supabase REST API for true Edge compatibility if Drizzle isn't Edge-ready yet.
-    // However, Drizzle with Supabase/Postgres.js usually requires Node environment.
-    // FOR USER: We will assume standard fetching for now, but to be TRUE Edge, we might need 
-    // to use Supabase REST Client or Neon Drizzle driver. 
-    // Given the constraints, let's implement a direct Supabase REST call for maximum Edge speed + compatibility.
-
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-
-    // Simple REST fetch to avoid Node-dependency issues in Edge
-    try {
-        const response = await fetch(`${supabaseUrl}/rest/v1/projects?select=*,profiles:owner_id(id,username,full_name,avatar_url)&visibility=eq.public&order=created_at.desc&limit=${limit}&offset=${page * limit}`, {
-            headers: {
-                'apikey': supabaseKey,
-                'Authorization': `Bearer ${supabaseKey}`
-            }
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim();
+    const missingEnvVars: string[] = [];
+    if (!supabaseUrl) missingEnvVars.push('NEXT_PUBLIC_SUPABASE_URL');
+    if (!supabaseKey) missingEnvVars.push('NEXT_PUBLIC_SUPABASE_ANON_KEY');
+    if (missingEnvVars.length > 0) {
+        logger.error('api.v1.projects.config_missing', {
+            requestId,
+            route: getRequestPath(request),
+            action: 'projects.get',
+            missingEnvVars,
         });
+        logProjectsRequest(request, {
+            requestId,
+            startedAt,
+            status: 500,
+            success: false,
+            errorCode: 'INTERNAL_ERROR',
+        });
+        return jsonError(
+            'Server configuration error',
+            500,
+            'INTERNAL_ERROR',
+        );
+    }
+    const validatedSupabaseUrl = supabaseUrl as string;
+    const validatedSupabaseKey = supabaseKey as string;
+    const selectColumns = [
+        'id',
+        'slug',
+        'title',
+        'description',
+        'status',
+        'visibility',
+        'owner_id',
+        'view_count',
+        'followers_count',
+        'saves_count',
+        'cover_image',
+        'created_at',
+        'updated_at',
+        'profiles:owner_id(id,username,full_name,avatar_url)'
+    ].join(',');
 
-        if (!response.ok) throw new Error('Supabase fetch failed');
+    try {
+        const response = await fetchWithBoundedRetry(
+            `${validatedSupabaseUrl}/rest/v1/projects?select=${selectColumns}&visibility=eq.public&order=created_at.desc,id.desc&limit=${limit}&offset=${page * limit}`,
+            {
+                headers: {
+                    'apikey': validatedSupabaseKey,
+                    'Authorization': `Bearer ${validatedSupabaseKey}`
+                },
+                timeoutMs: 4_000,
+                maxAttempts: 2,
+            }
+        );
+
+        if (!response.ok) {
+            const bodyText = await response.text().catch(() => '');
+            throw new Error(`Supabase fetch failed (${response.status}): ${bodyText.slice(0, 300)}`);
+        }
 
         const data = await response.json();
 
@@ -127,11 +257,44 @@ export async function GET(request: Request) {
             console.warn('Projects cache write failed, continuing without cache', error);
         }
 
-        return NextResponse.json({
-            data: data,
-            source: 'database'
+        logProjectsRequest(request, {
+            requestId,
+            startedAt,
+            status: 200,
+            success: true,
         });
-    } catch {
-        return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+        return jsonSuccess(
+            {
+                projects: data,
+                source: 'database',
+            },
+            undefined,
+            {
+            headers: {
+                'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=300',
+                'X-Edge-Region': 'global'
+            }
+            },
+        );
+    } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        const errorStack = err instanceof Error ? err.stack : undefined;
+        logger.error('api.v1.projects.error', {
+            requestId,
+            route: getRequestPath(request),
+            action: 'projects.get',
+            errorMessage,
+            errorStack: errorStack ?? null,
+        });
+        logProjectsRequest(request, {
+            requestId,
+            startedAt,
+            status: 500,
+            success: false,
+            errorCode: 'INTERNAL_ERROR',
+            errorMessage,
+            errorStack,
+        });
+        return jsonError('Internal Server Error', 500, 'INTERNAL_ERROR');
     }
 }

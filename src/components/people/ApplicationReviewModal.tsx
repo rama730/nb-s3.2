@@ -1,10 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Check, X, MessageSquare, Briefcase, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import {
+    APPLICATION_DECISION_REASON_TEMPLATES,
+    APPLICATION_REJECTION_REASON_OPTIONS,
+} from "@/lib/applications/reasons";
 
 interface ApplicationReviewModalProps {
     isOpen: boolean;
@@ -15,21 +19,7 @@ interface ApplicationReviewModalProps {
     roleTitle: string;
 }
 
-const REJECTION_REASONS = [
-    { value: "skills_mismatch", label: "Skills Mismatch" },
-    { value: "role_filled", label: "Position Filled" },
-    { value: "availability", label: "Availability Conflict" },
-    { value: "experience", label: "Insufficient Experience" },
-    { value: "other", label: "Other" },
-];
-
-const REJECTION_REASON_TEMPLATES: Record<string, string> = {
-    skills_mismatch: "Thanks for applying. Your profile is strong, but we currently need a closer stack match for this role.",
-    role_filled: "Thanks for applying. This role has been filled for now.",
-    availability: "Thanks for applying. We currently need availability that better aligns with the team schedule.",
-    experience: "Thanks for applying. At this stage we need deeper experience for this role.",
-    other: "Thanks for applying. We are moving forward with another direction right now.",
-};
+const REVIEW_DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
 
 export default function ApplicationReviewModal({
     isOpen,
@@ -44,6 +34,56 @@ export default function ApplicationReviewModal({
     const [isSubmitting, setIsSubmitting] = useState(false);
 
     const isAccept = mode === "accept";
+    const storageKey = useMemo(
+        () => `application-review-draft:${mode}:${applicantName}:${roleTitle}`,
+        [mode, applicantName, roleTitle]
+    );
+
+    useEffect(() => {
+        if (!isOpen || typeof window === "undefined") return;
+        try {
+            const raw = window.localStorage.getItem(storageKey);
+            if (!raw) {
+                setMessage("");
+                setReason("");
+                return;
+            }
+            const parsed = JSON.parse(raw) as { message?: string; reason?: string; savedAt?: number };
+            if (!parsed?.savedAt || Date.now() - parsed.savedAt > REVIEW_DRAFT_TTL_MS) {
+                window.localStorage.removeItem(storageKey);
+                setMessage("");
+                setReason("");
+                return;
+            }
+            if (typeof parsed.message === "string") {
+                setMessage(parsed.message.slice(0, 2000));
+            } else {
+                setMessage("");
+            }
+            if (typeof parsed.reason === "string") {
+                setReason(parsed.reason);
+            } else {
+                setReason("");
+            }
+        } catch {
+            window.localStorage.removeItem(storageKey);
+            setMessage("");
+            setReason("");
+        }
+    }, [isOpen, storageKey]);
+
+    useEffect(() => {
+        if (!isOpen || typeof window === "undefined") return;
+        const timeout = window.setTimeout(() => {
+            const hasDraft = !!message.trim() || !!reason;
+            if (!hasDraft) {
+                window.localStorage.removeItem(storageKey);
+                return;
+            }
+            window.localStorage.setItem(storageKey, JSON.stringify({ message, reason, savedAt: Date.now() }));
+        }, 220);
+        return () => window.clearTimeout(timeout);
+    }, [isOpen, message, reason, storageKey]);
 
     const handleSubmit = async () => {
         if (!isAccept && !reason) {
@@ -57,6 +97,9 @@ export default function ApplicationReviewModal({
             onClose();
             setMessage("");
             setReason("");
+            if (typeof window !== "undefined") {
+                window.localStorage.removeItem(storageKey);
+            }
         } catch {
             toast.error("An error occurred");
         } finally {
@@ -69,17 +112,17 @@ export default function ApplicationReviewModal({
             <Dialog.Portal>
                 <Dialog.Overlay className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 animate-in fade-in duration-200" />
                 <Dialog.Content className="fixed left-[50%] top-[50%] z-50 w-full max-w-md translate-x-[-50%] translate-y-[-50%] rounded-2xl bg-white dark:bg-zinc-900 shadow-xl border border-zinc-200 dark:border-zinc-800 focus:outline-none animate-in fade-in zoom-in-95 duration-200 overflow-hidden">
-                    
+
                     <div className={cn(
                         "px-6 py-4 border-b flex items-center gap-3",
-                        isAccept 
-                            ? "bg-purple-50 dark:bg-purple-900/20 border-purple-100 dark:border-purple-800" 
+                        isAccept
+                            ? "bg-purple-50 dark:bg-purple-900/20 border-purple-100 dark:border-purple-800"
                             : "bg-red-50 dark:bg-red-900/20 border-red-100 dark:border-red-800"
                     )}>
                         <div className={cn(
                             "w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0",
-                            isAccept 
-                                ? "bg-purple-100 text-purple-600 dark:bg-purple-900/40 dark:text-purple-400" 
+                            isAccept
+                                ? "bg-purple-100 text-purple-600 dark:bg-purple-900/40 dark:text-purple-400"
                                 : "bg-red-100 text-red-600 dark:bg-red-900/40 dark:text-red-400"
                         )}>
                             {isAccept ? <Check className="w-5 h-5" /> : <X className="w-5 h-5" />}
@@ -112,14 +155,15 @@ export default function ApplicationReviewModal({
                                         onChange={(e) => {
                                             const next = e.target.value;
                                             setReason(next);
-                                            if (!message.trim() && REJECTION_REASON_TEMPLATES[next]) {
-                                                setMessage(REJECTION_REASON_TEMPLATES[next]);
+                                            const template = APPLICATION_DECISION_REASON_TEMPLATES[next as keyof typeof APPLICATION_DECISION_REASON_TEMPLATES];
+                                            if (!message.trim() && template) {
+                                                setMessage(template);
                                             }
                                         }}
                                         className="w-full px-4 py-2.5 bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-200 dark:border-zinc-700 rounded-xl text-sm appearance-none focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500 transition-colors"
                                     >
                                         <option value="" disabled>Select a reason...</option>
-                                        {REJECTION_REASONS.map(r => (
+                                        {APPLICATION_REJECTION_REASON_OPTIONS.map(r => (
                                             <option key={r.value} value={r.value}>{r.label}</option>
                                         ))}
                                     </select>
@@ -137,8 +181,8 @@ export default function ApplicationReviewModal({
                                 <textarea
                                     value={message}
                                     onChange={(e) => setMessage(e.target.value)}
-                                    placeholder={isAccept 
-                                        ? "Hey! Excited to have you on the team..." 
+                                    placeholder={isAccept
+                                        ? "Hey! Excited to have you on the team..."
                                         : "Thank you for your interest. Unfortunately..."
                                     }
                                     className="w-full h-32 px-4 py-3 bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-200 dark:border-zinc-700 rounded-xl text-sm resize-none focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500 transition-colors placeholder:text-zinc-400"

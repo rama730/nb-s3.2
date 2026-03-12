@@ -1,8 +1,8 @@
 'use client'
 
-import { useRef, useState } from 'react'
+import { Suspense, useRef, useState } from 'react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useAuth } from '@/lib/hooks/use-auth'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -10,12 +10,16 @@ import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
 import { Github, Mail, Loader2, Eye, EyeOff } from 'lucide-react'
+import { buildAuthPageHref, resolveAuthRedirectPath } from '@/lib/auth/redirects'
 
 const LOGIN_REQUEST_TIMEOUT_MS = 25_000
 
-export default function LoginPage() {
+function LoginPageInner() {
     const router = useRouter()
+    const searchParams = useSearchParams()
     const { signIn, signInWithGoogle, signInWithGitHub } = useAuth()
+    const redirectPath = resolveAuthRedirectPath(searchParams.get('redirect'))
+    const signupHref = buildAuthPageHref('/signup', redirectPath)
 
     const [email, setEmail] = useState('')
     const [password, setPassword] = useState('')
@@ -42,7 +46,7 @@ export default function LoginPage() {
             if (result.error) {
                 setError(result.error.message)
             } else {
-                router.push('/hub')
+                router.push(redirectPath)
             }
         } catch (loginError) {
             if (currentRequestId !== submitRequestIdRef.current) return
@@ -60,7 +64,7 @@ export default function LoginPage() {
 
     const handleGoogleSignIn = async () => {
         setError(null)
-        const { error } = await signInWithGoogle()
+        const { error } = await signInWithGoogle(redirectPath)
         if (error) {
             setError(error.message)
         }
@@ -68,7 +72,7 @@ export default function LoginPage() {
 
     const handleGitHubSignIn = async () => {
         setError(null)
-        const { error } = await signInWithGitHub()
+        const { error } = await signInWithGitHub(redirectPath)
         if (error) {
             setError(error.message)
         }
@@ -225,7 +229,7 @@ export default function LoginPage() {
                     <CardFooter className="flex justify-center pb-6">
                         <p className="text-sm text-muted-foreground">
                             Don&apos;t have an account?{' '}
-                            <Link href="/signup" className="text-primary font-medium hover:underline">
+                            <Link href={signupHref} className="text-primary font-medium hover:underline">
                                 Sign up
                             </Link>
                         </p>
@@ -244,5 +248,31 @@ export default function LoginPage() {
                 </p>
             </div>
         </div>
+    )
+}
+
+function LoginPageFallback() {
+    return (
+        <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-background via-background to-muted/30 p-4">
+            <div className="w-full max-w-md">
+                <Card className="border-0 shadow-xl bg-card/50 backdrop-blur-sm">
+                    <CardHeader className="space-y-1 pb-4">
+                        <CardTitle className="text-xl">Sign in</CardTitle>
+                        <CardDescription>Loading authentication form...</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                        <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+                    </CardContent>
+                </Card>
+            </div>
+        </div>
+    )
+}
+
+export default function LoginPage() {
+    return (
+        <Suspense fallback={<LoginPageFallback />}>
+            <LoginPageInner />
+        </Suspense>
     )
 }

@@ -41,7 +41,7 @@ export function useTabContentLoader({
         return;
       }
 
-      const runLoad = (async () => {
+      const runLoad: Promise<void> = Promise.resolve().then(async () => {
         opsInProgressRef.current.add(node.id);
         contentLoadInFlightRef.current += 1;
 
@@ -73,37 +73,37 @@ export function useTabContentLoader({
           },
         }));
 
-        const ws = useFilesWorkspaceStore.getState().byProjectId[projectId];
-        const cached = ws?.fileStates?.[node.id];
-
-        if (cached) {
-          // Phase 5: Read content from detached Map instead of Zustand state
-          const cachedContent = getFileContent(projectId, node.id);
-          const hasContent = cachedContent.length > 0 || cached.isDirty;
-          if (hasContent) {
-            // Initialize saved snapshot so isNoOpSave works on first save
-            setDetachedContent(projectId, `${node.id}::saved`, cachedContent);
-            setTabById((prev) => {
-              const prevTab = prev[node.id];
-              return {
-                ...prev,
-                [node.id]: {
-                  ...prevTab,
-                  content: "",
-                  contentVersion: (prevTab?.contentVersion ?? 0) + 1,
-                  isDirty: cached.isDirty,
-                  lastSavedAt: cached.lastSavedAt,
-                  savedSnapshot: "",
-                  savedSnapshotVersion: (prevTab?.savedSnapshotVersion ?? 0) + 1,
-                  isLoading: false,
-                },
-              };
-            });
-            return;
-          }
-        }
-
         try {
+          const ws = useFilesWorkspaceStore.getState().byProjectId[projectId];
+          const cached = ws?.fileStates?.[node.id];
+
+          if (cached) {
+            // Phase 5: Read content from detached Map instead of Zustand state
+            const cachedContent = getFileContent(projectId, node.id);
+            const hasContent = cachedContent.length > 0 || cached.isDirty;
+            if (hasContent) {
+              // Initialize saved snapshot so isNoOpSave works on first save
+              setDetachedContent(projectId, `${node.id}::saved`, cachedContent);
+              setTabById((prev) => {
+                const prevTab = prev[node.id];
+                return {
+                  ...prev,
+                  [node.id]: {
+                    ...prevTab,
+                    content: "",
+                    contentVersion: (prevTab?.contentVersion ?? 0) + 1,
+                    isDirty: cached.isDirty,
+                    lastSavedAt: cached.lastSavedAt,
+                    savedSnapshot: "",
+                    savedSnapshotVersion: (prevTab?.savedSnapshotVersion ?? 0) + 1,
+                    isLoading: false,
+                  },
+                };
+              });
+              return;
+            }
+          }
+
           const url = await ensureSignedUrlForNode(node);
           if (!url) throw new Error("Failed to fetch file URL");
           const res = await fetch(url);
@@ -150,7 +150,7 @@ export function useTabContentLoader({
           opsInProgressRef.current.delete(node.id);
           contentLoadInFlightRef.current = Math.max(0, contentLoadInFlightRef.current - 1);
         }
-      })();
+      });
 
       inFlightByNodeRef.current.set(node.id, runLoad);
       try {

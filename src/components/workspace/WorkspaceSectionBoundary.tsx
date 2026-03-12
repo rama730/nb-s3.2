@@ -23,7 +23,10 @@ export class WorkspaceSectionBoundary extends Component<Props, State> {
     }
 
     componentDidCatch(error: Error) {
-        console.error(`[Workspace] Error in ${this.props.sectionName}:`, error);
+        console.error("[Workspace] Section render error", {
+            sectionName: this.props.sectionName,
+            error,
+        });
     }
 
     render() {

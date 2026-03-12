@@ -1,8 +1,8 @@
-import { NextResponse } from "next/server";
+// Backward-compatible alias. Canonical endpoint: /api/v1/ready
+import { GET as readyGet } from "@/app/api/v1/ready/route";
 
 export const dynamic = "force-dynamic";
 
-/** Minimal readiness probe: returns 200 when HTTP server can serve. Used by E2E webServer. */
-export async function GET() {
-  return NextResponse.json({ ok: true }, { status: 200 });
+export async function GET(request: Request) {
+  return readyGet(request);
 }

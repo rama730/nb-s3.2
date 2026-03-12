@@ -5,8 +5,6 @@ import { createClient } from '@/lib/supabase/client';
 import {
     Users,
     Eye,
-    Bookmark,
-    BookmarkCheck,
     Briefcase,
     UserPlus,
     Sparkles,
@@ -16,8 +14,9 @@ import {
 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { Project } from '@/types/hub';
-import { useToggleProjectBookmark, useToggleProjectFollow } from '@/hooks/mutations/useProjectMutations';
+import { useToggleProjectFollow } from '@/hooks/mutations/useProjectMutations';
 import { ProjectCardViewModel } from '@/lib/view-models/project-card';
+import { useRouteWarmPrefetch } from '@/hooks/useRouteWarmPrefetch';
 
 
 interface ProjectCardProps {
@@ -30,10 +29,10 @@ interface ProjectCardProps {
     isSelected?: boolean;
     onToggleSelection?: () => void;
     previewMode?: boolean;
-    isBookmarked?: boolean;
     isFollowing?: boolean;
     followersCount?: number;
     onOpenProject?: (projectId: string) => void;
+    disableHoverEffects?: boolean;
 }
 
 export default memo(function ProjectCard({
@@ -46,26 +45,22 @@ export default memo(function ProjectCard({
     isSelected,
     onToggleSelection,
     previewMode = false,
-    isBookmarked: propIsBookmarked,
     isFollowing: propIsFollowing,
     followersCount: propFollowersCount = 0,
     onOpenProject,
+    disableHoverEffects = false,
 }: ProjectCardProps) {
     const supabase = createClient();
     // Removed prefetch hooks as part of architectural optimization
-    const { mutate: toggleBookmarkMutation } = useToggleProjectBookmark();
     const { mutateAsync: toggleFollowMutation } = useToggleProjectFollow();
+    const warmPrefetchRoute = useRouteWarmPrefetch();
+    const projectHref = `/projects/${project.slug || project.id}?fromTab=${fromTab}`;
 
     // OPTIMIZATION: Removed Debounce Ref (prefetching removed)
     // const prefetchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-    const [bookmarked, setBookmarked] = useState(propIsBookmarked ?? false);
     const [followingProject, setFollowingProject] = useState(propIsFollowing ?? false);
     const [followersCount, setFollowersCount] = useState(propFollowersCount);
-
-    useEffect(() => {
-        if (propIsBookmarked !== undefined) setBookmarked(propIsBookmarked);
-    }, [propIsBookmarked]);
 
     useEffect(() => {
         if (propIsFollowing !== undefined) setFollowingProject(propIsFollowing);
@@ -85,20 +80,6 @@ export default memo(function ProjectCard({
         openRoles 
     } = viewModel;
     const rankingReasons = project.rankingReasons || [];
-
-    async function toggleBookmark(e: React.MouseEvent) {
-        e.preventDefault();
-        e.stopPropagation();
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) return;
-
-        toggleBookmarkMutation({
-            projectId: project.id,
-            currentStatus: bookmarked,
-            userId: user.id,
-        });
-        setBookmarked(!bookmarked);
-    }
 
     async function toggleFollow(e: React.MouseEvent) {
         e.preventDefault();
@@ -139,10 +120,11 @@ export default memo(function ProjectCard({
                 data-testid={`project-card-${project.id}`}
             >
                 <Link
-                    href={`/projects/${project.slug || project.id}?fromTab=${fromTab}`}
+                    href={projectHref}
                     className="absolute inset-0 z-10"
                     aria-label={`View project ${project.title}`}
                     onClick={() => onOpenProject?.(project.id)}
+                    onPointerEnter={() => warmPrefetchRoute(projectHref)}
                 />
                 
                 {/* Content Container (Row Layout) */}
@@ -190,11 +172,12 @@ export default memo(function ProjectCard({
 
     return (
         <div
-            className="h-full transform transition-all duration-300 hover:-translate-y-1"
+            className={`h-full ${disableHoverEffects ? '' : 'transform transition-all duration-300 hover:-translate-y-1'}`}
             data-project-id={project.id}
             data-testid={`project-card-${project.id}`}
+            onMouseEnter={() => warmPrefetchRoute(projectHref)}
         >
-            <div className="group relative h-full rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-sm hover:shadow-xl hover:border-indigo-500/20 dark:hover:border-indigo-500/20 transition-all duration-300 overflow-hidden flex flex-col">
+            <div className={`group relative h-full rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-sm overflow-hidden flex flex-col ${disableHoverEffects ? '' : 'transition-all duration-300 hover:-translate-y-1 hover:border-indigo-500/20 dark:hover:border-indigo-500/20'}`}>
                 {/* Selection Overlay */}
                 {selectionMode && (
                     <div
@@ -218,65 +201,51 @@ export default memo(function ProjectCard({
                 <div className={previewMode ? 'flex flex-col h-full pointer-events-none' : 'flex flex-col h-full'}>
                     {!previewMode && (
                         <Link
-                            href={`/projects/${project.slug || project.id}?fromTab=${fromTab}`}
+                            href={projectHref}
                             className="absolute inset-0 z-0"
                             onClick={() => onOpenProject?.(project.id)}
+                            onPointerEnter={() => warmPrefetchRoute(projectHref)}
                         />
                     )}
 
                     {/* Header */}
-                    <div className="p-5 flex items-start justify-between relative z-20">
-                        <div className="flex items-center gap-2">
-                            <span className="text-[11px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-lg bg-purple-100 dark:bg-purple-900/30 text-purple-800 dark:text-purple-200">
-                                {viewModel.category}
+                    <div className="p-4 flex items-center justify-between relative z-20">
+                        <span className="text-[11px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-lg bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300">
+                            {viewModel.category}
+                        </span>
+                        
+                        {totalOpenRoles > 0 && (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-50 dark:bg-indigo-500/10 border border-indigo-100 dark:border-indigo-500/20 text-[10px] font-bold text-indigo-600 dark:text-indigo-400">
+                                <Sparkles className="w-3 h-3" />
+                                {totalOpenRoles} Open Roles
                             </span>
-                            {totalOpenRoles > 0 && (
-                                <span className="opacity-100 group-hover:opacity-0 transition-opacity duration-500 ease-in-out flex-shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-50 dark:bg-indigo-500/10 border border-indigo-100 dark:border-indigo-500/20 text-[10px] font-bold text-indigo-600 dark:text-indigo-400">
-                                    <Briefcase className="w-3 h-3" />
-                                    {totalOpenRoles} Roles
-                                </span>
-                            )}
-                        </div>
-
-                        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity transform translate-x-4 group-hover:translate-x-0 duration-200">
-                            <button
-                                onClick={(e) => {
-                                    e.preventDefault();
-                                    onQuickView?.(project);
-                                }}
-                                className="p-2 text-zinc-400 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-zinc-800 rounded-full transition-colors"
-                                title="Quick View"
-                            >
-                                <Maximize2 className="w-4 h-4" />
-                            </button>
-                            <button
-                                onClick={toggleBookmark}
-                                className="p-2 text-zinc-400 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-zinc-800 rounded-full transition-colors"
-                                title={bookmarked ? 'Remove Bookmark' : 'Bookmark'}
-                            >
-                                {bookmarked ? <BookmarkCheck className="w-4 h-4 text-indigo-600 fill-current" /> : <Bookmark className="w-4 h-4" />}
-                            </button>
-                            <button
-                                onClick={toggleFollow}
-                                className="p-2 text-zinc-400 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-zinc-800 rounded-full transition-colors"
-                                title={followingProject ? 'Unfollow' : 'Follow'}
-                                data-testid={`project-card-follow-${project.id}`}
-                            >
-                                <UserPlus className={`w-4 h-4 ${followingProject ? 'text-emerald-600 fill-current' : ''}`} />
-                            </button>
-                        </div>
+                        )}
                     </div>
 
                     {/* Main Content */}
-                    <div className="px-5 pb-20 flex-1">
-                        <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 line-clamp-2 leading-snug group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors mb-2">
-                            {project.title}
-                        </h3>
-                        <p className="text-sm text-zinc-500 dark:text-zinc-400 line-clamp-3 mb-6">
-                            {project.shortDescription || project.description || 'No description provided.'}
-                        </p>
+                    <div className="px-4 pb-4 flex-1 flex flex-col">
+                        {/* Title & Tagline */}
+                        <div className="mb-2.5">
+                            <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 truncate leading-snug group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
+                                {project.title}
+                            </h3>
+                            {project.shortDescription && (
+                                <p className="text-[13px] font-medium text-zinc-500 dark:text-zinc-400 line-clamp-1 mt-0.5">
+                                    {project.shortDescription}
+                                </p>
+                            )}
+                        </div>
+
+                        {/* Description (2-line clamp) */}
+                        <div className="mb-3 flex-1 min-h-[40px]">
+                            <p className="text-[13px] text-zinc-600 dark:text-zinc-400 line-clamp-2 leading-relaxed">
+                                {project.description || project.shortDescription || 'No description provided.'}
+                            </p>
+                        </div>
+
+                        {/* Ranking Reasons */}
                         {rankingReasons.length > 0 && (
-                            <div className="mb-4 flex flex-wrap gap-1.5">
+                            <div className="mb-3 flex flex-wrap gap-1.5">
                                 {rankingReasons.map((reason) => (
                                     <span
                                         key={reason}
@@ -288,98 +257,74 @@ export default memo(function ProjectCard({
                             </div>
                         )}
 
-                        {/* Tech Stack */}
-                        <div className="flex flex-wrap gap-1.5 mb-6">
-                            {techStack.slice(0, 3).map((tech: string) => (
-                                <span key={tech} className="text-[10px] font-medium px-2 py-1 rounded-md bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700">
-                                    {tech}
-                                </span>
-                            ))}
-                            {techStack.length > 3 && (
-                                <span className="text-[10px] font-medium px-2 py-1 rounded-md bg-zinc-100 dark:bg-zinc-800 text-zinc-500">
-                                    +{techStack.length - 3}
-                                </span>
-                            )}
-                        </div>
+                        {/* Micro Tech Stack */}
+                        {techStack.length > 0 && (
+                            <div className="mt-auto">
+                                <p className="text-[11px] font-medium text-zinc-400 dark:text-zinc-500 truncate" title={techStack.join(', ')}>
+                                    {techStack.slice(0, 4).join(' • ')}
+                                    {techStack.length > 4 && ` • +${techStack.length - 4}`}
+                                </p>
+                            </div>
+                        )}
                     </div>
 
-                    {/* Footer */}
-                    <div className="absolute bottom-0 left-0 right-0 p-5 pt-0 flex items-center justify-between border-t border-transparent group-hover:border-zinc-100 dark:border-zinc-700 dark:group-hover:border-zinc-800 transition-colors">
-                        <div className="flex items-center -space-x-2">
+                    {/* Footer - Z-index elevated to ensure buttons are clickable over the absolute Link */}
+                    <div className="relative z-20 mt-auto px-4 py-3 border-t border-zinc-100 dark:border-zinc-800/50 bg-zinc-50/50 dark:bg-zinc-900/50 flex flex-col gap-3">
+                        {/* Upper row: Metrics & Actions */}
+                        <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-3 text-xs font-semibold text-zinc-500">
+                                <span className="flex items-center gap-1" data-testid={`project-card-views-${project.id}`} title="Views">
+                                    <Eye className="w-3.5 h-3.5" /> {project.viewCount || 0}
+                                </span>
+                                <span className="flex items-center gap-1" data-testid={`project-card-followers-${project.id}`} title="Followers">
+                                    <UserPlus className="w-3.5 h-3.5" /> {followersCount}
+                                </span>
+                            </div>
+                            
+                            <div className="flex items-center gap-1.5 text-zinc-400">
+                                <button
+                                    onClick={(e) => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        onQuickView?.(project);
+                                    }}
+                                    className="p-1.5 hover:text-indigo-600 hover:bg-white dark:hover:bg-zinc-800 rounded-md transition-colors border border-transparent hover:border-zinc-200 dark:hover:border-zinc-700 shadow-sm"
+                                    title="Quick View"
+                                >
+                                    <Maximize2 className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                    onClick={toggleFollow}
+                                    className="p-1.5 hover:text-emerald-600 hover:bg-white dark:hover:bg-zinc-800 rounded-md transition-colors border border-transparent hover:border-zinc-200 dark:hover:border-zinc-700 shadow-sm"
+                                    title={followingProject ? 'Unfollow' : 'Follow'}
+                                    data-testid={`project-card-follow-${project.id}`}
+                                >
+                                    <UserPlus className={`w-3.5 h-3.5 ${followingProject ? 'text-emerald-600 fill-current' : ''}`} />
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Lower row: Avatars */}
+                        <div className="flex items-center -space-x-1.5">
                             {collaborators.slice(0, 3).map((p, i) => (
-                                <div key={i} className="w-8 h-8 rounded-full border-2 border-white dark:border-zinc-900 bg-zinc-100 dark:bg-zinc-800 overflow-hidden" title={p.full_name || undefined}>
+                                <div key={i} className="w-6 h-6 rounded-full border-2 border-white dark:border-zinc-900 bg-zinc-100 dark:bg-zinc-800 overflow-hidden" title={p.full_name || undefined}>
                                     {p.avatar_url ? (
-                                        <Image src={p.avatar_url} alt={p.full_name || 'Collaborator'} width={32} height={32} className="w-full h-full object-cover" sizes="32px" />
+                                        <Image src={p.avatar_url} alt={p.full_name || 'Collaborator'} width={24} height={24} className="w-full h-full object-cover" sizes="24px" />
                                     ) : (
-                                        <div className="w-full h-full flex items-center justify-center text-xs font-bold text-zinc-400">
+                                        <div className="w-full h-full flex items-center justify-center text-[10px] font-bold text-zinc-400">
                                             {p.full_name?.[0] || '?'}
                                         </div>
                                     )}
                                 </div>
                             ))}
-                            {collaborators.length === 0 && (
-                                <div className="w-8 h-8 rounded-full border-2 border-white dark:border-zinc-900 bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center text-xs text-zinc-400">
-                                    <Users className="w-3 h-3" />
+                            {collaborators.length > 3 && (
+                                <div className="w-6 h-6 rounded-full border-2 border-white dark:border-zinc-900 bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center text-[9px] font-bold text-zinc-500">
+                                    +{collaborators.length - 3}
                                 </div>
                             )}
-                        </div>
-
-                        <div className="text-xs text-zinc-400 font-medium flex items-center gap-1">
-                            <Clock className="w-3 h-3" />
-                            {formatDistanceToNow(new Date(lastActive))} ago
-                        </div>
-                    </div>
-
-                    {/* Hover Reveal Drawer - Shows Open Roles */}
-                    {/* OPTIMIZATION: CSS-only transitions instead of framer-motion */}
-                    <div className="absolute inset-x-0 bottom-0 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-md border-t border-indigo-100 dark:border-indigo-900/30 p-5 transform translate-y-full group-hover:translate-y-0 transition-transform duration-300 ease-out z-20 flex flex-col justify-between shadow-lg">
-                        {/* Quick Stats Row */}
-                        <div className="flex items-center justify-between mb-4 text-xs font-medium text-zinc-500">
-                            <div className="flex gap-4">
-                                <span className="flex items-center gap-1.5" data-testid={`project-card-views-${project.id}`}>
-                                    <Eye className="w-3 h-3" /> {project.viewCount || 0}
-                                </span>
-                                <span className="flex items-center gap-1.5" data-testid={`project-card-followers-${project.id}`}>
-                                    <UserPlus className="w-3 h-3" /> {followersCount}
-                                </span>
-                            </div>
-                            {totalOpenRoles > 0 ? (
-                                <span className="text-indigo-600 dark:text-indigo-400 font-bold flex items-center gap-1">
-                                    <Sparkles className="w-3 h-3" /> {totalOpenRoles} Open Roles
-                                </span>
-                            ) : (
-                                <span className="text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
-                                    <Check className="w-3 h-3" /> Team Full
-                                </span>
-                            )}
-                        </div>
-
-                        {/* Open Roles List (Animated by staggering via CSS delays if needed, or simple list) */}
-                        <div className="space-y-2 mt-2 max-h-[200px] overflow-y-auto pr-1 custom-scrollbar">
-                            {totalOpenRoles > 0 ? (
-                                <>
-                                    {openRoles.map((role, i) => {
-                                        // CSS Stagger effect (simple)
-                                        const delayMs = i * 50; 
-                                        return (
-                                            <div
-                                                key={role.id}
-                                                className="flex items-center justify-between text-xs py-0.5 opacity-0 group-hover:opacity-100 translate-x-[-10px] group-hover:translate-x-0 transition-all duration-300"
-                                                style={{ transitionDelay: `${delayMs}ms` }}
-                                            >
-                                                <span className="font-medium text-zinc-700 dark:text-zinc-300 truncate max-w-[75%]">
-                                                    {role.title}
-                                                </span>
-                                                <span className="px-1.5 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 font-bold text-[9px]">
-                                                    {role.available}
-                                                </span>
-                                            </div>
-                                        );
-                                    })}
-                                </>
-                            ) : (
-                                <div className="text-center py-2 text-xs text-zinc-400 italic">
-                                    No open roles currently
+                            {collaborators.length === 0 && (
+                                <div className="w-6 h-6 rounded-full border-2 border-white dark:border-zinc-900 bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center text-[10px] font-bold text-zinc-400">
+                                    <Users className="w-3 h-3" />
                                 </div>
                             )}
                         </div>

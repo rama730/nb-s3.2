@@ -5,7 +5,7 @@ export const FILTER_VIEWS = {
     TRENDING: 'trending',
     RECOMMENDATIONS: 'recommendations',
     MY_PROJECTS: 'my_projects',
-    COLLECTION: 'collection',
+    FOLLOWING: 'following',
 } as const;
 
 export const PROJECT_STATUS = {
@@ -37,7 +37,7 @@ export const VIEW_MODES = {
 } as const;
 
 // Type exports
-export type FilterView = typeof FILTER_VIEWS[keyof typeof FILTER_VIEWS];
+export type FilterView = 'all' | 'trending' | 'recommendations' | 'my_projects' | 'following';
 export type ProjectStatus = typeof PROJECT_STATUS[keyof typeof PROJECT_STATUS];
 export type ProjectType = typeof PROJECT_TYPE[keyof typeof PROJECT_TYPE];
 export type SortOption = typeof SORT_OPTIONS[keyof typeof SORT_OPTIONS];

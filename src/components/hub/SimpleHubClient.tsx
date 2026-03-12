@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, memo, useEffect, useCallback } from 'react';
+import { useState, useMemo, memo, useEffect, useCallback, useRef } from 'react';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { motion } from 'framer-motion';
@@ -10,20 +10,20 @@ import { VirtuosoGrid } from 'react-virtuoso';
 import { useQueryClient } from '@tanstack/react-query';
 
 // Hooks
-import { useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import { useHubProjectsSimple } from '@/hooks/hub/useHubProjectsSimple';
 import { useAuth } from '@/hooks/useAuth';
 import { useHubSessionSeen } from '@/hooks/hub/useHubSessionSeen';
-import { useUserBookmarks, useUserFollowedProjects } from '@/hooks/hub/useUserInteractions';
+import { useUserFollowedProjects } from '@/hooks/hub/useUserInteractions';
+import { useHubUrlFilters } from '@/hooks/hub/useHubUrlFilters';
 
 // Components
 import ProjectCard from '@/components/projects/ProjectCard';
 import ProjectCardSkeleton from '@/components/projects/ProjectCardSkeleton';
-import CollectionsSidebar from '@/components/hub/CollectionsSidebar';
+import HubNavigation from '@/components/hub/HubNavigation';
 import HubHeader from '@/components/hub/HubHeader';
 import { HubErrorBoundary } from '@/components/hub/HubErrorBoundary';
-import { getCollectionProjectsAction } from '@/app/actions/collection';
-
+import { AppScrollArea } from '@/components/ui/AppScrollArea';
 // Constants & Types
 import {
     FILTER_VIEWS,
@@ -44,12 +44,12 @@ const CreateProjectWizard = dynamic(() => import('@/components/projects/create-w
 const ProjectQuickView = dynamic(() => import('@/components/projects/ProjectQuickView'), { ssr: false });
 const BulkActionBar = dynamic(() => import('@/components/hub/BulkActionBar'), { ssr: false });
 const ProjectComparisonModal = dynamic(() => import('@/components/hub/ProjectComparisonModal'), { ssr: false });
-const AddToCollectionModal = dynamic(() => import('@/components/hub/AddToCollectionModal'), { ssr: false });
 const NotificationSettingsModal = dynamic(() => import('@/components/hub/NotificationSettingsModal'), { ssr: false });
 // Optimization: Defer mobile sidebar code until interaction
 const MobileSidebarDrawer = dynamic(() => import('@/components/hub/MobileSidebarDrawer'), { ssr: false });
 
 import { toProjectCardViewModel, ProjectCardViewModel } from '@/lib/view-models/project-card';
+import { queryKeys } from '@/lib/query-keys';
 
 interface SimpleHubClientProps {
     returnUserData: User | null;
@@ -64,6 +64,7 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
     const queryClient = useQueryClient();
     const { showToast } = useToast();
     const { user } = useAuth();
+    const router = useRouter();
 
     // --- State ---
     // Essential UI State
@@ -71,18 +72,8 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
     const [isSticky, setIsSticky] = useState(false);
     const [showMobileSidebar, setShowMobileSidebar] = useState(false);
 
-    // Filter State
-    // Filter State
-    const [filterView, setFilterView] = useState<FilterView>(FILTER_VIEWS.ALL);
-    const [statusFilter, setStatusFilter] = useState<ProjectStatus>(PROJECT_STATUS.ALL);
-    const [typeFilter, setTypeFilter] = useState<ProjectType>(PROJECT_TYPE.ALL);
-    const [sortBy, setSortBy] = useState<SortOption>(SORT_OPTIONS.NEWEST);
-    const [selectedTech, setSelectedTech] = useState<string[]>([]);
-
     // Selection & Modal State
     const [selectedProject, setSelectedProject] = useState<Project | null>(null);
-    const [selectedCollectionId, setSelectedCollectionId] = useState<string | null>(null);
-    const [selectedCollectionName, setSelectedCollectionName] = useState<string | null>(null);
     const [selectionMode, setSelectionMode] = useState(false);
     const [selectedProjectIds, setSelectedProjectIds] = useState<Set<string>>(new Set());
 
@@ -90,14 +81,21 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [showNotificationSettings, setShowNotificationSettings] = useState(false);
     const [showComparisonModal, setShowComparisonModal] = useState(false);
-    const [showAddToCollectionModal, setShowAddToCollectionModal] = useState(false);
-    const [collectionProjectIds, setCollectionProjectIds] = useState<string[]>([]);
     const [profileChecklistItems, setProfileChecklistItems] = useState<string[]>([]);
     const [showProfileChecklist, setShowProfileChecklist] = useState(false);
+    const [isFeedScrolling, setIsFeedScrolling] = useState(false);
+    const feedScrollingRef = useRef(false);
+    const feedScrollStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     // --- Derived Data ---
-    const searchParams = useSearchParams();
-    const search = searchParams?.get('q') || undefined;
+    const { urlFilters, updateUrlFilters } = useHubUrlFilters();
+    const filterView = urlFilters.view;
+    const statusFilter = urlFilters.status;
+    const typeFilter = urlFilters.type;
+    const sortBy = urlFilters.sort;
+    const selectedTech = urlFilters.tech;
+    const search = urlFilters.q || undefined;
+    const hideOpened = urlFilters.hideOpened;
 
     const currentUser = useMemo(() => {
         if (user) {
@@ -112,19 +110,12 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
         return returnUserData;
     }, [user, returnUserData]);
 
-    const { data: myBookmarks } = useUserBookmarks(currentUser?.id);
     const { data: myFollowedProjects } = useUserFollowedProjects(currentUser?.id);
-    const { seenIds, hideSeen, setHideSeen, markSeen, clearSeen } = useHubSessionSeen();
+    const { seenIds, setHideSeen, markSeen } = useHubSessionSeen();
 
     useEffect(() => {
-        if (filterView === FILTER_VIEWS.COLLECTION && selectedCollectionId) {
-            getCollectionProjectsAction(selectedCollectionId).then((res) => {
-                if (res.success && res.projectIds) {
-                    setCollectionProjectIds(res.projectIds);
-                }
-            });
-        }
-    }, [filterView, selectedCollectionId]);
+        setHideSeen(hideOpened);
+    }, [hideOpened, setHideSeen]);
 
     useEffect(() => {
         if (typeof window === 'undefined') return;
@@ -153,9 +144,9 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
             tech: selectedTech,
             sort: effectiveSort,
             search, // Connected Global Search
-            includedIds: filterView === FILTER_VIEWS.COLLECTION && selectedCollectionId ? collectionProjectIds : undefined,
+            hideOpened,
         };
-    }, [filterView, statusFilter, typeFilter, selectedTech, sortBy, search, selectedCollectionId, collectionProjectIds]);
+    }, [filterView, hideOpened, search, selectedTech, sortBy, statusFilter, typeFilter]);
 
     // --- Data Fetching ---
     const {
@@ -165,7 +156,6 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
         isFetchingNextPage,
         isLoading,
         error: projectsError,
-        refetch
     } = useHubProjectsSimple(currentFilters, filterView, initialProjectsPage);
 
     const allProjects = useMemo(() => {
@@ -173,17 +163,17 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
     }, [data]);
 
     const visibleProjects = useMemo(() => {
-        if (!hideSeen) return allProjects;
+        if (!hideOpened) return allProjects;
         return allProjects.filter((project) => !seenIds.has(project.id));
-    }, [allProjects, hideSeen, seenIds]);
+    }, [allProjects, hideOpened, seenIds]);
 
     useEffect(() => {
-        if (!hideSeen) return;
+        if (!hideOpened) return;
         if (visibleProjects.length > 0) return;
         if (!hasNextPage || isFetchingNextPage) return;
         if (allProjects.length === 0) return;
         fetchNextPage();
-    }, [hideSeen, visibleProjects.length, hasNextPage, isFetchingNextPage, allProjects.length, fetchNextPage]);
+    }, [hideOpened, visibleProjects.length, hasNextPage, isFetchingNextPage, allProjects.length, fetchNextPage]);
 
     const projectViewModels = useMemo(() => {
         return visibleProjects.reduce((acc, p) => {
@@ -197,38 +187,57 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
     // Scroll Handling
     const [scrollContainer, setScrollContainer] = useState<HTMLDivElement | null>(null);
     const scrollContainerRef = useCallback((node: HTMLDivElement | null) => {
-        if (node) setScrollContainer(node);
+        setScrollContainer((prev) => (prev === node ? prev : node));
     }, []);
 
     useEffect(() => {
+        if (!scrollContainer) return;
+
+        let rafId: number | null = null;
+        const updateSticky = () => {
+            const nextSticky = scrollContainer.scrollTop > 10;
+            setIsSticky((prev) => (prev === nextSticky ? prev : nextSticky));
+        };
+
         const handleScroll = () => {
-            if (scrollContainer) {
-                setIsSticky(scrollContainer.scrollTop > 10);
+            if (rafId !== null) return;
+            rafId = window.requestAnimationFrame(() => {
+                rafId = null;
+                updateSticky();
+            });
+        };
+
+        scrollContainer.addEventListener('scroll', handleScroll, { passive: true });
+        updateSticky();
+
+        return () => {
+            scrollContainer.removeEventListener('scroll', handleScroll);
+            if (rafId !== null) {
+                window.cancelAnimationFrame(rafId);
             }
         };
-        if (scrollContainer) {
-            scrollContainer.addEventListener('scroll', handleScroll);
-            handleScroll();
-        }
-        return () => scrollContainer?.removeEventListener('scroll', handleScroll);
     }, [scrollContainer]);
 
     // Creating Project
-    const handleProjectCreated = useCallback(() => {
+    const handleProjectCreated = useCallback((projectId?: string) => {
         setShowCreateModal(false);
-        // FORCE REFRESH
-        queryClient.invalidateQueries({ queryKey: ['hub-projects-simple'] });
-        refetch();
+        queryClient.invalidateQueries({ queryKey: queryKeys.hub.projectsSimpleRoot() });
         showToast('Project created successfully!', 'success');
-    }, [queryClient, refetch, showToast]);
+        if (projectId) {
+            router.push(`/projects/${projectId}?tab=files`);
+        }
+    }, [queryClient, router, showToast]);
 
     // Clear Filters
     const handleClearFilters = useCallback(() => {
-        setStatusFilter(PROJECT_STATUS.ALL);
-        setTypeFilter(PROJECT_TYPE.ALL);
-        setSortBy(SORT_OPTIONS.NEWEST);
-        setSelectedTech([]);
-    }, []);
+        updateUrlFilters({
+            status: PROJECT_STATUS.ALL,
+            type: PROJECT_TYPE.ALL,
+            sort: SORT_OPTIONS.NEWEST,
+            tech: [],
+            hideOpened: false,
+        });
+    }, [updateUrlFilters]);
 
     // Selection
     const toggleSelection = useCallback((projectId: string) => {
@@ -248,29 +257,43 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
         }
     }, [visibleProjects, selectedProjectIds]);
 
-    const handleBulkBookmark = useCallback(() => {
-        showToast(`${selectedProjectIds.size} project(s) bookmarked`, 'success');
-        setSelectionMode(false);
-        setSelectedProjectIds(new Set());
-    }, [selectedProjectIds, showToast]);
-
     // Sidebar Navigation
-    const handleSelectCollection = (id: string, name?: string) => {
-        setSelectedCollectionId(id);
-        setSelectedCollectionName(name || null);
-        setFilterView(FILTER_VIEWS.COLLECTION);
+    const handleSelectView = (view: string) => {
+        updateUrlFilters({ view: view as FilterView });
         setShowMobileSidebar(false);
-        // Note: For "Collection" view, we would typically filter by IDs.
-        // For simplicity in this rebuild, we acknowledge the view switch 
-        // but maybe keeping the main feed or TODO: implement collection filtering in simplified hook.
     };
 
-    const handleSelectView = (view: string) => {
-        setFilterView(view as FilterView);
-        setSelectedCollectionId(null);
-        setSelectedCollectionName(null);
-        setShowMobileSidebar(false);
-    };
+    const handleFeedScrollState = useCallback((isScrolling: boolean) => {
+        if (isScrolling) {
+            if (feedScrollStopTimerRef.current) {
+                clearTimeout(feedScrollStopTimerRef.current);
+                feedScrollStopTimerRef.current = null;
+            }
+            if (!feedScrollingRef.current) {
+                feedScrollingRef.current = true;
+                setIsFeedScrolling(true);
+            }
+            return;
+        }
+
+        if (feedScrollStopTimerRef.current) {
+            clearTimeout(feedScrollStopTimerRef.current);
+        }
+
+        feedScrollStopTimerRef.current = setTimeout(() => {
+            feedScrollStopTimerRef.current = null;
+            feedScrollingRef.current = false;
+            setIsFeedScrolling(false);
+        }, 140);
+    }, []);
+
+    useEffect(() => {
+        return () => {
+            if (feedScrollStopTimerRef.current) {
+                clearTimeout(feedScrollStopTimerRef.current);
+            }
+        };
+    }, []);
 
     // --- Render ---
 
@@ -285,45 +308,52 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
 
                 <div className="max-w-[1600px] mx-auto flex h-full w-full min-h-0">
                     {/* Sidebar */}
-                    <div className="hidden lg:block w-64 flex-shrink-0 h-full overflow-y-auto py-8 pl-8 pr-8">
-                        <CollectionsSidebar
+                    <AppScrollArea axis="y" className="hidden lg:block w-64 flex-shrink-0 h-full py-8 pl-8 pr-8">
+                        <HubNavigation
                             currentUser={currentUser}
-                            onSelectCollection={handleSelectCollection}
-                            selectedCollectionId={selectedCollectionId}
                             activeView={filterView}
                             onSelectView={handleSelectView}
                         />
-                    </div>
+                    </AppScrollArea>
 
                     {/* Main Content */}
-                    <div className="flex-1 min-w-0 h-full overflow-y-auto" ref={scrollContainerRef} id="hub-scroll-container">
-                        <div className="px-4 sm:px-6 lg:px-8 py-8 flex flex-col gap-6">
-
-                            {/* Sticky Header */}
-                            <div className={`sticky top-0 z-30 transition-all duration-300 ease-in-out ${isSticky ? '-mt-2 pt-2 pb-2' : ''}`}>
-                                <div className={`bg-white dark:bg-zinc-900 p-4 rounded-2xl border border-zinc-200 dark:border-zinc-800 transition-shadow duration-300 ${isSticky ? 'shadow-md' : 'shadow-sm'}`}>
-                                    <HubHeader
-                                        filterView={filterView}
-                                        selectedCollectionName={selectedCollectionName}
-                                        selectionMode={selectionMode}
-                                        onToggleSelectionMode={() => {
-                                            setSelectionMode(!selectionMode);
-                                            if (selectionMode) setSelectedProjectIds(new Set());
-                                        }}
-                                        onApplyFilters={(newFilters) => {
-                                            setStatusFilter(newFilters.status as ProjectStatus);
-                                            setTypeFilter(newFilters.type as ProjectType);
-                                            setSortBy(newFilters.sort as SortOption);
-                                            setSelectedTech(newFilters.tech);
-                                        }}
-                                        onCreateProject={() => setShowCreateModal(true)}
-                                        onPreloadModal={() => import('@/components/projects/create-wizard/CreateProjectWizard')}
-                                        filters={currentFilters}
-                                        viewMode={viewMode}
-                                        onViewModeChange={setViewMode}
-                                    />
-                                </div>
+                    <div className="flex-1 min-w-0 h-full min-h-0 flex flex-col overflow-hidden">
+                        <div data-testid="hub-header-shell" className="px-4 sm:px-6 lg:px-8 pt-8 pb-4 shrink-0">
+                            <div className={`bg-white dark:bg-zinc-900 p-4 rounded-2xl border border-zinc-200 dark:border-zinc-800 transition-shadow duration-300 ${isSticky ? 'shadow-md' : 'shadow-sm'}`}>
+                                <HubHeader
+                                    filterView={filterView}
+                                    selectionMode={selectionMode}
+                                    onToggleSelectionMode={() => {
+                                        setSelectionMode(!selectionMode);
+                                        if (selectionMode) setSelectedProjectIds(new Set());
+                                    }}
+                                    onApplyFilters={(newFilters) => {
+                                        updateUrlFilters({
+                                            status: newFilters.status as ProjectStatus,
+                                            type: newFilters.type as ProjectType,
+                                            sort: newFilters.sort as SortOption,
+                                            tech: newFilters.tech,
+                                            hideOpened: newFilters.hideOpened ?? false,
+                                        });
+                                    }}
+                                    onCreateProject={() => setShowCreateModal(true)}
+                                    onPreloadModal={() => import('@/components/projects/create-wizard/CreateProjectWizard')}
+                                    filters={currentFilters}
+                                    viewMode={viewMode}
+                                    onViewModeChange={setViewMode}
+                                />
                             </div>
+                        </div>
+
+                        <AppScrollArea
+                            axis="y"
+                            dataScrollRoot
+                            ref={scrollContainerRef}
+                            id="hub-scroll-container"
+                            data-testid="hub-feed-scroll"
+                            className="flex-1 min-h-0 px-4 sm:px-6 lg:px-8 pb-8"
+                        >
+                            <div className="flex flex-col gap-6">
 
                             {showProfileChecklist && profileChecklistItems.length > 0 && (
                                 <div className="rounded-2xl border border-emerald-200 bg-emerald-50/70 dark:border-emerald-800 dark:bg-emerald-950/30 p-4">
@@ -362,36 +392,12 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
                                 </div>
                             )}
 
-                            <div className="flex flex-wrap items-center gap-2">
-                                <button
-                                    type="button"
-                                    onClick={() => setHideSeen((prev) => !prev)}
-                                    className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium transition-colors ${hideSeen
-                                        ? 'border-indigo-400/70 bg-indigo-50 text-indigo-700 dark:border-indigo-500/70 dark:bg-indigo-950/40 dark:text-indigo-300'
-                                        : 'border-zinc-300 bg-white text-zinc-600 hover:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:border-zinc-500'
-                                        }`}
-                                >
-                                    {hideSeen ? 'Showing unread only' : 'Hide opened this session'}
-                                </button>
-                                {seenIds.size > 0 && (
-                                    <button
-                                        type="button"
-                                        onClick={clearSeen}
-                                        className="inline-flex items-center rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-600 transition-colors hover:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:border-zinc-500"
-                                    >
-                                        Reset opened ({seenIds.size})
-                                    </button>
-                                )}
-                            </div>
-
                             {/* Bulk Actions */}
                             {selectionMode && (
                                 <BulkActionBar
                                     selectedCount={selectedProjectIds.size}
                                     totalCount={visibleProjects.length}
                                     onSelectAll={selectAll}
-                                    onAddToCollection={() => setShowAddToCollectionModal(true)}
-                                    onBookmark={handleBulkBookmark}
                                     onCompare={() => setShowComparisonModal(true)}
                                     onCancel={() => {
                                         setSelectionMode(false);
@@ -444,6 +450,10 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
                                             style={{ width: '100%' }}
                                             totalCount={visibleProjects.length}
                                             data={visibleProjects}
+                                            computeItemKey={(_, project) => project.id}
+                                            increaseViewportBy={{ top: 560, bottom: 1200 }}
+                                            overscan={520}
+                                            isScrolling={handleFeedScrollState}
                                             endReached={() => {
                                                 if (hasNextPage && !isFetchingNextPage) {
                                                     fetchNextPage();
@@ -459,7 +469,6 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
                                             }}
                                             itemContent={(_, project) => (
                                                 <ProjectCard
-                                                    key={project.id}
                                                     project={project}
                                                     viewModel={projectViewModels[project.id]}
                                                     viewMode={viewMode}
@@ -467,17 +476,18 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
                                                     isSelected={selectedProjectIds.has(project.id)}
                                                     onToggleSelection={() => toggleSelection(project.id)}
                                                     onQuickView={setSelectedProject}
-                                                    isBookmarked={myBookmarks?.has(project.id)}
                                                     isFollowing={myFollowedProjects?.has(project.id)}
                                                     followersCount={project.followersCount ?? 0}
                                                     onOpenProject={markSeen}
+                                                    disableHoverEffects={isFeedScrolling}
                                                 />
                                             )}
                                         />
                                     )}
                                 </div>
                             )}
-                        </div>
+                            </div>
+                        </AppScrollArea>
 
                         {/* Modals & Drawers */}
                         <ProjectQuickView
@@ -508,10 +518,6 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
                         {showComparisonModal && selectedProjectIds.size >= 2 && (
                             <ProjectComparisonModal projects={visibleProjects.filter(p => selectedProjectIds.has(p.id))} onClose={() => setShowComparisonModal(false)} />
                         )}
-
-                        {showAddToCollectionModal && (
-                            <AddToCollectionModal projectIds={Array.from(selectedProjectIds)} onClose={() => setShowAddToCollectionModal(false)} currentUser={currentUser} />
-                        )}
                     </div>
                 </div>
 
@@ -525,10 +531,8 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
                 </button>
 
                 <MobileSidebarDrawer isOpen={showMobileSidebar} onClose={() => setShowMobileSidebar(false)}>
-                    <CollectionsSidebar
+                    <HubNavigation
                         currentUser={currentUser}
-                        onSelectCollection={handleSelectCollection}
-                        selectedCollectionId={selectedCollectionId}
                         activeView={filterView}
                         onSelectView={handleSelectView}
                     />

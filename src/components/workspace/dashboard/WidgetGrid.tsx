@@ -1,6 +1,6 @@
 'use client';
 
-import { memo, useState, useCallback, useMemo } from 'react';
+import { memo, useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import {
     DndContext,
     type DragEndEvent,
@@ -24,8 +24,20 @@ import UrgentItems from '../sections/UrgentItems';
 import QuickNotes from '../sections/QuickNotes';
 import RecentMessages from '../sections/RecentMessages';
 import ShortcutsWidget from '../sections/ShortcutsWidget';
+import RecentFilesWidget from '../sections/RecentFilesWidget';
+import ProjectHealthWidget from '../sections/ProjectHealthWidget';
+import MentionsRequestsWidget from '../sections/MentionsRequestsWidget';
+import SprintSnapshotWidget from '../sections/SprintSnapshotWidget';
+import PinnedItemsWidget from '../sections/PinnedItemsWidget';
 
-import type { WorkspaceOverviewData, WorkspaceTask } from '@/app/actions/workspace';
+import type {
+    WorkspaceMentionsRequestItem,
+    WorkspaceProject,
+    WorkspaceRecentFile,
+    WorkspaceTask,
+    RecentActivityItem,
+} from '@/app/actions/workspace';
+import type { ConversationWithDetails } from '@/app/actions/messaging';
 
 // ============================================================================
 // Props
@@ -34,12 +46,21 @@ import type { WorkspaceOverviewData, WorkspaceTask } from '@/app/actions/workspa
 interface WidgetGridProps {
     layout: WorkspaceLayout;
     isEditing: boolean;
-    data: WorkspaceOverviewData | null;
+    data: {
+        tasks: WorkspaceTask[];
+        projects: WorkspaceProject[];
+        conversations: ConversationWithDetails[];
+        recentActivity: RecentActivityItem[];
+        files: WorkspaceRecentFile[];
+        mentionsRequests: WorkspaceMentionsRequestItem[];
+    } | null;
     onTaskClick?: (task: WorkspaceTask) => void;
     // Edit mode callbacks
     onAddWidget?: (widgetId: string, col: number, row: number) => boolean;
     onRemoveWidget?: (widgetId: string) => void;
-    onResizeWidget?: (widgetId: string, newColSpan: number, newRowSpan: number) => boolean;
+    onPreviewResizeWidget?: (widgetId: string, newColSpan: number, newRowSpan: number) => boolean;
+    onCommitLayoutChange?: () => void;
+    onDiscardPreview?: () => void;
     onMoveWidget?: (widgetId: string, newCol: number, newRow: number) => boolean;
     // Toolbar callbacks
     onDone?: () => void;
@@ -58,9 +79,11 @@ interface WidgetGridProps {
 
 interface WidgetRenderData {
     tasks: WorkspaceTask[];
-    projects: WorkspaceOverviewData['projects'];
-    conversations: WorkspaceOverviewData['conversations'];
-    recentActivity: WorkspaceOverviewData['recentActivity'];
+    projects: WorkspaceProject[];
+    conversations: ConversationWithDetails[];
+    recentActivity: RecentActivityItem[];
+    files: WorkspaceRecentFile[];
+    mentionsRequests: WorkspaceMentionsRequestItem[];
     urgentTasks: WorkspaceTask[];
     focusTasks: WorkspaceTask[];
 }
@@ -80,10 +103,21 @@ function renderWidget(
             return <MyProjectsGrid sizeMode={sizeMode} projects={data.projects} />;
         case 'urgent_items':
             return <UrgentItems sizeMode={sizeMode} tasks={data.urgentTasks} onTaskClick={onTaskClick} />;
+        case 'recent_files':
+            return <RecentFilesWidget sizeMode={sizeMode} files={data.files} />;
+        case 'project_health':
+            return <ProjectHealthWidget sizeMode={sizeMode} projects={data.projects} />;
+        case 'mentions_requests':
+            return <MentionsRequestsWidget sizeMode={sizeMode} items={data.mentionsRequests} />;
         case 'quick_notes':
             return <QuickNotes sizeMode={sizeMode} projects={data.projects} />;
         case 'recent_messages':
             return <RecentMessages sizeMode={sizeMode} conversations={data.conversations} />;
+        case 'sprint_snapshot':
+            return <SprintSnapshotWidget sizeMode={sizeMode} projects={data.projects} />;
+        case 'pinned_items':
+            return <PinnedItemsWidget sizeMode={sizeMode} onTaskClick={onTaskClick} />;
+        case 'quick_actions':
         case 'shortcuts':
             return <ShortcutsWidget sizeMode={sizeMode} />;
         default:
@@ -102,7 +136,9 @@ function WidgetGrid({
     onTaskClick,
     onAddWidget,
     onRemoveWidget,
-    onResizeWidget,
+    onPreviewResizeWidget,
+    onCommitLayoutChange,
+    onDiscardPreview,
     onMoveWidget,
     onDone,
     onCancel,
@@ -119,6 +155,32 @@ function WidgetGrid({
         row: number;
         position: { x: number; y: number };
     } | null>(null);
+    const gridRef = useRef<HTMLDivElement | null>(null);
+    const [cellWidth, setCellWidth] = useState<number | null>(null);
+
+    useEffect(() => {
+        const gridEl = gridRef.current;
+        if (!gridEl) return;
+
+        const updateMetrics = () => {
+            const width = gridEl.clientWidth;
+            if (width > 0) {
+                const styles = window.getComputedStyle(gridEl);
+                const parsedGap = Number.parseFloat(styles.columnGap || styles.gap || '0');
+                const gap = Number.isFinite(parsedGap) ? Math.max(0, parsedGap) : 0;
+                const totalGap = gap * Math.max(0, GRID_COLS - 1);
+                const usableWidth = Math.max(0, width - totalGap);
+                if (usableWidth > 0) {
+                    setCellWidth(usableWidth / GRID_COLS);
+                }
+            }
+        };
+        updateMetrics();
+
+        const observer = new ResizeObserver(updateMetrics);
+        observer.observe(gridEl);
+        return () => observer.disconnect();
+    }, []);
 
     // dnd-kit sensor with a small activation distance to distinguish clicks from drags
     const sensors = useSensors(
@@ -181,12 +243,7 @@ function WidgetGrid({
 
             const placement = active.data.current?.placement as WidgetPlacement | undefined;
             if (!placement) return;
-
-            // Estimate cell dimensions from the grid container
-            const gridEl = document.querySelector('[data-widget-grid]') as HTMLElement | null;
-            if (!gridEl) return;
-
-            const cellWidth = gridEl.clientWidth / GRID_COLS;
+            if (!cellWidth) return;
             const cellHeight = ROW_HEIGHT_PX;
 
             const colDelta = Math.round(delta.x / cellWidth);
@@ -199,7 +256,7 @@ function WidgetGrid({
 
             onMoveWidget(placement.widgetId, newCol, newRow);
         },
-        [onMoveWidget]
+        [onMoveWidget, cellWidth]
     );
 
     // Sort widgets by position for mobile stacking order (left-to-right, top-to-bottom)
@@ -215,6 +272,8 @@ function WidgetGrid({
         const projects = data?.projects ?? [];
         const conversations = data?.conversations ?? [];
         const recentActivity = data?.recentActivity ?? [];
+        const files = data?.files ?? [];
+        const mentionsRequests = data?.mentionsRequests ?? [];
 
         const now = new Date();
         const urgentTasks = tasks.filter(
@@ -224,13 +283,14 @@ function WidgetGrid({
             (t) => t.priority !== 'urgent' && t.priority !== 'high' && !(t.dueDate && new Date(t.dueDate) < now)
         );
 
-        return { tasks, projects, conversations, recentActivity, urgentTasks, focusTasks };
+        return { tasks, projects, conversations, recentActivity, files, mentionsRequests, urgentTasks, focusTasks };
     }, [data]);
 
     const gridContent = (
         <>
             {/* Desktop grid (lg+): 6-column CSS Grid with explicit positioning */}
             <div
+                ref={gridRef}
                 data-widget-grid
                 className="hidden lg:grid gap-3"
                 style={{
@@ -244,9 +304,12 @@ function WidgetGrid({
                         key={placement.widgetId}
                         placement={placement}
                         isEditing={isEditing}
+                        cellWidth={cellWidth}
                         staggerIndex={index}
                         onRemove={onRemoveWidget}
-                        onResize={onResizeWidget}
+                        onPreviewResize={onPreviewResizeWidget}
+                        onCommitResize={onCommitLayoutChange}
+                        onCancelResize={onDiscardPreview}
                     >
                         {renderWidget(placement.widgetId, widgetData, getWidgetCardSizeMode(placement), onTaskClick)}
                     </GridCell>

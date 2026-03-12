@@ -14,6 +14,41 @@ try {
 
 export { redis };
 
+type LocalRateLimitEntry = {
+    count: number;
+    resetAtMs: number;
+};
+
+const localRateLimitStore = new Map<string, LocalRateLimitEntry>();
+const LOCAL_RATE_LIMIT_MAX_KEYS = 10_000;
+let warnedRedisRateLimitFallback = false;
+
+function applyLocalRateLimit(identifier: string, limit: number, window: number): boolean {
+    const nowMs = Date.now();
+    const key = `ratelimit:${identifier}`;
+    const resetAtMs = nowMs + window * 1000;
+    const existing = localRateLimitStore.get(key);
+
+    if (!existing || existing.resetAtMs <= nowMs) {
+        localRateLimitStore.set(key, { count: 1, resetAtMs });
+        return true;
+    }
+
+    existing.count += 1;
+    localRateLimitStore.set(key, existing);
+
+    // Opportunistic cleanup to avoid unbounded growth in long-lived processes.
+    if (localRateLimitStore.size > LOCAL_RATE_LIMIT_MAX_KEYS) {
+        for (const [entryKey, entry] of localRateLimitStore) {
+            if (entry.resetAtMs <= nowMs) {
+                localRateLimitStore.delete(entryKey);
+            }
+        }
+    }
+
+    return existing.count <= limit;
+}
+
 /**
  * Cache a value in Redis with a TTL (seconds)
  */
@@ -37,11 +72,20 @@ export async function getCachedData<T>(key: string): Promise<T | null> {
  * Returns true if allowed, false if blocked
  */
 export async function rateLimit(identifier: string, limit: number = 10, window: number = 60): Promise<boolean> {
-    if (!redis) return true; // Fail open if no redis configured
-    const key = `ratelimit:${identifier}`;
-    const count = await redis.incr(key);
-    if (count === 1) {
-        await redis.expire(key, window);
+    if (!redis) return applyLocalRateLimit(identifier, limit, window);
+    try {
+        const key = `ratelimit:${identifier}`;
+        const count = await redis.incr(key);
+        if (count === 1) {
+            await redis.expire(key, window);
+        }
+        return count <= limit;
+    } catch (error) {
+        if (!warnedRedisRateLimitFallback) {
+            warnedRedisRateLimitFallback = true;
+            const message = error instanceof Error ? error.message : String(error);
+            console.warn(`[rate-limit] Redis unavailable, using in-memory fallback: ${message}`);
+        }
+        return applyLocalRateLimit(identifier, limit, window);
     }
-    return count <= limit;
 }

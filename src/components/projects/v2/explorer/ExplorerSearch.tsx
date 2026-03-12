@@ -64,33 +64,41 @@ export function useExplorerSearch(options: {
 
       searchSnippetsRef.current = snippets;
 
-      const latestNodesByIdBeforeHydrate =
-        useFilesWorkspaceStore.getState().byProjectId[pid]?.nodesById || {};
-      const missing = orderedIds.filter((id: string) => !latestNodesByIdBeforeHydrate[id]);
+      try {
+        const latestNodesByIdBeforeHydrate =
+          useFilesWorkspaceStore.getState().byProjectId[pid]?.nodesById || {};
+        const missing = orderedIds.filter((id: string) => !latestNodesByIdBeforeHydrate[id]);
 
-      if (missing.length > 0) {
-        const hydrated = (await getNodesByIds(pid, missing)) as ProjectNode[];
-        if (responseJobId !== searchRequestIdRef.current) return;
-        if (hydrated.length > 0) upsert(pid, hydrated);
-      }
+        if (missing.length > 0) {
+          const hydrated = (await getNodesByIds(pid, missing)) as ProjectNode[];
+          if (responseJobId !== searchRequestIdRef.current) return;
+          if (hydrated.length > 0) upsert(pid, hydrated);
+        }
 
-      const latestNodesById = useFilesWorkspaceStore.getState().byProjectId[pid]?.nodesById || {};
-      const orderedNodes = orderedIds
-        .map((id: string) => latestNodesById[id])
-        .filter((node: ProjectNode | undefined): node is ProjectNode => !!node);
-      setSearchResults(orderedNodes);
+        const latestNodesById = useFilesWorkspaceStore.getState().byProjectId[pid]?.nodesById || {};
+        const orderedNodes = orderedIds
+          .map((id: string) => latestNodesById[id])
+          .filter((node: ProjectNode | undefined): node is ProjectNode => !!node);
+        setSearchResults(orderedNodes);
 
-      const fileIds = orderedNodes
-        .filter((n: ProjectNode) => n.type === "file")
-        .map((n: ProjectNode) => n.id);
-      if (fileIds.length) {
-        const counts = await getTaskLinkCounts(pid, fileIds);
-        if (responseJobId !== searchRequestIdRef.current) return;
-        stlc(pid, counts);
-      }
-
-      if (responseJobId === searchRequestIdRef.current) {
-        setIsSearching(false);
+        const fileIds = orderedNodes
+          .filter((n: ProjectNode) => n.type === "file")
+          .map((n: ProjectNode) => n.id);
+        if (fileIds.length) {
+          const counts = await getTaskLinkCounts(pid, fileIds);
+          if (responseJobId !== searchRequestIdRef.current) return;
+          stlc(pid, counts);
+        }
+      } catch (error) {
+        console.error("[ExplorerSearch] handler error during hydration/counts", {
+          jobId: responseJobId,
+          error,
+        });
+        return;
+      } finally {
+        if (responseJobId === searchRequestIdRef.current) {
+          setIsSearching(false);
+        }
       }
     };
 

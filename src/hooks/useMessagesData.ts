@@ -3,10 +3,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { getConversations, type ConversationWithDetails } from "@/app/actions/messaging";
 import { getProfileBasic } from "@/app/actions/profile";
+import { queryKeys } from "@/lib/query-keys";
 
 export const MESSAGES_KEYS = {
-    conversations: ['chat', 'conversations'],
-    targetUser: (userId: string) => ['chat', 'targetUser', userId]
+    conversations: queryKeys.messages.conversations(),
+    targetUser: (userId: string) => queryKeys.messages.targetUser(userId),
 };
 
 type TargetUserProfile = Awaited<ReturnType<typeof getProfileBasic>>;

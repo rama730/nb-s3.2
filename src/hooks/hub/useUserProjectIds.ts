@@ -2,12 +2,13 @@
 
 import { useQuery } from '@tanstack/react-query';
 import { createClient } from '@/lib/supabase/client';
+import { queryKeys } from '@/lib/query-keys';
 
 export function useUserProjectIds(userId: string | null) {
     const supabase = createClient();
 
     const { data, ...rest } = useQuery<string[]>({
-        queryKey: ['user-project-ids', userId],
+        queryKey: queryKeys.hub.userProjectIds(userId),
         queryFn: async () => {
             if (!userId) return [];
 

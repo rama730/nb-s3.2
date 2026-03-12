@@ -279,6 +279,17 @@ CREATE INDEX IF NOT EXISTS idx_posts_visibility ON posts(visibility);
 CREATE INDEX IF NOT EXISTS idx_projects_owner ON projects(owner_id);
 CREATE INDEX IF NOT EXISTS idx_projects_status ON projects(status);
 CREATE INDEX IF NOT EXISTS idx_projects_created_at ON projects(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_projects_github_repo_branch
+ON projects(github_repo_url, github_default_branch)
+WHERE github_repo_url IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_projects_github_repo_branch_active
+ON projects(github_repo_url, github_default_branch, sync_status, updated_at DESC)
+WHERE github_repo_url IS NOT NULL AND deleted_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_projects_sync_status_updated_active
+ON projects(sync_status, updated_at DESC)
+WHERE deleted_at IS NULL;
 
 -- Project member queries
 CREATE INDEX IF NOT EXISTS idx_project_members_user ON project_members(user_id);
@@ -492,6 +503,10 @@ ON project_node_locks(project_id, node_id, expires_at);
 
 CREATE INDEX IF NOT EXISTS project_nodes_project_deleted_updated_idx
 ON project_nodes(project_id, deleted_at, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_project_nodes_active_file_reconcile
+ON project_nodes(project_id, type, s3_key)
+WHERE deleted_at IS NULL AND type = 'file';
 
 ALTER TABLE project_nodes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE project_file_index ENABLE ROW LEVEL SECURITY;
@@ -1060,10 +1075,9 @@ FOR INSERT
 WITH CHECK (applicant_id = auth.uid());
 
 DROP POLICY IF EXISTS "Project owners can update applications" ON role_applications;
-CREATE POLICY "Project owners can update applications" ON role_applications
-FOR UPDATE
-USING (EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid()))
-WITH CHECK (EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid()));
+-- Canonical UPDATE policy for applications is defined later in this script as:
+-- "Users can update their own applications or project admins can manage"
+-- Keep this legacy policy dropped to avoid conflicting effective behavior.
 
 -- 7. MISCELLANEOUS 
 ALTER TABLE connection_suggestion_dismissals ENABLE ROW LEVEL SECURITY;
@@ -1079,8 +1093,31 @@ WITH CHECK (user_id = auth.uid());
 
 -- 1. ADD MISSING PRIMARY KEYS
 -- The dm_pairs table was flagged for missing a primary key.
-ALTER TABLE public.dm_pairs 
-ADD COLUMN IF NOT EXISTS id uuid DEFAULT gen_random_uuid() PRIMARY KEY;
+DO $$
+DECLARE
+  existing_pk text;
+BEGIN
+  SELECT conname
+  INTO existing_pk
+  FROM pg_constraint
+  WHERE conrelid = 'public.dm_pairs'::regclass
+    AND contype = 'p';
+
+  IF existing_pk IS NOT NULL AND existing_pk <> 'dm_pairs_user_low_user_high_pk' THEN
+    EXECUTE format('ALTER TABLE public.dm_pairs DROP CONSTRAINT %I', existing_pk);
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conrelid = 'public.dm_pairs'::regclass
+      AND conname = 'dm_pairs_user_low_user_high_pk'
+      AND contype = 'p'
+  ) THEN
+    ALTER TABLE public.dm_pairs
+      ADD CONSTRAINT dm_pairs_user_low_user_high_pk PRIMARY KEY (user_low, user_high);
+  END IF;
+END $$;
 
 -- 2. RLS INITPLAN OPTIMIZATION (auth.uid() wrappers)
 -- Wrapping auth.uid() in a stable function forces PostgreSQL to evaluate it ONCE
@@ -1145,15 +1182,19 @@ CREATE INDEX IF NOT EXISTS idx_onboarding_submissions_user_id ON public.onboardi
 CREATE INDEX IF NOT EXISTS idx_onboarding_events_user_id ON public.onboarding_events(user_id);
 CREATE INDEX IF NOT EXISTS idx_onboarding_drafts_user_id ON public.onboarding_drafts(user_id);
 CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON public.messages(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_messages_conversation_created_id ON public.messages(conversation_id, created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_sender_id ON public.messages(sender_id);
 CREATE INDEX IF NOT EXISTS idx_messages_reply_to_message_id ON public.messages(reply_to_message_id);
+CREATE INDEX IF NOT EXISTS idx_messages_conversation_sender_client_lookup ON public.messages(conversation_id, sender_id, client_message_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_message_hidden_for_users_message_id ON public.message_hidden_for_users(message_id);
 CREATE INDEX IF NOT EXISTS idx_message_hidden_for_users_user_id ON public.message_hidden_for_users(user_id);
+CREATE INDEX IF NOT EXISTS idx_message_hidden_for_users_user_message ON public.message_hidden_for_users(user_id, message_id);
 CREATE INDEX IF NOT EXISTS idx_message_edit_logs_message_id ON public.message_edit_logs(message_id);
 CREATE INDEX IF NOT EXISTS idx_message_edit_logs_editor_id ON public.message_edit_logs(editor_id);
 CREATE INDEX IF NOT EXISTS idx_message_attachments_message_id ON public.message_attachments(message_id);
 CREATE INDEX IF NOT EXISTS idx_conversation_participants_conversation_id ON public.conversation_participants(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_conversation_participants_user_id ON public.conversation_participants(user_id);
+CREATE INDEX IF NOT EXISTS idx_conversation_participants_read_watermark ON public.conversation_participants(conversation_id, user_id, last_read_message_id);
 CREATE INDEX IF NOT EXISTS idx_connections_requester_id ON public.connections(requester_id);
 CREATE INDEX IF NOT EXISTS idx_connections_addressee_id ON public.connections(addressee_id);
 CREATE INDEX IF NOT EXISTS idx_connection_suggestion_dismissals_user_id ON public.connection_suggestion_dismissals(user_id);
@@ -1181,8 +1222,8 @@ CREATE POLICY "Users can view applications for their projects or their own" ON r
 FOR SELECT
 USING (
   applicant_id = auth.uid() OR
-  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid()) OR
-  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid() AND m.role IN ('owner', 'admin'))
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = role_applications.project_id AND p.owner_id = auth.uid()) OR
+  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = role_applications.project_id AND m.user_id = auth.uid() AND m.role IN ('owner', 'admin'))
 );
 
 DROP POLICY IF EXISTS "Users can create their own applications" ON role_applications;
@@ -1191,12 +1232,18 @@ FOR INSERT
 WITH CHECK (applicant_id = auth.uid());
 
 DROP POLICY IF EXISTS "Users can update their own applications or project admins can manage" ON role_applications;
+DROP POLICY IF EXISTS "Project owners can update applications" ON role_applications;
 CREATE POLICY "Users can update their own applications or project admins can manage" ON role_applications
 FOR UPDATE
 USING (
   applicant_id = auth.uid() OR
-  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid()) OR
-  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid() AND m.role IN ('owner', 'admin'))
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = role_applications.project_id AND p.owner_id = auth.uid()) OR
+  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = role_applications.project_id AND m.user_id = auth.uid() AND m.role IN ('owner', 'admin'))
+)
+WITH CHECK (
+  applicant_id = auth.uid() OR
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = role_applications.project_id AND p.owner_id = auth.uid()) OR
+  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = role_applications.project_id AND m.user_id = auth.uid() AND m.role IN ('owner', 'admin'))
 );
 
 -- Saved Projects
@@ -1250,7 +1297,23 @@ WITH CHECK (user_id = auth.uid());
 DROP POLICY IF EXISTS "Open roles are viewable by everyone" ON project_open_roles;
 CREATE POLICY "Open roles are viewable by everyone" ON project_open_roles
 FOR SELECT
-USING (true);
+USING (
+  EXISTS (
+    SELECT 1
+    FROM projects p
+    WHERE p.id = project_id
+      AND (
+        p.visibility = 'public'
+        OR p.owner_id = auth.uid()
+        OR EXISTS (
+          SELECT 1
+          FROM project_members m
+          WHERE m.project_id = p.id
+            AND m.user_id = auth.uid()
+        )
+      )
+  )
+);
 
 DROP POLICY IF EXISTS "Project admins can manage open roles" ON project_open_roles;
 CREATE POLICY "Project admins can manage open roles" ON project_open_roles
@@ -1487,9 +1550,9 @@ ALTER TABLE "profile_interests" ADD CONSTRAINT "profile_interests_profile_id_pro
 ALTER TABLE "profile_interests" ADD CONSTRAINT "profile_interests_interest_id_interests_id_fk" FOREIGN KEY ("interest_id") REFERENCES "public"."interests"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "profile_skills" ADD CONSTRAINT "profile_skills_profile_id_profiles_id_fk" FOREIGN KEY ("profile_id") REFERENCES "public"."profiles"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "profile_skills" ADD CONSTRAINT "profile_skills_skill_id_skills_id_fk" FOREIGN KEY ("skill_id") REFERENCES "public"."skills"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "project_skills" ADD CONSTRAINT "project_skills_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "project_skills" ADD CONSTRAINT "project_skills_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "project_skills" ADD CONSTRAINT "project_skills_skill_id_skills_id_fk" FOREIGN KEY ("skill_id") REFERENCES "public"."skills"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "project_tags" ADD CONSTRAINT "project_tags_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "project_tags" ADD CONSTRAINT "project_tags_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "project_tags" ADD CONSTRAINT "project_tags_tag_id_tags_id_fk" FOREIGN KEY ("tag_id") REFERENCES "public"."tags"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "interests_name_search_idx" ON "interests" USING gin ("name" gin_trgm_ops);--> statement-breakpoint
 CREATE UNIQUE INDEX "profile_interests_unique_idx" ON "profile_interests" USING btree ("profile_id","interest_id");--> statement-breakpoint
@@ -1502,112 +1565,28 @@ CREATE UNIQUE INDEX "project_tags_unique_idx" ON "project_tags" USING btree ("pr
 CREATE INDEX "project_tags_tag_idx" ON "project_tags" USING btree ("tag_id");--> statement-breakpoint
 CREATE INDEX "skills_name_search_idx" ON "skills" USING gin ("name" gin_trgm_ops);--> statement-breakpoint
 CREATE INDEX "tags_name_search_idx" ON "tags" USING gin ("name" gin_trgm_ops);--> statement-breakpoint
-ALTER TABLE "project_node_events" ADD CONSTRAINT "project_node_events_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "project_nodes" ADD CONSTRAINT "project_nodes_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "project_run_diagnostics" ADD CONSTRAINT "project_run_diagnostics_session_id_project_run_sessions_id_fk" FOREIGN KEY ("session_id") REFERENCES "public"."project_run_sessions"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "project_run_diagnostics" ADD CONSTRAINT "project_run_diagnostics_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "project_run_logs" ADD CONSTRAINT "project_run_logs_session_id_project_run_sessions_id_fk" FOREIGN KEY ("session_id") REFERENCES "public"."project_run_sessions"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "project_run_logs" ADD CONSTRAINT "project_run_logs_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "project_run_profiles" ADD CONSTRAINT "project_run_profiles_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "project_run_sessions" ADD CONSTRAINT "project_run_sessions_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "tasks" ADD CONSTRAINT "tasks_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "project_node_events" ADD CONSTRAINT "project_node_events_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "project_nodes" ADD CONSTRAINT "project_nodes_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'project_run_sessions_id_project_id_key'
+      AND conrelid = 'project_run_sessions'::regclass
+  ) THEN
+    ALTER TABLE "project_run_sessions"
+      ADD CONSTRAINT "project_run_sessions_id_project_id_key" UNIQUE ("id", "project_id");
+  END IF;
+END $$;--> statement-breakpoint
+ALTER TABLE "project_run_diagnostics" ADD CONSTRAINT "project_run_diagnostics_session_id_project_run_sessions_id_fk" FOREIGN KEY ("session_id","project_id") REFERENCES "public"."project_run_sessions"("id","project_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "project_run_diagnostics" ADD CONSTRAINT "project_run_diagnostics_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "project_run_logs" ADD CONSTRAINT "project_run_logs_session_id_project_run_sessions_id_fk" FOREIGN KEY ("session_id","project_id") REFERENCES "public"."project_run_sessions"("id","project_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "project_run_logs" ADD CONSTRAINT "project_run_logs_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "project_run_profiles" ADD CONSTRAINT "project_run_profiles_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "project_run_sessions" ADD CONSTRAINT "project_run_sessions_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "tasks" ADD CONSTRAINT "tasks_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "project_nodes_path_idx" ON "project_nodes" USING btree ("path");-- scripts/setup-partitioning.sql
 
--- 1. project_node_events
-DROP TABLE IF EXISTS project_node_events CASCADE;
-CREATE TABLE project_node_events (
-    id UUID DEFAULT gen_random_uuid(),
-    project_id UUID NOT NULL REFERENCES projects(id),
-    node_id UUID REFERENCES project_nodes(id) ON DELETE SET NULL,
-    actor_id UUID REFERENCES profiles(id) ON DELETE SET NULL,
-    type TEXT NOT NULL,
-    metadata JSONB DEFAULT '{}',
-    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
-    PRIMARY KEY (id, created_at)
-) PARTITION BY RANGE (created_at);
-
--- Create current partitions
-CREATE TABLE project_node_events_2026_01 PARTITION OF project_node_events FOR VALUES FROM ('2026-01-01') TO ('2026-02-01');
-CREATE TABLE project_node_events_2026_02 PARTITION OF project_node_events FOR VALUES FROM ('2026-02-01') TO ('2026-03-01');
-CREATE TABLE project_node_events_2026_03 PARTITION OF project_node_events FOR VALUES FROM ('2026-03-01') TO ('2026-04-01');
-CREATE TABLE project_node_events_2026_04 PARTITION OF project_node_events FOR VALUES FROM ('2026-04-01') TO ('2026-05-01');
-CREATE TABLE project_node_events_2026_05 PARTITION OF project_node_events FOR VALUES FROM ('2026-05-01') TO ('2026-06-01');
-CREATE TABLE project_node_events_2026_06 PARTITION OF project_node_events FOR VALUES FROM ('2026-06-01') TO ('2026-07-01');
-CREATE TABLE project_node_events_2026_07 PARTITION OF project_node_events FOR VALUES FROM ('2026-07-01') TO ('2026-08-01');
-CREATE TABLE project_node_events_2026_08 PARTITION OF project_node_events FOR VALUES FROM ('2026-08-01') TO ('2026-09-01');
-CREATE TABLE project_node_events_2026_09 PARTITION OF project_node_events FOR VALUES FROM ('2026-09-01') TO ('2026-10-01');
-CREATE TABLE project_node_events_2026_10 PARTITION OF project_node_events FOR VALUES FROM ('2026-10-01') TO ('2026-11-01');
-CREATE TABLE project_node_events_2026_11 PARTITION OF project_node_events FOR VALUES FROM ('2026-11-01') TO ('2026-12-01');
-CREATE TABLE project_node_events_2026_12 PARTITION OF project_node_events FOR VALUES FROM ('2026-12-01') TO ('2027-01-01');
--- Default to catch anything else
-CREATE TABLE project_node_events_default PARTITION OF project_node_events DEFAULT;
-
-CREATE INDEX project_node_events_project_idx ON project_node_events(project_id, created_at);
-CREATE INDEX project_node_events_node_idx ON project_node_events(node_id, created_at);
-
-
--- 2. project_run_logs
-DROP TABLE IF EXISTS project_run_logs CASCADE;
-CREATE TABLE project_run_logs (
-    id UUID DEFAULT gen_random_uuid(),
-    session_id UUID NOT NULL REFERENCES project_run_sessions(id),
-    project_id UUID NOT NULL REFERENCES projects(id),
-    stream TEXT DEFAULT 'stdout' NOT NULL,
-    line_number INTEGER DEFAULT 0 NOT NULL,
-    message TEXT NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
-    PRIMARY KEY (id, created_at)
-) PARTITION BY RANGE (created_at);
-
-CREATE TABLE project_run_logs_2026_01 PARTITION OF project_run_logs FOR VALUES FROM ('2026-01-01') TO ('2026-02-01');
-CREATE TABLE project_run_logs_2026_02 PARTITION OF project_run_logs FOR VALUES FROM ('2026-02-01') TO ('2026-03-01');
-CREATE TABLE project_run_logs_2026_03 PARTITION OF project_run_logs FOR VALUES FROM ('2026-03-01') TO ('2026-04-01');
-CREATE TABLE project_run_logs_2026_04 PARTITION OF project_run_logs FOR VALUES FROM ('2026-04-01') TO ('2026-05-01');
-CREATE TABLE project_run_logs_2026_05 PARTITION OF project_run_logs FOR VALUES FROM ('2026-05-01') TO ('2026-06-01');
-CREATE TABLE project_run_logs_2026_06 PARTITION OF project_run_logs FOR VALUES FROM ('2026-06-01') TO ('2026-07-01');
-CREATE TABLE project_run_logs_2026_07 PARTITION OF project_run_logs FOR VALUES FROM ('2026-07-01') TO ('2026-08-01');
-CREATE TABLE project_run_logs_2026_08 PARTITION OF project_run_logs FOR VALUES FROM ('2026-08-01') TO ('2026-09-01');
-CREATE TABLE project_run_logs_2026_09 PARTITION OF project_run_logs FOR VALUES FROM ('2026-09-01') TO ('2026-10-01');
-CREATE TABLE project_run_logs_2026_10 PARTITION OF project_run_logs FOR VALUES FROM ('2026-10-01') TO ('2026-11-01');
-CREATE TABLE project_run_logs_2026_11 PARTITION OF project_run_logs FOR VALUES FROM ('2026-11-01') TO ('2026-12-01');
-CREATE TABLE project_run_logs_2026_12 PARTITION OF project_run_logs FOR VALUES FROM ('2026-12-01') TO ('2027-01-01');
-CREATE TABLE project_run_logs_default PARTITION OF project_run_logs DEFAULT;
-
-CREATE INDEX project_run_logs_session_idx ON project_run_logs(session_id, line_number);
-CREATE INDEX project_run_logs_project_idx ON project_run_logs(project_id, created_at);
-
-
--- 3. project_run_diagnostics
-DROP TABLE IF EXISTS project_run_diagnostics CASCADE;
-CREATE TABLE project_run_diagnostics (
-    id UUID DEFAULT gen_random_uuid(),
-    session_id UUID NOT NULL REFERENCES project_run_sessions(id),
-    project_id UUID NOT NULL REFERENCES projects(id),
-    node_id UUID REFERENCES project_nodes(id) ON DELETE SET NULL,
-    file_path TEXT,
-    line INTEGER,
-    "column" INTEGER,
-    severity TEXT DEFAULT 'error' NOT NULL,
-    source TEXT,
-    code TEXT,
-    message TEXT NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
-    PRIMARY KEY (id, created_at)
-) PARTITION BY RANGE (created_at);
-
-CREATE TABLE project_run_diagnostics_2026_01 PARTITION OF project_run_diagnostics FOR VALUES FROM ('2026-01-01') TO ('2026-02-01');
-CREATE TABLE project_run_diagnostics_2026_02 PARTITION OF project_run_diagnostics FOR VALUES FROM ('2026-02-01') TO ('2026-03-01');
-CREATE TABLE project_run_diagnostics_2026_03 PARTITION OF project_run_diagnostics FOR VALUES FROM ('2026-03-01') TO ('2026-04-01');
-CREATE TABLE project_run_diagnostics_2026_04 PARTITION OF project_run_diagnostics FOR VALUES FROM ('2026-04-01') TO ('2026-05-01');
-CREATE TABLE project_run_diagnostics_2026_05 PARTITION OF project_run_diagnostics FOR VALUES FROM ('2026-05-01') TO ('2026-06-01');
-CREATE TABLE project_run_diagnostics_2026_06 PARTITION OF project_run_diagnostics FOR VALUES FROM ('2026-06-01') TO ('2026-07-01');
-CREATE TABLE project_run_diagnostics_2026_07 PARTITION OF project_run_diagnostics FOR VALUES FROM ('2026-07-01') TO ('2026-08-01');
-CREATE TABLE project_run_diagnostics_2026_08 PARTITION OF project_run_diagnostics FOR VALUES FROM ('2026-08-01') TO ('2026-09-01');
-CREATE TABLE project_run_diagnostics_2026_09 PARTITION OF project_run_diagnostics FOR VALUES FROM ('2026-09-01') TO ('2026-10-01');
-CREATE TABLE project_run_diagnostics_2026_10 PARTITION OF project_run_diagnostics FOR VALUES FROM ('2026-10-01') TO ('2026-11-01');
-CREATE TABLE project_run_diagnostics_2026_11 PARTITION OF project_run_diagnostics FOR VALUES FROM ('2026-11-01') TO ('2026-12-01');
-CREATE TABLE project_run_diagnostics_2026_12 PARTITION OF project_run_diagnostics FOR VALUES FROM ('2026-12-01') TO ('2027-01-01');
-CREATE TABLE project_run_diagnostics_default PARTITION OF project_run_diagnostics DEFAULT;
-
-CREATE INDEX project_run_diagnostics_session_idx ON project_run_diagnostics(session_id, severity);
-CREATE INDEX project_run_diagnostics_project_idx ON project_run_diagnostics(project_id, created_at);
+-- Partition bootstrap is managed in scripts/setup-partitioning.sql.
+-- Keep this setup script non-destructive for existing data and RLS policy safety.

@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { validateCsrf } from "@/lib/security/csrf";
+import { resolveSupabasePublicEnv } from "@/lib/supabase/env";
 import {
   enforceRouteLimit,
   getRequestId,
@@ -140,11 +141,27 @@ export async function POST(request: Request) {
     return jsonError("Account is missing a verified email address", 400, "BAD_REQUEST");
   }
 
+  let verifierEnv: { url: string; anonKey: string };
+  try {
+    verifierEnv = resolveSupabasePublicEnv("api.v1.auth.change-password");
+  } catch (error) {
+    logApiRoute(request, {
+      requestId,
+      action: "auth.changePassword.post",
+      userId: auth.user.id,
+      startedAt,
+      success: false,
+      status: 500,
+      errorCode: "INTERNAL_ERROR",
+    });
+    return jsonError("Server configuration error", 500, "INTERNAL_ERROR");
+  }
+
   try {
     // Verify current password without mutating current request cookies.
     const verifier = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      verifierEnv.url,
+      verifierEnv.anonKey,
       {
         cookies: {
           getAll() {

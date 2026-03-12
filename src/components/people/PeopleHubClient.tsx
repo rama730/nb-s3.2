@@ -82,9 +82,9 @@ export default function PeopleHubClient({
     }
 
     return (
-        <div className="bg-zinc-50 dark:bg-black min-h-screen">
+        <div className="bg-zinc-50 dark:bg-black h-full min-h-0">
             {/* Sticky Tabs Header — single card with buttons */}
-            <div className="sticky top-16 z-30 pt-2 pb-3">
+            <div className="sticky top-0 z-30 pt-2 pb-3">
                 <div className="flex justify-center">
                     <div className="inline-flex items-center p-1 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-sm">
                         {visibleTabs.map((t) => {

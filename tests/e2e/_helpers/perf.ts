@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { expect } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
 export type PerfSample = {
   runId: string;
@@ -67,4 +67,30 @@ export async function measureWithTiming<T>(
   const start = performance.now();
   const result = await fn();
   return { result, elapsedMs: performance.now() - start };
+}
+
+export async function markNavigationMetrics(
+  tracker: PerfTracker,
+  page: Page,
+  route?: string,
+): Promise<void> {
+  const navigation = await page.evaluate(() => {
+    const entries = performance.getEntriesByType("navigation");
+    if (!entries || entries.length === 0) return null;
+    const nav = entries[entries.length - 1] as PerformanceNavigationTiming;
+    const serverTtfb = Math.max(0, nav.responseStart - nav.requestStart);
+    const browserLoad = Math.max(0, nav.loadEventEnd - nav.startTime);
+    const hydration = Math.max(0, nav.domContentLoadedEventEnd - nav.responseEnd);
+    return {
+      serverTtfb,
+      browserLoad,
+      hydration,
+    };
+  });
+
+  if (!navigation) return;
+
+  tracker.mark("route.server.ttfb", navigation.serverTtfb, route);
+  tracker.mark("route.browser.load", navigation.browserLoad, route);
+  tracker.mark("route.hydration.ms", navigation.hydration, route);
 }

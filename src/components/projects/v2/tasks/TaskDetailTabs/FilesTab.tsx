@@ -5,6 +5,7 @@ import { Download, FileText, Folder, Link2, Loader2, Paperclip, Plus, Search, Tr
 import { createClient } from "@/lib/supabase/client";
 import type { ProjectNode } from "@/lib/db/schema";
 import { createFileNode, getProjectNodes, getTaskAttachments, linkNodeToTask, unlinkNodeFromTask, getProjectRecentNodes } from "@/app/actions/files";
+import { getUploadPresignedUrl } from "@/app/actions/upload";
 import { TaskFilesExplorer } from "@/components/projects/v2/tasks/components/TaskFilesExplorer";
 import { buildProjectFileKey } from "@/lib/storage/project-file-key";
 
@@ -108,14 +109,23 @@ export default function FilesTab({ taskId, isOwnerOrMember, projectId, taskTitle
                     const fileExt = extOf(file.name);
                     const opaque = Math.random().toString(36).slice(2);
                     storagePath = buildProjectFileKey(projectId, `${opaque}${fileExt ? `.${fileExt}` : ""}`);
+                    const contentType = file.type || "application/octet-stream";
 
                     updateStatus({ progress: 20 });
 
-                    const { error: uploadError } = await supabase.storage
-                        .from("project-files")
-                        .upload(storagePath, file, { upsert: false });
-                    
-                    if (uploadError) throw uploadError;
+                    const uploadSession = await getUploadPresignedUrl(storagePath, contentType, file.size);
+                    if ("error" in uploadSession) {
+                        throw new Error(uploadSession.error || "Failed to prepare upload");
+                    }
+                    const uploadResponse = await fetch(uploadSession.url, {
+                        method: "PUT",
+                        headers: { "Content-Type": contentType },
+                        body: file,
+                    });
+                    if (!uploadResponse.ok) {
+                        throw new Error(`Upload failed (${uploadResponse.status})`);
+                    }
+
                     updateStatus({ progress: 60 });
 
                     let candidateName = file.name;
@@ -126,7 +136,7 @@ export default function FilesTab({ taskId, isOwnerOrMember, projectId, taskTitle
                                 name: candidateName,
                                 s3Key: storagePath,
                                 size: file.size,
-                                mimeType: file.type || "application/octet-stream",
+                                mimeType: contentType,
                             })) as ProjectNode;
                             break;
                         } catch (e: any) {
@@ -180,8 +190,9 @@ export default function FilesTab({ taskId, isOwnerOrMember, projectId, taskTitle
                     .from("project-files")
                     .createSignedUrl(node.s3Key, 3600);
                 if (urlError) throw urlError;
+                if (!data?.signedUrl) throw new Error("Failed to create download link");
                 const a = document.createElement("a");
-                a.href = data.url;
+                a.href = data.signedUrl;
                 a.target = "_blank";
                 a.rel = "noopener noreferrer";
                 a.download = node.name;
@@ -445,7 +456,7 @@ export default function FilesTab({ taskId, isOwnerOrMember, projectId, taskTitle
                                                         {n.name}
                                                     </div>
                                                     <div className="text-xs text-zinc-500 mt-0.5">
-                                                        {formatBytes(n.size)} • Modified {new Date(n.updatedAt!).toLocaleDateString()}
+                                                        {formatBytes(n.size)} • Modified {n.updatedAt ? new Date(n.updatedAt).toLocaleDateString() : "Unknown"}
                                                     </div>
                                                 </div>
                                                 <button

@@ -24,6 +24,10 @@ export default function ProjectQuickView({
     hasPrevious,
 }: ProjectQuickViewProps) {
     if (!project || !isOpen) return null;
+    const availableRoles =
+        project.openRoles?.filter(
+            (role) => Math.max(0, (role.count || 0) - (role.filled || 0)) > 0
+        ) ?? [];
 
     return (
         <AnimatePresence>
@@ -78,9 +82,47 @@ export default function ProjectQuickView({
 
                     {/* Content */}
                     <div className="p-6 overflow-y-auto max-h-[calc(80vh-140px)]">
-                        <p className="text-zinc-600 dark:text-zinc-400 mb-6">
+                        <p className="text-zinc-600 dark:text-zinc-400 mb-6 whitespace-pre-wrap">
                             {project.description || project.shortDescription || 'No description available.'}
                         </p>
+
+                        {/* Open Roles */}
+                        {availableRoles.length > 0 && (
+                            <div className="mb-6">
+                                <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-3">
+                                    Open Roles
+                                </h3>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                    {availableRoles.map((role) => {
+                                        const available = Math.max(0, (role.count || 0) - (role.filled || 0));
+                                        return (
+                                            <div
+                                                key={role.id}
+                                                className="p-3 rounded-xl border border-indigo-100 dark:border-indigo-900/30 bg-indigo-50/50 dark:bg-indigo-900/10 flex flex-col gap-1.5"
+                                            >
+                                                <div className="flex items-start justify-between gap-2">
+                                                    <span className="font-semibold text-zinc-900 dark:text-zinc-100 text-sm">
+                                                        {role.title || role.role}
+                                                    </span>
+                                                    <span className="px-2 py-0.5 rounded-md bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 text-[10px] font-bold">
+                                                        {available} Open
+                                                    </span>
+                                                </div>
+                                                {role.skills && role.skills.length > 0 && (
+                                                    <div className="flex flex-wrap gap-1 mt-1">
+                                                        {role.skills.map((skill) => (
+                                                            <span key={skill} className="text-[10px] px-1.5 py-0.5 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded text-zinc-500 dark:text-zinc-400">
+                                                                {skill}
+                                                            </span>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        )}
 
                         {/* Tech Stack */}
                         {project.skills && project.skills.length > 0 && (

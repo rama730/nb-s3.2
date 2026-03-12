@@ -14,6 +14,101 @@ interface UsernameInputProps {
     disabled?: boolean
 }
 
+type UsernameAvailabilityResult = {
+    ok: boolean
+    status: number
+    payload: {
+        available?: boolean
+        message?: string
+        code?: string
+    }
+    responseText: string
+}
+
+const USERNAME_CHECK_TTL_MS = 20_000
+const USERNAME_CHECK_CACHE_MAX = 120
+const usernameCheckCache = new Map<string, { expiresAt: number; result: UsernameAvailabilityResult }>()
+const usernameCheckInFlight = new Map<string, Promise<UsernameAvailabilityResult>>()
+
+function setUsernameCheckCache(username: string, result: UsernameAvailabilityResult) {
+    if (usernameCheckCache.size >= USERNAME_CHECK_CACHE_MAX) {
+        const oldest = usernameCheckCache.keys().next().value
+        if (oldest) usernameCheckCache.delete(oldest)
+    }
+    usernameCheckCache.set(username, {
+        expiresAt: Date.now() + USERNAME_CHECK_TTL_MS,
+        result,
+    })
+}
+
+async function requestUsernameAvailability(username: string): Promise<UsernameAvailabilityResult> {
+    const normalized = sanitizeUsernameInput(username)
+    if (!normalized) {
+        return {
+            ok: true,
+            status: 200,
+            payload: { available: false, message: "Username is unavailable" },
+            responseText: "",
+        }
+    }
+
+    const cached = usernameCheckCache.get(normalized)
+    if (cached && cached.expiresAt > Date.now()) {
+        return cached.result
+    }
+
+    const existing = usernameCheckInFlight.get(normalized)
+    if (existing) {
+        return existing
+    }
+
+    const task = (async (): Promise<UsernameAvailabilityResult> => {
+        const response = await fetch(`/api/v1/onboarding/username-check?username=${encodeURIComponent(normalized)}`, {
+            method: 'GET',
+            cache: 'no-store',
+        })
+        const responseForText = response.clone()
+        const contentType = response.headers.get('content-type') || ''
+        let payload: UsernameAvailabilityResult["payload"] = {}
+        let responseText = ''
+
+        if (contentType.includes('application/json')) {
+            try {
+                payload = (await response.json()) as UsernameAvailabilityResult["payload"]
+            } catch {
+                payload = {}
+            }
+        }
+
+        if (!payload.message) {
+            try {
+                responseText = (await responseForText.text()).trim()
+            } catch {
+                responseText = ''
+            }
+        }
+
+        const result: UsernameAvailabilityResult = {
+            ok: response.ok,
+            status: response.status,
+            payload,
+            responseText,
+        }
+
+        if (response.status < 500) {
+            setUsernameCheckCache(normalized, result)
+        }
+
+        return result
+    })()
+        .finally(() => {
+            usernameCheckInFlight.delete(normalized)
+        })
+
+    usernameCheckInFlight.set(normalized, task)
+    return task
+}
+
 // Generate simple suggestions from name
 function generateSuggestions(fullName: string): string[] {
     if (!fullName || fullName.trim().length === 0) return []
@@ -68,53 +163,20 @@ export default function UsernameInput({ value, onChange, fullName, disabled }: U
         setMessage('Checking availability...')
         const requestId = requestIdRef.current + 1
         requestIdRef.current = requestId
-        const controller = new AbortController()
 
         const timer = setTimeout(async () => {
             try {
-                const response = await fetch(`/api/onboarding/username-check?username=${encodeURIComponent(value)}`, {
-                    method: 'GET',
-                    cache: 'no-store',
-                    signal: controller.signal,
-                })
-                const responseForText = response.clone()
-                let payload: {
-                    available?: boolean
-                    message?: string
-                    code?: string
-                }
-                let responseText = ''
-                const contentType = response.headers.get('content-type') || ''
-                if (contentType.includes('application/json')) {
-                    try {
-                        payload = (await response.json()) as {
-                            available?: boolean
-                            message?: string
-                            code?: string
-                        }
-                    } catch {
-                        payload = {}
-                    }
-                } else {
-                    payload = {}
-                }
-                if (!payload.message) {
-                    try {
-                        responseText = (await responseForText.text()).trim()
-                    } catch {
-                        responseText = ''
-                    }
-                }
+                const { ok, status, payload, responseText } = await requestUsernameAvailability(value)
                 if (requestId !== requestIdRef.current) return
 
-                if (!response.ok) {
-                    if (response.status === 429 || payload.code === 'RATE_LIMITED') {
+                if (!ok) {
+                    if (status === 429 || payload.code === 'RATE_LIMITED') {
                         setStatus('invalid')
                         setMessage('Too many checks. Please wait and try again.')
                         return
                     }
                     setStatus('error')
-                    setMessage(payload.message || responseText || `HTTP ${response.status}`)
+                    setMessage(payload.message || responseText || `HTTP ${status}`)
                     return
                 }
 
@@ -131,13 +193,12 @@ export default function UsernameInput({ value, onChange, fullName, disabled }: U
                 }
 
                 setStatus('invalid')
-                if (response.status === 429 || payload.code === 'RATE_LIMITED') {
+                if (status === 429 || payload.code === 'RATE_LIMITED') {
                     setMessage('Too many checks. Please wait and try again.')
                 } else {
                     setMessage(payload.message || responseText || 'Username is unavailable')
                 }
             } catch (error) {
-                if ((error as Error)?.name === 'AbortError') return
                 if (requestId !== requestIdRef.current) return
                 setStatus('error')
                 setMessage('Unable to verify username right now. Please retry.')
@@ -146,7 +207,6 @@ export default function UsernameInput({ value, onChange, fullName, disabled }: U
 
         return () => {
             clearTimeout(timer)
-            controller.abort()
         }
     }, [value])
 

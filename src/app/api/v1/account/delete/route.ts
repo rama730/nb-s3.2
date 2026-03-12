@@ -1,6 +1,5 @@
-import { NextResponse } from 'next/server';
 import { deleteMyAccount } from '@/app/actions/account';
-import { validateCsrf } from '@/lib/security/csrf';
+import { getRequestId, jsonError, jsonSuccess, logApiRoute } from '@/app/api/v1/_shared';
 
 function toStatusCode(error?: string) {
     if (!error) return 500;
@@ -10,9 +9,34 @@ function toStatusCode(error?: string) {
     return 500;
 }
 
+function getCsrfError(request: Request): string | null {
+    const origin = request.headers.get('origin');
+    const host = request.headers.get('host');
+    if (!origin || !host) return 'Missing origin or host header';
+    try {
+        const originHost = new URL(origin).host;
+        if (originHost !== host) return 'Origin mismatch';
+    } catch {
+        return 'Invalid origin';
+    }
+    return null;
+}
+
 export async function DELETE(request: Request) {
-    const csrfError = validateCsrf(request);
-    if (csrfError) return csrfError;
+    const startedAt = Date.now();
+    const requestId = getRequestId(request);
+    const csrfError = getCsrfError(request);
+    if (csrfError) {
+        logApiRoute(request, {
+            requestId,
+            action: 'account.delete',
+            startedAt,
+            success: false,
+            status: 403,
+            errorCode: 'FORBIDDEN',
+        });
+        return jsonError(csrfError, 403, 'FORBIDDEN');
+    }
     try {
         let confirmationText = '';
         try {
@@ -26,18 +50,53 @@ export async function DELETE(request: Request) {
 
         const result = await deleteMyAccount(confirmationText);
         if (!result.success) {
-            return NextResponse.json(
-                { success: false, message: result.error || 'Failed to delete account' },
-                { status: toStatusCode(result.error) }
+            const status = toStatusCode(result.error);
+            logApiRoute(request, {
+                requestId,
+                action: 'account.delete',
+                startedAt,
+                success: false,
+                status,
+                errorCode:
+                    status === 401
+                        ? 'UNAUTHORIZED'
+                        : status === 400
+                            ? 'BAD_REQUEST'
+                            : status === 403
+                                ? 'FORBIDDEN'
+                                : 'INTERNAL_ERROR',
+            });
+            return jsonError(
+                result.error || 'Failed to delete account',
+                status,
+                status === 401
+                    ? 'UNAUTHORIZED'
+                    : status === 400
+                        ? 'BAD_REQUEST'
+                        : status === 403
+                            ? 'FORBIDDEN'
+                            : 'INTERNAL_ERROR',
             );
         }
 
-        return NextResponse.json({ success: true });
+        logApiRoute(request, {
+            requestId,
+            action: 'account.delete',
+            startedAt,
+            success: true,
+            status: 200,
+        });
+        return jsonSuccess();
     } catch (error) {
         console.error('Account delete route error:', error);
-        return NextResponse.json(
-            { success: false, message: 'Failed to delete account' },
-            { status: 500 }
-        );
+        logApiRoute(request, {
+            requestId,
+            action: 'account.delete',
+            startedAt,
+            success: false,
+            status: 500,
+            errorCode: 'INTERNAL_ERROR',
+        });
+        return jsonError('Failed to delete account', 500, 'INTERNAL_ERROR');
     }
 }

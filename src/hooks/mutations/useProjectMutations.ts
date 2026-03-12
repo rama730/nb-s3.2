@@ -1,13 +1,8 @@
 'use client';
 
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { toggleProjectBookmarkAction, toggleProjectFollowAction } from '@/app/actions/project';
-
-interface ToggleBookmarkParams {
-    projectId: string;
-    currentStatus: boolean;
-    userId: string;
-}
+import { toggleProjectFollowAction } from '@/app/actions/project';
+import { queryKeys } from '@/lib/query-keys';
 
 interface ToggleFollowParams {
     projectId: string;
@@ -15,23 +10,7 @@ interface ToggleFollowParams {
     userId: string;
 }
 
-export function useToggleProjectBookmark() {
-    const queryClient = useQueryClient();
 
-    return useMutation({
-        mutationFn: async (params: ToggleBookmarkParams) => {
-            const result = await toggleProjectBookmarkAction(params.projectId, !params.currentStatus);
-            if (!result.success) throw new Error(result.error);
-            return result;
-        },
-        onSuccess: (_, { userId }) => {
-            queryClient.invalidateQueries({ queryKey: ['user-bookmarks', userId] });
-            queryClient.invalidateQueries({ queryKey: ['hub-projects-simple'] });
-            queryClient.invalidateQueries({ queryKey: ['hub-projects'] });
-            queryClient.invalidateQueries({ queryKey: ['hub-trending'] });
-        },
-    });
-}
 
 export function useToggleProjectFollow() {
     const queryClient = useQueryClient();
@@ -43,10 +22,8 @@ export function useToggleProjectFollow() {
             return result;
         },
         onSuccess: (_, { userId }) => {
-            queryClient.invalidateQueries({ queryKey: ['user-followed-projects', userId] });
-            queryClient.invalidateQueries({ queryKey: ['hub-projects-simple'] });
-            queryClient.invalidateQueries({ queryKey: ['hub-projects'] });
-            queryClient.invalidateQueries({ queryKey: ['hub-trending'] });
+            queryClient.invalidateQueries({ queryKey: queryKeys.hub.userFollowedProjects(userId) });
+            queryClient.invalidateQueries({ queryKey: queryKeys.hub.projectsSimpleRoot() });
         },
     });
 }

@@ -16,6 +16,7 @@ export {
 
     // Messages
     getMessages,
+    getMessageContext,
     sendMessage,
     editMessage,
     deleteMessage,

@@ -143,7 +143,7 @@ function sanitizeDraftSocialLinks(value: unknown): OnboardingSocialLinks | undef
         if (!normalized) continue
         result[key] = normalized
     }
-    return Object.keys(result).length > 0 ? result : {}
+    return Object.keys(result).length > 0 ? result : undefined
 }
 
 function sanitizeOnboardingDraft(input: unknown): DraftPayload {
@@ -191,6 +191,49 @@ function sanitizeOnboardingDraft(input: unknown): DraftPayload {
             ? (visibility as OnboardingVisibility)
             : undefined,
     }
+}
+
+function sanitizeOnboardingDraftPatch(input: unknown): Partial<DraftPayload> {
+    const source = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>
+    const patch: Partial<DraftPayload> = {}
+
+    if ('username' in source) {
+        patch.username = typeof source.username === 'string' ? sanitizeUsernameInput(source.username) : undefined
+    }
+    if ('fullName' in source) patch.fullName = trimOptionalString(source.fullName, MAX_DRAFT_FULL_NAME_CHARS)
+    if ('avatarUrl' in source) patch.avatarUrl = trimOptionalString(source.avatarUrl, 2000)
+    if ('headline' in source) patch.headline = trimOptionalString(source.headline, MAX_DRAFT_HEADLINE_CHARS)
+    if ('bio' in source) patch.bio = trimOptionalString(source.bio, MAX_DRAFT_BIO_CHARS)
+    if ('location' in source) patch.location = trimOptionalString(source.location, MAX_DRAFT_LOCATION_CHARS)
+    if ('website' in source) patch.website = trimOptionalUrl(source.website, MAX_DRAFT_WEBSITE_CHARS)
+    if ('skills' in source) patch.skills = sanitizeDraftTagList(source.skills)
+    if ('interests' in source) patch.interests = sanitizeDraftTagList(source.interests)
+    if ('openTo' in source) patch.openTo = sanitizeDraftOpenToList(source.openTo)
+    if ('availabilityStatus' in source) {
+        patch.availabilityStatus = sanitizeEnum(source.availabilityStatus, ONBOARDING_AVAILABILITY_VALUES)
+    }
+    if ('messagePrivacy' in source) {
+        patch.messagePrivacy = sanitizeEnum(source.messagePrivacy, ONBOARDING_MESSAGE_PRIVACY_VALUES)
+    }
+    if ('socialLinks' in source) patch.socialLinks = sanitizeDraftSocialLinks(source.socialLinks)
+    if ('experienceLevel' in source) {
+        patch.experienceLevel = sanitizeEnum(source.experienceLevel, ONBOARDING_EXPERIENCE_LEVEL_VALUES)
+    }
+    if ('hoursPerWeek' in source) {
+        patch.hoursPerWeek = sanitizeEnum(source.hoursPerWeek, ONBOARDING_HOURS_PER_WEEK_VALUES)
+    }
+    if ('genderIdentity' in source) {
+        patch.genderIdentity = sanitizeEnum(source.genderIdentity, ONBOARDING_GENDER_VALUES)
+    }
+    if ('pronouns' in source) patch.pronouns = trimOptionalString(source.pronouns, MAX_DRAFT_PRONOUNS_CHARS)
+    if ('visibility' in source) {
+        const visibility = source.visibility
+        patch.visibility = ONBOARDING_VISIBILITY_VALUES.includes(visibility as OnboardingVisibility)
+            ? (visibility as OnboardingVisibility)
+            : undefined
+    }
+
+    return patch
 }
 
 function sanitizeTelemetryMetadata(input: unknown): Record<string, unknown> {
@@ -873,7 +916,7 @@ export async function saveOnboardingDraft(input: {
         }
 
         const safeStep = clampStep(input.step)
-        const incomingDraftPatch = sanitizeOnboardingDraft(input.draft)
+        const incomingDraftPatch = sanitizeOnboardingDraftPatch(input.draft)
         const updatedAt = new Date()
 
         const current = await db.query.onboardingDrafts.findFirst({
@@ -945,9 +988,11 @@ export async function saveOnboardingDraft(input: {
             }
         }
 
-        const mergedDraftInput = {
+        const mergedDraftInput: Record<string, unknown> = {
             ...((latest.draft as Record<string, unknown>) || {}),
-            ...incomingDraftPatch,
+        }
+        for (const key of Object.keys(incomingDraftPatch) as Array<keyof DraftPayload>) {
+            mergedDraftInput[key] = incomingDraftPatch[key]
         }
         const safeDraft = sanitizeOnboardingDraft(mergedDraftInput)
         const nextVersion = latest.version + 1

@@ -9,9 +9,14 @@ type PerfSample = {
 const ENABLED = process.env.E2E_PERF_GATE !== '0';
 const PERF_DIR = path.join(process.cwd(), 'test-results', 'perf');
 const PERF_RUN_ID_FILE = path.join(process.cwd(), '.e2e-last-run-id');
+const ROUTE_LOAD_BUDGET_MS = Number(process.env.APP_ROUTE_P95_LOAD_BUDGET_MS || '1500');
+const ROUTE_TTFB_BUDGET_MS = Number(process.env.APP_ROUTE_P95_TTFB_BUDGET_MS || '300');
 
 const THRESHOLDS: Record<string, number> = {
-  'route.interactive.core': 2000,
+  'route.interactive.core': ROUTE_LOAD_BUDGET_MS,
+  'route.browser.load': ROUTE_LOAD_BUDGET_MS,
+  'route.server.ttfb': ROUTE_TTFB_BUDGET_MS,
+  'route.hydration.ms': 700,
   'messages.ready.firstConversation': 1500,
   'files.open': 1200,
   'files.save': 800,

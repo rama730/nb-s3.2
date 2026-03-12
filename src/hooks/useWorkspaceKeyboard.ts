@@ -19,8 +19,9 @@ export function useWorkspaceKeyboard(
 ) {
     useEffect(() => {
         const handler = (e: KeyboardEvent) => {
-            const tag = (document.activeElement?.tagName || '').toLowerCase();
-            if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+            const active = document.activeElement as HTMLElement | null;
+            const tag = (active?.tagName || '').toLowerCase();
+            if (tag === 'input' || tag === 'textarea' || tag === 'select' || !!active?.isContentEditable) return;
 
             // Tab switching: 1-6
             if (e.key >= '1' && e.key <= '6' && !e.metaKey && !e.ctrlKey && !e.altKey) {

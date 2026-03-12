@@ -19,6 +19,9 @@ type MyApplication = MyApplicationsResponse extends { applications: infer T }
 export default function ApplicationsTab({ initialUser }: ApplicationsTabProps) {
     const [applications, setApplications] = useState<MyApplication[]>([]);
     const [loading, setLoading] = useState(true);
+    const [isLoadingMore, setIsLoadingMore] = useState(false);
+    const [hasMore, setHasMore] = useState(false);
+    const [nextCursor, setNextCursor] = useState<string | null>(null);
 
     useEffect(() => {
         async function fetchApplications() {
@@ -28,11 +31,15 @@ export default function ApplicationsTab({ initialUser }: ApplicationsTabProps) {
             }
 
             try {
-                const res = await getMyApplicationsAction();
+                const res = await getMyApplicationsAction({ limit: 20 });
                 if (res?.success) {
                     setApplications(res.applications || []);
+                    setHasMore(!!res.hasMore);
+                    setNextCursor(res.nextCursor || null);
                 } else {
                     setApplications([]);
+                    setHasMore(false);
+                    setNextCursor(null);
                 }
             } catch (error) {
                 console.error("Error fetching applications:", error);
@@ -42,6 +49,23 @@ export default function ApplicationsTab({ initialUser }: ApplicationsTabProps) {
         }
         fetchApplications();
     }, [initialUser?.id]);
+
+    const handleLoadMore = async () => {
+        if (isLoadingMore || !hasMore || !nextCursor) return;
+        setIsLoadingMore(true);
+        try {
+            const res = await getMyApplicationsAction({ limit: 20, cursor: nextCursor });
+            if (res?.success) {
+                setApplications((prev) => [...prev, ...(res.applications || [])]);
+                setHasMore(!!res.hasMore);
+                setNextCursor(res.nextCursor || null);
+            }
+        } catch (error) {
+            console.error("Error loading more applications:", error);
+        } finally {
+            setIsLoadingMore(false);
+        }
+    };
 
     if (loading) {
         return (
@@ -100,6 +124,16 @@ export default function ApplicationsTab({ initialUser }: ApplicationsTabProps) {
                     </div>
                 </div>
             ))}
+            {hasMore && (
+                <button
+                    type="button"
+                    onClick={handleLoadMore}
+                    disabled={isLoadingMore}
+                    className="w-full rounded-xl border border-zinc-200 dark:border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 disabled:opacity-60"
+                >
+                    {isLoadingMore ? "Loading..." : "Load More"}
+                </button>
+            )}
         </div>
     );
 }

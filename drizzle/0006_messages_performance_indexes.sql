@@ -11,6 +11,12 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_messages_conversation_created
     ON messages(conversation_id, created_at DESC) 
     WHERE deleted_at IS NULL;
 
+-- Index 1b: Deterministic pagination tie-breaker for message virtualization
+-- Used by: getMessages() cursor ordering with created_at + id
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_messages_conversation_created_id
+    ON messages(conversation_id, created_at DESC, id DESC)
+    WHERE deleted_at IS NULL;
+
 -- Index 2: Unread message counting
 -- Used by: getUnreadCount() and conversation unread badge queries
 -- Impact: Fast counting of unread messages per conversation
@@ -42,6 +48,11 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_conversations_updated
 -- Impact: Fast attachment lookup for message lists
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_message_attachments_message
     ON message_attachments(message_id);
+
+-- Index 7: Hidden-message visibility checks by viewer
+-- Used by: getMessages() / getMessageContext() visibility filters
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_message_hidden_for_users_user_message
+    ON message_hidden_for_users(user_id, message_id);
 
 -- ============================================================================
 -- QUERY PERFORMANCE NOTES

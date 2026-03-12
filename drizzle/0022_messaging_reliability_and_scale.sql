@@ -35,6 +35,13 @@ ON messages USING gin (content gin_trgm_ops);
 CREATE UNIQUE INDEX IF NOT EXISTS messages_conversation_sender_client_unique
 ON messages (conversation_id, sender_id, client_message_id);
 
+CREATE INDEX IF NOT EXISTS messages_conversation_sender_client_lookup_idx
+ON messages (conversation_id, sender_id, client_message_id, created_at DESC)
+WHERE client_message_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS conversation_participants_read_watermark_idx
+ON conversation_participants (conversation_id, user_id, last_read_message_id);
+
 -- ---------------------------------------------------------------------------
 -- DB-authoritative consistency trigger for message insert
 -- ---------------------------------------------------------------------------

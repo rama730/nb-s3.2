@@ -14,25 +14,23 @@ export function ProfileShell({
     rail: React.ReactNode;
 }) {
     return (
-        <div className="h-full min-h-0 overflow-hidden bg-zinc-50 dark:bg-black">
-            <div className="h-full min-h-0 overflow-y-auto">
-                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
-                    <div className="space-y-6">
-                        {header}
-                        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 items-start">
-                            <div className="lg:col-span-8 space-y-6">
-                                {tabs}
-                                {main}
-                            </div>
-                            <div className="hidden lg:block lg:col-span-4">
-                                <div
-                                    className="sticky space-y-6"
-                                    style={{
-                                        top: "24px",
-                                    }}
-                                >
-                                    {rail}
-                                </div>
+        <div className="min-h-full bg-zinc-50 dark:bg-black">
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
+                <div className="space-y-6">
+                    {header}
+                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 items-start">
+                        <div className="lg:col-span-8 space-y-6">
+                            {tabs}
+                            {main}
+                        </div>
+                        <div className="hidden lg:block lg:col-span-4">
+                            <div
+                                className="sticky space-y-6"
+                                style={{
+                                    top: "24px",
+                                }}
+                            >
+                                {rail}
                             </div>
                         </div>
                     </div>

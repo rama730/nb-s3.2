@@ -4,8 +4,13 @@ import { memo, useRef, useEffect } from 'react';
 import { X } from 'lucide-react';
 import {
     Target,
+    AtSign,
     Activity,
+    FileClock,
     FolderKanban,
+    Gauge,
+    HeartPulse,
+    Pin,
     AlertTriangle,
     StickyNote,
     MessageSquare,
@@ -17,8 +22,13 @@ import type { WidgetId } from './types';
 // Map icon names to actual icons (avoids dynamic imports)
 const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
     Target,
+    AtSign,
     Activity,
+    FileClock,
     FolderKanban,
+    Gauge,
+    HeartPulse,
+    Pin,
     AlertTriangle,
     StickyNote,
     MessageSquare,

@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { Activity, CheckCircle2, PlayCircle, Circle, UserPlus, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { getWorkspaceActivity, type WorkspaceActivityItem } from '@/app/actions/workspace';
+import { queryKeys } from '@/lib/query-keys';
 
 const TYPE_CONFIG: Record<WorkspaceActivityItem['type'], { icon: typeof CheckCircle2; color: string }> = {
     task_completed: { icon: CheckCircle2, color: 'text-emerald-500' },
@@ -16,7 +17,7 @@ const TYPE_CONFIG: Record<WorkspaceActivityItem['type'], { icon: typeof CheckCir
 
 function ActivityTab() {
     const { data, isLoading } = useQuery({
-        queryKey: ['workspace', 'activity'],
+        queryKey: queryKeys.workspace.activity(),
         queryFn: () => getWorkspaceActivity(),
         staleTime: 60_000,
     });

@@ -14,6 +14,7 @@ type ApplicationEventPayload = {
     actorId: string;
     roleId?: string;
     reasonCode?: string | null;
+    applicationTraceId?: string;
     source?: 'project' | 'messages' | 'requests' | 'system';
 };
 

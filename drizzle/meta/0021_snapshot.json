@@ -1053,7 +1053,15 @@
           "onUpdate": "no action"
         }
       },
-      "compositePrimaryKeys": {},
+      "compositePrimaryKeys": {
+        "dm_pairs_user_low_user_high_pk": {
+          "name": "dm_pairs_user_low_user_high_pk",
+          "columns": [
+            "user_low",
+            "user_high"
+          ]
+        }
+      },
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},

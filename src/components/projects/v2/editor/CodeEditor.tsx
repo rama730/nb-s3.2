@@ -172,7 +172,6 @@ export default function CodeEditor({
         ref={editorRef}
         onCreateEditor={(view) => {
           setIsEditorReady(true);
-          dispatchCursorMoved(view, tabId);
         }}
         value={value}
         onChange={(nextValue) => onChange(nextValue)}

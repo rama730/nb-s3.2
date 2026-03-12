@@ -13,68 +13,36 @@ import {
     messages,
     profiles
 } from '@/lib/db/schema';
-import { eq, and, sql, or, inArray, desc } from 'drizzle-orm';
+import { eq, and, sql, or, inArray, desc, lt } from 'drizzle-orm';
 import { createClient } from '@/lib/supabase/server';
 import { revalidatePath } from 'next/cache';
 import { consumeRateLimit } from '@/lib/security/rate-limit';
 import { trackApplicationEvent } from '@/lib/observability/applications';
-import type {
-    ApplicationCoreStatus,
-    ApplicationLifecycleStatus,
-    ApplicationLifecycleStatusWithNone,
-} from '@/lib/applications/status';
+import { runInFlightDeduped } from '@/lib/async/inflight-dedupe';
+import {
+    APPLICATION_DECISION_REASON_TEMPLATES,
+    normalizeApplicationDecisionReason,
+    type ApplicationDecisionReasonCode,
+} from '@/lib/applications/reasons';
 import {
     calculateCooldown,
     normalizeApplicationMessageText,
     resolveLifecycleStatus,
 } from '@/lib/applications/utils';
 import { isApplicationReviewerRole } from '@/lib/applications/authorization';
+import type {
+    ApplicationActionOptions,
+    ApplicationActionResult,
+    ApplicationCursorPaginationInput,
+    ApplicationRequestHistoryItem,
+    ApplicationStatusResult,
+    ApplicationActionErrorCode,
+} from './types';
 
 // ============================================================================
 // TYPES
 // ============================================================================
-interface ApplicationResult {
-    success: boolean;
-    error?: string;
-    applicationId?: string;
-    conversationId?: string;
-}
-
-interface ApplicationStatus {
-    status: ApplicationCoreStatus;
-    roleId?: string;
-    roleTitle?: string;
-    decisionReason?: string | null;
-    lifecycleStatus?: ApplicationLifecycleStatusWithNone;
-    canReapply?: boolean;
-    waitTime?: string;
-    updatedAt?: Date;
-}
-
 type ApplicationDecisionStatus = 'accepted' | 'rejected';
-
-export interface ApplicationRequestHistoryItem {
-    id: string;
-    kind: 'application';
-    direction: 'incoming' | 'outgoing';
-    status: ApplicationLifecycleStatus;
-    decisionReason?: string | null;
-    eventAt: string;
-    createdAt: string;
-    conversationId?: string | null;
-    project: {
-        id: string;
-        title: string;
-        slug: string | null;
-    };
-    roleTitle: string;
-    user: {
-        id: string;
-        username: string | null;
-        fullName: string | null;
-        avatarUrl: string | null;
-    } | null;
-}
 
 // ============================================================================
 // COOLDOWN HELPER (24 hours)
@@ -87,14 +55,6 @@ const APPLICATION_APPLY_COOLDOWN_GLOBAL_SECONDS = 8;
 const APPLICATION_LIST_DEFAULT_LIMIT = 20;
 const APPLICATION_LIST_MAX_LIMIT = 100;
 const APPLICATION_LIST_MAX_OFFSET = 100_000;
-
-const DECISION_REASON_TEMPLATES = {
-    skills_mismatch: 'Your skills are strong, but this role currently needs a closer stack match.',
-    role_filled: 'This role has already been filled by another applicant.',
-    availability: 'Current availability requirements do not align with the team schedule.',
-    experience: 'We need deeper experience for this role at this stage of the project.',
-    other: 'Thank you for applying. We are moving forward with another direction right now.',
-} as const;
 
 function normalizeApplicationListPagination(limit: unknown, offset: unknown) {
     const rawLimit = typeof limit === 'number' ? limit : Number(limit);
@@ -110,6 +70,80 @@ function normalizeApplicationListPagination(limit: unknown, offset: unknown) {
     const safeOffset = Math.min(Math.max(normalizedOffset, 0), APPLICATION_LIST_MAX_OFFSET);
 
     return { safeLimit, safeOffset };
+}
+
+function normalizeCursorPaginationInput(
+    input?: ApplicationCursorPaginationInput
+): { safeLimit: number; cursor: { createdAt: Date; id: string } | null } {
+    const rawLimit = typeof input?.limit === 'number' ? input.limit : Number(input?.limit);
+    const normalizedLimit = Number.isFinite(rawLimit)
+        ? Math.trunc(rawLimit)
+        : APPLICATION_LIST_DEFAULT_LIMIT;
+    const safeLimit = Math.min(Math.max(normalizedLimit, 1), APPLICATION_LIST_MAX_LIMIT);
+
+    const rawCursor = typeof input?.cursor === 'string' ? input.cursor.trim() : '';
+    if (!rawCursor) {
+        return { safeLimit, cursor: null };
+    }
+
+    try {
+        const decoded = Buffer.from(rawCursor, 'base64').toString('utf8');
+        const [iso, id] = decoded.split(':::');
+        if (!iso || !id) {
+            return { safeLimit, cursor: null };
+        }
+        const createdAt = new Date(iso);
+        if (Number.isNaN(createdAt.getTime())) {
+            return { safeLimit, cursor: null };
+        }
+        return { safeLimit, cursor: { createdAt, id } };
+    } catch {
+        return { safeLimit, cursor: null };
+    }
+}
+
+function encodeApplicationCursor(row: { createdAt: Date; id: string }): string {
+    return Buffer.from(`${row.createdAt.toISOString()}:::${row.id}`, 'utf8').toString('base64');
+}
+
+function resolveApplicationTraceId(
+    action: string,
+    userId: string,
+    targetId: string,
+    options?: ApplicationActionOptions
+): string {
+    const supplied = options?.applicationTraceId?.trim();
+    if (supplied) return supplied;
+    const suffix = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    return `app_${action}_${userId.slice(0, 8)}_${targetId.slice(0, 8)}_${suffix}`;
+}
+
+function normalizeDecisionReasonCode(reason: unknown): ApplicationDecisionReasonCode {
+    return normalizeApplicationDecisionReason(reason, 'other');
+}
+
+function toApplicationFailure(
+    traceId: string,
+    errorCode: ApplicationActionErrorCode,
+    message: string
+): ApplicationActionResult {
+    return {
+        success: false,
+        error: message,
+        errorCode,
+        applicationTraceId: traceId,
+    };
+}
+
+function toApplicationSuccess(
+    traceId: string,
+    payload?: Partial<ApplicationActionResult>
+): ApplicationActionResult {
+    return {
+        success: true,
+        applicationTraceId: traceId,
+        ...payload,
+    };
 }
 
 
@@ -151,8 +185,8 @@ function resolveDecisionMessage(
     if (status === 'accepted') {
         return 'Welcome to the project.';
     }
-    const reasonKey = (reason || '').trim().toLowerCase() as keyof typeof DECISION_REASON_TEMPLATES;
-    return DECISION_REASON_TEMPLATES[reasonKey] || DECISION_REASON_TEMPLATES.other;
+    const reasonKey = normalizeDecisionReasonCode(reason);
+    return APPLICATION_DECISION_REASON_TEMPLATES[reasonKey];
 }
 
 function toISODate(value: Date | string | null | undefined) {
@@ -448,7 +482,8 @@ async function sendApplicationMessageInternal(
     projectTitle: string,
     roleTitle: string,
     userMessage: string,
-    applicationId: string
+    applicationId: string,
+    applicationTraceId: string
 ): Promise<{ conversationId: string }> {
     // 1) Ensure a single DM conversation for this user pair
     const conversationId = await getOrCreateDmConversationIdInternal(tx, applicantId, creatorId);
@@ -494,6 +529,7 @@ async function sendApplicationMessageInternal(
         projectTitle,
         roleTitle,
         status: 'pending',
+        applicationTraceId,
         lastUpdatedAt: nowIso,
         links: normalizedMessage
             .split(/\r?\n/)
@@ -506,6 +542,7 @@ async function sendApplicationMessageInternal(
         status: 'pending',
         at: nowIso,
         by: applicantId,
+        applicationTraceId,
     });
 
     const mergedMetadata = {
@@ -577,7 +614,8 @@ async function sendApplicationStatusUpdateInternal(
     roleTitle: string,
     status: 'accepted' | 'rejected' | 'pending',
     customMessage?: string,
-    reason?: string
+    reason?: string,
+    applicationTraceId?: string
 ): Promise<void> {
     const statusText =
         status === 'accepted' ? 'Accepted' : status === 'rejected' ? 'Not Accepted' : 'Reopened';
@@ -601,6 +639,7 @@ async function sendApplicationStatusUpdateInternal(
         projectTitle,
         roleTitle,
         status,
+        applicationTraceId: applicationTraceId || null,
         ...(status === 'pending'
             ? { reopenedAt: decisionAt, reopenedBy: creatorId }
             : { decisionAt, decisionBy: creatorId }),
@@ -704,9 +743,18 @@ async function syncCanonicalApplicationMessageDecisionInternal(
         decisionBy: string;
         reason?: string;
         timelineType?: 'decision' | 'reopened';
+        applicationTraceId?: string;
     }
 ) {
-    const { applicationId, conversationId, status, decisionBy, reason, timelineType } = params;
+    const {
+        applicationId,
+        conversationId,
+        status,
+        decisionBy,
+        reason,
+        timelineType,
+        applicationTraceId,
+    } = params;
     if (!conversationId) return;
 
     const nowIso = new Date().toISOString();
@@ -736,6 +784,7 @@ async function syncCanonicalApplicationMessageDecisionInternal(
             at: nowIso,
             by: decisionBy,
             reasonCode: reason || null,
+            applicationTraceId: applicationTraceId || null,
         });
 
         await tx
@@ -744,6 +793,7 @@ async function syncCanonicalApplicationMessageDecisionInternal(
                 metadata: {
                     ...nextMetadata,
                     status,
+                    applicationTraceId: applicationTraceId || null,
                     ...(status === 'pending'
                         ? { reopenedBy: decisionBy, reopenedAt: nowIso }
                         : { decisionBy, decisionAt: nowIso }),
@@ -758,7 +808,7 @@ async function syncCanonicalApplicationMessageDecisionInternal(
 // ============================================================================
 // GET APPLICATION STATUS (for project page)
 // ============================================================================
-export async function getApplicationStatusAction(projectId: string): Promise<ApplicationStatus> {
+export async function getApplicationStatusAction(projectId: string): Promise<ApplicationStatusResult> {
     try {
         const supabase = await createClient();
         const { data: { user } } = await supabase.auth.getUser();
@@ -786,7 +836,10 @@ export async function getApplicationStatusAction(projectId: string): Promise<App
 
         const roleTitle = application.role?.title || application.role?.role || 'Unknown Role';
         const decisionMap = await getDecisionMetadataMap([application.id]);
-        const decisionReason = decisionMap.get(application.id)?.reasonCode || null;
+        const decisionReasonRaw = decisionMap.get(application.id)?.reasonCode || null;
+        const decisionReason = decisionReasonRaw
+            ? normalizeApplicationDecisionReason(decisionReasonRaw, 'other')
+            : null;
         const lifecycleStatus = resolveLifecycleStatus(application.status, decisionReason);
 
         if (application.status === 'rejected') {
@@ -834,213 +887,220 @@ export async function getApplicationStatusAction(projectId: string): Promise<App
 export async function applyToRoleAction(
     projectId: string,
     roleId: string,
-    message: string
-): Promise<ApplicationResult> {
+    message: string,
+    options?: ApplicationActionOptions
+): Promise<ApplicationActionResult> {
+    const traceId = resolveApplicationTraceId('apply', 'anon', projectId, options);
     try {
         const supabase = await createClient();
         const { data: { user } } = await supabase.auth.getUser();
 
         if (!user) {
-            return { success: false, error: 'You must be logged in to apply' };
-        }
-
-        const applyRate = await consumeRateLimit(`applications:apply:${user.id}`, 30, APPLICATION_APPLY_COOLDOWN_GLOBAL_SECONDS);
-        if (!applyRate.allowed) {
-            return { success: false, error: 'Too many application attempts. Please wait a moment.' };
-        }
-        const projectApplyRate = await consumeRateLimit(
-            `applications:apply:${user.id}:${projectId}`,
-            6,
-            APPLICATION_APPLY_COOLDOWN_PER_PROJECT_SECONDS
-        );
-        if (!projectApplyRate.allowed) {
-            return { success: false, error: 'Too many attempts for this project. Please retry shortly.' };
-        }
-
-        // OPTIMIZATION: Batch all read queries into a single parallel fetch
-        const [project, role, existingMember, existingApp] = await Promise.all([
-            db.query.projects.findFirst({
-                where: eq(projects.id, projectId),
-                columns: { id: true, ownerId: true, slug: true, title: true }
-            }),
-            db.query.projectOpenRoles.findFirst({
-                where: and(
-                    eq(projectOpenRoles.id, roleId),
-                    eq(projectOpenRoles.projectId, projectId)
-                ),
-                columns: { id: true, role: true, title: true, count: true, filled: true }
-            }),
-            db.query.projectMembers.findFirst({
-                where: and(
-                    eq(projectMembers.projectId, projectId),
-                    eq(projectMembers.userId, user.id)
-                ),
-                columns: { id: true }
-            }),
-            db.query.roleApplications.findFirst({
-                where: and(
-                    eq(roleApplications.projectId, projectId),
-                    eq(roleApplications.applicantId, user.id)
-                ),
-                columns: { id: true, status: true, updatedAt: true, decisionBy: true, conversationId: true }
-            })
-        ]);
-
-        // Validation checks (fail fast)
-        if (!project) {
-            return { success: false, error: 'Project not found' };
-        }
-        if (project.ownerId === user.id) {
-            return { success: false, error: 'You cannot apply to your own project' };
-        }
-        if (!role) {
-            return { success: false, error: 'Role not found' };
-        }
-        if (role.filled >= role.count) {
-            return { success: false, error: 'This role has no available spots' };
-        }
-        if (existingMember) {
-            return { success: false, error: 'You are already a team member' };
+            return toApplicationFailure(traceId, 'UNAUTHORIZED', 'You must be logged in to apply');
         }
 
         const trimmedMessage = normalizeApplicationMessageText(message);
         if (!trimmedMessage) {
-            return { success: false, error: 'Please add a short application message' };
+            return toApplicationFailure(traceId, 'INVALID_INPUT', 'Please add a short application message');
         }
-        const roleTitleText = role?.title || role?.role || 'Unknown Role';
+        const dedupeKey = `applications:apply:${user.id}:${projectId}:${roleId}:${options?.idempotencyKey?.trim() || trimmedMessage.slice(0, 120)}`;
+        return await runInFlightDeduped(dedupeKey, async () => {
+            const applyRate = await consumeRateLimit(`applications:apply:${user.id}`, 30, APPLICATION_APPLY_COOLDOWN_GLOBAL_SECONDS);
+            if (!applyRate.allowed) {
+                return toApplicationFailure(traceId, 'RATE_LIMITED', 'Too many application attempts. Please wait a moment.');
+            }
+            const projectApplyRate = await consumeRateLimit(
+                `applications:apply:${user.id}:${projectId}`,
+                6,
+                APPLICATION_APPLY_COOLDOWN_PER_PROJECT_SECONDS
+            );
+            if (!projectApplyRate.allowed) {
+                return toApplicationFailure(traceId, 'RATE_LIMITED', 'Too many attempts for this project. Please retry shortly.');
+            }
 
-        // Handle existing application states
-        if (existingApp) {
-            if (existingApp.status === 'pending') {
-                return {
-                    success: true,
-                    applicationId: existingApp.id,
-                    conversationId: existingApp.conversationId || undefined,
-                };
+            const [project, role, existingMember, existingApp] = await Promise.all([
+                db.query.projects.findFirst({
+                    where: eq(projects.id, projectId),
+                    columns: { id: true, ownerId: true, slug: true, title: true }
+                }),
+                db.query.projectOpenRoles.findFirst({
+                    where: and(
+                        eq(projectOpenRoles.id, roleId),
+                        eq(projectOpenRoles.projectId, projectId)
+                    ),
+                    columns: { id: true, role: true, title: true, count: true, filled: true }
+                }),
+                db.query.projectMembers.findFirst({
+                    where: and(
+                        eq(projectMembers.projectId, projectId),
+                        eq(projectMembers.userId, user.id)
+                    ),
+                    columns: { id: true }
+                }),
+                db.query.roleApplications.findFirst({
+                    where: and(
+                        eq(roleApplications.projectId, projectId),
+                        eq(roleApplications.applicantId, user.id)
+                    ),
+                    columns: { id: true, status: true, updatedAt: true, decisionBy: true, conversationId: true }
+                })
+            ]);
+
+            if (!project) {
+                return toApplicationFailure(traceId, 'PROJECT_NOT_FOUND', 'Project not found');
             }
-            if (existingApp.status === 'accepted') {
-                return { success: false, error: 'Your application was already accepted' };
+            if (project.ownerId === user.id) {
+                return toApplicationFailure(traceId, 'FORBIDDEN', 'You cannot apply to your own project');
             }
-            if (existingApp.status === 'rejected') {
-                const canSkipCooldown = existingApp.decisionBy === user.id;
-                const { canApply, waitTime } = canSkipCooldown
-                    ? { canApply: true, waitTime: undefined as string | undefined }
-                    : calculateCooldown(existingApp.updatedAt);
-                if (!canApply) {
-                    return { success: false, error: `You can reapply in ${waitTime}` };
+            if (!role) {
+                return toApplicationFailure(traceId, 'ROLE_NOT_FOUND', 'Role not found');
+            }
+            if (role.filled >= role.count) {
+                return toApplicationFailure(traceId, 'ROLE_FULL', 'This role has no available spots');
+            }
+            if (existingMember) {
+                return toApplicationFailure(traceId, 'ALREADY_MEMBER', 'You are already a team member');
+            }
+
+            const roleTitleText = role?.title || role?.role || 'Unknown Role';
+
+            if (existingApp) {
+                if (existingApp.status === 'pending') {
+                    return toApplicationSuccess(traceId, {
+                        applicationId: existingApp.id,
+                        conversationId: existingApp.conversationId || undefined,
+                        idempotent: true,
+                    });
                 }
-
-                const { conversationId } = await db.transaction(async (tx) => {
-                    // State transition: rejected -> pending
-                    const reopened = await transitionApplicationToPendingInternal(tx, existingApp.id);
-                    if (!reopened) {
-                        throw new Error('Application is not eligible for reapply');
+                if (existingApp.status === 'accepted') {
+                    return toApplicationFailure(traceId, 'INVALID_STATE', 'Your application was already accepted');
+                }
+                if (existingApp.status === 'rejected') {
+                    const canSkipCooldown = existingApp.decisionBy === user.id;
+                    const { canApply, waitTime } = canSkipCooldown
+                        ? { canApply: true, waitTime: undefined as string | undefined }
+                        : calculateCooldown(existingApp.updatedAt);
+                    if (!canApply) {
+                        return toApplicationFailure(traceId, 'COOLDOWN_ACTIVE', `You can reapply in ${waitTime}`);
                     }
 
-                    await tx
-                        .update(roleApplications)
-                        .set({
-                            roleId,
-                            message: trimmedMessage,
-                            updatedAt: new Date(),
-                        })
-                        .where(eq(roleApplications.id, existingApp.id));
+                    const { conversationId } = await db.transaction(async (tx) => {
+                        const reopened = await transitionApplicationToPendingInternal(tx, existingApp.id);
+                        if (!reopened) {
+                            throw new Error('Application is not eligible for reapply');
+                        }
 
-                    // Send reapplication message to chat (atomic with the application update)
-                    const { conversationId } = await sendApplicationMessageInternal(
-                        tx,
-                        user.id,
-                        project.ownerId,
+                        await tx
+                            .update(roleApplications)
+                            .set({
+                                roleId,
+                                message: trimmedMessage,
+                                updatedAt: new Date(),
+                            })
+                            .where(eq(roleApplications.id, existingApp.id));
+
+                        const { conversationId } = await sendApplicationMessageInternal(
+                            tx,
+                            user.id,
+                            project.ownerId,
+                            projectId,
+                            roleId,
+                            project.title || 'Project',
+                            roleTitleText,
+                            trimmedMessage,
+                            existingApp.id,
+                            traceId
+                        );
+
+                        await tx.update(roleApplications)
+                            .set({ conversationId, updatedAt: new Date() })
+                            .where(eq(roleApplications.id, existingApp.id));
+
+                        return { conversationId };
+                    });
+
+                    revalidatePath(`/projects/${project.slug || projectId}`);
+                    revalidatePath('/messages');
+                    trackApplicationEvent('apply_submitted', {
+                        applicationId: existingApp.id,
                         projectId,
                         roleId,
-                        project.title || 'Project',
-                        roleTitleText,
-                        trimmedMessage,
-                        existingApp.id
-                    );
-
-                    // Store conversation ID for linking
-                    await tx.update(roleApplications)
-                        .set({ conversationId, updatedAt: new Date() })
-                        .where(eq(roleApplications.id, existingApp.id));
-
-                    return { conversationId };
-                });
-
-                revalidatePath(`/projects/${project.slug || projectId}`);
-                revalidatePath('/messages');
-                trackApplicationEvent('apply_submitted', {
-                    applicationId: existingApp.id,
-                    projectId,
-                    roleId,
-                    actorId: user.id,
-                    source: 'project',
-                });
-                return { success: true, applicationId: existingApp.id, conversationId };
+                        actorId: user.id,
+                        source: 'project',
+                        applicationTraceId: traceId,
+                    });
+                    return toApplicationSuccess(traceId, {
+                        applicationId: existingApp.id,
+                        conversationId,
+                        idempotent: true,
+                    });
+                }
             }
-        }
 
-        const pendingCount = await db
-            .select({ count: sql<number>`COUNT(*)::int` })
-            .from(roleApplications)
-            .where(and(eq(roleApplications.applicantId, user.id), eq(roleApplications.status, 'pending')))
-            .then((rows) => rows[0]?.count ?? 0);
-        if (pendingCount >= APPLICATION_PENDING_CAP_PER_USER) {
-            return { success: false, error: 'You already have too many pending applications. Please wait for decisions.' };
-        }
+            const pendingCount = await db
+                .select({ count: sql<number>`COUNT(*)::int` })
+                .from(roleApplications)
+                .where(and(eq(roleApplications.applicantId, user.id), eq(roleApplications.status, 'pending')))
+                .then((rows) => rows[0]?.count ?? 0);
+            if (pendingCount >= APPLICATION_PENDING_CAP_PER_USER) {
+                return toApplicationFailure(traceId, 'INVALID_STATE', 'You already have too many pending applications. Please wait for decisions.');
+            }
 
-        const { applicationId: newApplicationId, conversationId } = await db.transaction(async (tx) => {
-            // Create new application with message
-            const [newApp] = await tx.insert(roleApplications)
-                .values({
+            const { applicationId: newApplicationId, conversationId } = await db.transaction(async (tx) => {
+                const [newApp] = await tx.insert(roleApplications)
+                    .values({
+                        projectId,
+                        roleId,
+                        applicantId: user.id,
+                        creatorId: project.ownerId,
+                        message: trimmedMessage,
+                        status: 'pending'
+                    })
+                    .returning({ id: roleApplications.id });
+
+                const { conversationId } = await sendApplicationMessageInternal(
+                    tx,
+                    user.id,
+                    project.ownerId,
                     projectId,
                     roleId,
-                    applicantId: user.id,
-                    creatorId: project.ownerId,
-                    message: trimmedMessage,
-                    status: 'pending'
-                })
-                .returning({ id: roleApplications.id });
+                    project.title || 'Project',
+                    roleTitleText,
+                    trimmedMessage,
+                    newApp.id,
+                    traceId
+                );
 
-            // Send application message to chat (atomic with application insert)
-            const { conversationId } = await sendApplicationMessageInternal(
-                tx,
-                user.id,
-                project.ownerId,
+                await tx.update(roleApplications)
+                    .set({ conversationId, updatedAt: new Date() })
+                    .where(eq(roleApplications.id, newApp.id));
+
+                return { applicationId: newApp.id, conversationId };
+            });
+
+            revalidatePath(`/projects/${project.slug || projectId}`);
+            revalidatePath('/messages');
+            revalidatePath('/people');
+            trackApplicationEvent('apply_submitted', {
+                applicationId: newApplicationId,
                 projectId,
                 roleId,
-                project.title || 'Project',
-                roleTitleText,
-                trimmedMessage,
-                newApp.id
-            );
+                actorId: user.id,
+                source: 'project',
+                applicationTraceId: traceId,
+            });
 
-            // Store conversation ID for linking
-            await tx.update(roleApplications)
-                .set({ conversationId, updatedAt: new Date() })
-                .where(eq(roleApplications.id, newApp.id));
-
-            return { applicationId: newApp.id, conversationId };
+            return toApplicationSuccess(traceId, {
+                applicationId: newApplicationId,
+                conversationId,
+            });
         });
-
-        revalidatePath(`/projects/${project.slug || projectId}`);
-        revalidatePath('/messages');
-        revalidatePath('/people');
-        trackApplicationEvent('apply_submitted', {
-            applicationId: newApplicationId,
-            projectId,
-            roleId,
-            actorId: user.id,
-            source: 'project',
-        });
-
-        return { success: true, applicationId: newApplicationId, conversationId };
     } catch (error) {
         console.error('Failed to apply to role:', error);
         if (error instanceof Error && error.message === 'Application is not eligible for reapply') {
-            return { success: false, error: 'This application cannot be reopened right now' };
+            return toApplicationFailure(traceId, 'INVALID_STATE', 'This application cannot be reopened right now');
         }
-        return { success: false, error: 'Failed to submit application' };
+        return toApplicationFailure(traceId, 'INTERNAL_ERROR', 'Failed to submit application');
     }
 }
 
@@ -1049,187 +1109,183 @@ export async function applyToRoleAction(
 // ============================================================================
 export async function acceptApplicationAction(
     applicationId: string,
-    message?: string
-): Promise<ApplicationResult> {
+    message?: string,
+    options?: ApplicationActionOptions
+): Promise<ApplicationActionResult> {
+    const traceId = resolveApplicationTraceId('accept', 'anon', applicationId, options);
     try {
         const supabase = await createClient();
         const { data: { user } } = await supabase.auth.getUser();
 
         if (!user) {
-            return { success: false, error: 'Unauthorized' };
+            return toApplicationFailure(traceId, 'UNAUTHORIZED', 'Unauthorized');
         }
-
-        const acceptRate = await consumeRateLimit(`applications:accept:${user.id}`, 40, 60);
-        if (!acceptRate.allowed) {
-            return { success: false, error: 'Too many decisions. Please wait a moment.' };
-        }
-
-        const application = await db.query.roleApplications.findFirst({
-            where: eq(roleApplications.id, applicationId),
-            with: {
-                // OPTIMIZATION: Include conversationId to avoid N+1 query in transaction
-                project: { columns: { id: true, title: true, slug: true, ownerId: true, conversationId: true } },
-                role: { columns: { id: true, role: true, title: true, filled: true, count: true, projectId: true } }
-            }
-        });
-
-        if (!application) {
-            return { success: false, error: 'Application not found' };
-        }
-
-        const canReview = await canReviewProjectApplicationInternal(
-            db,
-            application.projectId,
-            user.id,
-            application.project?.ownerId
-        );
-        if (!canReview) {
-            return { success: false, error: 'Only the project owner or admins can accept applications' };
-        }
-
-        if (application.status === 'accepted') {
-            return { success: true };
-        }
-        if (application.status === 'rejected') {
-            return { success: false, error: 'This application has already been rejected' };
-        }
-
-        if (!application.role || application.role.projectId !== application.projectId) {
-            return { success: false, error: 'Invalid application role mapping' };
-        }
-
-        // Check if role is still available
-        if (application.role && application.role.filled >= application.role.count) {
-            return { success: false, error: 'This role is now full' };
-        }
-
-        // Transaction: accept app, add member, increment filled, auto-connect
-        await db.transaction(async (tx) => {
-            // 1. Transition pending -> accepted atomically (prevents double processing/races).
-            const roleTitleForMember =
-                application.role?.title || application.role?.role || 'Team Member';
-
-            const transitioned = await transitionApplicationDecisionInternal(tx, {
-                applicationId,
-                status: 'accepted',
-                decisionBy: user.id,
-                acceptedRoleTitle: roleTitleForMember,
-            });
-
-            if (!transitioned) {
-                throw new Error('Application already processed');
+        const dedupeKey = `applications:accept:${user.id}:${applicationId}:${options?.idempotencyKey?.trim() || 'default'}`;
+        return await runInFlightDeduped(dedupeKey, async () => {
+            const acceptRate = await consumeRateLimit(`applications:accept:${user.id}`, 40, 60);
+            if (!acceptRate.allowed) {
+                return toApplicationFailure(traceId, 'RATE_LIMITED', 'Too many decisions. Please wait a moment.');
             }
 
-            // 2. Add user as project member (use 'member' role for team membership)
-            const existingMember = await tx.query.projectMembers.findFirst({
-                where: and(
-                    eq(projectMembers.projectId, application.projectId),
-                    eq(projectMembers.userId, application.applicantId)
-                ),
-                columns: { id: true }
-            });
-
-            if (!existingMember) {
-                // Lock role row and enforce capacity at commit time.
-                const roleCapacity = await tx
-                    .select({
-                        id: projectOpenRoles.id,
-                        filled: projectOpenRoles.filled,
-                        count: projectOpenRoles.count,
-                    })
-                    .from(projectOpenRoles)
-                    .where(eq(projectOpenRoles.id, application.roleId))
-                    .for('update')
-                    .limit(1);
-
-                const role = roleCapacity[0];
-                if (!role || role.filled >= role.count) {
-                    throw new Error('Role is full');
+            const application = await db.query.roleApplications.findFirst({
+                where: eq(roleApplications.id, applicationId),
+                with: {
+                    project: { columns: { id: true, title: true, slug: true, ownerId: true, conversationId: true } },
+                    role: { columns: { id: true, role: true, title: true, filled: true, count: true, projectId: true } }
                 }
+            });
 
-                await tx.insert(projectMembers)
-                    .values({
-                        projectId: application.projectId,
-                        userId: application.applicantId,
-                        role: 'member' // Member role for application-based joins
-                    });
-
-                // 3. Increment filled count only when membership was actually created.
-                await tx.update(projectOpenRoles)
-                    .set({
-                        filled: sql`${projectOpenRoles.filled} + 1`,
-                        updatedAt: new Date()
-                    })
-                    .where(eq(projectOpenRoles.id, application.roleId));
+            if (!application) {
+                return toApplicationFailure(traceId, 'NOT_FOUND', 'Application not found');
             }
 
-            // 3.5 Deterministic project-group enrollment in this transaction.
-            const projectConversationId = await ensureProjectGroupConversationIdInternal(
-                tx,
+            const canReview = await canReviewProjectApplicationInternal(
+                db,
                 application.projectId,
-                application.project.ownerId
+                user.id,
+                application.project?.ownerId
             );
-            await tx
-                .insert(conversationParticipants)
-                .values([
-                    { conversationId: projectConversationId, userId: application.project.ownerId },
-                    { conversationId: projectConversationId, userId: application.applicantId },
-                ])
-                .onConflictDoNothing({
-                    target: [conversationParticipants.conversationId, conversationParticipants.userId],
-                });
+            if (!canReview) {
+                return toApplicationFailure(traceId, 'FORBIDDEN', 'Only the project owner or admins can accept applications');
+            }
 
-            // 4. Auto-connect users with pair-locking and count consistency.
-            // Never force-convert blocked relationships.
-            await ensureAcceptedConnectionInternal(tx, user.id, application.applicantId);
+            if (application.status === 'accepted') {
+                return toApplicationSuccess(traceId, { idempotent: true, applicationId });
+            }
+            if (application.status === 'rejected') {
+                return toApplicationFailure(traceId, 'INVALID_STATE', 'This application has already been rejected');
+            }
 
-            // Send status update message to chat if conversation exists
-            if (application.conversationId) {
-                await syncCanonicalApplicationMessageDecisionInternal(tx, {
+            if (!application.role || application.role.projectId !== application.projectId) {
+                return toApplicationFailure(traceId, 'INVALID_STATE', 'Invalid application role mapping');
+            }
+
+            if (application.role && application.role.filled >= application.role.count) {
+                return toApplicationFailure(traceId, 'ROLE_FULL', 'This role is now full');
+            }
+
+            await db.transaction(async (tx) => {
+                const roleTitleForMember =
+                    application.role?.title || application.role?.role || 'Team Member';
+
+                const transitioned = await transitionApplicationDecisionInternal(tx, {
                     applicationId,
-                    conversationId: application.conversationId,
                     status: 'accepted',
                     decisionBy: user.id,
+                    acceptedRoleTitle: roleTitleForMember,
                 });
 
-                // 2. SEND NEW NOTIFICATION MESSAGE
-                await sendApplicationStatusUpdateInternal(
+                if (!transitioned) {
+                    throw new Error('Application already processed');
+                }
+
+                const existingMember = await tx.query.projectMembers.findFirst({
+                    where: and(
+                        eq(projectMembers.projectId, application.projectId),
+                        eq(projectMembers.userId, application.applicantId)
+                    ),
+                    columns: { id: true }
+                });
+
+                if (!existingMember) {
+                    const roleCapacity = await tx
+                        .select({
+                            id: projectOpenRoles.id,
+                            filled: projectOpenRoles.filled,
+                            count: projectOpenRoles.count,
+                        })
+                        .from(projectOpenRoles)
+                        .where(eq(projectOpenRoles.id, application.roleId))
+                        .for('update')
+                        .limit(1);
+
+                    const role = roleCapacity[0];
+                    if (!role || role.filled >= role.count) {
+                        throw new Error('Role is full');
+                    }
+
+                    await tx.insert(projectMembers)
+                        .values({
+                            projectId: application.projectId,
+                            userId: application.applicantId,
+                            role: 'member'
+                        });
+
+                    await tx.update(projectOpenRoles)
+                        .set({
+                            filled: sql`${projectOpenRoles.filled} + 1`,
+                            updatedAt: new Date()
+                        })
+                        .where(eq(projectOpenRoles.id, application.roleId));
+                }
+
+                const projectConversationId = await ensureProjectGroupConversationIdInternal(
                     tx,
-                    application.conversationId,
-                    user.id,
-                    applicationId,
                     application.projectId,
-                    application.roleId,
-                    application.project?.title || 'Project',
-                    application.role?.title || application.role?.role || 'Role',
-                    'accepted',
-                    message
+                    application.project.ownerId
                 );
-            }
-        });
+                await tx
+                    .insert(conversationParticipants)
+                    .values([
+                        { conversationId: projectConversationId, userId: application.project.ownerId },
+                        { conversationId: projectConversationId, userId: application.applicantId },
+                    ])
+                    .onConflictDoNothing({
+                        target: [conversationParticipants.conversationId, conversationParticipants.userId],
+                    });
 
-        const slugOrId = application.project?.slug || application.projectId;
-        revalidatePath(`/projects/${slugOrId}`);
-        revalidatePath('/people');
-        revalidatePath('/messages');
-        trackApplicationEvent('apply_accepted', {
-            applicationId,
-            projectId: application.projectId,
-            roleId: application.roleId,
-            actorId: user.id,
-            source: 'requests',
-        });
+                await ensureAcceptedConnectionInternal(tx, user.id, application.applicantId);
 
-        return { success: true };
+                if (application.conversationId) {
+                    await syncCanonicalApplicationMessageDecisionInternal(tx, {
+                        applicationId,
+                        conversationId: application.conversationId,
+                        status: 'accepted',
+                        decisionBy: user.id,
+                        applicationTraceId: traceId,
+                    });
+
+                    await sendApplicationStatusUpdateInternal(
+                        tx,
+                        application.conversationId,
+                        user.id,
+                        applicationId,
+                        application.projectId,
+                        application.roleId,
+                        application.project?.title || 'Project',
+                        application.role?.title || application.role?.role || 'Role',
+                        'accepted',
+                        message,
+                        undefined,
+                        traceId
+                    );
+                }
+            });
+
+            const slugOrId = application.project?.slug || application.projectId;
+            revalidatePath(`/projects/${slugOrId}`);
+            revalidatePath('/people');
+            revalidatePath('/messages');
+            trackApplicationEvent('apply_accepted', {
+                applicationId,
+                projectId: application.projectId,
+                roleId: application.roleId,
+                actorId: user.id,
+                source: 'requests',
+                applicationTraceId: traceId,
+            });
+
+            return toApplicationSuccess(traceId, { applicationId });
+        });
     } catch (error) {
         console.error('Failed to accept application:', error);
         if (error instanceof Error && error.message === 'Application already processed') {
-            return { success: false, error: 'This application has already been processed' };
+            return toApplicationFailure(traceId, 'ALREADY_PROCESSED', 'This application has already been processed');
         }
         if (error instanceof Error && error.message === 'Role is full') {
-            return { success: false, error: 'This role is now full' };
+            return toApplicationFailure(traceId, 'ROLE_FULL', 'This role is now full');
         }
-        return { success: false, error: 'Failed to accept application' };
+        return toApplicationFailure(traceId, 'INTERNAL_ERROR', 'Failed to accept application');
     }
 }
 
@@ -1239,109 +1295,116 @@ export async function acceptApplicationAction(
 export async function rejectApplicationAction(
     applicationId: string,
     message?: string,
-    reason?: string
-): Promise<ApplicationResult> {
+    reason?: string,
+    options?: ApplicationActionOptions
+): Promise<ApplicationActionResult> {
+    const traceId = resolveApplicationTraceId('reject', 'anon', applicationId, options);
     try {
         const supabase = await createClient();
         const { data: { user } } = await supabase.auth.getUser();
 
         if (!user) {
-            return { success: false, error: 'Unauthorized' };
+            return toApplicationFailure(traceId, 'UNAUTHORIZED', 'Unauthorized');
         }
+        const dedupeKey = `applications:reject:${user.id}:${applicationId}:${options?.idempotencyKey?.trim() || 'default'}`;
+        return await runInFlightDeduped(dedupeKey, async () => {
+            const rejectRate = await consumeRateLimit(`applications:reject:${user.id}`, 50, 60);
+            if (!rejectRate.allowed) {
+                return toApplicationFailure(traceId, 'RATE_LIMITED', 'Too many decisions. Please wait a moment.');
+            }
 
-        const rejectRate = await consumeRateLimit(`applications:reject:${user.id}`, 50, 60);
-        if (!rejectRate.allowed) {
-            return { success: false, error: 'Too many decisions. Please wait a moment.' };
-        }
-
-        const application = await db.query.roleApplications.findFirst({
-            where: eq(roleApplications.id, applicationId),
-            with: {
-                project: { columns: { title: true, slug: true, ownerId: true } },
-                role: { columns: { title: true, role: true } }
-            },
-            columns: { id: true, creatorId: true, projectId: true, roleId: true, status: true, conversationId: true }
-        });
-
-        if (!application) {
-            return { success: false, error: 'Application not found' };
-        }
-
-        const canReview = await canReviewProjectApplicationInternal(
-            db,
-            application.projectId,
-            user.id,
-            application.project?.ownerId || application.creatorId
-        );
-        if (!canReview) {
-            return { success: false, error: 'Only the project owner or admins can reject applications' };
-        }
-
-        if (application.status === 'rejected') {
-            return { success: true };
-        }
-        if (application.status === 'accepted') {
-            return { success: false, error: 'This application has already been accepted' };
-        }
-
-        await db.transaction(async (tx) => {
-            const transitioned = await transitionApplicationDecisionInternal(tx, {
-                applicationId,
-                status: 'rejected',
-                decisionBy: user.id,
+            const application = await db.query.roleApplications.findFirst({
+                where: eq(roleApplications.id, applicationId),
+                with: {
+                    project: { columns: { title: true, slug: true, ownerId: true } },
+                    role: { columns: { title: true, role: true } }
+                },
+                columns: { id: true, creatorId: true, projectId: true, roleId: true, status: true, conversationId: true }
             });
 
-            if (!transitioned) {
-                throw new Error('Application already processed');
+            if (!application) {
+                return toApplicationFailure(traceId, 'NOT_FOUND', 'Application not found');
             }
 
-            // Send status update message to chat if conversation exists
-            if (application.conversationId) {
-                await syncCanonicalApplicationMessageDecisionInternal(tx, {
+            const canReview = await canReviewProjectApplicationInternal(
+                db,
+                application.projectId,
+                user.id,
+                application.project?.ownerId || application.creatorId
+            );
+            if (!canReview) {
+                return toApplicationFailure(traceId, 'FORBIDDEN', 'Only the project owner or admins can reject applications');
+            }
+
+            if (application.status === 'rejected') {
+                return toApplicationSuccess(traceId, { idempotent: true, applicationId });
+            }
+            if (application.status === 'accepted') {
+                return toApplicationFailure(traceId, 'INVALID_STATE', 'This application has already been accepted');
+            }
+
+            const normalizedReason = normalizeDecisionReasonCode(reason || 'other');
+
+            await db.transaction(async (tx) => {
+                const transitioned = await transitionApplicationDecisionInternal(tx, {
                     applicationId,
-                    conversationId: application.conversationId,
                     status: 'rejected',
                     decisionBy: user.id,
-                    reason,
                 });
 
-                // 2. SEND NEW NOTIFICATION MESSAGE
-                await sendApplicationStatusUpdateInternal(
-                    tx,
-                    application.conversationId,
-                    user.id,
-                    applicationId,
-                    application.projectId,
-                    application.roleId,
-                    application.project?.title || 'Project',
-                    application.role?.title || application.role?.role || 'Role',
-                    'rejected',
-                    message,
-                    reason
-                );
-            }
-        });
+                if (!transitioned) {
+                    throw new Error('Application already processed');
+                }
 
-        const slugOrId = application.project?.slug || application.projectId;
-        revalidatePath(`/projects/${slugOrId}`);
-        revalidatePath('/people');
-        revalidatePath('/messages');
-        trackApplicationEvent('apply_rejected', {
-            applicationId,
-            projectId: application.projectId,
-            roleId: application.roleId,
-            actorId: user.id,
-            reasonCode: reason || null,
-            source: 'requests',
-        });
+                if (application.conversationId) {
+                    await syncCanonicalApplicationMessageDecisionInternal(tx, {
+                        applicationId,
+                        conversationId: application.conversationId,
+                        status: 'rejected',
+                        decisionBy: user.id,
+                        reason: normalizedReason,
+                        applicationTraceId: traceId,
+                    });
 
-        return { success: true };
+                    await sendApplicationStatusUpdateInternal(
+                        tx,
+                        application.conversationId,
+                        user.id,
+                        applicationId,
+                        application.projectId,
+                        application.roleId,
+                        application.project?.title || 'Project',
+                        application.role?.title || application.role?.role || 'Role',
+                        'rejected',
+                        message,
+                        normalizedReason,
+                        traceId
+                    );
+                }
+            });
+
+            const slugOrId = application.project?.slug || application.projectId;
+            revalidatePath(`/projects/${slugOrId}`);
+            revalidatePath('/people');
+            revalidatePath('/messages');
+            trackApplicationEvent('apply_rejected', {
+                applicationId,
+                projectId: application.projectId,
+                roleId: application.roleId,
+                actorId: user.id,
+                reasonCode: normalizedReason || null,
+                source: 'requests',
+                applicationTraceId: traceId,
+            });
+
+            return toApplicationSuccess(traceId, { applicationId });
+        });
     } catch (error) {
         console.error('Failed to reject application:', error);
         if (error instanceof Error && error.message === 'Application already processed') {
-            return { success: false, error: 'This application has already been processed' };
+            return toApplicationFailure(traceId, 'ALREADY_PROCESSED', 'This application has already been processed');
         }
-        return { success: false, error: 'Failed to reject application' };
+        return toApplicationFailure(traceId, 'INTERNAL_ERROR', 'Failed to reject application');
     }
 }
 
@@ -1350,23 +1413,25 @@ export async function rejectApplicationAction(
 // ============================================================================
 export async function editPendingApplicationAction(
     applicationId: string,
-    message: string
-): Promise<ApplicationResult> {
+    message: string,
+    options?: ApplicationActionOptions
+): Promise<ApplicationActionResult> {
+    const traceId = resolveApplicationTraceId('edit', 'anon', applicationId, options);
     try {
         const supabase = await createClient();
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) {
-            return { success: false, error: 'Unauthorized' };
+            return toApplicationFailure(traceId, 'UNAUTHORIZED', 'Unauthorized');
         }
 
         const editRate = await consumeRateLimit(`applications:edit:${user.id}`, 20, 60);
         if (!editRate.allowed) {
-            return { success: false, error: 'Too many edits. Please wait a moment.' };
+            return toApplicationFailure(traceId, 'RATE_LIMITED', 'Too many edits. Please wait a moment.');
         }
 
         const normalizedMessage = normalizeApplicationMessageText(message);
         if (!normalizedMessage) {
-            return { success: false, error: 'Application message cannot be empty' };
+            return toApplicationFailure(traceId, 'INVALID_INPUT', 'Application message cannot be empty');
         }
 
         const application = await db.query.roleApplications.findFirst({
@@ -1388,17 +1453,21 @@ export async function editPendingApplicationAction(
             },
         });
 
-        if (!application) return { success: false, error: 'Application not found' };
-        if (application.applicantId !== user.id) return { success: false, error: 'Only the applicant can edit this application' };
-        if (application.status !== 'pending') return { success: false, error: 'Only pending applications can be edited' };
+        if (!application) return toApplicationFailure(traceId, 'NOT_FOUND', 'Application not found');
+        if (application.applicantId !== user.id) return toApplicationFailure(traceId, 'FORBIDDEN', 'Only the applicant can edit this application');
+        if (application.status !== 'pending') return toApplicationFailure(traceId, 'INVALID_STATE', 'Only pending applications can be edited');
 
         const ageMs = Date.now() - new Date(application.createdAt).getTime();
         if (ageMs > APPLICATION_EDIT_WINDOW_MS) {
-            return { success: false, error: 'Edit window expired' };
+            return toApplicationFailure(traceId, 'EDIT_WINDOW_EXPIRED', 'Edit window expired');
         }
 
         if ((application.message || '').trim() === normalizedMessage) {
-            return { success: true, applicationId: application.id, conversationId: application.conversationId || undefined };
+            return toApplicationSuccess(traceId, {
+                applicationId: application.id,
+                conversationId: application.conversationId || undefined,
+                idempotent: true,
+            });
         }
 
         const roleTitle = application.role?.title || application.role?.role || 'Role';
@@ -1419,7 +1488,8 @@ export async function editPendingApplicationAction(
                 projectTitle,
                 roleTitle,
                 normalizedMessage,
-                application.id
+                application.id,
+                traceId
             );
 
             await tx
@@ -1440,12 +1510,16 @@ export async function editPendingApplicationAction(
             roleId: application.roleId,
             actorId: user.id,
             source: 'messages',
+            applicationTraceId: traceId,
         });
 
-        return { success: true, applicationId: application.id, conversationId };
+        return toApplicationSuccess(traceId, {
+            applicationId: application.id,
+            conversationId,
+        });
     } catch (error) {
         console.error('Failed to edit pending application:', error);
-        return { success: false, error: 'Failed to edit application' };
+        return toApplicationFailure(traceId, 'INTERNAL_ERROR', 'Failed to edit application');
     }
 }
 
@@ -1454,18 +1528,20 @@ export async function editPendingApplicationAction(
 // ============================================================================
 export async function withdrawApplicationAction(
     applicationId: string,
-    message?: string
-): Promise<ApplicationResult> {
+    message?: string,
+    options?: ApplicationActionOptions
+): Promise<ApplicationActionResult> {
+    const traceId = resolveApplicationTraceId('withdraw', 'anon', applicationId, options);
     try {
         const supabase = await createClient();
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) {
-            return { success: false, error: 'Unauthorized' };
+            return toApplicationFailure(traceId, 'UNAUTHORIZED', 'Unauthorized');
         }
 
         const withdrawRate = await consumeRateLimit(`applications:withdraw:${user.id}`, 20, 60);
         if (!withdrawRate.allowed) {
-            return { success: false, error: 'Too many requests. Please wait a moment.' };
+            return toApplicationFailure(traceId, 'RATE_LIMITED', 'Too many requests. Please wait a moment.');
         }
 
         const application = await db.query.roleApplications.findFirst({
@@ -1484,10 +1560,12 @@ export async function withdrawApplicationAction(
             },
         });
 
-        if (!application) return { success: false, error: 'Application not found' };
-        if (application.applicantId !== user.id) return { success: false, error: 'Only the applicant can withdraw this application' };
-        if (application.status === 'accepted') return { success: false, error: 'Accepted applications cannot be withdrawn' };
-        if (application.status === 'rejected') return { success: true, applicationId };
+        if (!application) return toApplicationFailure(traceId, 'NOT_FOUND', 'Application not found');
+        if (application.applicantId !== user.id) return toApplicationFailure(traceId, 'FORBIDDEN', 'Only the applicant can withdraw this application');
+        if (application.status === 'accepted') return toApplicationFailure(traceId, 'INVALID_STATE', 'Accepted applications cannot be withdrawn');
+        if (application.status === 'rejected') {
+            return toApplicationSuccess(traceId, { applicationId, idempotent: true });
+        }
 
         await db.transaction(async (tx) => {
             const transitioned = await transitionApplicationDecisionInternal(tx, {
@@ -1506,6 +1584,7 @@ export async function withdrawApplicationAction(
                 status: 'rejected',
                 decisionBy: user.id,
                 reason: 'withdrawn_by_applicant',
+                applicationTraceId: traceId,
             });
 
             if (application.conversationId) {
@@ -1520,7 +1599,8 @@ export async function withdrawApplicationAction(
                     application.role?.title || application.role?.role || 'Role',
                     'rejected',
                     (message || '').trim() || 'Application withdrawn by applicant',
-                    'withdrawn_by_applicant'
+                    'withdrawn_by_applicant',
+                    traceId
                 );
             }
         });
@@ -1536,15 +1616,16 @@ export async function withdrawApplicationAction(
             actorId: user.id,
             reasonCode: 'withdrawn_by_applicant',
             source: 'messages',
+            applicationTraceId: traceId,
         });
 
-        return { success: true, applicationId };
+        return toApplicationSuccess(traceId, { applicationId });
     } catch (error) {
         console.error('Failed to withdraw application:', error);
         if (error instanceof Error && error.message === 'Application already processed') {
-            return { success: false, error: 'This application has already been processed' };
+            return toApplicationFailure(traceId, 'ALREADY_PROCESSED', 'This application has already been processed');
         }
-        return { success: false, error: 'Failed to withdraw application' };
+        return toApplicationFailure(traceId, 'INTERNAL_ERROR', 'Failed to withdraw application');
     }
 }
 
@@ -1553,18 +1634,20 @@ export async function withdrawApplicationAction(
 // ============================================================================
 export async function reopenApplicationAction(
     applicationId: string,
-    message?: string
-): Promise<ApplicationResult> {
+    message?: string,
+    options?: ApplicationActionOptions
+): Promise<ApplicationActionResult> {
+    const traceId = resolveApplicationTraceId('reopen', 'anon', applicationId, options);
     try {
         const supabase = await createClient();
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) {
-            return { success: false, error: 'Unauthorized' };
+            return toApplicationFailure(traceId, 'UNAUTHORIZED', 'Unauthorized');
         }
 
         const reopenRate = await consumeRateLimit(`applications:reopen:${user.id}`, 20, 60);
         if (!reopenRate.allowed) {
-            return { success: false, error: 'Too many reopen requests. Please wait a moment.' };
+            return toApplicationFailure(traceId, 'RATE_LIMITED', 'Too many reopen requests. Please wait a moment.');
         }
 
         const application = await db.query.roleApplications.findFirst({
@@ -1585,7 +1668,7 @@ export async function reopenApplicationAction(
             },
         });
 
-        if (!application) return { success: false, error: 'Application not found' };
+        if (!application) return toApplicationFailure(traceId, 'NOT_FOUND', 'Application not found');
 
         const canReview = await canReviewProjectApplicationInternal(
             db,
@@ -1594,29 +1677,29 @@ export async function reopenApplicationAction(
             application.project?.ownerId || application.creatorId
         );
         if (!canReview) {
-            return { success: false, error: 'Only project owner or admins can reopen applications' };
+            return toApplicationFailure(traceId, 'FORBIDDEN', 'Only project owner or admins can reopen applications');
         }
 
         if (application.status === 'pending') {
-            return { success: true, applicationId };
+            return toApplicationSuccess(traceId, { applicationId, idempotent: true });
         }
         if (application.status === 'accepted') {
-            return { success: false, error: 'Accepted applications cannot be reopened' };
+            return toApplicationFailure(traceId, 'INVALID_STATE', 'Accepted applications cannot be reopened');
         }
         if (application.status !== 'rejected') {
-            return { success: false, error: 'Only rejected applications can be reopened' };
+            return toApplicationFailure(traceId, 'INVALID_STATE', 'Only rejected applications can be reopened');
         }
 
         const decisionTimestampSource = application.decisionAt ?? application.updatedAt;
         if (!decisionTimestampSource) {
-            return { success: false, error: 'Cannot determine decision timestamp' };
+            return toApplicationFailure(traceId, 'INVALID_STATE', 'Cannot determine decision timestamp');
         }
         const decisionTimestamp = new Date(decisionTimestampSource).getTime();
         if (Number.isNaN(decisionTimestamp)) {
-            return { success: false, error: 'Invalid decision timestamp' };
+            return toApplicationFailure(traceId, 'INVALID_STATE', 'Invalid decision timestamp');
         }
         if (Date.now() - decisionTimestamp > APPLICATION_REOPEN_WINDOW_MS) {
-            return { success: false, error: 'Reopen window expired' };
+            return toApplicationFailure(traceId, 'REOPEN_WINDOW_EXPIRED', 'Reopen window expired');
         }
 
         await db.transaction(async (tx) => {
@@ -1630,6 +1713,7 @@ export async function reopenApplicationAction(
                 decisionBy: user.id,
                 reason: 'reopened_by_reviewer',
                 timelineType: 'reopened',
+                applicationTraceId: traceId,
             });
 
             if (application.conversationId) {
@@ -1644,7 +1728,8 @@ export async function reopenApplicationAction(
                     application.role?.title || application.role?.role || 'Role',
                     'pending',
                     (message || '').trim() || 'Application reopened for review.',
-                    'reopened_by_reviewer'
+                    'reopened_by_reviewer',
+                    traceId
                 );
             }
         });
@@ -1659,32 +1744,52 @@ export async function reopenApplicationAction(
             roleId: application.roleId,
             actorId: user.id,
             source: 'messages',
+            applicationTraceId: traceId,
         });
 
-        return { success: true, applicationId };
+        return toApplicationSuccess(traceId, { applicationId });
     } catch (error) {
         console.error('Failed to reopen application:', error);
         if (error instanceof Error && error.message === 'Application already processed') {
-            return { success: false, error: 'This application cannot be reopened right now' };
+            return toApplicationFailure(traceId, 'ALREADY_PROCESSED', 'This application cannot be reopened right now');
         }
-        return { success: false, error: 'Failed to reopen application' };
+        return toApplicationFailure(traceId, 'INTERNAL_ERROR', 'Failed to reopen application');
     }
 }
 
 // ============================================================================
 // GET USER'S APPLICATIONS (for Connections > Requests tab)
 // ============================================================================
-export async function getMyApplicationsAction() {
+export async function getMyApplicationsAction(
+    pagination: ApplicationCursorPaginationInput = {}
+) {
     try {
         const supabase = await createClient();
         const { data: { user } } = await supabase.auth.getUser();
 
         if (!user) {
-            return { success: false, applications: [] };
+            return {
+                success: false,
+                errorCode: 'UNAUTHORIZED' as const,
+                error: 'Unauthorized',
+                applications: [],
+                hasMore: false,
+                nextCursor: null,
+            };
         }
 
+        const { safeLimit, cursor } = normalizeCursorPaginationInput(pagination);
+
         const applications = await db.query.roleApplications.findMany({
-            where: eq(roleApplications.applicantId, user.id),
+            where: cursor
+                ? and(
+                    eq(roleApplications.applicantId, user.id),
+                    or(
+                        lt(roleApplications.createdAt, cursor.createdAt),
+                        and(eq(roleApplications.createdAt, cursor.createdAt), lt(roleApplications.id, cursor.id))
+                    )
+                )
+                : eq(roleApplications.applicantId, user.id),
             with: {
                 project: {
                     columns: { id: true, title: true, slug: true, coverImage: true }
@@ -1704,16 +1809,29 @@ export async function getMyApplicationsAction() {
                 updatedAt: true,
                 decisionBy: true,
             },
-            orderBy: (apps, { desc }) => [desc(apps.createdAt)]
+            orderBy: (apps, { desc }) => [desc(apps.createdAt), desc(apps.id)],
+            limit: safeLimit + 1,
         });
 
-        const decisionMap = await getDecisionMetadataMap(applications.map((app) => app.id));
+        const hasMore = applications.length > safeLimit;
+        const slicedApplications = applications.slice(0, safeLimit);
+        const nextCursor = hasMore && slicedApplications.length > 0
+            ? encodeApplicationCursor({
+                createdAt: slicedApplications[slicedApplications.length - 1].createdAt,
+                id: slicedApplications[slicedApplications.length - 1].id,
+            })
+            : null;
+
+        const decisionMap = await getDecisionMetadataMap(slicedApplications.map((app) => app.id));
 
         return {
             success: true,
-            applications: applications.map((app) => {
+            applications: slicedApplications.map((app) => {
                 const decisionMeta = decisionMap.get(app.id);
-                const decisionReason = decisionMeta?.reasonCode || null;
+                const decisionReasonRaw = decisionMeta?.reasonCode || null;
+                const decisionReason = decisionReasonRaw
+                    ? normalizeApplicationDecisionReason(decisionReasonRaw, 'other')
+                    : null;
                 const lifecycleStatus = resolveLifecycleStatus(app.status, decisionReason);
                 const canSkipCooldown = app.decisionBy === user.id;
                 const cooldownMeta =
@@ -1740,11 +1858,20 @@ export async function getMyApplicationsAction() {
                         Date.now() - new Date(app.createdAt).getTime() <= APPLICATION_EDIT_WINDOW_MS,
                     ...cooldownMeta
                 };
-            })
+            }),
+            hasMore,
+            nextCursor,
         };
     } catch (error) {
         console.error('Failed to get applications:', error);
-        return { success: false, applications: [] };
+        return {
+            success: false,
+            errorCode: 'INTERNAL_ERROR' as const,
+            error: 'Failed to load applications',
+            applications: [],
+            hasMore: false,
+            nextCursor: null,
+        };
     }
 }
 
@@ -1755,7 +1882,7 @@ export async function getMyApplicationsAction() {
 // GET INCOMING APPLICATIONS (for Creator - Connections > Requests tab)
 // ============================================================================
 export async function getIncomingApplicationsAction(
-    limit: number = APPLICATION_LIST_DEFAULT_LIMIT,
+    paginationOrLimit: ApplicationCursorPaginationInput | number = APPLICATION_LIST_DEFAULT_LIMIT,
     offset: number = 0
 ) {
     try {
@@ -1763,14 +1890,34 @@ export async function getIncomingApplicationsAction(
         const { data: { user } } = await supabase.auth.getUser();
 
         if (!user) {
-            return { success: false, applications: [], hasMore: false };
+            return {
+                success: false,
+                errorCode: 'UNAUTHORIZED' as const,
+                error: 'Unauthorized',
+                applications: [],
+                hasMore: false,
+                nextCursor: null,
+            };
         }
-        const { safeLimit, safeOffset } = normalizeApplicationListPagination(limit, offset);
+
+        const legacyMode = typeof paginationOrLimit === 'number';
+        const { safeLimit, safeOffset } = legacyMode
+            ? normalizeApplicationListPagination(paginationOrLimit, offset)
+            : normalizeApplicationListPagination(paginationOrLimit.limit, 0);
+        const { cursor } = legacyMode
+            ? { cursor: null }
+            : normalizeCursorPaginationInput(paginationOrLimit);
 
         const applications = await db.query.roleApplications.findMany({
             where: and(
                 eq(roleApplications.creatorId, user.id),
-                eq(roleApplications.status, 'pending')
+                eq(roleApplications.status, 'pending'),
+                ...(cursor
+                    ? [or(
+                        lt(roleApplications.createdAt, cursor.createdAt),
+                        and(eq(roleApplications.createdAt, cursor.createdAt), lt(roleApplications.id, cursor.id))
+                    )]
+                    : [])
             ),
             with: {
                 project: {
@@ -1784,13 +1931,19 @@ export async function getIncomingApplicationsAction(
                 }
             },
             columns: { id: true, projectId: true, status: true, createdAt: true, conversationId: true },
-            orderBy: (apps, { desc }) => [desc(apps.createdAt)],
+            orderBy: (apps, { desc }) => [desc(apps.createdAt), desc(apps.id)],
             limit: safeLimit + 1,
-            offset: safeOffset
+            offset: cursor ? 0 : safeOffset
         });
 
         const hasMore = applications.length > safeLimit;
         const slicedApplications = applications.slice(0, safeLimit);
+        const nextCursor = hasMore && slicedApplications.length > 0
+            ? encodeApplicationCursor({
+                createdAt: slicedApplications[slicedApplications.length - 1].createdAt,
+                id: slicedApplications[slicedApplications.length - 1].id,
+            })
+            : null;
 
         return {
             success: true,
@@ -1810,11 +1963,19 @@ export async function getIncomingApplicationsAction(
                 createdAt: app.createdAt,
                 conversationId: app.conversationId,
             })),
-            hasMore
+            hasMore,
+            nextCursor,
         };
     } catch (error) {
         console.error('Failed to get incoming applications:', error);
-        return { success: false, applications: [], hasMore: false };
+        return {
+            success: false,
+            errorCode: 'INTERNAL_ERROR' as const,
+            error: 'Failed to load incoming applications',
+            applications: [],
+            hasMore: false,
+            nextCursor: null,
+        };
     }
 }
 
@@ -1900,7 +2061,10 @@ export async function getInboxApplicationsAction(
             applications: slicedApplications.map((app) => {
                 const isIncoming = app.creatorId === user.id;
                 const decisionMeta = decisionMap.get(app.id);
-                const decisionReason = decisionMeta?.reasonCode || null;
+                const decisionReasonRaw = decisionMeta?.reasonCode || null;
+                const decisionReason = decisionReasonRaw
+                    ? normalizeApplicationDecisionReason(decisionReasonRaw, 'other')
+                    : null;
                 const lifecycleStatus = resolveLifecycleStatus(app.status, decisionReason);
 
                 let displayUser: {
@@ -2044,7 +2208,10 @@ export async function getApplicationRequestHistory(limit: number = 80): Promise<
             .map<ApplicationRequestHistoryItem>((app) => {
                 const isIncoming = app.creatorId === user.id && app.applicantId !== user.id;
                 const decisionMeta = decisionMap.get(app.id);
-                const decisionReason = decisionMeta?.reasonCode || null;
+                const decisionReasonRaw = decisionMeta?.reasonCode || null;
+                const decisionReason = decisionReasonRaw
+                    ? normalizeApplicationDecisionReason(decisionReasonRaw, 'other')
+                    : null;
                 const lifecycleStatus = resolveLifecycleStatus(app.status, decisionReason);
                 const decisionTimestamp = decisionMeta?.decisionAt
                     ? new Date(decisionMeta.decisionAt)

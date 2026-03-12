@@ -58,7 +58,14 @@ export async function fetchRepoMeta(args: {
   repo: string;
   token?: string;
   signal?: AbortSignal;
-}): Promise<{ defaultBranch: string | null; isPrivate: boolean | null }> {
+}): Promise<{
+  defaultBranch: string | null;
+  isPrivate: boolean | null;
+  visibility: "public" | "private" | null;
+  sizeKb: number | null;
+  fullName: string | null;
+  repoId: number | null;
+}> {
   const { owner, repo, token, signal } = args;
   const timeout = createTimeoutSignal(signal);
   let res: Response;
@@ -79,8 +86,23 @@ export async function fetchRepoMeta(args: {
     throw new Error(`GitHub repo lookup failed (${res.status})`);
   }
 
-  const json = (await res.json()) as { default_branch?: string; private?: boolean };
-  return { defaultBranch: json.default_branch || null, isPrivate: typeof json.private === "boolean" ? json.private : null };
+  const json = (await res.json()) as {
+    id?: number;
+    full_name?: string;
+    default_branch?: string;
+    private?: boolean;
+    size?: number;
+  };
+  const isPrivate = typeof json.private === "boolean" ? json.private : null;
+  return {
+    defaultBranch: json.default_branch || null,
+    isPrivate,
+    // `null` means GitHub did not return privacy info, so visibility is unknown.
+    visibility: isPrivate === true ? "private" : isPrivate === false ? "public" : null,
+    sizeKb: typeof json.size === "number" ? json.size : null,
+    fullName: typeof json.full_name === "string" ? json.full_name : null,
+    repoId: typeof json.id === "number" ? json.id : null,
+  };
 }
 
 export async function fetchContents(args: {

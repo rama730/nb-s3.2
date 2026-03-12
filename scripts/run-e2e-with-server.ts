@@ -10,7 +10,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { execSync } from "node:child_process";
 
 const baseURL = process.env.E2E_BASE_URL || "http://localhost:3000";
-const readyURL = `${baseURL}/api/ready`;
+const readyURL = `${baseURL}/api/v1/ready`;
 const timeoutMs = 120_000;
 const pollMs = 500;
 const devServerMode = (process.env.E2E_DEV_SERVER_MODE || "webpack").toLowerCase();

@@ -12,6 +12,8 @@ import { parseGithubRepo } from '@/lib/github/repo-preview';
 import { shouldIgnorePath } from '@/lib/import/import-filters';
 import { getLifecycleStagesForProjectType } from '@/lib/projects/lifecycle-templates';
 import { previewGithubFolderAction, previewGithubRepoRootAction } from '@/app/actions/github';
+import { buildProjectImportEventId, buildUploadManifestHash } from '@/lib/import/idempotency';
+import { buildProjectFileKey } from '@/lib/storage/project-file-key';
 
 export interface WizardContextType {
     openRoles: OpenRoleInput[];
@@ -214,7 +216,8 @@ export function useCreateProjectWizard({ onClose, onSuccess, draftId }: UseCreat
                 return;
             }
 
-            const res = await previewGithubRepoRootAction(url, watchedBranch || null);
+            const preferredInstallationId = (getValues('import_source.metadata') as any)?.githubInstallationId ?? null;
+            const res = await previewGithubRepoRootAction(url, watchedBranch || null, preferredInstallationId);
             if (!res.success) {
                 setGithubPreview((prev) => ({
                     ...prev,
@@ -255,7 +258,7 @@ export function useCreateProjectWizard({ onClose, onSuccess, draftId }: UseCreat
                 rootEntries: [],
             }));
         }
-    }, [setValue, watchedBranch]);
+    }, [getValues, setValue, watchedBranch]);
 
     const loadGithubFolder = useCallback(async (folderPath: string) => {
         const baseUrl = (githubPreview.repoUrl || '').trim();
@@ -275,7 +278,13 @@ export function useCreateProjectWizard({ onClose, onSuccess, draftId }: UseCreat
         if (!parsed) return;
 
         try {
-            const res = await previewGithubFolderAction(`https://github.com/${parsed.owner}/${parsed.repo}`, branch, key);
+            const preferredInstallationId = (getValues('import_source.metadata') as any)?.githubInstallationId ?? null;
+            const res = await previewGithubFolderAction(
+                `https://github.com/${parsed.owner}/${parsed.repo}`,
+                branch,
+                key,
+                preferredInstallationId
+            );
             if (!res.success) {
                 setGithubFolderEntries((prev) => ({ ...prev, [key]: [] }));
                 return;
@@ -286,7 +295,7 @@ export function useCreateProjectWizard({ onClose, onSuccess, draftId }: UseCreat
             // Non-blocking: folder expansion can fail silently; keep UX smooth.
             setGithubFolderEntries((prev) => ({ ...prev, [key]: [] }));
         }
-    }, [githubFolderEntries, githubPreview.branch, githubPreview.repoUrl, watchedBranch]);
+    }, [getValues, githubFolderEntries, githubPreview.branch, githubPreview.repoUrl, watchedBranch]);
 
     // --- Draft Management ---
 
@@ -407,11 +416,16 @@ export function useCreateProjectWizard({ onClose, onSuccess, draftId }: UseCreat
                     return;
                 }
 
-                // STRICT PREVIEW CHECK: We removed the "skip" option.
+                const metadata = (getValues('import_source.metadata') || {}) as Record<string, unknown>;
+                const preflightReady = metadata.githubPreflightStatus === 'ok';
+                if (!preflightReady) {
+                    toast.info('Run GitHub import checks before continuing.');
+                    return;
+                }
+
                 const previewReady = githubPreview.status === 'ready' && githubPreview.repoUrl === repoUrl;
                 if (!previewReady) {
-                    toast.info('You must preview the repository files to continue.');
-                    return;
+                    toast.info('Continuing without full preview. Import checks passed.');
                 }
             }
             if (importType === 'upload') {
@@ -458,6 +472,7 @@ export function useCreateProjectWizard({ onClose, onSuccess, draftId }: UseCreat
         setIsSubmitting(true);
         const importType = data.import_source?.type || 'scratch';
         let createdProjectId: string | null = null;
+        let uploadSessionContext: { sessionId?: string; manifestHash?: string } | null = null;
         try {
             const result = await createProjectAction({
                 ...data,
@@ -485,12 +500,16 @@ export function useCreateProjectWizard({ onClose, onSuccess, draftId }: UseCreat
                 ]);
 
                 const { getBatchUploadUrls, getUploadPresignedUrl } = uploadActions;
-                const { registerUploadedFolderAction } = importActions;
+                const { registerUploadedFolderAction, updateUploadSessionAction } = importActions;
+                const uploadProjectId = createdProjectId;
+                if (!uploadProjectId) {
+                    throw new Error('Project creation did not return a project ID.');
+                }
 
                 const filesArr = Array.from(uploadFiles);
                 const meta = filesArr.map((f) => {
                     const relativePath = f.webkitRelativePath || f.name;
-                    const key = `${createdProjectId}/${relativePath}`;
+                    const key = buildProjectFileKey(uploadProjectId, relativePath);
                     return {
                         key,
                         relativePath,
@@ -498,23 +517,51 @@ export function useCreateProjectWizard({ onClose, onSuccess, draftId }: UseCreat
                         mimeType: f.type || 'application/octet-stream',
                     };
                 });
+                const sessionId = globalThis.crypto?.randomUUID?.()
+                    || `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+                const manifestHash = buildUploadManifestHash(
+                    meta.map((entry) => ({
+                        relativePath: entry.relativePath,
+                        size: entry.size,
+                        mimeType: entry.mimeType,
+                    }))
+                );
+                const importEventId = buildProjectImportEventId({
+                    projectId: uploadProjectId,
+                    source: 'upload',
+                    normalizedTarget: 'upload',
+                    branchOrManifestHash: manifestHash,
+                });
+                uploadSessionContext = { sessionId, manifestHash };
+
+                await updateUploadSessionAction(uploadProjectId, {
+                    sessionId,
+                    manifestHash,
+                    totalFiles: meta.length,
+                    uploadedFiles: 0,
+                    status: 'uploading',
+                    importEventId,
+                });
 
                 // Pre-generate URLs (batch) for performance
-                const batchRes = await getBatchUploadUrls(meta.map(m => ({ key: m.key, contentType: m.mimeType })));
+                const batchRes = await getBatchUploadUrls(
+                    meta.map((m) => ({ key: m.key, contentType: m.mimeType, sizeBytes: m.size })),
+                    { sessionId }
+                );
                 if ('error' in batchRes) throw new Error(batchRes.error);
                 const urlMap = batchRes.urls || {};
 
-                const getPresignedUrl = async (key: string, contentType: string) => {
+                const getPresignedUrl = async (key: string, contentType: string, sizeBytes: number) => {
                     const cached = urlMap[key];
                     if (cached) return cached;
-                    const single = await getUploadPresignedUrl(key, contentType);
+                    const single = await getUploadPresignedUrl(key, contentType, sizeBytes, { sessionId });
                     if ('error' in single) throw new Error(single.error);
                     return single.url;
                 };
 
                 const uploadRes = await uploadFolder(
                     uploadFiles,
-                    createdProjectId,
+                    uploadProjectId,
                     (p) => {
                         setUploadProgress({
                             percent: p.percent,
@@ -522,7 +569,12 @@ export function useCreateProjectWizard({ onClose, onSuccess, draftId }: UseCreat
                             isUploading: p.percent < 100,
                         });
                     },
-                    getPresignedUrl
+                    getPresignedUrl,
+                    {
+                        sessionId,
+                        manifestHash,
+                        retryBudget: Math.max(8, Math.ceil(meta.length * 0.25)),
+                    }
                 );
 
                 // Register ONLY successfully uploaded files so Files tab never references missing keys
@@ -535,7 +587,30 @@ export function useCreateProjectWizard({ onClose, onSuccess, draftId }: UseCreat
                         mimeType: m.mimeType,
                     }));
 
-                await registerUploadedFolderAction(createdProjectId, manifest);
+                await updateUploadSessionAction(uploadProjectId, {
+                    sessionId,
+                    manifestHash,
+                    totalFiles: meta.length,
+                    uploadedFiles: manifest.length,
+                    status: 'registering',
+                    importEventId,
+                });
+
+                const registerResult = await registerUploadedFolderAction(uploadProjectId, manifest, {
+                    sessionId,
+                    manifestHash,
+                    reconcilePolicy: 'mirror',
+                });
+                if (!registerResult.success) {
+                    if (registerResult.skipped) {
+                        const ownerInfo = registerResult.lockOwnerSessionId
+                            ? ` (active session: ${registerResult.lockOwnerSessionId})`
+                            : '';
+                        toast.info(`Upload registration already in progress${ownerInfo}.`);
+                    } else {
+                        throw new Error('Failed to register uploaded files.');
+                    }
+                }
 
                 setUploadProgress({ percent: 100, currentFile: '', isUploading: false });
 
@@ -557,7 +632,11 @@ export function useCreateProjectWizard({ onClose, onSuccess, draftId }: UseCreat
             try {
                 if (createdProjectId && importType === 'upload') {
                     const { markProjectSyncFailedAction } = await import('@/app/actions/upload-import');
-                    await markProjectSyncFailedAction(createdProjectId);
+                    await markProjectSyncFailedAction(createdProjectId, {
+                        sessionId: uploadSessionContext?.sessionId,
+                        manifestHash: uploadSessionContext?.manifestHash,
+                        reason: error?.message || 'Upload import failed',
+                    });
                 }
             } catch { }
             toast.error(error.message || 'Failed to create project');

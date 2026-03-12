@@ -117,6 +117,14 @@ export default function TopNav() {
     );
 
     useEffect(() => {
+        if (!mounted || !isSignedIn) return;
+        const prefetchTargets = [ROUTES.HUB, ROUTES.PEOPLE, ROUTES.MESSAGES, ROUTES.WORKSPACE, ROUTES.SETTINGS];
+        for (const target of prefetchTargets) {
+            router.prefetch(target);
+        }
+    }, [mounted, isSignedIn, router]);
+
+    useEffect(() => {
         document.documentElement.style.setProperty("--header-height", "56px");
     }, []);
 

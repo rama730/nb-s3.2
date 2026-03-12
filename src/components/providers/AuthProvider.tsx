@@ -5,10 +5,19 @@ import { createClient } from '@/lib/supabase/client';
 import type { User, Session } from '@supabase/supabase-js';
 import { useRouter } from 'next/navigation';
 import type { Profile } from '@/lib/db/schema';
+import { logger } from '@/lib/logger';
+import { getAuthHardeningPhase } from '@/lib/auth/hardening';
+import { buildOAuthRedirectTo, normalizeAuthNextPath, resolveAuthBaseUrl } from '@/lib/auth/redirects';
+import { resetMonotonicEntity, runMonotonicUpdate } from '@/lib/state/monotonic';
 
 const AUTH_SIGN_IN_TIMEOUT_MS = 8_000;
-const USE_CLIENT_E2E_AUTH_FALLBACK = process.env.NEXT_PUBLIC_E2E_AUTH_FALLBACK === '1';
 const AUTH_UNREACHABLE_MESSAGE = 'Authentication service is unavailable. Check your Supabase connection and try again.';
+function createAuthRequestId(): string {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+        return crypto.randomUUID();
+    }
+    return `auth-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
 
 // --- Types ---
 interface AuthState {
@@ -33,8 +42,8 @@ interface AuthContextType extends AuthState {
     signIn: (email: string, password: string) => Promise<AuthResult>;
     signUp: (email: string, password: string, fullName?: string) => Promise<AuthResult>;
     signOut: () => Promise<void>;
-    signInWithGoogle: () => Promise<OAuthResult>;
-    signInWithGitHub: () => Promise<OAuthResult>;
+    signInWithGoogle: (nextPath?: string | null) => Promise<OAuthResult>;
+    signInWithGitHub: (nextPath?: string | null) => Promise<OAuthResult>;
     refreshProfile: () => Promise<void>;
 }
 
@@ -79,6 +88,7 @@ export function AuthProvider({
     initialUser: User | null;
     initialProfile: any | null;
 }) {
+    const MONOTONIC_AUTH_KEY = 'auth-provider:state';
     const [state, setState] = useState<AuthState>({
         user: initialUser,
         session: null, // session will be populated by client-side listener
@@ -86,39 +96,8 @@ export function AuthProvider({
         isLoading: false, // Initialized immediately with server data
     });
     const activeUserIdRef = useRef<string | null>(initialUser?.id || null);
+    const authEventVersionRef = useRef(0);
     const router = useRouter();
-
-    const signInWithE2EFallback = useCallback(async (email: string, password: string): Promise<AuthResult> => {
-        try {
-            const response = await fetch('/api/e2e/auth', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email, password }),
-            });
-            const payload = await response.json().catch(() => ({} as { error?: string }));
-            if (!response.ok) {
-                if (response.status === 404) {
-                    return {
-                        data: null,
-                        error: { message: 'E2E auth fallback is disabled. Set E2E_AUTH_FALLBACK=1 (or NEXT_PUBLIC_E2E_AUTH_FALLBACK=1) and restart dev server.' },
-                    };
-                }
-                return {
-                    data: null,
-                    error: { message: payload.error || 'Sign in failed' },
-                };
-            }
-            return {
-                data: { user: null, session: null },
-                error: null,
-            };
-        } catch {
-            return {
-                data: null,
-                error: { message: 'Sign in failed' },
-            };
-        }
-    }, []);
 
     // Sync with Supabase Auth Listener
     useEffect(() => {
@@ -136,52 +115,64 @@ export function AuthProvider({
         
         const { data: { subscription } } = supabase.auth.onAuthStateChange(
             async (event: string, session: Session | null) => {
+                const eventVersion = ++authEventVersionRef.current;
                 if (cancelled) return;
                 if (event === 'SIGNED_IN' && session) {
                     if (session.user.id !== activeUserIdRef.current) {
                         const profile = await loadProfile(session.user.id);
-                        if (cancelled) return;
-                        activeUserIdRef.current = session.user.id;
-                        setState({
-                            user: session.user,
-                            session,
-                            profile,
-                            isLoading: false
+                        if (cancelled || eventVersion !== authEventVersionRef.current) return;
+                        const applied = runMonotonicUpdate(MONOTONIC_AUTH_KEY, eventVersion, () => {
+                            activeUserIdRef.current = session.user.id;
+                            setState({
+                                user: session.user,
+                                session,
+                                profile,
+                                isLoading: false
+                            });
                         });
+                        if (applied === null) return;
                         router.refresh();
                         return;
                     }
 
-                    setState(prev => ({
-                        ...prev,
-                        user: session.user,
-                        session,
-                        isLoading: false
-                    }));
+                    runMonotonicUpdate(MONOTONIC_AUTH_KEY, eventVersion, () => {
+                        setState(prev => ({
+                            ...prev,
+                            user: session.user,
+                            session,
+                            isLoading: false
+                        }));
+                    });
                 } else if (event === 'SIGNED_OUT') {
-                    activeUserIdRef.current = null;
-                    setState({
-                        user: null,
-                        session: null,
-                        profile: null,
-                        isLoading: false
+                    runMonotonicUpdate(MONOTONIC_AUTH_KEY, eventVersion, () => {
+                        activeUserIdRef.current = null;
+                        setState({
+                            user: null,
+                            session: null,
+                            profile: null,
+                            isLoading: false
+                        });
                     });
                     router.refresh();
                 } else if (event === 'USER_UPDATED' && session) {
                     const profile = await loadProfile(session.user.id);
-                    if (cancelled) return;
-                    activeUserIdRef.current = session.user.id;
+                    if (cancelled || eventVersion !== authEventVersionRef.current) return;
+                    runMonotonicUpdate(MONOTONIC_AUTH_KEY, eventVersion, () => {
+                        activeUserIdRef.current = session.user.id;
 
-                    setState(prev => ({
-                        ...prev,
-                        user: session.user,
-                        session,
-                        profile: profile || prev.profile,
-                        isLoading: false
-                    }));
+                        setState(prev => ({
+                            ...prev,
+                            user: session.user,
+                            session,
+                            profile: profile || prev.profile,
+                            isLoading: false
+                        }));
+                    });
                 } else if (event === 'TOKEN_REFRESHED' && session) {
-                    activeUserIdRef.current = session.user.id;
-                    setState(prev => ({ ...prev, session, user: session.user }));
+                    runMonotonicUpdate(MONOTONIC_AUTH_KEY, eventVersion, () => {
+                        activeUserIdRef.current = session.user.id;
+                        setState(prev => ({ ...prev, session, user: session.user }));
+                    });
                 }
             }
         );
@@ -189,15 +180,12 @@ export function AuthProvider({
         return () => {
             cancelled = true;
             subscription.unsubscribe();
+            resetMonotonicEntity(MONOTONIC_AUTH_KEY);
         };
     }, [router]);
 
     // --- Actions ---
     const signIn = useCallback(async (email: string, password: string) => {
-        if (USE_CLIENT_E2E_AUTH_FALLBACK) {
-            return await signInWithE2EFallback(email, password);
-        }
-
         const supabase = createClient();
         try {
             const result = await Promise.race([
@@ -210,9 +198,6 @@ export function AuthProvider({
 
             const message = (result.error.message || '').toLowerCase();
             const isConnectivityError = message.includes('fetch failed') || message.includes('timeout');
-            if (isConnectivityError && USE_CLIENT_E2E_AUTH_FALLBACK) {
-                return await signInWithE2EFallback(email, password);
-            }
             if (isConnectivityError) {
                 return {
                     data: null,
@@ -223,9 +208,6 @@ export function AuthProvider({
         } catch (error) {
             const message = error instanceof Error ? error.message : '';
             const isConnectivityError = message === 'AUTH_TIMEOUT' || message.toLowerCase().includes('fetch failed');
-            if (isConnectivityError && USE_CLIENT_E2E_AUTH_FALLBACK) {
-                return await signInWithE2EFallback(email, password);
-            }
             if (isConnectivityError) {
                 return {
                     data: null,
@@ -237,7 +219,7 @@ export function AuthProvider({
                 error: { message: 'Sign in failed' },
             };
         }
-    }, [signInWithE2EFallback]);
+    }, []);
 
     const signUp = useCallback(async (email: string, password: string, fullName?: string) => {
         const supabase = createClient();
@@ -252,26 +234,49 @@ export function AuthProvider({
         });
     }, []);
 
-    const signInWithGoogle = useCallback(async () => {
+    const signInWithGoogle = useCallback(async (nextPath?: string | null) => {
         const supabase = createClient();
+        const normalizedNextPath = normalizeAuthNextPath(nextPath);
+        const baseUrl = resolveAuthBaseUrl();
+        const oauthRequestId = createAuthRequestId();
+        const hardeningPhase = getAuthHardeningPhase();
+        const redirectTo = buildOAuthRedirectTo(baseUrl, normalizedNextPath, oauthRequestId);
+        logger.metric('auth.oauth.start', {
+            requestId: oauthRequestId,
+            provider: 'google',
+            nextPath: normalizedNextPath,
+            baseUrl,
+            phase: hardeningPhase,
+        });
         return await supabase.auth.signInWithOAuth({
             provider: 'google',
-            options: { redirectTo: `${window.location.origin}/auth/callback` },
+            options: { redirectTo },
         });
     }, []);
 
-    const signInWithGitHub = useCallback(async () => {
+    const signInWithGitHub = useCallback(async (nextPath?: string | null) => {
         const supabase = createClient();
+        const normalizedNextPath = normalizeAuthNextPath(nextPath);
+        const baseUrl = resolveAuthBaseUrl();
+        const oauthRequestId = createAuthRequestId();
+        const hardeningPhase = getAuthHardeningPhase();
+        const redirectTo = buildOAuthRedirectTo(baseUrl, normalizedNextPath, oauthRequestId);
+        logger.metric('auth.oauth.start', {
+            requestId: oauthRequestId,
+            provider: 'github',
+            nextPath: normalizedNextPath,
+            baseUrl,
+            phase: hardeningPhase,
+        });
         return await supabase.auth.signInWithOAuth({
             provider: 'github',
-            options: { redirectTo: `${window.location.origin}/auth/callback` },
+            options: { redirectTo },
         });
     }, []);
 
     const signOut = useCallback(async () => {
         const supabase = createClient();
         await supabase.auth.signOut().catch(() => null);
-        await fetch('/api/e2e/auth', { method: 'DELETE' }).catch(() => null);
         // State update handled by onAuthStateChange, but we can optimise responsiveness
         setState({
             user: null,

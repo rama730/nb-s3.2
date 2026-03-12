@@ -1,24 +1,25 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import Image from 'next/image';
 import { useChatStore, selectUnreadTotal } from '@/stores/chatStore';
-import { setConversationArchived, setConversationMuted } from '@/app/actions/messaging';
+import { type MessageWithSender } from '@/app/actions/messaging';
 import { MessageThread } from './MessageThread';
 import { MessageInput } from './MessageInput';
 import { ConversationList } from './ConversationList';
 import { ApplicationList } from './ApplicationList';
 import { ProjectGroupList } from './ProjectGroupList';
 import { X, Minus, MessageSquare, ArrowLeft, MoreVertical, Archive, Bell, BellOff } from 'lucide-react';
-import { useState } from 'react';
-import { toast } from 'sonner';
+import { useConversationActions } from './useConversationActions';
 import {
     DropdownMenu,
     DropdownMenuContent,
     DropdownMenuItem,
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+
+const EMPTY_MESSAGES: MessageWithSender[] = [];
 
 // ============================================================================
 // CHAT POPUP
@@ -30,7 +31,6 @@ export function ChatPopup() {
 
     // State for Inbox Zero Toggle (Must be at top level)
     const [activeTab, setActiveTab] = useState<'chats' | 'applications' | 'projects'>('chats');
-    const [actionLoading, setActionLoading] = useState(false);
 
     // Select primitive values and stable references
     const isPopupOpen = useChatStore(state => state.isPopupOpen);
@@ -38,7 +38,12 @@ export function ChatPopup() {
     const activeConversationId = useChatStore(state => state.activeConversationId);
     const totalUnread = useChatStore(selectUnreadTotal);
     const conversations = useChatStore(state => state.conversations);
-    const messagesByConversation = useChatStore(state => state.messagesByConversation);
+    const messages = useChatStore(
+        useCallback((state) => {
+            if (!activeConversationId) return EMPTY_MESSAGES;
+            return state.messagesByConversation[activeConversationId]?.messages || EMPTY_MESSAGES;
+        }, [activeConversationId])
+    );
 
     // Actions
     const closePopup = useChatStore(state => state.closePopup);
@@ -52,11 +57,11 @@ export function ChatPopup() {
         if (!activeConversationId) return null;
         return conversations.find(c => c.id === activeConversationId) || null;
     }, [activeConversationId, conversations]);
-
-    const messages = useMemo(() => {
-        if (!activeConversationId) return [];
-        return messagesByConversation[activeConversationId]?.messages || [];
-    }, [activeConversationId, messagesByConversation]);
+    const {
+        conversationActionLoading: actionLoading,
+        handleToggleArchiveConversation,
+        handleToggleMuteConversation,
+    } = useConversationActions(activeConversation);
 
     // Hide popup on /messages page
     const isOnMessagesPage = pathname.startsWith('/messages');
@@ -66,6 +71,7 @@ export function ChatPopup() {
     if (!isPopupOpen || isPopupMinimized) {
         return (
             <button
+                type="button"
                 onClick={() => isPopupOpen ? maximizePopup() : openPopup()}
                 className="fixed bottom-6 right-6 z-50 flex items-center justify-center w-14 h-14 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-full shadow-lg hover:shadow-xl transition-all hover:scale-105"
             >
@@ -82,43 +88,6 @@ export function ChatPopup() {
     // Get other participant for DM
     const otherParticipant = activeConversation?.participants[0];
 
-    const handleToggleMuteConversation = async () => {
-        if (!activeConversation) return;
-        setActionLoading(true);
-        try {
-            const result = await setConversationMuted(activeConversation.id, !activeConversation.muted);
-            if (!result.success) {
-                toast.error(result.error || 'Failed to update mute state');
-                return;
-            }
-            await useChatStore.getState().refreshConversations();
-            await useChatStore.getState().openConversation(activeConversation.id);
-        } finally {
-            setActionLoading(false);
-        }
-    };
-
-    const handleToggleArchiveConversation = async () => {
-        if (!activeConversation) return;
-        setActionLoading(true);
-        try {
-            const nextArchived = activeConversation.lifecycleState !== 'archived';
-            const result = await setConversationArchived(activeConversation.id, nextArchived);
-            if (!result.success) {
-                toast.error(result.error || 'Failed to update conversation');
-                return;
-            }
-            await useChatStore.getState().refreshConversations();
-            if (nextArchived) {
-                useChatStore.getState().closeConversation();
-            } else {
-                await useChatStore.getState().openConversation(activeConversation.id);
-            }
-        } finally {
-            setActionLoading(false);
-        }
-    };
-
     return (
         <div className="fixed bottom-6 right-6 z-50 w-96 h-[520px] bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl border border-zinc-200 dark:border-zinc-800 flex flex-col overflow-hidden">
             {/* Header */}
@@ -127,6 +96,7 @@ export function ChatPopup() {
                     {activeConversationId ? (
                         <div className="flex items-center gap-3">
                             <button
+                                type="button"
                                 onClick={closeConversation}
                                 className="p-1 hover:bg-white/20 rounded-lg transition-colors"
                             >
@@ -207,12 +177,14 @@ export function ChatPopup() {
                             </DropdownMenu>
                         )}
                         <button
+                            type="button"
                             onClick={minimizePopup}
                             className="p-1.5 hover:bg-white/20 rounded-lg transition-colors"
                         >
                             <Minus className="w-4 h-4" />
                         </button>
                         <button
+                            type="button"
                             onClick={closePopup}
                             className="p-1.5 hover:bg-white/20 rounded-lg transition-colors"
                         >
@@ -226,6 +198,7 @@ export function ChatPopup() {
                     <div className="px-4 pb-3">
                         <div className="flex p-1 bg-black/20 rounded-lg">
                             <button
+                                type="button"
                                 onClick={() => setActiveTab('chats')}
                                 className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-all ${
                                     activeTab === 'chats'
@@ -236,6 +209,7 @@ export function ChatPopup() {
                                 Chats
                             </button>
                             <button
+                                type="button"
                                 onClick={() => setActiveTab('applications')}
                                 className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-all ${
                                     activeTab === 'applications'
@@ -246,6 +220,7 @@ export function ChatPopup() {
                                 Applications
                             </button>
                             <button
+                                type="button"
                                 onClick={() => setActiveTab('projects')}
                                 className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-all ${
                                     activeTab === 'projects'
@@ -261,7 +236,7 @@ export function ChatPopup() {
             </div>
 
             {/* Content */}
-            <div className="flex-1 flex flex-col overflow-hidden">
+            <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
                 {activeConversationId ? (
                     <>
                         <MessageThread

@@ -8,8 +8,6 @@ export function useWorkspaceUiState() {
   const [quickOpenQuery, setQuickOpenQuery] = useState("");
   const [commandOpen, setCommandOpen] = useState(false);
   const [commandQuery, setCommandQuery] = useState("");
-  const [headerSearchOpen, setHeaderSearchOpen] = useState(false);
-  const [headerSearchQuery, setHeaderSearchQuery] = useState("");
   const [recentFileIds, setRecentFileIds] = useState<string[]>([]);
 
   return {
@@ -23,10 +21,6 @@ export function useWorkspaceUiState() {
     setCommandOpen,
     commandQuery,
     setCommandQuery,
-    headerSearchOpen,
-    setHeaderSearchOpen,
-    headerSearchQuery,
-    setHeaderSearchQuery,
     recentFileIds,
     setRecentFileIds,
   };

@@ -11,17 +11,21 @@ export {
     deleteProjectDraftAction,
     updateProjectStageAction,
     updateProjectLifecycleAction,
+    updateProjectSettingsAction,
+    getProjectDangerZonePreflightAction,
+    archiveProjectAction,
     finalizeProjectAction,
     retryGithubImportAction,
 
     // Members & Social
     ensureProjectGroupExists,
-    toggleProjectBookmarkAction,
+
     toggleProjectFollowAction,
     getProjectMembersAction,
 
     // Queries
     incrementProjectViewAction,
+    getProjectDetailShellAction,
     getProjectUserStateAction,
     fetchProjectTasksAction,
     fetchProjectSprintsAction,

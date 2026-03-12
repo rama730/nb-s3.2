@@ -3,17 +3,14 @@ import { Geist, Geist_Mono } from "next/font/google";
 import Script from "next/script";
 import { QueryProvider } from "@/components/providers/query-provider";
 import { ThemeProvider } from "@/components/providers/theme-provider";
-import { ChatProvider } from "@/components/chat/ChatProvider";
 import { Toaster } from "@/components/ui/sonner";
 import { Analytics } from "@vercel/analytics/react";
-import { AuthProvider } from "@/components/providers/AuthProvider";
-import { RealtimeProvider } from "@/components/providers/RealtimeProvider";
 import { NextIntlClientProvider } from "next-intl";
 import { getMessages } from "next-intl/server";
 import "@/lib/env";
 import "./globals.css";
-import { getViewerProfileContext } from "@/lib/server/viewer-context";
 import { buildThemePrehydrateScript } from "@/lib/theme/appearance";
+import { RoutePerformanceObserver } from "@/components/observability/RoutePerformanceObserver";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -48,7 +45,6 @@ export default async function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  const { user, profile } = await getViewerProfileContext();
   const messages = await getMessages();
 
   return (
@@ -62,11 +58,8 @@ export default async function RootLayout({
         <NextIntlClientProvider messages={messages}>
           <ThemeProvider>
             <QueryProvider>
-              <AuthProvider initialUser={user} initialProfile={profile}>
-                <RealtimeProvider>
-                  <ChatProvider>{children}</ChatProvider>
-                </RealtimeProvider>
-              </AuthProvider>
+              <RoutePerformanceObserver />
+              {children}
               <Toaster position="bottom-right" />
               <Analytics />
             </QueryProvider>

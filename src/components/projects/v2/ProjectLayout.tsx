@@ -170,7 +170,7 @@ export default function ProjectLayout({
 
             {/* Bottom Row: Navigation Tabs (STICKY) */}
             <div className={cn(
-                "sticky top-[var(--header-height,56px)] z-30 bg-white/80 dark:bg-zinc-950/80 backdrop-blur-md border-b border-zinc-200 dark:border-zinc-800 transition-[top,box-shadow] duration-300 ease-in-out",
+                "sticky top-0 z-30 bg-white dark:bg-zinc-950 border-b border-zinc-200 dark:border-zinc-800 transition-[top,box-shadow] duration-300 ease-in-out",
                 isScrolled && "shadow-sm"
             )}>
                 <div className="max-w-7xl mx-auto">

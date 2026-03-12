@@ -4,10 +4,17 @@ import { db } from "@/lib/db";
 import { projectFileIndex, projectNodeEvents, projectNodeLocks, projectNodes } from "@/lib/db/schema";
 import type { ProjectNode } from "@/lib/db/schema";
 import { eq, and, or, isNull, isNotNull, ilike, inArray, sql } from "drizzle-orm";
+import { randomUUID } from "crypto";
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { consumeRateLimit } from "@/lib/security/rate-limit";
-import { buildProjectFileKey } from "@/lib/storage/project-file-key";
+import { buildProjectFileKey, isCanonicalProjectFileKey, parseProjectFileKey } from "@/lib/storage/project-file-key";
+import {
+    normalizeAndValidateFileSize,
+    normalizeAndValidateMimeType,
+    normalizeAndValidateUploadRelativePath,
+    PROJECT_UPLOAD_MAX_FILE_BYTES,
+} from "@/lib/upload/security";
 import {
     assertProjectWriteAccess,
     assertValidParentFolder,
@@ -80,6 +87,14 @@ export async function createFileNode(projectId: string, parentId: string | null,
 
     const safeName = normalizeNodeName(file.name);
     assertValidNodeName(safeName);
+    const parsedKey = parseProjectFileKey(file.s3Key);
+    if (!parsedKey || !isCanonicalProjectFileKey(file.s3Key) || parsedKey.projectId !== projectId) {
+        throw new Error("Invalid file storage key");
+    }
+    const normalizedRelativePath = normalizeAndValidateUploadRelativePath(parsedKey.relativePath);
+    const canonicalS3Key = buildProjectFileKey(projectId, normalizedRelativePath);
+    const normalizedSize = normalizeAndValidateFileSize(file.size, PROJECT_UPLOAD_MAX_FILE_BYTES);
+    const normalizedMimeType = normalizeAndValidateMimeType(file.mimeType);
 
     const node = await db.transaction(async (tx) => {
         await assertValidParentFolder(projectId, parentId, tx);
@@ -93,15 +108,15 @@ export async function createFileNode(projectId: string, parentId: string | null,
             type: 'file',
             name: safeName,
             path: nodePath,
-            s3Key: file.s3Key,
-            size: file.size,
-            mimeType: file.mimeType,
+            s3Key: canonicalS3Key,
+            size: normalizedSize,
+            mimeType: normalizedMimeType,
             createdBy: user.id,
         }).returning();
         return created;
     });
 
-    await recordNodeEvent(projectId, user.id, node.id, 'create_file', { parentId, name: safeName, s3Key: file.s3Key });
+    await recordNodeEvent(projectId, user.id, node.id, 'create_file', { parentId, name: safeName, s3Key: canonicalS3Key });
     revalidatePath(`/projects/${projectId}`);
     return node;
 }
@@ -142,10 +157,12 @@ export async function renameNode(nodeId: string, newName: string, projectId: str
 
         // If it's a folder, update all descendants paths
         if (current.type === 'folder' && oldPath) {
+            const escapedOldPath = oldPath.replace(/[\\%_]/g, "\\$&");
+            const likePattern = `${escapedOldPath}/%`;
             await tx.execute(sql`
                 UPDATE project_nodes 
                 SET path = ${newPath} || SUBSTRING(path FROM ${oldPath.length + 1})
-                WHERE project_id = ${projectId} AND path LIKE ${oldPath + '/%'}
+                WHERE project_id = ${projectId} AND path LIKE ${likePattern} ESCAPE '\\'
             `);
         }
 
@@ -533,10 +550,21 @@ export async function bulkCreateFolderTree(
 
     if (files.length === 0) return [];
     if (files.length > 5000) throw new Error("Maximum 5000 files allowed per bulk upload block.");
+    const normalizedFiles = files.map((file) => {
+        const normalizedPath = normalizeAndValidateUploadRelativePath(file.path);
+        const normalizedSize = normalizeAndValidateFileSize(file.size, PROJECT_UPLOAD_MAX_FILE_BYTES);
+        const normalizedMimeType = normalizeAndValidateMimeType(file.mimeType);
+        return {
+            path: normalizedPath,
+            name: file.name,
+            size: normalizedSize,
+            mimeType: normalizedMimeType,
+        };
+    });
 
     // 1. Parse all implicit folders from the file paths
     const folderPaths = new Set<string>();
-    for (const f of files) {
+    for (const f of normalizedFiles) {
         const parts = f.path.split('/');
         parts.pop(); // Remove the file name
         let cur = "";
@@ -554,8 +582,14 @@ export async function bulkCreateFolderTree(
 
         // Map: virtual path -> physical node ID
         const pathToId = new Map<string, string>();
+        // Map: virtual path -> materialized node path (for DB `path` column)
+        const pathToNodePath = new Map<string, string>();
         if (targetParentId) {
             pathToId.set("", targetParentId);
+            const parentPath = await getParentPath(tx, projectId, targetParentId);
+            pathToNodePath.set("", parentPath);
+        } else {
+            pathToNodePath.set("", "");
         }
 
         // 2. Resolve / Create all folders layer by layer (Strict O(Depth) operations)
@@ -575,6 +609,7 @@ export async function bulkCreateFolderTree(
                 const parts = path.split('/');
                 const name = parts[parts.length - 1];
                 const safeName = normalizeNodeName(name);
+                assertValidNodeName(safeName);
                 const parentVirtualPath = parts.slice(0, -1).join('/');
                 const parentId = targetParentId
                     ? (parentVirtualPath ? pathToId.get(parentVirtualPath) : targetParentId)
@@ -585,7 +620,7 @@ export async function bulkCreateFolderTree(
             const parentIdsAtDepth = Array.from(new Set(nodesToFindOrCreate.map(n => n.parentId).filter(Boolean))) as string[];
             const namesAtDepth = Array.from(new Set(nodesToFindOrCreate.map(n => n.safeName)));
 
-            let existingFolders: { id: string, name: string, parentId: string | null }[] = [];
+            let existingFolders: { id: string, name: string, parentId: string | null, path: string }[] = [];
 
             if (namesAtDepth.length > 0) {
                 // Find existing folders at this exact depth level
@@ -609,7 +644,7 @@ export async function bulkCreateFolderTree(
 
                 existingFolders = await tx.query.projectNodes.findMany({
                     where: and(...conditions),
-                    columns: { id: true, name: true, parentId: true }
+                    columns: { id: true, name: true, parentId: true, path: true }
                 });
             }
 
@@ -618,17 +653,23 @@ export async function bulkCreateFolderTree(
 
             for (const node of nodesToFindOrCreate) {
                 const existing = existingFolders.find(e => e.name === node.safeName && e.parentId === node.parentId);
+                const parentVirtualPath = node.path.split('/').slice(0, -1).join('/');
+                const parentNodePath = pathToNodePath.get(parentVirtualPath) || "";
+                const nodePath = `${parentNodePath}/${node.safeName}`;
                 if (existing) {
                     pathToId.set(node.path, existing.id);
+                    pathToNodePath.set(node.path, existing.path || nodePath);
                 } else {
                     newFolderInserts.push({
                         projectId,
                         parentId: node.parentId,
                         type: 'folder',
                         name: node.safeName,
+                        path: nodePath,
                         createdBy: user.id
                     });
                     newFolderPaths.push(node.path);
+                    pathToNodePath.set(node.path, nodePath);
                 }
             }
 
@@ -648,21 +689,26 @@ export async function bulkCreateFolderTree(
         const fileInserts: (typeof projectNodes.$inferInsert)[] = [];
         const resultMappings: { path: string; fileId: string; s3Key: string; name: string }[] = [];
 
-        for (const f of files) {
+        for (const f of normalizedFiles) {
             const parts = f.path.split('/');
             const name = parts.pop() || "unknown";
             const safeName = normalizeNodeName(name);
+            assertValidNodeName(safeName);
             const parentVirtualPath = parts.join('/');
 
             const parentId = targetParentId ? (parentVirtualPath ? pathToId.get(parentVirtualPath) : targetParentId) : (parentVirtualPath ? pathToId.get(parentVirtualPath) : null);
             const fileExt = safeName.includes(".") ? safeName.split(".").pop() : "bin";
-            const s3Key = buildProjectFileKey(projectId, `${Math.random().toString(36).substring(2)}.${fileExt}`);
+            const s3Key = buildProjectFileKey(projectId, `${randomUUID()}.${fileExt}`);
+
+            const parentNodePath = parentVirtualPath ? (pathToNodePath.get(parentVirtualPath) || "") : (pathToNodePath.get("") || "");
+            const filePath = `${parentNodePath}/${safeName}`;
 
             fileInserts.push({
                 projectId,
                 parentId: parentId || null,
                 type: 'file',
                 name: safeName,
+                path: filePath,
                 s3Key: s3Key,
                 size: f.size,
                 mimeType: f.mimeType,
@@ -680,7 +726,7 @@ export async function bulkCreateFolderTree(
 
                 for (let j = 0; j < chunk.length; j++) {
                     resultMappings.push({
-                        path: files[i + j].path,
+                        path: normalizedFiles[i + j].path,
                         fileId: inserted[j].id,
                         s3Key: inserted[j].s3Key!,
                         name: inserted[j].name

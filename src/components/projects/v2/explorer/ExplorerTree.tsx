@@ -91,6 +91,7 @@ export function useVisibleRows(params: {
     };
     workerRef.current.onerror = (event) => {
       const jobIdAtError = latestJobRef.current;
+      const fallbackChildren = latestChildrenRef.current;
       console.error("[ExplorerTree] sort worker error", {
         jobId: jobIdAtError,
         message: event.message,
@@ -101,7 +102,7 @@ export function useVisibleRows(params: {
       // Apply fallback only when this is still the active job; ignore stale race.
       queueMicrotask(() => {
         if (jobIdAtError !== latestJobRef.current) return;
-        setSortedChildren(latestChildrenRef.current);
+        setSortedChildren(fallbackChildren);
       });
     };
     return () => {

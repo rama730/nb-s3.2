@@ -4,6 +4,48 @@ import { Component, ReactNode } from "react";
 import { AlertTriangle, RefreshCw } from "lucide-react";
 import { logger } from "@/lib/logger";
 
+const STACK_PREFIX_COMPONENT_LIMIT = 4;
+const NORMALIZED_MESSAGE_LIMIT = 160;
+
+function hashToken(input: string): string {
+    let hash = 0x811c9dc5;
+    for (let i = 0; i < input.length; i += 1) {
+        hash ^= input.charCodeAt(i);
+        hash = Math.imul(hash, 0x01000193);
+    }
+    return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function normalizeErrorMessage(rawMessage: string): string {
+    const normalized = rawMessage
+        .toLowerCase()
+        .replace(/\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b/g, "<email>")
+        .replace(/\bhttps?:\/\/\S+/g, "<url>")
+        .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/g, "<uuid>")
+        .replace(/\b0x[0-9a-f]+\b/g, "<hex>")
+        .replace(/(?:[a-z]:)?[\\/][^\s)]+/g, "<path>")
+        .replace(/\b\d+\b/g, "<num>")
+        .replace(/["'`][^"'`]{1,120}["'`]/g, "<str>")
+        .replace(/\s+/g, " ")
+        .trim();
+
+    if (!normalized) return "empty";
+    return normalized.slice(0, NORMALIZED_MESSAGE_LIMIT);
+}
+
+function sanitizeComponentStackPrefix(componentStack: string): string {
+    const names = componentStack
+        .split("\n")
+        .map((line) => line.trim())
+        .map((line) => (line.startsWith("at ") ? line.slice(3) : line))
+        .map((line) => line.match(/^[A-Za-z0-9_$.-]+/)?.[0] ?? "")
+        .map((name) => name.replace(/[^A-Za-z0-9_$.-]/g, ""))
+        .filter((name): name is string => name.length > 0)
+        .slice(0, STACK_PREFIX_COMPONENT_LIMIT);
+
+    return names.length > 0 ? names.join(">") : "stack_unavailable";
+}
+
 interface TabErrorBoundaryProps {
     children: ReactNode;
     tabName: string;
@@ -28,18 +70,21 @@ export class TabErrorBoundary extends Component<TabErrorBoundaryProps, TabErrorB
 
     componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
         const componentStack = errorInfo.componentStack || "";
-        const stackHash = `${this.props.tabName}:${error.name}:${error.message}:${componentStack.slice(0, 120)}`;
-        console.error("Error in project tab", {
+        const errorName = error.name || "Error";
+        const sanitizedMessageHash = hashToken(normalizeErrorMessage(error.message || ""));
+        const safeStackPrefix = sanitizeComponentStackPrefix(componentStack);
+        const stackHash = `${this.props.tabName}:${errorName}:${sanitizedMessageHash}:${safeStackPrefix}`;
+        const safePayload = {
             tabName: this.props.tabName,
-            error,
-            errorInfo,
-        });
-        logger.metric("project.tab.error", {
-            tabName: this.props.tabName,
-            errorName: error.name,
-            message: error.message,
+            errorName,
+            sanitizedMessageHash,
+            safeStackPrefix,
             stackHash,
             retryCount: this.state.retryCount,
+        };
+        logger.error("Error in project tab", safePayload);
+        logger.metric("project.tab.error", {
+            ...safePayload,
         });
     }
 

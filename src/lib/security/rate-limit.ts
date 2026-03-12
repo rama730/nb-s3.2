@@ -149,7 +149,8 @@ export async function consumeRateLimit(
                 : fallback === 'allow'
                     ? 'allowing requests'
                     : 'using in-memory fallback';
-            console.warn(`[rate-limit] Redis unavailable, ${behavior}`, {
+            console.warn("[rate-limit] Redis unavailable", {
+                behavior,
                 mode,
                 fallback,
             });

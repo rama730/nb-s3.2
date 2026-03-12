@@ -1,6 +1,7 @@
-import { createClient } from '@/lib/supabase/server'
 import PeopleHubClient from '@/components/people/PeopleHubClient'
 import { getMyApplicationsAction, getIncomingApplicationsAction } from '@/app/actions/applications'
+import { isHardeningDomainEnabled } from '@/lib/features/hardening'
+import { getViewerAuthContext } from '@/lib/server/viewer-context'
 
 export const dynamic = 'force-dynamic';
 
@@ -9,17 +10,20 @@ interface PeoplePageProps {
 }
 
 export default async function PeoplePage({ searchParams }: PeoplePageProps) {
-    const supabase = await createClient()
-    const { data: { user } } = await supabase.auth.getUser()
+    const { user } = await getViewerAuthContext()
+    const peopleHardeningEnabled = isHardeningDomainEnabled("peopleV1", user?.id ?? null);
     const resolvedSearchParams = searchParams ? await searchParams : undefined;
     const tabParam = typeof resolvedSearchParams?.tab === 'string'
         ? resolvedSearchParams.tab.toLowerCase()
         : '';
 
     // Only prefetch heavy request/applications payload when Requests tab is explicitly requested.
-    const shouldPrefetchApplications = !!user && tabParam === 'requests';
+    const shouldPrefetchApplications = !!user && tabParam === 'requests' && peopleHardeningEnabled;
     const [myAppRes, incomingAppRes] = shouldPrefetchApplications
-        ? await Promise.all([getMyApplicationsAction(), getIncomingApplicationsAction(20, 0)])
+        ? await Promise.all([
+            getMyApplicationsAction({ limit: 12 }),
+            getIncomingApplicationsAction({ limit: 12 }),
+        ])
         : [{ applications: [] }, { applications: [] }];
     
     const initialApplications = {
@@ -28,10 +32,15 @@ export default async function PeoplePage({ searchParams }: PeoplePageProps) {
     };
 
     return (
-        <PeopleHubClient 
-            initialUser={user}
-            initialApplications={initialApplications}
-            // Other heavy lists (profiles, connections) remain lazy loaded for TTFB
-        />
+        <div
+            data-scroll-root="route"
+            className="h-full min-h-0 overflow-hidden app-scroll app-scroll-y app-scroll-gutter bg-zinc-50 dark:bg-black"
+        >
+            <PeopleHubClient
+                initialUser={user}
+                initialApplications={initialApplications}
+                // Other heavy lists (profiles, connections) remain lazy loaded for TTFB
+            />
+        </div>
     )
 }

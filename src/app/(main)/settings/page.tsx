@@ -1,6 +1,7 @@
 "use client";
 
 import { usePrefetchSettings } from "@/hooks/useSettingsQueries";
+import { useRouteWarmPrefetch } from "@/hooks/useRouteWarmPrefetch";
 import Link from "next/link";
 
 type SettingsItem = {
@@ -54,6 +55,7 @@ const items: SettingsItem[] = [
 export default function Page() {
     const { prefetchNotifications, prefetchSecurity, prefetchPrivacy } =
         usePrefetchSettings();
+    const warmPrefetchRoute = useRouteWarmPrefetch();
 
     const handlePrefetch = (prefetchKey?: SettingsItem["prefetchKey"]) => {
         if (!prefetchKey) return;
@@ -87,7 +89,10 @@ export default function Page() {
                         key={it.href}
                         href={it.href}
                         data-testid={`settings-card-${it.title.toLowerCase()}`}
-                        onPointerEnter={() => handlePrefetch(it.prefetchKey)}
+                        onPointerEnter={() => {
+                            warmPrefetchRoute(it.href);
+                            handlePrefetch(it.prefetchKey);
+                        }}
                         className="group rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 hover:shadow-sm transition"
                     >
                         <div className="font-medium text-zinc-900 dark:text-zinc-100 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">

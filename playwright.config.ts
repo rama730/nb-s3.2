@@ -48,7 +48,7 @@ export default defineConfig({
                 devServerMode === "turbo"
                     ? "pnpm run dev"
                     : "pnpm exec next dev --webpack -H 0.0.0.0",
-            url: `${baseURL}/api/ready`,
+            url: `${baseURL}/api/v1/ready`,
             reuseExistingServer: !process.env.CI,
             timeout: 120_000,
             stdout: "ignore",

@@ -31,7 +31,7 @@ const TABS: Array<{ key: WorkspaceTab; label: string; icon: typeof LayoutDashboa
 
 function WorkspaceTabBar({ activeTab, onTabChange, badges }: WorkspaceTabBarProps) {
     return (
-        <div className="flex gap-1 overflow-x-auto scrollbar-none -mb-px" role="tablist" aria-label="Workspace tabs">
+        <div className="flex gap-1 app-scroll app-scroll-x app-scroll-hidden -mb-px" role="tablist" aria-label="Workspace tabs">
             {TABS.map(({ key, label, icon: Icon }) => {
                 const isActive = activeTab === key;
                 const badgeCount = badges?.[key];

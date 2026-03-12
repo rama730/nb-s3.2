@@ -9,6 +9,7 @@ import { updateTaskStatusAction } from '@/app/actions/task';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import type { WidgetCardSizeMode } from '@/components/workspace/dashboard/types';
+import { queryKeys } from '@/lib/query-keys';
 
 const PRIORITY_DOT: Record<string, string> = {
     urgent: 'bg-rose-500',
@@ -31,10 +32,12 @@ function TodaysFocus({ tasks, sizeMode = 'standard', onTaskClick }: TodaysFocusP
     const handleStatusToggle = async (task: WorkspaceTask) => {
         const nextStatus = task.status === 'todo' ? 'in_progress' : 'done';
         const label = nextStatus === 'in_progress' ? 'Task started' : 'Task marked as done';
+        const previousOverview = queryClient.getQueryData<WorkspaceOverviewData>(queryKeys.workspace.overview());
+        const previousSectionTasks = queryClient.getQueryData<WorkspaceTask[]>(queryKeys.workspace.overviewSection.tasks());
 
         // Optimistic update
         queryClient.setQueryData<WorkspaceOverviewData | undefined>(
-            ['workspace', 'overview'],
+            queryKeys.workspace.overview(),
             (old) => {
                 if (!old) return old;
                 return {
@@ -45,14 +48,26 @@ function TodaysFocus({ tasks, sizeMode = 'standard', onTaskClick }: TodaysFocusP
                 };
             }
         );
+        queryClient.setQueryData<WorkspaceTask[]>(
+            queryKeys.workspace.overviewSection.tasks(),
+            (old = []) => old.map((t) => (t.id === task.id ? { ...t, status: nextStatus } : t)),
+        );
 
         try {
             await updateTaskStatusAction(task.id, nextStatus, task.projectId);
             toast.success(label);
         } catch {
+            if (previousOverview) {
+                queryClient.setQueryData(queryKeys.workspace.overview(), previousOverview);
+            }
+            if (previousSectionTasks) {
+                queryClient.setQueryData(queryKeys.workspace.overviewSection.tasks(), previousSectionTasks);
+            }
             toast.error('Failed to update task');
         }
-        queryClient.invalidateQueries({ queryKey: ['workspace'] });
+        queryClient.invalidateQueries({ queryKey: queryKeys.workspace.overviewBase() });
+        queryClient.invalidateQueries({ queryKey: queryKeys.workspace.overviewSection.tasks() });
+        queryClient.invalidateQueries({ queryKey: queryKeys.workspace.tasksRoot() });
     };
 
     return (

@@ -15,6 +15,36 @@ interface MarkdownPreviewProps {
   className?: string;
 }
 
+const CONTROL_CHARS_REGEX = /[\u0000-\u001F\u007F]/g;
+const SAFE_LINK_PROTOCOLS = new Set(["http:", "https:", "mailto:", "tel:"]);
+const SAFE_IMAGE_PROTOCOLS = new Set(["http:", "https:"]);
+
+function sanitizeMarkdownUrl(raw: string, allowRelative: boolean, isImage: boolean): string {
+  const value = raw.replace(CONTROL_CHARS_REGEX, "").trim();
+  if (!value) return "";
+  if (value.startsWith("#")) return allowRelative ? value : "";
+
+  if (!/^[a-zA-Z][a-zA-Z\d+\-.]*:/.test(value)) {
+    if (!allowRelative) return "";
+    if (value.startsWith("//")) return "";
+    return value;
+  }
+
+  try {
+    const parsed = new URL(value);
+    const allowedProtocols = isImage ? SAFE_IMAGE_PROTOCOLS : SAFE_LINK_PROTOCOLS;
+    return allowedProtocols.has(parsed.protocol) ? parsed.toString() : "";
+  } catch {
+    return "";
+  }
+}
+
+function safeMarkdownUrlTransform(url: string, key: string): string {
+  const isImage = key === "src";
+  const allowRelative = !isImage;
+  return sanitizeMarkdownUrl(url, allowRelative, isImage);
+}
+
 const markdownComponents = {
   h1: ({ ...props }: React.HTMLAttributes<HTMLHeadingElement>) => <h1 className="text-2xl font-bold mb-4 border-b border-zinc-200 dark:border-zinc-800 pb-2" {...props} />,
   h2: ({ ...props }: React.HTMLAttributes<HTMLHeadingElement>) => <h2 className="text-xl font-semibold mt-6 mb-3" {...props} />,
@@ -24,7 +54,20 @@ const markdownComponents = {
   ol: ({ ...props }: React.HTMLAttributes<HTMLOListElement>) => <ol className="list-decimal list-inside mb-4 pl-4" {...props} />,
   li: ({ ...props }: React.HTMLAttributes<HTMLLIElement>) => <li className="mb-1" {...props} />,
   blockquote: ({ ...props }: React.HTMLAttributes<HTMLQuoteElement>) => <blockquote className="border-l-4 border-zinc-300 dark:border-zinc-700 pl-4 py-1 my-4 italic text-zinc-600 dark:text-zinc-400" {...props} />,
-  a: ({ ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => <a className="text-blue-600 dark:text-blue-400 hover:underline" {...props} />,
+  a: ({ href, rel, target, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => {
+    const safeHref = typeof href === "string" ? sanitizeMarkdownUrl(href, true, false) : "";
+    if (!safeHref) return <span className="text-zinc-500">{props.children}</span>;
+    const isExternal = /^https?:\/\//i.test(safeHref);
+    return (
+      <a
+        href={safeHref}
+        rel={isExternal ? "noopener noreferrer" : rel}
+        target={isExternal ? "_blank" : target}
+        className="text-blue-600 dark:text-blue-400 hover:underline"
+        {...props}
+      />
+    );
+  },
   code: ({ className, children, ...props }: React.HTMLAttributes<HTMLElement>) => {
     const match = /language-(\w+)/.exec(className || "");
     const isInline = !match;
@@ -44,7 +87,7 @@ const markdownComponents = {
   td: ({ ...props }: React.TdHTMLAttributes<HTMLTableCellElement>) => <td className="border-b border-zinc-200 dark:border-zinc-800 p-2" {...props} />,
   hr: ({ ...props }: React.HTMLAttributes<HTMLHRElement>) => <hr className="my-6 border-zinc-200 dark:border-zinc-800" {...props} />,
   img: ({ src, alt = "", title }: React.ImgHTMLAttributes<HTMLImageElement>) => {
-    const safeSrc = typeof src === "string" ? src : "";
+    const safeSrc = typeof src === "string" ? sanitizeMarkdownUrl(src, false, true) : "";
     if (!safeSrc) return null;
     return (
       <Image
@@ -77,6 +120,8 @@ export default function MarkdownPreview({ content, className }: MarkdownPreviewP
       <Suspense fallback={<div className="text-sm text-zinc-500">Loading preview...</div>}>
         <LazyReactMarkdown
           remarkPlugins={remarkPlugins}
+          skipHtml
+          urlTransform={safeMarkdownUrlTransform}
           components={markdownComponents as unknown as Record<string, React.FC>}
         >
           {content}

@@ -1,7 +1,8 @@
-import { NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { reservedUsernames } from '@/lib/db/schema'
+import { getRequestId, jsonError, jsonSuccess, logApiRoute } from '@/app/api/v1/_shared'
 import { isAdminUser } from '@/lib/security/admin'
+import { validateCsrf } from '@/lib/security/csrf'
 import { createClient } from '@/lib/supabase/server'
 import { RESERVED_USERNAMES, normalizeUsername } from '@/lib/validations/username'
 import { asc, eq } from 'drizzle-orm'
@@ -13,14 +14,26 @@ async function requireAdmin() {
     const supabase = await createClient()
     const { data: authData } = await supabase.auth.getUser()
     const user = authData.user
-    if (!user) return { ok: false as const, response: NextResponse.json({ message: 'Not authenticated' }, { status: 401 }) }
-    if (!isAdminUser(user)) return { ok: false as const, response: NextResponse.json({ message: 'Forbidden' }, { status: 403 }) }
+    if (!user) return { ok: false as const, status: 401 as const, errorCode: 'UNAUTHORIZED' as const, message: 'Not authenticated' }
+    if (!isAdminUser(user)) return { ok: false as const, status: 403 as const, errorCode: 'FORBIDDEN' as const, message: 'Forbidden' }
     return { ok: true as const, user }
 }
 
-export async function GET() {
+export async function GET(request: Request) {
+    const startedAt = Date.now()
+    const requestId = getRequestId(request)
     const admin = await requireAdmin()
-    if (!admin.ok) return admin.response
+    if (!admin.ok) {
+        logApiRoute(request, {
+            requestId,
+            action: 'account.reservedUsernames.get',
+            startedAt,
+            success: false,
+            status: admin.status,
+            errorCode: admin.errorCode,
+        })
+        return jsonError(admin.message, admin.status, admin.errorCode)
+    }
 
     const rows = await db
         .select({
@@ -31,25 +44,77 @@ export async function GET() {
         .from(reservedUsernames)
         .orderBy(asc(reservedUsernames.username))
 
-    return NextResponse.json({ items: rows })
+    logApiRoute(request, {
+        requestId,
+        action: 'account.reservedUsernames.get',
+        userId: admin.user.id,
+        startedAt,
+        success: true,
+        status: 200,
+    })
+    return jsonSuccess({ items: rows })
 }
 
 export async function POST(request: Request) {
+    const startedAt = Date.now()
+    const requestId = getRequestId(request)
+    const csrfError = validateCsrf(request)
+    if (csrfError) {
+        logApiRoute(request, {
+            requestId,
+            action: 'account.reservedUsernames.post',
+            startedAt,
+            success: false,
+            status: 403,
+            errorCode: 'FORBIDDEN',
+        })
+        return csrfError
+    }
+
     const admin = await requireAdmin()
-    if (!admin.ok) return admin.response
+    if (!admin.ok) {
+        logApiRoute(request, {
+            requestId,
+            action: 'account.reservedUsernames.post',
+            startedAt,
+            success: false,
+            status: admin.status,
+            errorCode: admin.errorCode,
+        })
+        return jsonError(admin.message, admin.status, admin.errorCode)
+    }
 
     let body: { username?: string; reason?: string }
     try {
         body = (await request.json()) as { username?: string; reason?: string }
     } catch {
-        return NextResponse.json({ message: 'Malformed JSON' }, { status: 400 })
+        logApiRoute(request, {
+            requestId,
+            action: 'account.reservedUsernames.post',
+            userId: admin.user.id,
+            startedAt,
+            success: false,
+            status: 400,
+            errorCode: 'BAD_REQUEST',
+        })
+        return jsonError('Malformed JSON', 400, 'BAD_REQUEST')
     }
 
     const username = normalizeUsername(body.username || '')
     if (!USERNAME_PATTERN.test(username)) {
-        return NextResponse.json(
-            { message: 'Username must be 3-20 chars with lowercase letters, numbers, or underscores' },
-            { status: 400 }
+        logApiRoute(request, {
+            requestId,
+            action: 'account.reservedUsernames.post',
+            userId: admin.user.id,
+            startedAt,
+            success: false,
+            status: 400,
+            errorCode: 'BAD_REQUEST',
+        })
+        return jsonError(
+            'Username must be 3-20 chars with lowercase letters, numbers, or underscores',
+            400,
+            'BAD_REQUEST'
         )
     }
 
@@ -63,28 +128,116 @@ export async function POST(request: Request) {
             set: { reason },
         })
 
-    return NextResponse.json({ success: true })
+    logApiRoute(request, {
+        requestId,
+        action: 'account.reservedUsernames.post',
+        userId: admin.user.id,
+        startedAt,
+        success: true,
+        status: 200,
+    })
+    return jsonSuccess()
 }
 
 export async function DELETE(request: Request) {
+    const startedAt = Date.now()
+    const requestId = getRequestId(request)
+    const csrfError = validateCsrf(request)
+    if (csrfError) {
+        logApiRoute(request, {
+            requestId,
+            action: 'account.reservedUsernames.delete',
+            startedAt,
+            success: false,
+            status: 403,
+            errorCode: 'FORBIDDEN',
+        })
+        return csrfError
+    }
+
     const admin = await requireAdmin()
-    if (!admin.ok) return admin.response
+    if (!admin.ok) {
+        logApiRoute(request, {
+            requestId,
+            action: 'account.reservedUsernames.delete',
+            startedAt,
+            success: false,
+            status: admin.status,
+            errorCode: admin.errorCode,
+        })
+        return jsonError(admin.message, admin.status, admin.errorCode)
+    }
 
     let body: { username?: string }
     try {
         body = (await request.json()) as { username?: string }
     } catch {
-        return NextResponse.json({ message: 'Malformed JSON' }, { status: 400 })
+        logApiRoute(request, {
+            requestId,
+            action: 'account.reservedUsernames.delete',
+            userId: admin.user.id,
+            startedAt,
+            success: false,
+            status: 400,
+            errorCode: 'BAD_REQUEST',
+        })
+        return jsonError('Malformed JSON', 400, 'BAD_REQUEST')
     }
 
     const username = normalizeUsername(body.username || '')
     if (!username) {
-        return NextResponse.json({ message: 'Username is required' }, { status: 400 })
+        logApiRoute(request, {
+            requestId,
+            action: 'account.reservedUsernames.delete',
+            userId: admin.user.id,
+            startedAt,
+            success: false,
+            status: 400,
+            errorCode: 'BAD_REQUEST',
+        })
+        return jsonError('Username is required', 400, 'BAD_REQUEST')
     }
     if (CORE_RESERVED_SET.has(username)) {
-        return NextResponse.json({ message: 'Core reserved usernames cannot be removed' }, { status: 400 })
+        logApiRoute(request, {
+            requestId,
+            action: 'account.reservedUsernames.delete',
+            userId: admin.user.id,
+            startedAt,
+            success: false,
+            status: 400,
+            errorCode: 'BAD_REQUEST',
+        })
+        return jsonError('Core reserved usernames cannot be removed', 400, 'BAD_REQUEST')
     }
 
-    await db.delete(reservedUsernames).where(eq(reservedUsernames.username, username))
-    return NextResponse.json({ success: true })
+    try {
+        await db.delete(reservedUsernames).where(eq(reservedUsernames.username, username))
+        logApiRoute(request, {
+            requestId,
+            action: 'account.reservedUsernames.delete',
+            userId: admin.user.id,
+            startedAt,
+            success: true,
+            status: 200,
+        })
+        return jsonSuccess()
+    } catch (error) {
+        console.error('[account.reservedUsernames.delete] delete failed', {
+            requestId,
+            userId: admin.user.id,
+            username,
+            error: error instanceof Error ? error.message : String(error),
+            durationMs: Date.now() - startedAt,
+        })
+        logApiRoute(request, {
+            requestId,
+            action: 'account.reservedUsernames.delete',
+            userId: admin.user.id,
+            startedAt,
+            success: false,
+            status: 500,
+            errorCode: 'INTERNAL_ERROR',
+        })
+        return jsonError('Failed to delete reserved username', 500, 'INTERNAL_ERROR')
+    }
 }

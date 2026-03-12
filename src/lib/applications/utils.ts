@@ -1,4 +1,5 @@
 import type { ApplicationLifecycleStatus } from '@/lib/applications/status';
+import { normalizeSafeExternalUrl } from '@/lib/messages/safe-links';
 
 const COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
@@ -7,6 +8,8 @@ const APPLICATION_LINK_LABELS = [
     { hostIncludes: 'linkedin.com', label: 'LinkedIn' },
     { hostIncludes: 'gitlab.com', label: 'GitLab' },
 ] as const;
+const URL_ONLY_LINE_REGEX = /^(?:(?:https?:\/\/|www\.)[^\s]+|(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/[^\s]*)?)$/i;
+const LABELED_URL_LINE_REGEX = /^([A-Za-z][A-Za-z ]{1,24}):\s*(\S+)$/;
 
 function getLinkTypeLabel(hostnameOrRaw: string) {
     const value = hostnameOrRaw.toLowerCase();
@@ -17,19 +20,20 @@ function getLinkTypeLabel(hostnameOrRaw: string) {
 function normalizeTypedLinkLine(rawValue: string) {
     const trimmed = rawValue.trim();
     if (!trimmed) return null;
-    const looksLikeLink = /^https?:\/\//i.test(trimmed) || /[a-z0-9-]+\.[a-z]{2,}/i.test(trimmed);
-    if (!looksLikeLink) return null;
-    const firstToken = trimmed.split(/\s+/)[0];
-    const candidate = /^https?:\/\//i.test(firstToken) ? firstToken : `https://${firstToken}`;
-
-    try {
-        const parsed = new URL(candidate);
-        const label = getLinkTypeLabel(parsed.hostname);
-        return `${label}: ${parsed.toString()}`;
-    } catch {
-        const label = getLinkTypeLabel(firstToken);
-        return `${label}: ${trimmed}`;
+    const labeledMatch = trimmed.match(LABELED_URL_LINE_REGEX);
+    if (labeledMatch) {
+        const label = labeledMatch[1].trim();
+        const normalizedValue = normalizeSafeExternalUrl(labeledMatch[2]);
+        if (!normalizedValue) return null;
+        return `${label}: ${normalizedValue}`;
     }
+
+    if (!URL_ONLY_LINE_REGEX.test(trimmed)) return null;
+    const normalizedValue = normalizeSafeExternalUrl(trimmed);
+    if (!normalizedValue) return null;
+    const parsed = new URL(normalizedValue);
+    const label = getLinkTypeLabel(parsed.hostname);
+    return `${label}: ${normalizedValue}`;
 }
 
 export function calculateCooldown(updatedAt: Date, nowMs: number = Date.now()): { canApply: boolean; waitTime?: string } {

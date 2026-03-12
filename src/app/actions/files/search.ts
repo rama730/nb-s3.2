@@ -28,6 +28,7 @@ const FILE_WRITE_ERROR_CODES = {
     STORAGE_WRITE_FAILED: "STORAGE_WRITE_FAILED",
     DB_WRITE_FAILED: "DB_WRITE_FAILED",
     ROLLBACK_FAILED: "ROLLBACK_FAILED",
+    VALIDATION_FAILED: "VALIDATION_FAILED",
 } as const;
 
 type FileWriteErrorCode = (typeof FILE_WRITE_ERROR_CODES)[keyof typeof FILE_WRITE_ERROR_CODES];
@@ -53,7 +54,7 @@ async function rollbackStorageWrites(
     entries: PlannedStorageWrite[],
     writeEntry: (s3Key: string, content: string) => Promise<{ error: { message?: string } | null }>
 ): Promise<{ ok: true } | { ok: false; failedNodeName: string }> {
-    for (const entry of entries.reverse()) {
+    for (const entry of [...entries].reverse()) {
         const rollbackResult = await writeEntry(entry.s3Key, entry.prevContent);
         if (rollbackResult.error) {
             return { ok: false, failedNodeName: entry.nodeName };
@@ -262,14 +263,16 @@ export async function previewProjectSearchReplace(
 
     const needle = normalizeSearchQuery(query);
     if (!needle || needle.length < 2) {
-        return { success: true as const, items: [] as Array<{
-            nodeId: string;
-            name: string;
-            parentId: string | null;
-            occurrenceCount: number;
-            beforeSnippet: string;
-            afterSnippet: string;
-        }> };
+        return {
+            success: true as const, items: [] as Array<{
+                nodeId: string;
+                name: string;
+                parentId: string | null;
+                occurrenceCount: number;
+                beforeSnippet: string;
+                afterSnippet: string;
+            }>
+        };
     }
 
     const safeLimit = Math.max(1, Math.min(MAX_BATCH_REPLACE_FILES, limit));
@@ -493,13 +496,13 @@ export async function rollbackProjectSearchReplace(
     const entries = Array.from(new Map((backups || []).map((item) => [item.nodeId, item])).values())
         .slice(0, MAX_BATCH_REPLACE_FILES);
     if (entries.length === 0) {
-        return failFileWrite(FILE_WRITE_ERROR_CODES.DB_WRITE_FAILED, "Nothing to rollback.");
+        return failFileWrite(FILE_WRITE_ERROR_CODES.VALIDATION_FAILED, "Nothing to rollback.");
     }
 
     let totalBytes = 0;
     for (const entry of entries) totalBytes += entry.content?.length || 0;
     if (totalBytes > MAX_BATCH_REPLACE_TOTAL_BYTES) {
-        return failFileWrite(FILE_WRITE_ERROR_CODES.DB_WRITE_FAILED, "Rollback payload too large.");
+        return failFileWrite(FILE_WRITE_ERROR_CODES.VALIDATION_FAILED, "Rollback payload too large.");
     }
 
     const nodes = await db

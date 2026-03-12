@@ -12,6 +12,7 @@ import {
   renameNode,
   bulkCreateFolderTree,
 } from "@/app/actions/files";
+import { getBatchUploadUrls, getUploadPresignedUrl } from "@/app/actions/upload";
 import { filesParentKey, useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 import type { ExplorerOperation } from "./explorerTypes";
 import { getErrorMessage } from "./explorerTypes";
@@ -110,6 +111,24 @@ export function useExplorerMutations({
     [runInMutationQueue]
   );
 
+  const uploadWithPresignedUrl = useCallback(
+    async (key: string, file: Blob, contentType: string, sizeBytes: number) => {
+      const presigned = await getUploadPresignedUrl(key, contentType, sizeBytes);
+      if ("error" in presigned) {
+        throw new Error(presigned.error || "Failed to prepare upload");
+      }
+      const response = await fetch(presigned.url, {
+        method: "PUT",
+        headers: { "Content-Type": contentType },
+        body: file,
+      });
+      if (!response.ok) {
+        throw new Error(`Upload failed (${response.status})`);
+      }
+    },
+    []
+  );
+
   const openCreate = useCallback(
     (kind: "file" | "folder") => {
       if (!canEdit) return;
@@ -159,10 +178,8 @@ export function useExplorerMutations({
 
         const fileExt = name.includes(".") ? name.split(".").pop() : "txt";
         const storagePath = buildProjectFileKey(projectId, `${Math.random().toString(36).substring(2)}.${fileExt}`);
-        const supabase = getSupabase();
         const emptyBlob = new Blob([""], { type: "text/plain" });
-        const { error: uploadError } = await supabase.storage.from("project-files").upload(storagePath, emptyBlob);
-        if (uploadError) throw uploadError;
+        await uploadWithPresignedUrl(storagePath, emptyBlob, "text/plain", emptyBlob.size);
 
         return (await createFileNode(projectId, parentId, {
           name,
@@ -208,7 +225,6 @@ export function useExplorerMutations({
     canEdit,
     childrenByParentId,
     createDialog,
-    getSupabase,
     loadedChildren,
     loadFolderContent,
     nodesById,
@@ -218,6 +234,7 @@ export function useExplorerMutations({
     setChildren,
     showToast,
     toggleExpanded,
+    uploadWithPresignedUrl,
     upsertNodes,
   ]);
 
@@ -241,27 +258,67 @@ export function useExplorerMutations({
             const createdNodes: ProjectNode[] = [];
             let failed = 0;
             const uploadConcurrency = Math.max(1, FILES_RUNTIME_BUDGETS.saveAllConcurrency);
+            const uploadPlans = files.map((file) => {
+              const ext = file.name.split(".").pop() || "bin";
+              const fileName = `${Math.random().toString(36).slice(2)}.${ext}`;
+              return {
+                file,
+                filePath: buildProjectFileKey(projectId, fileName),
+                contentType: file.type || "application/octet-stream",
+                sizeBytes: file.size,
+              };
+            });
 
-            await runWithConcurrency(files, uploadConcurrency, async (file) => {
-              let filePath: string | null = null;
+            const presignedBatch = await getBatchUploadUrls(
+              uploadPlans.map((item) => ({
+                key: item.filePath,
+                contentType: item.contentType,
+                sizeBytes: item.sizeBytes,
+              }))
+            );
+
+            if ("error" in presignedBatch) {
+              throw new Error(presignedBatch.error || "Failed to prepare upload URLs");
+            }
+            const uploadUrlMap = presignedBatch.urls || {};
+
+            await runWithConcurrency(uploadPlans, uploadConcurrency, async ({ file, filePath, contentType, sizeBytes }) => {
               try {
-                const ext = file.name.split(".").pop() || "bin";
-                const fileName = `${Math.random().toString(36).slice(2)}.${ext}`;
-                filePath = buildProjectFileKey(projectId, fileName);
-                const { error } = await supabase.storage.from("project-files").upload(filePath, file);
-                if (error) throw error;
+                const uploadUrl =
+                  uploadUrlMap[filePath] ||
+                  (
+                    await getUploadPresignedUrl(filePath, contentType, sizeBytes)
+                  );
+
+                const resolvedUploadUrl =
+                  typeof uploadUrl === "string"
+                    ? uploadUrl
+                    : "error" in uploadUrl
+                      ? null
+                      : uploadUrl.url;
+
+                if (!resolvedUploadUrl) {
+                  throw new Error("Failed to prepare upload URL");
+                }
+
+                const uploadResponse = await fetch(resolvedUploadUrl, {
+                  method: "PUT",
+                  headers: { "Content-Type": contentType },
+                  body: file,
+                });
+                if (!uploadResponse.ok) {
+                  throw new Error(`Upload failed (${uploadResponse.status})`);
+                }
 
                 const node = (await createFileNode(projectId, parentId, {
                   name: file.name,
                   s3Key: filePath,
                   size: file.size,
-                  mimeType: file.type,
+                  mimeType: contentType,
                 })) as ProjectNode;
                 createdNodes.push(node);
               } catch {
-                if (filePath) {
-                  await supabase.storage.from("project-files").remove([filePath]).catch(() => null);
-                }
+                await supabase.storage.from("project-files").remove([filePath]).catch(() => null);
                 failed += 1;
               }
             });
@@ -369,12 +426,36 @@ export function useExplorerMutations({
           }
           if (mappedFiles.length === 0) return;
 
-          // 2. Fetch session JWT for Worker
-          const supabase = getSupabase();
-          const { data: { session } } = await supabase.auth.getSession();
-          if (!session) {
-            showToast("Authentication required for upload.", "error");
+          const mappingByPath = new Map(mappedFiles.map((entry) => [entry.path, entry]));
+          const uploadNodes = files
+            .map((file) => {
+              const mapping = mappingByPath.get(file.webkitRelativePath || file.name);
+              if (!mapping) return null;
+              return { file, s3Key: mapping.s3Key, fileId: mapping.fileId, path: mapping.path };
+            })
+            .filter((item): item is { file: File; s3Key: string; fileId: string; path: string } => item !== null);
+
+          if (uploadNodes.length === 0) {
+            showToast("No eligible files found for upload.", "warning");
             return;
+          }
+
+          // 2. Pre-generate signed upload URLs in chunks (server-side validation applied)
+          const presignedUploadUrls: Record<string, string> = {};
+          const PRESIGN_CHUNK_SIZE = 200;
+          for (let i = 0; i < uploadNodes.length; i += PRESIGN_CHUNK_SIZE) {
+            const chunk = uploadNodes.slice(i, i + PRESIGN_CHUNK_SIZE);
+            const batch = await getBatchUploadUrls(
+              chunk.map((entry) => ({
+                key: entry.s3Key,
+                contentType: entry.file.type || "application/octet-stream",
+                sizeBytes: entry.file.size,
+              }))
+            );
+            if ("error" in batch) {
+              throw new Error(batch.error || "Failed to prepare folder upload URLs");
+            }
+            Object.assign(presignedUploadUrls, batch.urls || {});
           }
 
           // 3. Connect to Web Worker to bypass main JS loop limits
@@ -396,23 +477,12 @@ export function useExplorerMutations({
               ? crypto.randomUUID()
               : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
-          const mappingByPath = new Map(mappedFiles.map((entry) => [entry.path, entry]));
-          const uploadNodes = files
-            .map((file) => {
-              const mapping = mappingByPath.get(file.webkitRelativePath || file.name);
-              if (!mapping) return null;
-              return { file, s3Key: mapping.s3Key, fileId: mapping.fileId, path: mapping.path };
-            })
-            .filter((item): item is { file: File; s3Key: string; fileId: string; path: string } => item !== null);
-
           showToast(`Uploading ${uploadNodes.length} items in background UI daemon...`, "info");
 
           worker.postMessage({
             jobId: uploadJobId,
             uploadNodes,
-            supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL,
-            bucketName: "project-files",
-            jwt: session.access_token
+            uploadUrls: presignedUploadUrls,
           });
 
           worker.onmessage = async (e) => {
@@ -477,7 +547,6 @@ export function useExplorerMutations({
     },
     [
       canEdit,
-      getSupabase,
       loadFolderContent,
       projectId,
       recordOperation,
@@ -890,27 +959,66 @@ export function useExplorerMutations({
           const supabase = getSupabase();
           const createdNodes: ProjectNode[] = [];
           let failed = 0;
+          const uploadPlans = files.map((file) => {
+            const ext = file.name.split(".").pop() || "bin";
+            const fileName = `${Math.random().toString(36).slice(2)}.${ext}`;
+            return {
+              file,
+              filePath: buildProjectFileKey(projectId, fileName),
+              contentType: file.type || "application/octet-stream",
+              sizeBytes: file.size,
+            };
+          });
 
-          for (const file of files) {
-            let filePath: string | null = null;
+          const presignedBatch = await getBatchUploadUrls(
+            uploadPlans.map((item) => ({
+              key: item.filePath,
+              contentType: item.contentType,
+              sizeBytes: item.sizeBytes,
+            }))
+          );
+          if ("error" in presignedBatch) {
+            throw new Error(presignedBatch.error || "Failed to prepare upload URLs");
+          }
+          const uploadUrlMap = presignedBatch.urls || {};
+
+          for (const { file, filePath, contentType, sizeBytes } of uploadPlans) {
             try {
-              const ext = file.name.split(".").pop() || "bin";
-              const fileName = `${Math.random().toString(36).slice(2)}.${ext}`;
-              filePath = buildProjectFileKey(projectId, fileName);
-              const { error } = await supabase.storage.from("project-files").upload(filePath, file);
-              if (error) throw error;
+              const uploadUrl =
+                uploadUrlMap[filePath] ||
+                (
+                  await getUploadPresignedUrl(filePath, contentType, sizeBytes)
+                );
+
+              const resolvedUploadUrl =
+                typeof uploadUrl === "string"
+                  ? uploadUrl
+                  : "error" in uploadUrl
+                    ? null
+                    : uploadUrl.url;
+
+              if (!resolvedUploadUrl) {
+                throw new Error("Failed to prepare upload URL");
+              }
+
+              const uploadResponse = await fetch(resolvedUploadUrl, {
+                method: "PUT",
+                headers: { "Content-Type": contentType },
+                body: file,
+              });
+              if (!uploadResponse.ok) {
+                throw new Error(`Upload failed (${uploadResponse.status})`);
+              }
 
               const node = (await createFileNode(projectId, parentId, {
                 name: file.name,
                 s3Key: filePath,
                 size: file.size,
-                mimeType: file.type || "application/octet-stream",
+                mimeType: contentType,
               })) as ProjectNode;
               createdNodes.push(node);
             } catch {
-              if (filePath) {
-                await supabase.storage.from("project-files").remove([filePath]).catch(() => null);
-              }
+              await supabase.storage.from("project-files").remove([filePath]).catch(() => null);
               failed += 1;
             }
           }

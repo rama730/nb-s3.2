@@ -6,6 +6,7 @@ import type { ProjectNode } from "@/lib/db/schema";
 import { eq, and, isNull, ilike, inArray, sql, type SQL } from "drizzle-orm";
 import { createClient } from "@/lib/supabase/server";
 import { logger } from "@/lib/logger";
+import { runInFlightDeduped } from "@/lib/async/inflight-dedupe";
 import {
     assertProjectReadAccess,
     assertProjectAccess,
@@ -136,27 +137,36 @@ export async function getProjectNodes(
     return { nodes, nextCursor };
 }
 
-export async function getProjectTreeFlat(projectId: string): Promise<ProjectNode[]> {
+export async function getProjectTreeFlat(projectId: string): Promise<{ nodes: ProjectNode[], isComplete: boolean }> {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
 
-    if (!projectId) return [];
-    await assertProjectReadAccess(projectId, user?.id ?? null);
+    if (!projectId) return { nodes: [], isComplete: true };
+    const actorId = user?.id ?? null;
+    return await runInFlightDeduped(`files:tree-flat:${projectId}:${actorId ?? "anon"}`, async () => {
+        await assertProjectReadAccess(projectId, actorId);
 
-    // Smart threshold: load everything as a flat tree for projects up to 20K nodes.
-    // For larger projects, return empty so the frontend falls back to paginated loading.
-    const MAX_FLAT_TREE_NODES = 20_000;
+        // Smart threshold: load everything as a flat tree for projects up to 20K nodes.
+        // For larger projects, return empty so the frontend falls back to paginated loading.
+        const MAX_FLAT_TREE_NODES = 20_000;
 
-    const nodes = await db.query.projectNodes.findMany({
-        where: and(
-            eq(projectNodes.projectId, projectId),
-            isNull(projectNodes.deletedAt)
-        ),
-        orderBy: (pn, { asc }) => [asc(pn.path)],
-        limit: MAX_FLAT_TREE_NODES,
+        const nodes = await db.query.projectNodes.findMany({
+            where: and(
+                eq(projectNodes.projectId, projectId),
+                isNull(projectNodes.deletedAt)
+            ),
+            orderBy: (pn, { asc }) => [asc(pn.path)],
+            limit: MAX_FLAT_TREE_NODES + 1,
+        });
+
+        const isComplete = nodes.length <= MAX_FLAT_TREE_NODES;
+        if (!isComplete) {
+            nodes.pop(); // Remove the extra node, but we'll return empty anyway
+            return { nodes: [], isComplete: false };
+        }
+
+        return { nodes, isComplete: true };
     });
-
-    return nodes;
 }
 
 export async function getProjectNodesSafe(
@@ -184,8 +194,6 @@ export async function getProjectBatchNodes(projectId: string, parentIds: (string
 
     if (!parentIds.length) return [];
 
-    await assertProjectReadAccess(projectId, user?.id ?? null);
-
     // De-dupe and sanitize. Ignore empty/invalid values so they never hit UUID SQL params.
     const uniqueParents = Array.from(new Set(parentIds));
     const cleanParents = Array.from(
@@ -205,54 +213,64 @@ export async function getProjectBatchNodes(projectId: string, parentIds: (string
         throw new Error(`Too many folders requested in one batch. Max: ${MAX_BATCH_PARENT_FOLDERS}`);
     }
     if (!cleanParents.length) return [];
+    const actorId = user?.id ?? null;
+    const parentKey = cleanParents.map((parentId) => parentId ?? "__root__").sort().join(",");
 
-    // Fetch per parent to avoid starvation from a single global LIMIT when many folders are expanded.
-    const fetchByParent = async (parentId: string | null) => {
-        return await db.query.projectNodes.findMany({
-            where: and(
-                eq(projectNodes.projectId, projectId),
-                isNull(projectNodes.deletedAt),
-                parentId ? eq(projectNodes.parentId, parentId) : isNull(projectNodes.parentId)
-            ),
-            orderBy: (nodes, { asc }) => [asc(nodes.type), asc(nodes.name), asc(nodes.id)],
-            limit: MAX_BATCH_FETCH_PER_PARENT,
-        });
-    };
+    return await runInFlightDeduped(`files:batch-nodes:${projectId}:${parentKey}:${actorId ?? "anon"}`, async () => {
+        await assertProjectReadAccess(projectId, actorId);
 
-    const out: ProjectNode[] = [];
-    for (let i = 0; i < cleanParents.length; i += BATCH_PARENT_QUERY_CONCURRENCY) {
-        const chunk = cleanParents.slice(i, i + BATCH_PARENT_QUERY_CONCURRENCY);
-        const rowsByParent = await Promise.all(chunk.map((parentId) => fetchByParent(parentId)));
-        for (const rows of rowsByParent) {
-            for (const row of rows) {
-                out.push(row);
-                if (out.length >= MAX_BATCH_FETCH_TOTAL) {
-                    logger.metric("files.batch_fetch.cap_hit", {
-                        module: "files",
-                        projectId,
-                        requestedParents: cleanParents.length,
-                        fetchedRows: out.length,
-                        cap: MAX_BATCH_FETCH_TOTAL,
-                    });
-                    return out;
+        // Fetch per parent to avoid starvation from a single global LIMIT when many folders are expanded.
+        const fetchByParent = async (parentId: string | null) => {
+            return await db.query.projectNodes.findMany({
+                where: and(
+                    eq(projectNodes.projectId, projectId),
+                    isNull(projectNodes.deletedAt),
+                    parentId ? eq(projectNodes.parentId, parentId) : isNull(projectNodes.parentId)
+                ),
+                orderBy: (nodes, { asc }) => [asc(nodes.type), asc(nodes.name), asc(nodes.id)],
+                limit: MAX_BATCH_FETCH_PER_PARENT,
+            });
+        };
+
+        const out: ProjectNode[] = [];
+        for (let i = 0; i < cleanParents.length; i += BATCH_PARENT_QUERY_CONCURRENCY) {
+            const chunk = cleanParents.slice(i, i + BATCH_PARENT_QUERY_CONCURRENCY);
+            const rowsByParent = await Promise.all(chunk.map((parentId) => fetchByParent(parentId)));
+            for (const rows of rowsByParent) {
+                for (const row of rows) {
+                    out.push(row);
+                    if (out.length >= MAX_BATCH_FETCH_TOTAL) {
+                        logger.metric("files.batch_fetch.cap_hit", {
+                            module: "files",
+                            projectId,
+                            requestedParents: cleanParents.length,
+                            fetchedRows: out.length,
+                            cap: MAX_BATCH_FETCH_TOTAL,
+                        });
+                        return out;
+                    }
                 }
             }
         }
-    }
 
-    return out;
+        return out;
+    });
 }
 
 export async function getNodesByIds(projectId: string, nodeIds: string[]) {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
-    await assertProjectReadAccess(projectId, user?.id ?? null);
 
     const unique = Array.from(new Set(nodeIds)).filter(Boolean);
     if (unique.length === 0) return [];
+    const actorId = user?.id ?? null;
+    const idsKey = unique.slice().sort().join(",");
 
-    return await db.query.projectNodes.findMany({
-        where: and(eq(projectNodes.projectId, projectId), inArray(projectNodes.id, unique)),
+    return await runInFlightDeduped(`files:nodes-by-ids:${projectId}:${idsKey}:${actorId ?? "anon"}`, async () => {
+        await assertProjectReadAccess(projectId, actorId);
+        return await db.query.projectNodes.findMany({
+            where: and(eq(projectNodes.projectId, projectId), inArray(projectNodes.id, unique)),
+        });
     });
 }
 
@@ -314,68 +332,72 @@ export async function getNodeMetadataBatch(
 export async function getBreadcrumbs(projectId: string, folderId: string | null) {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
-    await assertProjectReadAccess(projectId, user?.id ?? null);
+    const actorId = user?.id ?? null;
 
     if (!folderId) return [];
 
-    const folder = await db.query.projectNodes.findFirst({
-        where: and(eq(projectNodes.id, folderId), eq(projectNodes.projectId, projectId)),
-        columns: { path: true }
+    return await runInFlightDeduped(`files:breadcrumbs:${projectId}:${folderId}:${actorId ?? "anon"}`, async () => {
+        await assertProjectReadAccess(projectId, actorId);
+        const folder = await db.query.projectNodes.findFirst({
+            where: and(eq(projectNodes.id, folderId), eq(projectNodes.projectId, projectId)),
+            columns: { path: true }
+        });
+
+        // Materialized Path O(1) query
+        if (folder && folder.path && folder.path !== '/') {
+            const parts = folder.path.split('/').filter(Boolean);
+            const pathsToFetch: string[] = [];
+            let cur = "";
+            for (const p of parts) {
+                cur += "/" + p;
+                pathsToFetch.push(cur);
+            }
+
+            if (pathsToFetch.length > 0) {
+                const rows = await db.query.projectNodes.findMany({
+                    where: and(
+                        eq(projectNodes.projectId, projectId),
+                        // Intentionally inclusive of deleted_at so breadcrumbs resolve
+                        // correctly for visible nodes inside deleted folders
+                        inArray(projectNodes.path, pathsToFetch)
+                    ),
+                    columns: { id: true, name: true, parentId: true, path: true }
+                });
+
+                // Sort by path length to ensure root-to-leaf order
+                rows.sort((a, b) => (a.path?.length || 0) - (b.path?.length || 0));
+
+                return rows.map((r) => ({
+                    id: r.id,
+                    name: r.name,
+                    parentId: r.parentId,
+                }));
+            }
+        }
+
+        // Fallback for unmigrated legacy rows
+        const rows = await db.execute<{ id: string; name: string; parent_id: string | null }>(sql`
+            WITH RECURSIVE ancestors AS (
+                SELECT id, name, parent_id
+                FROM project_nodes
+                WHERE id = ${folderId} AND project_id = ${projectId}
+                UNION ALL
+                SELECT pn.id, pn.name, pn.parent_id
+                FROM project_nodes pn
+                INNER JOIN ancestors a ON pn.id = a.parent_id
+                WHERE pn.project_id = ${projectId}
+            )
+            SELECT id, name, parent_id FROM ancestors
+        `);
+
+        const arr = Array.from(rows).map((r) => ({
+            id: r.id,
+            name: r.name,
+            parentId: r.parent_id,
+        }));
+
+        return arr.reverse();
     });
-
-    // Materialized Path O(1) query
-    if (folder && folder.path && folder.path !== '/') {
-        const parts = folder.path.split('/').filter(Boolean);
-        const pathsToFetch: string[] = [];
-        let cur = "";
-        for (const p of parts) {
-            cur += "/" + p;
-            pathsToFetch.push(cur);
-        }
-
-        if (pathsToFetch.length > 0) {
-            const rows = await db.query.projectNodes.findMany({
-                where: and(
-                    eq(projectNodes.projectId, projectId),
-                    isNull(projectNodes.deletedAt),
-                    inArray(projectNodes.path, pathsToFetch)
-                ),
-                columns: { id: true, name: true, parentId: true, path: true }
-            });
-
-            // Sort by path length to ensure root-to-leaf order
-            rows.sort((a, b) => (a.path?.length || 0) - (b.path?.length || 0));
-
-            return rows.map((r) => ({
-                id: r.id,
-                name: r.name,
-                parentId: r.parentId,
-            }));
-        }
-    }
-
-    // Fallback for unmigrated legacy rows
-    const rows = await db.execute<{ id: string; name: string; parent_id: string | null }>(sql`
-        WITH RECURSIVE ancestors AS (
-            SELECT id, name, parent_id
-            FROM project_nodes
-            WHERE id = ${folderId} AND project_id = ${projectId} AND deleted_at IS NULL
-            UNION ALL
-            SELECT pn.id, pn.name, pn.parent_id
-            FROM project_nodes pn
-            INNER JOIN ancestors a ON pn.id = a.parent_id
-            WHERE pn.project_id = ${projectId} AND pn.deleted_at IS NULL
-        )
-        SELECT id, name, parent_id FROM ancestors
-    `);
-
-    const arr = Array.from(rows).map((r) => ({
-        id: r.id,
-        name: r.name,
-        parentId: r.parent_id,
-    }));
-
-    return arr.reverse();
 }
 
 export async function findNodeByPath(projectId: string, path: string[]) {
@@ -477,18 +499,21 @@ export async function getProjectRecentNodes(projectId: string, limit: number = 5
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new Error("Unauthorized");
-    await assertProjectReadAccess(projectId, user.id);
+    const safeLimit = Math.max(1, Math.min(50, limit));
+    return await runInFlightDeduped(`files:recent-nodes:${projectId}:${safeLimit}:${user.id}`, async () => {
+        await assertProjectReadAccess(projectId, user.id);
 
-    // Fetch the most recently updated files (excluding folders)
-    const nodes = await db.query.projectNodes.findMany({
-        where: and(
-            eq(projectNodes.projectId, projectId),
-            eq(projectNodes.type, 'file'),
-            isNull(projectNodes.deletedAt)
-        ),
-        orderBy: (nodes, { desc }) => [desc(nodes.updatedAt)],
-        limit,
+        // Fetch the most recently updated files (excluding folders)
+        const nodes = await db.query.projectNodes.findMany({
+            where: and(
+                eq(projectNodes.projectId, projectId),
+                eq(projectNodes.type, 'file'),
+                isNull(projectNodes.deletedAt)
+            ),
+            orderBy: (nodes, { desc }) => [desc(nodes.updatedAt)],
+            limit: safeLimit,
+        });
+
+        return nodes;
     });
-
-    return nodes;
 }

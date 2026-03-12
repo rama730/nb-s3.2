@@ -3,7 +3,8 @@ import ProjectCardSkeleton from "@/components/projects/ProjectCardSkeleton";
 import SimpleHubClient from "@/components/hub/SimpleHubClient";
 import { fetchHubProjectsAction } from "@/app/actions/hub";
 import { PROJECT_STATUS, PROJECT_TYPE, SORT_OPTIONS } from "@/constants/hub";
-import { createClient } from "@/lib/supabase/server";
+import { isHardeningDomainEnabled } from "@/lib/features/hardening";
+import { getViewerAuthContext } from "@/lib/server/viewer-context";
 
 export const dynamic = 'force-dynamic'; // Real-time data fetching
 
@@ -24,14 +25,13 @@ export async function generateMetadata() {
 }
 
 export default async function HubPage() {
-    const supabase = await createClient();
-    const [{ data: { user } }, initialData] = await Promise.all([
-        supabase.auth.getUser(),
-        fetchHubProjectsAction(INITIAL_HUB_FILTERS, undefined, 24),
-    ]);
+    const { user } = await getViewerAuthContext();
+    const dataHardeningEnabled = isHardeningDomainEnabled("dataV1", user?.id ?? null);
+    const initialPageSize = dataHardeningEnabled ? 18 : 24;
+    const initialData = await fetchHubProjectsAction(INITIAL_HUB_FILTERS, undefined, initialPageSize);
 
     return (
-        <div className="h-[calc(100vh-var(--header-height,56px))] min-h-0 overflow-hidden bg-zinc-50 dark:bg-zinc-950">
+        <div className="h-full min-h-0 overflow-hidden bg-zinc-50 dark:bg-zinc-950 flex flex-col flex-1">
             <Suspense fallback={
                 <div className="h-full min-h-0 overflow-hidden">
                     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">

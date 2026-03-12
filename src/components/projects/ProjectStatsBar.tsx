@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 interface ProjectStatsBarProps {
     viewCount?: number;
     followersCount?: number;
-    savesCount?: number;
+
     className?: string;
     size?: "sm" | "md";
     testIdPrefix?: string;
@@ -15,7 +15,7 @@ interface ProjectStatsBarProps {
 export default function ProjectStatsBar({
     viewCount = 0,
     followersCount = 0,
-    savesCount,
+
     className,
     size = "md",
     testIdPrefix = "project",
@@ -33,12 +33,7 @@ export default function ProjectStatsBar({
                 <Users className={iconClass} />
                 <span className="font-semibold text-zinc-900 dark:text-zinc-200">{followersCount}</span>
             </div>
-            {typeof savesCount === "number" && (
-                <div className="flex items-center gap-1" title="Saves" data-testid={`${testIdPrefix}-saves-count`}>
-                    <Bookmark className={iconClass} />
-                    <span className="font-semibold text-zinc-900 dark:text-zinc-200">{savesCount}</span>
-                </div>
-            )}
+
         </div>
     );
 }

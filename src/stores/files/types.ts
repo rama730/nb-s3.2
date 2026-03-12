@@ -137,6 +137,8 @@ export type UiState = {
   commandHistory: string[];
   /** Persisted output mode filter */
   outputFilterMode: "all" | "out" | "err";
+  /** @internal Saved state for Zen mode restore */
+  _prevBottomPanelCollapsed?: boolean;
 };
 
 export interface Problem {
@@ -374,6 +376,7 @@ export const DEFAULT_UI_STATE: UiState = {
   debugOutput: [],
   commandHistory: [],
   outputFilterMode: "all",
+  _prevBottomPanelCollapsed: undefined,
 };
 
 export const ROOT_KEY = "__root__";

@@ -609,7 +609,6 @@ export default function WorkspaceShell({
 
   useEffect(() => {
     if (
-      !filesHardeningEnabled ||
       !shouldMountDiagnostics ||
       !filesFeatureFlags.wave4GitIntegration ||
       gitBootstrapRef.current.has(projectId)
@@ -647,7 +646,6 @@ export default function WorkspaceShell({
       setGitStatusLoaded(projectId, true);
     };
   }, [
-    filesHardeningEnabled,
     shouldMountDiagnostics,
     projectId,
     setGitRepo,

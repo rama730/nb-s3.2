@@ -93,26 +93,65 @@ export const migrateProjectFileLegacyKeys = inngest.createFunction(
                 continue;
             }
 
-            await db.transaction(async (tx) => {
-                await tx
-                    .update(projectNodes)
-                    .set({
-                        s3Key: newKey,
-                        updatedAt: new Date(),
-                    })
-                    .where(and(eq(projectNodes.id, row.nodeId), eq(projectNodes.projectId, row.projectId)));
+            try {
+                await db.transaction(async (tx) => {
+                    const updatedRows = await tx
+                        .update(projectNodes)
+                        .set({
+                            s3Key: newKey,
+                            updatedAt: new Date(),
+                        })
+                        .where(
+                            and(
+                                eq(projectNodes.id, row.nodeId),
+                                eq(projectNodes.projectId, row.projectId),
+                                eq(projectNodes.s3Key, oldKey),
+                            ),
+                        )
+                        .returning({ id: projectNodes.id });
 
-                await tx.insert(projectNodeEvents).values({
+                    if (updatedRows.length === 0) {
+                        throw new Error("Concurrent modification detected while migrating project file key");
+                    }
+
+                    await tx.insert(projectNodeEvents).values({
+                        projectId: row.projectId,
+                        nodeId: row.nodeId,
+                        actorId: null,
+                        type: "storage_key_migrated",
+                        metadata: { oldKey, newKey },
+                        createdAt: new Date(),
+                    });
+                });
+            } catch (error) {
+                // If migration in DB fails, cleanup the newly uploaded object to avoid orphans
+                console.error("project-files-key-migration: transaction failed", {
+                    nodeId: row.nodeId,
+                    projectId: row.projectId,
+                    error,
+                });
+                await admin.storage.from("project-files").remove([newKey]).catch((cleanupError) => {
+                    console.error("project-files-key-migration: failed to remove new storage file after failed transaction", {
+                        projectId: row.projectId,
+                        nodeId: row.nodeId,
+                        oldKey,
+                        newKey,
+                        cleanupError,
+                    });
+                });
+                failed += 1;
+                continue;
+            }
+
+            await admin.storage.from("project-files").remove([oldKey]).catch((cleanupError) => {
+                console.error("project-files-key-migration: failed to remove old storage file", {
                     projectId: row.projectId,
                     nodeId: row.nodeId,
-                    actorId: null,
-                    type: "storage_key_migrated",
-                    metadata: { oldKey, newKey },
-                    createdAt: new Date(),
+                    oldKey,
+                    newKey,
+                    cleanupError,
                 });
             });
-
-            await admin.storage.from("project-files").remove([oldKey]).catch(() => null);
             migrated += 1;
             migratedBytes += rowSize;
         }
@@ -126,4 +165,3 @@ export const migrateProjectFileLegacyKeys = inngest.createFunction(
         };
     },
 );
-

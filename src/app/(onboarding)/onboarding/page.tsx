@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { useQueryClient } from '@tanstack/react-query'
 import { createClient } from '@/lib/supabase/client'
+import { queryKeys } from '@/lib/query-keys'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -19,6 +20,7 @@ import {
     saveOnboardingDraft,
     trackOnboardingEvent,
 } from '@/app/actions/onboarding'
+import { createProfileImageUploadUrlAction } from '@/app/actions/profile'
 import { useAuth } from '@/lib/hooks/use-auth'
 import { validateUsername } from '@/lib/validations/username'
 import {
@@ -270,13 +272,25 @@ function readOnboardingDraft(): { step: number; data: Partial<OnboardingData>; u
 }
 
 function mergeOnboardingData(current: OnboardingData, updates: OnboardingDataUpdates): OnboardingData {
+    const { socialLinks: socialLinkUpdates, ...restUpdates } = updates
+    const definedUpdates = Object.fromEntries(
+        Object.entries(restUpdates).filter(([, value]) => value !== undefined)
+    ) as Partial<Omit<OnboardingData, 'socialLinks'>>
+
+    const nextSocialLinks = { ...current.socialLinks }
+    if (socialLinkUpdates) {
+        for (const key of ONBOARDING_SOCIAL_KEYS) {
+            const value = socialLinkUpdates[key]
+            if (value !== undefined) {
+                nextSocialLinks[key] = value
+            }
+        }
+    }
+
     return {
         ...current,
-        ...updates,
-        socialLinks: {
-            ...current.socialLinks,
-            ...(updates.socialLinks || {}),
-        },
+        ...definedUpdates,
+        socialLinks: nextSocialLinks,
     }
 }
 
@@ -355,6 +369,7 @@ export default function OnboardingPage() {
     const submitIdempotencyKeyRef = useRef<string>('')
     const onboardingStartedAtRef = useRef<number>(Date.now())
     const stepEnteredAtRef = useRef<number>(Date.now())
+    const lastStepViewRef = useRef<number | null>(null)
     const [error, setError] = useState<string | null>(null)
     const [customOpenTo, setCustomOpenTo] = useState('')
     const [customOpenToError, setCustomOpenToError] = useState<string | null>(null)
@@ -373,6 +388,10 @@ export default function OnboardingPage() {
         messagePrivacy: data.messagePrivacy,
         visibility: data.visibility,
     }), [data])
+    const telemetrySnapshotRef = useRef(telemetrySnapshot)
+    useEffect(() => {
+        telemetrySnapshotRef.current = telemetrySnapshot
+    }, [telemetrySnapshot])
 
     const trackEvent = useCallback((payload: OnboardingEventInput) => {
         void trackOnboardingEvent(payload)
@@ -386,16 +405,28 @@ export default function OnboardingPage() {
     // Pre-fill data from social login and ensure profile exists
     useEffect(() => {
         async function loadSocialData() {
+            const localDraft = readOnboardingDraft()
             try {
-                const localDraft = readOnboardingDraft()
                 if (typeof window !== 'undefined' && !submitIdempotencyKeyRef.current) {
                     const storedSubmitKey = window.localStorage.getItem(ONBOARDING_SUBMIT_KEY) || ''
                     submitIdempotencyKeyRef.current = storedSubmitKey || generateIdempotencyKey()
                     window.localStorage.setItem(ONBOARDING_SUBMIT_KEY, submitIdempotencyKeyRef.current)
                 }
 
+                if (localDraft) {
+                    setStep(localDraft.step)
+                    setData(prev => mergeOnboardingData(prev, localDraft.data))
+                    lastSyncedStepRef.current = localDraft.step
+                }
+
                 const supabase = createClient()
-                const { data: { user } } = await supabase.auth.getUser()
+                let user: Awaited<ReturnType<typeof supabase.auth.getUser>>['data']['user'] = null
+                try {
+                    const authResult = await supabase.auth.getUser()
+                    user = authResult.data.user
+                } catch (authError) {
+                    console.warn('Unable to fetch auth user during onboarding bootstrap:', authError)
+                }
 
                 if (user) {
                     const remoteDraftResult = await getOnboardingDraft()
@@ -416,7 +447,7 @@ export default function OnboardingPage() {
                             ? remoteDraft
                             : localDraft
 
-                    if (preferredDraft) {
+                    if (preferredDraft && preferredDraft !== localDraft) {
                         setStep(preferredDraft.step)
                         setData(prev => mergeOnboardingData(prev, preferredDraft.data))
                         lastSyncedStepRef.current = preferredDraft.step
@@ -458,7 +489,7 @@ export default function OnboardingPage() {
                     },
                 })
             } catch (error) {
-                console.error('Error loading user data:', error)
+                console.warn('Onboarding bootstrap degraded; continuing with local state:', error)
             } finally {
                 setIsInitializing(false)
             }
@@ -573,16 +604,20 @@ export default function OnboardingPage() {
 
     useEffect(() => {
         if (isInitializing) return
+        if (lastStepViewRef.current === step) return
+
         stepEnteredAtRef.current = Date.now()
+        lastStepViewRef.current = step
+        const stableTelemetrySnapshot = telemetrySnapshotRef.current
         trackEvent({
             eventType: 'step_view',
             step,
             metadata: {
-                ...telemetrySnapshot,
+                ...stableTelemetrySnapshot,
                 step2Section,
             },
         })
-    }, [step, isInitializing, telemetrySnapshot, step2Section, trackEvent])
+    }, [step, isInitializing, step2Section, trackEvent])
 
     useEffect(() => {
         if (isInitializing) return
@@ -650,31 +685,31 @@ export default function OnboardingPage() {
             reader.readAsDataURL(file)
 
             // Try to upload compressed version to storage (background, non-blocking)
-            const supabase = createClient()
-            const { data: { user } } = await supabase.auth.getUser()
-
-            if (user) {
-                try {
-                    const compressedBlob = await compressAvatarOffMainThread(file)
-                    const fileName = `${user.id}-${Date.now()}.jpg`
-
-                    const { error: uploadError } = await supabase.storage
-                        .from('avatars')
-                        .upload(fileName, compressedBlob, {
-                            contentType: 'image/jpeg',
-                            upsert: true,
-                        })
-
-                    if (!uploadError) {
-                        const { data: { publicUrl } } = supabase.storage
-                            .from('avatars')
-                            .getPublicUrl(fileName)
-                        updateData({ avatarUrl: publicUrl })
-                    }
-                } catch {
-                    // Silently ignore upload errors - preview is already showing
-                    console.log('Storage upload skipped, using preview')
+            try {
+                const compressedBlob = await compressAvatarOffMainThread(file)
+                const uploadSession = await createProfileImageUploadUrlAction({
+                    mimeType: 'image/jpeg',
+                    sizeBytes: compressedBlob.size,
+                    kind: 'avatar',
+                })
+                if (!uploadSession.success) {
+                    throw new Error(uploadSession.error || 'Failed to prepare avatar upload')
                 }
+
+                const uploadResponse = await fetch(uploadSession.uploadUrl, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': uploadSession.contentType },
+                    body: compressedBlob,
+                })
+
+                if (!uploadResponse.ok) {
+                    throw new Error(`Avatar upload failed (${uploadResponse.status})`)
+                }
+
+                updateData({ avatarUrl: `${uploadSession.publicUrl}?t=${Date.now()}` })
+            } catch {
+                // Silently ignore upload errors - preview is already showing
+                console.log('Storage upload skipped, using preview')
             }
         } catch (error) {
             console.error('Avatar error:', error)
@@ -787,7 +822,7 @@ export default function OnboardingPage() {
     }, [markInteraction])
 
     const addCustomOpenTo = useCallback(() => {
-        const normalized = customOpenTo.trim().slice(0, 32)
+        const normalized = customOpenTo.trim()
         if (!normalized) {
             setCustomOpenToError('Enter an option before adding')
             return
@@ -888,8 +923,9 @@ export default function OnboardingPage() {
                 refreshProfile(),
                 clearOnboardingDraft(),
             ])
-            queryClient.invalidateQueries({ queryKey: ['profile'] })
-            queryClient.invalidateQueries({ queryKey: ['user'] })
+            if (data.username) {
+                queryClient.invalidateQueries({ queryKey: queryKeys.profile.byTarget(data.username) })
+            }
             if (typeof window !== 'undefined') {
                 const checklistItems = [
                     !data.headline ? 'Add a headline' : null,
@@ -1221,19 +1257,27 @@ export default function OnboardingPage() {
                                             ))}
                                         </div>
                                         {ONBOARDING_FEATURE_FLAGS.enableCustomOpenTo && (
-                                            <div className="flex gap-2">
-                                                <Input
-                                                    value={customOpenTo}
-                                                    onChange={(e) => {
-                                                        setCustomOpenTo(e.target.value)
-                                                        setCustomOpenToError(null)
-                                                    }}
-                                                    placeholder="Add custom preference (e.g. Weekend projects)"
-                                                    className="h-10"
-                                                />
-                                                <Button type="button" variant="outline" onClick={addCustomOpenTo}>
-                                                    Add
-                                                </Button>
+                                            <div className="space-y-2">
+                                                <div className="flex gap-2">
+                                                    <div className="relative flex-1">
+                                                        <Input
+                                                            value={customOpenTo}
+                                                            onChange={(e) => {
+                                                                setCustomOpenTo(e.target.value)
+                                                                setCustomOpenToError(null)
+                                                            }}
+                                                            placeholder="Add custom preference (max 32 chars)"
+                                                            maxLength={32}
+                                                            className="h-10 pr-12"
+                                                        />
+                                                        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground select-none">
+                                                            {customOpenTo.length}/32
+                                                        </span>
+                                                    </div>
+                                                    <Button type="button" variant="outline" onClick={addCustomOpenTo}>
+                                                        Add
+                                                    </Button>
+                                                </div>
                                             </div>
                                         )}
                                         {customOpenToError && (

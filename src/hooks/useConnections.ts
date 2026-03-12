@@ -32,6 +32,7 @@ import {
 } from '@/app/actions/applications';
 import { createSupabaseBrowserClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
+import { queryKeys } from '@/lib/query-keys';
 
 export type FeedStats = Pick<ConnectionStats, 'totalConnections' | 'pendingIncoming' | 'pendingSent'>;
 
@@ -221,6 +222,354 @@ function updatePendingRequestQueries(
     );
 }
 
+function invalidateConnectionsScoped(queryClient: ReturnType<typeof useQueryClient>) {
+    queryClient.invalidateQueries({ queryKey: ['connections', 'feed'] });
+    queryClient.invalidateQueries({ queryKey: ['connections', 'pending-requests'] });
+    queryClient.invalidateQueries({ queryKey: ['connections', 'request-history'] });
+    queryClient.invalidateQueries({ queryKey: ['connections', 'stats'] });
+}
+
+async function cancelConnectionsScoped(queryClient: ReturnType<typeof useQueryClient>) {
+    await Promise.all([
+        queryClient.cancelQueries({ queryKey: ['connections', 'feed'] }),
+        queryClient.cancelQueries({ queryKey: ['connections', 'pending-requests'] }),
+        queryClient.cancelQueries({ queryKey: ['connections', 'stats'] }),
+    ]);
+}
+
+type ConnectionsRealtimePayload = {
+    new?: Record<string, unknown>;
+    old?: Record<string, unknown>;
+};
+
+type ConnectionsRealtimeRow = {
+    id: string;
+    requesterId: string;
+    addresseeId: string;
+    status: string;
+    updatedAt: Date;
+};
+
+function parseRealtimeConnectionRowFromSource(source?: Record<string, unknown>): ConnectionsRealtimeRow | null {
+    if (!source) return null;
+
+    const id = typeof source.id === 'string' ? source.id : null;
+    const requesterId = typeof source.requester_id === 'string' ? source.requester_id : null;
+    const addresseeId = typeof source.addressee_id === 'string' ? source.addressee_id : null;
+    const status = typeof source.status === 'string' ? source.status : null;
+    const updatedRaw = source.updated_at || source.updatedAt;
+    const updatedAt = updatedRaw ? new Date(updatedRaw as string | number | Date) : new Date();
+
+    if (!id || !requesterId || !addresseeId || !status) return null;
+
+    return {
+        id,
+        requesterId,
+        addresseeId,
+        status,
+        updatedAt: Number.isNaN(updatedAt.getTime()) ? new Date() : updatedAt,
+    };
+}
+
+function parseRealtimeConnectionPair(payload: ConnectionsRealtimePayload): {
+    previous: ConnectionsRealtimeRow | null;
+    current: ConnectionsRealtimeRow | null;
+} {
+    return {
+        previous: parseRealtimeConnectionRowFromSource(payload.old),
+        current: parseRealtimeConnectionRowFromSource(payload.new),
+    };
+}
+
+function rowCountersForViewer(row: ConnectionsRealtimeRow | null, userId: string) {
+    if (!row) {
+        return {
+            pendingIncoming: 0,
+            pendingSent: 0,
+            totalConnections: 0,
+        };
+    }
+
+    return {
+        pendingIncoming: row.status === 'pending' && row.addresseeId === userId ? 1 : 0,
+        pendingSent: row.status === 'pending' && row.requesterId === userId ? 1 : 0,
+        totalConnections:
+            row.status === 'accepted' && (row.requesterId === userId || row.addresseeId === userId)
+                ? 1
+                : 0,
+    };
+}
+
+function clampStats(stats: FeedStats): FeedStats {
+    return {
+        totalConnections: Math.max(0, stats.totalConnections),
+        pendingIncoming: Math.max(0, stats.pendingIncoming),
+        pendingSent: Math.max(0, stats.pendingSent),
+    };
+}
+
+function patchRealtimeStatsFromPayload(
+    queryClient: ReturnType<typeof useQueryClient>,
+    userId: string,
+    payload: ConnectionsRealtimePayload
+) {
+    const pair = parseRealtimeConnectionPair(payload);
+    const before = rowCountersForViewer(pair.previous, userId);
+    const after = rowCountersForViewer(pair.current, userId);
+    const delta = {
+        totalConnections: after.totalConnections - before.totalConnections,
+        pendingIncoming: after.pendingIncoming - before.pendingIncoming,
+        pendingSent: after.pendingSent - before.pendingSent,
+    };
+
+    if (delta.totalConnections === 0 && delta.pendingIncoming === 0 && delta.pendingSent === 0) {
+        return false;
+    }
+
+    updateStatsQueries(queryClient, (stats) =>
+        clampStats({
+            totalConnections: stats.totalConnections + delta.totalConnections,
+            pendingIncoming: stats.pendingIncoming + delta.pendingIncoming,
+            pendingSent: stats.pendingSent + delta.pendingSent,
+        })
+    );
+
+    queryClient.setQueriesData<PendingRequestsData>(
+        { queryKey: ['connections', 'pending-requests'] },
+        (prev) => {
+            if (!prev) return prev;
+            return {
+                ...prev,
+                stats: clampStats({
+                    totalConnections: Number(prev.stats?.totalConnections || 0) + delta.totalConnections,
+                    pendingIncoming: Number(prev.stats?.pendingIncoming || 0) + delta.pendingIncoming,
+                    pendingSent: Number(prev.stats?.pendingSent || 0) + delta.pendingSent,
+                }),
+            };
+        }
+    );
+
+    updateFeedQueries<unknown>(queryClient, ['connections', 'feed'], (page) => ({
+        ...page,
+        stats: clampStats({
+            totalConnections: Number(page.stats?.totalConnections || 0) + delta.totalConnections,
+            pendingIncoming: Number(page.stats?.pendingIncoming || 0) + delta.pendingIncoming,
+            pendingSent: Number(page.stats?.pendingSent || 0) + delta.pendingSent,
+        }),
+    }));
+
+    return true;
+}
+
+function resolveDiscoverStatus(
+    row: ConnectionsRealtimeRow,
+    userId: string
+): DiscoverConnectionItem['connectionStatus'] {
+    if (row.status === 'accepted') return 'connected';
+    if (row.status === 'pending') {
+        return row.requesterId === userId ? 'pending_sent' : 'pending_received';
+    }
+    return 'none';
+}
+
+function patchConnectionsRealtimeCaches(
+    queryClient: ReturnType<typeof useQueryClient>,
+    userId: string,
+    payload: ConnectionsRealtimePayload
+) {
+    const pair = parseRealtimeConnectionPair(payload);
+    const row = pair.current || pair.previous;
+    if (!row) {
+        return {
+            patched: false,
+            networkChanged: false,
+            discoverChanged: false,
+            requestsIncomingChanged: false,
+            requestsSentChanged: false,
+            pendingRequestsChanged: false,
+            affectsNetwork: false,
+            affectsRequestsIncoming: false,
+            affectsRequestsSent: false,
+            affectsPendingRequests: false,
+        };
+    }
+
+    const otherUserId =
+        row.requesterId === userId
+            ? row.addresseeId
+            : row.addresseeId === userId
+                ? row.requesterId
+                : null;
+
+    const affectsNetwork = [pair.previous, pair.current].some(
+        (candidate) =>
+            !!candidate &&
+            (candidate.requesterId === userId || candidate.addresseeId === userId) &&
+            candidate.status === 'accepted'
+    );
+    const affectsRequestsIncoming = [pair.previous, pair.current].some(
+        (candidate) => !!candidate && candidate.addresseeId === userId && candidate.status === 'pending'
+    );
+    const affectsRequestsSent = [pair.previous, pair.current].some(
+        (candidate) => !!candidate && candidate.requesterId === userId && candidate.status === 'pending'
+    );
+    const affectsPendingRequests = affectsRequestsIncoming || affectsRequestsSent;
+
+    const feedQueries = queryClient.getQueriesData<InfiniteData<FeedPage<unknown>>>({
+        queryKey: ['connections', 'feed'],
+    });
+
+    let patched = false;
+    let networkChanged = false;
+    let discoverChanged = false;
+    let requestsIncomingChanged = false;
+    let requestsSentChanged = false;
+    let pendingRequestsChanged = false;
+
+    for (const [queryKey, data] of feedQueries) {
+        if (!data) continue;
+        const tab = Array.isArray(queryKey) ? queryKey[2] : null;
+        if (
+            tab !== 'network' &&
+            tab !== 'discover' &&
+            tab !== 'requests_incoming' &&
+            tab !== 'requests_sent'
+        ) {
+            continue;
+        }
+
+        let queryChanged = false;
+        const nextPages = data.pages.map((page) => {
+            if (!Array.isArray(page.items)) return page;
+            let pageChanged = false;
+
+            const nextItems = page.items.map((item) => {
+                if (!item || typeof item !== 'object') return item;
+                const itemRecord = item as Record<string, unknown>;
+                const itemId = typeof itemRecord.id === 'string' ? itemRecord.id : null;
+                if (!itemId) return item;
+
+                if (tab === 'network') {
+                    if (itemId !== row.id) return item;
+                    if (row.status !== 'accepted') return null;
+                    pageChanged = true;
+                    return {
+                        ...item,
+                        status: row.status,
+                        updatedAt: row.updatedAt,
+                    };
+                }
+
+                if (tab === 'discover') {
+                    if (!otherUserId || itemId !== otherUserId) return item;
+                    pageChanged = true;
+                    const nextStatus = resolveDiscoverStatus(row, userId);
+                    return {
+                        ...item,
+                        connectionStatus: nextStatus,
+                        canConnect: nextStatus === 'none',
+                    };
+                }
+
+                if (tab === 'requests_incoming') {
+                    if (itemId !== row.id || row.addresseeId !== userId) return item;
+                    if (row.status !== 'pending') return null;
+                    pageChanged = true;
+                    return {
+                        ...item,
+                        status: row.status,
+                        updatedAt: row.updatedAt,
+                    };
+                }
+
+                if (tab === 'requests_sent') {
+                    if (itemId !== row.id || row.requesterId !== userId) return item;
+                    if (row.status !== 'pending') return null;
+                    pageChanged = true;
+                    return {
+                        ...item,
+                        status: row.status,
+                        updatedAt: row.updatedAt,
+                    };
+                }
+
+                return item;
+            }).filter(Boolean);
+
+            if (nextItems.length !== page.items.length || pageChanged) {
+                queryChanged = true;
+                return {
+                    ...page,
+                    items: nextItems,
+                };
+            }
+
+            return page;
+        });
+
+        if (queryChanged) {
+            patched = true;
+            if (tab === 'network') networkChanged = true;
+            if (tab === 'discover') discoverChanged = true;
+            if (tab === 'requests_incoming') requestsIncomingChanged = true;
+            if (tab === 'requests_sent') requestsSentChanged = true;
+            queryClient.setQueryData<InfiniteData<FeedPage<unknown>>>(queryKey, {
+                ...data,
+                pages: nextPages,
+            });
+        }
+    }
+
+    const shouldAffectIncoming = row.addresseeId === userId;
+    const shouldAffectSent = row.requesterId === userId;
+
+    if (shouldAffectIncoming || shouldAffectSent) {
+        updatePendingRequestQueries(queryClient, (prev) => {
+            let changed = false;
+            const incoming = prev.incoming.filter((item) => {
+                if (item.id !== row.id) return true;
+                if (shouldAffectIncoming && row.status !== 'pending') {
+                    changed = true;
+                    return false;
+                }
+                return true;
+            });
+
+            const sent = prev.sent.filter((item) => {
+                if (item.id !== row.id) return true;
+                if (shouldAffectSent && row.status !== 'pending') {
+                    changed = true;
+                    return false;
+                }
+                return true;
+            });
+
+            if (!changed) return prev;
+
+            patched = true;
+            pendingRequestsChanged = true;
+            return {
+                ...prev,
+                incoming,
+                sent,
+            };
+        });
+    }
+
+    return {
+        patched,
+        networkChanged,
+        discoverChanged,
+        requestsIncomingChanged,
+        requestsSentChanged,
+        pendingRequestsChanged,
+        affectsNetwork,
+        affectsRequestsIncoming,
+        affectsRequestsSent,
+        affectsPendingRequests,
+    };
+}
+
 export function useConnectionsRealtimeInvalidation() {
     const queryClient = useQueryClient();
     const { user } = useAuth();
@@ -230,11 +579,34 @@ export function useConnectionsRealtimeInvalidation() {
     useEffect(() => {
         if (!userId) return;
 
-        const scheduleInvalidate = () => {
+        const scheduleInvalidate = (payload: ConnectionsRealtimePayload) => {
+            const patchResult = patchConnectionsRealtimeCaches(queryClient, userId, payload);
+            const statsPatched = patchRealtimeStatsFromPayload(queryClient, userId, payload);
+            if (patchResult.patched) {
+                if (!statsPatched) {
+                    queryClient.invalidateQueries({ queryKey: ['connections', 'stats'] });
+                }
+                queryClient.invalidateQueries({ queryKey: ['connections', 'request-history'] });
+
+                if (patchResult.affectsNetwork && !patchResult.networkChanged) {
+                    queryClient.invalidateQueries({ queryKey: ['connections', 'feed', 'network'] });
+                }
+                if (patchResult.affectsRequestsIncoming && !patchResult.requestsIncomingChanged) {
+                    queryClient.invalidateQueries({ queryKey: ['connections', 'feed', 'requests_incoming'] });
+                }
+                if (patchResult.affectsRequestsSent && !patchResult.requestsSentChanged) {
+                    queryClient.invalidateQueries({ queryKey: ['connections', 'feed', 'requests_sent'] });
+                }
+                if (patchResult.affectsPendingRequests && !patchResult.pendingRequestsChanged) {
+                    queryClient.invalidateQueries({ queryKey: ['connections', 'pending-requests'] });
+                }
+                return;
+            }
+
             if (invalidateTimerRef.current) return;
             invalidateTimerRef.current = setTimeout(() => {
                 invalidateTimerRef.current = null;
-                queryClient.invalidateQueries({ queryKey: CONNECTIONS_QUERY_KEYS.root });
+                invalidateConnectionsScoped(queryClient);
             }, 250);
         };
 
@@ -434,10 +806,13 @@ export function useConnectionStats(userId?: string) {
 
 export function useConnectionMutations() {
     const queryClient = useQueryClient();
+    const { user } = useAuth();
 
     const invalidateAll = () => {
-        queryClient.invalidateQueries({ queryKey: CONNECTIONS_QUERY_KEYS.root });
-        queryClient.invalidateQueries({ queryKey: ['profile'] });
+        invalidateConnectionsScoped(queryClient);
+        if (user?.id) {
+            queryClient.invalidateQueries({ queryKey: queryKeys.profile.byTarget(user.id) });
+        }
     };
 
     const sendRequest = useMutation({
@@ -447,7 +822,7 @@ export function useConnectionMutations() {
             return { ...result, userId };
         },
         onMutate: async ({ userId }) => {
-            await queryClient.cancelQueries({ queryKey: ['connections'] });
+            await cancelConnectionsScoped(queryClient);
 
             updateFeedQueries<DiscoverConnectionItem>(queryClient, ['connections', 'feed', 'discover'], (page) => ({
                 ...page,
@@ -474,7 +849,7 @@ export function useConnectionMutations() {
             return { id };
         },
         onMutate: async (id) => {
-            await queryClient.cancelQueries({ queryKey: ['connections'] });
+            await cancelConnectionsScoped(queryClient);
             updatePendingRequestQueries(queryClient, (prev) => ({
                 ...prev,
                 sent: prev.sent.filter((item) => item.id !== id),
@@ -496,7 +871,7 @@ export function useConnectionMutations() {
             return { id };
         },
         onMutate: async (id) => {
-            await queryClient.cancelQueries({ queryKey: ['connections'] });
+            await cancelConnectionsScoped(queryClient);
             updatePendingRequestQueries(queryClient, (prev) => ({
                 ...prev,
                 incoming: prev.incoming.filter((item) => item.id !== id),
@@ -519,7 +894,7 @@ export function useConnectionMutations() {
             return { id, undoUntil: result.undoUntil };
         },
         onMutate: async (id) => {
-            await queryClient.cancelQueries({ queryKey: ['connections'] });
+            await cancelConnectionsScoped(queryClient);
             updatePendingRequestQueries(queryClient, (prev) => ({
                 ...prev,
                 incoming: prev.incoming.filter((item) => item.id !== id),
@@ -541,7 +916,7 @@ export function useConnectionMutations() {
             return { profileId };
         },
         onMutate: async (profileId) => {
-            await queryClient.cancelQueries({ queryKey: ['connections'] });
+            await cancelConnectionsScoped(queryClient);
             updateFeedQueries<DiscoverConnectionItem>(queryClient, ['connections', 'feed', 'discover'], (page) => ({
                 ...page,
                 items: page.items.filter((item) => item.id !== profileId),
@@ -567,7 +942,7 @@ export function useConnectionMutations() {
             return result;
         },
         onMutate: async () => {
-            await queryClient.cancelQueries({ queryKey: ['connections'] });
+            await cancelConnectionsScoped(queryClient);
             let acceptedCount = 0;
 
             updatePendingRequestQueries(queryClient, (prev) => {
@@ -596,7 +971,7 @@ export function useConnectionMutations() {
             return result;
         },
         onMutate: async () => {
-            await queryClient.cancelQueries({ queryKey: ['connections'] });
+            await cancelConnectionsScoped(queryClient);
             let rejectedCount = 0;
 
             updatePendingRequestQueries(queryClient, (prev) => {
@@ -624,7 +999,7 @@ export function useConnectionMutations() {
             return { id };
         },
         onMutate: async (id) => {
-            await queryClient.cancelQueries({ queryKey: ['connections'] });
+            await cancelConnectionsScoped(queryClient);
             updateFeedQueries<NetworkConnectionItem>(queryClient, ['connections', 'feed', 'network'], (page) => ({
                 ...page,
                 items: page.items.filter((item) => item.id !== id),

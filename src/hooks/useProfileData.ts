@@ -1,11 +1,13 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
+import { useMemo } from "react";
 import { getProfileProjectsAction, getProfileStatsAction } from "@/app/actions/profile";
+import { queryKeys } from "@/lib/query-keys";
 
 export const PROFILE_KEYS = {
-    projects: (userId: string) => ['profile', 'projects', userId],
-    stats: (userId: string) => ['profile', 'stats', userId]
+    projects: (userId: string) => queryKeys.profile.projects(userId),
+    stats: (userId: string) => queryKeys.profile.stats(userId),
 };
 
 export function useProfileProjects(userId: string, initialData?: any[], enabled: boolean = true) {
@@ -38,4 +40,38 @@ export function useProfileStats(userId: string, initialData?: any, enabled: bool
         refetchOnMount: hasInitialData ? false : true,
         refetchOnWindowFocus: false,
     });
+}
+
+interface UseProfileReadModelOptions {
+    profileId: string;
+    initialProjects?: any[];
+    initialStats?: any;
+    projectsEnabled?: boolean;
+}
+
+export function useProfileReadModel({
+    profileId,
+    initialProjects,
+    initialStats,
+    projectsEnabled = true,
+}: UseProfileReadModelOptions) {
+    const projectsQuery = useProfileProjects(profileId, initialProjects, projectsEnabled);
+    const statsQuery = useProfileStats(profileId, initialStats, true);
+
+    return useMemo(
+        () => ({
+            projects: projectsQuery.data || [],
+            stats: statsQuery.data || initialStats || null,
+            projectsLoading: projectsQuery.isLoading,
+            statsLoading: statsQuery.isLoading,
+            loading: projectsQuery.isLoading || statsQuery.isLoading,
+        }),
+        [
+            initialStats,
+            projectsQuery.data,
+            projectsQuery.isLoading,
+            statsQuery.data,
+            statsQuery.isLoading,
+        ]
+    );
 }

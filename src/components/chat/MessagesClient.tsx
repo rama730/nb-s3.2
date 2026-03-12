@@ -8,8 +8,6 @@ import { MessageThread } from '@/components/chat/MessageThread';
 import { MessageInput } from '@/components/chat/MessageInput';
 import {
     searchMessages,
-    setConversationArchived,
-    setConversationMuted,
     type MessageWithSender,
     type ConversationWithDetails
 } from '@/app/actions/messaging';
@@ -18,7 +16,7 @@ import { useDebounce } from '@/hooks/hub/useDebounce';
 import { NewChatModal } from './NewChatModal';
 import { useTargetUser } from '@/hooks/useMessagesData';
 import { ConversationList } from './ConversationList';
-import { toast } from 'sonner';
+import { useConversationActions } from './useConversationActions';
 
 import { ApplicationList } from './ApplicationList';
 import { ProjectGroupList } from './ProjectGroupList';
@@ -36,9 +34,49 @@ import {
 interface MessagesClientProps {
     targetUserId?: string | null;  // Changed from full object to ID
     initialConversationId?: string | null;
+    hardeningEnabled?: boolean;
 }
 
-export default function MessagesClient({ targetUserId, initialConversationId }: MessagesClientProps) {
+type InboxTab = 'chats' | 'applications' | 'projects';
+
+const EMPTY_ACTIVE_MESSAGES: MessageWithSender[] = [];
+const INBOX_TAB_STORAGE_KEY = 'messages:inbox-tab';
+
+function isInboxTab(value: string | null): value is InboxTab {
+    return value === 'chats' || value === 'applications' || value === 'projects';
+}
+
+function readInboxTabFromLocation(): InboxTab {
+    if (typeof window === 'undefined') return 'chats';
+    const params = new URLSearchParams(window.location.search);
+    const fromQuery = params.get('inbox');
+    if (isInboxTab(fromQuery)) return fromQuery;
+    try {
+        const fromStorage = window.sessionStorage.getItem(INBOX_TAB_STORAGE_KEY);
+        if (isInboxTab(fromStorage)) return fromStorage;
+    } catch {
+        // ignore storage errors
+    }
+    return 'chats';
+}
+
+function persistInboxTab(tab: InboxTab) {
+    if (typeof window === 'undefined') return;
+    try {
+        window.sessionStorage.setItem(INBOX_TAB_STORAGE_KEY, tab);
+    } catch {
+        // ignore storage errors
+    }
+    const url = new URL(window.location.href);
+    url.searchParams.set('inbox', tab);
+    window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
+}
+
+export default function MessagesClient({
+    targetUserId,
+    initialConversationId,
+    hardeningEnabled = true,
+}: MessagesClientProps) {
     const { user, isLoading: authLoading } = useAuth();
     const userId = user?.id ?? null;
     
@@ -47,8 +85,14 @@ export default function MessagesClient({ targetUserId, initialConversationId }: 
 
     const activeConversationId = useChatStore(state => state.activeConversationId);
     const conversations = useChatStore(state => state.conversations);
-    const messagesByConversation = useChatStore(state => state.messagesByConversation);
+    const messages = useChatStore(
+        useCallback((state) => {
+            if (!activeConversationId) return EMPTY_ACTIVE_MESSAGES;
+            return state.messagesByConversation[activeConversationId]?.messages || EMPTY_ACTIVE_MESSAGES;
+        }, [activeConversationId])
+    );
     const openConversation = useChatStore(state => state.openConversation);
+    const focusMessage = useChatStore(state => state.focusMessage);
     const upsertConversation = useChatStore(state => state.upsertConversation);
     const initializeChat = useChatStore(state => state.initialize);
     const chatInitialized = useChatStore(state => state.isInitialized);
@@ -61,7 +105,25 @@ export default function MessagesClient({ targetUserId, initialConversationId }: 
 
     // Draft State
     const [isNewChatOpen, setIsNewChatOpen] = useState(false);
-    const [activeTab, setActiveTab] = useState<'chats' | 'applications' | 'projects'>('chats');
+    const [activeTab, setActiveTab] = useState<InboxTab>(() => readInboxTabFromLocation());
+    const [tabsReady, setTabsReady] = useState(false);
+    const selectInboxTab = useCallback((tab: InboxTab) => {
+        setActiveTab((prev) => (prev === tab ? prev : tab));
+        persistInboxTab(tab);
+    }, []);
+
+    useEffect(() => {
+        setTabsReady(true);
+    }, []);
+
+    useEffect(() => {
+        const handlePopState = () => {
+            const nextTab = readInboxTabFromLocation();
+            setActiveTab((prev) => (prev === nextTab ? prev : nextTab));
+        };
+        window.addEventListener('popstate', handlePopState);
+        return () => window.removeEventListener('popstate', handlePopState);
+    }, []);
     
     // Check if we need to set up a draft conversation
     const existingConversationWithTarget = useMemo(() => {
@@ -118,11 +180,6 @@ export default function MessagesClient({ targetUserId, initialConversationId }: 
         return conversations.find(c => c.id === activeConversationId) || null;
     }, [activeConversationId, conversations]);
 
-    const messages = useMemo(() => {
-        if (!activeConversationId) return [];
-        return messagesByConversation[activeConversationId]?.messages || [];
-    }, [activeConversationId, messagesByConversation]);
-
     const [searchQuery, setSearchQuery] = useState('');
     const [isSearching, setIsSearching] = useState(false);
     const [searchResults, setSearchResults] = useState<Array<{ 
@@ -131,9 +188,28 @@ export default function MessagesClient({ targetUserId, initialConversationId }: 
         conversation?: ConversationWithDetails; // Hydration data
     }>>([]);
     const [showSearchResults, setShowSearchResults] = useState(false);
-    const [conversationActionLoading, setConversationActionLoading] = useState(false);
+    const searchCacheRef = useRef<Map<string, { at: number; results: Array<{ 
+        message: MessageWithSender; 
+        conversationId: string;
+        conversation?: ConversationWithDetails;
+    }> }>>(new Map());
+    const searchInFlightRef = useRef<Map<string, Promise<Array<{ 
+        message: MessageWithSender; 
+        conversationId: string;
+        conversation?: ConversationWithDetails;
+    }>>>>(new Map());
+
+    useEffect(() => {
+        searchCacheRef.current.clear();
+        searchInFlightRef.current.clear();
+    }, [userId]);
 
     const debouncedSearch = useDebounce(searchQuery, 300);
+    const {
+        conversationActionLoading,
+        handleToggleArchiveConversation,
+        handleToggleMuteConversation,
+    } = useConversationActions(activeConversation);
 
     // Initialize store with data from hook
     // This replaces the old separate effects
@@ -156,13 +232,45 @@ export default function MessagesClient({ targetUserId, initialConversationId }: 
             setShowSearchResults(true);
             
             try {
-                const result = await searchMessages(query);
-                if (cancelled) return;
-                if (result.success && result.results) {
-                    setSearchResults(result.results);
+                const now = Date.now();
+                const cacheTtlMs = hardeningEnabled ? 20_000 : 8_000;
+                const cached = searchCacheRef.current.get(query);
+                let nextResults: Array<{ 
+                    message: MessageWithSender; 
+                    conversationId: string;
+                    conversation?: ConversationWithDetails;
+                }> = [];
+                if (cached && now - cached.at <= cacheTtlMs) {
+                    nextResults = cached.results;
                 } else {
-                    setSearchResults([]);
+                    const existing = searchInFlightRef.current.get(query);
+                    if (existing) {
+                        nextResults = await existing;
+                    } else {
+                        const searchTask = (async () => {
+                            const result = await searchMessages(query);
+                            if (result.success && result.results) {
+                                return hardeningEnabled ? result.results.slice(0, 50) : result.results;
+                            }
+                            return [];
+                        })().finally(() => {
+                            searchInFlightRef.current.delete(query);
+                        });
+                        searchInFlightRef.current.set(query, searchTask);
+                        nextResults = await searchTask;
+                    }
+
+                    searchCacheRef.current.set(query, {
+                        at: Date.now(),
+                        results: nextResults,
+                    });
+                    if (searchCacheRef.current.size > 100) {
+                        const oldest = searchCacheRef.current.keys().next().value;
+                        if (oldest) searchCacheRef.current.delete(oldest);
+                    }
                 }
+                if (cancelled) return;
+                setSearchResults(nextResults);
             } catch (error) {
                 if (cancelled) return;
                 console.error('Search failed:', error);
@@ -178,57 +286,28 @@ export default function MessagesClient({ targetUserId, initialConversationId }: 
         return () => {
             cancelled = true;
         };
-    }, [debouncedSearch]);
+    }, [debouncedSearch, hardeningEnabled]);
 
     // Handle search result click
-    const handleSearchResultClick = useCallback((conversationId: string, conversation?: ConversationWithDetails) => {
+    const handleSearchResultClick = useCallback((
+        conversationId: string,
+        messageId: string,
+        conversation?: ConversationWithDetails
+    ) => {
         // Hydrate conversation if missing (Ghost Conversation Fix)
         if (conversation) {
             upsertConversation(conversation);
         }
         
-        openConversation(conversationId);
+        void openConversation(conversationId).then(() => {
+            window.setTimeout(() => {
+                void focusMessage(conversationId, messageId);
+            }, 120);
+        });
         setSearchQuery('');
         setShowSearchResults(false);
         setSearchResults([]);
-    }, [openConversation, upsertConversation]);
-
-    const handleToggleArchiveConversation = useCallback(async () => {
-        if (!activeConversation) return;
-        setConversationActionLoading(true);
-        try {
-            const nextArchived = activeConversation.lifecycleState !== 'archived';
-            const result = await setConversationArchived(activeConversation.id, nextArchived);
-            if (!result.success) {
-                toast.error(result.error || 'Failed to update conversation');
-                return;
-            }
-            await useChatStore.getState().refreshConversations();
-            if (nextArchived) {
-                useChatStore.getState().closeConversation();
-            } else {
-                await openConversation(activeConversation.id);
-            }
-        } finally {
-            setConversationActionLoading(false);
-        }
-    }, [activeConversation, openConversation]);
-
-    const handleToggleMuteConversation = useCallback(async () => {
-        if (!activeConversation) return;
-        setConversationActionLoading(true);
-        try {
-            const result = await setConversationMuted(activeConversation.id, !activeConversation.muted);
-            if (!result.success) {
-                toast.error(result.error || 'Failed to update mute state');
-                return;
-            }
-            await useChatStore.getState().refreshConversations();
-            await openConversation(activeConversation.id);
-        } finally {
-            setConversationActionLoading(false);
-        }
-    }, [activeConversation, openConversation]);
+    }, [focusMessage, openConversation, upsertConversation]);
 
     // Determine what to show in the main pane
     // 1. Loading
@@ -241,7 +320,7 @@ export default function MessagesClient({ targetUserId, initialConversationId }: 
 
     if (authLoading) {
         return (
-            <div className="flex items-center justify-center min-h-screen">
+            <div className="flex h-full min-h-0 items-center justify-center">
                 <div className="animate-spin rounded-full h-8 w-8 border-2 border-blue-600 border-t-transparent" />
             </div>
         );
@@ -249,7 +328,7 @@ export default function MessagesClient({ targetUserId, initialConversationId }: 
 
     if (!user) {
         return (
-            <div className="flex flex-col items-center justify-center min-h-screen p-6">
+            <div className="flex h-full min-h-0 flex-col items-center justify-center p-6">
                 <MessageSquare className="w-16 h-16 text-zinc-300 mb-4" />
                 <h1 className="text-2xl font-bold text-zinc-900 dark:text-white mb-2">Sign in to view messages</h1>
                 <p className="text-zinc-500">You need to be logged in to access your messages.</p>
@@ -260,14 +339,15 @@ export default function MessagesClient({ targetUserId, initialConversationId }: 
     const isDraftMode = !initialConversationId && !!targetUser && !existingConversationWithTarget;
 
     return (
-        <div className="flex h-[calc(100vh-64px)] bg-white dark:bg-zinc-950">
+        <div className="flex h-full min-h-0 overflow-hidden bg-white dark:bg-zinc-950">
             {/* Sidebar code remains same */}
-            <div className="w-80 border-r border-zinc-200 dark:border-zinc-800 flex flex-col">
+            <div className="w-80 border-r border-zinc-200 dark:border-zinc-800 flex flex-col min-h-0">
                 {/* Header, Search, List logic... */}
                  <div className="p-4 border-b border-zinc-200 dark:border-zinc-800 flex flex-col gap-4">
                     <div className="flex items-center justify-between">
                         <h1 className="text-xl font-bold text-zinc-900 dark:text-white">Messages</h1>
                         <button 
+                            type="button"
                             onClick={() => setIsNewChatOpen(true)}
                             className="p-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-full text-zinc-600 dark:text-zinc-400 transition-colors"
                             title="New Message"
@@ -279,30 +359,39 @@ export default function MessagesClient({ targetUserId, initialConversationId }: 
                     {/* Inbox Zero Toggle */}
                     <div className="flex p-1 bg-zinc-100 dark:bg-zinc-900 rounded-lg">
                         <button
-                            onClick={() => setActiveTab('chats')}
+                            type="button"
+                            onMouseDown={() => selectInboxTab('chats')}
+                            onClick={() => selectInboxTab('chats')}
                             data-testid="messages-tab-chats"
+                            disabled={!tabsReady}
                             className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-all ${
                                 activeTab === 'chats'
                                     ? 'bg-white dark:bg-zinc-800 text-zinc-900 dark:text-white shadow-sm'
                                     : 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'
-                            }`}
+                            } ${!tabsReady ? 'opacity-60 cursor-not-allowed' : ''}`}
                         >
                             Chats
                         </button>
                         <button
-                            onClick={() => setActiveTab('applications')}
+                            type="button"
+                            onMouseDown={() => selectInboxTab('applications')}
+                            onClick={() => selectInboxTab('applications')}
                             data-testid="messages-tab-applications"
+                            disabled={!tabsReady}
                             className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-all ${
                                 activeTab === 'applications'
                                     ? 'bg-white dark:bg-zinc-800 text-zinc-900 dark:text-white shadow-sm'
                                     : 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'
-                            }`}
+                            } ${!tabsReady ? 'opacity-60 cursor-not-allowed' : ''}`}
                         >
                             Applications
                         </button>
                         <button
-                            onClick={() => setActiveTab('projects')}
+                            type="button"
+                            onMouseDown={() => selectInboxTab('projects')}
+                            onClick={() => selectInboxTab('projects')}
                             data-testid="messages-tab-projects"
+                            disabled={!tabsReady}
                             className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-all ${
                                 activeTab === 'projects'
                                     ? 'bg-white dark:bg-zinc-800 text-zinc-900 dark:text-white shadow-sm'
@@ -328,6 +417,7 @@ export default function MessagesClient({ targetUserId, initialConversationId }: 
                             />
                             {searchQuery && (
                                 <button
+                                    type="button"
                                     onClick={() => {
                                         setSearchQuery('');
                                         setIsSearching(false);
@@ -346,7 +436,7 @@ export default function MessagesClient({ targetUserId, initialConversationId }: 
                 {/* Content: Search Results or Conversation List/Application List */}
                 <div className="flex-1 min-h-0 overflow-hidden">
                     {activeTab === 'applications' ? (
-                        <div className="h-full overflow-y-auto custom-scrollbar">
+                        <div className="h-full app-scroll app-scroll-y">
                             <ApplicationList />
                         </div>
                     ) : activeTab === 'projects' ? (
@@ -364,7 +454,7 @@ export default function MessagesClient({ targetUserId, initialConversationId }: 
                                 <p className="text-sm text-zinc-500">No messages found</p>
                             </div>
                         ) : (
-                            <div className="h-full overflow-y-auto custom-scrollbar">
+                            <div className="h-full app-scroll app-scroll-y">
                                 <div className="space-y-1">
                                     {searchResults.map((item) => {
                                         const { message, conversationId } = item;
@@ -375,7 +465,7 @@ export default function MessagesClient({ targetUserId, initialConversationId }: 
                                         return (
                                             <button
                                                 key={message.id}
-                                                onClick={() => handleSearchResultClick(conversationId, item.conversation)}
+                                                onClick={() => handleSearchResultClick(conversationId, message.id, item.conversation)}
                                                 className="w-full flex flex-col gap-1 p-4 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 text-left transition-colors"
                                             >
                                                 <div className="flex items-center gap-2">
@@ -451,7 +541,7 @@ export default function MessagesClient({ targetUserId, initialConversationId }: 
             </div>
 
             {/* Main Content - Message Thread */}
-            <div className="flex-1 flex flex-col">
+            <div className="flex-1 min-w-0 flex flex-col min-h-0">
                 {activeConversationId && otherParticipant ? (
                     // Logic already handled for existing chat
                      <>
@@ -579,12 +669,34 @@ export default function MessagesClient({ targetUserId, initialConversationId }: 
 
 // Helper function to highlight search matches
 function highlightMatch(text: string, query: string): React.ReactNode {
-    if (!query.trim()) return text;
+    const trimmed = query.trim();
+    if (!trimmed || trimmed.length > 120) return text;
 
-    const parts = text.split(new RegExp(`(${query})`, 'gi'));
-    return parts.map((part, i) =>
-        part.toLowerCase() === query.toLowerCase() ? (
-            <mark key={i} className="bg-yellow-200 dark:bg-yellow-800 rounded px-0.5">{part}</mark>
-        ) : part
-    );
+    const normalizedText = text.toLowerCase();
+    const normalizedQuery = trimmed.toLowerCase();
+    const queryLength = trimmed.length;
+    const nodes: React.ReactNode[] = [];
+
+    let cursor = 0;
+    let marker = 0;
+    while (cursor < text.length) {
+        const matchIndex = normalizedText.indexOf(normalizedQuery, cursor);
+        if (matchIndex === -1) break;
+        if (matchIndex > cursor) {
+            nodes.push(text.slice(cursor, matchIndex));
+        }
+        const matchValue = text.slice(matchIndex, matchIndex + queryLength);
+        nodes.push(
+            <mark key={`m-${marker++}`} className="bg-yellow-200 dark:bg-yellow-800 rounded px-0.5">
+                {matchValue}
+            </mark>
+        );
+        cursor = matchIndex + queryLength;
+    }
+
+    if (nodes.length === 0) return text;
+    if (cursor < text.length) {
+        nodes.push(text.slice(cursor));
+    }
+    return nodes;
 }

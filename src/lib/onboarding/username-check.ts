@@ -1,6 +1,7 @@
 import { consumeRateLimit } from '@/lib/security/rate-limit'
 import { onboardingError, type OnboardingError } from '@/lib/onboarding/errors'
 import { normalizeUsername, validateUsername } from '@/lib/validations/username'
+import type { SupabaseClient } from '@supabase/supabase-js'
 
 export type UsernameAvailabilityResult = {
     available: boolean
@@ -40,9 +41,8 @@ export function buildOnboardingRateLimitKeys(params: {
     }
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function checkUsernameAvailabilityWithClient(params: {
-    supabase: any
+    supabase: Pick<SupabaseClient, 'from'>
     username: string
     viewerKey: string
     viewerId?: string | null

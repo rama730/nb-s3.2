@@ -56,11 +56,6 @@ export default function CreateProjectWizard({ onClose, onSuccess, draftId }: Pro
         if (t !== 'github') return undefined;
         const url = (methods.getValues('import_source.repoUrl') || '').trim();
         if (!url) return 'Continue';
-
-        // Footer button is “next phase only” in GitHub flow.
-        // Preview is triggered by the inline Continue in Phase 1 UI.
-        const previewReady = githubPreview.status === 'ready' && githubPreview.repoUrl === url;
-        if (!previewReady) return 'Continue';
         return 'Continue';
     })();
 
@@ -70,9 +65,8 @@ export default function CreateProjectWizard({ onClose, onSuccess, draftId }: Pro
         if (t === 'github') {
             const url = (methods.getValues('import_source.repoUrl') || '').trim();
             if (!url) return true;
-
-            const previewReady = githubPreview.status === 'ready' && githubPreview.repoUrl === url;
-            return !previewReady;
+            const metadata = (methods.getValues('import_source.metadata') || {}) as Record<string, unknown>;
+            return metadata.githubPreflightStatus !== 'ok';
         }
 
         if (t === 'upload') {

@@ -21,7 +21,7 @@ export default function ProfileShell({ initialData, profileId }: ProfileShellPro
 
     if (!displayProfile && loading) {
         return (
-            <div className="min-h-screen bg-white dark:bg-zinc-950 flex items-center justify-center">
+            <div className="h-full min-h-0 bg-white dark:bg-zinc-950 flex items-center justify-center">
                 <Loader2 className="w-8 h-8 animate-spin text-zinc-400" />
             </div>
         );

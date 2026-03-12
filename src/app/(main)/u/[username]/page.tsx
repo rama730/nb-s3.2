@@ -49,7 +49,10 @@ export default async function PublicProfilePage({ params }: { params: Promise<{ 
     // Pass data to the Client Component
     // connectionStatus, isOwner, stats etc are all calculated by getProfileDetails
     return (
-        <div className="h-[calc(100vh-var(--header-height,56px))] min-h-0 overflow-hidden bg-zinc-50 dark:bg-black">
+        <div
+            data-scroll-root="route"
+            className="h-full min-h-0 overflow-hidden app-scroll app-scroll-y app-scroll-gutter bg-zinc-50 dark:bg-black"
+        >
             <ProfileV2Client
                 profile={data.profile}
                 stats={data.stats}

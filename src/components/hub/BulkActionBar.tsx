@@ -1,14 +1,12 @@
 'use client';
 
 import { memo } from 'react';
-import { Bookmark, FolderPlus, GitCompare, Share2, Download, X } from 'lucide-react';
+import { GitCompare, Share2, Download, X } from 'lucide-react';
 
 interface BulkActionBarProps {
     selectedCount: number;
     totalCount: number;
     onSelectAll: () => void;
-    onAddToCollection: () => void;
-    onBookmark: () => void;
     onCompare: () => void;
     onCancel: () => void;
     onShare: () => void;
@@ -20,8 +18,6 @@ const BulkActionBar = memo(function BulkActionBar({
     selectedCount,
     totalCount,
     onSelectAll,
-    onAddToCollection,
-    onBookmark,
     onCompare,
     onCancel,
     onShare,
@@ -45,20 +41,6 @@ const BulkActionBar = memo(function BulkActionBar({
             </div>
 
             <div className="flex items-center gap-1">
-                <button
-                    onClick={onBookmark}
-                    className="p-2 text-zinc-600 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-zinc-800 rounded-lg transition-colors"
-                    title="Bookmark selected"
-                >
-                    <Bookmark className="w-5 h-5" />
-                </button>
-                <button
-                    onClick={onAddToCollection}
-                    className="p-2 text-zinc-600 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-zinc-800 rounded-lg transition-colors"
-                    title="Add to collection"
-                >
-                    <FolderPlus className="w-5 h-5" />
-                </button>
                 <button
                     onClick={onCompare}
                     disabled={!canCompare}

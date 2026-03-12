@@ -26,6 +26,10 @@ type GitPullEvent = {
     data: {
         projectId: string;
         userId: string;
+        branch?: string | null;
+        deliveryId?: string | null;
+        afterSha?: string | null;
+        source?: "webhook" | "manual" | "system";
     };
 };
 

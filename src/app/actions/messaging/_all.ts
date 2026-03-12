@@ -18,6 +18,12 @@ import { createClient, createAdminClient } from '@/lib/supabase/server';
 import { eq, and, desc, lt, gt, ne, isNull, inArray, sql, or } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { consumeRateLimit } from '@/lib/security/rate-limit';
+import { runInFlightDeduped } from '@/lib/async/inflight-dedupe';
+import {
+    ATTACHMENT_UPLOAD_MAX_FILE_BYTES,
+    normalizeAndValidateFileSize,
+    normalizeAndValidateMimeType,
+} from '@/lib/upload/security';
 
 // ============================================================================
 // TYPES
@@ -173,9 +179,20 @@ const ATTACHMENTS_BUCKET = 'chat-attachments';
 const ATTACHMENT_SIGNED_URL_TTL_SECONDS = 60 * 15;
 const MESSAGE_EDIT_WINDOW_MINUTES = 15;
 const MAX_MESSAGE_CONTENT_LENGTH = 4000;
+const MAX_SEARCH_TEXT_QUERY_LENGTH = 256;
+const SEARCH_CONTROL_CHARS_REGEX = /[\u0000-\u001F\u007F]/g;
+const UUID_V4_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 type ReplyPreview = NonNullable<MessageWithSender['replyTo']>;
 type MessageDeliveryState = 'sending' | 'queued' | 'sent' | 'delivered' | 'read' | 'failed';
+
+function sanitizeMessageSearchText(input: string): string {
+    return input
+        .replace(SEARCH_CONTROL_CHARS_REGEX, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, MAX_SEARCH_TEXT_QUERY_LENGTH);
+}
 
 function parseMessageSearchQuery(query: string) {
     const tokens = query
@@ -191,7 +208,8 @@ function parseMessageSearchQuery(query: string) {
     for (const token of tokens) {
         const lower = token.toLowerCase();
         if (lower.startsWith('from:') && lower.length > 5) {
-            fromFilter = lower.slice(5);
+            const normalizedFrom = lower.slice(5).replace(/[^a-z0-9_]/g, '').slice(0, 32);
+            if (normalizedFrom) fromFilter = normalizedFrom;
             continue;
         }
         if (lower.startsWith('has:')) {
@@ -213,7 +231,7 @@ function parseMessageSearchQuery(query: string) {
     }
 
     return {
-        textQuery: textTokens.join(' ').trim(),
+        textQuery: sanitizeMessageSearchText(textTokens.join(' ').trim()),
         fromFilter,
         hasFilter,
         inFilter,
@@ -754,50 +772,56 @@ export async function getConversations(
         const [cursorAtRaw, cursorConversationIdRaw] = cursor ? cursor.split('|') : [];
         const parsedCursorAt = cursorAtRaw ? new Date(cursorAtRaw) : cursor ? new Date(cursor) : undefined;
         const cursorAt = parsedCursorAt && !Number.isNaN(parsedCursorAt.getTime()) ? parsedCursorAt : undefined;
-        const cursorConversationId = cursorConversationIdRaw || undefined;
+        const cursorConversationId =
+            cursorConversationIdRaw && UUID_V4_REGEX.test(cursorConversationIdRaw)
+                ? cursorConversationIdRaw
+                : undefined;
+        const safeLimit = Math.max(1, Math.min(limit, 100));
+        const dedupeKey = `messages:conversations:${user.id}:${safeLimit}:${cursorAt?.toISOString() ?? ''}:${cursorConversationId ?? ''}`;
 
-        const userConversations = await db.execute<{
-            conversation_id: string;
-            unread_count: number;
-            last_message_at: Date | null;
-            updated_at: Date;
-            sort_at: Date;
-            archived_at: Date | null;
-            muted: boolean | null;
-        }>(sql`
-            SELECT 
-                cp.conversation_id,
-                cp.unread_count,
-                cp.last_message_at,
-                c.updated_at,
-                cp.archived_at,
-                cp.muted,
-                COALESCE(cp.last_message_at, c.updated_at) AS sort_at
-            FROM ${conversationParticipants} cp
-            INNER JOIN ${conversations} c ON c.id = cp.conversation_id
-            WHERE cp.user_id = ${user.id}
-            AND cp.archived_at IS NULL
-            AND c.type != 'project_group'
-            ${cursorAt ? sql`
-                AND (
-                    COALESCE(cp.last_message_at, c.updated_at) < ${cursorAt.toISOString()}
-                    ${cursorConversationId ? sql`OR (
-                        COALESCE(cp.last_message_at, c.updated_at) = ${cursorAt.toISOString()}
-                        AND cp.conversation_id < ${cursorConversationId}
-                    )` : sql``}
-                )
-            ` : sql``}
-            ORDER BY COALESCE(cp.last_message_at, c.updated_at) DESC, cp.conversation_id DESC
-            LIMIT ${limit + 1}
-        `);
+        return await runInFlightDeduped(dedupeKey, async () => {
+            const userConversations = await db.execute<{
+                conversation_id: string;
+                unread_count: number;
+                last_message_at: Date | null;
+                updated_at: Date;
+                sort_at: Date;
+                archived_at: Date | null;
+                muted: boolean | null;
+            }>(sql`
+                SELECT 
+                    cp.conversation_id,
+                    cp.unread_count,
+                    cp.last_message_at,
+                    c.updated_at,
+                    cp.archived_at,
+                    cp.muted,
+                    COALESCE(cp.last_message_at, c.updated_at) AS sort_at
+                FROM ${conversationParticipants} cp
+                INNER JOIN ${conversations} c ON c.id = cp.conversation_id
+                WHERE cp.user_id = ${user.id}
+                AND cp.archived_at IS NULL
+                AND c.type != 'project_group'
+                ${cursorAt ? sql`
+                    AND (
+                        COALESCE(cp.last_message_at, c.updated_at) < ${cursorAt.toISOString()}
+                        ${cursorConversationId ? sql`OR (
+                            COALESCE(cp.last_message_at, c.updated_at) = ${cursorAt.toISOString()}
+                            AND cp.conversation_id < ${cursorConversationId}
+                        )` : sql``}
+                    )
+                ` : sql``}
+                ORDER BY COALESCE(cp.last_message_at, c.updated_at) DESC, cp.conversation_id DESC
+                LIMIT ${safeLimit + 1}
+            `);
 
-        const userConvArray = Array.from(userConversations);
-        const hasMore = userConvArray.length > limit;
-        const paginatedConvs = userConvArray.slice(0, limit);
+            const userConvArray = Array.from(userConversations);
+            const hasMore = userConvArray.length > safeLimit;
+            const paginatedConvs = userConvArray.slice(0, safeLimit);
 
-        if (paginatedConvs.length === 0) {
-            return { success: true, conversations: [], hasMore: false };
-        }
+            if (paginatedConvs.length === 0) {
+                return { success: true, conversations: [], hasMore: false };
+            }
 
         const conversationIds = paginatedConvs.map((conversation) => conversation.conversation_id);
 
@@ -897,14 +921,15 @@ export async function getConversations(
         // Re-sort client side just in case mapping shuffled, though map preservation usually works
         // The initial query defined the order.
 
-        return {
-            success: true,
-            conversations: result,
-            hasMore,
-            nextCursor: hasMore
-                ? `${paginatedConvs[paginatedConvs.length - 1].sort_at.toISOString()}|${paginatedConvs[paginatedConvs.length - 1].conversation_id}`
-                : undefined
-        };
+            return {
+                success: true,
+                conversations: result,
+                hasMore,
+                nextCursor: hasMore
+                    ? `${paginatedConvs[paginatedConvs.length - 1].sort_at.toISOString()}|${paginatedConvs[paginatedConvs.length - 1].conversation_id}`
+                    : undefined
+            };
+        });
     } catch (error) {
         console.error('Error fetching conversations:', error);
         return { success: false, error: 'Failed to fetch conversations' };
@@ -921,6 +946,7 @@ export async function getConversationById(
     try {
         const user = await getAuthUser();
         if (!user) return { success: false, error: 'Not authenticated' };
+        return await runInFlightDeduped(`messages:conversation:${user.id}:${conversationId}`, async () => {
 
         const membership = await db
             .select({
@@ -1027,6 +1053,7 @@ export async function getConversationById(
                 unreadCount: membership[0].unreadCount || 0,
             },
         };
+        });
     } catch (error) {
         console.error('Error fetching conversation by id:', error);
         return { success: false, error: 'Failed to fetch conversation' };
@@ -1051,6 +1078,15 @@ export async function getMessages(
     try {
         const user = await getAuthUser();
         if (!user) return { success: false, error: 'Not authenticated' };
+        const safeLimit = Math.max(1, Math.min(100, limit));
+        const [cursorAtRaw, cursorMessageIdRaw] = cursor ? cursor.split('|') : [];
+        const parsedCursorAt = cursorAtRaw ? new Date(cursorAtRaw) : cursor ? new Date(cursor) : undefined;
+        const cursorAt = parsedCursorAt && !Number.isNaN(parsedCursorAt.getTime()) ? parsedCursorAt : undefined;
+        const cursorMessageId = cursorMessageIdRaw || undefined;
+        const cursorKey = cursorAt ? `${cursorAt.toISOString()}|${cursorMessageId || ''}` : 'head';
+        return await runInFlightDeduped(
+            `messages:list:${user.id}:${conversationId}:${cursorKey}:${safeLimit}`,
+            async () => {
 
         // Verify user is participant
         const participant = await db
@@ -1089,6 +1125,21 @@ export async function getMessages(
             otherParticipantLastReadAt = otherParticipant?.lastReadAt || null;
         }
 
+        const visibilityPredicate = sql`NOT EXISTS (
+            SELECT 1
+            FROM ${messageHiddenForUsers} h
+            WHERE h.message_id = ${messages.id}
+            AND h.user_id = ${user.id}
+        )`;
+        const cursorPredicate = cursorAt
+            ? (cursorMessageId
+                ? or(
+                    lt(messages.createdAt, cursorAt),
+                    and(eq(messages.createdAt, cursorAt), lt(messages.id, cursorMessageId))
+                )
+                : lt(messages.createdAt, cursorAt))
+            : undefined;
+
         // Build query
         const query = db
             .select({
@@ -1106,33 +1157,24 @@ export async function getMessages(
             })
             .from(messages)
             .where(
-                cursor
+                cursorPredicate
                     ? and(
                         eq(messages.conversationId, conversationId),
-                        lt(messages.createdAt, new Date(cursor)),
-                        sql`NOT EXISTS (
-                            SELECT 1
-                            FROM ${messageHiddenForUsers} h
-                            WHERE h.message_id = ${messages.id}
-                            AND h.user_id = ${user.id}
-                        )`
+                        cursorPredicate,
+                        visibilityPredicate
                     )
                     : and(
                         eq(messages.conversationId, conversationId),
-                        sql`NOT EXISTS (
-                            SELECT 1
-                            FROM ${messageHiddenForUsers} h
-                            WHERE h.message_id = ${messages.id}
-                            AND h.user_id = ${user.id}
-                        )`
+                        visibilityPredicate
                     )
             )
-            .orderBy(desc(messages.createdAt))
-            .limit(limit + 1);
+            .orderBy(desc(messages.createdAt), desc(messages.id))
+            .limit(safeLimit + 1);
 
         const messageList = await query;
-        const hasMore = messageList.length > limit;
-        const paginatedMessages = messageList.slice(0, limit);
+        const hasMore = messageList.length > safeLimit;
+        const paginatedMessages = messageList.slice(0, safeLimit);
+        const nextCursorMessage = hasMore ? paginatedMessages[paginatedMessages.length - 1] : null;
 
         if (paginatedMessages.length === 0) {
             return { success: true, messages: [], hasMore: false };
@@ -1218,11 +1260,181 @@ export async function getMessages(
             success: true,
             messages: result,
             hasMore,
-            nextCursor: hasMore ? paginatedMessages[paginatedMessages.length - 1].createdAt.toISOString() : undefined,
+            nextCursor: nextCursorMessage
+                ? `${nextCursorMessage.createdAt.toISOString()}|${nextCursorMessage.id}`
+                : undefined,
         };
+            }
+        );
     } catch (error) {
         console.error('Error fetching messages:', error);
         return { success: false, error: 'Failed to fetch messages' };
+    }
+}
+
+// ============================================================================
+// GET MESSAGE CONTEXT (single-message fallback for reply focus navigation)
+// ============================================================================
+
+export async function getMessageContext(
+    conversationId: string,
+    messageId: string
+): Promise<{
+    success: boolean;
+    error?: string;
+    available: boolean;
+    message?: MessageWithSender;
+}> {
+    try {
+        const user = await getAuthUser();
+        if (!user) return { success: false, error: 'Not authenticated', available: false };
+
+        return await runInFlightDeduped(
+            `messages:context:${user.id}:${conversationId}:${messageId}`,
+            async () => {
+                const [participant] = await db
+                    .select({ id: conversationParticipants.id })
+                    .from(conversationParticipants)
+                    .where(
+                        and(
+                            eq(conversationParticipants.conversationId, conversationId),
+                            eq(conversationParticipants.userId, user.id)
+                        )
+                    )
+                    .limit(1);
+
+                if (!participant) {
+                    return { success: false, error: 'Not a participant of this conversation', available: false };
+                }
+
+                const [messageRow] = await db
+                    .select({
+                        id: messages.id,
+                        conversationId: messages.conversationId,
+                        senderId: messages.senderId,
+                        replyToMessageId: messages.replyToMessageId,
+                        clientMessageId: messages.clientMessageId,
+                        content: messages.content,
+                        type: messages.type,
+                        metadata: messages.metadata,
+                        createdAt: messages.createdAt,
+                        editedAt: messages.editedAt,
+                        deletedAt: messages.deletedAt,
+                    })
+                    .from(messages)
+                    .where(
+                        and(
+                            eq(messages.id, messageId),
+                            eq(messages.conversationId, conversationId)
+                        )
+                    )
+                    .limit(1);
+
+                if (!messageRow) {
+                    return { success: true, available: false };
+                }
+
+                const [hidden] = await db
+                    .select({ id: messageHiddenForUsers.id })
+                    .from(messageHiddenForUsers)
+                    .where(
+                        and(
+                            eq(messageHiddenForUsers.messageId, messageId),
+                            eq(messageHiddenForUsers.userId, user.id)
+                        )
+                    )
+                    .limit(1);
+                if (hidden) {
+                    return { success: true, available: false };
+                }
+
+                const [conversationMeta] = await db
+                    .select({ type: conversations.type })
+                    .from(conversations)
+                    .where(eq(conversations.id, conversationId))
+                    .limit(1);
+
+                let otherParticipantLastReadAt: Date | null = null;
+                if (conversationMeta?.type === 'dm') {
+                    const [otherParticipant] = await db
+                        .select({ lastReadAt: conversationParticipants.lastReadAt })
+                        .from(conversationParticipants)
+                        .where(
+                            and(
+                                eq(conversationParticipants.conversationId, conversationId),
+                                ne(conversationParticipants.userId, user.id)
+                            )
+                        )
+                        .limit(1);
+                    otherParticipantLastReadAt = otherParticipant?.lastReadAt || null;
+                }
+
+                const [senderProfile] = messageRow.senderId
+                    ? await db
+                        .select({
+                            id: profiles.id,
+                            username: profiles.username,
+                            fullName: profiles.fullName,
+                            avatarUrl: profiles.avatarUrl,
+                        })
+                        .from(profiles)
+                        .where(eq(profiles.id, messageRow.senderId))
+                        .limit(1)
+                    : [null];
+
+                const attachmentRows = await db
+                    .select()
+                    .from(messageAttachments)
+                    .where(eq(messageAttachments.messageId, messageRow.id));
+                const hydratedAttachments = await hydrateAttachmentUrls(
+                    attachmentRows as AttachmentRowForResolution[]
+                );
+
+                const replyPreviewMap = await getReplyPreviewMap(
+                    conversationId,
+                    user.id,
+                    messageRow.replyToMessageId ? [messageRow.replyToMessageId] : []
+                );
+
+                const baseMetadata = (messageRow.metadata || {}) as Record<string, unknown>;
+                let deliveryState = baseMetadata.deliveryState as MessageDeliveryState | undefined;
+                if (messageRow.senderId === user.id && conversationMeta?.type === 'dm' && !deliveryState) {
+                    deliveryState =
+                        otherParticipantLastReadAt && messageRow.createdAt <= otherParticipantLastReadAt
+                            ? 'read'
+                            : 'delivered';
+                }
+
+                const hydrated: MessageWithSender = {
+                    id: messageRow.id,
+                    conversationId: messageRow.conversationId,
+                    senderId: messageRow.senderId,
+                    replyTo: messageRow.replyToMessageId
+                        ? replyPreviewMap.get(messageRow.replyToMessageId) || null
+                        : null,
+                    clientMessageId: messageRow.clientMessageId,
+                    content: messageRow.content,
+                    type: messageRow.type as MessageWithSender['type'],
+                    metadata: deliveryState
+                        ? withDeliveryMetadata(baseMetadata, deliveryState)
+                        : baseMetadata,
+                    createdAt: messageRow.createdAt,
+                    editedAt: messageRow.editedAt,
+                    deletedAt: messageRow.deletedAt,
+                    sender: senderProfile || null,
+                    attachments: hydratedAttachments,
+                };
+
+                return {
+                    success: true,
+                    available: true,
+                    message: hydrated,
+                };
+            }
+        );
+    } catch (error) {
+        console.error('Error fetching message context:', error);
+        return { success: false, error: 'Failed to fetch message context', available: false };
     }
 }
 
@@ -2068,6 +2280,8 @@ export async function getPinnedMessages(
     try {
         const user = await getAuthUser();
         if (!user) return { success: false, error: 'Not authenticated' };
+        const safeLimit = Math.max(1, Math.min(20, limit));
+        return await runInFlightDeduped(`messages:pinned:${user.id}:${conversationId}:${safeLimit}`, async () => {
 
         const [membership] = await db
             .select({ id: conversationParticipants.id })
@@ -2115,7 +2329,7 @@ export async function getPinnedMessages(
             .orderBy(
                 desc(sql`coalesce((${messages.metadata}->>'pinnedAt')::timestamptz, ${messages.createdAt})`)
             )
-            .limit(limit);
+            .limit(safeLimit);
 
         if (rows.length === 0) {
             return { success: true, messages: [] };
@@ -2179,6 +2393,7 @@ export async function getPinnedMessages(
                 attachments: hydrated.get(row.id) || [],
             })),
         };
+        });
     } catch (error) {
         console.error('Error fetching pinned messages:', error);
         return { success: false, error: 'Failed to fetch pinned messages' };
@@ -2263,20 +2478,23 @@ export async function getUnreadCount(): Promise<{
     try {
         const user = await getAuthUser();
         if (!user) return { success: false, error: 'Not authenticated' };
+        const dedupeKey = `messages:unread-count:${user.id}`;
 
-        // Optimized: O(1) Sum of denormalized columns
-        // No loop, no joins with messages table
-        const [result] = await db
-            .select({ count: sql<number>`SUM(unread_count)::int` })
-            .from(conversationParticipants)
-            .where(
-                and(
-                    eq(conversationParticipants.userId, user.id),
-                    isNull(conversationParticipants.archivedAt)
-                )
-            );
+        return await runInFlightDeduped(dedupeKey, async () => {
+            // Optimized: O(1) Sum of denormalized columns
+            // No loop, no joins with messages table
+            const [result] = await db
+                .select({ count: sql<number>`SUM(unread_count)::int` })
+                .from(conversationParticipants)
+                .where(
+                    and(
+                        eq(conversationParticipants.userId, user.id),
+                        isNull(conversationParticipants.archivedAt)
+                    )
+                );
 
-        return { success: true, count: result?.count || 0 };
+            return { success: true, count: result?.count || 0 };
+        });
     } catch (error) {
         console.error('Error getting unread count:', error);
         return { success: false, error: 'Failed to get unread count' };
@@ -2351,14 +2569,16 @@ export async function uploadAttachment(
                 },
             });
 
-        // Validate file size (50MB max)
-        const MAX_SIZE = 50 * 1024 * 1024;
-        if (file.size > MAX_SIZE) {
+        const maxAttachmentSizeMb = Math.floor(ATTACHMENT_UPLOAD_MAX_FILE_BYTES / (1024 * 1024));
+        let normalizedSize = 0;
+        try {
+            normalizedSize = normalizeAndValidateFileSize(file.size, ATTACHMENT_UPLOAD_MAX_FILE_BYTES);
+        } catch {
             await db
                 .update(attachmentUploads)
                 .set({
                     status: 'failed',
-                    error: 'File too large. Maximum size is 50MB.',
+                    error: `File too large. Maximum size is ${maxAttachmentSizeMb}MB.`,
                     updatedAt: new Date(),
                 })
                 .where(
@@ -2367,10 +2587,29 @@ export async function uploadAttachment(
                         eq(attachmentUploads.clientUploadId, clientUploadId)
                     )
                 );
-            return { success: false, error: 'File too large. Maximum size is 50MB.' };
+            return { success: false, error: `File too large. Maximum size is ${maxAttachmentSizeMb}MB.` };
         }
 
-        const mimeType = (file.type || '').toLowerCase();
+        let mimeType = '';
+        try {
+            mimeType = normalizeAndValidateMimeType(file.type || 'application/octet-stream');
+        } catch {
+            await db
+                .update(attachmentUploads)
+                .set({
+                    status: 'failed',
+                    error: 'Unsupported or invalid MIME type',
+                    updatedAt: new Date(),
+                })
+                .where(
+                    and(
+                        eq(attachmentUploads.userId, user.id),
+                        eq(attachmentUploads.clientUploadId, clientUploadId)
+                    )
+                );
+            return { success: false, error: 'Unsupported file type.' };
+        }
+
         const ext = (file.name.split('.').pop() || '').toLowerCase();
         const allowedDocumentMimes = new Set([
             'application/pdf',
@@ -2478,7 +2717,7 @@ export async function uploadAttachment(
             type: fileType,
             url: signedUrl,
             filename: file.name,
-            sizeBytes: file.size,
+            sizeBytes: normalizedSize,
             mimeType: mimeType || 'application/octet-stream',
             thumbnailUrl,
             width: null,

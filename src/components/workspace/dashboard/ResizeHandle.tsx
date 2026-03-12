@@ -7,12 +7,22 @@ import { WIDGET_REGISTRY } from './widgetRegistry';
 
 interface ResizeHandleProps {
     placement: WidgetPlacement;
-    onResize: (newColSpan: number, newRowSpan: number) => boolean;
+    cellWidth: number | null;
+    onPreviewResize: (newColSpan: number, newRowSpan: number) => boolean;
+    onCommitResize: () => void;
+    onCancelResize: () => void;
 }
 
-function ResizeHandle({ placement, onResize }: ResizeHandleProps) {
+function ResizeHandle({
+    placement,
+    cellWidth,
+    onPreviewResize,
+    onCommitResize,
+    onCancelResize,
+}: ResizeHandleProps) {
     const [isResizing, setIsResizing] = useState(false);
     const startRef = useRef<{ x: number; y: number; colSpan: number; rowSpan: number } | null>(null);
+    const pendingRef = useRef(false);
 
     const config = WIDGET_REGISTRY[placement.widgetId as keyof typeof WIDGET_REGISTRY];
     const maxColSpan = config?.maxColSpan ?? 3;
@@ -25,10 +35,19 @@ function ResizeHandle({ placement, onResize }: ResizeHandleProps) {
             e.preventDefault();
             e.stopPropagation();
 
-            // Find the grid container to compute cell dimensions
-            const target = e.currentTarget as HTMLElement;
-            const gridEl = target.closest('[data-widget-grid]') as HTMLElement | null;
-            if (!gridEl) return;
+            const measuredWidth = cellWidth ?? (() => {
+                const gridEl = (e.currentTarget as HTMLElement).closest('[data-widget-grid]') as HTMLElement | null;
+                if (!gridEl) return 0;
+                const width = gridEl.clientWidth;
+                if (width <= 0) return 0;
+                const styles = window.getComputedStyle(gridEl);
+                const parsedGap = Number.parseFloat(styles.columnGap || styles.gap || '0');
+                const gap = Number.isFinite(parsedGap) ? Math.max(0, parsedGap) : 0;
+                const totalGap = gap * Math.max(0, GRID_COLS - 1);
+                const usableWidth = Math.max(0, width - totalGap);
+                return usableWidth > 0 ? usableWidth / GRID_COLS : 0;
+            })();
+            if (measuredWidth <= 0) return;
 
             startRef.current = {
                 x: e.clientX,
@@ -36,10 +55,8 @@ function ResizeHandle({ placement, onResize }: ResizeHandleProps) {
                 colSpan: placement.colSpan,
                 rowSpan: placement.rowSpan,
             };
+            pendingRef.current = false;
             setIsResizing(true);
-
-            const cellWidth = gridEl.clientWidth / GRID_COLS;
-            const rowHeight = ROW_HEIGHT_PX;
 
             const handlePointerMove = (moveEvent: PointerEvent) => {
                 if (!startRef.current) return;
@@ -47,32 +64,34 @@ function ResizeHandle({ placement, onResize }: ResizeHandleProps) {
                 const dx = moveEvent.clientX - startRef.current.x;
                 const dy = moveEvent.clientY - startRef.current.y;
 
-                const colDelta = Math.round(dx / cellWidth);
-                const rowDelta = Math.round(dy / rowHeight);
+                const colDelta = Math.round(dx / measuredWidth);
+                const rowDelta = Math.round(dy / ROW_HEIGHT_PX);
 
                 const newColSpan = Math.max(
                     minColSpan,
                     Math.min(
                         maxColSpan,
                         startRef.current.colSpan + colDelta,
-                        GRID_COLS - placement.col // Don't exceed grid width
-                    )
+                        GRID_COLS - placement.col,
+                    ),
                 );
                 const newRowSpan = Math.max(
                     minRowSpan,
-                    Math.min(maxRowSpan, startRef.current.rowSpan + rowDelta)
+                    Math.min(maxRowSpan, startRef.current.rowSpan + rowDelta),
                 );
 
-                if (
-                    newColSpan !== placement.colSpan ||
-                    newRowSpan !== placement.rowSpan
-                ) {
-                    onResize(newColSpan, newRowSpan);
-                }
+                if (newColSpan === placement.colSpan && newRowSpan === placement.rowSpan) return;
+                pendingRef.current = onPreviewResize(newColSpan, newRowSpan) || pendingRef.current;
             };
 
             const handlePointerUp = () => {
                 setIsResizing(false);
+                if (pendingRef.current) {
+                    onCommitResize();
+                } else {
+                    onCancelResize();
+                }
+                pendingRef.current = false;
                 startRef.current = null;
                 document.removeEventListener('pointermove', handlePointerMove);
                 document.removeEventListener('pointerup', handlePointerUp);
@@ -81,7 +100,17 @@ function ResizeHandle({ placement, onResize }: ResizeHandleProps) {
             document.addEventListener('pointermove', handlePointerMove);
             document.addEventListener('pointerup', handlePointerUp);
         },
-        [placement, onResize, minColSpan, maxColSpan, minRowSpan, maxRowSpan]
+        [
+            placement,
+            cellWidth,
+            minColSpan,
+            maxColSpan,
+            minRowSpan,
+            maxRowSpan,
+            onPreviewResize,
+            onCommitResize,
+            onCancelResize,
+        ],
     );
 
     return (
@@ -94,7 +123,6 @@ function ResizeHandle({ placement, onResize }: ResizeHandleProps) {
             }`}
             title="Drag to resize"
         >
-            {/* Resize icon — bottom-right diagonal lines */}
             <svg
                 width="10"
                 height="10"

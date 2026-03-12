@@ -1,16 +1,16 @@
 import { db } from '@/lib/db';
-import { projects, projectFollows, projectOpenRoles, profiles, projectMembers, savedProjects } from '@/lib/db/schema';
+import { projects, projectFollows, projectOpenRoles, profiles, projectMembers } from '@/lib/db/schema';
 import { eq, desc, sql, and, isNull } from 'drizzle-orm';
 import { cache } from 'react';
 
 // Removing cache for debug
 export const getProjectDetails = async (rawProjectId: string) => {
     const projectId = decodeURIComponent(rawProjectId).trim();
-    console.log(`[getProjectDetails] Lookup: "${projectId}"`);
+    console.log("[getProjectDetails] Lookup", { projectId });
 
     // UUID Regex
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(projectId);
-    console.log(`[getProjectDetails] isUuid: ${isUuid}`);
+    console.log("[getProjectDetails] Parsed project identifier", { projectId, isUuid });
 
     try {
         const conditions = isUuid ? eq(projects.id, projectId) : eq(projects.slug, projectId);
@@ -25,7 +25,7 @@ export const getProjectDetails = async (rawProjectId: string) => {
         });
 
         if (!project) {
-            console.log(`[getProjectDetails] Not found for: ${projectId}`);
+            console.log("[getProjectDetails] Not found", { projectId });
             return null;
         }
 
@@ -100,7 +100,7 @@ export const getProjectDetails = async (rawProjectId: string) => {
         };
 
     } catch (error) {
-        console.error(`[getProjectDetails] Error fetching project ${projectId}:`, error);
+        console.error("[getProjectDetails] Error fetching project", { projectId, error });
         return null;
     }
 };

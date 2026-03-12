@@ -101,6 +101,7 @@ export default function ProjectDashboardClient({
     const refreshProjectData = useCallback(() => {
         invalidateProjectDetailSlices({
             shell: true,
+            shellRefresh: true,
             tasks: true,
             sprints: true,
             analytics: true,
@@ -128,6 +129,8 @@ export default function ProjectDashboardClient({
     const [isOnboardingOpen, setIsOnboardingOpen] = useState(false);
     const [isStageUpdating, setIsStageUpdating] = useState(false);
     const [stageVersion, setStageVersion] = useState<string | null>((project as any).updatedAt || null);
+    const stageVersionRef = useRef<string | null>((project as any).updatedAt || null);
+    const isStageUpdatingRef = useRef(false);
     const isMountedRef = useRef(true);
     const followRequestRef = useRef(0);
     const followInFlightRef = useRef(false);
@@ -135,6 +138,16 @@ export default function ProjectDashboardClient({
     const viewRequestRef = useRef(0);
     const stageRequestRef = useRef(0);
     const sprintMutationRequestRef = useRef(0);
+
+    const setStageVersionSafe = useCallback((nextVersion: string | null) => {
+        stageVersionRef.current = nextVersion;
+        setStageVersion(nextVersion);
+    }, []);
+
+    const setIsStageUpdatingSafe = useCallback((next: boolean) => {
+        isStageUpdatingRef.current = next;
+        setIsStageUpdating(next);
+    }, []);
 
     useEffect(() => {
         isMountedRef.current = true;
@@ -195,8 +208,8 @@ export default function ProjectDashboardClient({
         setFollowersCount((project as any).followersCount || 0);
         setViewCount((project as any).viewCount || 0);
         setIsFollowing((project as any).isFollowed || false);
-        setStageVersion(serverProjectUpdatedAt);
-    }, [project?.id, serverProjectUpdatedAt]);
+        setStageVersionSafe(serverProjectUpdatedAt);
+    }, [project?.id, serverProjectUpdatedAt, setStageVersionSafe]);
 
     // OPTIMIZATION: Default to empty arrays as these are now fetched client-side or lazy loaded
     const tasks = useMemo(() => extendedProject?.tasks || [], [extendedProject]);
@@ -499,7 +512,7 @@ export default function ProjectDashboardClient({
         allowRetry = true
     ): Promise<boolean> => {
         const requestId = ++stageRequestRef.current;
-        setIsStageUpdating(true);
+        setIsStageUpdatingSafe(true);
         try {
             const result = await updateProjectStageAction(project.id, targetIndex, {
                 expectedUpdatedAt: expectedUpdatedAt || undefined,
@@ -510,7 +523,7 @@ export default function ProjectDashboardClient({
             if (result.success) {
                 const nextIndex = typeof result.currentStageIndex === "number" ? result.currentStageIndex : targetIndex;
                 setOptimisticStageIndex(nextIndex);
-                setStageVersion(result.updatedAt ?? null);
+                setStageVersionSafe(result.updatedAt ?? null);
                 return true;
             }
 
@@ -518,7 +531,7 @@ export default function ProjectDashboardClient({
                 const latestIndex = Math.max(0, result.latest.currentStageIndex ?? 0);
                 const latestVersion = result.latest.updatedAt ?? null;
                 setOptimisticStageIndex(latestIndex);
-                setStageVersion(latestVersion);
+                setStageVersionSafe(latestVersion);
 
                 if (latestIndex >= targetIndex) {
                     toast.info("Stage updated from another session. Synced latest stage.");
@@ -537,7 +550,7 @@ export default function ProjectDashboardClient({
                         ? retryResult.currentStageIndex
                         : retryTarget;
                     setOptimisticStageIndex(nextIndex);
-                    setStageVersion(retryResult.updatedAt ?? latestVersion);
+                    setStageVersionSafe(retryResult.updatedAt ?? latestVersion);
                     return true;
                 }
 
@@ -553,22 +566,25 @@ export default function ProjectDashboardClient({
             return false;
         } finally {
             if (isMountedRef.current && requestId === stageRequestRef.current) {
-                setIsStageUpdating(false);
+                setIsStageUpdatingSafe(false);
             }
         }
-    }, [lifecycleStageNames.length, project.id]);
+    }, [lifecycleStageNames.length, project.id, setIsStageUpdatingSafe, setStageVersionSafe]);
 
-    const handleUndoStage = useCallback(async (prevIndex: number) => {
-        if (isStageUpdating) return;
-        const rollbackIndex = optimisticStageIndex;
+    const handleUndoStage = useCallback(async (
+        prevIndex: number,
+        rollbackIndex: number,
+        expectedUpdatedAt: string | null,
+    ) => {
+        if (isStageUpdatingRef.current) return;
         setOptimisticStageIndex(prevIndex);
-        const committed = await commitStageIndex(prevIndex, stageVersion, true);
+        const committed = await commitStageIndex(prevIndex, expectedUpdatedAt, true);
         if (!committed) {
             setOptimisticStageIndex(rollbackIndex);
             return;
         }
         toast.success("Undid stage advancement");
-    }, [commitStageIndex, isStageUpdating, optimisticStageIndex, stageVersion]);
+    }, [commitStageIndex]);
 
     const handleAdvanceStage = useCallback(async () => {
         if (isStageUpdating) {
@@ -589,6 +605,7 @@ export default function ProjectDashboardClient({
         const prevIndex = optimisticStageIndex;
         const nextIndex = prevIndex + 1;
         const nextStageName = stages[nextIndex];
+        const expectedUpdatedAt = stageVersionRef.current;
 
         // 1. Optimistic Update
         setOptimisticStageIndex(nextIndex);
@@ -597,18 +614,20 @@ export default function ProjectDashboardClient({
         toast.success(`Advanced to ${nextStageName}`, {
             action: {
                 label: "Undo",
-                onClick: () => handleUndoStage(prevIndex),
+                onClick: () => {
+                    void handleUndoStage(prevIndex, nextIndex, expectedUpdatedAt);
+                },
             },
             duration: 4000,
         });
 
         // 3. Server Action
-        const committed = await commitStageIndex(nextIndex, stageVersion, true);
+        const committed = await commitStageIndex(nextIndex, expectedUpdatedAt, true);
         if (!committed) {
             // Revert on failure
             setOptimisticStageIndex(prevIndex);
         }
-    }, [isOwner, isStageUpdating, lifecycleStageNames, optimisticStageIndex, commitStageIndex, stageVersion, handleUndoStage]);
+    }, [isOwner, isStageUpdating, lifecycleStageNames, optimisticStageIndex, commitStageIndex, handleUndoStage]);
 
     const filesSyncStatus = extendedProject?.syncStatus;
     const filesImportSourceType = extendedProject?.importSource?.type || null;

@@ -91,7 +91,7 @@ export default function TaskFilters({
                                         setReorderMode?.(false);
                                         setViewMode('board');
                                     }}
-                                    className="text-xs text-indigo-600 hover:text-indigo-700 font-medium"
+                                    className="text-xs text-indigo-600 hover:text-indigo-700 dark:text-indigo-400 dark:hover:text-indigo-300 font-medium"
                                 >
                                     Reset all
                                 </button>

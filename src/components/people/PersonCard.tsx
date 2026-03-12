@@ -10,7 +10,9 @@ import type { SuggestedProfile } from "@/app/actions/connections";
 
 export interface PersonCardProps {
     profile: SuggestedProfile;
+    /** Keep stable with useCallback in parent to avoid stale closures in memoized cards. */
     onConnect: (userId: string) => Promise<void>;
+    /** Keep stable with useCallback in parent to avoid unnecessary re-renders. */
     onDismiss?: (userId: string) => Promise<void>;
     isConnecting?: boolean;
     /** Render as either a compact grid card or a full recommended dossier */
@@ -234,6 +236,16 @@ function PersonCard({ profile, onConnect, onDismiss, isConnecting, variant = "co
     // ---------- COMPACT VARIANT ----------
     return (
         <div className="relative flex flex-col h-[200px] rounded-2xl bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl border border-zinc-200/60 dark:border-white/5 overflow-hidden transition-all duration-200 hover:border-indigo-500/30 group">
+            {onDismiss && (
+                <button
+                    type="button"
+                    onClick={handleDismiss}
+                    className="absolute top-4 right-4 z-10 p-1.5 text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 opacity-0 group-hover:opacity-100 focus:opacity-100 focus-visible:opacity-100 active:opacity-100 transition-opacity"
+                    aria-label={`Dismiss ${profile.fullName || profile.username || "suggestion"}`}
+                >
+                    <X className="w-3.5 h-3.5" />
+                </button>
+            )}
             <Link href={profileHref(profile)} className="flex-1 flex flex-col p-4 group/link focus:outline-none focus:ring-2 focus:ring-inset focus:ring-indigo-500">
                 <div className="flex items-start justify-between">
                     <div className="flex items-start gap-3 flex-1 min-w-0">
@@ -253,18 +265,8 @@ function PersonCard({ profile, onConnect, onDismiss, isConnecting, variant = "co
                         )}
                         
                         <div className="flex-1 min-w-0 pt-0.5 group-hover/link:text-indigo-600 dark:group-hover/link:text-indigo-400 transition-colors">
-                            <h3 className="font-semibold text-zinc-900 dark:text-zinc-100 truncate text-sm leading-tight pr-6 relative">
+                            <h3 className="font-semibold text-zinc-900 dark:text-zinc-100 truncate text-sm leading-tight pr-6">
                                 {profile.fullName || profile.username || "User"}
-                                {onDismiss && (
-                                    <button
-                                        type="button"
-                                        onClick={handleDismiss}
-                                        className="absolute -right-2 top-1/2 -translate-y-1/2 p-1.5 text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 opacity-0 group-hover:opacity-100 transition-opacity"
-                                        aria-label={`Dismiss ${profile.fullName || profile.username || "suggestion"}`}
-                                    >
-                                        <X className="w-3.5 h-3.5" />
-                                    </button>
-                                )}
                             </h3>
                             <p className="text-[11px] text-zinc-500 truncate mt-0.5">
                                 @{profile.username || (profile.fullName?.toLowerCase().replace(/\s+/g, ''))}
@@ -309,12 +311,38 @@ function PersonCard({ profile, onConnect, onDismiss, isConnecting, variant = "co
     );
 }
 
+const areSameProjects = (
+    prevProjects: PersonCardProps["profile"]["projects"],
+    nextProjects: PersonCardProps["profile"]["projects"]
+) => {
+    if (prevProjects === nextProjects) return true;
+    if (!prevProjects || !nextProjects) return !prevProjects && !nextProjects;
+    if (prevProjects.length !== nextProjects.length) return false;
+    for (let i = 0; i < prevProjects.length; i++) {
+        if (prevProjects[i].id !== nextProjects[i].id) return false;
+        if (prevProjects[i].title !== nextProjects[i].title) return false;
+        if (prevProjects[i].status !== nextProjects[i].status) return false;
+    }
+    return true;
+};
+
 const areCardsEqual = (prevProps: PersonCardProps, nextProps: PersonCardProps) => {
     return (
         prevProps.profile.id === nextProps.profile.id &&
         prevProps.profile.connectionStatus === nextProps.profile.connectionStatus &&
+        prevProps.profile.fullName === nextProps.profile.fullName &&
+        prevProps.profile.username === nextProps.profile.username &&
+        prevProps.profile.avatarUrl === nextProps.profile.avatarUrl &&
+        prevProps.profile.headline === nextProps.profile.headline &&
+        prevProps.profile.location === nextProps.profile.location &&
+        prevProps.profile.mutualConnections === nextProps.profile.mutualConnections &&
+        prevProps.profile.recommendationReason === nextProps.profile.recommendationReason &&
+        areSameProjects(prevProps.profile.projects, nextProps.profile.projects) &&
         prevProps.isConnecting === nextProps.isConnecting &&
-        prevProps.variant === nextProps.variant
+        prevProps.variant === nextProps.variant &&
+        prevProps.priority === nextProps.priority &&
+        prevProps.onDismiss === nextProps.onDismiss &&
+        prevProps.onConnect === nextProps.onConnect
     );
 };
 

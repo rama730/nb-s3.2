@@ -5,27 +5,41 @@ import Button from "@/components/ui-custom/Button";
 import Input from "@/components/ui-custom/Input";
 import { Label } from "@/components/ui-custom/Label";
 import { Loader2 } from "lucide-react";
-import { MfaSetup } from "@/components/auth/MfaSetup";
-import { SessionsList } from "@/components/settings/SessionsList";
-import LoginHistory from "@/components/auth/LoginHistory";
-import PasskeysSection from "@/components/auth/PasskeysSection";
+import dynamic from "next/dynamic";
 import { SettingsPageHeader } from "@/components/settings/ui/SettingsPageHeader";
 import { SettingsSectionCard } from "@/components/settings/ui/SettingsSectionCard";
 import { PasswordStrengthMeter } from "@/components/settings/PasswordStrengthMeter";
 import { useToast } from "@/components/ui-custom/Toast";
 import { useSecurityData, useChangePassword } from "@/hooks/useSettingsQueries";
+import { useAuth } from "@/hooks/useAuth";
+import { isSecurityHardeningEnabled } from "@/lib/features/security";
+
+const MfaSetup = dynamic(() => import("@/components/auth/MfaSetup").then((m) => m.MfaSetup), {
+    ssr: false,
+    loading: () => <div className="text-xs text-zinc-500">Loading MFA settings...</div>,
+});
+const PasskeysSection = dynamic(() => import("@/components/auth/PasskeysSection"), {
+    ssr: false,
+    loading: () => <div className="text-xs text-zinc-500">Loading passkeys...</div>,
+});
+const SessionsList = dynamic(() => import("@/components/settings/SessionsList").then((m) => m.SessionsList), {
+    ssr: false,
+    loading: () => <div className="text-xs text-zinc-500">Loading sessions...</div>,
+});
+const LoginHistory = dynamic(() => import("@/components/auth/LoginHistory"), {
+    ssr: false,
+    loading: () => <div className="text-xs text-zinc-500">Loading login history...</div>,
+});
+
+const SECURITY_SECTION_KEYS = ["mfa", "passkeys", "password", "sessions", "login-history"] as const;
 
 // Skeleton for security sections
-const SecuritySkeleton = memo(function SecuritySkeleton() {
+const SecuritySectionsSkeleton = memo(function SecuritySectionsSkeleton() {
     return (
         <div className="space-y-6 animate-pulse">
-            <div className="space-y-2">
-                <div className="h-8 w-32 bg-zinc-200 dark:bg-zinc-800 rounded" />
-                <div className="h-4 w-64 bg-zinc-200 dark:bg-zinc-800 rounded" />
-            </div>
-            {[1, 2, 3, 4].map((i) => (
+            {SECURITY_SECTION_KEYS.map((key) => (
                 <div
-                    key={i}
+                    key={key}
                     className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6"
                 >
                     <div className="h-5 w-40 bg-zinc-200 dark:bg-zinc-800 rounded mb-4" />
@@ -40,8 +54,10 @@ const SecuritySkeleton = memo(function SecuritySkeleton() {
 });
 
 export default function SecurityPage() {
+    const { user } = useAuth();
+    const securityHardeningEnabled = isSecurityHardeningEnabled(user?.id ?? null);
     const { showToast } = useToast();
-    const { data: securityData, isLoading } = useSecurityData();
+    const { data: securityData, isLoading, error } = useSecurityData({ hardeningEnabled: securityHardeningEnabled });
     const changePasswordMutation = useChangePassword();
 
     const [currentPassword, setCurrentPassword] = useState("");
@@ -81,18 +97,47 @@ export default function SecurityPage() {
         );
     };
 
-    if (isLoading) {
-        return <SecuritySkeleton />;
-    }
+    const securityErrorMessage = (() => {
+        if (!error) return null;
+        if (error instanceof Error) return error.message;
+        if (typeof error === "object" && error !== null && "message" in error) {
+            const message = (error as { message?: unknown }).message;
+            if (typeof message === "string") return message;
+        }
+        if (typeof error === "string") return error;
+        try {
+            return JSON.stringify(error);
+        } catch {
+            return String(error);
+        }
+    })();
 
     const isChangingPassword = changePasswordMutation.isPending;
 
+    if (isLoading) {
+        return (
+            <div className="space-y-6" data-hardening-security={securityHardeningEnabled ? "v1" : "off"}>
+                <SettingsPageHeader
+                    title="Security"
+                    description="Protect your account with modern authentication and active session controls."
+                />
+                <SecuritySectionsSkeleton />
+            </div>
+        );
+    }
+
     return (
-        <div className="space-y-6">
+        <div className="space-y-6" data-hardening-security={securityHardeningEnabled ? "v1" : "off"}>
             <SettingsPageHeader
                 title="Security"
                 description="Protect your account with modern authentication and active session controls."
             />
+
+            {securityErrorMessage ? (
+                <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:border-amber-900/40 dark:bg-amber-900/10 dark:text-amber-300">
+                    {securityErrorMessage}
+                </div>
+            ) : null}
 
             <SettingsSectionCard
                 title="Multi-factor authentication"

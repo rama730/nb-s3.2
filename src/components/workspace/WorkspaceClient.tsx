@@ -6,8 +6,10 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { LayoutGrid } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import {
-    getWorkspaceOverview,
-    type WorkspaceOverviewData,
+    getWorkspaceOverviewBase,
+    getWorkspaceOverviewProjectsSection,
+    type WorkspaceOverviewBaseData,
+    type WorkspaceProject,
     type WorkspaceTask,
 } from '@/app/actions/workspace';
 import WorkspaceTabBar, { type WorkspaceTab } from './WorkspaceTabBar';
@@ -22,9 +24,10 @@ import { WorkspaceSectionBoundary } from './WorkspaceSectionBoundary';
 import { useWorkspaceRealtime } from '@/hooks/useWorkspaceRealtime';
 import { useWorkspaceKeyboard } from '@/hooks/useWorkspaceKeyboard';
 import { useTaskPanelData } from '@/hooks/useTaskPanelData';
+import { queryKeys } from '@/lib/query-keys';
 
 interface WorkspaceClientProps {
-    initialData: WorkspaceOverviewData | null;
+    initialData: WorkspaceOverviewBaseData | null;
     initialTab?: string;
 }
 
@@ -40,16 +43,24 @@ export default function WorkspaceClient({ initialData, initialTab }: WorkspaceCl
     const { user } = useAuth();
     const queryClient = useQueryClient();
 
-    // Phase 1B: React Query wrapper — seeds from SSR, auto-refetches on focus + realtime invalidation
-    const { data: liveData } = useQuery({
-        queryKey: ['workspace', 'overview'],
+    const { data: baseData } = useQuery({
+        queryKey: queryKeys.workspace.overviewBase(),
         queryFn: async () => {
-            const result = await getWorkspaceOverview();
+            const result = await getWorkspaceOverviewBase();
             return result.success && result.data ? result.data : null;
         },
         initialData: initialData ?? undefined,
         staleTime: 30_000,
         refetchOnWindowFocus: true,
+    });
+
+    const { data: projectsData } = useQuery({
+        queryKey: queryKeys.workspace.overviewSection.projects(),
+        queryFn: async () => {
+            const result = await getWorkspaceOverviewProjectsSection();
+            return result.success && result.projects ? result.projects : [];
+        },
+        staleTime: 30_000,
     });
 
     // Remember last tab — URL param > localStorage > 'overview'
@@ -70,9 +81,21 @@ export default function WorkspaceClient({ initialData, initialTab }: WorkspaceCl
     // Inline task detail panel
     const [selectedTask, setSelectedTask] = useState<WorkspaceTask | null>(null);
 
+    const normalizedBaseData = useMemo<WorkspaceOverviewBaseData | null>(() => baseData ?? null, [baseData]);
+
+    const projects: WorkspaceProject[] = useMemo(
+        () => projectsData ?? [],
+        [projectsData],
+    );
+
+    const overviewInitialSections = useMemo(() => ({ projects }), [projects]);
+
     const projectIds = useMemo(
-        () => new Set((liveData?.projects ?? []).map(p => p.id)),
-        [liveData?.projects]
+        () => new Set([
+            ...projects.map((p) => p.id),
+            ...(normalizedBaseData?.projectRefs ?? []).map((p) => p.id),
+        ]),
+        [projects, normalizedBaseData?.projectRefs]
     );
 
     const handleTaskClick = useCallback((task: WorkspaceTask) => {
@@ -81,33 +104,33 @@ export default function WorkspaceClient({ initialData, initialTab }: WorkspaceCl
 
     const handleCloseTaskPanel = useCallback(() => {
         setSelectedTask(null);
-        queryClient.invalidateQueries({ queryKey: ['workspace'] });
+        queryClient.invalidateQueries({ queryKey: queryKeys.workspace.overviewBase() });
+        queryClient.invalidateQueries({ queryKey: queryKeys.workspace.overviewSection.tasks() });
+        queryClient.invalidateQueries({ queryKey: queryKeys.workspace.tasksRoot() });
+        queryClient.invalidateQueries({ queryKey: queryKeys.workspace.activity() });
     }, [queryClient]);
 
     // Phase 1D: Lazy fetch sprints/members for task panel
     const { members, sprints } = useTaskPanelData(selectedTask?.projectId ?? null);
 
     // Contextual greeting
-    const greeting = useMemo(() => getGreeting(liveData ?? null), [liveData]);
+    const greeting = useMemo(() => getGreeting(normalizedBaseData ?? null), [normalizedBaseData]);
 
     // Tab badge counts
     const badges = useMemo(() => {
-        if (!liveData) return {};
-        const now = new Date();
-        const overdueCount = liveData.tasks.filter(t => t.dueDate && new Date(t.dueDate) < now).length;
+        if (!normalizedBaseData) return {};
+        const overdueCount = normalizedBaseData.overdueCount;
         return {
             tasks: overdueCount || undefined,
-            inbox: liveData.inboxCount || undefined,
+            inbox: normalizedBaseData.inboxCount || undefined,
         };
-    }, [liveData]);
+    }, [normalizedBaseData]);
 
     // Realtime subscriptions
     useWorkspaceRealtime(user?.id ?? null);
 
     // Keyboard navigation
     useWorkspaceKeyboard(handleTabChange, handleCloseTaskPanel);
-
-    const projects = liveData?.projects ?? [];
 
     // Ref to hold the enterEditMode function from OverviewTab
     const enterEditModeRef = useRef<(() => void) | null>(null);
@@ -121,7 +144,11 @@ export default function WorkspaceClient({ initialData, initialTab }: WorkspaceCl
     }, []);
 
     return (
-        <div className="h-full flex flex-col overflow-hidden">
+        <div
+            data-scroll-root="route"
+            data-testid="workspace-route-scroll"
+            className="h-full min-h-0 flex flex-col app-scroll app-scroll-y app-scroll-gutter"
+        >
             {/* Header */}
             <div className="shrink-0 border-b border-zinc-200/60 dark:border-zinc-800/60 bg-white/80 dark:bg-zinc-950/80 backdrop-blur-sm">
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -167,7 +194,8 @@ export default function WorkspaceClient({ initialData, initialTab }: WorkspaceCl
                     >
                         <WorkspaceSectionBoundary sectionName="Overview">
                             <OverviewTab
-                                initialData={liveData ?? null}
+                                initialData={normalizedBaseData ?? null}
+                                initialSections={overviewInitialSections}
                                 onTaskClick={handleTaskClick}
                                 onRequestEditMode={handleEditModeRegister}
                             />
@@ -176,7 +204,7 @@ export default function WorkspaceClient({ initialData, initialTab }: WorkspaceCl
                 ) : (
                     <motion.div
                         key={activeTab}
-                        className="flex-1 min-h-0 overflow-y-auto"
+                        className="flex-1 min-h-0"
                         role="tabpanel"
                         id={`workspace-tab-${activeTab}`}
                         initial={TAB_INITIAL}
@@ -234,15 +262,14 @@ export default function WorkspaceClient({ initialData, initialTab }: WorkspaceCl
     );
 }
 
-function getGreeting(data: WorkspaceOverviewData | null): string {
+function getGreeting(data: WorkspaceOverviewBaseData | null): string {
     const hour = new Date().getHours();
     const prefix = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
 
     if (!data) return `${prefix} — loading your workspace.`;
 
-    const now = new Date();
-    const overdueCount = data.tasks.filter(t => t.dueDate && new Date(t.dueDate) < now).length;
-    const inProgressCount = data.tasks.filter(t => t.status === 'in_progress').length;
+    const overdueCount = data.overdueCount;
+    const inProgressCount = data.inProgressCount;
     const dueToday = data.tasksDueCount;
 
     if (overdueCount > 0) return `${prefix} — you have ${overdueCount} overdue task${overdueCount > 1 ? 's' : ''}.`;

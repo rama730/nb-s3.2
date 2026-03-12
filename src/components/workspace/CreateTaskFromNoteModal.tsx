@@ -6,6 +6,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { createTaskAction } from '@/app/actions/project';
 import type { WorkspaceProject } from '@/app/actions/workspace';
 import { toast } from 'sonner';
+import { queryKeys } from '@/lib/query-keys';
 
 interface CreateTaskFromNoteModalProps {
     defaultTitle: string;
@@ -80,7 +81,10 @@ export default function CreateTaskFromNoteModal({
                 setSuccess(true);
                 const projectName = projects.find(p => p.id === projectId)?.title || 'project';
                 toast.success(`Task created in ${projectName}`);
-                queryClient.invalidateQueries({ queryKey: ['workspace'] });
+                queryClient.invalidateQueries({ queryKey: queryKeys.workspace.tasksRoot() });
+                queryClient.invalidateQueries({ queryKey: queryKeys.workspace.overviewBase() });
+                queryClient.invalidateQueries({ queryKey: queryKeys.workspace.overviewSection.tasks() });
+                queryClient.invalidateQueries({ queryKey: queryKeys.workspace.overviewSection.projects() });
                 setTimeout(onClose, 800);
             } else {
                 setError(result.error || 'Failed to create task');

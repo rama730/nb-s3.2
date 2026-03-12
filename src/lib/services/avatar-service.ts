@@ -3,6 +3,8 @@
  * Shows immediate preview, uploads in background
  */
 
+import { createProfileImageUploadUrlAction } from '@/app/actions/profile'
+
 /**
  * Compress and resize image to 400x400 JPEG
  */
@@ -60,8 +62,8 @@ export function fileToDataUrl(file: File): Promise<string> {
  * Returns preview URL immediately, uploads in background
  */
 export async function uploadAvatarWithPreview(
-    supabase: ReturnType<typeof import('@/lib/supabase/client').createClient>,
-    userId: string,
+    _supabase: ReturnType<typeof import('@/lib/supabase/client').createClient>,
+    _userId: string,
     file: File,
     onPreview: (previewUrl: string) => void,
     onUploaded?: (finalUrl: string) => void
@@ -74,29 +76,29 @@ export async function uploadAvatarWithPreview(
         // 2. Compress image
         const compressedBlob = await compressAvatar(file)
 
-        // 3. Upload to storage
-        const fileName = `${userId}-${Date.now()}.jpg`
-
-        const { error: uploadError } = await supabase.storage
-            .from('avatars')
-            .upload(fileName, compressedBlob, {
-                contentType: 'image/jpeg',
-                upsert: true,
-            })
-
-        if (uploadError) {
-            console.log('Storage upload skipped:', uploadError.message)
+        // 3. Upload to storage using server-validated signed URL
+        const uploadSession = await createProfileImageUploadUrlAction({
+            mimeType: 'image/jpeg',
+            sizeBytes: compressedBlob.size,
+            kind: 'avatar',
+        })
+        if (!uploadSession.success) {
+            console.log('Storage upload skipped:', uploadSession.error)
             // Keep using preview URL (data URL) - works fine for onboarding
             return { success: true }
         }
-
-        // 4. Get public URL and update
-        const { data: { publicUrl } } = supabase.storage
-            .from('avatars')
-            .getPublicUrl(fileName)
+        const uploadResponse = await fetch(uploadSession.uploadUrl, {
+            method: 'PUT',
+            headers: { 'Content-Type': uploadSession.contentType },
+            body: compressedBlob,
+        })
+        if (!uploadResponse.ok) {
+            console.log('Storage upload skipped:', uploadResponse.status)
+            return { success: true }
+        }
 
         if (onUploaded) {
-            onUploaded(publicUrl)
+            onUploaded(uploadSession.publicUrl)
         }
 
         return { success: true }
@@ -110,8 +112,8 @@ export async function uploadAvatarWithPreview(
  * Simple upload avatar (original API maintained for compatibility)
  */
 export async function uploadAvatar(
-    supabase: ReturnType<typeof import('@/lib/supabase/client').createClient>,
-    userId: string,
+    _supabase: ReturnType<typeof import('@/lib/supabase/client').createClient>,
+    _userId: string,
     file: File
 ): Promise<{ url: string | null; error: string | null }> {
     try {
@@ -121,20 +123,20 @@ export async function uploadAvatar(
         // Try to compress and upload
         try {
             const compressedBlob = await compressAvatar(file)
-            const fileName = `${userId}-${Date.now()}.jpg`
-
-            const { error: uploadError } = await supabase.storage
-                .from('avatars')
-                .upload(fileName, compressedBlob, {
-                    contentType: 'image/jpeg',
-                    upsert: true,
+            const uploadSession = await createProfileImageUploadUrlAction({
+                mimeType: 'image/jpeg',
+                sizeBytes: compressedBlob.size,
+                kind: 'avatar',
+            })
+            if (uploadSession.success) {
+                const uploadResponse = await fetch(uploadSession.uploadUrl, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': uploadSession.contentType },
+                    body: compressedBlob,
                 })
-
-            if (!uploadError) {
-                const { data: { publicUrl } } = supabase.storage
-                    .from('avatars')
-                    .getPublicUrl(fileName)
-                return { url: publicUrl, error: null }
+                if (uploadResponse.ok) {
+                    return { url: uploadSession.publicUrl, error: null }
+                }
             }
         } catch (e) {
             console.log('Upload failed, using preview:', e)

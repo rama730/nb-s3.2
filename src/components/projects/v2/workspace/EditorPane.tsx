@@ -194,7 +194,9 @@ export default function EditorPane({
       } else {
         const pinnedSet = new Set(pinnedIds);
         const allVisiblePinned = visible.every((id) => pinnedSet.has(id));
-        if (!allVisiblePinned) {
+        if (allVisiblePinned) {
+          visible[visible.length - 1] = activeTabId;
+        } else {
           let replaceIndex = visible.length - 1;
           for (let i = visible.length - 1; i >= 0; i--) {
             if (!pinnedSet.has(visible[i])) {
@@ -340,8 +342,7 @@ export default function EditorPane({
                           return (
                             <DropdownMenuItem
                               key={id}
-                              onSelect={(e) => {
-                                e.preventDefault();
+                              onSelect={() => {
                                 setActiveTab(id);
                               }}
                               className="flex items-center justify-between gap-2"

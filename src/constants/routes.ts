@@ -13,11 +13,11 @@ export const ROUTES = {
 } as const
 
 export const API_ROUTES = {
-    HEALTH: '/api/health',
+    HEALTH: '/api/v1/health',
     PROJECTS: '/api/v1/projects',
-    USERNAME_CHECK: '/api/onboarding/username-check',
+    USERNAME_CHECK: '/api/v1/onboarding/username-check',
     ACCOUNT_DELETE: '/api/v1/account/delete',
     RESERVED_USERNAMES: '/api/v1/account/reserved-usernames',
-    INNGEST: '/api/inngest',
-    CLEANUP_ORPHAN: '/api/cleanup-orphan',
+    INNGEST: '/api/v1/inngest',
+    CLEANUP_ORPHAN: '/api/v1/cleanup-orphan',
 } as const

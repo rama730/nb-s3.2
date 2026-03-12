@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { hasE2ECredentials, login } from "./_helpers/auth";
 import { scopedName } from "./_helpers/fixtures";
 import { attachPageMonitoring } from "./_helpers/monitoring";
-import { PerfTracker, measure } from "./_helpers/perf";
+import { PerfTracker, markNavigationMetrics, measure } from "./_helpers/perf";
 
 test.describe("Application flow smoke", () => {
     test.skip(!hasE2ECredentials, "E2E_USER_EMAIL and E2E_USER_PASSWORD are required.");
@@ -17,6 +17,7 @@ test.describe("Application flow smoke", () => {
         await measure(perf, "route.interactive.core", () =>
             page.goto("/messages", { waitUntil: "domcontentloaded" })
         );
+        await markNavigationMetrics(perf, page, "/messages");
         await page.getByRole("button", { name: "Applications" }).click();
 
         const applicationRows = page

@@ -18,8 +18,10 @@ interface ConfirmDialogProps {
   confirmLabel?: string;
   cancelLabel?: string;
   variant?: "default" | "destructive";
-  onConfirm: () => void;
+  onConfirm: () => void | Promise<void>;
+  onError?: (error: unknown) => void;
   loading?: boolean;
+  autoCloseOnConfirm?: boolean;
 }
 
 export function ConfirmDialog({
@@ -31,7 +33,9 @@ export function ConfirmDialog({
   cancelLabel = "Cancel",
   variant = "default",
   onConfirm,
+  onError,
   loading = false,
+  autoCloseOnConfirm = true,
 }: ConfirmDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -46,9 +50,19 @@ export function ConfirmDialog({
           </Button>
           <Button
             variant={variant === "destructive" ? "destructive" : "default"}
-            onClick={() => {
-              onConfirm();
-              onOpenChange(false);
+            onClick={async () => {
+              try {
+                await onConfirm();
+                if (autoCloseOnConfirm) {
+                  onOpenChange(false);
+                }
+              } catch (error) {
+                if (onError) {
+                  onError(error);
+                } else {
+                  console.error("[ConfirmDialog] confirm action failed", error);
+                }
+              }
             }}
             disabled={loading}
           >

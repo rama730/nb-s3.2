@@ -20,21 +20,19 @@ export default function PasskeysSection({ initialPasskeys }: PasskeysSectionProp
     const loadPasskeys = useCallback(async () => {
         try {
             const res = await fetch("/api/v1/auth/passkeys");
-            if (!res.ok) {
-                setPasskeys([]);
-                return;
-            }
             const contentType = res.headers.get("content-type") || "";
             if (!contentType.includes("application/json")) {
-                setPasskeys([]);
+                toast.error(`Failed to load passkeys (${res.status})`);
                 return;
             }
             const json = await res.json();
-            if (json?.success) {
-                setPasskeys(json?.data?.passkeys || []);
+            if (!res.ok || json?.success === false) {
+                toast.error(json?.message || `Failed to load passkeys (${res.status})`);
+                return;
             }
+            setPasskeys(json?.data?.passkeys || []);
         } catch {
-            setPasskeys([]);
+            toast.error("Failed to load passkeys");
         } finally {
             setLoading(false);
         }
@@ -66,12 +64,15 @@ export default function PasskeysSection({ initialPasskeys }: PasskeysSectionProp
             const res = await fetch(`/api/v1/auth/passkeys/${passkeyId}`, {
                 method: "DELETE",
             });
-            if (res.ok) {
-                setPasskeys((prev) => prev.filter((p) => p.id !== passkeyId));
+            const contentType = res.headers.get("content-type") || "";
+            const json = contentType.includes("application/json") ? await res.json() : null;
+            if (!res.ok || json?.success === false) {
+                throw new Error(json?.message || `Failed to remove passkey (${res.status})`);
             }
+            setPasskeys((prev) => prev.filter((p) => p.id !== passkeyId));
         } catch (error) {
             console.error("Failed to delete passkey:", error);
-            toast.error("Failed to remove passkey");
+            toast.error(error instanceof Error ? error.message : "Failed to remove passkey");
         }
     };
 
@@ -98,7 +99,7 @@ export default function PasskeysSection({ initialPasskeys }: PasskeysSectionProp
                                 <div>
                                     <div className="text-sm font-medium">{passkey.name || "Passkey"}</div>
                                     <div className="text-xs text-zinc-500">
-                                        Created {new Date(passkey.created_at).toLocaleDateString()}
+                                        Created {passkey.created_at ? new Date(passkey.created_at).toLocaleDateString() : "unknown"}
                                         {passkey.last_used && (
                                             <> • Last used {new Date(passkey.last_used).toLocaleDateString()}</>
                                         )}

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Loader2, CheckCircle, XCircle, MapPin } from "lucide-react";
+import { Loader2, MapPin } from "lucide-react";
 import { parseUserAgent } from "@/lib/utils/device";
 import type { LoginHistoryEntry } from "@/lib/types/settingsTypes";
 
@@ -17,20 +17,17 @@ export default function LoginHistory({ initialHistory }: LoginHistoryProps) {
     const loadHistory = useCallback(async () => {
         try {
             const res = await fetch("/api/v1/auth/login-history");
-            if (!res.ok) {
-                setHistory([]);
-                return;
-            }
             const contentType = res.headers.get("content-type") || "";
             if (!contentType.includes("application/json")) {
-                setHistory([]);
-                return;
+                throw new Error(`Failed to load login history (${res.status})`);
             }
             const json = await res.json();
-            if (json?.success) {
-                setHistory(json?.data?.history || []);
+            if (!res.ok || json?.success === false) {
+                throw new Error(json?.message || `Failed to load login history (${res.status})`);
             }
-        } catch {
+            setHistory(json?.data?.history || []);
+        } catch (error) {
+            console.warn("[settings] login history fetch failed", error);
             setHistory([]);
         } finally {
             setLoading(false);
@@ -77,11 +74,6 @@ export default function LoginHistory({ initialHistory }: LoginHistoryProps) {
                                     <span className="text-sm font-medium">
                                         {browser} on {os}
                                     </span>
-                                    {entry.success ? (
-                                        <CheckCircle className="h-3 w-3 text-green-500" />
-                                    ) : (
-                                        <XCircle className="h-3 w-3 text-red-500" />
-                                    )}
                                 </div>
                                 <div className="flex items-center gap-2 text-xs text-zinc-500">
                                     <span>{entry.ip_address}</span>

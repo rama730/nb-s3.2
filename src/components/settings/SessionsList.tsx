@@ -36,21 +36,19 @@ export function SessionsList({ initialSessions }: SessionsListProps) {
     const fetchSessions = async () => {
         try {
             const res = await fetch('/api/v1/sessions');
-            if (!res.ok) {
-                setSessions([]);
-                return;
-            }
             const contentType = res.headers.get('content-type') || '';
             if (!contentType.includes('application/json')) {
-                setSessions([]);
+                toast.error(`Failed to load sessions (${res.status})`);
                 return;
             }
             const json = await res.json();
-            if (json?.success) {
-                setSessions(json?.data?.sessions || []);
+            if (!res.ok || json?.success === false) {
+                toast.error(json?.message || `Failed to load sessions (${res.status})`);
+                return;
             }
+            setSessions(json?.data?.sessions || []);
         } catch {
-            setSessions([]);
+            toast.error("Failed to load sessions");
         } finally {
             setLoading(false);
         }
@@ -59,10 +57,15 @@ export function SessionsList({ initialSessions }: SessionsListProps) {
     const handleRevoke = async (id: string) => {
         setRevoking(id);
         try {
-            await fetch(`/api/v1/sessions/${id}`, { method: 'DELETE' });
+            const res = await fetch(`/api/v1/sessions/${id}`, { method: 'DELETE' });
+            const contentType = res.headers.get('content-type') || '';
+            const json = contentType.includes('application/json') ? await res.json() : null;
+            if (!res.ok || json?.success === false) {
+                throw new Error(json?.message || `Failed to revoke session (${res.status})`);
+            }
             setSessions(prev => prev.filter(s => s.id !== id));
-        } catch {
-            toast.error("Failed to revoke session");
+        } catch (error) {
+            toast.error(error instanceof Error ? error.message : "Failed to revoke session");
         } finally {
             setRevoking(null);
         }
@@ -73,8 +76,21 @@ export function SessionsList({ initialSessions }: SessionsListProps) {
     const handleRevokeAll = async () => {
         setRevoking('all');
         try {
-            await fetch('/api/v1/sessions/all', { method: 'DELETE' });
-            setSessions([]);
+            const res = await fetch('/api/v1/sessions/all', { method: 'DELETE' });
+            const contentType = res.headers.get('content-type') || '';
+            const json = contentType.includes('application/json') ? await res.json() : null;
+            if (!res.ok || json?.success === false) {
+                throw new Error(json?.message || `Failed to revoke sessions (${res.status})`);
+            }
+            setSessions((prev) => {
+                const returnedSessions = Array.isArray(json?.data?.sessions)
+                    ? (json.data.sessions as Session[])
+                    : null;
+                if (returnedSessions) return returnedSessions;
+                return prev.filter((session) => session.is_current);
+            });
+        } catch (error) {
+            toast.error(error instanceof Error ? error.message : "Failed to revoke sessions");
         } finally {
             setRevoking(null);
         }

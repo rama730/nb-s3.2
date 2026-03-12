@@ -1,11 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 
-const ALLOWED_TARGETS = new Set([5, 25, 100]);
+const ALLOWED_TARGETS = new Set([10, 50, 100]);
 const ALLOWED_TRANSITIONS: Record<number, number> = {
-  0: 5,
-  5: 25,
-  25: 100,
+  0: 10,
+  10: 50,
+  50: 100,
 };
 
 function parsePercent(name: string, fallback: number): number {
@@ -30,6 +30,11 @@ function parseHours(name: string, fallback: number): number {
     throw new Error(`${name} must be a non-negative number, received "${raw}"`);
   }
   return parsed;
+}
+
+function defaultStabilityWindowHours(targetPercent: number): number {
+  if (targetPercent >= 100) return 72;
+  return 24;
 }
 
 function readLastRunId(repoRoot: string): string {
@@ -103,7 +108,10 @@ function main() {
     );
   }
 
-  const requiredStabilityHours = parseHours("HARDENING_ROLLOUT_STABILITY_HOURS", 24);
+  const requiredStabilityHours = parseHours(
+    "HARDENING_ROLLOUT_STABILITY_HOURS",
+    defaultStabilityWindowHours(targetPercent),
+  );
   validateStabilityWindow(new Date(), requiredStabilityHours);
   const runId = readLastRunId(repoRoot);
 

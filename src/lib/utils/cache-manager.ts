@@ -9,15 +9,15 @@ class CacheManager {
                 const request = indexedDB.deleteDatabase(name);
                 request.onsuccess = () => resolve();
                 request.onerror = () => {
-                    console.error(`Failed to delete IndexedDB database: ${name}`);
+                    console.error("Failed to delete IndexedDB database", { name });
                     resolve();
                 };
                 request.onblocked = () => {
-                    console.warn(`IndexedDB delete blocked for: ${name}`);
+                    console.warn("IndexedDB delete blocked", { name });
                     resolve();
                 };
             } catch (error) {
-                console.error(`Error deleting IndexedDB database ${name}:`, error);
+                console.error("Error deleting IndexedDB database", { name, error });
                 resolve();
             }
         });

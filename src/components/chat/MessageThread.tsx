@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useMemo, useEffect } from 'react';
+import { useRef, useMemo, useEffect, useCallback } from 'react';
 import { useChatStore } from '@/stores/chatStore';
 import { useTypingChannel } from '@/hooks/useTypingChannel';
 import { MessageBubble } from './MessageBubble';
@@ -26,12 +26,15 @@ export function MessageThread({ messages, conversationId }: MessageThreadProps) 
     const isAtBottomRef = useRef(true);
     const initialBottomAppliedForConversationRef = useRef<string | null>(null);
     const prevMessagesLengthRef = useRef(messages.length);
+    const prevLatestMessageIdRef = useRef<string | null>(messages.length > 0 ? messages[messages.length - 1]?.id ?? null : null);
+    const pendingFocusMessageIdRef = useRef<string | null>(null);
 
     const messageCache = useChatStore(state => state.messagesByConversation[conversationId]);
     const pinnedMessages = useChatStore(
         (state) => state.pinnedMessagesByConversation[conversationId] ?? EMPTY_PINNED_MESSAGES
     );
     const loadMoreMessages = useChatStore(state => state.loadMoreMessages);
+    const focusMessageInStore = useChatStore(state => state.focusMessage);
     const fetchPinnedMessages = useChatStore(state => state.fetchPinnedMessages);
     
     // Scalable Broadcast Typing
@@ -40,38 +43,48 @@ export function MessageThread({ messages, conversationId }: MessageThreadProps) 
     const isLoading = messageCache?.loading || false;
     const hasMore = messageCache?.hasMore || false;
 
+    const highlightMessage = useCallback((messageId: string, tone: 'blue' | 'amber' = 'blue') => {
+        const node = document.getElementById(`msg-${messageId}`);
+        if (!node) return false;
+        const ringClass = tone === 'amber' ? 'ring-amber-500/70' : 'ring-blue-500/60';
+        const bgClass = tone === 'amber' ? 'bg-amber-50/40' : 'bg-blue-50/40';
+        const darkBgClass = tone === 'amber' ? 'dark:bg-amber-950/20' : 'dark:bg-blue-950/20';
+        node.classList.add('ring-2', ringClass, bgClass, darkBgClass);
+        window.setTimeout(() => {
+            node.classList.remove('ring-2', ringClass, bgClass, darkBgClass);
+        }, 1400);
+        return true;
+    }, []);
+
     useEffect(() => {
         isAtBottomRef.current = true;
         initialBottomAppliedForConversationRef.current = null;
         prevMessagesLengthRef.current = 0;
+        prevLatestMessageIdRef.current = null;
+        pendingFocusMessageIdRef.current = null;
     }, [conversationId]);
 
-    // Auto-scroll to bottom on new messages when user is already at bottom
+    // Auto-scroll only for tail appends (new outgoing/incoming messages), never for history backfill.
     useEffect(() => {
+        const latestMessageId = messages.length > 0 ? messages[messages.length - 1]?.id ?? null : null;
+        const didGrow = messages.length > prevMessagesLengthRef.current;
+        const tailAdvanced = latestMessageId !== prevLatestMessageIdRef.current;
+
         if (
-            messages.length > prevMessagesLengthRef.current &&
+            didGrow &&
+            tailAdvanced &&
             isAtBottomRef.current &&
             initialBottomAppliedForConversationRef.current === conversationId
         ) {
             virtuosoRef.current?.scrollToIndex({
                 index: 'LAST',
                 align: 'end',
-                behavior: 'smooth',
+                behavior: 'auto',
             });
         }
         prevMessagesLengthRef.current = messages.length;
-    }, [conversationId, messages.length]);
-
-    // Scroll when typing users change (only if at bottom)
-    useEffect(() => {
-        if (typingUsers.length > 0 && messages.length > 0 && isAtBottomRef.current) {
-            virtuosoRef.current?.scrollToIndex({
-                index: 'LAST',
-                align: 'end',
-                behavior: 'smooth',
-            });
-        }
-    }, [messages.length, typingUsers.length]);
+        prevLatestMessageIdRef.current = latestMessageId;
+    }, [conversationId, messages]);
 
     // Ensure each conversation opens from latest message once data is ready
     useEffect(() => {
@@ -91,7 +104,8 @@ export function MessageThread({ messages, conversationId }: MessageThreadProps) 
         void fetchPinnedMessages(conversationId);
     }, [conversationId, fetchPinnedMessages]);
 
-    // Flatten messages with date headers for virtualization
+    // Flatten messages with date headers for virtualization.
+    // Message ordering is already normalized in the store merge pipeline.
     const items = useMemo(() => {
         const toValidDate = (value: unknown) => {
             const date = new Date(value as string | number | Date);
@@ -99,17 +113,9 @@ export function MessageThread({ messages, conversationId }: MessageThreadProps) 
         };
 
         const result: Array<{ type: 'date'; date: Date; id: string } | { type: 'message'; message: MessageWithSender; id: string }> = [];
-        const groups = new Map<string, { date: Date; messages: MessageWithSender[] }>();
-        const sortedMessages = [...messages].sort((a, b) => {
-            const da = toValidDate(a.createdAt);
-            const db = toValidDate(b.createdAt);
-            if (!da && !db) return 0;
-            if (!da) return 1;
-            if (!db) return -1;
-            return da.getTime() - db.getTime();
-        });
+        let currentDayKey: string | null = null;
 
-        for (const message of sortedMessages) {
+        for (const message of messages) {
             const createdAt = toValidDate(message.createdAt);
             if (!createdAt) {
                 result.push({ type: 'message', message, id: message.id });
@@ -117,32 +123,86 @@ export function MessageThread({ messages, conversationId }: MessageThreadProps) 
             }
             const dayKey = `${createdAt.getFullYear()}-${String(createdAt.getMonth() + 1).padStart(2, '0')}-${String(createdAt.getDate()).padStart(2, '0')}`;
 
-            if (!groups.has(dayKey)) {
-                groups.set(dayKey, {
+            if (currentDayKey !== dayKey) {
+                currentDayKey = dayKey;
+                result.push({
+                    type: 'date',
                     date: new Date(createdAt.getFullYear(), createdAt.getMonth(), createdAt.getDate()),
-                    messages: [],
+                    id: `date-${dayKey}`,
                 });
             }
-
-            groups.get(dayKey)!.messages.push(message);
-        }
-
-        for (const [dayKey, group] of groups.entries()) {
-            result.push({ type: 'date', date: group.date, id: `date-${dayKey}` });
-            for (const msg of group.messages) {
-                result.push({ type: 'message', message: msg, id: msg.id });
-            }
+            result.push({ type: 'message', message, id: message.id });
         }
 
         return result;
     }, [messages]);
-    const initialTopMostItemIndex = items.length > 0 ? items.length - 1 : 0;
+    const focusMessageById = useCallback((messageId: string, tone: 'blue' | 'amber' = 'blue') => {
+        const targetIndex = items.findIndex(
+            (item) => item.type === 'message' && item.message.id === messageId
+        );
+
+        if (targetIndex >= 0) {
+            pendingFocusMessageIdRef.current = null;
+            virtuosoRef.current?.scrollToIndex({
+                index: targetIndex,
+                align: 'center',
+                behavior: 'auto',
+            });
+            window.setTimeout(() => {
+                highlightMessage(messageId, tone);
+            }, 220);
+            return true;
+        }
+
+        pendingFocusMessageIdRef.current = messageId;
+        if (hasMore && !isLoading) {
+            void loadMoreMessages(conversationId);
+            return false;
+        }
+        if (!hasMore && !isLoading) {
+            void focusMessageInStore(conversationId, messageId).then((result) => {
+                if (!result.found && pendingFocusMessageIdRef.current === messageId) {
+                    pendingFocusMessageIdRef.current = null;
+                }
+            });
+        }
+        return false;
+    }, [conversationId, focusMessageInStore, hasMore, highlightMessage, isLoading, items, loadMoreMessages]);
+
+    useEffect(() => {
+        const pendingId = pendingFocusMessageIdRef.current;
+        if (!pendingId) return;
+        if (focusMessageById(pendingId)) return;
+        if (!hasMore && !isLoading) {
+            pendingFocusMessageIdRef.current = null;
+        }
+    }, [focusMessageById, hasMore, isLoading, items.length]);
+
+    useEffect(() => {
+        type FocusMessageDetail = {
+            conversationId?: string;
+            messageId?: string;
+            tone?: 'blue' | 'amber';
+        };
+        const handler = (event: Event) => {
+            const customEvent = event as CustomEvent<FocusMessageDetail>;
+            const detail = customEvent.detail;
+            if (!detail?.messageId) return;
+            if (detail.conversationId !== conversationId) return;
+            focusMessageById(detail.messageId, detail.tone || 'blue');
+        };
+
+        window.addEventListener('chat:focus-message', handler as EventListener);
+        return () => {
+            window.removeEventListener('chat:focus-message', handler as EventListener);
+        };
+    }, [conversationId, focusMessageById]);
 
     return (
-        <div className="flex-1 overflow-hidden h-full flex flex-col">
+        <div className="flex-1 overflow-hidden overflow-x-hidden h-full flex flex-col">
             {pinnedMessages.length > 0 && (
                 <div className="px-3 py-2 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50/80 dark:bg-zinc-900/70">
-                    <div className="flex items-center gap-2 overflow-x-auto">
+                    <div className="flex flex-wrap items-center gap-2">
                         <span className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400 whitespace-nowrap">
                             Pinned
                         </span>
@@ -152,14 +212,7 @@ export function MessageThread({ messages, conversationId }: MessageThreadProps) 
                                 type="button"
                                 className="max-w-[240px] text-left text-xs px-2 py-1 rounded-md border border-zinc-200 dark:border-zinc-700 bg-white/70 dark:bg-zinc-800/80 hover:bg-white dark:hover:bg-zinc-800 whitespace-nowrap truncate"
                                 onClick={() => {
-                                    const node = document.getElementById(`msg-${message.id}`);
-                                    if (node) {
-                                        node.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                                        node.classList.add('ring-2', 'ring-amber-500/70');
-                                        window.setTimeout(() => {
-                                            node.classList.remove('ring-2', 'ring-amber-500/70');
-                                        }, 1400);
-                                    }
+                                    focusMessageById(message.id, 'amber');
                                 }}
                                 title={message.content || 'Pinned message'}
                             >
@@ -171,16 +224,16 @@ export function MessageThread({ messages, conversationId }: MessageThreadProps) 
             )}
             <Virtuoso
                 ref={virtuosoRef}
-                style={{ height: '100%', flex: 1 }}
+                style={{ height: '100%', flex: 1, overflowX: 'hidden' }}
                 data={items}
-                initialTopMostItemIndex={initialTopMostItemIndex} // Start at bottom
-                alignToBottom // Stick to bottom on load
+                increaseViewportBy={{ top: 320, bottom: 160 }}
+                computeItemKey={(_, item) => item.id}
                 atBottomStateChange={(atBottom) => {
                     isAtBottomRef.current = atBottom;
                 }}
                 startReached={() => {
                     if (!isLoading && hasMore) {
-                        loadMoreMessages(conversationId);
+                        void loadMoreMessages(conversationId);
                     }
                 }}
                 components={{
@@ -215,7 +268,7 @@ export function MessageThread({ messages, conversationId }: MessageThreadProps) 
                         (prevItem.type === 'message' && prevItem.message.senderId !== item.message.senderId);
 
                     return (
-                        <div id={`msg-${item.message.id}`} className="px-4 py-1 transition-shadow duration-300 rounded-md">
+                        <div id={`msg-${item.message.id}`} className="px-4 py-1 rounded-md min-w-0 overflow-x-hidden">
                             <MessageBubble
                                 key={item.message.id}
                                 message={item.message}

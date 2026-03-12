@@ -126,6 +126,8 @@ export function ProjectGroupList() {
         <Virtuoso
             style={{ height: '100%' }}
             data={projectGroups}
+            computeItemKey={(_, group) => group.id}
+            increaseViewportBy={{ top: 160, bottom: 200 }}
             itemContent={(_, group) => (
                 <ProjectGroupItem
                     key={group.id}

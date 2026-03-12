@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { hasE2ECredentials, login } from "./_helpers/auth";
 import { scopedName } from "./_helpers/fixtures";
 import { attachPageMonitoring } from "./_helpers/monitoring";
-import { PerfTracker, measure } from "./_helpers/perf";
+import { PerfTracker, markNavigationMetrics, measure } from "./_helpers/perf";
 
 test.describe("Messaging smoke", () => {
     test.skip(!hasE2ECredentials, "E2E_USER_EMAIL and E2E_USER_PASSWORD are required.");
@@ -15,6 +15,7 @@ test.describe("Messaging smoke", () => {
         await login(page);
 
         await measure(perf, "messages.ready.firstConversation", () => page.goto("/messages"));
+        await markNavigationMetrics(perf, page, "/messages");
         await page.getByRole("button", { name: "Chats" }).click();
 
         const conversationRows = page.locator("[data-testid^='conversation-row-']");

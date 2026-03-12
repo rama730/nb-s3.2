@@ -4,8 +4,31 @@
 
 -- 1. ADD MISSING PRIMARY KEYS
 -- The dm_pairs table was flagged for missing a primary key.
-ALTER TABLE public.dm_pairs 
-ADD COLUMN IF NOT EXISTS id uuid DEFAULT gen_random_uuid() PRIMARY KEY;
+DO $$
+DECLARE
+  existing_pk text;
+BEGIN
+  SELECT conname
+  INTO existing_pk
+  FROM pg_constraint
+  WHERE conrelid = 'public.dm_pairs'::regclass
+    AND contype = 'p';
+
+  IF existing_pk IS NOT NULL AND existing_pk <> 'dm_pairs_user_low_user_high_pk' THEN
+    EXECUTE format('ALTER TABLE public.dm_pairs DROP CONSTRAINT %I', existing_pk);
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conrelid = 'public.dm_pairs'::regclass
+      AND conname = 'dm_pairs_user_low_user_high_pk'
+      AND contype = 'p'
+  ) THEN
+    ALTER TABLE public.dm_pairs
+      ADD CONSTRAINT dm_pairs_user_low_user_high_pk PRIMARY KEY (user_low, user_high);
+  END IF;
+END $$;
 
 -- 2. RLS INITPLAN OPTIMIZATION (auth.uid() wrappers)
 -- Wrapping auth.uid() in a stable function forces PostgreSQL to evaluate it ONCE
@@ -68,20 +91,3 @@ CREATE INDEX IF NOT EXISTS idx_project_file_index_node_id ON public.project_file
 CREATE INDEX IF NOT EXISTS idx_profile_audit_events_user_id ON public.profile_audit_events(user_id);
 CREATE INDEX IF NOT EXISTS idx_onboarding_submissions_user_id ON public.onboarding_submissions(user_id);
 CREATE INDEX IF NOT EXISTS idx_onboarding_events_user_id ON public.onboarding_events(user_id);
-CREATE INDEX IF NOT EXISTS idx_onboarding_drafts_user_id ON public.onboarding_drafts(user_id);
-CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON public.messages(conversation_id);
-CREATE INDEX IF NOT EXISTS idx_messages_sender_id ON public.messages(sender_id);
-CREATE INDEX IF NOT EXISTS idx_messages_reply_to_message_id ON public.messages(reply_to_message_id);
-CREATE INDEX IF NOT EXISTS idx_message_hidden_for_users_message_id ON public.message_hidden_for_users(message_id);
-CREATE INDEX IF NOT EXISTS idx_message_hidden_for_users_user_id ON public.message_hidden_for_users(user_id);
-CREATE INDEX IF NOT EXISTS idx_message_edit_logs_message_id ON public.message_edit_logs(message_id);
-CREATE INDEX IF NOT EXISTS idx_message_edit_logs_editor_id ON public.message_edit_logs(editor_id);
-CREATE INDEX IF NOT EXISTS idx_message_attachments_message_id ON public.message_attachments(message_id);
-CREATE INDEX IF NOT EXISTS idx_conversation_participants_conversation_id ON public.conversation_participants(conversation_id);
-CREATE INDEX IF NOT EXISTS idx_conversation_participants_user_id ON public.conversation_participants(user_id);
-CREATE INDEX IF NOT EXISTS idx_connections_requester_id ON public.connections(requester_id);
-CREATE INDEX IF NOT EXISTS idx_connections_addressee_id ON public.connections(addressee_id);
-CREATE INDEX IF NOT EXISTS idx_connection_suggestion_dismissals_user_id ON public.connection_suggestion_dismissals(user_id);
-CREATE INDEX IF NOT EXISTS idx_connection_suggestion_dismissals_dismissed_profile_id ON public.connection_suggestion_dismissals(dismissed_profile_id);
-CREATE INDEX IF NOT EXISTS idx_attachment_uploads_user_id ON public.attachment_uploads(user_id);
-CREATE INDEX IF NOT EXISTS idx_attachment_uploads_conversation_id ON public.attachment_uploads(conversation_id);

@@ -9,6 +9,15 @@ import { cn } from "@/lib/utils";
 import { FileIcon } from "./FileIcons";
 import { ProjectNode } from "@/lib/db/schema";
 
+const NODE_DRAG_MIME = "application/x-nb-node";
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function extractDraggedNodeId(dataTransfer: DataTransfer): string | null {
+    const raw = dataTransfer.getData(NODE_DRAG_MIME).trim();
+    if (!raw) return null;
+    return UUID_PATTERN.test(raw) ? raw : null;
+}
+
 // ─── Inline Rename Input ─────────────────────────────────────────────
 function InlineRenameInput({
     value,
@@ -185,7 +194,7 @@ export const FileTreeRow = React.memo(function FileTreeRow({
             draggable={canEdit && !isRenaming}
             onDragStart={(e) => {
                 if (!canEdit || isRenaming) return;
-                e.dataTransfer.setData("application/x-nb-node", node.id);
+                e.dataTransfer.setData(NODE_DRAG_MIME, node.id);
                 e.dataTransfer.effectAllowed = "move";
                 onDragStart(node.id);
             }}
@@ -194,9 +203,7 @@ export const FileTreeRow = React.memo(function FileTreeRow({
                 e.preventDefault();
                 // Accept desktop file drops on folders
                 const hasFiles = e.dataTransfer.types.includes("Files");
-                const hasNodeDrag =
-                    e.dataTransfer.types.includes("application/x-nb-node") ||
-                    e.dataTransfer.types.includes("text/plain");
+                const hasNodeDrag = e.dataTransfer.types.includes(NODE_DRAG_MIME);
                 if (isFolder && hasFiles) {
                     e.dataTransfer.dropEffect = "copy";
                 } else if (isFolder && hasNodeDrag) {
@@ -219,10 +226,10 @@ export const FileTreeRow = React.memo(function FileTreeRow({
                     return;
                 }
  
-                const draggedId = e.dataTransfer.getData("application/x-nb-node");
-                if (draggedId) {
-                     onDrop(node.id, draggedId);
-                }
+                if (!e.dataTransfer.types.includes(NODE_DRAG_MIME)) return;
+                const draggedId = extractDraggedNodeId(e.dataTransfer);
+                if (!draggedId || draggedId === node.id) return;
+                onDrop(node.id, draggedId);
             }}
         >
             {guides}

@@ -3,7 +3,8 @@
 import { db } from "@/lib/db";
 import { collections, collectionProjects } from "@/lib/db/schema";
 import { createClient } from "@/lib/supabase/server";
-import { and, eq, inArray } from "drizzle-orm";
+import { runInFlightDeduped } from "@/lib/async/inflight-dedupe";
+import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
 export async function createCollectionAction(name: string) {
@@ -36,20 +37,21 @@ export async function getUserCollectionsAction() {
         if (!user) {
             return { success: false, error: "Unauthorized" };
         }
-
-        const userCollections = await db.query.collections.findMany({
-            where: eq(collections.ownerId, user.id),
-            with: {
-                projects: {
-                    columns: {
-                        projectId: true,
+        return await runInFlightDeduped(`collections:user:${user.id}`, async () => {
+            const userCollections = await db.query.collections.findMany({
+                where: eq(collections.ownerId, user.id),
+                with: {
+                    projects: {
+                        columns: {
+                            projectId: true,
+                        }
                     }
-                }
-            },
-            orderBy: (collections, { desc }) => [desc(collections.createdAt)],
-        });
+                },
+                orderBy: (collections, { desc }) => [desc(collections.createdAt)],
+            });
 
-        return { success: true, collections: userCollections };
+            return { success: true, collections: userCollections };
+        });
     } catch (error: any) {
         console.error("Failed to get collections:", error);
         return { success: false, error: error?.message || "Failed to fetch collections" };
@@ -58,14 +60,14 @@ export async function getUserCollectionsAction() {
 
 export async function addProjectsToCollectionAction(collectionId: string, projectIds: string[]) {
     try {
-        if (!projectIds.length) return { success: true };
-
         const supabase = await createClient();
         const { data: { user } } = await supabase.auth.getUser();
 
         if (!user) {
             return { success: false, error: "Unauthorized" };
         }
+
+        if (!projectIds.length) return { success: true };
 
         // Verify ownership
         const [collection] = await db.select().from(collections)
@@ -146,11 +148,28 @@ export async function deleteCollectionAction(collectionId: string) {
 
 export async function getCollectionProjectsAction(collectionId: string) {
     try {
-        const rows = await db.query.collectionProjects.findMany({
-            where: eq(collectionProjects.collectionId, collectionId),
-            columns: { projectId: true },
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+
+        if (!user) {
+            return { success: false, error: "Unauthorized" };
+        }
+        return await runInFlightDeduped(`collections:projects:${user.id}:${collectionId}`, async () => {
+            // Verify ownership
+            const [collection] = await db.select().from(collections)
+                .where(and(eq(collections.id, collectionId), eq(collections.ownerId, user.id)))
+                .limit(1);
+
+            if (!collection) {
+                return { success: false, error: "Collection not found or unauthorized" };
+            }
+
+            const rows = await db.query.collectionProjects.findMany({
+                where: eq(collectionProjects.collectionId, collectionId),
+                columns: { projectId: true },
+            });
+            return { success: true, projectIds: rows.map(r => r.projectId) };
         });
-        return { success: true, projectIds: rows.map(r => r.projectId) };
     } catch (error: any) {
         console.error("Failed to fetch collection projects:", error);
         return { success: false, error: error?.message || "Failed to fetch collection projects" };

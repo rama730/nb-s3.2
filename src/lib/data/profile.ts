@@ -100,7 +100,6 @@ export async function getProfileDetails(username?: string, options: ProfileDetai
                     category: true,
                     viewCount: true,
                     followersCount: true,
-                    savesCount: true,
                     tags: true,
                     skills: true,
                     visibility: true,

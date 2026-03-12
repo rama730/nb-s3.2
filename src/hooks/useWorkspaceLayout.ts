@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import type { WorkspaceLayout } from '@/components/workspace/dashboard/types';
@@ -13,205 +13,271 @@ import {
     moveWidget as moveWidgetEngine,
 } from '@/components/workspace/dashboard/gridEngine';
 import { saveWorkspaceLayout } from '@/app/actions/workspace';
-import type { WorkspaceOverviewData } from '@/app/actions/workspace';
+import type { WorkspaceOverviewBaseData } from '@/app/actions/workspace';
+import { queryKeys } from '@/lib/query-keys';
 
 const MAX_UNDO = 20;
+const MAX_WIDGETS = 12;
 
 interface UseWorkspaceLayoutReturn {
-    /** The resolved layout (either user's saved or default) */
     layout: WorkspaceLayout;
-    /** Whether the user is currently in edit mode */
+    savedLayout: WorkspaceLayout;
+    draftLayout: WorkspaceLayout | null;
+    previewLayout: WorkspaceLayout | null;
     isEditing: boolean;
-    /** Enter edit mode — clones current layout for editing */
     enterEditMode: () => void;
-    /** Exit edit mode and persist the layout to the server */
     exitEditMode: () => void;
-    /** Discard edits and exit edit mode */
     cancelEditMode: () => void;
-    /** Add a widget at a position */
     addWidget: (widgetId: string, col: number, row: number) => boolean;
-    /** Remove a widget from the layout */
     removeWidget: (widgetId: string) => void;
-    /** Resize a widget */
     resizeWidget: (widgetId: string, newColSpan: number, newRowSpan: number) => boolean;
-    /** Move a widget to a new position */
     moveWidget: (widgetId: string, newCol: number, newRow: number) => boolean;
-    /** Reset the layout to the default */
+    previewResizeWidget: (widgetId: string, newColSpan: number, newRowSpan: number) => boolean;
+    commitLayoutChange: () => void;
+    discardPreview: () => void;
     resetLayout: () => void;
-    /** Undo last edit action */
     undo: () => void;
-    /** Redo last undone action */
     redo: () => void;
-    /** Whether undo is available */
     canUndo: boolean;
-    /** Whether redo is available */
     canRedo: boolean;
-    /** Whether the layout is currently being saved */
     isSaving: boolean;
 }
 
-export function useWorkspaceLayout(
-    rawLayout: unknown
-): UseWorkspaceLayoutReturn {
+function cloneLayout(layout: WorkspaceLayout): WorkspaceLayout {
+    return {
+        ...layout,
+        widgets: layout.widgets.map((widget) => ({ ...widget })),
+        pins: layout.pins ? layout.pins.map((pin) => ({ ...pin })) : [],
+        quickNotes: layout.quickNotes ? { ...layout.quickNotes } : undefined,
+    };
+}
+
+export function useWorkspaceLayout(rawLayout: unknown): UseWorkspaceLayoutReturn {
     const queryClient = useQueryClient();
+    const resolvedServerLayout = useMemo(() => resolveLayout(rawLayout), [rawLayout]);
 
-    // The resolved (valid) layout from the server or default
-    const savedLayout = resolveLayout(rawLayout);
-
-    // Edit mode state
+    const [savedLayout, setSavedLayout] = useState<WorkspaceLayout>(resolvedServerLayout);
     const [isEditing, setIsEditing] = useState(false);
-    const [editingLayout, setEditingLayout] = useState<WorkspaceLayout | null>(null);
+    const [draftLayout, setDraftLayout] = useState<WorkspaceLayout | null>(null);
+    const [previewLayout, setPreviewLayout] = useState<WorkspaceLayout | null>(null);
     const [isSaving, setIsSaving] = useState(false);
 
-    // Undo/redo stacks
     const undoStackRef = useRef<WorkspaceLayout[]>([]);
     const redoStackRef = useRef<WorkspaceLayout[]>([]);
+    const saveInFlightRef = useRef(false);
+    const queuedSaveRef = useRef<WorkspaceLayout | null>(null);
 
-    // The layout to render — editing layout when in edit mode, saved layout otherwise
-    const layout = isEditing && editingLayout ? editingLayout : savedLayout;
+    useEffect(() => {
+        if (isEditing) return;
+        setSavedLayout(resolvedServerLayout);
+    }, [resolvedServerLayout, isEditing]);
 
-    // Push current state to undo stack before making a change
+    const layout = previewLayout ?? (isEditing && draftLayout ? draftLayout : savedLayout);
+
     const pushUndo = useCallback((current: WorkspaceLayout) => {
         undoStackRef.current = [
             ...undoStackRef.current.slice(-MAX_UNDO + 1),
-            current,
+            cloneLayout(current),
         ];
-        // Clear redo stack on new action
         redoStackRef.current = [];
     }, []);
 
+    const persistLayout = useCallback(async (): Promise<boolean> => {
+        if (saveInFlightRef.current) {
+            // Already running; active runner will drain queuedSaveRef.
+            return false;
+        }
+        saveInFlightRef.current = true;
+        setIsSaving(true);
+        let runSucceeded = true;
+        try {
+            while (queuedSaveRef.current) {
+                const nextLayout = queuedSaveRef.current;
+                let result: Awaited<ReturnType<typeof saveWorkspaceLayout>>;
+                try {
+                    result = await saveWorkspaceLayout(nextLayout);
+                } catch (error) {
+                    const message =
+                        error instanceof Error && error.message
+                            ? error.message
+                            : 'Failed to save layout';
+                    toast.error(message);
+                    runSucceeded = false;
+                    break;
+                }
+                if (!result.success) {
+                    toast.error(result.error || 'Failed to save layout');
+                    runSucceeded = false;
+                    break;
+                }
+                // Only clear when the same pending layout was persisted successfully.
+                if (queuedSaveRef.current === nextLayout) {
+                    queuedSaveRef.current = null;
+                }
+            }
+            return runSucceeded && queuedSaveRef.current === null;
+        } finally {
+            saveInFlightRef.current = false;
+            setIsSaving(false);
+            if (runSucceeded && queuedSaveRef.current) {
+                // A new save was queued while we were finishing; start another drain pass.
+                void persistLayout();
+            }
+        }
+    }, []);
+
+    const queuePersist = useCallback(async (nextLayout: WorkspaceLayout): Promise<boolean> => {
+        queuedSaveRef.current = cloneLayout(nextLayout);
+        return await persistLayout();
+    }, [persistLayout]);
+
     const enterEditMode = useCallback(() => {
-        setEditingLayout(savedLayout);
+        const snapshot = cloneLayout(savedLayout);
+        setDraftLayout(snapshot);
+        setPreviewLayout(null);
         undoStackRef.current = [];
         redoStackRef.current = [];
         setIsEditing(true);
     }, [savedLayout]);
 
-    const exitEditMode = useCallback(async () => {
-        if (!editingLayout) {
+    const commitLayoutChange = useCallback(() => {
+        if (!isEditing || !draftLayout || !previewLayout) return;
+        pushUndo(draftLayout);
+        setDraftLayout(cloneLayout(previewLayout));
+        setPreviewLayout(null);
+    }, [isEditing, draftLayout, previewLayout, pushUndo]);
+
+    const discardPreview = useCallback(() => {
+        setPreviewLayout(null);
+    }, []);
+
+    const exitEditMode = useCallback(() => {
+        if (!isEditing) return;
+        const finalLayout = cloneLayout(previewLayout ?? draftLayout ?? savedLayout);
+
+        const persistAndFinalize = async () => {
+            const didSave = await queuePersist(finalLayout);
+            if (!didSave) return;
+
+            // Keep both cache keys in sync while legacy consumers are still active.
+            queryClient.setQueryData<WorkspaceOverviewBaseData | undefined>(
+                queryKeys.workspace.overviewBase(),
+                (old) => (old ? { ...old, workspaceLayout: finalLayout } : old),
+            );
+            queryClient.setQueryData(
+                queryKeys.workspace.overview(),
+                (old: unknown) => {
+                    if (!old || typeof old !== 'object') return old;
+                    return { ...(old as Record<string, unknown>), workspaceLayout: finalLayout };
+                },
+            );
+
+            setSavedLayout(finalLayout);
+            setDraftLayout(null);
+            setPreviewLayout(null);
             setIsEditing(false);
-            return;
-        }
+            toast.success('Layout saved');
+        };
 
-        setIsSaving(true);
-
-        // Optimistic: update React Query cache immediately
-        queryClient.setQueryData<WorkspaceOverviewData | undefined>(
-            ['workspace', 'overview'],
-            (old) => {
-                if (!old) return old;
-                return { ...old, workspaceLayout: editingLayout };
-            }
-        );
-
-        setIsEditing(false);
-
-        // Persist to server in background
-        try {
-            const result = await saveWorkspaceLayout(editingLayout);
-            if (!result.success) {
-                toast.error('Failed to save layout');
-                // Revert optimistic update
-                queryClient.setQueryData<WorkspaceOverviewData | undefined>(
-                    ['workspace', 'overview'],
-                    (old) => {
-                        if (!old) return old;
-                        return { ...old, workspaceLayout: savedLayout };
-                    }
-                );
-            } else {
-                toast.success('Layout saved');
-            }
-        } catch {
-            toast.error('Failed to save layout');
-        } finally {
-            setIsSaving(false);
-            setEditingLayout(null);
-        }
-    }, [editingLayout, savedLayout, queryClient]);
+        void persistAndFinalize();
+    }, [isEditing, previewLayout, draftLayout, savedLayout, queryClient, queuePersist]);
 
     const cancelEditMode = useCallback(() => {
         setIsEditing(false);
-        setEditingLayout(null);
+        setDraftLayout(null);
+        setPreviewLayout(null);
         undoStackRef.current = [];
         redoStackRef.current = [];
     }, []);
 
     const addWidget = useCallback((widgetId: string, col: number, row: number): boolean => {
-        if (!editingLayout) return false;
-        pushUndo(editingLayout);
-        const result = placeWidget(editingLayout, widgetId, col, row);
-        if (!result) {
-            // Revert undo push
-            undoStackRef.current.pop();
-            return false;
-        }
-        setEditingLayout(result);
+        if (!isEditing || !draftLayout) return false;
+        if (draftLayout.widgets.length >= MAX_WIDGETS) return false;
+        const result = placeWidget(draftLayout, widgetId, col, row);
+        if (!result) return false;
+        pushUndo(draftLayout);
+        setDraftLayout(result);
+        setPreviewLayout(null);
         return true;
-    }, [editingLayout, pushUndo]);
+    }, [isEditing, draftLayout, pushUndo]);
 
-    const removeWidgetHandler = useCallback((widgetId: string) => {
-        if (!editingLayout) return;
-        pushUndo(editingLayout);
-        setEditingLayout(removeWidgetEngine(editingLayout, widgetId));
-    }, [editingLayout, pushUndo]);
+    const removeWidget = useCallback((widgetId: string) => {
+        if (!isEditing || !draftLayout) return;
+        pushUndo(draftLayout);
+        setDraftLayout(removeWidgetEngine(draftLayout, widgetId));
+        setPreviewLayout(null);
+    }, [isEditing, draftLayout, pushUndo]);
 
-    const resizeWidgetHandler = useCallback((widgetId: string, newColSpan: number, newRowSpan: number): boolean => {
-        if (!editingLayout) return false;
-        pushUndo(editingLayout);
-        const result = resizeWidgetEngine(editingLayout, widgetId, newColSpan, newRowSpan);
-        if (!result) {
-            undoStackRef.current.pop();
-            return false;
-        }
-        setEditingLayout(result);
+    const resizeWidget = useCallback((widgetId: string, newColSpan: number, newRowSpan: number): boolean => {
+        if (!isEditing || !draftLayout) return false;
+        const result = resizeWidgetEngine(draftLayout, widgetId, newColSpan, newRowSpan);
+        if (!result) return false;
+        pushUndo(draftLayout);
+        setDraftLayout(result);
+        setPreviewLayout(null);
         return true;
-    }, [editingLayout, pushUndo]);
+    }, [isEditing, draftLayout, pushUndo]);
 
-    const moveWidgetHandler = useCallback((widgetId: string, newCol: number, newRow: number): boolean => {
-        if (!editingLayout) return false;
-        pushUndo(editingLayout);
-        const result = moveWidgetEngine(editingLayout, widgetId, newCol, newRow);
-        if (!result) {
-            undoStackRef.current.pop();
-            return false;
-        }
-        setEditingLayout(result);
+    const previewResizeWidget = useCallback((widgetId: string, newColSpan: number, newRowSpan: number): boolean => {
+        if (!isEditing || !draftLayout) return false;
+        const source = previewLayout ?? draftLayout;
+        const result = resizeWidgetEngine(source, widgetId, newColSpan, newRowSpan);
+        if (!result) return false;
+        setPreviewLayout(result);
         return true;
-    }, [editingLayout, pushUndo]);
+    }, [isEditing, draftLayout, previewLayout]);
+
+    const moveWidget = useCallback((widgetId: string, newCol: number, newRow: number): boolean => {
+        if (!isEditing || !draftLayout) return false;
+        const result = moveWidgetEngine(draftLayout, widgetId, newCol, newRow);
+        if (!result) return false;
+        pushUndo(draftLayout);
+        setDraftLayout(result);
+        setPreviewLayout(null);
+        return true;
+    }, [isEditing, draftLayout, pushUndo]);
 
     const resetLayout = useCallback(() => {
-        if (!editingLayout) return;
-        pushUndo(editingLayout);
-        setEditingLayout(DEFAULT_LAYOUT);
-    }, [editingLayout, pushUndo]);
+        if (!isEditing || !draftLayout) return;
+        pushUndo(draftLayout);
+        setDraftLayout(cloneLayout(DEFAULT_LAYOUT));
+        setPreviewLayout(null);
+    }, [isEditing, draftLayout, pushUndo]);
 
     const undo = useCallback(() => {
-        if (undoStackRef.current.length === 0 || !editingLayout) return;
-        redoStackRef.current = [...redoStackRef.current, editingLayout];
-        const prev = undoStackRef.current[undoStackRef.current.length - 1];
+        if (!isEditing || !draftLayout || undoStackRef.current.length === 0) return;
+        const previous = undoStackRef.current[undoStackRef.current.length - 1];
         undoStackRef.current = undoStackRef.current.slice(0, -1);
-        setEditingLayout(prev);
-    }, [editingLayout]);
+        redoStackRef.current = [...redoStackRef.current, cloneLayout(draftLayout)];
+        setDraftLayout(cloneLayout(previous));
+        setPreviewLayout(null);
+    }, [isEditing, draftLayout]);
 
     const redo = useCallback(() => {
-        if (redoStackRef.current.length === 0 || !editingLayout) return;
-        undoStackRef.current = [...undoStackRef.current, editingLayout];
+        if (!isEditing || !draftLayout || redoStackRef.current.length === 0) return;
         const next = redoStackRef.current[redoStackRef.current.length - 1];
         redoStackRef.current = redoStackRef.current.slice(0, -1);
-        setEditingLayout(next);
-    }, [editingLayout]);
+        undoStackRef.current = [...undoStackRef.current, cloneLayout(draftLayout)];
+        setDraftLayout(cloneLayout(next));
+        setPreviewLayout(null);
+    }, [isEditing, draftLayout]);
 
     return {
         layout,
+        savedLayout,
+        draftLayout,
+        previewLayout,
         isEditing,
         enterEditMode,
         exitEditMode,
         cancelEditMode,
         addWidget,
-        removeWidget: removeWidgetHandler,
-        resizeWidget: resizeWidgetHandler,
-        moveWidget: moveWidgetHandler,
+        removeWidget,
+        resizeWidget,
+        moveWidget,
+        previewResizeWidget,
+        commitLayoutChange,
+        discardPreview,
         resetLayout,
         undo,
         redo,

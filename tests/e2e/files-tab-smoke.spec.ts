@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { hasE2ECredentials, login } from "./_helpers/auth";
 import { scopedName } from "./_helpers/fixtures";
 import { attachPageMonitoring } from "./_helpers/monitoring";
-import { PerfTracker, measure, measureWithTiming } from "./_helpers/perf";
+import { PerfTracker, markNavigationMetrics, measure, measureWithTiming } from "./_helpers/perf";
 const fixtureProjectSlug = process.env.E2E_FILES_PROJECT_SLUG || "e2e-files-workspace-controls";
 
 test.describe("Files tab smoke", () => {
@@ -23,6 +23,7 @@ test.describe("Files tab smoke", () => {
         await measure(perf, "route.interactive.core", () =>
             page.goto(`/projects/${fixtureProjectSlug}`, { waitUntil: "domcontentloaded" })
         );
+        await markNavigationMetrics(perf, page, `/projects/${fixtureProjectSlug}`);
         const ensureFilesWorkspaceSession = async () => {
             const signInLink = page.getByRole("link", { name: "Sign in" });
             const signedOut = await signInLink.isVisible().catch(() => false);

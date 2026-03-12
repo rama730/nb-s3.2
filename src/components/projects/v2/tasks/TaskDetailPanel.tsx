@@ -77,7 +77,7 @@ export default function TaskDetailPanel({
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="fixed top-[var(--header-height,64px)] left-0 right-0 bottom-0 bg-black/50 backdrop-blur-sm z-[200]"
+                className="fixed top-[var(--header-height,56px)] left-0 right-0 bottom-0 bg-black/50 backdrop-blur-sm z-[200]"
                 onClick={onClose}
             />
 
@@ -87,7 +87,7 @@ export default function TaskDetailPanel({
                 animate={{ x: 0 }}
                 exit={{ x: "100%" }}
                 transition={{ type: "spring", damping: 25, stiffness: 200 }}
-                className="fixed right-0 top-[var(--header-height,64px)] bottom-0 w-full max-w-2xl bg-white dark:bg-zinc-900 shadow-2xl z-[201] flex flex-col border-l border-zinc-200 dark:border-zinc-800 lg:w-[42rem] xl:w-[48rem]"
+                className="fixed right-0 top-[var(--header-height,56px)] bottom-0 w-full max-w-2xl bg-white dark:bg-zinc-900 shadow-2xl z-[201] flex flex-col border-l border-zinc-200 dark:border-zinc-800 lg:w-[42rem] xl:w-[48rem]"
             >
                 {/* Header */}
                 <div className="flex-shrink-0 border-b border-zinc-200 dark:border-zinc-800">

@@ -1,4 +1,6 @@
 import MessagesClient from '@/components/chat/MessagesClient';
+import { isMessagesHardeningEnabled } from '@/lib/features/messages';
+import { getViewerAuthContext } from '@/lib/server/viewer-context';
 
 export const dynamic = 'force-dynamic';
 
@@ -18,10 +20,20 @@ export default async function MessagesPage({ searchParams }: { searchParams: Pro
         ? resolvedParams.conversationId
         : null;
 
+    const { user } = await getViewerAuthContext();
+    const messagesHardeningEnabled = isMessagesHardeningEnabled(user?.id ?? null);
+
     return (
-        <MessagesClient 
-            targetUserId={targetUserId}
-            initialConversationId={initialConversationId}
-        />
+        <div
+            data-scroll-root="route"
+            data-hardening-messages={messagesHardeningEnabled ? "v1" : "off"}
+            className="h-full min-h-0 overflow-hidden app-scroll app-scroll-y app-scroll-gutter bg-white dark:bg-zinc-950"
+        >
+            <MessagesClient
+                targetUserId={targetUserId}
+                initialConversationId={initialConversationId}
+                hardeningEnabled={messagesHardeningEnabled}
+            />
+        </div>
     );
 }

@@ -4,6 +4,7 @@ import { useEffect, useMemo } from 'react';
 import { useAuth } from '@/lib/hooks/use-auth';
 import type { Profile } from '@/lib/db/schema';
 import { normalizeProfile } from '@/lib/utils/normalize-profile';
+import { queryKeys } from '@/lib/query-keys';
 
 export const useProfile = (usernameOrId?: string, initialData?: Profile | null) => {
     const queryClient = useQueryClient();
@@ -18,7 +19,7 @@ export const useProfile = (usernameOrId?: string, initialData?: Profile | null) 
     const hasInitialData = !!initialData;
 
     const { data: fetchedProfile, isLoading, error } = useQuery({
-        queryKey: ['profile', targetKey],
+        queryKey: queryKeys.profile.byTarget(targetKey || 'unknown'),
         initialData: initialData,
         queryFn: async () => {
             if (!targetKey) return null;
@@ -58,8 +59,28 @@ export const useProfile = (usernameOrId?: string, initialData?: Profile | null) 
                     filter: `id=eq.${activeProfile.id}`
                 },
                 (payload: any) => {
-                    console.log('Realtime profile update (other):', payload);
-                    queryClient.invalidateQueries({ queryKey: ['profile', targetKey] });
+                    if (payload?.eventType === 'DELETE') {
+                        queryClient.invalidateQueries({ queryKey: queryKeys.profile.byTarget(targetKey || 'unknown') });
+                        return;
+                    }
+
+                    const rawProfile = payload?.new as Record<string, unknown> | null | undefined;
+                    if (!rawProfile) {
+                        queryClient.invalidateQueries({ queryKey: queryKeys.profile.byTarget(targetKey || 'unknown') });
+                        return;
+                    }
+
+                    const normalized = normalizeProfile(rawProfile) as Profile | null;
+                    if (!normalized?.id) {
+                        queryClient.invalidateQueries({ queryKey: queryKeys.profile.byTarget(targetKey || 'unknown') });
+                        return;
+                    }
+
+                    queryClient.setQueryData(queryKeys.profile.byTarget(targetKey || 'unknown'), normalized);
+                    queryClient.setQueryData(queryKeys.profile.byTarget(normalized.id), normalized);
+                    if (normalized.username) {
+                        queryClient.setQueryData(queryKeys.profile.byTarget(normalized.username), normalized);
+                    }
                 }
             )
             .subscribe();

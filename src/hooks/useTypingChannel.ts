@@ -20,7 +20,13 @@ interface UseTypingChannelReturn {
     sendTyping: (isTyping: boolean) => Promise<void>;
 }
 
-const supabase = createClient();
+let supabaseClient: ReturnType<typeof createClient> | null = null;
+
+function getSupabaseClient() {
+    if (supabaseClient) return supabaseClient;
+    supabaseClient = createClient();
+    return supabaseClient;
+}
 
 // ----------------------------------------------------------------------------
 // SINGLETON REGISTRY
@@ -41,28 +47,50 @@ const channelRegistry = new Map<string, ChannelEntry>();
 
 let cachedCurrentUserId: string | null = null;
 let cachedCurrentUserProfile: TypingUser | null = null;
+let cachedCurrentUserFetchedAt = 0;
+const CURRENT_USER_CACHE_TTL_MS = 30_000;
 
-async function getCurrentUser() {
+async function getCurrentUserId() {
     try {
+        if (cachedCurrentUserId && Date.now() - cachedCurrentUserFetchedAt < CURRENT_USER_CACHE_TTL_MS) {
+            return cachedCurrentUserId;
+        }
+        const supabase = getSupabaseClient();
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) {
             cachedCurrentUserId = null;
             cachedCurrentUserProfile = null;
+            cachedCurrentUserFetchedAt = Date.now();
             return null;
         }
+        cachedCurrentUserId = user.id;
+        cachedCurrentUserFetchedAt = Date.now();
+        return user.id;
+    } catch {
+        cachedCurrentUserId = null;
+        cachedCurrentUserProfile = null;
+        cachedCurrentUserFetchedAt = 0;
+        return null;
+    }
+}
 
-        if (cachedCurrentUserProfile && cachedCurrentUserId === user.id) {
-            return cachedCurrentUserProfile;
-        }
+async function getCurrentUserProfile() {
+    const userId = await getCurrentUserId();
+    if (!userId) return null;
+    if (cachedCurrentUserProfile && cachedCurrentUserProfile.id === userId) {
+        return cachedCurrentUserProfile;
+    }
 
+    try {
+        const supabase = getSupabaseClient();
         const { data: profile } = await supabase
             .from('profiles')
             .select('id, username, full_name, avatar_url')
-            .eq('id', user.id)
+            .eq('id', userId)
             .single();
 
         if (!profile) {
-            cachedCurrentUserId = user.id;
+            cachedCurrentUserId = userId;
             cachedCurrentUserProfile = null;
             return null;
         }
@@ -74,7 +102,7 @@ async function getCurrentUser() {
             avatarUrl: profile.avatar_url || null,
         };
 
-        cachedCurrentUserId = user.id;
+        cachedCurrentUserId = userId;
         cachedCurrentUserProfile = nextProfile;
         return nextProfile;
     } catch (error) {
@@ -139,11 +167,15 @@ export function useTypingChannel(conversationId: string | null, options: { liste
             return;
         }
 
+        // Warm the viewer identity once per mount cycle to avoid auth lookups on each typing event.
+        void getCurrentUserId();
+
         // 1. Get or Create Entry
         let entry = channelRegistry.get(conversationId);
 
         if (!entry) {
             const channelId = `typing:${conversationId}`;
+            const supabase = getSupabaseClient();
             const channel = supabase.channel(channelId);
 
             entry = {
@@ -163,11 +195,18 @@ export function useTypingChannel(conversationId: string | null, options: { liste
                     const currentEntry = channelRegistry.get(conversationId);
                     if (!currentEntry) return;
 
-                    // Filter self
-                    const currentUser = await getCurrentUser();
+                    const cachedViewerId = cachedCurrentUserId;
+                    if (cachedViewerId) {
+                        if (payload.user?.id === cachedViewerId) return;
+                        handleRegistryEvent(conversationId, payload.user, payload.isTyping);
+                        return;
+                    }
+
+                    // Fallback for first event before cache warm-up completes.
+                    const resolvedViewerId = await getCurrentUserId();
                     const entryAfterUserLookup = channelRegistry.get(conversationId);
                     if (!entryAfterUserLookup) return;
-                    if (payload.user?.id === currentUser?.id) return;
+                    if (payload.user?.id === resolvedViewerId) return;
 
                     handleRegistryEvent(conversationId, payload.user, payload.isTyping);
                 })
@@ -204,6 +243,7 @@ export function useTypingChannel(conversationId: string | null, options: { liste
 
             // Only destroy channel if NO refs left
             if (currentEntry.refCount <= 0) {
+                const supabase = getSupabaseClient();
                 supabase.removeChannel(currentEntry.channel);
                 // Clear timers
                 currentEntry.timers.forEach(clearTimeout);
@@ -225,7 +265,7 @@ export function useTypingChannel(conversationId: string | null, options: { liste
 
         if (!entry) return;
 
-        const currentUser = await getCurrentUser();
+        const currentUser = await getCurrentUserProfile();
         if (!currentUser) return;
 
         const now = Date.now();

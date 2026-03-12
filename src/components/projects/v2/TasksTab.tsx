@@ -16,7 +16,7 @@ import { Task } from "@/components/projects/v2/tasks/TaskCard";
 
 import FocusStrip from "./tasks/components/FocusStrip";
 import { useTaskFilters } from "./tasks/hooks/useTaskFilters";
-import { useProjectInfiniteTasks } from "@/hooks/hub/useProjectData"; // Changed import
+import { useProjectInfiniteTasks, type ProjectTaskScope } from "@/hooks/hub/useProjectData";
 
 interface TasksTabProps {
     projectId: string;
@@ -53,6 +53,11 @@ export default function TasksTab({
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [editingTask, setEditingTask] = useState<Task | null>(null);
     const [createTaskError, setCreateTaskError] = useState<string | null>(null);
+    const queryScope: ProjectTaskScope = useMemo(() => {
+        if (scope === "backlog") return "backlog";
+        if (scope === "sprint") return "sprint";
+        return "all";
+    }, [scope]);
 
     // Hook Integration: Smart Fetching (Infinite Loading)
     const { 
@@ -61,7 +66,7 @@ export default function TasksTab({
         fetchNextPage, 
         hasNextPage, 
         isFetchingNextPage 
-    } = useProjectInfiniteTasks(projectId, initialTasks);
+    } = useProjectInfiniteTasks(projectId, initialTasks, queryScope);
     
     // Flatten pages for filtering and focus strips
     const fetchedTasks = useMemo(() => {

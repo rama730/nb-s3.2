@@ -1,6 +1,7 @@
 'use server'
 
-import { createClient } from '@/lib/supabase/server'
+import { randomUUID } from 'crypto'
+import { createAdminClient, createClient } from '@/lib/supabase/server'
 import { db } from '@/lib/db'
 import { profileAuditEvents, profiles, projects } from '@/lib/db/schema'
 import { eq, and, ne, desc, sql } from 'drizzle-orm'
@@ -13,14 +14,115 @@ import {
     type ProfileUpdateInput,
 } from '@/lib/validations/profile'
 import { clearProfileCache } from '@/lib/services/profile-service'
+import { runInFlightDeduped } from '@/lib/async/inflight-dedupe'
+import { normalizeAndValidateFileSize, normalizeAndValidateMimeType } from '@/lib/upload/security'
 
 export type UpdateProfileInput = ProfileUpdateInput
+export type ProfileUpdateErrorCode =
+    | 'UNAUTHORIZED'
+    | 'RATE_LIMITED'
+    | 'VALIDATION_ERROR'
+    | 'PROFILE_NOT_FOUND'
+    | 'USERNAME_RATE_LIMITED'
+    | 'USERNAME_HISTORY_UNAVAILABLE'
+    | 'USERNAME_COOLDOWN'
+    | 'USERNAME_TAKEN'
+    | 'PROFILE_CONFLICT'
+    | 'PROFILE_UPDATE_FAILED'
+
+export type UpdateProfileActionResult =
+    | { success: true; updatedAt: string }
+    | { success: false; error: string; errorCode: ProfileUpdateErrorCode; code?: ProfileUpdateErrorCode }
 
 const PROFILE_UPDATE_LIMIT = 30
 const PROFILE_UPDATE_WINDOW_SECONDS = 60
 const USERNAME_CHANGE_LIMIT = 5
 const USERNAME_CHANGE_WINDOW_SECONDS = 24 * 60 * 60
 const USERNAME_CHANGE_COOLDOWN_MS = 14 * 24 * 60 * 60 * 1000
+const PROFILE_IMAGE_UPLOAD_MAX_FILE_BYTES = Number.parseInt(
+    process.env.PROFILE_IMAGE_UPLOAD_MAX_FILE_BYTES || `${10 * 1024 * 1024}`,
+    10,
+)
+const ALLOWED_PROFILE_IMAGE_MIME_TYPES = new Set([
+    'image/jpeg',
+    'image/png',
+    'image/webp',
+    'image/gif',
+])
+
+type ProfileImageUploadErrorCode = 'UNAUTHORIZED' | 'VALIDATION_ERROR' | 'UPLOAD_URL_FAILED'
+
+function profileImageExtensionFromMimeType(mimeType: string): string {
+    switch (mimeType) {
+        case 'image/jpeg':
+            return 'jpg'
+        case 'image/png':
+            return 'png'
+        case 'image/webp':
+            return 'webp'
+        case 'image/gif':
+            return 'gif'
+        default:
+            return 'bin'
+    }
+}
+
+export async function createProfileImageUploadUrlAction(input: {
+    mimeType: string
+    sizeBytes: number
+    kind?: 'avatar' | 'banner'
+}): Promise<
+    | { success: true; uploadUrl: string; publicUrl: string; storagePath: string; contentType: string }
+    | { success: false; error: string; errorCode: ProfileImageUploadErrorCode }
+> {
+    const supabase = await createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) {
+        return { success: false, error: 'Unauthorized', errorCode: 'UNAUTHORIZED' }
+    }
+
+    let normalizedMimeType = ''
+    try {
+        normalizedMimeType = normalizeAndValidateMimeType(input.mimeType)
+        if (!ALLOWED_PROFILE_IMAGE_MIME_TYPES.has(normalizedMimeType)) {
+            return { success: false, error: 'Unsupported image type', errorCode: 'VALIDATION_ERROR' }
+        }
+        normalizeAndValidateFileSize(
+            input.sizeBytes,
+            Number.isFinite(PROFILE_IMAGE_UPLOAD_MAX_FILE_BYTES) && PROFILE_IMAGE_UPLOAD_MAX_FILE_BYTES > 0
+                ? PROFILE_IMAGE_UPLOAD_MAX_FILE_BYTES
+                : 10 * 1024 * 1024,
+            input.kind === 'banner' ? 'Banner image' : 'Avatar image',
+        )
+    } catch (error) {
+        return {
+            success: false,
+            error: error instanceof Error ? error.message : 'Invalid upload input',
+            errorCode: 'VALIDATION_ERROR',
+        }
+    }
+
+    const extension = profileImageExtensionFromMimeType(normalizedMimeType)
+    const storagePath = `${user.id}/${Date.now()}-${randomUUID()}.${extension}`
+    const admin = await createAdminClient()
+    const { data, error } = await admin.storage.from('avatars').createSignedUploadUrl(storagePath, { upsert: false })
+    if (error || !data?.signedUrl) {
+        return {
+            success: false,
+            error: error?.message || 'Failed to create upload URL',
+            errorCode: 'UPLOAD_URL_FAILED',
+        }
+    }
+
+    const { data: { publicUrl } } = admin.storage.from('avatars').getPublicUrl(storagePath)
+    return {
+        success: true,
+        uploadUrl: data.signedUrl,
+        publicUrl,
+        storagePath,
+        contentType: normalizedMimeType,
+    }
+}
 
 function toNullableString(value: string | undefined): string | null | undefined {
     if (value === undefined) return undefined
@@ -28,13 +130,13 @@ function toNullableString(value: string | undefined): string | null | undefined 
     return trimmed || null
 }
 
-export async function updateProfileAction(data: UpdateProfileInput) {
+export async function updateProfileAction(data: UpdateProfileInput): Promise<UpdateProfileActionResult> {
     try {
         const supabase = await createClient()
         const { data: { user } } = await supabase.auth.getUser()
 
         if (!user) {
-            return { success: false, error: 'Unauthorized' }
+            return { success: false, error: 'Unauthorized', errorCode: 'UNAUTHORIZED' }
         }
 
         const updateRate = await consumeRateLimit(
@@ -43,12 +145,12 @@ export async function updateProfileAction(data: UpdateProfileInput) {
             PROFILE_UPDATE_WINDOW_SECONDS
         )
         if (!updateRate.allowed) {
-            return { success: false, error: 'Too many profile updates. Please wait and try again.' }
+            return { success: false, error: 'Too many profile updates. Please wait and try again.', errorCode: 'RATE_LIMITED' }
         }
 
         const result = profileUpdateSchema.safeParse(data)
         if (!result.success) {
-            return { success: false, error: result.error.issues[0].message }
+            return { success: false, error: result.error.issues[0].message, errorCode: 'VALIDATION_ERROR' }
         }
         const validData = normalizeProfileUpdateInput(result.data)
 
@@ -81,7 +183,7 @@ export async function updateProfileAction(data: UpdateProfileInput) {
             },
         })
         if (!current) {
-            return { success: false, error: 'Profile not found' }
+            return { success: false, error: 'Profile not found', errorCode: 'PROFILE_NOT_FOUND' }
         }
 
         const patch = pickChangedProfileFields(
@@ -122,7 +224,7 @@ export async function updateProfileAction(data: UpdateProfileInput) {
                 USERNAME_CHANGE_WINDOW_SECONDS
             )
             if (!usernameRate.allowed) {
-                return { success: false, error: 'Too many username changes. Please try again later.' }
+                return { success: false, error: 'Too many username changes. Please try again later.', errorCode: 'USERNAME_RATE_LIMITED' }
             }
 
             let lastUsernameChange: { createdAt: Date } | undefined
@@ -143,6 +245,7 @@ export async function updateProfileAction(data: UpdateProfileInput) {
                 return {
                     success: false,
                     error: 'Unable to verify username change history right now. Please try again shortly.',
+                    errorCode: 'USERNAME_HISTORY_UNAVAILABLE',
                 }
             }
 
@@ -154,6 +257,7 @@ export async function updateProfileAction(data: UpdateProfileInput) {
                 return {
                     success: false,
                     error: `Username can be changed again after ${retryDate.toLocaleDateString()}`,
+                    errorCode: 'USERNAME_COOLDOWN',
                 }
             }
 
@@ -165,7 +269,7 @@ export async function updateProfileAction(data: UpdateProfileInput) {
                 ),
             })
             if (existing) {
-                return { success: false, error: 'Username is already taken' }
+                return { success: false, error: 'Username is already taken', errorCode: 'USERNAME_TAKEN' }
             }
         }
 
@@ -221,10 +325,11 @@ export async function updateProfileAction(data: UpdateProfileInput) {
                 return {
                     success: false,
                     error: 'Profile was updated elsewhere. Please refresh and retry.',
+                    errorCode: 'PROFILE_CONFLICT',
                     code: 'PROFILE_CONFLICT',
                 }
             }
-            return { success: false, error: 'Profile not found' }
+            return { success: false, error: 'Profile not found', errorCode: 'PROFILE_NOT_FOUND' }
         }
 
         const sensitiveFields: Array<{
@@ -292,7 +397,7 @@ export async function updateProfileAction(data: UpdateProfileInput) {
         return { success: true, updatedAt: updatedRows[0].updatedAt.toISOString() }
     } catch (error) {
         console.error('Error updating profile:', error)
-        return { success: false, error: 'Failed to update profile' }
+        return { success: false, error: 'Failed to update profile', errorCode: 'PROFILE_UPDATE_FAILED' }
     }
 }
 
@@ -303,18 +408,20 @@ export async function updateBioAction(bio: string) {
 export async function getProfileBasic(userId: string) {
     if (!userId) return null;
     try {
-        const [profile] = await db
-            .select({
-                id: profiles.id,
-                fullName: profiles.fullName,
-                username: profiles.username,
-                avatarUrl: profiles.avatarUrl,
-            })
-            .from(profiles)
-            .where(eq(profiles.id, userId))
-            .limit(1);
+        return await runInFlightDeduped(`profile:basic:${userId}`, async () => {
+            const [profile] = await db
+                .select({
+                    id: profiles.id,
+                    fullName: profiles.fullName,
+                    username: profiles.username,
+                    avatarUrl: profiles.avatarUrl,
+                })
+                .from(profiles)
+                .where(eq(profiles.id, userId))
+                .limit(1);
 
-        return profile || null;
+            return profile || null;
+        });
     } catch (error) {
         console.error('Error fetching profile basic:', error);
         return null;
@@ -327,35 +434,38 @@ export async function getProfileProjectsAction(userId: string) {
         const supabase = await createClient()
         const { data: { user } } = await supabase.auth.getUser()
         const isOwner = user?.id === userId
+        const dedupeKey = `profile:projects:${user?.id ?? 'anon'}:${userId}`;
 
-        const visibilityFilter = isOwner
-            ? eq(projects.ownerId, userId)
-            : and(
-                eq(projects.ownerId, userId),
-                eq(projects.visibility, 'public'),
-                ne(projects.status, 'draft')
-            )
+        return await runInFlightDeduped(dedupeKey, async () => {
+            const visibilityFilter = isOwner
+                ? eq(projects.ownerId, userId)
+                : and(
+                    eq(projects.ownerId, userId),
+                    eq(projects.visibility, 'public'),
+                    ne(projects.status, 'draft')
+                )
 
-        const userProjects = await db
-            .select({
-                id: projects.id,
-                slug: projects.slug,
-                title: projects.title,
-                description: projects.description,
-                shortDescription: projects.shortDescription,
-                coverImage: projects.coverImage,
-                updatedAt: projects.updatedAt,
-            })
-            .from(projects)
-            .where(visibilityFilter)
-            .orderBy(desc(projects.updatedAt), desc(projects.createdAt))
-            .limit(12);
+            const userProjects = await db
+                .select({
+                    id: projects.id,
+                    slug: projects.slug,
+                    title: projects.title,
+                    description: projects.description,
+                    shortDescription: projects.shortDescription,
+                    coverImage: projects.coverImage,
+                    updatedAt: projects.updatedAt,
+                })
+                .from(projects)
+                .where(visibilityFilter)
+                .orderBy(desc(projects.updatedAt), desc(projects.createdAt))
+                .limit(12);
 
-        return userProjects.map((project) => ({
-            ...project,
-            image: project.coverImage || null,
-            url: project.slug ? `/projects/${project.slug}` : `/projects/${project.id}`,
-        }));
+            return userProjects.map((project) => ({
+                ...project,
+                image: project.coverImage || null,
+                url: project.slug ? `/projects/${project.slug}` : `/projects/${project.id}`,
+            }));
+        });
     } catch (error) {
         console.error('Error fetching profile projects:', error);
         return [];
@@ -365,29 +475,31 @@ export async function getProfileProjectsAction(userId: string) {
 export async function getProfileStatsAction(userId: string) {
     if (!userId) return { connectionsCount: 0, projectsCount: 0, followersCount: 0 };
     try {
-        const [profileStats] = await db
-            .select({
-                connectionsCount: profiles.connectionsCount,
-                projectsCount: profiles.projectsCount,
-                followersCount: profiles.followersCount,
-            })
-            .from(profiles)
-            .where(eq(profiles.id, userId))
-            .limit(1);
+        return await runInFlightDeduped(`profile:stats:${userId}`, async () => {
+            const [profileStats] = await db
+                .select({
+                    connectionsCount: profiles.connectionsCount,
+                    projectsCount: profiles.projectsCount,
+                    followersCount: profiles.followersCount,
+                })
+                .from(profiles)
+                .where(eq(profiles.id, userId))
+                .limit(1);
 
-        if (profileStats) {
+            if (profileStats) {
+                return {
+                    connectionsCount: profileStats.connectionsCount || 0,
+                    projectsCount: profileStats.projectsCount || 0,
+                    followersCount: profileStats.followersCount || 0,
+                };
+            }
+
             return {
-                connectionsCount: profileStats.connectionsCount || 0,
-                projectsCount: profileStats.projectsCount || 0,
-                followersCount: profileStats.followersCount || 0,
+                connectionsCount: 0,
+                projectsCount: 0,
+                followersCount: 0
             };
-        }
-
-        return {
-            connectionsCount: 0,
-            projectsCount: 0,
-            followersCount: 0
-        };
+        });
     } catch (error) {
         console.error('Error fetching profile stats:', error);
         return { connectionsCount: 0, projectsCount: 0, followersCount: 0 };

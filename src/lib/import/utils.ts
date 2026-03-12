@@ -7,6 +7,7 @@ import { projectNodes } from '@/lib/db/schema';
 import { eq, and, inArray, isNull, sql } from 'drizzle-orm';
 import { IGNORED_DIRS, isTooLarge } from '@/lib/import/import-filters';
 import { buildProjectFileKey } from '@/lib/storage/project-file-key';
+import { appendSafePathSegment } from '@/lib/security/path-safety';
 
 export interface ScannedFile {
     relativePath: string;
@@ -120,7 +121,7 @@ async function collectDirPaths(dir: string, rootDir: string, dirPaths: Set<strin
     const entries = await fs.readdir(dir, { withFileTypes: true });
     for (const entry of entries) {
         if (IGNORED_DIRS.has(entry.name)) continue;
-        const fullPath = path.join(dir, entry.name);
+        const fullPath = appendSafePathSegment(dir, entry.name, 'directory entry');
         const rel = normalizeRelativePath(path.relative(rootDir, fullPath));
 
         if (entry.isDirectory()) {
@@ -136,7 +137,7 @@ async function* walkFiles(dir: string, rootDir: string): AsyncGenerator<ScannedF
     const entries = await fs.readdir(dir, { withFileTypes: true });
     for (const entry of entries) {
         if (IGNORED_DIRS.has(entry.name)) continue;
-        const fullPath = path.join(dir, entry.name);
+        const fullPath = appendSafePathSegment(dir, entry.name, 'directory entry');
         const relativePath = normalizeRelativePath(path.relative(rootDir, fullPath));
 
         if (entry.isDirectory()) {
@@ -385,7 +386,11 @@ export async function uploadToStorageAndDB(
 
     for (let i = 0; i < files.length; i += FILE_BATCH_SIZE) {
         const batch = files.slice(i, i + FILE_BATCH_SIZE);
-        console.log(`[Worker] Uploading batch ${i} to ${Math.min(i + FILE_BATCH_SIZE, files.length)} of ${files.length} files...`);
+        console.log("[Worker] Uploading batch", {
+            start: i,
+            end: Math.min(i + FILE_BATCH_SIZE, files.length),
+            total: files.length,
+        });
 
         const results = await runWithConcurrency(batch, UPLOAD_CONCURRENCY, async (file) => {
             try {
@@ -400,12 +405,18 @@ export async function uploadToStorageAndDB(
                     });
 
                 if (uploadError) {
-                    console.error(`[Worker] Failed to upload ${file.relativePath}`, uploadError);
+                    console.error("[Worker] Failed to upload file", {
+                        relativePath: file.relativePath,
+                        uploadError,
+                    });
                     return null;
                 }
                 return file;
             } catch (err) {
-                console.error(`[Worker] Error processing file ${file.relativePath}`, err);
+                console.error("[Worker] Error processing file", {
+                    relativePath: file.relativePath,
+                    error: err,
+                });
                 return null;
             }
         });
@@ -435,8 +446,9 @@ export async function uploadRepoFiles(
     rootDir: string,
     folderMap: Map<string, string>,
     userId: string
-): Promise<{ processed: number; uploaded: number; failed: number }> {
+): Promise<{ processed: number; uploaded: number; failed: number; touchedNodeIds: string[] }> {
     const adminClient = await createAdminClient();
+    const touchedNodeIds = new Set<string>();
 
     const runWithConcurrency = async <T, R>(
         items: T[],
@@ -514,10 +526,18 @@ export async function uploadRepoFiles(
         }
 
         if (toInsert.length > 0) {
-            await db.insert(projectNodes).values(toInsert);
+            const inserted = await db.insert(projectNodes).values(toInsert).returning({
+                id: projectNodes.id,
+            });
+            for (const row of inserted) {
+                touchedNodeIds.add(row.id);
+            }
         }
 
         if (toUpdate.length > 0) {
+            for (const row of toUpdate) {
+                touchedNodeIds.add(row.id);
+            }
             const values = toUpdate.map((u) =>
                 sql`(${u.id}, ${u.s3Key}, ${u.size}, ${u.mimeType}, ${u.updatedAt})`
             );
@@ -563,12 +583,18 @@ export async function uploadRepoFiles(
                             upsert: true
                         });
                     if (uploadError) {
-                        console.error(`[Worker] Failed to upload ${f.relativePath}`, uploadError);
+                        console.error("[Worker] Failed to upload file", {
+                            relativePath: f.relativePath,
+                            uploadError,
+                        });
                         return null;
                     }
                     return f;
                 } catch (err) {
-                    console.error(`[Worker] Error processing file ${f.relativePath}`, err);
+                    console.error("[Worker] Error processing file", {
+                        relativePath: f.relativePath,
+                        error: err,
+                    });
                     return null;
                 }
             });
@@ -595,12 +621,18 @@ export async function uploadRepoFiles(
                         upsert: true
                     });
                 if (uploadError) {
-                    console.error(`[Worker] Failed to upload ${f.relativePath}`, uploadError);
+                    console.error("[Worker] Failed to upload file", {
+                        relativePath: f.relativePath,
+                        uploadError,
+                    });
                     return null;
                 }
                 return f;
             } catch (err) {
-                console.error(`[Worker] Error processing file ${f.relativePath}`, err);
+                console.error("[Worker] Error processing file", {
+                    relativePath: f.relativePath,
+                    error: err,
+                });
                 return null;
             }
         });
@@ -616,5 +648,6 @@ export async function uploadRepoFiles(
         processed: fileCount,
         uploaded: uploadedCount,
         failed: failedCount,
+        touchedNodeIds: Array.from(touchedNodeIds),
     };
 }

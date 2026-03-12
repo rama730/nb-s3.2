@@ -3,10 +3,17 @@
 import { memo, useState, useEffect, useCallback, useRef } from 'react';
 import { StickyNote, Copy, Trash2, Check, Download, ListPlus } from 'lucide-react';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
-import type { WorkspaceProject } from '@/app/actions/workspace';
+import {
+    getWorkspacePreferences,
+    saveWorkspaceQuickNotes,
+    type WorkspaceProject,
+} from '@/app/actions/workspace';
 import CreateTaskFromNoteModal from '../CreateTaskFromNoteModal';
+import { useQuery } from '@tanstack/react-query';
+import { queryKeys } from '@/lib/query-keys';
 
 const STORAGE_KEY = 'workspace-notes-full';
+const STORAGE_UPDATED_AT_KEY = 'workspace-notes-updated-at';
 
 interface NotesTabProps {
     projects?: WorkspaceProject[];
@@ -31,6 +38,34 @@ function NotesTab({ projects }: NotesTabProps) {
         }
     }, []);
 
+    const { data: preferences } = useQuery({
+        queryKey: queryKeys.workspace.preferences(),
+        queryFn: async () => {
+            const result = await getWorkspacePreferences();
+            return result.success && result.data ? result.data : null;
+        },
+        staleTime: 30_000,
+    });
+
+    useEffect(() => {
+        const serverNotes = preferences?.notes;
+        if (!serverNotes?.content) return;
+        try {
+            const localUpdatedAt = localStorage.getItem(STORAGE_UPDATED_AT_KEY) ?? '';
+            const parsedLocalTime = localUpdatedAt ? Date.parse(localUpdatedAt) : 0;
+            const localTime = Number.isFinite(parsedLocalTime) ? parsedLocalTime : 0;
+            const parsedServerTime = serverNotes.updatedAt ? Date.parse(serverNotes.updatedAt) : 0;
+            const serverTime = Number.isFinite(parsedServerTime) ? parsedServerTime : 0;
+            if (serverTime >= localTime) {
+                setContent(serverNotes.content);
+                localStorage.setItem(STORAGE_KEY, serverNotes.content);
+                localStorage.setItem(STORAGE_UPDATED_AT_KEY, serverNotes.updatedAt || new Date().toISOString());
+            }
+        } catch {
+            // localStorage unavailable
+        }
+    }, [preferences?.notes]);
+
     // Debounced auto-save (500ms)
     const handleChange = useCallback((value: string) => {
         setContent(value);
@@ -38,10 +73,12 @@ function NotesTab({ projects }: NotesTabProps) {
         saveTimerRef.current = setTimeout(() => {
             try {
                 localStorage.setItem(STORAGE_KEY, value);
+                localStorage.setItem(STORAGE_UPDATED_AT_KEY, new Date().toISOString());
                 setLastSaved(new Date());
             } catch {
                 // localStorage unavailable
             }
+            void saveWorkspaceQuickNotes(value);
         }, 500);
     }, []);
 
@@ -63,9 +100,11 @@ function NotesTab({ projects }: NotesTabProps) {
         setContent('');
         try {
             localStorage.removeItem(STORAGE_KEY);
+            localStorage.removeItem(STORAGE_UPDATED_AT_KEY);
         } catch {
             // localStorage unavailable
         }
+        void saveWorkspaceQuickNotes('');
     }, []);
 
     const handleDownload = useCallback(() => {

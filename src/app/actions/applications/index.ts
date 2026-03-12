@@ -17,47 +17,78 @@ import {
     getInboxApplicationsAction as getInboxApplicationsActionImpl,
     getApplicationRequestHistory as getApplicationRequestHistoryImpl,
 } from './queries';
+import type { ApplicationActionOptions, ApplicationCursorPaginationInput } from './types';
 
-export type { ApplicationRequestHistoryItem } from './types';
+export type {
+    ApplicationRequestHistoryItem,
+    ApplicationActionOptions,
+    ApplicationActionResult,
+    ApplicationCursorPaginationInput,
+} from './types';
 
 export async function getApplicationStatusAction(projectId: string) {
     return getApplicationStatusActionImpl(projectId);
 }
 
-export async function applyToRoleAction(projectId: string, roleId: string, message: string) {
-    return applyToRoleActionImpl(projectId, roleId, message);
+export async function applyToRoleAction(
+    projectId: string,
+    roleId: string,
+    message: string,
+    options?: ApplicationActionOptions
+) {
+    return applyToRoleActionImpl(projectId, roleId, message, options);
 }
 
-export async function acceptApplicationAction(applicationId: string, message?: string) {
-    return acceptApplicationActionImpl(applicationId, message);
+export async function acceptApplicationAction(
+    applicationId: string,
+    message?: string,
+    options?: ApplicationActionOptions
+) {
+    return acceptApplicationActionImpl(applicationId, message, options);
 }
 
 export async function rejectApplicationAction(
     applicationId: string,
     message?: string,
     reason?: string,
+    options?: ApplicationActionOptions
 ) {
-    return rejectApplicationActionImpl(applicationId, message, reason);
+    return rejectApplicationActionImpl(applicationId, message, reason, options);
 }
 
-export async function editPendingApplicationAction(applicationId: string, message: string) {
-    return editPendingApplicationActionImpl(applicationId, message);
+export async function editPendingApplicationAction(
+    applicationId: string,
+    message: string,
+    options?: ApplicationActionOptions
+) {
+    return editPendingApplicationActionImpl(applicationId, message, options);
 }
 
-export async function withdrawApplicationAction(applicationId: string) {
-    return withdrawApplicationActionImpl(applicationId);
+export async function withdrawApplicationAction(
+    applicationId: string,
+    message?: string,
+    options?: ApplicationActionOptions
+) {
+    return withdrawApplicationActionImpl(applicationId, message, options);
 }
 
-export async function reopenApplicationAction(applicationId: string, message?: string) {
-    return reopenApplicationActionImpl(applicationId, message);
+export async function reopenApplicationAction(
+    applicationId: string,
+    message?: string,
+    options?: ApplicationActionOptions
+) {
+    return reopenApplicationActionImpl(applicationId, message, options);
 }
 
-export async function getMyApplicationsAction() {
-    return getMyApplicationsActionImpl();
+export async function getMyApplicationsAction(pagination?: ApplicationCursorPaginationInput) {
+    return getMyApplicationsActionImpl(pagination);
 }
 
-export async function getIncomingApplicationsAction(limit: number = 20, offset: number = 0) {
-    return getIncomingApplicationsActionImpl(limit, offset);
+export async function getIncomingApplicationsAction(
+    paginationOrLimit: ApplicationCursorPaginationInput | number = 20,
+    offset: number = 0
+) {
+    return getIncomingApplicationsActionImpl(paginationOrLimit, offset);
 }
 
 export async function getInboxApplicationsAction(limit: number = 20, offset: number = 0) {

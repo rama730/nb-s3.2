@@ -27,7 +27,7 @@ function ShortcutsWidget({ sizeMode = 'standard' }: { sizeMode?: WidgetCardSizeM
                     <Zap className={cn('text-emerald-600 dark:text-emerald-400', isCompact ? 'w-3.5 h-3.5' : 'w-4 h-4')} />
                 </div>
                 <h3 className={cn('font-semibold text-zinc-900 dark:text-zinc-100 tracking-tight', isCompact ? 'text-[13px]' : 'text-sm')}>
-                    Shortcuts
+                    Workspace Quick Actions
                 </h3>
             </div>
 

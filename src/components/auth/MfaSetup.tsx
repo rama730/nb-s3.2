@@ -20,21 +20,19 @@ export function MfaSetup({ initialFactors }: MfaSetupProps) {
     const loadFactors = useCallback(async () => {
         try {
             const res = await fetch("/api/v1/auth/mfa/factors");
-            if (!res.ok) {
-                setFactors([]);
-                return;
-            }
             const contentType = res.headers.get("content-type") || "";
             if (!contentType.includes("application/json")) {
-                setFactors([]);
+                toast.error(`Failed to load MFA settings (${res.status})`);
                 return;
             }
             const json = await res.json();
-            if (json?.success) {
-                setFactors(json?.data?.factors || []);
+            if (!res.ok || json?.success === false) {
+                toast.error(json?.message || `Failed to load MFA settings (${res.status})`);
+                return;
             }
+            setFactors(json?.data?.factors || []);
         } catch {
-            setFactors([]);
+            toast.error("Failed to load MFA settings");
         } finally {
             setLoading(false);
         }
@@ -63,12 +61,15 @@ export function MfaSetup({ initialFactors }: MfaSetupProps) {
             const res = await fetch(`/api/v1/auth/mfa/factors/${factorId}`, {
                 method: "DELETE",
             });
-            if (res.ok) {
-                setFactors((prev) => prev.filter((f) => f.id !== factorId));
+            const contentType = res.headers.get("content-type") || "";
+            const json = contentType.includes("application/json") ? await res.json() : null;
+            if (!res.ok || json?.success === false) {
+                throw new Error(json?.message || `Failed to remove MFA factor (${res.status})`);
             }
+            setFactors((prev) => prev.filter((f) => f.id !== factorId));
         } catch (error) {
             console.error("Failed to unenroll factor:", error);
-            toast.error("Failed to remove MFA factor");
+            toast.error(error instanceof Error ? error.message : "Failed to remove MFA factor");
         }
     };
 
@@ -113,7 +114,7 @@ export function MfaSetup({ initialFactors }: MfaSetupProps) {
                                         {factor.type === "totp" ? "Authenticator App" : "Phone"}
                                     </div>
                                     <div className="text-xs text-zinc-500">
-                                        Added {new Date(factor.created_at).toLocaleDateString()}
+                                        Added {factor.created_at ? new Date(factor.created_at).toLocaleDateString() : "unknown"}
                                     </div>
                                 </div>
                             </div>

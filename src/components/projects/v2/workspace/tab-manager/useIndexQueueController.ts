@@ -44,9 +44,16 @@ export function useIndexQueueController({ projectId }: UseIndexQueueControllerOp
       ) {
         const nodeId = indexQueueRef.current.shift();
         if (!nodeId) break;
-        queuedNodeIdsRef.current.delete(nodeId);
         const content = pendingContentByNodeRef.current.get(nodeId);
-        if (typeof content !== "string") continue;
+        if (typeof content !== "string") {
+          queuedNodeIdsRef.current.delete(nodeId);
+          console.warn("Index queue: skipping nodeId with missing content", {
+            projectId,
+            nodeId,
+          });
+          continue;
+        }
+        queuedNodeIdsRef.current.delete(nodeId);
 
         started += 1;
         activeIndexJobsRef.current += 1;

@@ -109,7 +109,7 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
             <div className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8 py-6 h-full min-h-0">
                 <div className="flex gap-6 h-full min-h-0">
                     {/* Desktop sidebar */}
-                    <aside className="hidden lg:block w-72 flex-shrink-0 h-full overflow-y-auto">
+                    <aside className="hidden lg:block w-72 flex-shrink-0 h-full app-scroll app-scroll-y">
                         <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white/80 dark:bg-zinc-950/60 backdrop-blur p-3">
                             <div className="px-2 py-2">
                                 <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
@@ -183,7 +183,10 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
                     </aside>
 
                     {/* Main content */}
-                    <div className="flex-1 min-w-0 h-full overflow-y-auto">
+                    <div
+                        data-scroll-root="route"
+                        className="flex-1 min-w-0 h-full app-scroll app-scroll-y app-scroll-gutter"
+                    >
                         {/* Mobile section picker */}
                         <div className="lg:hidden mb-4">
                             <button

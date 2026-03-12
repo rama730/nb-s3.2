@@ -19,21 +19,20 @@ function shouldLog(level: LogLevel): boolean {
 function emit(level: LogLevel, message: string, context?: LogContext) {
     if (!shouldLog(level)) return
 
+    const entry = { level, msg: message, ts: Date.now(), ...context }
+
     if (IS_PRODUCTION) {
-        const entry = { level, msg: message, ts: Date.now(), ...context }
         switch (level) {
-            case 'error': console.error(JSON.stringify(entry)); break
-            case 'warn':  console.warn(JSON.stringify(entry)); break
-            default:      console.info(JSON.stringify(entry)); break
+            case 'error': console.error("[logger]", entry); break
+            case 'warn':  console.warn("[logger]", entry); break
+            default:      console.info("[logger]", entry); break
         }
     } else {
-        const prefix = `[${level.toUpperCase()}]`
-        const ctx = context ? ` ${JSON.stringify(context)}` : ''
         switch (level) {
-            case 'error': console.error(prefix, message, ctx); break
-            case 'warn':  console.warn(prefix, message, ctx); break
-            case 'debug': console.debug(prefix, message, ctx); break
-            default:      console.info(prefix, message, ctx); break
+            case 'error': console.error("[logger]", entry); break
+            case 'warn':  console.warn("[logger]", entry); break
+            case 'debug': console.debug("[logger]", entry); break
+            default:      console.info("[logger]", entry); break
         }
     }
 }

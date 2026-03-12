@@ -1,20 +1,30 @@
 'use client';
 
 import { memo, useEffect } from 'react';
-import type { WorkspaceOverviewData, WorkspaceTask } from '@/app/actions/workspace';
-import { WorkspaceSectionBoundary } from '../WorkspaceSectionBoundary';
-import PinnedStrip from '../sections/PinnedStrip';
+import type {
+    RecentActivityItem,
+    WorkspaceOverviewBaseData,
+    WorkspaceProject,
+    WorkspaceTask,
+} from '@/app/actions/workspace';
+import type { ConversationWithDetails } from '@/app/actions/messaging';
 import WidgetGrid from '../dashboard/WidgetGrid';
 import { useWorkspaceLayout } from '@/hooks/useWorkspaceLayout';
+import { useWorkspaceOverviewSections } from '@/hooks/useWorkspaceOverviewSections';
 
 interface OverviewTabProps {
-    initialData: WorkspaceOverviewData | null;
+    initialData: WorkspaceOverviewBaseData | null;
+    initialSections?: {
+        tasks?: WorkspaceTask[];
+        projects?: WorkspaceProject[];
+        conversations?: ConversationWithDetails[];
+        recentActivity?: RecentActivityItem[];
+    } | null;
     onTaskClick?: (task: WorkspaceTask) => void;
-    /** Called by parent to trigger edit mode externally (e.g. from header Customize button) */
     onRequestEditMode?: (enter: () => void) => void;
 }
 
-function OverviewTab({ initialData, onTaskClick, onRequestEditMode }: OverviewTabProps) {
+function OverviewTab({ initialData, initialSections, onTaskClick, onRequestEditMode }: OverviewTabProps) {
     const {
         layout,
         isEditing,
@@ -23,8 +33,10 @@ function OverviewTab({ initialData, onTaskClick, onRequestEditMode }: OverviewTa
         cancelEditMode,
         addWidget,
         removeWidget,
-        resizeWidget,
+        previewResizeWidget,
         moveWidget,
+        commitLayoutChange,
+        discardPreview,
         resetLayout,
         undo,
         redo,
@@ -33,30 +45,28 @@ function OverviewTab({ initialData, onTaskClick, onRequestEditMode }: OverviewTa
         isSaving,
     } = useWorkspaceLayout(initialData?.workspaceLayout);
 
-    // Register once per callback change; avoid calling parent mutators during render.
+    const sectionData = useWorkspaceOverviewSections({
+        widgetIds: layout.widgets.map((widget) => widget.widgetId),
+        initialData: initialSections,
+    });
+
     useEffect(() => {
         onRequestEditMode?.(enterEditMode);
     }, [onRequestEditMode, enterEditMode]);
 
     return (
         <div className="flex flex-col lg:h-full overflow-y-auto">
-            {/* Pinned Items strip — stays above the customizable grid */}
-            <WorkspaceSectionBoundary sectionName="Pinned Items">
-                <PinnedStrip onTaskClick={onTaskClick} />
-            </WorkspaceSectionBoundary>
-
-            {/* Customizable Widget Grid */}
             <WidgetGrid
                 layout={layout}
                 isEditing={isEditing}
-                data={initialData}
+                data={sectionData}
                 onTaskClick={onTaskClick}
-                // Edit mode callbacks
                 onAddWidget={addWidget}
                 onRemoveWidget={removeWidget}
-                onResizeWidget={resizeWidget}
+                onPreviewResizeWidget={previewResizeWidget}
+                onCommitLayoutChange={commitLayoutChange}
+                onDiscardPreview={discardPreview}
                 onMoveWidget={moveWidget}
-                // Toolbar callbacks
                 onDone={exitEditMode}
                 onCancel={cancelEditMode}
                 onUndo={undo}

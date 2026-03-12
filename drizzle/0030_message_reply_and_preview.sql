@@ -27,3 +27,6 @@ ON messages (reply_to_message_id);
 
 CREATE INDEX IF NOT EXISTS messages_conversation_reply_created_idx
 ON messages (conversation_id, reply_to_message_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS messages_reply_context_lookup_idx
+ON messages (conversation_id, id, reply_to_message_id, created_at DESC);

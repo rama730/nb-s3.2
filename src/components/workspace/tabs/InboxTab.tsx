@@ -1,6 +1,6 @@
 'use client';
 
-import { memo, useState, useCallback } from 'react';
+import { memo, useState, useCallback, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import Image from 'next/image';
@@ -17,19 +17,35 @@ import { cn } from '@/lib/utils';
 import { getWorkspaceInbox, type WorkspaceInboxItem } from '@/app/actions/workspace';
 import { acceptConnectionRequest, rejectConnectionRequest } from '@/app/actions/connections';
 import { toast } from 'sonner';
+import { queryKeys } from '@/lib/query-keys';
 
 function InboxTab() {
     const queryClient = useQueryClient();
     const [cursor, setCursor] = useState<string | undefined>(undefined);
     const [allItems, setAllItems] = useState<WorkspaceInboxItem[]>([]);
+    const requestVersionRef = useRef(0);
 
     const { data, isLoading, isFetching } = useQuery({
-        queryKey: ['workspace', 'inbox', cursor],
+        queryKey: queryKeys.workspace.inboxList(cursor),
         queryFn: async () => {
+            const requestVersion = ++requestVersionRef.current;
+            const cursorSnapshot = cursor;
             const result = await getWorkspaceInbox(cursor, 10);
+            if (requestVersion !== requestVersionRef.current) return result;
             if (result.success && result.items) {
-                if (cursor) {
-                    setAllItems(prev => [...prev, ...result.items!]);
+                if (cursorSnapshot) {
+                    const incoming = result.items;
+                    setAllItems((prev) => {
+                        if (incoming.length === 0) return prev;
+                        const merged = [...prev];
+                        const seen = new Set(prev.map((item) => item.id));
+                        for (const item of incoming) {
+                            if (seen.has(item.id)) continue;
+                            seen.add(item.id);
+                            merged.push(item);
+                        }
+                        return merged;
+                    });
                 } else {
                     setAllItems(result.items);
                 }
@@ -54,7 +70,9 @@ function InboxTab() {
         } catch {
             toast.error('Failed to accept connection');
         }
-        queryClient.invalidateQueries({ queryKey: ['workspace'] });
+        queryClient.invalidateQueries({ queryKey: queryKeys.workspace.inboxRoot() });
+        queryClient.invalidateQueries({ queryKey: queryKeys.workspace.overviewBase() });
+        queryClient.invalidateQueries({ queryKey: queryKeys.workspace.activity() });
     }, [queryClient]);
 
     const handleRejectConnection = useCallback(async (connectionId: string) => {
@@ -66,7 +84,9 @@ function InboxTab() {
         } catch {
             toast.error('Failed to decline connection');
         }
-        queryClient.invalidateQueries({ queryKey: ['workspace'] });
+        queryClient.invalidateQueries({ queryKey: queryKeys.workspace.inboxRoot() });
+        queryClient.invalidateQueries({ queryKey: queryKeys.workspace.overviewBase() });
+        queryClient.invalidateQueries({ queryKey: queryKeys.workspace.activity() });
     }, [queryClient]);
 
     if (isLoading && allItems.length === 0) {

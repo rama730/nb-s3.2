@@ -1,4 +1,4 @@
-import { and, eq, isNotNull, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import { inngest } from "../client";
 import { db } from "@/lib/db";
 import { projectNodeEvents, projectNodes } from "@/lib/db/schema";
@@ -35,6 +35,7 @@ export const reconcileProjectFiles = inngest.createFunction(
                     isNotNull(projectNodes.s3Key),
                 ),
             )
+            .orderBy(asc(projectNodes.projectId), asc(projectNodes.id))
             .limit(MAX_PROJECTS_PER_RUN * MAX_KEYS_PER_PROJECT);
 
         const activeFiles = rows
@@ -46,7 +47,14 @@ export const reconcileProjectFiles = inngest.createFunction(
             })) as ActiveFileRow[];
 
         if (activeFiles.length === 0) {
-            return { scannedProjects: 0, missingObjects: 0, orphanObjects: 0, emittedEvents: 0 };
+            return {
+                scannedProjects: 0,
+                missingObjects: 0,
+                orphanObjects: 0,
+                emittedEvents: 0,
+                skippedProjects: 0,
+                failedInserts: 0,
+            };
         }
 
         const byProject = new Map<string, ActiveFileRow[]>();
@@ -60,7 +68,9 @@ export const reconcileProjectFiles = inngest.createFunction(
         let missingObjects = 0;
         let orphanObjects = 0;
         let emittedEvents = 0;
+        let queuedEvents = 0;
         let skippedProjects = 0;
+        let failedInserts = 0;
 
         for (const [projectId, files] of Array.from(byProject.entries()).slice(0, MAX_PROJECTS_PER_RUN)) {
             const canonicalPrefix = `${projectId}/%`;
@@ -97,7 +107,7 @@ export const reconcileProjectFiles = inngest.createFunction(
             const events = [];
 
             for (const file of missingForProject) {
-                if (emittedEvents >= MAX_EVENTS_PER_RUN) break;
+                if (queuedEvents >= MAX_EVENTS_PER_RUN) break;
                 events.push({
                     projectId,
                     nodeId: file.nodeId,
@@ -106,11 +116,11 @@ export const reconcileProjectFiles = inngest.createFunction(
                     metadata: { s3Key: file.s3Key },
                     createdAt: new Date(),
                 });
-                emittedEvents++;
+                queuedEvents++;
             }
 
             for (const orphan of orphanForProject) {
-                if (emittedEvents >= MAX_EVENTS_PER_RUN) break;
+                if (queuedEvents >= MAX_EVENTS_PER_RUN) break;
                 events.push({
                     projectId,
                     nodeId: null,
@@ -119,14 +129,24 @@ export const reconcileProjectFiles = inngest.createFunction(
                     metadata: { s3Key: orphan.name },
                     createdAt: new Date(),
                 });
-                emittedEvents++;
+                queuedEvents++;
             }
 
             if (events.length > 0) {
-                await db.insert(projectNodeEvents).values(events);
+                try {
+                    await db.insert(projectNodeEvents).values(events);
+                    emittedEvents += events.length;
+                } catch (error) {
+                    console.error("[project-files-reconciliation] failed to insert events", {
+                        projectId,
+                        eventCount: events.length,
+                        error: error instanceof Error ? error.message : String(error),
+                    });
+                    failedInserts += events.length;
+                }
             }
 
-            if (emittedEvents >= MAX_EVENTS_PER_RUN) break;
+            if (queuedEvents >= MAX_EVENTS_PER_RUN) break;
         }
 
         return {
@@ -135,6 +155,7 @@ export const reconcileProjectFiles = inngest.createFunction(
             orphanObjects,
             emittedEvents,
             skippedProjects,
+            failedInserts,
         };
     },
 );

@@ -91,7 +91,7 @@ export async function listReservedUsernames(): Promise<{ success: boolean; items
         if (!response.ok) {
             return { success: false, items: [], message: payload?.message || 'Failed to load reserved usernames' }
         }
-        return { success: true, items: payload.items || [] }
+        return { success: true, items: payload?.data?.items || [] }
     } catch (error) {
         console.error('Error loading reserved usernames:', error)
         return { success: false, items: [], message: 'Failed to load reserved usernames' }

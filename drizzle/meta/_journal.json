@@ -358,6 +358,13 @@
       "when": 1772758800000,
       "tag": "0044_onboarding_profile_extended_preferences",
       "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1772816852425,
+      "tag": "0051_clever_scarecrow",
+      "breakpoints": true
     }
   ]
 }

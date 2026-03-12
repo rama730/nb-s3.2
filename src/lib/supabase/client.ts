@@ -1,13 +1,15 @@
 import { createBrowserClient } from '@supabase/ssr'
+import { resolveSupabasePublicEnv } from '@/lib/supabase/env'
 
 let client: ReturnType<typeof createBrowserClient> | undefined;
 
 export function createClient() {
   if (client) return client;
+  const env = resolveSupabasePublicEnv('supabase.browser')
 
   client = createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+    env.url,
+    env.anonKey
   )
   return client;
 }

@@ -14,8 +14,11 @@ interface GridCellProps {
     placement: WidgetPlacement;
     isEditing: boolean;
     staggerIndex: number;
+    cellWidth: number | null;
     onRemove?: (widgetId: string) => void;
-    onResize?: (widgetId: string, newColSpan: number, newRowSpan: number) => boolean;
+    onPreviewResize?: (widgetId: string, newColSpan: number, newRowSpan: number) => boolean;
+    onCommitResize?: () => void;
+    onCancelResize?: () => void;
     children: React.ReactNode;
 }
 
@@ -23,8 +26,11 @@ function GridCell({
     placement,
     isEditing,
     staggerIndex,
+    cellWidth,
     onRemove,
-    onResize,
+    onPreviewResize,
+    onCommitResize,
+    onCancelResize,
     children,
 }: GridCellProps) {
     const config = WIDGET_REGISTRY[placement.widgetId as keyof typeof WIDGET_REGISTRY];
@@ -39,11 +45,11 @@ function GridCell({
         onRemove?.(placement.widgetId);
     }, [onRemove, placement.widgetId]);
 
-    const handleResize = useCallback(
+    const handlePreviewResize = useCallback(
         (newColSpan: number, newRowSpan: number) => {
-            return onResize?.(placement.widgetId, newColSpan, newRowSpan) ?? false;
+            return onPreviewResize?.(placement.widgetId, newColSpan, newRowSpan) ?? false;
         },
-        [onResize, placement.widgetId]
+        [onPreviewResize, placement.widgetId]
     );
 
     // CSS Grid positioning via inline styles
@@ -94,7 +100,10 @@ function GridCell({
                     {/* Resize handle */}
                     <ResizeHandle
                         placement={placement}
-                        onResize={handleResize}
+                        cellWidth={cellWidth}
+                        onPreviewResize={handlePreviewResize}
+                        onCommitResize={onCommitResize ?? (() => {})}
+                        onCancelResize={onCancelResize ?? (() => {})}
                     />
 
                     {/* Edit border ring */}

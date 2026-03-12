@@ -293,7 +293,7 @@ test.describe('Onboarding smoke', () => {
         for (let index = 0; index < maxAttempts; index += 1) {
             const username = `rluser${index.toString().padStart(2, '0')}`
             const response = await context.request.get(
-                `/api/onboarding/username-check?username=${encodeURIComponent(username)}`,
+                `/api/v1/onboarding/username-check?username=${encodeURIComponent(username)}`,
                 {
                     headers: {
                         'user-agent': 'playwright-rate-limit-test',

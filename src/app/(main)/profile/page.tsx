@@ -1,11 +1,11 @@
 import { redirect } from 'next/navigation'
 import { getProfileDetails } from '@/lib/data/profile'
 import ProfileShell from '@/components/profile/ProfileShell'
-import { createClient } from '@/lib/supabase/server'
+import { isHardeningDomainEnabled } from '@/lib/features/hardening'
+import { getViewerAuthContext } from '@/lib/server/viewer-context'
 
 export default async function ProfilePage() {
-    const supabase = await createClient()
-    const { data: { user } } = await supabase.auth.getUser()
+    const { user } = await getViewerAuthContext()
 
     if (!user) {
         redirect('/login')
@@ -13,7 +13,8 @@ export default async function ProfilePage() {
 
     let data;
     try {
-        data = await getProfileDetails(undefined, { skipHeavyData: true })
+        const profileHardeningEnabled = isHardeningDomainEnabled("profileV1", user.id);
+        data = await getProfileDetails(undefined, { skipHeavyData: profileHardeningEnabled })
     } catch (error) {
         console.error('Profile fetch error:', error)
         redirect('/onboarding')
@@ -24,7 +25,10 @@ export default async function ProfilePage() {
     }
 
     return (
-        <div className="h-[calc(100vh-var(--header-height,56px))] min-h-0 overflow-hidden bg-white dark:bg-zinc-950">
+        <div
+            data-scroll-root="route"
+            className="h-full min-h-0 app-scroll app-scroll-y app-scroll-gutter overscroll-y-contain bg-white dark:bg-zinc-950"
+        >
             <ProfileShell initialData={data} profileId={data.profile.id} />
         </div>
     )

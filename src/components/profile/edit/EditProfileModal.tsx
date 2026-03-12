@@ -10,6 +10,8 @@ import { useAuth } from "@/lib/hooks/use-auth";
 import { useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { calculateProfileCompletion } from "@/lib/validations/profile";
+import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { queryKeys } from "@/lib/query-keys";
 
 interface EditProfileModalProps {
     open: boolean;
@@ -20,6 +22,7 @@ interface EditProfileModalProps {
 }
 
 type EditSection = "general" | "experience" | "education" | "skills" | "social";
+type SaveState = "idle" | "saving" | "success" | "error";
 
 const DRAFT_KEY_PREFIX = "profile:edit:draft:v1:";
 
@@ -65,6 +68,13 @@ function sectionKeys(section: EditSection): string[] {
 }
 
 function buildActionPayload(formState: any, expectedUpdatedAt?: string) {
+    const normalizedExpectedUpdatedAt = (() => {
+        if (!expectedUpdatedAt || typeof expectedUpdatedAt !== "string") return undefined;
+        const parsed = new Date(expectedUpdatedAt);
+        if (!Number.isFinite(parsed.getTime())) return undefined;
+        return parsed.toISOString();
+    })();
+
     return {
         fullName: formState.full_name,
         username: formState.username,
@@ -80,14 +90,17 @@ function buildActionPayload(formState: any, expectedUpdatedAt?: string) {
         openTo: formState.openTo,
         experience: formState.experience,
         education: formState.education,
-        expectedUpdatedAt,
+        ...(normalizedExpectedUpdatedAt ? { expectedUpdatedAt: normalizedExpectedUpdatedAt } : {}),
     };
 }
 
 function buildPartialPayload(formState: any, section: EditSection, expectedUpdatedAt?: string) {
     const keys = sectionKeys(section);
     const payload = buildActionPayload(formState, expectedUpdatedAt) as Record<string, unknown>;
-    const partial: Record<string, unknown> = { expectedUpdatedAt };
+    const partial: Record<string, unknown> = {};
+    if (typeof payload.expectedUpdatedAt === "string") {
+        partial.expectedUpdatedAt = payload.expectedUpdatedAt;
+    }
     for (const key of keys) {
         if (key === "full_name") partial.fullName = payload.fullName;
         if (key === "username") partial.username = payload.username;
@@ -140,7 +153,8 @@ export function EditProfileModal({ open, onOpenChange, profile, onOptimisticUpda
     const queryClient = useQueryClient();
     const { refreshProfile } = useAuth();
     const [formState, setFormState] = useState<any>(null);
-    const [saving, setSaving] = useState(false);
+    const [saveState, setSaveState] = useState<SaveState>("idle");
+    const [saveErrorMessage, setSaveErrorMessage] = useState<string | null>(null);
     const [hasChanges, setHasChanges] = useState(false);
     const inFlightRef = useRef(false);
     const wasOpenRef = useRef(false);
@@ -196,6 +210,8 @@ export function EditProfileModal({ open, onOpenChange, profile, onOptimisticUpda
             }
             lastKnownUpdatedAtRef.current = toIsoTimestamp(profile?.updatedAt || profile?.updated_at);
             setHasChanges(false);
+            setSaveState("idle");
+            setSaveErrorMessage(null);
         }
     }, [open, profile?.id, profile?.updatedAt, profile?.updated_at]);
 
@@ -228,12 +244,45 @@ export function EditProfileModal({ open, onOpenChange, profile, onOptimisticUpda
         });
     };
 
+    const loadLatestServerProfileState = async () => {
+        if (!profile?.id) return null;
+        const supabase = createSupabaseBrowserClient();
+        const { data, error } = await supabase
+            .from("profiles")
+            .select(`
+                id,
+                full_name,
+                username,
+                headline,
+                bio,
+                location,
+                website,
+                avatar_url,
+                banner_url,
+                availability_status,
+                open_to,
+                skills,
+                social_links,
+                experience,
+                education,
+                updated_at
+            `)
+            .eq("id", profile.id)
+            .single();
+        if (error || !data) return null;
+        return {
+            formState: toFormState(data),
+            updatedAt: toIsoTimestamp(data.updated_at),
+        };
+    };
+
     const persistChanges = async (payload: Record<string, unknown>, closeOnSuccess: boolean) => {
         if (!formState || inFlightRef.current) return;
         inFlightRef.current = true;
-        setSaving(true);
+        setSaveState("saving");
+        setSaveErrorMessage(null);
+        const rollbackPatch: Record<string, unknown> = {}
         try {
-            const rollbackPatch: Record<string, unknown> = {}
             for (const [key, value] of Object.entries(payload)) {
                 if (key === "expectedUpdatedAt") continue;
                 if (key === "fullName") rollbackPatch.fullName = baseProfileRef.current.full_name
@@ -254,30 +303,88 @@ export function EditProfileModal({ open, onOpenChange, profile, onOptimisticUpda
             }
 
             applyOptimisticPatch(payload);
-            const res = await updateProfileAction(payload as any);
-            if (res.success) {
-                queryClient.invalidateQueries({ queryKey: ['profile'] });
-                await refreshProfile();
-                lastKnownUpdatedAtRef.current = (res as any).updatedAt || lastKnownUpdatedAtRef.current;
-                baseProfileRef.current = applyPayloadToBaseState(baseProfileRef.current, payload);
+            const applyUpdate = async (nextPayload: Record<string, unknown>) => {
+                const response = await updateProfileAction(nextPayload as any);
+                if (response.success && typeof (response as any).updatedAt === "string") {
+                    return { ok: true as const, response, payload: nextPayload };
+                }
+                return { ok: false as const, response };
+            };
+
+            let updateResult = await applyUpdate(payload);
+            let retryBaseState: ReturnType<typeof toFormState> | null = null;
+            const errorCode =
+                !updateResult.ok
+                    ? ((updateResult.response as any)?.errorCode || (updateResult.response as any)?.code)
+                    : null;
+
+            if (!updateResult.ok && errorCode === "PROFILE_CONFLICT") {
+                const latest = await loadLatestServerProfileState();
+                if (latest) {
+                    const retryPayload = { ...payload, expectedUpdatedAt: latest.updatedAt };
+                    updateResult = await applyUpdate(retryPayload);
+                    if (updateResult.ok) {
+                        retryBaseState = latest.formState;
+                    }
+                }
+            }
+
+            if (updateResult.ok) {
+                const targetKeys = new Set<string>([
+                    profile?.id || "",
+                    profile?.username || "",
+                    (payload.username as string | undefined) || "",
+                ]);
+                targetKeys.forEach((target) => {
+                    if (!target) return;
+                    queryClient.invalidateQueries({ queryKey: queryKeys.profile.byTarget(target) });
+                });
+                void refreshProfile().catch((refreshError) => {
+                    console.warn("Profile refresh after save failed", {
+                        profileId: profile?.id,
+                        error:
+                            refreshError instanceof Error
+                                ? refreshError.message
+                                : String(refreshError),
+                    });
+                });
+                if (retryBaseState) {
+                    baseProfileRef.current = retryBaseState;
+                }
+                lastKnownUpdatedAtRef.current = (updateResult.response as any).updatedAt || lastKnownUpdatedAtRef.current;
+                baseProfileRef.current = applyPayloadToBaseState(baseProfileRef.current, updateResult.payload);
                 const draftKey = `${DRAFT_KEY_PREFIX}${profile.id}`;
                 if (typeof window !== "undefined") {
                     window.localStorage.removeItem(draftKey);
                 }
                 setHasChanges(false);
+                setSaveState("success");
                 showToast("Profile updated successfully", "success");
                 if (closeOnSuccess) {
                     onOpenChange(false);
                 }
             } else {
                 applyOptimisticPatch(rollbackPatch);
-                showToast(res.error || "Failed to update profile", "error");
+                const message =
+                    (updateResult.response as any)?.error ||
+                    "Failed to update profile. Please review your changes and retry.";
+                console.error("Profile save failed", {
+                    profileId: profile?.id,
+                    errorCode: (updateResult.response as any)?.errorCode || (updateResult.response as any)?.code || null,
+                    message,
+                });
+                setSaveState("error");
+                setSaveErrorMessage(message);
+                showToast(message, "error");
             }
         } catch (error) {
+            applyOptimisticPatch(rollbackPatch);
             console.error(error);
-            showToast("An unexpected error occurred", "error");
+            const message = "An unexpected error occurred while saving your profile.";
+            setSaveState("error");
+            setSaveErrorMessage(message);
+            showToast(message, "error");
         } finally {
-            setSaving(false);
             inFlightRef.current = false;
         }
     };
@@ -338,6 +445,10 @@ export function EditProfileModal({ open, onOpenChange, profile, onOptimisticUpda
                         onChange={(updates) => {
                             setFormState(updates);
                             setHasChanges(true);
+                            if (saveState !== "saving") {
+                                setSaveState("idle");
+                                setSaveErrorMessage(null);
+                            }
                         }}
                         onSaveSection={handleSaveSection}
                         onResetSection={handleResetSection}
@@ -345,11 +456,14 @@ export function EditProfileModal({ open, onOpenChange, profile, onOptimisticUpda
                 </div>
 
                 <DialogFooter className="px-6 py-4 border-t border-zinc-100 dark:border-zinc-800 bg-white dark:bg-zinc-900 rounded-b-lg">
-                    <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
+                    {saveErrorMessage ? (
+                        <p className="mr-auto text-xs text-red-500">{saveErrorMessage}</p>
+                    ) : null}
+                    <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saveState === "saving"}>
                         Cancel
                     </Button>
-                    <Button onClick={handleSave} disabled={saving || !hasChanges}>
-                        {saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                    <Button onClick={handleSave} disabled={saveState === "saving" || !hasChanges}>
+                        {saveState === "saving" && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
                         Save Changes
                     </Button>
                 </DialogFooter>

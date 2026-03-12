@@ -6,11 +6,11 @@ import Input from "@/components/ui-custom/Input";
 import { Label } from "@/components/ui-custom/Label";
 import { Loader2, Camera } from "lucide-react";
 import { useToast } from "@/components/ui-custom/Toast";
-import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import Image from "next/image";
-import { updateProfileAction } from "@/app/actions/profile";
+import { createProfileImageUploadUrlAction, updateProfileAction } from "@/app/actions/profile";
 import { useAuth } from "@/lib/hooks/use-auth";
 import { useQueryClient } from "@tanstack/react-query";
+import { queryKeys } from "@/lib/query-keys";
 
 interface ProfileFormProps {
     initialData: {
@@ -28,7 +28,6 @@ interface ProfileFormProps {
 export function ProfileForm({ initialData, onOptimisticUpdate }: ProfileFormProps) {
     const { showToast } = useToast();
     const queryClient = useQueryClient();
-    const supabase = createSupabaseBrowserClient();
     const { refreshProfile } = useAuth();
 
     const [saving, setSaving] = useState(false);
@@ -55,18 +54,24 @@ export function ProfileForm({ initialData, onOptimisticUpdate }: ProfileFormProp
 
         setAvatarUploading(true);
         try {
-            const fileExt = file.name.split(".").pop();
-            const filePath = `avatars/${initialData.id}/${Date.now()}.${fileExt}`;
+            const uploadSession = await createProfileImageUploadUrlAction({
+                mimeType: file.type || "application/octet-stream",
+                sizeBytes: file.size,
+                kind: "avatar",
+            });
+            if (!uploadSession.success) {
+                throw new Error(uploadSession.error || "Failed to prepare avatar upload");
+            }
 
-            const { error: uploadError } = await supabase.storage
-                .from("avatars")
-                .upload(filePath, file, { upsert: true });
-
-            if (uploadError) throw uploadError;
-
-            const {
-                data: { publicUrl },
-            } = supabase.storage.from("avatars").getPublicUrl(filePath);
+            const uploadResponse = await fetch(uploadSession.uploadUrl, {
+                method: "PUT",
+                headers: { "Content-Type": uploadSession.contentType },
+                body: file,
+            });
+            if (!uploadResponse.ok) {
+                throw new Error(`Failed to upload avatar (${uploadResponse.status})`);
+            }
+            const publicUrl = uploadSession.publicUrl;
 
             setFormData((prev) => ({ ...prev, avatar_url: publicUrl }));
 
@@ -117,8 +122,13 @@ export function ProfileForm({ initialData, onOptimisticUpdate }: ProfileFormProp
 
             await Promise.allSettled([
                 refreshProfile(),
-                queryClient.invalidateQueries({ queryKey: ["profile"] }),
-                queryClient.invalidateQueries({ queryKey: ["user"] }),
+                queryClient.invalidateQueries({ queryKey: queryKeys.profile.byTarget(initialData.id) }),
+                ...(initialData.username
+                    ? [queryClient.invalidateQueries({ queryKey: queryKeys.profile.byTarget(initialData.username) })]
+                    : []),
+                ...(formData.username
+                    ? [queryClient.invalidateQueries({ queryKey: queryKeys.profile.byTarget(formData.username) })]
+                    : []),
             ]);
 
             showToast("Profile updated", "success");

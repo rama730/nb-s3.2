@@ -1,15 +1,10 @@
 "use client";
 
+import { useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { NotificationPreferences, SecurityData, PrivacySettings } from "@/lib/types/settingsTypes";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
-
-// Query keys
-const SETTINGS_KEYS = {
-    notifications: ["settings", "notifications"] as const,
-    security: ["settings", "security"] as const,
-    privacy: ["settings", "privacy"] as const,
-};
+import { queryKeys } from "@/lib/query-keys";
 
 const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = {
     email: true,
@@ -24,20 +19,84 @@ const DEFAULT_PRIVACY_SETTINGS: PrivacySettings = {
     connection_privacy: "public",
 };
 
+const DEFAULT_SECURITY_DATA: SecurityData = {
+    mfaFactors: [],
+    passkeys: [],
+    sessions: [],
+    loginHistory: [],
+};
+
+const SETTINGS_VIEWER_TTL_MS = 30_000;
+type SettingsViewerResolverState = {
+    cachedUserId: string | null;
+    expiresAt: number;
+    inFlight: Promise<string | null> | null;
+};
+
+function createSettingsViewerResolverState(): SettingsViewerResolverState {
+    return {
+        cachedUserId: null,
+        expiresAt: 0,
+        inFlight: null,
+    };
+}
+
+async function resolveSettingsViewerId(
+    supabase: ReturnType<typeof createSupabaseBrowserClient>,
+    state: SettingsViewerResolverState,
+): Promise<string | null> {
+    const now = Date.now();
+    if (state.cachedUserId !== null && state.expiresAt > now) {
+        return state.cachedUserId;
+    }
+
+    if (state.inFlight) {
+        return state.inFlight;
+    }
+
+    state.inFlight = supabase.auth
+        .getUser()
+        .then((authResult: { data: { user: { id: string } | null }; error: Error | null }) => {
+            const { data, error } = authResult;
+            if (error) {
+                state.cachedUserId = null;
+                state.expiresAt = 0;
+                throw error;
+            }
+
+            const userId = data.user?.id ?? null;
+            if (userId !== null) {
+                state.cachedUserId = userId;
+                state.expiresAt = Date.now() + SETTINGS_VIEWER_TTL_MS;
+            } else {
+                // Do not cache null viewer IDs so retries after auth changes work immediately.
+                state.cachedUserId = null;
+                state.expiresAt = 0;
+            }
+            return userId;
+        })
+        .finally(() => {
+            state.inFlight = null;
+        });
+
+    return state.inFlight;
+}
+
 // Notification preferences
 export function useNotificationPreferences() {
     const supabase = createSupabaseBrowserClient();
+    const viewerResolverStateRef = useRef<SettingsViewerResolverState>(createSettingsViewerResolverState());
 
     return useQuery({
-        queryKey: SETTINGS_KEYS.notifications,
+        queryKey: queryKeys.settings.notifications(),
         queryFn: async (): Promise<NotificationPreferences> => {
-            const { data: { user } } = await supabase.auth.getUser();
-            if (!user) throw new Error("Not authenticated");
+            const userId = await resolveSettingsViewerId(supabase, viewerResolverStateRef.current);
+            if (!userId) throw new Error("Not authenticated");
 
             const { data, error } = await supabase
                 .from("profiles")
                 .select("notification_preferences")
-                .eq("id", user.id)
+                .eq("id", userId)
                 .maybeSingle();
 
             if (error) {
@@ -53,67 +112,73 @@ export function useNotificationPreferences() {
 
 export function useUpdateNotificationPreferences() {
     const supabase = createSupabaseBrowserClient();
+    const viewerResolverStateRef = useRef<SettingsViewerResolverState>(createSettingsViewerResolverState());
     const queryClient = useQueryClient();
 
     return useMutation({
         mutationFn: async (preferences: NotificationPreferences) => {
-            const { data: { user } } = await supabase.auth.getUser();
-            if (!user) throw new Error("Not authenticated");
+            const userId = await resolveSettingsViewerId(supabase, viewerResolverStateRef.current);
+            if (!userId) throw new Error("Not authenticated");
 
             const { error } = await supabase
                 .from("profiles")
                 .update({ notification_preferences: preferences })
-                .eq("id", user.id);
+                .eq("id", userId);
 
             if (error) throw error;
             return preferences;
         },
         onMutate: async (newPrefs) => {
             // Optimistic update
-            await queryClient.cancelQueries({ queryKey: SETTINGS_KEYS.notifications });
-            const previous = queryClient.getQueryData(SETTINGS_KEYS.notifications);
-            queryClient.setQueryData(SETTINGS_KEYS.notifications, newPrefs);
+            await queryClient.cancelQueries({ queryKey: queryKeys.settings.notifications() });
+            const previous = queryClient.getQueryData(queryKeys.settings.notifications());
+            queryClient.setQueryData(queryKeys.settings.notifications(), newPrefs);
             return { previous };
         },
         onError: (err, newPrefs, context) => {
             if (context?.previous) {
-                queryClient.setQueryData(SETTINGS_KEYS.notifications, context.previous);
+                queryClient.setQueryData(queryKeys.settings.notifications(), context.previous);
             }
         },
         onSettled: () => {
-            queryClient.invalidateQueries({ queryKey: SETTINGS_KEYS.notifications });
+            queryClient.invalidateQueries({ queryKey: queryKeys.settings.notifications() });
         },
     });
 }
 
 // Security data
-export function useSecurityData() {
+export function useSecurityData(options?: { hardeningEnabled?: boolean }) {
+    const hardeningEnabled = options?.hardeningEnabled ?? false;
     return useQuery({
-        queryKey: SETTINGS_KEYS.security,
+        queryKey: queryKeys.settings.security(),
         queryFn: async (): Promise<SecurityData> => {
-            const defaults: SecurityData = {
-                mfaFactors: [],
-                passkeys: [],
-                sessions: [],
-                loginHistory: [],
-            };
-            try {
-                const res = await fetch("/api/v1/security");
-                if (!res.ok) return defaults;
-                const contentType = res.headers.get("content-type") || "";
-                if (!contentType.includes("application/json")) return defaults;
-                const json = await res.json();
-                return json.data || defaults;
-            } catch {
-                return defaults;
+            const res = await fetch("/api/v1/security");
+            const contentType = res.headers.get("content-type") || "";
+            if (!contentType.includes("application/json")) {
+                throw new Error(`Security endpoint returned non-JSON response (${res.status})`);
             }
+
+            const json = await res.json();
+            const message =
+                (typeof json?.error === "string" && json.error) ||
+                (typeof json?.message === "string" && json.message) ||
+                `Failed to load security data (${res.status})`;
+            if (!res.ok || json?.success === false) {
+                throw new Error(message);
+            }
+
+            return json?.data || DEFAULT_SECURITY_DATA;
         },
+        retry: 1,
+        staleTime: hardeningEnabled ? 60_000 : 0,
+        gcTime: hardeningEnabled ? 5 * 60_000 : undefined,
     });
 }
 
 export function useChangePassword() {
     return useMutation({
         mutationFn: async ({ currentPassword, newPassword }: { currentPassword: string; newPassword: string }) => {
+            const toFailure = (message: string) => ({ success: false as const, message });
             try {
                 const res = await fetch("/api/v1/auth/change-password", {
                     method: "POST",
@@ -121,17 +186,45 @@ export function useChangePassword() {
                     body: JSON.stringify({ currentPassword, newPassword }),
                 });
 
-                if (!res.ok) {
-                    return { success: false, message: "Password change is not available yet" };
-                }
                 const contentType = res.headers.get("content-type") || "";
-                if (!contentType.includes("application/json")) {
-                    return { success: false, message: "Password change is not available yet" };
+                const isJson = contentType.includes("application/json");
+
+                if (!res.ok) {
+                    if (isJson) {
+                        try {
+                            const errorJson = await res.json();
+                            const message = errorJson?.message || errorJson?.error;
+                            if (typeof message === "string" && message.trim().length > 0) {
+                                return toFailure(message);
+                            }
+                        } catch {
+                            // Fall through to generic error
+                        }
+                    }
+                    const fallback = res.statusText
+                        ? `Password change failed (${res.status}: ${res.statusText})`
+                        : `Password change failed (${res.status})`;
+                    return toFailure(fallback);
                 }
+
+                if (!isJson) {
+                    return { success: true as const };
+                }
+
                 const json = await res.json();
-                return json;
-            } catch {
-                return { success: false, message: "Password change is not available yet" };
+                if (json?.success === false) {
+                    const message =
+                        typeof json?.message === "string" && json.message
+                            ? json.message
+                            : "Password change failed";
+                    return toFailure(message);
+                }
+                const success = typeof json?.success === "boolean" ? json.success : true;
+                const message = typeof json?.message === "string" ? json.message : undefined;
+                return { success, message, data: json?.data };
+            } catch (error) {
+                const message = error instanceof Error ? error.message : "Unable to change password. Please try again.";
+                return toFailure(message);
             }
         },
     });
@@ -140,17 +233,18 @@ export function useChangePassword() {
 // Privacy settings
 export function usePrivacySettings() {
     const supabase = createSupabaseBrowserClient();
+    const viewerResolverStateRef = useRef<SettingsViewerResolverState>(createSettingsViewerResolverState());
 
     return useQuery({
-        queryKey: SETTINGS_KEYS.privacy,
+        queryKey: queryKeys.settings.privacy(),
         queryFn: async (): Promise<PrivacySettings> => {
-            const { data: { user } } = await supabase.auth.getUser();
-            if (!user) throw new Error("Not authenticated");
+            const userId = await resolveSettingsViewerId(supabase, viewerResolverStateRef.current);
+            if (!userId) throw new Error("Not authenticated");
 
             const { data, error } = await supabase
                 .from("profiles")
                 .select("is_private, connection_privacy")
-                .eq("id", user.id)
+                .eq("id", userId)
                 .maybeSingle();
 
             if (error) {
@@ -169,19 +263,20 @@ export function usePrivacySettings() {
 // Prefetch hooks
 export function usePrefetchSettings() {
     const queryClient = useQueryClient();
+    const supabase = createSupabaseBrowserClient();
+    const viewerResolverStateRef = useRef<SettingsViewerResolverState>(createSettingsViewerResolverState());
 
     const prefetchNotifications = () => {
         queryClient.prefetchQuery({
-            queryKey: SETTINGS_KEYS.notifications,
+            queryKey: queryKeys.settings.notifications(),
             queryFn: async () => {
-                const supabase = createSupabaseBrowserClient();
-                const { data: { user } } = await supabase.auth.getUser();
-                if (!user) return null;
+                const userId = await resolveSettingsViewerId(supabase, viewerResolverStateRef.current);
+                if (!userId) return DEFAULT_NOTIFICATION_PREFERENCES;
 
                 const { data, error } = await supabase
                     .from("profiles")
                     .select("notification_preferences")
-                    .eq("id", user.id)
+                    .eq("id", userId)
                     .maybeSingle();
 
                 if (error) {
@@ -196,35 +291,38 @@ export function usePrefetchSettings() {
 
     const prefetchSecurity = () => {
         queryClient.prefetchQuery({
-            queryKey: SETTINGS_KEYS.security,
+            queryKey: queryKeys.settings.security(),
             queryFn: async () => {
-                const defaults = { mfaFactors: [], passkeys: [], sessions: [], loginHistory: [] };
-                try {
-                    const res = await fetch("/api/v1/security");
-                    if (!res.ok) return defaults;
-                    const contentType = res.headers.get("content-type") || "";
-                    if (!contentType.includes("application/json")) return defaults;
-                    const json = await res.json();
-                    return json.data || defaults;
-                } catch {
-                    return defaults;
+                const res = await fetch("/api/v1/security");
+                const contentType = res.headers.get("content-type") || "";
+                if (!contentType.includes("application/json")) {
+                    throw new Error(`Security endpoint returned non-JSON response (${res.status})`);
                 }
+                const json = await res.json();
+                if (!res.ok || json?.success === false) {
+                    const message =
+                        (typeof json?.error === "string" && json.error) ||
+                        (typeof json?.message === "string" && json.message) ||
+                        `Failed to load security data (${res.status})`;
+                    throw new Error(message);
+                }
+                return json.data || DEFAULT_SECURITY_DATA;
             },
+            retry: 0,
         });
     };
 
     const prefetchPrivacy = () => {
         queryClient.prefetchQuery({
-            queryKey: SETTINGS_KEYS.privacy,
+            queryKey: queryKeys.settings.privacy(),
             queryFn: async () => {
-                const supabase = createSupabaseBrowserClient();
-                const { data: { user } } = await supabase.auth.getUser();
-                if (!user) return null;
+                const userId = await resolveSettingsViewerId(supabase, viewerResolverStateRef.current);
+                if (!userId) throw new Error("Not authenticated");
 
                 const { data, error } = await supabase
                     .from("profiles")
                     .select("is_private, connection_privacy")
-                    .eq("id", user.id)
+                    .eq("id", userId)
                     .maybeSingle();
 
                 if (error) {

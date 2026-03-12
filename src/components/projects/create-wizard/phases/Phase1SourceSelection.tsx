@@ -6,7 +6,15 @@ import { CreateProjectInput } from '@/lib/validations/project';
 import { Github, Upload, Code2, FolderUp, Check, Loader2, Link as LinkIcon, Sparkles } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { toast } from 'sonner';
-import { analyzeGithubRepoAction } from '@/app/actions/github';
+import { logger } from '@/lib/logger';
+import { getAuthHardeningPhase } from '@/lib/auth/hardening';
+import { buildOAuthRedirectTo, resolveAuthBaseUrl } from '@/lib/auth/redirects';
+import {
+    analyzeGithubRepoAction,
+    listGithubBranches,
+    listGithubRepositories,
+    preflightGithubImport,
+} from '@/app/actions/github';
 
 export default function Phase1SourceSelection({
     uploadFiles,
@@ -46,6 +54,7 @@ export default function Phase1SourceSelection({
     const { getValues, setValue, watch, formState: { errors } } = useFormContext<CreateProjectInput>();
     const importSourceType = watch('import_source.type');
     const repoUrl = watch('import_source.repoUrl');
+    const branch = watch('import_source.branch');
     
     // Default to 'scratch' if undefined
     const selectedSource = importSourceType || 'scratch';
@@ -69,6 +78,36 @@ export default function Phase1SourceSelection({
     const [isConnected, setIsConnected] = useState(false);
     const [isLoadingAuth, setIsLoadingAuth] = useState(true);
     const [ghUsername, setGhUsername] = useState<string | null>(null);
+    const [repoQuery, setRepoQuery] = useState('');
+    const [repoItems, setRepoItems] = useState<Array<{
+        id: number;
+        owner: string;
+        name: string;
+        fullName: string;
+        htmlUrl: string;
+        private: boolean;
+        visibility: 'public' | 'private';
+        defaultBranch: string | null;
+        description: string | null;
+        updatedAt: string | null;
+    }>>([]);
+    const [repoCursor, setRepoCursor] = useState<string | null>(null);
+    const [isLoadingRepos, setIsLoadingRepos] = useState(false);
+    const [branchOptions, setBranchOptions] = useState<string[]>([]);
+    const [isLoadingBranches, setIsLoadingBranches] = useState(false);
+    const [preflightState, setPreflightState] = useState<{
+        status: 'idle' | 'loading' | 'ok' | 'error';
+        warnings: string[];
+        error: string | null;
+        authSource: string | null;
+    }>({
+        status: 'idle',
+        warnings: [],
+        error: null,
+        authSource: null,
+    });
+    const latestBranchRequestKeyRef = useRef('');
+    const latestPreflightRequestKeyRef = useRef('');
     const supabase = createClient();
 
     const normalizeGitHubRepoUrl = useCallback((raw: string) => {
@@ -130,10 +169,23 @@ export default function Phase1SourceSelection({
 
     const handleConnectGithub = async () => {
         try {
+            const currentPath = `${window.location.pathname}${window.location.search}`;
+            const oauthRequestId =
+                typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+                    ? crypto.randomUUID()
+                    : `wizard-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+            const redirectTo = buildOAuthRedirectTo(resolveAuthBaseUrl(), currentPath, oauthRequestId);
+            logger.metric('auth.oauth.start', {
+                requestId: oauthRequestId,
+                provider: 'github',
+                flow: 'create_wizard',
+                nextPath: currentPath,
+                phase: getAuthHardeningPhase(),
+            });
             const { error } = await supabase.auth.signInWithOAuth({
                 provider: 'github',
                 options: {
-                    redirectTo: window.location.href,
+                    redirectTo,
                     scopes: 'repo', // Request private repo access
                 }
             });
@@ -161,6 +213,211 @@ export default function Phase1SourceSelection({
             setExpandedFolders(new Set());
         }
     };
+
+    const setGithubMetadata = useCallback((updates: Record<string, unknown>) => {
+        const current = (getValues('import_source.metadata') || {}) as Record<string, unknown>;
+        setValue(
+            'import_source.metadata',
+            {
+                ...current,
+                ...updates,
+            },
+            { shouldDirty: true }
+        );
+    }, [getValues, setValue]);
+
+    const loadRepositories = useCallback(async (reset: boolean, cursorOverride?: string | null) => {
+        if (!isConnected) return;
+        setIsLoadingRepos(true);
+        try {
+            const res = await listGithubRepositories({
+                cursor: reset ? null : (cursorOverride ?? null),
+                q: repoQuery || null,
+                perPage: 15,
+            });
+            if (!res.success) {
+                toast.error(res.error || 'Failed to load repositories');
+                return;
+            }
+
+            setRepoItems((prev) => (reset ? res.items : [...prev, ...res.items]));
+            setRepoCursor(res.cursor || null);
+        } finally {
+            setIsLoadingRepos(false);
+        }
+    }, [isConnected, repoQuery]);
+
+    const loadBranchesForRepo = useCallback(async (url: string) => {
+        const normalizedUrl = normalizeGitHubRepoUrl(url || '');
+        if (!normalizedUrl) return;
+        latestBranchRequestKeyRef.current = normalizedUrl;
+
+        setIsLoadingBranches(true);
+        try {
+            const installationId = ((getValues('import_source.metadata') as any)?.githubInstallationId ?? null) as number | null;
+            const res = await listGithubBranches({
+                repoUrl: normalizedUrl,
+                installationId,
+            });
+            if (latestBranchRequestKeyRef.current !== normalizedUrl) return;
+            if (!res.success) {
+                setBranchOptions([]);
+                return;
+            }
+
+            const options = Array.isArray(res.branches) ? res.branches : [];
+            setBranchOptions(options);
+            if (res.installationId) {
+                setGithubMetadata({ githubInstallationId: res.installationId });
+            }
+            if (options.length > 0) {
+                const currentBranch = (getValues('import_source.branch') || '').trim();
+                if (!currentBranch || !options.includes(currentBranch)) {
+                    setValue('import_source.branch', options[0], { shouldDirty: true });
+                }
+            }
+        } finally {
+            if (latestBranchRequestKeyRef.current !== normalizedUrl) return;
+            setIsLoadingBranches(false);
+        }
+    }, [getValues, normalizeGitHubRepoUrl, setGithubMetadata, setValue]);
+
+    const runPreflightChecks = useCallback(async (nextRepoUrl?: string, nextBranch?: string | null) => {
+        const normalizedUrl = normalizeGitHubRepoUrl(nextRepoUrl || repoUrl || '');
+        latestPreflightRequestKeyRef.current = normalizedUrl;
+        if (!normalizedUrl) {
+            if (latestPreflightRequestKeyRef.current !== normalizedUrl) return false;
+            setPreflightState({
+                status: 'error',
+                warnings: [],
+                error: 'Invalid GitHub repository URL.',
+                authSource: null,
+            });
+            setGithubMetadata({
+                githubPreflightStatus: 'error',
+                githubPreflightError: 'Invalid GitHub repository URL.',
+                githubPreflightCheckedAt: new Date().toISOString(),
+            });
+            return false;
+        }
+
+        setPreflightState({ status: 'loading', warnings: [], error: null, authSource: null });
+
+        try {
+            const installationId = ((getValues('import_source.metadata') as any)?.githubInstallationId ?? null) as number | null;
+            const res = await preflightGithubImport({
+                repoUrl: normalizedUrl,
+                branch: nextBranch ?? branch ?? null,
+                installationId,
+            });
+            if (latestPreflightRequestKeyRef.current !== normalizedUrl) return false;
+
+            if (!res.success) {
+                const message = res.error || 'Preflight failed.';
+                setPreflightState({
+                    status: 'error',
+                    warnings: [],
+                    error: message,
+                    authSource: null,
+                });
+                setGithubMetadata({
+                    githubPreflightStatus: 'error',
+                    githubPreflightError: message,
+                    githubPreflightCheckedAt: new Date().toISOString(),
+                });
+                return false;
+            }
+
+            setValue('import_source.repoUrl', res.normalizedRepoUrl, { shouldDirty: true });
+            if (res.branch) {
+                setValue('import_source.branch', res.branch, { shouldDirty: true });
+            }
+
+            setGithubMetadata({
+                ...res.metadata,
+                githubInstallationId: res.auth.installationId,
+                githubPreflightStatus: 'ok',
+                githubPreflightWarnings: res.warnings,
+                githubPreflightError: null,
+                githubPreflightCheckedAt: res.checkedAt,
+            });
+
+            setPreflightState({
+                status: 'ok',
+                warnings: res.warnings,
+                error: null,
+                authSource: res.auth.source,
+            });
+            return true;
+        } catch (error: any) {
+            if (latestPreflightRequestKeyRef.current !== normalizedUrl) return false;
+            const message = error?.message || 'Preflight failed.';
+            setPreflightState({
+                status: 'error',
+                warnings: [],
+                error: message,
+                authSource: null,
+            });
+            setGithubMetadata({
+                githubPreflightStatus: 'error',
+                githubPreflightError: message,
+                githubPreflightCheckedAt: new Date().toISOString(),
+            });
+            return false;
+        }
+    }, [branch, getValues, normalizeGitHubRepoUrl, repoUrl, setGithubMetadata, setValue]);
+
+    const handlePickRepository = useCallback(async (item: {
+        id: number;
+        owner: string;
+        name: string;
+        fullName: string;
+        htmlUrl: string;
+        private: boolean;
+        visibility: 'public' | 'private';
+        defaultBranch: string | null;
+    }) => {
+        setValue('import_source.repoUrl', item.htmlUrl, { shouldDirty: true });
+        if (item.defaultBranch) {
+            setValue('import_source.branch', item.defaultBranch, { shouldDirty: true });
+        }
+        setGithubMetadata({
+            githubRepoId: item.id,
+            githubOwner: item.owner,
+            githubName: item.name,
+            githubVisibility: item.visibility,
+            githubInstallationId: null,
+            githubPreflightStatus: 'idle',
+            githubPreflightError: null,
+            githubPreflightWarnings: [],
+        });
+        await loadBranchesForRepo(item.htmlUrl);
+        await runPreflightChecks(item.htmlUrl, item.defaultBranch);
+    }, [loadBranchesForRepo, runPreflightChecks, setGithubMetadata, setValue]);
+
+    useEffect(() => {
+        if (selectedSource !== 'github') return;
+        if (!isConnected) return;
+        const timer = setTimeout(() => {
+            void loadRepositories(true, null);
+        }, 300);
+        return () => clearTimeout(timer);
+    }, [isConnected, loadRepositories, repoQuery, selectedSource]);
+
+    useEffect(() => {
+        if (selectedSource !== 'github') return;
+        const normalizedUrl = normalizeGitHubRepoUrl(repoUrl || '');
+        if (!normalizedUrl) {
+            setBranchOptions([]);
+            setPreflightState({ status: 'idle', warnings: [], error: null, authSource: null });
+            return;
+        }
+
+        const timer = setTimeout(() => {
+            void loadBranchesForRepo(normalizedUrl);
+        }, 450);
+        return () => clearTimeout(timer);
+    }, [loadBranchesForRepo, normalizeGitHubRepoUrl, repoUrl, selectedSource]);
 
     const handleBrowseClick = () => {
         fileInputRef.current?.click();
@@ -231,7 +488,8 @@ export default function Phase1SourceSelection({
         const timeout = setTimeout(async () => {
             setIsAnalyzing(true);
             try {
-                const response = await analyzeGithubRepoAction(repoUrl);
+                const installationId = ((getValues('import_source.metadata') as any)?.githubInstallationId ?? null) as number | null;
+                const response = await analyzeGithubRepoAction(repoUrl, installationId);
                 if (!response.success || !response.result) return;
                 const result = response.result;
 
@@ -256,7 +514,7 @@ export default function Phase1SourceSelection({
             clearTimeout(timeout);
             controller?.abort();
         };
-    }, [repoUrl, setValue, importSourceType]);
+    }, [getValues, repoUrl, setValue, importSourceType]);
 
     const rootEntries = githubFolderEntries[''] || githubPreview.rootEntries || [];
 
@@ -456,7 +714,7 @@ export default function Phase1SourceSelection({
                                 </div>
 
                                 {/* Upgrade Scope Helper */}
-                                {repoUrl && repoUrl.trim().length > 0 && (
+                                {repoUrl && repoUrl.trim().length > 0 && !isConnected && (
                                     <button
                                         type="button"
                                         onClick={handleConnectGithub}
@@ -464,6 +722,72 @@ export default function Phase1SourceSelection({
                                     >
                                         Grant Private Access
                                     </button>
+                                )}
+
+                                {/* Picker-first flow */}
+                                {isConnected ? (
+                                    <div className="mb-3 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50/70 dark:bg-zinc-900/40 p-2 space-y-2">
+                                        <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                                            My Repositories
+                                        </div>
+                                        <input
+                                            type="text"
+                                            value={repoQuery}
+                                            onChange={(e) => setRepoQuery(e.target.value)}
+                                            placeholder="Search repositories..."
+                                            className="w-full rounded-md border border-zinc-200 dark:border-zinc-700 px-2 py-1.5 text-xs bg-white dark:bg-zinc-900"
+                                        />
+                                        <div className="max-h-40 overflow-auto rounded-md border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900">
+                                            {repoItems.length === 0 && !isLoadingRepos && (
+                                                <div className="px-2 py-3 text-xs text-zinc-500 dark:text-zinc-400 text-center">
+                                                    No repositories found
+                                                </div>
+                                            )}
+                                            {repoItems.map((item) => {
+                                                const selected = normalizeGitHubRepoUrl(repoUrl || '') === item.htmlUrl;
+                                                return (
+                                                    <button
+                                                        key={`${item.id}-${item.fullName}`}
+                                                        type="button"
+                                                        onClick={() => void handlePickRepository(item)}
+                                                        className={`w-full text-left px-2 py-2 border-b border-zinc-100 dark:border-zinc-800 last:border-b-0 ${
+                                                            selected
+                                                                ? 'bg-indigo-50 dark:bg-indigo-900/20'
+                                                                : 'hover:bg-zinc-50 dark:hover:bg-zinc-800/50'
+                                                        }`}
+                                                    >
+                                                        <div className="text-xs font-medium text-zinc-900 dark:text-zinc-100 truncate">
+                                                            {item.fullName}
+                                                        </div>
+                                                        <div className="text-[10px] text-zinc-500 dark:text-zinc-400">
+                                                            {item.visibility}
+                                                            {item.defaultBranch ? ` · ${item.defaultBranch}` : ''}
+                                                        </div>
+                                                    </button>
+                                                );
+                                            })}
+                                            {isLoadingRepos && (
+                                                <div className="px-2 py-2 text-xs text-zinc-500 dark:text-zinc-400 flex items-center gap-1.5">
+                                                    <Loader2 className="w-3 h-3 animate-spin" />
+                                                    Loading repositories...
+                                                </div>
+                                            )}
+                                        </div>
+                                        {repoCursor && (
+                                            <button
+                                                type="button"
+                                                onClick={() => void loadRepositories(false, repoCursor)}
+                                                disabled={isLoadingRepos}
+                                                className="w-full rounded-md border border-zinc-200 dark:border-zinc-700 py-1.5 text-xs font-semibold hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-60"
+                                            >
+                                                Load more
+                                            </button>
+                                        )}
+                                    </div>
+                                ) : (
+                                    <div className="mb-3 rounded-lg border border-amber-200 dark:border-amber-900/50 bg-amber-50/70 dark:bg-amber-900/10 px-2 py-2 text-[11px] text-amber-700 dark:text-amber-300">
+                                        Connect GitHub to browse your repositories. Manual public URLs still work.
+                                    </div>
                                 )}
 
                                 <div className="relative">
@@ -476,36 +800,131 @@ export default function Phase1SourceSelection({
                                         value={repoUrl || ''}
                                         className="block w-full pl-9 pr-3 py-2 border-zinc-200 dark:border-zinc-700 rounded-lg dark:bg-zinc-800 dark:text-white text-sm focus:ring-2 focus:ring-slate-500 dark:focus:ring-slate-400 shadow-sm"
                                         placeholder="username/repo or https://github.com/owner/repo"
-                                        onChange={(e) => setValue('import_source.repoUrl', normalizeGitHubRepoUrl(e.target.value))}
+                                        onChange={(e) => {
+                                            const normalized = normalizeGitHubRepoUrl(e.target.value);
+                                            setValue('import_source.repoUrl', normalized, { shouldDirty: true });
+                                            setGithubMetadata({
+                                                githubPreflightStatus: 'idle',
+                                                githubPreflightError: null,
+                                                githubPreflightWarnings: [],
+                                            });
+                                            setPreflightState({ status: 'idle', warnings: [], error: null, authSource: null });
+                                        }}
                                     />
                                 </div>
 
+                                <div className="mt-3 space-y-2">
+                                    <label className="block text-[10px] font-semibold text-slate-700 dark:text-slate-300 uppercase tracking-wider">
+                                        Branch
+                                    </label>
+                                    {branchOptions.length > 0 ? (
+                                        <select
+                                            value={branch || ''}
+                                            onChange={(e) => {
+                                                setValue('import_source.branch', e.target.value, { shouldDirty: true });
+                                                setGithubMetadata({
+                                                    githubPreflightStatus: 'idle',
+                                                    githubPreflightError: null,
+                                                });
+                                                setPreflightState({ status: 'idle', warnings: [], error: null, authSource: null });
+                                            }}
+                                            className="w-full rounded-lg border border-zinc-200 dark:border-zinc-700 px-3 py-2 text-sm dark:bg-zinc-800 dark:text-white"
+                                        >
+                                            {branchOptions.map((option) => (
+                                                <option key={option} value={option}>
+                                                    {option}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    ) : (
+                                        <input
+                                            type="text"
+                                            value={branch || ''}
+                                            onChange={(e) => {
+                                                setValue('import_source.branch', e.target.value, { shouldDirty: true });
+                                                setGithubMetadata({
+                                                    githubPreflightStatus: 'idle',
+                                                    githubPreflightError: null,
+                                                });
+                                                setPreflightState({ status: 'idle', warnings: [], error: null, authSource: null });
+                                            }}
+                                            placeholder="main"
+                                            className="w-full rounded-lg border border-zinc-200 dark:border-zinc-700 px-3 py-2 text-sm dark:bg-zinc-800 dark:text-white"
+                                        />
+                                    )}
+                                    {isLoadingBranches && (
+                                        <div className="text-[10px] text-zinc-500 dark:text-zinc-400 flex items-center gap-1.5">
+                                            <Loader2 className="w-3 h-3 animate-spin" />
+                                            Loading branches...
+                                        </div>
+                                    )}
+                                </div>
+
                                 {(repoUrl && repoUrl.trim().length > 0) ? (
-                                    <button
-                                        type="button"
-                                        disabled={githubPreview.status === 'loading'}
-                                        onClick={async () => {
-                                            const url = normalizeGitHubRepoUrl(repoUrl || '');
-                                            setValue('import_source.repoUrl', url);
-                                            await startGithubRootPreview(url);
-                                        }}
-                                        className="mt-3 w-full flex items-center justify-center gap-2 px-4 py-2 bg-slate-900 hover:bg-slate-800 disabled:bg-slate-400 dark:bg-white dark:hover:bg-zinc-200 dark:disabled:bg-zinc-400 text-white dark:text-zinc-900 rounded-lg text-sm font-bold transition-colors"
-                                    >
-                                        {githubPreview.status === 'loading' ? (
-                                            <>
-                                                <Loader2 className="w-4 h-4 animate-spin" />
-                                                Loading preview...
-                                            </>
-                                        ) : (
-                                            <>
-                                                Preview Repository
-                                                <Sparkles className="w-4 h-4" />
-                                            </>
-                                        )}
-                                    </button>
+                                    <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                        <button
+                                            type="button"
+                                            disabled={preflightState.status === 'loading'}
+                                            onClick={() => void runPreflightChecks(repoUrl, branch || null)}
+                                            className="w-full flex items-center justify-center gap-2 px-3 py-2 border border-slate-300 dark:border-slate-600 hover:bg-slate-100 dark:hover:bg-zinc-800 disabled:opacity-60 text-slate-800 dark:text-slate-100 rounded-lg text-sm font-semibold transition-colors"
+                                        >
+                                            {preflightState.status === 'loading' ? (
+                                                <>
+                                                    <Loader2 className="w-4 h-4 animate-spin" />
+                                                    Running checks...
+                                                </>
+                                            ) : (
+                                                <>
+                                                    Run Import Checks
+                                                    <Check className="w-4 h-4" />
+                                                </>
+                                            )}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            disabled={githubPreview.status === 'loading'}
+                                            onClick={async () => {
+                                                const url = normalizeGitHubRepoUrl(repoUrl || '');
+                                                setValue('import_source.repoUrl', url);
+                                                const preflightOk = await runPreflightChecks(url, branch || null);
+                                                if (!preflightOk) return;
+                                                await startGithubRootPreview(url);
+                                            }}
+                                            className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-slate-900 hover:bg-slate-800 disabled:bg-slate-400 dark:bg-white dark:hover:bg-zinc-200 dark:disabled:bg-zinc-400 text-white dark:text-zinc-900 rounded-lg text-sm font-bold transition-colors"
+                                        >
+                                            {githubPreview.status === 'loading' ? (
+                                                <>
+                                                    <Loader2 className="w-4 h-4 animate-spin" />
+                                                    Loading preview...
+                                                </>
+                                            ) : (
+                                                <>
+                                                    Preview Repository
+                                                    <Sparkles className="w-4 h-4" />
+                                                </>
+                                            )}
+                                        </button>
+                                    </div>
                                 ) : (
                                     <div className="mt-3 text-[10px] text-zinc-500 dark:text-zinc-400 text-center">
-                                        Paste a repo link to enable Continue.
+                                        Select or paste a repo to run checks.
+                                    </div>
+                                )}
+
+                                {preflightState.status === 'ok' && (
+                                    <div className="mt-2 rounded-lg border border-emerald-200 dark:border-emerald-900/50 bg-emerald-50/70 dark:bg-emerald-900/10 px-2 py-2 text-[11px] text-emerald-700 dark:text-emerald-300">
+                                        Import checks passed
+                                        {preflightState.authSource ? ` · auth: ${preflightState.authSource}` : ''}
+                                        {preflightState.warnings.length > 0 && (
+                                            <div className="mt-1 text-[10px] text-amber-700 dark:text-amber-300">
+                                                {preflightState.warnings.join(' ')}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                                {preflightState.status === 'error' && preflightState.error && (
+                                    <div className="mt-2 rounded-lg border border-red-200 dark:border-red-900/50 bg-red-50/70 dark:bg-red-900/10 px-2 py-2 text-[11px] text-red-700 dark:text-red-300">
+                                        {preflightState.error}
                                     </div>
                                 )}
                                 

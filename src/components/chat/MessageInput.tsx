@@ -54,6 +54,8 @@ export function MessageInput({ conversationId, targetUserId }: MessageInputProps
     const fileInputRef = useRef<HTMLInputElement>(null);
     const attachmentsRef = useRef<PendingAttachment[]>([]);
     const activeUploadIdsRef = useRef<Set<string>>(new Set());
+    const sendingRef = useRef(false);
+    const lastSendRef = useRef<{ signature: string; at: number } | null>(null);
     const router = useRouter();
 
     useEffect(() => {
@@ -232,7 +234,7 @@ export function MessageInput({ conversationId, targetUserId }: MessageInputProps
             .map(att => att.uploaded!);
 
         if (!text && uploadedAttachments.length === 0) return;
-        if (isSending) return;
+        if (isSending || sendingRef.current) return;
 
         // Check if any attachments are still uploading
         if (attachments.some(att => att.status === 'queued' || att.status === 'uploading')) {
@@ -240,6 +242,23 @@ export function MessageInput({ conversationId, targetUserId }: MessageInputProps
             return;
         }
 
+        const signature = JSON.stringify({
+            conversationId: conversationId === 'new' ? `new:${targetUserId || ''}` : conversationId,
+            replyToMessageId: replyTarget?.id || null,
+            text,
+            attachments: uploadedAttachments.map((attachment) => attachment.id).sort(),
+        });
+        const now = Date.now();
+        if (
+            lastSendRef.current &&
+            lastSendRef.current.signature === signature &&
+            now - lastSendRef.current.at < 1200
+        ) {
+            return;
+        }
+
+        sendingRef.current = true;
+        lastSendRef.current = { signature, at: now };
         setIsSending(true);
         if (conversationId !== 'new') {
             sendTyping(false);
@@ -302,7 +321,10 @@ export function MessageInput({ conversationId, targetUserId }: MessageInputProps
                      router.replace(`/messages?conversationId=${actualConversationId}`);
                 }
 
-                clearReplyTarget(conversationId);
+                clearReplyTarget(actualConversationId);
+                if (conversationId !== actualConversationId) {
+                    clearReplyTarget(conversationId);
+                }
 
                 if (result.queued) {
                     toast.info('Message queued. It will send automatically when connection is stable.');
@@ -314,6 +336,7 @@ export function MessageInput({ conversationId, targetUserId }: MessageInputProps
             console.error(e);
             toast.error("Error sending message");
         } finally {
+            sendingRef.current = false;
             setIsSending(false);
         }
 

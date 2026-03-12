@@ -1,0 +1,198 @@
+{
+  "generatedAt": "2026-03-12T01:58:17.566Z",
+  "source": "/tmp/page-load-metrics.json",
+  "sourceMeasuredAt": "2026-03-12T01:12:14.296Z",
+  "routeCount": 19,
+  "routes": [
+    {
+      "routeId": "/",
+      "pageFile": "src/app/page.tsx",
+      "status": 200,
+      "finalUrl": "http://localhost:3000/login",
+      "browserLoadMs": 892,
+      "browserNavDurationMs": 892,
+      "serverTtfbMs": 182,
+      "domContentLoadedMs": 308
+    },
+    {
+      "routeId": "/login",
+      "pageFile": "src/app/(auth)/login/page.tsx",
+      "status": 200,
+      "finalUrl": "http://localhost:3000/login",
+      "browserLoadMs": 692,
+      "browserNavDurationMs": 692,
+      "serverTtfbMs": 118,
+      "domContentLoadedMs": 143
+    },
+    {
+      "routeId": "/signup",
+      "pageFile": "src/app/(auth)/signup/page.tsx",
+      "status": 200,
+      "finalUrl": "http://localhost:3000/signup",
+      "browserLoadMs": 2909,
+      "browserNavDurationMs": 2909,
+      "serverTtfbMs": 2136,
+      "domContentLoadedMs": 2180
+    },
+    {
+      "routeId": "/onboarding",
+      "pageFile": "src/app/(onboarding)/onboarding/page.tsx",
+      "status": 200,
+      "finalUrl": "http://localhost:3000/signup",
+      "browserLoadMs": 846,
+      "browserNavDurationMs": 846,
+      "serverTtfbMs": 87,
+      "domContentLoadedMs": 121
+    },
+    {
+      "routeId": "/hub",
+      "pageFile": "src/app/(main)/hub/page.tsx",
+      "status": 200,
+      "finalUrl": "http://localhost:3000/login?redirect=%2Fhub",
+      "browserLoadMs": 1014,
+      "browserNavDurationMs": 1014,
+      "serverTtfbMs": 416,
+      "domContentLoadedMs": 445
+    },
+    {
+      "routeId": "/people",
+      "pageFile": "src/app/(main)/people/page.tsx",
+      "status": 200,
+      "finalUrl": "http://localhost:3000/login?redirect=%2Fpeople",
+      "browserLoadMs": 644,
+      "browserNavDurationMs": 644,
+      "serverTtfbMs": 80,
+      "domContentLoadedMs": 111
+    },
+    {
+      "routeId": "/projects/[slug]",
+      "pageFile": "src/app/(main)/projects/[slug]/page.tsx",
+      "status": 200,
+      "finalUrl": "http://localhost:3000/login",
+      "browserLoadMs": 1416,
+      "browserNavDurationMs": 1416,
+      "serverTtfbMs": 321,
+      "domContentLoadedMs": 442
+    },
+    {
+      "routeId": "/profile",
+      "pageFile": "src/app/(main)/profile/page.tsx",
+      "status": 200,
+      "finalUrl": "http://localhost:3000/login?redirect=%2Fprofile",
+      "browserLoadMs": 597,
+      "browserNavDurationMs": 597,
+      "serverTtfbMs": 54,
+      "domContentLoadedMs": 82
+    },
+    {
+      "routeId": "/messages",
+      "pageFile": "src/app/(main)/messages/page.tsx",
+      "status": 200,
+      "finalUrl": "http://localhost:3000/login?redirect=%2Fmessages",
+      "browserLoadMs": 607,
+      "browserNavDurationMs": 607,
+      "serverTtfbMs": 62,
+      "domContentLoadedMs": 93
+    },
+    {
+      "routeId": "/u/[username]",
+      "pageFile": "src/app/(main)/u/[username]/page.tsx",
+      "status": 200,
+      "finalUrl": "http://localhost:3000/login",
+      "browserLoadMs": 4961,
+      "browserNavDurationMs": 4961,
+      "serverTtfbMs": 3896,
+      "domContentLoadedMs": 4007
+    },
+    {
+      "routeId": "/workspace",
+      "pageFile": "src/app/(main)/workspace/page.tsx",
+      "status": 200,
+      "finalUrl": "http://localhost:3000/login?redirect=%2Fworkspace",
+      "browserLoadMs": 944,
+      "browserNavDurationMs": 944,
+      "serverTtfbMs": 61,
+      "domContentLoadedMs": 77
+    },
+    {
+      "routeId": "/settings",
+      "pageFile": "src/app/(main)/settings/page.tsx",
+      "status": 200,
+      "finalUrl": "http://localhost:3000/login?redirect=%2Fsettings",
+      "browserLoadMs": 954,
+      "browserNavDurationMs": 954,
+      "serverTtfbMs": 90,
+      "domContentLoadedMs": 121
+    },
+    {
+      "routeId": "/settings/account",
+      "pageFile": "src/app/(main)/settings/account/page.tsx",
+      "status": 200,
+      "finalUrl": "http://localhost:3000/login?redirect=%2Fsettings%2Faccount",
+      "browserLoadMs": 1006,
+      "browserNavDurationMs": 1006,
+      "serverTtfbMs": 90,
+      "domContentLoadedMs": 105
+    },
+    {
+      "routeId": "/settings/security",
+      "pageFile": "src/app/(main)/settings/security/page.tsx",
+      "status": 200,
+      "finalUrl": "http://localhost:3000/login?redirect=%2Fsettings%2Fsecurity",
+      "browserLoadMs": 612,
+      "browserNavDurationMs": 612,
+      "serverTtfbMs": 77,
+      "domContentLoadedMs": 102
+    },
+    {
+      "routeId": "/settings/privacy",
+      "pageFile": "src/app/(main)/settings/privacy/page.tsx",
+      "status": 200,
+      "finalUrl": "http://localhost:3000/login?redirect=%2Fsettings%2Fprivacy",
+      "browserLoadMs": 629,
+      "browserNavDurationMs": 629,
+      "serverTtfbMs": 78,
+      "domContentLoadedMs": 102
+    },
+    {
+      "routeId": "/settings/notifications",
+      "pageFile": "src/app/(main)/settings/notifications/page.tsx",
+      "status": 200,
+      "finalUrl": "http://localhost:3000/login?redirect=%2Fsettings%2Fnotifications",
+      "browserLoadMs": 618,
+      "browserNavDurationMs": 618,
+      "serverTtfbMs": 80,
+      "domContentLoadedMs": 109
+    },
+    {
+      "routeId": "/settings/appearance",
+      "pageFile": "src/app/(main)/settings/appearance/page.tsx",
+      "status": 200,
+      "finalUrl": "http://localhost:3000/login?redirect=%2Fsettings%2Fappearance",
+      "browserLoadMs": 638,
+      "browserNavDurationMs": 638,
+      "serverTtfbMs": 92,
+      "domContentLoadedMs": 106
+    },
+    {
+      "routeId": "/settings/integrations",
+      "pageFile": "src/app/(main)/settings/integrations/page.tsx",
+      "status": 200,
+      "finalUrl": "http://localhost:3000/login?redirect=%2Fsettings%2Fintegrations",
+      "browserLoadMs": 620,
+      "browserNavDurationMs": 620,
+      "serverTtfbMs": 78,
+      "domContentLoadedMs": 103
+    },
+    {
+      "routeId": "/settings/languages",
+      "pageFile": "src/app/(main)/settings/languages/page.tsx",
+      "status": 200,
+      "finalUrl": "http://localhost:3000/login?redirect=%2Fsettings%2Flanguages",
+      "browserLoadMs": 684,
+      "browserNavDurationMs": 684,
+      "serverTtfbMs": 78,
+      "domContentLoadedMs": 102
+    }
+  ]
+}

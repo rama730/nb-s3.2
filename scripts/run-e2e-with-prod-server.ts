@@ -43,7 +43,7 @@ function resolveServerTarget() {
 }
 
 const { port, baseURL } = resolveServerTarget();
-const readyURL = `${baseURL}/api/ready`;
+const readyURL = `${baseURL}/api/v1/ready`;
 const timeoutMs = 120_000;
 const pollMs = 500;
 const perfDir = path.join(process.cwd(), "test-results", "perf");

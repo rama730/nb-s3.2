@@ -21,9 +21,55 @@ export interface WidgetPlacement {
 
 export type WidgetCardSizeMode = 'compact' | 'standard' | 'expanded';
 
+export interface WorkspaceQuickNotesState {
+    content: string;
+    updatedAt: string;
+}
+
+export interface WorkspacePinnedItem {
+    type: 'task' | 'project';
+    id: string;
+    title: string;
+    projectSlug?: string | null;
+    projectKey?: string | null;
+    taskNumber?: number | null;
+    projectId?: string;
+}
+
 export interface WorkspaceLayout {
     version: number;
     widgets: WidgetPlacement[];
+    quickNotes?: WorkspaceQuickNotesState;
+    pins?: WorkspacePinnedItem[];
+}
+
+export type WorkspaceOverviewSectionKey =
+    | 'tasks'
+    | 'projects'
+    | 'conversations'
+    | 'recentActivity'
+    | 'files'
+    | 'mentionsRequests';
+
+export type WidgetDataSource =
+    | 'workspace'
+    | 'projects'
+    | 'messages'
+    | 'files'
+    | 'people'
+    | 'profile'
+    | 'local';
+
+export type WidgetAuthScope = 'authenticated' | 'project_member' | 'owner_or_member';
+
+export interface WidgetCapability {
+    source: WidgetDataSource;
+    authScope: WidgetAuthScope;
+    refreshMs: number | null;
+    dataBudget: {
+        maxItems: number;
+    };
+    sections: WorkspaceOverviewSectionKey[];
 }
 
 // ============================================================================
@@ -41,6 +87,7 @@ export interface WidgetConfig {
     maxColSpan: number;
     maxRowSpan: number;
     description: string;
+    capability: WidgetCapability;
 }
 
 // ============================================================================
@@ -49,25 +96,36 @@ export interface WidgetConfig {
 
 export type WidgetId =
     | 'todays_focus'
-    | 'recent_activity'
-    | 'my_projects'
     | 'urgent_items'
-    | 'quick_notes'
     | 'recent_messages'
-    | 'shortcuts';
+    | 'my_projects'
+    | 'recent_files'
+    | 'project_health'
+    | 'mentions_requests'
+    | 'recent_activity'
+    | 'pinned_items'
+    | 'quick_notes'
+    | 'sprint_snapshot'
+    | 'quick_actions'
+    | 'shortcuts'; // legacy alias (auto-migrates to quick_actions)
 
 // ============================================================================
 // Default Layout — used when user has no saved layout (NULL in DB)
 // ============================================================================
 
+export const WORKSPACE_LAYOUT_VERSION = 2;
+
 export const DEFAULT_LAYOUT: WorkspaceLayout = {
-    version: 1,
+    version: WORKSPACE_LAYOUT_VERSION,
     widgets: [
-        { widgetId: 'quick_notes',      col: 0, row: 0, colSpan: 2, rowSpan: 2 },
-        { widgetId: 'todays_focus',     col: 2, row: 0, colSpan: 2, rowSpan: 2 },
-        { widgetId: 'urgent_items',     col: 4, row: 0, colSpan: 2, rowSpan: 1 },
-        { widgetId: 'my_projects',      col: 4, row: 1, colSpan: 2, rowSpan: 1 },
-        { widgetId: 'recent_activity',  col: 0, row: 2, colSpan: 3, rowSpan: 1 },
-        { widgetId: 'recent_messages',  col: 3, row: 2, colSpan: 3, rowSpan: 1 },
+        { widgetId: 'quick_notes',       col: 0, row: 0, colSpan: 2, rowSpan: 2 },
+        { widgetId: 'todays_focus',      col: 2, row: 0, colSpan: 2, rowSpan: 2 },
+        { widgetId: 'urgent_items',      col: 4, row: 0, colSpan: 2, rowSpan: 1 },
+        { widgetId: 'mentions_requests', col: 4, row: 1, colSpan: 2, rowSpan: 1 },
+        { widgetId: 'my_projects',       col: 0, row: 2, colSpan: 2, rowSpan: 1 },
+        { widgetId: 'recent_files',      col: 2, row: 2, colSpan: 2, rowSpan: 1 },
+        { widgetId: 'recent_messages',   col: 4, row: 2, colSpan: 2, rowSpan: 1 },
+        { widgetId: 'recent_activity',   col: 0, row: 3, colSpan: 3, rowSpan: 1 },
+        { widgetId: 'project_health',    col: 3, row: 3, colSpan: 3, rowSpan: 1 },
     ],
 };

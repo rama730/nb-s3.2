@@ -17,6 +17,8 @@ import {
 } from "@/app/actions/applications";
 import ApplicationReviewModal from "./ApplicationReviewModal";
 import { PROJECT_MEMBERS_QUERY_KEY } from "@/hooks/hub/useProjectData";
+import { getApplicationDecisionReasonLabel } from "@/lib/applications/reasons";
+import { logger } from "@/lib/logger";
 import {
     Dialog,
     DialogContent,
@@ -78,9 +80,13 @@ export default function ProjectApplicationsSection({ initialUser, initialApplica
     const hasInitialApplications = !!initialApplications;
     const [myApplications, setMyApplications] = useState<MyApplication[]>(initialApplications?.my || []);
     const [incomingApplications, setIncomingApplications] = useState<IncomingApplication[]>(initialApplications?.incoming || []);
-    const [hasMoreIncoming, setHasMoreIncoming] = useState(initialApplications ? initialApplications.incoming.length >= 20 : false); // Optimistic guess
+    const [hasMoreIncoming, setHasMoreIncoming] = useState(false);
+    const [incomingNextCursor, setIncomingNextCursor] = useState<string | null>(null);
+    const [hasMoreMy, setHasMoreMy] = useState(false);
+    const [myNextCursor, setMyNextCursor] = useState<string | null>(null);
     const [isLoading, setIsLoading] = useState(!hasInitialApplications);
     const [isLoadingMore, setIsLoadingMore] = useState(false);
+    const [isLoadingMoreMy, setIsLoadingMoreMy] = useState(false);
     const [expandMy, setExpandMy] = useState(true);
     const [expandIncoming, setExpandIncoming] = useState(true);
     const [processingId, setProcessingId] = useState<string | null>(null);
@@ -131,14 +137,17 @@ export default function ProjectApplicationsSection({ initialUser, initialApplica
             try {
                 // Parallel fetch - both actions are lightweight and indexed
                 const [myRes, incomingRes] = await Promise.all([
-                    getMyApplicationsAction(),
-                    getIncomingApplicationsAction(20, 0)
+                    getMyApplicationsAction({ limit: 20 }),
+                    getIncomingApplicationsAction({ limit: 20 })
                 ]);
                 
                 if (!cancelled) {
                     setMyApplications(myRes.applications || []);
+                    setHasMoreMy(!!myRes.hasMore);
+                    setMyNextCursor(myRes.nextCursor || null);
                     setIncomingApplications(incomingRes.applications || []);
                     setHasMoreIncoming(!!incomingRes.hasMore);
+                    setIncomingNextCursor(incomingRes.nextCursor || null);
                 }
             } catch (error) {
                 console.error("Failed to fetch applications:", error);
@@ -163,13 +172,16 @@ export default function ProjectApplicationsSection({ initialUser, initialApplica
         const refresh = async () => {
             try {
                 const [myRes, incomingRes] = await Promise.all([
-                    getMyApplicationsAction(),
-                    getIncomingApplicationsAction(20, 0),
+                    getMyApplicationsAction({ limit: 20 }),
+                    getIncomingApplicationsAction({ limit: 20 }),
                 ]);
                 if (cancelled) return;
                 setMyApplications(myRes.applications || []);
+                setHasMoreMy(!!myRes.hasMore);
+                setMyNextCursor(myRes.nextCursor || null);
                 setIncomingApplications(incomingRes.applications || []);
                 setHasMoreIncoming(!!incomingRes.hasMore);
+                setIncomingNextCursor(incomingRes.nextCursor || null);
             } catch {
                 // silent background refresh
             }
@@ -183,18 +195,38 @@ export default function ProjectApplicationsSection({ initialUser, initialApplica
     }, [initialUser?.id]);
 
     const handleLoadMore = async () => {
-        if (isLoadingMore || !hasMoreIncoming) return;
+        if (isLoadingMore || !hasMoreIncoming || !incomingNextCursor) return;
         setIsLoadingMore(true);
         try {
-            const result = await getIncomingApplicationsAction(20, incomingApplications.length);
+            const result = await getIncomingApplicationsAction({ limit: 20, cursor: incomingNextCursor });
             if (result.success) {
-                setIncomingApplications(prev => [...prev, ...result.applications]);
+                setIncomingApplications(prev => [...prev, ...(result.applications || [])]);
                 setHasMoreIncoming(!!result.hasMore);
+                setIncomingNextCursor(result.nextCursor || null);
             }
         } catch {
             toast.error("Failed to load more applications");
         } finally {
             setIsLoadingMore(false);
+        }
+    };
+
+    const handleLoadMoreMy = async () => {
+        if (isLoadingMoreMy || !hasMoreMy || !myNextCursor) return;
+        setIsLoadingMoreMy(true);
+        try {
+            const result = await getMyApplicationsAction({ limit: 20, cursor: myNextCursor });
+            if (result.success) {
+                setMyApplications((prev) => [...prev, ...(result.applications || [])]);
+                setHasMoreMy(!!result.hasMore);
+                setMyNextCursor(result.nextCursor || null);
+            } else {
+                toast.error(result.error || "Failed to load applications");
+            }
+        } catch {
+            toast.error("Failed to load applications");
+        } finally {
+            setIsLoadingMoreMy(false);
         }
     };
 
@@ -224,6 +256,8 @@ export default function ProjectApplicationsSection({ initialUser, initialApplica
         const { applicationId, projectId, mode } = reviewModalState;
         if (!applicationId) return;
 
+        const startedAt = performance.now();
+        const requestId = `application-decision:${applicationId}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
         setProcessingId(applicationId); // Optimistic UI for list item
         try {
             let result;
@@ -234,6 +268,27 @@ export default function ProjectApplicationsSection({ initialUser, initialApplica
             }
 
             if (result.success) {
+                const durationMs = Math.round(performance.now() - startedAt);
+                logger.metric("applications.review.result", {
+                    module: "people-requests",
+                    mode,
+                    applicationId,
+                    projectId: projectId || null,
+                    applicationTraceId: result.applicationTraceId || null,
+                    result: "success",
+                    durationMs,
+                    requestId,
+                });
+                logger.metric("project.detail.application.decision", {
+                    interaction: "application.decision",
+                    mode,
+                    applicationId,
+                    projectId: projectId || null,
+                    applicationTraceId: result.applicationTraceId || null,
+                    requestId,
+                    durationMs,
+                    result: "success",
+                });
                 toast.success(mode === "accept" ? "Application accepted!" : "Application rejected");
                 setIncomingApplications(prev => prev.filter(a => a.id !== applicationId));
 
@@ -244,9 +299,44 @@ export default function ProjectApplicationsSection({ initialUser, initialApplica
                     });
                 }
             } else {
+                const durationMs = Math.round(performance.now() - startedAt);
+                logger.metric("applications.review.result", {
+                    module: "people-requests",
+                    mode,
+                    applicationId,
+                    projectId: projectId || null,
+                    applicationTraceId: result.applicationTraceId || null,
+                    errorCode: result.errorCode || "UNKNOWN",
+                    result: "failure",
+                    durationMs,
+                    requestId,
+                });
+                logger.metric("project.detail.application.decision", {
+                    interaction: "application.decision",
+                    mode,
+                    applicationId,
+                    projectId: projectId || null,
+                    applicationTraceId: result.applicationTraceId || null,
+                    requestId,
+                    durationMs,
+                    result: "failure",
+                    errorCode: result.errorCode || "UNKNOWN",
+                });
                 toast.error(result.error || `Failed to ${mode}`);
             }
-        } catch {
+        } catch (error) {
+            const durationMs = Math.round(performance.now() - startedAt);
+            logger.metric("project.detail.application.decision", {
+                interaction: "application.decision",
+                mode,
+                applicationId,
+                projectId: projectId || null,
+                requestId,
+                durationMs,
+                result: "failure",
+                errorCode: "UNEXPECTED_ERROR",
+                message: error instanceof Error ? error.message : "Unknown error",
+            });
             toast.error("Something went wrong");
         } finally {
             setProcessingId(null);
@@ -458,11 +548,7 @@ export default function ProjectApplicationsSection({ initialUser, initialApplica
                                     role_filled: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300",
                                 }[lifecycle] || "";
                                 const statusLabel = lifecycle === "role_filled" ? "filled" : lifecycle;
-                                const reasonLabel = app.decisionReason === "role_filled"
-                                    ? "Role was filled"
-                                    : app.decisionReason === "withdrawn_by_applicant"
-                                        ? "Withdrawn"
-                                        : null;
+                                const reasonLabel = getApplicationDecisionReasonLabel(app.decisionReason);
 
                                 return (
                                     <div 
@@ -531,6 +617,16 @@ export default function ProjectApplicationsSection({ initialUser, initialApplica
                                     </div>
                                 );
                             })}
+                            {hasMoreMy && (
+                                <button
+                                    onClick={handleLoadMoreMy}
+                                    disabled={isLoadingMoreMy}
+                                    className="w-full py-2 text-sm text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 font-medium transition-colors flex items-center justify-center gap-2"
+                                >
+                                    {isLoadingMoreMy && <Loader2 className="w-4 h-4 animate-spin" />}
+                                    Load More Applications
+                                </button>
+                            )}
                         </div>
                     )}
                 </div>

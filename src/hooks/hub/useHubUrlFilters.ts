@@ -11,6 +11,7 @@ interface UrlFilters {
     type: ProjectType;
     sort: SortOption;
     tech: string[];
+    hideOpened: boolean;
 }
 
 export function useHubUrlFilters() {
@@ -25,15 +26,23 @@ export function useHubUrlFilters() {
         type: (searchParams.get('type') as ProjectType) || PROJECT_TYPE.ALL,
         sort: (searchParams.get('sort') as SortOption) || SORT_OPTIONS.NEWEST,
         tech: searchParams.get('tech')?.split(',').filter(Boolean) || [],
+        hideOpened: searchParams.get('hideOpened') === 'true',
     }), [searchParams]);
 
     const updateUrlFilters = useCallback((newFilters: Partial<UrlFilters>) => {
         const params = new URLSearchParams(searchParams.toString());
 
         Object.entries(newFilters).forEach(([key, value]) => {
-            if (value === undefined || value === '' || value === FILTER_VIEWS.ALL ||
-                value === PROJECT_STATUS.ALL || value === PROJECT_TYPE.ALL ||
-                value === SORT_OPTIONS.NEWEST || (Array.isArray(value) && value.length === 0)) {
+            if (
+                value === undefined ||
+                value === '' ||
+                value === FILTER_VIEWS.ALL ||
+                value === PROJECT_STATUS.ALL ||
+                value === PROJECT_TYPE.ALL ||
+                value === SORT_OPTIONS.NEWEST ||
+                (Array.isArray(value) && value.length === 0) ||
+                (key === 'hideOpened' && value === false)
+            ) {
                 params.delete(key);
             } else if (Array.isArray(value)) {
                 params.set(key, value.join(','));
@@ -57,7 +66,8 @@ export function useHubUrlFilters() {
             urlFilters.status !== PROJECT_STATUS.ALL ||
             urlFilters.type !== PROJECT_TYPE.ALL ||
             urlFilters.sort !== SORT_OPTIONS.NEWEST ||
-            urlFilters.tech.length > 0
+            urlFilters.tech.length > 0 ||
+            urlFilters.hideOpened
         );
     }, [urlFilters]);
 

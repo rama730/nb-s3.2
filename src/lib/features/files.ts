@@ -1,3 +1,5 @@
+import { hardeningFeatureFlags, isHardeningDomainEnabled } from "@/lib/features/hardening";
+
 const asEnabledDefault = (value: string | undefined) =>
   value === "0" || value === "false" ? false : true;
 
@@ -30,6 +32,7 @@ const capabilityOverrides = {
 
 export const filesFeatureFlags = {
   ...legacyFlags,
+  hardeningV1: hardeningFeatureFlags.hardeningFilesV1,
   searchHybrid:
     capabilityOverrides.searchHybrid !== undefined
       ? asEnabledDefault(capabilityOverrides.searchHybrid)
@@ -51,3 +54,13 @@ export const filesFeatureFlags = {
       ? asEnabledDefault(capabilityOverrides.uiEnhanced)
       : legacyFlags.wave3UiEnhancements,
 } as const;
+
+export function isFilesHardeningEnabled(userId?: string | null): boolean {
+  const explicit = process.env.NEXT_PUBLIC_FILES_HARDENING_V1;
+  const enabled =
+    explicit !== undefined
+      ? asEnabledDefault(explicit)
+      : filesFeatureFlags.hardeningV1;
+  if (!enabled) return false;
+  return isHardeningDomainEnabled("filesV1", userId);
+}

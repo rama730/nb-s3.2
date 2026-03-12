@@ -1,11 +1,7 @@
-import * as tus from "tus-js-client";
-
 self.onmessage = async (e: MessageEvent) => {
-    const { uploadNodes, supabaseUrl, bucketName, jwt, jobId } = e.data as {
+    const { uploadNodes, uploadUrls, jobId } = e.data as {
         uploadNodes: { file: File; s3Key: string; fileId: string; path: string }[];
-        supabaseUrl: string;
-        bucketName: string;
-        jwt: string; // The user's auth token
+        uploadUrls: Record<string, string>;
         jobId?: string;
     };
 
@@ -32,39 +28,43 @@ self.onmessage = async (e: MessageEvent) => {
 
             const node = uploadNodes[cursor++];
             active++;
+            const uploadUrl = uploadUrls[node.s3Key];
+            if (!uploadUrl) {
+                failCount++;
+                results.push({ fileId: node.fileId, success: false, error: "Missing signed upload URL" });
+                active--;
+                self.postMessage({
+                    type: "progress",
+                    jobId,
+                    completed: successCount + failCount,
+                    total,
+                    success: successCount,
+                    failed: failCount
+                });
+                continue;
+            }
 
-            const upload = new tus.Upload(node.file, {
-                endpoint: `${supabaseUrl}/storage/v1/upload/resumable`,
-                retryDelays: [0, 3000, 5000, 10000, 20000],
-                headers: {
-                    Authorization: `Bearer ${jwt}`,
-                    'x-upsert': 'true',
-                },
-                uploadDataDuringCreation: true,
-                removeFingerprintOnSuccess: true,
-                metadata: {
-                    bucketName: bucketName,
-                    objectName: node.s3Key,
-                    contentType: node.file.type || 'application/octet-stream',
-                    cacheControl: '3600',
-                },
-                chunkSize: 6 * 1024 * 1024, // 6MB
-                onError: (error) => {
-                    failCount++;
-                    results.push({ fileId: node.fileId, success: false, error: error.message });
-                    active--;
-                    self.postMessage({
-                        type: "progress",
-                        jobId,
-                        completed: successCount + failCount,
-                        total,
-                        success: successCount,
-                        failed: failCount
-                    });
-                },
-                onSuccess: () => {
+            fetch(uploadUrl, {
+                method: "PUT",
+                headers: { "Content-Type": node.file.type || "application/octet-stream" },
+                body: node.file,
+            })
+                .then((response) => {
+                    if (!response.ok) {
+                        throw new Error(`Upload failed (${response.status})`);
+                    }
                     successCount++;
                     results.push({ fileId: node.fileId, success: true });
+                })
+                .catch((error: unknown) => {
+                    failCount++;
+                    results.push({
+                        fileId: node.fileId,
+                        success: false,
+                        error: error instanceof Error ? error.message : String(error),
+                    });
+                })
+                .finally(() => {
                     active--;
                     self.postMessage({
                         type: "progress",
@@ -74,11 +74,7 @@ self.onmessage = async (e: MessageEvent) => {
                         success: successCount,
                         failed: failCount
                     });
-                }
-            });
-
-            // For extreme bulk uploads, we bypass checking for previous partial uploads and force start
-            upload.start();
+                });
         }
 
         // Wait for trailing active uploads

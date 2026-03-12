@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from "react";
 import Image from "next/image";
 import { Loader2, Camera, Plus, X, Trash2, Calendar, GripVertical } from "lucide-react";
-import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { createProfileImageUploadUrlAction } from "@/app/actions/profile";
 import { useToast } from "@/components/ui-custom/Toast";
 import Input from "@/components/ui-custom/Input";
 import { Label } from "@/components/ui-custom/Label";
@@ -21,7 +21,6 @@ interface EditProfileTabsProps {
 
 export function EditProfileTabs({ profile, onChange, onSaveSection, onResetSection }: EditProfileTabsProps) {
     const { showToast } = useToast();
-    const supabase = createSupabaseBrowserClient();
 
     // -- STATES --
     // General
@@ -90,74 +89,30 @@ export function EditProfileTabs({ profile, onChange, onSaveSection, onResetSecti
         setUploading(true);
 
         try {
-            // 1. Get authenticated user ID reliably from Supabase session
-            const { data: { user }, error: authError } = await supabase.auth.getUser();
-            if (authError || !user) {
-                console.error('Auth error or no user:', authError);
-                showToast('Please log in to upload images', 'error');
-                return;
+            const uploadSession = await createProfileImageUploadUrlAction({
+                mimeType: file.type || "application/octet-stream",
+                sizeBytes: file.size,
+                kind: type,
+            });
+            if (!uploadSession.success) {
+                throw new Error(uploadSession.error || "Failed to prepare image upload");
             }
 
-            const userId = user.id;
-
-            // 2. Delete old avatar from storage if exists
-            const currentUrl = type === 'avatar' ? formData.avatar_url : formData.banner_url;
-            if (currentUrl && currentUrl.includes('/avatars/')) {
-                try {
-                    // Extract file path from URL (format: .../avatars/{userId}/{filename})
-                    const urlParts = currentUrl.split('/avatars/');
-                    if (urlParts[1]) {
-                        const oldFilePath = urlParts[1];
-
-                        const { error: deleteError } = await supabase.storage
-                            .from('avatars')
-                            .remove([oldFilePath]);
-                        if (deleteError) {
-                            console.warn('[Upload] Could not delete old file:', deleteError);
-                        } else {
-
-                        }
-                    }
-                } catch (delErr) {
-                    console.warn('[Upload] Error deleting old avatar:', delErr);
-                    // Continue with upload even if delete fails
-                }
+            const uploadResponse = await fetch(uploadSession.uploadUrl, {
+                method: "PUT",
+                headers: { "Content-Type": uploadSession.contentType },
+                body: file,
+            });
+            if (!uploadResponse.ok) {
+                throw new Error(`Failed to upload image (${uploadResponse.status})`);
             }
 
-            const fileExt = file.name.split(".").pop()?.toLowerCase() || 'jpg';
-            const fileName = `${Date.now()}.${fileExt}`;
-            const filePath = `${userId}/${fileName}`;
-
-
-
-            // 3. Upload to Supabase Storage
-            const { data: uploadData, error: uploadError } = await supabase.storage
-                .from("avatars")
-                .upload(filePath, file, {
-                    upsert: true,
-                    cacheControl: '0',  // No caching for avatars
-                    contentType: file.type
-                });
-
-            if (uploadError) {
-                console.error('[Upload] Upload error:', uploadError);
-                throw uploadError;
-            }
-
-
-
-            // 4. Get the public URL with cache buster
-            const { data: { publicUrl } } = supabase.storage.from("avatars").getPublicUrl(filePath);
-            // Add timestamp to bust any CDN/browser cache
-            const cacheBustedUrl = `${publicUrl}?t=${Date.now()}`;
-
-
-            // 5. Update the form state
+            const cacheBustedUrl = `${uploadSession.publicUrl}?t=${Date.now()}`;
             const key = type === 'avatar' ? 'avatar_url' : 'banner_url';
             updateForm(key, cacheBustedUrl);
             showToast(`${type === 'avatar' ? 'Avatar' : 'Banner'} updated`, "success");
         } catch (error: any) {
-            console.error(`[Upload] Error uploading ${type}:`, error);
+            console.error("[Upload] Error uploading asset", { type, error });
             const message = error?.message || error?.error_description || 'Unknown error';
             showToast(`Failed to upload ${type}: ${message}`, "error");
         } finally {
@@ -214,7 +169,7 @@ export function EditProfileTabs({ profile, onChange, onSaveSection, onResetSecti
                 </TabsList>
             </div>
 
-            <div className="flex-1 overflow-y-auto px-5 py-4 pb-6 custom-scrollbar">
+            <div className="flex-1 app-scroll app-scroll-y px-5 py-4 pb-6">
 
                 {/* --- GENERAL TAB --- */}
                 <TabsContent value="general" className="space-y-4 mt-0">

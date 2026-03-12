@@ -1,7 +1,8 @@
 'use client';
 
-import { memo, useState, useCallback, useMemo, useEffect } from 'react';
+import { memo, useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { CancelledError } from '@tanstack/query-core';
 import {
     CheckSquare,
     Filter,
@@ -21,6 +22,7 @@ import {
 } from '@/app/actions/workspace';
 import { updateTaskStatusAction } from '@/app/actions/task';
 import { toast } from 'sonner';
+import { queryKeys } from '@/lib/query-keys';
 
 interface TasksTabProps {
     initialProjects: WorkspaceProject[];
@@ -105,19 +107,49 @@ function TasksTab({ initialProjects, onTaskClick }: TasksTabProps) {
     const [cursor, setCursor] = useState<string | undefined>(undefined);
     const [allTasks, setAllTasks] = useState<WorkspaceTask[]>([]);
     const [groupBy, setGroupBy] = useState<'project' | 'dueDate'>(() => loadPersistedFilters().groupBy || 'project');
+    const [routeScrollParent, setRouteScrollParent] = useState<HTMLElement | null>(null);
+    const requestVersionRef = useRef(0);
 
     // 2F: Persist on change
     useEffect(() => {
         persistFilters({ ...filters, groupBy });
     }, [filters, groupBy]);
 
+    useEffect(() => {
+        const resolveScrollParent = () => document.querySelector<HTMLElement>('[data-scroll-root="route"]');
+        setRouteScrollParent(resolveScrollParent());
+        const rafId = window.requestAnimationFrame(() => {
+            setRouteScrollParent(resolveScrollParent());
+        });
+        return () => window.cancelAnimationFrame(rafId);
+    }, []);
+
     const { data, isLoading, isFetching } = useQuery({
-        queryKey: ['workspace', 'tasks', filters, cursor],
-        queryFn: async () => {
-            const result = await getWorkspaceTasks(filters, cursor, 20);
+        queryKey: queryKeys.workspace.tasksList(filters, cursor),
+        queryFn: async ({ signal }) => {
+            const requestVersion = ++requestVersionRef.current;
+            const cursorSnapshot = cursor;
+            if (signal.aborted) {
+                throw new CancelledError({ revert: true, silent: true });
+            }
+            const result = await getWorkspaceTasks(filters, cursorSnapshot, 20);
+            if (signal.aborted || requestVersion !== requestVersionRef.current) {
+                throw new CancelledError({ revert: true, silent: true });
+            }
             if (result.success && result.tasks) {
-                if (cursor) {
-                    setAllTasks((prev) => [...prev, ...result.tasks!]);
+                if (cursorSnapshot) {
+                    const incoming = result.tasks;
+                    setAllTasks((prev) => {
+                        if (incoming.length === 0) return prev;
+                        const merged = [...prev];
+                        const seen = new Set(prev.map((task) => task.id));
+                        for (const task of incoming) {
+                            if (seen.has(task.id)) continue;
+                            seen.add(task.id);
+                            merged.push(task);
+                        }
+                        return merged;
+                    });
                 } else {
                     setAllTasks(result.tasks);
                 }
@@ -150,6 +182,7 @@ function TasksTab({ initialProjects, onTaskClick }: TasksTabProps) {
     const handleStatusToggle = useCallback(async (taskId: string, currentStatus: string, projectId: string) => {
         const nextStatus = currentStatus === 'todo' ? 'in_progress' : currentStatus === 'in_progress' ? 'done' : 'todo';
         const label = nextStatus === 'in_progress' ? 'Task started' : nextStatus === 'done' ? 'Task marked as done' : 'Task moved to To Do';
+        const previousTasks = allTasks;
 
         // Optimistic: update local list
         setAllTasks((prev) =>
@@ -159,11 +192,15 @@ function TasksTab({ initialProjects, onTaskClick }: TasksTabProps) {
         try {
             await updateTaskStatusAction(taskId, nextStatus, projectId);
             toast.success(label);
+            queryClient.invalidateQueries({ queryKey: queryKeys.workspace.tasksRoot() });
+            queryClient.invalidateQueries({ queryKey: queryKeys.workspace.overviewBase() });
+            queryClient.invalidateQueries({ queryKey: queryKeys.workspace.overviewSection.tasks() });
+            queryClient.invalidateQueries({ queryKey: queryKeys.workspace.activity() });
         } catch {
+            setAllTasks(previousTasks);
             toast.error('Failed to update task');
         }
-        queryClient.invalidateQueries({ queryKey: ['workspace'] });
-    }, [queryClient]);
+    }, [allTasks, queryClient]);
 
     // Build flat virtual items for Virtuoso
     const virtualItems = useMemo((): VirtualItem[] => {
@@ -287,7 +324,7 @@ function TasksTab({ initialProjects, onTaskClick }: TasksTabProps) {
             ) : (
                 <Virtuoso
                     data={virtualItems}
-                    useWindowScroll
+                    customScrollParent={routeScrollParent ?? undefined}
                     endReached={() => {
                         if (data?.hasMore && !isFetching) handleLoadMore();
                     }}

@@ -32,6 +32,7 @@ import {
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { toast } from 'sonner';
+import { normalizeSafeExternalUrl, parseSafeLinkToken } from '@/lib/messages/safe-links';
 
 interface MessageBubbleProps {
     message: MessageWithSender;
@@ -50,12 +51,15 @@ type ChatAttachment = {
     height: number | null;
 };
 
+const LINK_OR_MENTION_REGEX = /((?<!\S)@[a-zA-Z0-9_]{2,32}\b|(?:https?:\/\/|www\.)[^\s]+|(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(?:\/[^\s]*)?)/g;
+
 export function MessageBubble({ message, showAvatar = true }: MessageBubbleProps) {
     const { user } = useAuth();
     const setReplyTarget = useChatStore((state) => state.setReplyTarget);
     const refreshMessages = useChatStore((state) => state.refreshMessages);
     const refreshConversations = useChatStore((state) => state.refreshConversations);
     const pinMessage = useChatStore((state) => state.pinMessage);
+    const focusMessage = useChatStore((state) => state.focusMessage);
     const isOwn = message.senderId === user?.id;
     const isDeleted = !!message.deletedAt;
     const metadata = (message.metadata ?? null) as Record<string, unknown> | null;
@@ -82,6 +86,13 @@ export function MessageBubble({ message, showAvatar = true }: MessageBubbleProps
         () => attachments.filter((attachment) => attachment.type === 'file'),
         [attachments]
     );
+    const viewableAttachments = useMemo(() => {
+        return attachments.filter((attachment) =>
+            attachment.type === 'image' ||
+            attachment.type === 'video' ||
+            attachment.filename.toLowerCase().endsWith('.pdf')
+        );
+    }, [attachments]);
     const canEditMessage = isOwn && !isDeleted && Boolean(message.content);
     const canReply = !isDeleted;
     useEffect(() => {
@@ -182,20 +193,14 @@ export function MessageBubble({ message, showAvatar = true }: MessageBubbleProps
         }
     }, [isPinned, message.conversationId, message.id, pinMessage]);
 
-    const handleOpenRepliedMessage = useCallback(() => {
+    const handleOpenRepliedMessage = useCallback(async () => {
         const repliedId = message.replyTo?.id;
         if (!repliedId) return;
-        const element = document.getElementById(`msg-${repliedId}`);
-        if (element) {
-            element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            element.classList.add('ring-2', 'ring-blue-500/60');
-            window.setTimeout(() => {
-                element.classList.remove('ring-2', 'ring-blue-500/60');
-            }, 1400);
-            return;
+        const result = await focusMessage(message.conversationId, repliedId);
+        if (!result.found) {
+            toast.info('Original message is not available in this conversation');
         }
-        handleReply();
-    }, [handleReply, message.replyTo?.id]);
+    }, [focusMessage, message.conversationId, message.replyTo?.id]);
 
     if (message.type === 'system') {
         return (
@@ -223,9 +228,9 @@ export function MessageBubble({ message, showAvatar = true }: MessageBubbleProps
     }
 
     return (
-        <div className={`flex ${isOwn ? 'justify-end' : 'justify-start'}`}>
+        <div className={`w-full min-w-0 flex ${isOwn ? 'justify-end' : 'justify-start'}`}>
             <div
-                className={`group flex items-end gap-2 ${isOwn ? 'flex-row-reverse' : 'flex-row'}`}
+                className={`group max-w-full flex items-end gap-2 ${isOwn ? 'flex-row-reverse' : 'flex-row'}`}
             >
                 {!isOwn && showAvatar && (
                     <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center overflow-hidden">
@@ -247,7 +252,7 @@ export function MessageBubble({ message, showAvatar = true }: MessageBubbleProps
                 )}
                 {!isOwn && !showAvatar && <div className="w-8 flex-shrink-0" />}
 
-                <div className={`w-fit max-w-[78%] ${isOwn ? 'items-end' : 'items-start'}`}>
+                <div className={`min-w-0 max-w-[78%] flex flex-col ${isOwn ? 'items-end' : 'items-start'}`}>
                     <div
                         className={`flex items-end gap-1 ${isOwn ? 'flex-row-reverse' : 'flex-row'}`}
                         onMouseEnter={() => setIsHovered(true)}
@@ -262,7 +267,7 @@ export function MessageBubble({ message, showAvatar = true }: MessageBubbleProps
                             )}
 
                             {fileAttachments.length > 0 && (
-                                <div className="mb-1 space-y-1">
+                                <div className="mb-1 min-w-0 max-w-full overflow-hidden space-y-1">
                                     {fileAttachments.map((attachment) => (
                                         <FileAttachmentCard 
                                             key={attachment.id} 
@@ -325,7 +330,7 @@ export function MessageBubble({ message, showAvatar = true }: MessageBubbleProps
                                             <p className="text-[10px] font-semibold truncate">
                                                 {message.replyTo.senderName || 'Message'}
                                             </p>
-                                            <p className="text-[11px] truncate opacity-90">
+                                            <p className="text-[11px] truncate break-all opacity-90">
                                                 {message.replyTo.content?.trim() || `[${message.replyTo.type || 'message'}]`}
                                             </p>
                                         </button>
@@ -452,7 +457,7 @@ export function MessageBubble({ message, showAvatar = true }: MessageBubbleProps
 
             {activeAttachmentId && (
                 <MediaViewerModal
-                    attachments={attachments}
+                    attachments={viewableAttachments}
                     initialAttachmentId={activeAttachmentId}
                     onClose={() => setActiveAttachmentId(null)}
                 />
@@ -481,7 +486,7 @@ function MessageTextContent({
                     const match = trimmed.match(/^([A-Za-z][A-Za-z ]{1,24}):\s*(.+)$/);
                     if (!match) {
                         return (
-                            <p key={`app-line-${index}`} className="whitespace-pre-wrap break-words break-all leading-relaxed">
+                            <p key={`app-line-${index}`} className="whitespace-pre-wrap break-words leading-relaxed">
                                 {renderTextWithMentions(trimmed, isOwn)}
                             </p>
                         );
@@ -489,16 +494,16 @@ function MessageTextContent({
 
                     const label = match[1].trim();
                     const value = match[2].trim();
-                    const isUrl = /^https?:\/\//i.test(value);
+                    const normalizedUrl = normalizeSafeExternalUrl(value);
                     return (
-                        <p key={`app-meta-${index}`} className="whitespace-pre-wrap break-words break-all leading-relaxed">
+                        <p key={`app-meta-${index}`} className="whitespace-pre-wrap break-words leading-relaxed">
                             <span className="font-semibold">{label}: </span>
-                            {isUrl ? (
+                            {normalizedUrl ? (
                                 <a
-                                    href={value}
+                                    href={normalizedUrl}
                                     target="_blank"
-                                    rel="noopener noreferrer"
-                                    className={isOwn ? "underline text-white" : "underline text-blue-600 dark:text-blue-400"}
+                                    rel="noopener noreferrer nofollow ugc"
+                                    className={isOwn ? "underline text-white break-all" : "underline text-blue-600 dark:text-blue-400 break-all"}
                                 >
                                     {value}
                                 </a>
@@ -523,7 +528,7 @@ function MessageTextContent({
                         isOwn={isOwn}
                     />
                 ) : (
-                    <p key={`text-${index}`} className="whitespace-pre-wrap break-words break-all leading-relaxed">
+                    <p key={`text-${index}`} className="whitespace-pre-wrap break-words leading-relaxed">
                         {renderTextWithMentions(segment.content, isOwn)}
                     </p>
                 )
@@ -533,23 +538,42 @@ function MessageTextContent({
 }
 
 function renderTextWithMentions(text: string, isOwn: boolean) {
-    const parts = text.split(/(@[a-zA-Z0-9_]{2,32})/g);
+    const parts = text.split(LINK_OR_MENTION_REGEX);
     return parts.map((part, index) => {
-        if (!part.startsWith('@')) {
-            return <span key={`txt-${index}`}>{part}</span>;
+        if (part.startsWith('@')) {
+            const username = part.slice(1).toLowerCase();
+            return (
+                <a
+                    key={`mention-${index}`}
+                    href={`/u/${username}`}
+                    className={`font-semibold underline underline-offset-2 ${
+                        isOwn ? 'text-white' : 'text-blue-600 dark:text-blue-400'
+                    }`}
+                >
+                    {part}
+                </a>
+            );
         }
-        const username = part.slice(1).toLowerCase();
-        return (
-            <a
-                key={`mention-${index}`}
-                href={`/u/${username}`}
-                className={`font-semibold underline underline-offset-2 ${
-                    isOwn ? 'text-white' : 'text-blue-600 dark:text-blue-400'
-                }`}
-            >
-                {part}
-            </a>
-        );
+        const safeLink = parseSafeLinkToken(part);
+        if (safeLink) {
+            return (
+                <span key={`link-wrap-${index}`}>
+                    <a
+                        href={safeLink.href}
+                        target="_blank"
+                        rel="noopener noreferrer nofollow ugc"
+                        className={`underline break-all ${
+                            isOwn ? 'text-white' : 'text-blue-600 dark:text-blue-400'
+                        }`}
+                    >
+                        {safeLink.display}
+                    </a>
+                    {safeLink.trailing}
+                </span>
+            );
+        }
+
+        return <span key={`txt-${index}`}>{part}</span>;
     });
 }
 
@@ -713,13 +737,13 @@ function FileAttachmentCard({ attachment, onPreview }: { attachment: ChatAttachm
             <button
                 type="button"
                 onClick={onPreview}
-                className="w-full text-left flex items-center gap-3 p-3 bg-zinc-100 dark:bg-zinc-800 rounded-lg hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-colors"
+                className="w-full max-w-full min-w-0 overflow-hidden text-left flex items-center gap-3 p-3 bg-zinc-100 dark:bg-zinc-800 rounded-lg hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-colors"
             >
-                <div className="w-10 h-10 bg-blue-100 dark:bg-blue-900/30 rounded-lg flex items-center justify-center">
+                <div className="w-10 h-10 shrink-0 bg-blue-100 dark:bg-blue-900/30 rounded-lg flex items-center justify-center">
                     <File className="w-5 h-5 text-blue-600" />
                 </div>
                 <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-zinc-900 dark:text-white truncate">{attachment.filename}</p>
+                    <p className="text-sm font-medium text-zinc-900 dark:text-white truncate break-all">{attachment.filename}</p>
                     {attachment.sizeBytes && (
                         <p className="text-xs text-zinc-500">{formatFileSize(attachment.sizeBytes)}</p>
                     )}
@@ -733,13 +757,13 @@ function FileAttachmentCard({ attachment, onPreview }: { attachment: ChatAttachm
             target="_blank"
             rel="noopener noreferrer"
             download={attachment.filename}
-            className="flex items-center gap-3 p-3 bg-zinc-100 dark:bg-zinc-800 rounded-lg hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-colors"
+            className="w-full max-w-full min-w-0 overflow-hidden flex items-center gap-3 p-3 bg-zinc-100 dark:bg-zinc-800 rounded-lg hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-colors"
         >
-            <div className="w-10 h-10 bg-blue-100 dark:bg-blue-900/30 rounded-lg flex items-center justify-center">
+            <div className="w-10 h-10 shrink-0 bg-blue-100 dark:bg-blue-900/30 rounded-lg flex items-center justify-center">
                 <File className="w-5 h-5 text-blue-600" />
             </div>
             <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-zinc-900 dark:text-white truncate">{attachment.filename}</p>
+                <p className="text-sm font-medium text-zinc-900 dark:text-white truncate break-all">{attachment.filename}</p>
                 {attachment.sizeBytes && (
                     <p className="text-xs text-zinc-500">{formatFileSize(attachment.sizeBytes)}</p>
                 )}

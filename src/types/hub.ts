@@ -65,16 +65,7 @@ export interface Project {
 
     // Timestamps
     createdAt?: string;
-    updatedAt?: string;
-}
-
-// Collection types
-export interface Collection {
-    id: string;
-    name: string;
-    user_id: string;
-    project_ids: string[];
-    created_at: string;
+    updatedAt?: string | null;
 }
 
 // Filter types
@@ -85,4 +76,5 @@ export interface HubFilters {
     sort: string;
     search?: string;
     includedIds?: string[];
+    hideOpened?: boolean;
 }

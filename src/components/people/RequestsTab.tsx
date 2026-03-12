@@ -1,4 +1,4 @@
-import { useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { Loader2, UserPlus, X, Clock, CheckCheck, Briefcase, ChevronDown, ChevronRight } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
@@ -60,6 +60,11 @@ const TIMELINE_DOT_COLORS: Record<string, string> = {
     withdrawn: 'bg-zinc-400 dark:bg-zinc-600',
     role_filled: 'bg-blue-500',
 };
+
+const REQUESTS_INITIAL_BATCH = 24;
+const REQUESTS_BATCH_STEP = 24;
+const HISTORY_INITIAL_BATCH = 60;
+const HISTORY_BATCH_STEP = 60;
 
 function getHistorySummary(item: RequestHistoryItem) {
     if (item.source === 'connection') {
@@ -151,6 +156,9 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
 
     const [timelineOpen, setTimelineOpen] = useState(true);
     const [appsOpen, setAppsOpen] = useState(true);
+    const [incomingLimit, setIncomingLimit] = useState(REQUESTS_INITIAL_BATCH);
+    const [sentLimit, setSentLimit] = useState(REQUESTS_INITIAL_BATCH);
+    const [historyLimit, setHistoryLimit] = useState(HISTORY_INITIAL_BATCH);
     const appsPanelId = "project-apps-panel";
     const timelinePanelId = "activity-timeline-panel";
 
@@ -168,7 +176,38 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
         () => requestHistoryData?.items ?? [],
         [requestHistoryData?.items],
     );
-    const groupedHistory = useMemo(() => groupHistoryByTime(historyItems), [historyItems]);
+    const visibleIncomingRequests = useMemo(
+        () => incomingRequests.slice(0, incomingLimit),
+        [incomingLimit, incomingRequests],
+    );
+    const visibleSentRequests = useMemo(
+        () => sentRequests.slice(0, sentLimit),
+        [sentLimit, sentRequests],
+    );
+    const visibleHistoryItems = useMemo(
+        () => historyItems.slice(0, historyLimit),
+        [historyItems, historyLimit],
+    );
+    const groupedHistory = useMemo(() => groupHistoryByTime(visibleHistoryItems), [visibleHistoryItems]);
+    const hasMoreIncoming = incomingRequests.length > visibleIncomingRequests.length;
+    const hasMoreSent = sentRequests.length > visibleSentRequests.length;
+    const hasMoreHistory = historyItems.length > visibleHistoryItems.length;
+    const viewerId = initialUser?.id ?? null;
+    const incomingFirstId = incomingRequests[0]?.id ?? null;
+    const sentFirstId = sentRequests[0]?.id ?? null;
+    const historyFirstId = historyItems[0]?.id ?? null;
+
+    useEffect(() => {
+        setIncomingLimit(REQUESTS_INITIAL_BATCH);
+    }, [incomingFirstId, viewerId]);
+
+    useEffect(() => {
+        setSentLimit(REQUESTS_INITIAL_BATCH);
+    }, [sentFirstId, viewerId]);
+
+    useEffect(() => {
+        setHistoryLimit(HISTORY_INITIAL_BATCH);
+    }, [historyFirstId, viewerId]);
 
     const handleAccept = async (id: string) => {
         toast.promise(acceptRequest.mutateAsync(id), {
@@ -343,7 +382,7 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
                                     Incoming Requests
                                 </h2>
                                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
-                                    {incomingRequests.map((req) => {
+                                    {visibleIncomingRequests.map((req) => {
                                         const profile = {
                                             id: req.requesterId,
                                             username: req.requesterUsername,
@@ -354,7 +393,9 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
                                             connectionStatus: 'pending_received' as const,
                                             canConnect: true
                                         };
-                                        const isProcessing = (acceptRequest.isPending || rejectRequest.isPending) && (acceptRequest.variables === req.id || rejectRequest.variables === req.id);
+                                        const isProcessing =
+                                            (acceptRequest.isPending && acceptRequest.variables === req.id) ||
+                                            (rejectRequest.isPending && rejectRequest.variables === req.id);
 
                                         return (
                                             <div key={req.id} className="relative h-[200px] group">
@@ -387,6 +428,17 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
                                         );
                                     })}
                                 </div>
+                                {hasMoreIncoming && (
+                                    <div className="mt-3">
+                                        <button
+                                            type="button"
+                                            onClick={() => setIncomingLimit((prev) => prev + REQUESTS_BATCH_STEP)}
+                                            className="w-full rounded-xl border border-zinc-200 dark:border-zinc-800 px-3 py-2 text-xs font-medium text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-900 transition-colors"
+                                        >
+                                            Load more incoming requests
+                                        </button>
+                                    </div>
+                                )}
                             </>
                         )}
                         {incomingRequests.length === 0 && (
@@ -406,7 +458,7 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
                                     Sent Requests
                                 </h2>
                                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
-                                    {sentRequests.map((req) => {
+                                    {visibleSentRequests.map((req) => {
                                         const profile = {
                                             id: req.addresseeId,
                                             username: req.addresseeUsername,
@@ -450,6 +502,17 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
                                         );
                                     })}
                                 </div>
+                                {hasMoreSent && (
+                                    <div className="mt-3">
+                                        <button
+                                            type="button"
+                                            onClick={() => setSentLimit((prev) => prev + REQUESTS_BATCH_STEP)}
+                                            className="w-full rounded-xl border border-zinc-200 dark:border-zinc-800 px-3 py-2 text-xs font-medium text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-900 transition-colors"
+                                        >
+                                            Load more sent requests
+                                        </button>
+                                    </div>
+                                )}
                             </>
                         )}
                         {sentRequests.length === 0 && (
@@ -602,6 +665,15 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
                                         </div>
                                     </div>
                                 ))}
+                                {hasMoreHistory && (
+                                    <button
+                                        type="button"
+                                        onClick={() => setHistoryLimit((prev) => prev + HISTORY_BATCH_STEP)}
+                                        className="w-full rounded-xl border border-zinc-200 dark:border-zinc-800 px-3 py-2 text-xs font-medium text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-900 transition-colors"
+                                    >
+                                        Load more activity
+                                    </button>
+                                )}
                             </div>
                         )}
                     </div>

@@ -82,16 +82,20 @@ export function ConversationList({
     const renderConversationItem = (conv: (typeof filteredConversations)[number]) => {
         const participant = conv.participants[0];
         const unread = unreadCounts[conv.id] || 0;
+        const relativeLastMessageTime = conv.lastMessage
+            ? safeFormatRelativeTime(conv.lastMessage.createdAt)
+            : null;
+        const isSelected = selectedConversationId === conv.id;
 
         return (
             <button
                 key={conv.id}
                 data-testid={`conversation-row-${conv.id}`}
                 aria-label={`Conversation with ${participant?.fullName || participant?.username || 'Unknown'}${unread > 0 ? `, ${unread} unread` : ''}`}
-                aria-current={selectedConversationId === conv.id ? 'true' : undefined}
+                aria-current={isSelected ? 'true' : undefined}
                 onClick={() => (onConversationSelect ? onConversationSelect(conv.id) : openConversation(conv.id))}
                 className={`w-full flex items-center gap-3 p-3 transition-colors text-left border-l-2 ${
-                    selectedConversationId === conv.id
+                    isSelected
                         ? 'bg-blue-50 dark:bg-blue-950/30 border-l-blue-600'
                         : 'hover:bg-zinc-50 dark:hover:bg-zinc-800/50 border-l-transparent'
                 }`}
@@ -130,9 +134,9 @@ export function ConversationList({
                                 <BellOff className="w-3.5 h-3.5 text-zinc-400 flex-shrink-0" />
                             )}
                         </div>
-                        {conv.lastMessage && safeFormatRelativeTime(conv.lastMessage.createdAt) && (
+                        {relativeLastMessageTime && (
                             <span className="text-xs text-zinc-400 flex-shrink-0 ml-2">
-                                {safeFormatRelativeTime(conv.lastMessage.createdAt)}
+                                {relativeLastMessageTime}
                             </span>
                         )}
                     </div>
@@ -140,6 +144,7 @@ export function ConversationList({
                         typingConversationId={conv.id}
                         lastMessage={conv.lastMessage}
                         unread={unread}
+                        listenTyping={isSelected}
                     />
                 </div>
             </button>
@@ -199,41 +204,30 @@ export function ConversationList({
                         </p>
                     </div>
                 ) : (
-                    hideSearch ? (
-                        <div className="h-full overflow-y-auto divide-y divide-zinc-100 dark:divide-zinc-800">
-                            {filteredConversations.map(renderConversationItem)}
-                            {hasMoreConversations && !effectiveSearchQuery.trim() && (
-                                <div className="p-3 text-center">
-                                    <button
-                                        onClick={() => void loadMoreConversations()}
-                                        disabled={conversationsLoading}
-                                        className="text-xs text-zinc-500 hover:text-zinc-700 disabled:opacity-60"
-                                    >
-                                        {conversationsLoading ? 'Loading…' : 'Load older conversations'}
-                                    </button>
-                                </div>
-                            )}
-                        </div>
-                    ) : (
-                        <Virtuoso
-                            style={{ height: '100%' }}
-                            data={filteredConversations}
-                            endReached={() => {
-                                if (hasMoreConversations && !effectiveSearchQuery.trim() && !conversationsLoading) {
-                                    void loadMoreConversations();
-                                }
-                            }}
-                            components={{
-                                Footer: () =>
-                                    hasMoreConversations && !effectiveSearchQuery.trim() ? (
-                                        <div className="p-3 text-center text-xs text-zinc-500">
-                                            {conversationsLoading ? 'Loading…' : 'Scroll for older conversations'}
-                                        </div>
-                                    ) : null,
-                            }}
-                            itemContent={(_, conv) => renderConversationItem(conv)}
-                        />
-                    )
+                    <Virtuoso
+                        style={{ height: '100%' }}
+                        data={filteredConversations}
+                        computeItemKey={(_, conv) => conv.id}
+                        increaseViewportBy={{ top: 180, bottom: 240 }}
+                        endReached={() => {
+                            if (hasMoreConversations && !effectiveSearchQuery.trim() && !conversationsLoading) {
+                                void loadMoreConversations();
+                            }
+                        }}
+                        components={{
+                            Footer: () =>
+                                hasMoreConversations && !effectiveSearchQuery.trim() ? (
+                                    <div className="p-3 text-center text-xs text-zinc-500">
+                                        {conversationsLoading ? 'Loading…' : 'Scroll for older conversations'}
+                                    </div>
+                                ) : null,
+                        }}
+                        itemContent={(_, conv) => (
+                            <div className="border-b border-zinc-100 dark:border-zinc-800 last:border-b-0">
+                                {renderConversationItem(conv)}
+                            </div>
+                        )}
+                    />
                 )}
             </div>
         </div>
@@ -247,13 +241,15 @@ export function ConversationList({
 export function ConversationPreview({ 
     typingConversationId,
     lastMessage, 
-    unread 
+    unread,
+    listenTyping = true,
 }: { 
     typingConversationId: string | null;
     lastMessage: { content?: string | null; type?: string | null } | null | undefined; 
     unread: number;
+    listenTyping?: boolean;
 }) {
-    const { typingUsers } = useTypingChannel(typingConversationId);
+    const { typingUsers } = useTypingChannel(listenTyping ? typingConversationId : null);
 
     if (typingUsers.length > 0) {
         const typingLabel = typingUsers.length === 1

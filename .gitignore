@@ -40,3 +40,8 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+typecheck_output.txt
+review.txt
+eslint_output.txt
+.review.txt.swp
+.e2e-last-run-id

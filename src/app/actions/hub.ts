@@ -8,6 +8,7 @@ import { createClient } from '@/lib/supabase/server';
 import { HubFilters } from '@/types/hub';
 import { headers } from 'next/headers';
 import { unstable_cache } from 'next/cache';
+import { runInFlightDeduped } from '@/lib/async/inflight-dedupe';
 
 export async function fetchHubProjectsAction(
     filters: HubFilters,
@@ -47,7 +48,7 @@ export async function fetchHubProjectsAction(
             tech: Array.isArray(filters.tech) ? filters.tech : [],
             sort: filters.sort || 'newest',
             search: normalizedSearch || undefined,
-            includedIds: Array.isArray(filters.includedIds) ? filters.includedIds : undefined,
+            hideOpened: filters.hideOpened || false,
         };
 
         const shouldUseAnonEdgeCache = !user && !normalizedCursor;
@@ -69,15 +70,26 @@ export async function fetchHubProjectsAction(
             };
         }
 
-        const result = await getHubProjects(normalizedFilters, normalizedCursor, normalizedLimit, {
-            view: normalizedView,
-            viewerId: user?.id ?? null,
-        });
+        const dedupeKey = [
+            'hub:projects',
+            user?.id ?? `anon:${ipAddress}`,
+            normalizedView,
+            normalizedLimit,
+            normalizedCursor ?? '',
+            JSON.stringify(normalizedFilters),
+        ].join(':');
 
-        return {
-            success: true as const,
-            ...result,
-        };
+        return await runInFlightDeduped(dedupeKey, async () => {
+            const result = await getHubProjects(normalizedFilters, normalizedCursor, normalizedLimit, {
+                view: normalizedView,
+                viewerId: user?.id ?? null,
+            });
+
+            return {
+                success: true as const,
+                ...result,
+            };
+        });
     } catch (error) {
         console.error('Error fetching hub projects:', error);
         return {

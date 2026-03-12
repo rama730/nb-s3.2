@@ -2,9 +2,8 @@
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { CheckCircle2, Rocket, FileText, Users } from "lucide-react";
-import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { CheckCircle2, Rocket, FileText } from "lucide-react";
+import { useEffect, useRef } from "react";
 import confetti from "canvas-confetti";
 
 interface ProjectOnboardingModalProps {
@@ -24,20 +23,28 @@ export function ProjectOnboardingModal({
     onViewTasks,
     onViewDocs
 }: ProjectOnboardingModalProps) {
-    const [step, setStep] = useState(1);
+    const confettiFiredRef = useRef(false);
 
-    // Trigger confetti on mount if open
-    if (isOpen && step === 1) {
-        // slight delay to ensure render
-        setTimeout(() => {
+    useEffect(() => {
+        if (!isOpen) {
+            confettiFiredRef.current = false;
+            return;
+        }
+        if (confettiFiredRef.current) return;
+        confettiFiredRef.current = true;
+        const timeoutId = window.setTimeout(() => {
             confetti({
                 particleCount: 100,
                 spread: 70,
                 origin: { y: 0.6 },
-                zIndex: 9999
+                zIndex: 9999,
             });
-        }, 500);
-    }
+        }, 300);
+        return () => {
+            window.clearTimeout(timeoutId);
+            confettiFiredRef.current = false;
+        };
+    }, [isOpen]);
 
     return (
         <Dialog open={isOpen} onOpenChange={onClose}>

@@ -69,7 +69,8 @@ export function BottomPanel({
         toggle(projectId);
         setTab(projectId, tabId);
       } else if (activeTab === tabId) {
-        toggle(projectId);
+        // Keep panel open on active-tab clicks; collapse is explicit via chevron/close.
+        return;
       } else {
         setTab(projectId, tabId);
       }

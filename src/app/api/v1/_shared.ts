@@ -50,20 +50,6 @@ export function logApiRoute(
   });
 }
 
-function decodeJwtPayload(token: string): Record<string, unknown> | null {
-  try {
-    const parts = token.split(".");
-    if (parts.length < 2) return null;
-    const payload = Buffer.from(parts[1], "base64url").toString("utf8");
-    const parsed = JSON.parse(payload);
-    return parsed && typeof parsed === "object"
-      ? (parsed as Record<string, unknown>)
-      : null;
-  } catch {
-    return null;
-  }
-}
-
 export function getSessionIdentifier(
   session: { access_token?: string } | null | undefined,
 ): string | null {
@@ -75,21 +61,6 @@ export function getSessionIdentifier(
   const maybeSessionId = (session as { session_id?: unknown }).session_id;
   if (typeof maybeSessionId === "string" && maybeSessionId.trim().length > 0) {
     return maybeSessionId;
-  }
-
-  const accessToken = session.access_token;
-  if (!accessToken) return null;
-  const claims = decodeJwtPayload(accessToken);
-  if (!claims) return null;
-
-  const tokenSessionId = claims.session_id;
-  if (typeof tokenSessionId === "string" && tokenSessionId.trim().length > 0) {
-    return tokenSessionId;
-  }
-
-  const tokenJti = claims.jti;
-  if (typeof tokenJti === "string" && tokenJti.trim().length > 0) {
-    return tokenJti;
   }
 
   return null;
@@ -123,4 +94,51 @@ export async function requireAuthenticatedUser() {
     };
   }
   return { supabase, user, response: null as ReturnType<typeof jsonError> | null };
+}
+
+export async function withTimeout<T>(
+  promiseFactory: (signal: AbortSignal) => Promise<T>,
+  timeoutMs: number,
+): Promise<T> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error("timeout")), timeoutMs);
+  try {
+    return await promiseFactory(controller.signal);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function fetchWithBoundedRetry(
+  input: RequestInfo | URL,
+  init: RequestInit & { timeoutMs?: number; maxAttempts?: number } = {},
+) {
+  const timeoutMs = Math.max(250, init.timeoutMs ?? 4_000);
+  const maxAttempts = Math.max(1, Math.min(3, init.maxAttempts ?? 2));
+  const retryableStatuses = new Set([408, 425, 429, 500, 502, 503, 504]);
+  let lastError: unknown = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const response = await withTimeout(
+        (signal) =>
+          fetch(input, {
+            ...init,
+            signal,
+          }),
+        timeoutMs,
+      );
+
+      if (response.ok || !retryableStatuses.has(response.status) || attempt >= maxAttempts) {
+        return response;
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, Math.min(500 * attempt, 1_500)));
+    } catch (error) {
+      lastError = error;
+      if (attempt >= maxAttempts) break;
+      await new Promise<void>((resolve) => setTimeout(resolve, Math.min(500 * attempt, 1_500)));
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("fetchWithBoundedRetry failed");
 }

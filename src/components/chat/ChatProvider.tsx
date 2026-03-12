@@ -8,19 +8,19 @@ import { ChatPopup } from './ChatPopup';
 import { createVisibilityAwareInterval } from '@/lib/utils/visibility';
 
 interface ChatProviderProps {
-    children: React.ReactNode;
+    children?: React.ReactNode;
 }
 
 const DISABLE_CHAT_IN_E2E = process.env.NEXT_PUBLIC_E2E_AUTH_FALLBACK === "1";
 
-export function ChatProvider({ children }: ChatProviderProps) {
+export function ChatProvider({ children = null }: ChatProviderProps) {
     if (DISABLE_CHAT_IN_E2E) {
         return <>{children}</>;
     }
     return <ChatProviderInner>{children}</ChatProviderInner>;
 }
 
-function ChatProviderInner({ children }: ChatProviderProps) {
+function ChatProviderInner({ children = null }: ChatProviderProps) {
 
     const { user, isLoading } = useAuth();
     const initialize = useChatStore(state => state.initialize);

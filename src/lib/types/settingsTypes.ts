@@ -19,14 +19,14 @@ export interface MfaFactor {
     id: string;
     type: 'totp' | 'phone';
     friendly_name?: string;
-    created_at: string;
+    created_at?: string;
     status: 'verified' | 'unverified';
 }
 
 export interface Passkey {
     id: string;
     name: string;
-    created_at: string;
+    created_at?: string;
     last_used?: string;
 }
 
@@ -35,7 +35,6 @@ export interface LoginHistoryEntry {
     ip_address: string;
     user_agent: string;
     created_at: string;
-    success: boolean;
     location?: string;
 }
 

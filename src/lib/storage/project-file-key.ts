@@ -13,6 +13,16 @@ function normalizePathPart(input: string): string {
   return (input || "").replaceAll("\\", "/").replace(/^\/+/, "").replace(/\/+/g, "/");
 }
 
+function hasUnsafePathSegment(relativePath: string): boolean {
+  const segments = (relativePath || "").split("/").filter(Boolean);
+  if (segments.length === 0) return true;
+  return segments.some((segment) => {
+    if (!segment) return true;
+    if (segment === "." || segment === "..") return true;
+    return /[\x00-\x1f]/.test(segment);
+  });
+}
+
 export function normalizeProjectFileRelativePath(relativePath: string): string {
   return normalizePathPart(relativePath).replace(/^\.\//, "");
 }
@@ -22,6 +32,7 @@ export function buildProjectFileKey(projectId: string, relativePath: string): st
   const rel = normalizeProjectFileRelativePath(relativePath);
   if (!pid) throw new Error("projectId is required");
   if (!rel) throw new Error("relativePath is required");
+  if (hasUnsafePathSegment(rel)) throw new Error("relativePath contains unsafe segments");
   return `${pid}/${rel}`;
 }
 
@@ -34,18 +45,22 @@ export function parseProjectFileKey(key: string): ParsedProjectFileKey | null {
 
   // Canonical: <projectId>/<path...>
   if (UUID_RE.test(parts[0])) {
+    const relativePath = parts.slice(1).join("/");
+    if (hasUnsafePathSegment(relativePath)) return null;
     return {
       projectId: parts[0],
-      relativePath: parts.slice(1).join("/"),
+      relativePath,
       format: "canonical",
     };
   }
 
   // Legacy: projects/<projectId>/<path...>
   if (parts[0] === LEGACY_PROJECT_FILES_PREFIX && parts.length >= 3 && UUID_RE.test(parts[1])) {
+    const relativePath = parts.slice(2).join("/");
+    if (hasUnsafePathSegment(relativePath)) return null;
     return {
       projectId: parts[1],
-      relativePath: parts.slice(2).join("/"),
+      relativePath,
       format: "legacy",
     };
   }

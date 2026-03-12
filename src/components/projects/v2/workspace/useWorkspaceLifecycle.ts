@@ -4,7 +4,7 @@ import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 import { acquireProjectNodeLock, releaseProjectNodeLock, getProjectLocks } from "@/app/actions/files";
 import { clearOfflineChange, listOfflineChanges } from "../hooks/useFilesOfflineQueue";
 import { recordFilesMetric } from "@/lib/files/observability";
-import { get, set } from "idb-keyval";
+import { get } from "idb-keyval";
 import { runWithConcurrency } from "@/lib/utils/concurrency";
 import { FILES_RUNTIME_BUDGETS } from "@/lib/files/runtime-budgets";
 import { createClient } from "@/lib/supabase/client";
@@ -167,6 +167,7 @@ export function useWorkspaceLifecycle({
       .subscribe();
 
     return () => {
+      if (realtimeTimeout) clearTimeout(realtimeTimeout);
       supabase.removeChannel(realtimeChannel);
       supabase.removeChannel(locksChannel);
     };
@@ -237,7 +238,9 @@ export function useWorkspaceLifecycle({
         } finally {
           try {
             await releaseProjectNodeLock(projectId, nodeId);
-          } catch { }
+          } catch (error) {
+            console.warn("Failed to release project node lock", { projectId, nodeId, error });
+          }
         }
       });
 

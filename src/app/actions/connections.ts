@@ -11,8 +11,9 @@ import {
     isConnectionHistoryStatus,
     type ConnectionRequestHistoryStatus,
 } from '@/lib/applications/status';
+import { runInFlightDeduped } from '@/lib/async/inflight-dedupe';
 import { APPLICATION_BANNER_HIDE_AFTER_MS } from '@/lib/chat/banner-lifecycle';
-import { cacheData, getCachedData } from '@/lib/redis';
+import { cacheData, getCachedData, redis } from '@/lib/redis';
 
 // ============================================================================
 // TYPES
@@ -228,6 +229,58 @@ async function getConnectionStatsForUser(targetId: string): Promise<ConnectionsF
 function getSafeSearch(search?: string) {
     const normalized = (search || '').trim();
     return normalized.length > 0 ? normalized : undefined;
+}
+
+const DISCOVER_CACHE_KEY_PREFIX = 'connections:feed:discover:v2';
+
+function buildDiscoverCacheKey(params: {
+    userId: string;
+    limit: number;
+    offset: number;
+    cursor?: string;
+    search?: string;
+}) {
+    const cursorPart = params.cursor ? encodeURIComponent(params.cursor) : '';
+    const searchPart = params.search ? encodeURIComponent(params.search.toLowerCase()) : '';
+    return `${DISCOVER_CACHE_KEY_PREFIX}:${params.userId}:l:${params.limit}:o:${params.offset}:c:${cursorPart}:q:${searchPart}`;
+}
+
+async function invalidateDiscoverCacheForUser(userId: string) {
+    if (!redis) return;
+    const redisClient = redis;
+    const prefix = `${DISCOVER_CACHE_KEY_PREFIX}:${userId}:`;
+    const scanPattern = `${prefix}*`;
+    const scanCount = 100;
+    const deleteBatchSize = 100;
+    try {
+        let cursor: string | number = '0';
+        do {
+            const [nextCursor, keys] = (await redisClient.scan(cursor, {
+                match: scanPattern,
+                count: scanCount,
+            })) as [string, string[]];
+            cursor = nextCursor;
+            if (!keys || keys.length === 0) continue;
+
+            for (let i = 0; i < keys.length; i += deleteBatchSize) {
+                const batch = keys.slice(i, i + deleteBatchSize);
+                if (batch.length === 0) continue;
+                await redisClient.unlink(...batch);
+            }
+        } while (String(cursor) !== '0');
+    } catch (error) {
+        console.error('Failed to invalidate discover cache:', error);
+    }
+}
+
+async function invalidateDiscoverCacheForUsers(userIds: Iterable<string | null | undefined>) {
+    const uniqueUserIds = Array.from(
+        new Set(
+            Array.from(userIds).filter((userId): userId is string => typeof userId === 'string' && userId.length > 0),
+        ),
+    );
+    if (uniqueUserIds.length === 0) return;
+    await Promise.all(uniqueUserIds.map((userId) => invalidateDiscoverCacheForUser(userId)));
 }
 
 export async function getConnectionsFeed(input: ConnectionsFeedInput) {
@@ -458,7 +511,13 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
 
     // PURE OPTIMIZATION: Split heavy vs light queries based on offset
     const isHeavyLoad = safeOffset === 0 && !searchPattern;
-    const cacheKey = `connections:feed:discover:${user.id}:${safeOffset}`;
+    const cacheKey = buildDiscoverCacheKey({
+        userId: user.id,
+        limit,
+        offset: safeOffset,
+        cursor: input.cursor,
+        search: safeSearch,
+    });
 
     // Redis Buffer Cache for Light Explore Load
     if (!isHeavyLoad && !searchPattern) {
@@ -723,66 +782,68 @@ export async function getConnectionRequestHistory(limit: number = 80): Promise<{
         if (!user) return { success: false, items: [], error: 'Not authenticated' };
 
         const effectiveLimit = Math.max(1, Math.min(limit, 200));
+        const dedupeKey = `connections:request-history:${user.id}:${effectiveLimit}`;
+        return await runInFlightDeduped(dedupeKey, async () => {
+            const rows = await db
+                .select({
+                    id: connections.id,
+                    requesterId: connections.requesterId,
+                    addresseeId: connections.addresseeId,
+                    status: connections.status,
+                    createdAt: connections.createdAt,
+                    updatedAt: connections.updatedAt,
+                    profileId: profiles.id,
+                    username: profiles.username,
+                    fullName: profiles.fullName,
+                    avatarUrl: profiles.avatarUrl,
+                    headline: profiles.headline,
+                })
+                .from(connections)
+                .innerJoin(
+                    profiles,
+                    or(
+                        and(eq(connections.requesterId, user.id), eq(connections.addresseeId, profiles.id)),
+                        and(eq(connections.addresseeId, user.id), eq(connections.requesterId, profiles.id)),
+                    ),
+                )
+                .where(
+                    and(
+                        or(eq(connections.requesterId, user.id), eq(connections.addresseeId, user.id)),
+                        inArray(connections.status, CONNECTION_HISTORY_STATUSES),
+                    ),
+                )
+                .orderBy(desc(connections.updatedAt), desc(connections.id))
+                .limit(effectiveLimit);
 
-        const rows = await db
-            .select({
-                id: connections.id,
-                requesterId: connections.requesterId,
-                addresseeId: connections.addresseeId,
-                status: connections.status,
-                createdAt: connections.createdAt,
-                updatedAt: connections.updatedAt,
-                profileId: profiles.id,
-                username: profiles.username,
-                fullName: profiles.fullName,
-                avatarUrl: profiles.avatarUrl,
-                headline: profiles.headline,
-            })
-            .from(connections)
-            .innerJoin(
-                profiles,
-                or(
-                    and(eq(connections.requesterId, user.id), eq(connections.addresseeId, profiles.id)),
-                    and(eq(connections.addresseeId, user.id), eq(connections.requesterId, profiles.id)),
-                ),
-            )
-            .where(
-                and(
-                    or(eq(connections.requesterId, user.id), eq(connections.addresseeId, user.id)),
-                    inArray(connections.status, CONNECTION_HISTORY_STATUSES),
-                ),
-            )
-            .orderBy(desc(connections.updatedAt), desc(connections.id))
-            .limit(effectiveLimit);
+            const items: ConnectionRequestHistoryItem[] = rows.flatMap((row) => {
+                if (!isConnectionRequestHistoryStatus(row.status)) {
+                    console.error('Invalid connection history status encountered', {
+                        connectionId: row.id,
+                        status: row.status,
+                    });
+                    return [];
+                }
 
-        const items: ConnectionRequestHistoryItem[] = rows.flatMap((row) => {
-            if (!isConnectionRequestHistoryStatus(row.status)) {
-                console.error('Invalid connection history status encountered', {
-                    connectionId: row.id,
-                    status: row.status,
-                });
-                return [];
-            }
+                const status = row.status;
+                return [{
+                    id: row.id,
+                    kind: 'connection',
+                    direction: row.requesterId === user.id ? 'outgoing' : 'incoming',
+                    status,
+                    eventAt: (status === 'pending' ? row.createdAt : row.updatedAt).toISOString(),
+                    createdAt: row.createdAt.toISOString(),
+                    user: {
+                        id: row.profileId,
+                        username: row.username,
+                        fullName: row.fullName,
+                        avatarUrl: row.avatarUrl,
+                        headline: row.headline,
+                    },
+                }];
+            });
 
-            const status = row.status;
-            return [{
-                id: row.id,
-                kind: 'connection',
-                direction: row.requesterId === user.id ? 'outgoing' : 'incoming',
-                status,
-                eventAt: (status === 'pending' ? row.createdAt : row.updatedAt).toISOString(),
-                createdAt: row.createdAt.toISOString(),
-                user: {
-                    id: row.profileId,
-                    username: row.username,
-                    fullName: row.fullName,
-                    avatarUrl: row.avatarUrl,
-                    headline: row.headline,
-                },
-            }];
+            return { success: true, items };
         });
-
-        return { success: true, items };
     } catch (error) {
         console.error('Error fetching connection request history:', error);
         return { success: false, items: [], error: 'Failed to load history' };
@@ -897,6 +958,7 @@ export async function sendConnectionRequest(
             return { success: false, error: txResult.error || 'Failed to send request' };
         }
 
+        await invalidateDiscoverCacheForUsers([user.id, addresseeId]);
         await revalidateConnectionsPaths();
         return { success: true, connectionId: txResult.connectionId };
     } catch (error) {
@@ -928,6 +990,7 @@ export async function dismissConnectionSuggestion(
                 target: [connectionSuggestionDismissals.userId, connectionSuggestionDismissals.dismissedProfileId],
             });
 
+        await invalidateDiscoverCacheForUser(user.id);
         revalidatePath('/people');
         return { success: true };
     } catch (error) {
@@ -949,7 +1012,7 @@ export async function acceptAllIncomingConnectionRequests(
             return { success: false, error: 'Too many bulk actions. Please wait and try again.' };
         }
 
-        const acceptedCount = await db.transaction(async (tx) => {
+        const acceptedRows = await db.transaction(async (tx) => {
             const rows = await tx
                 .select({
                     id: connections.id,
@@ -961,7 +1024,7 @@ export async function acceptAllIncomingConnectionRequests(
                 .orderBy(desc(connections.createdAt))
                 .limit(effectiveLimit);
 
-            if (rows.length === 0) return 0;
+            if (rows.length === 0) return [] as Array<{ requesterId: string; addresseeId: string }>;
 
             const ids = rows.map((row) => row.id);
             const updated = await tx
@@ -976,7 +1039,7 @@ export async function acceptAllIncomingConnectionRequests(
                     addresseeId: connections.addresseeId,
                 });
 
-            if (updated.length === 0) return 0;
+            if (updated.length === 0) return [] as Array<{ requesterId: string; addresseeId: string }>;
 
             const increments = new Map<string, number>();
             for (const row of updated) {
@@ -984,9 +1047,13 @@ export async function acceptAllIncomingConnectionRequests(
                 increments.set(row.addresseeId, (increments.get(row.addresseeId) || 0) + 1);
             }
             await applyConnectionsCountIncrements(tx, increments);
-            return updated.length;
+            return updated;
         });
 
+        const acceptedCount = acceptedRows.length;
+        await invalidateDiscoverCacheForUsers(
+            acceptedRows.flatMap((row) => [row.requesterId, row.addresseeId]),
+        );
         await revalidateConnectionsPaths();
         return { success: true, acceptedCount };
     } catch (error) {
@@ -1008,15 +1075,19 @@ export async function rejectAllIncomingConnectionRequests(
             return { success: false, error: 'Too many bulk actions. Please wait and try again.' };
         }
 
-        const rejectedCount = await db.transaction(async (tx) => {
+        const rejectedRows = await db.transaction(async (tx) => {
             const rows = await tx
-                .select({ id: connections.id })
+                .select({
+                    id: connections.id,
+                    requesterId: connections.requesterId,
+                    addresseeId: connections.addresseeId,
+                })
                 .from(connections)
                 .where(and(eq(connections.addresseeId, user.id), eq(connections.status, 'pending')))
                 .orderBy(desc(connections.createdAt))
                 .limit(effectiveLimit);
 
-            if (rows.length === 0) return 0;
+            if (rows.length === 0) return [] as Array<{ requesterId: string; addresseeId: string }>;
 
             const ids = rows.map((row) => row.id);
             const updated = await tx
@@ -1026,11 +1097,18 @@ export async function rejectAllIncomingConnectionRequests(
                     updatedAt: new Date(),
                 })
                 .where(and(inArray(connections.id, ids), eq(connections.status, 'pending')))
-                .returning({ id: connections.id });
+                .returning({
+                    requesterId: connections.requesterId,
+                    addresseeId: connections.addresseeId,
+                });
 
-            return updated.length;
+            return updated;
         });
 
+        const rejectedCount = rejectedRows.length;
+        await invalidateDiscoverCacheForUsers(
+            rejectedRows.flatMap((row) => [row.requesterId, row.addresseeId]),
+        );
         await revalidateConnectionsPaths();
         return { success: true, rejectedCount };
     } catch (error) {
@@ -1090,13 +1168,23 @@ export async function cancelConnectionRequest(
                     updatedAt: new Date(),
                 })
                 .where(and(eq(connections.id, connectionId), eq(connections.status, 'pending')))
-                .returning({ id: connections.id });
+                .returning({
+                    id: connections.id,
+                    requesterId: connections.requesterId,
+                    addresseeId: connections.addresseeId,
+                });
 
-            return updated || null;
+            if (!updated) return null;
+            return {
+                id: updated.id,
+                requesterId: updated.requesterId,
+                addresseeId: updated.addresseeId,
+            };
         });
 
         if (!cancelled) return { success: false, error: 'Request not found or cannot be cancelled' };
 
+        await invalidateDiscoverCacheForUsers([cancelled.requesterId, cancelled.addresseeId]);
         await revalidateConnectionsPaths();
         return { success: true };
     } catch (error) {
@@ -1154,6 +1242,7 @@ export async function acceptConnectionRequest(
             return { success: false, error: 'Request not found' };
         }
 
+        await invalidateDiscoverCacheForUsers([accepted.requesterId, accepted.addresseeId]);
         await revalidateConnectionsPaths();
         return { success: true };
     } catch (error) {
@@ -1190,12 +1279,18 @@ export async function rejectConnectionRequest(
                     eq(connections.status, 'pending')
                 )
             )
-            .returning({ id: connections.id, updatedAt: connections.updatedAt });
+            .returning({
+                id: connections.id,
+                requesterId: connections.requesterId,
+                addresseeId: connections.addresseeId,
+                updatedAt: connections.updatedAt,
+            });
 
         if (!rejected) {
             return { success: false, error: 'Request not found' };
         }
 
+        await invalidateDiscoverCacheForUsers([rejected.requesterId, rejected.addresseeId]);
         await revalidateConnectionsPaths();
         return {
             success: true,
@@ -1233,12 +1328,17 @@ export async function undoRejectConnectionRequest(
                     sql`${connections.updatedAt} >= ${cutoff}`
                 )
             )
-            .returning({ id: connections.id });
+            .returning({
+                id: connections.id,
+                requesterId: connections.requesterId,
+                addresseeId: connections.addresseeId,
+            });
 
         if (!restored) {
             return { success: false, error: 'Undo window expired' };
         }
 
+        await invalidateDiscoverCacheForUsers([restored.requesterId, restored.addresseeId]);
         await revalidateConnectionsPaths();
         return { success: true };
     } catch (error) {
@@ -1325,6 +1425,7 @@ export async function removeConnection(
             return { success: false, error: 'Connection not found' };
         }
 
+        await invalidateDiscoverCacheForUsers([removed.requesterId, removed.addresseeId]);
         await revalidateConnectionsPaths();
         return { success: true };
     } catch (error) {
@@ -1355,51 +1456,54 @@ export async function getConnectionStats(
     }
 
     try {
-        const now = new Date();
-        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-        const startOfMonthIso = startOfMonth.toISOString();
-        const [profileCounter, stats] = await Promise.all([
-            db
-                .select({ connectionsCount: profiles.connectionsCount })
-                .from(profiles)
-                .where(eq(profiles.id, targetId))
-                .limit(1),
-            db.select({
-                pendingIncoming: sql<number>`count(*) FILTER (
-                    WHERE ${connections.addresseeId} = ${targetId}
-                    AND ${connections.status} = 'pending'
-                )`,
-                pendingSent: sql<number>`count(*) FILTER (
-                    WHERE ${connections.requesterId} = ${targetId}
-                    AND ${connections.status} = 'pending'
-                )`,
-                connectionsThisMonth: sql<number>`count(*) FILTER (
-                    WHERE ${connections.status} = 'accepted'
-                    AND (${connections.requesterId} = ${targetId} OR ${connections.addresseeId} = ${targetId})
-                    AND ${connections.updatedAt} >= ${startOfMonthIso}
-                )`,
-                connectionsGained: sql<number>`count(*) FILTER (
-                    WHERE ${connections.addresseeId} = ${targetId}
-                    AND ${connections.status} = 'accepted'
-                    AND ${connections.updatedAt} >= ${startOfMonthIso}
-                )`
-            })
-                .from(connections)
-                .where(
-                    or(
-                        eq(connections.requesterId, targetId),
-                        eq(connections.addresseeId, targetId)
-                    )
-                ),
-        ]);
+        const dedupeKey = `connections:stats:${user?.id ?? 'anon'}:${targetId}:${canViewPrivateStats ? 'self' : 'public'}`;
+        return await runInFlightDeduped(dedupeKey, async () => {
+            const now = new Date();
+            const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+            const startOfMonthIso = startOfMonth.toISOString();
+            const [profileCounter, stats] = await Promise.all([
+                db
+                    .select({ connectionsCount: profiles.connectionsCount })
+                    .from(profiles)
+                    .where(eq(profiles.id, targetId))
+                    .limit(1),
+                db.select({
+                    pendingIncoming: sql<number>`count(*) FILTER (
+                        WHERE ${connections.addresseeId} = ${targetId}
+                        AND ${connections.status} = 'pending'
+                    )`,
+                    pendingSent: sql<number>`count(*) FILTER (
+                        WHERE ${connections.requesterId} = ${targetId}
+                        AND ${connections.status} = 'pending'
+                    )`,
+                    connectionsThisMonth: sql<number>`count(*) FILTER (
+                        WHERE ${connections.status} = 'accepted'
+                        AND (${connections.requesterId} = ${targetId} OR ${connections.addresseeId} = ${targetId})
+                        AND ${connections.updatedAt} >= ${startOfMonthIso}
+                    )`,
+                    connectionsGained: sql<number>`count(*) FILTER (
+                        WHERE ${connections.addresseeId} = ${targetId}
+                        AND ${connections.status} = 'accepted'
+                        AND ${connections.updatedAt} >= ${startOfMonthIso}
+                    )`
+                })
+                    .from(connections)
+                    .where(
+                        or(
+                            eq(connections.requesterId, targetId),
+                            eq(connections.addresseeId, targetId)
+                        )
+                    ),
+            ]);
 
-        return {
-            totalConnections: Number(profileCounter[0]?.connectionsCount || 0),
-            pendingIncoming: canViewPrivateStats ? Number(stats[0]?.pendingIncoming || 0) : 0,
-            pendingSent: canViewPrivateStats ? Number(stats[0]?.pendingSent || 0) : 0,
-            connectionsThisMonth: canViewPrivateStats ? Number(stats[0]?.connectionsThisMonth || 0) : 0,
-            connectionsGained: canViewPrivateStats ? Number(stats[0]?.connectionsGained || 0) : 0,
-        };
+            return {
+                totalConnections: Number(profileCounter[0]?.connectionsCount || 0),
+                pendingIncoming: canViewPrivateStats ? Number(stats[0]?.pendingIncoming || 0) : 0,
+                pendingSent: canViewPrivateStats ? Number(stats[0]?.pendingSent || 0) : 0,
+                connectionsThisMonth: canViewPrivateStats ? Number(stats[0]?.connectionsThisMonth || 0) : 0,
+                connectionsGained: canViewPrivateStats ? Number(stats[0]?.connectionsGained || 0) : 0,
+            };
+        });
     } catch (error) {
         console.error('Error fetching connection stats:', error);
         // Return zeros if table doesn't exist or query fails
@@ -1456,97 +1560,102 @@ export async function getPendingRequests(
     limit: number = 20,
     offset: number = 0
 ) {
-    if (offset > 0) {
-        const user = await getAuthUser();
-        if (!user) return { incoming: [], sent: [], hasMoreIncoming: false, hasMoreSent: false };
+    const safeLimit = Math.max(1, Math.min(limit, 60));
+    const safeOffset = Math.max(0, offset);
+    const user = await getAuthUser();
+    const dedupeKey = `connections:pending:${user?.id ?? 'anon'}:${safeLimit}:${safeOffset}`;
 
-        const [incoming, sent] = await Promise.all([
-            db
-                .select({
-                    id: connections.id,
-                    requesterId: connections.requesterId,
-                    addresseeId: connections.addresseeId,
-                    status: connections.status,
-                    createdAt: connections.createdAt,
-                    requesterUsername: profiles.username,
-                    requesterFullName: profiles.fullName,
-                    requesterAvatarUrl: profiles.avatarUrl,
-                    requesterHeadline: profiles.headline,
-                })
-                .from(connections)
-                .innerJoin(profiles, eq(profiles.id, connections.requesterId))
-                .where(and(eq(connections.addresseeId, user.id), eq(connections.status, 'pending')))
-                .orderBy(desc(connections.createdAt))
-                .limit(limit + 1)
-                .offset(offset),
-            db
-                .select({
-                    id: connections.id,
-                    requesterId: connections.requesterId,
-                    addresseeId: connections.addresseeId,
-                    status: connections.status,
-                    createdAt: connections.createdAt,
-                    addresseeUsername: profiles.username,
-                    addresseeFullName: profiles.fullName,
-                    addresseeAvatarUrl: profiles.avatarUrl,
-                    addresseeHeadline: profiles.headline,
-                })
-                .from(connections)
-                .innerJoin(profiles, eq(profiles.id, connections.addresseeId))
-                .where(and(eq(connections.requesterId, user.id), eq(connections.status, 'pending')))
-                .orderBy(desc(connections.createdAt))
-                .limit(limit + 1)
-                .offset(offset),
+    return runInFlightDeduped(dedupeKey, async () => {
+        if (safeOffset > 0) {
+            if (!user) return { incoming: [], sent: [], hasMoreIncoming: false, hasMoreSent: false };
+
+            const [incoming, sent] = await Promise.all([
+                db
+                    .select({
+                        id: connections.id,
+                        requesterId: connections.requesterId,
+                        addresseeId: connections.addresseeId,
+                        status: connections.status,
+                        createdAt: connections.createdAt,
+                        requesterUsername: profiles.username,
+                        requesterFullName: profiles.fullName,
+                        requesterAvatarUrl: profiles.avatarUrl,
+                        requesterHeadline: profiles.headline,
+                    })
+                    .from(connections)
+                    .innerJoin(profiles, eq(profiles.id, connections.requesterId))
+                    .where(and(eq(connections.addresseeId, user.id), eq(connections.status, 'pending')))
+                    .orderBy(desc(connections.createdAt))
+                    .limit(safeLimit + 1)
+                    .offset(safeOffset),
+                db
+                    .select({
+                        id: connections.id,
+                        requesterId: connections.requesterId,
+                        addresseeId: connections.addresseeId,
+                        status: connections.status,
+                        createdAt: connections.createdAt,
+                        addresseeUsername: profiles.username,
+                        addresseeFullName: profiles.fullName,
+                        addresseeAvatarUrl: profiles.avatarUrl,
+                        addresseeHeadline: profiles.headline,
+                    })
+                    .from(connections)
+                    .innerJoin(profiles, eq(profiles.id, connections.addresseeId))
+                    .where(and(eq(connections.requesterId, user.id), eq(connections.status, 'pending')))
+                    .orderBy(desc(connections.createdAt))
+                    .limit(safeLimit + 1)
+                    .offset(safeOffset),
+            ]);
+
+            return {
+                incoming: incoming.slice(0, safeLimit),
+                sent: sent.slice(0, safeLimit),
+                hasMoreIncoming: incoming.length > safeLimit,
+                hasMoreSent: sent.length > safeLimit,
+            };
+        }
+
+        const [incomingFeed, sentFeed] = await Promise.all([
+            getConnectionsFeed({ tab: 'requests_incoming', limit: safeLimit }),
+            getConnectionsFeed({ tab: 'requests_sent', limit: safeLimit }),
         ]);
 
+        if (!incomingFeed.success && !sentFeed.success) {
+            return { incoming: [], sent: [], hasMoreIncoming: false, hasMoreSent: false };
+        }
+
         return {
-            incoming: incoming.slice(0, limit),
-            sent: sent.slice(0, limit),
-            hasMoreIncoming: incoming.length > limit,
-            hasMoreSent: sent.length > limit,
+            incoming: incomingFeed.success
+                ? (incomingFeed.items as RequestFeedItem[]).map((item) => ({
+                    id: item.id,
+                    requesterId: item.requesterId,
+                    addresseeId: item.addresseeId,
+                    status: item.status,
+                    createdAt: item.createdAt,
+                    requesterUsername: item.user?.username,
+                    requesterFullName: item.user?.fullName,
+                    requesterAvatarUrl: item.user?.avatarUrl,
+                    requesterHeadline: item.user?.headline,
+                }))
+                : [],
+            sent: sentFeed.success
+                ? (sentFeed.items as RequestFeedItem[]).map((item) => ({
+                    id: item.id,
+                    requesterId: item.requesterId,
+                    addresseeId: item.addresseeId,
+                    status: item.status,
+                    createdAt: item.createdAt,
+                    addresseeUsername: item.user?.username,
+                    addresseeFullName: item.user?.fullName,
+                    addresseeAvatarUrl: item.user?.avatarUrl,
+                    addresseeHeadline: item.user?.headline,
+                }))
+                : [],
+            hasMoreIncoming: incomingFeed.success ? incomingFeed.hasMore : false,
+            hasMoreSent: sentFeed.success ? sentFeed.hasMore : false,
         };
-    }
-
-    const cursor = offset > 0 ? `o:${Math.max(offset, 0)}` : undefined;
-    const [incomingFeed, sentFeed] = await Promise.all([
-        getConnectionsFeed({ tab: 'requests_incoming', limit, cursor }),
-        getConnectionsFeed({ tab: 'requests_sent', limit, cursor }),
-    ]);
-
-    if (!incomingFeed.success && !sentFeed.success) {
-        return { incoming: [], sent: [], hasMoreIncoming: false, hasMoreSent: false };
-    }
-
-    return {
-        incoming: incomingFeed.success
-            ? (incomingFeed.items as RequestFeedItem[]).map((item) => ({
-                id: item.id,
-                requesterId: item.requesterId,
-                addresseeId: item.addresseeId,
-                status: item.status,
-                createdAt: item.createdAt,
-                requesterUsername: item.user?.username,
-                requesterFullName: item.user?.fullName,
-                requesterAvatarUrl: item.user?.avatarUrl,
-                requesterHeadline: item.user?.headline,
-            }))
-            : [],
-        sent: sentFeed.success
-            ? (sentFeed.items as RequestFeedItem[]).map((item) => ({
-                id: item.id,
-                requesterId: item.requesterId,
-                addresseeId: item.addresseeId,
-                status: item.status,
-                createdAt: item.createdAt,
-                addresseeUsername: item.user?.username,
-                addresseeFullName: item.user?.fullName,
-                addresseeAvatarUrl: item.user?.avatarUrl,
-                addresseeHeadline: item.user?.headline,
-            }))
-            : [],
-        hasMoreIncoming: incomingFeed.success ? incomingFeed.hasMore : false,
-        hasMoreSent: sentFeed.success ? sentFeed.hasMore : false,
-    };
+    });
 }
 
 // ============================================================================

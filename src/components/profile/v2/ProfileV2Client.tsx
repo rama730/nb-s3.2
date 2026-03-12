@@ -11,7 +11,7 @@ import { ProfileTabs } from './ProfileTabs'
 import { useConnectionMutations } from '@/hooks/useConnections';
 import { checkConnectionStatus } from '@/app/actions/connections';
 import { toast } from 'sonner';
-import { useProfileProjects, useProfileStats } from '@/hooks/useProfileData';
+import { useProfileReadModel } from '@/hooks/useProfileData';
 
 // Section Imports (Kept static as they are usually in viewport)
 import { AboutCard } from './sections/AboutCard'
@@ -56,12 +56,12 @@ export function ProfileV2Client({
     }, [activeTab, projectsEnabled])
 
     // Lazy Load Data
-    const { data: projects, isLoading: projectsLoading } = useProfileProjects(
-        profile.id,
-        initialProjects.length > 0 ? initialProjects : undefined,
-        projectsEnabled
-    );
-    const { data: stats, isLoading: statsLoading } = useProfileStats(profile.id, initialStats, true);
+    const { projects, stats, projectsLoading } = useProfileReadModel({
+        profileId: profile.id,
+        initialProjects: initialProjects.length > 0 ? initialProjects : undefined,
+        initialStats,
+        projectsEnabled,
+    });
 
     const { sendRequest, acceptRequest, rejectRequest, cancelRequest, disconnect } = useConnectionMutations();
 

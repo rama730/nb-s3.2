@@ -2,9 +2,11 @@
 
 import { db } from "@/lib/db";
 import { profiles, projectNodeEvents, projectNodeLocks, projectNodes } from "@/lib/db/schema";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, sql, gt } from "drizzle-orm";
 import { createClient } from "@/lib/supabase/server";
+import { runInFlightDeduped } from "@/lib/async/inflight-dedupe";
 import {
+    assertProjectReadAccess,
     assertProjectWriteAccess,
     recordNodeEvent,
 } from "./_shared";
@@ -150,27 +152,31 @@ export async function releaseProjectNodeLock(projectId: string, nodeId: string) 
 export async function getProjectLocks(projectId: string) {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
-    // This is read-only metadata; allow any project member to fetch.
-    const now = new Date();
+    const actorId = user?.id ?? null;
+    return await runInFlightDeduped(`files:locks:${projectId}:${actorId ?? "anon"}`, async () => {
+        await assertProjectReadAccess(projectId, actorId);
+        // This is read-only metadata; allow any project member to fetch.
+        const now = new Date();
 
-    const rows = await db
-        .select({
-            nodeId: projectNodeLocks.nodeId,
-            projectId: projectNodeLocks.projectId,
-            lockedBy: projectNodeLocks.lockedBy,
-            expiresAt: projectNodeLocks.expiresAt,
-            username: profiles.username,
-            fullName: profiles.fullName,
-        })
-        .from(projectNodeLocks)
-        .leftJoin(profiles, eq(projectNodeLocks.lockedBy, profiles.id))
-        .where(and(eq(projectNodeLocks.projectId, projectId), sql`${projectNodeLocks.expiresAt} > ${now}`));
+        const rows = await db
+            .select({
+                nodeId: projectNodeLocks.nodeId,
+                projectId: projectNodeLocks.projectId,
+                lockedBy: projectNodeLocks.lockedBy,
+                expiresAt: projectNodeLocks.expiresAt,
+                username: profiles.username,
+                fullName: profiles.fullName,
+            })
+            .from(projectNodeLocks)
+            .leftJoin(profiles, eq(projectNodeLocks.lockedBy, profiles.id))
+            .where(and(eq(projectNodeLocks.projectId, projectId), gt(projectNodeLocks.expiresAt, now)));
 
-    return rows.map(r => ({
-        nodeId: r.nodeId,
-        projectId: r.projectId,
-        lockedBy: r.lockedBy,
-        lockedByName: r.fullName || r.username || null,
-        expiresAt: r.expiresAt.getTime(),
-    }));
+        return rows.map(r => ({
+            nodeId: r.nodeId,
+            projectId: r.projectId,
+            lockedBy: r.lockedBy,
+            lockedByName: r.fullName || r.username || null,
+            expiresAt: r.expiresAt.getTime(),
+        }));
+    });
 }

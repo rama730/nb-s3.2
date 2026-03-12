@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { shouldHideTerminalApplicationBanner } from "@/lib/chat/banner-lifecycle";
+import { logger } from "@/lib/logger";
 
 interface ChatApplicationBannerProps {
     isApplicant: boolean;
@@ -35,6 +36,15 @@ interface ChatApplicationBannerProps {
 type RequestAction = 'accept' | 'reject' | 'withdraw' | 'reopen';
 
 const EMPTY_MESSAGES: ReadonlyArray<MessageWithSender> = [];
+
+function hashText(input: string) {
+    let hash = 2166136261;
+    for (let i = 0; i < input.length; i += 1) {
+        hash ^= input.charCodeAt(i);
+        hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(16);
+}
 
 function extractApplicationBody(content: string | null) {
     const value = (content || "").trim();
@@ -195,16 +205,24 @@ export function ChatApplicationBanner({
 
         setRequestLoading(action);
         try {
-            const fn = action === 'accept'
-                ? acceptApplicationAction
+            const idempotencyKey = `chat:${action}:${activeApplicationId}`;
+            const res = action === 'accept'
+                ? await acceptApplicationAction(activeApplicationId, undefined, { idempotencyKey })
                 : action === 'reject'
-                    ? rejectApplicationAction
+                    ? await rejectApplicationAction(activeApplicationId, undefined, 'other', { idempotencyKey })
                     : action === 'withdraw'
-                        ? withdrawApplicationAction
-                        : reopenApplicationAction;
-            const res = await fn(activeApplicationId);
+                        ? await withdrawApplicationAction(activeApplicationId, undefined, { idempotencyKey })
+                        : await reopenApplicationAction(activeApplicationId, undefined, { idempotencyKey });
             
             if (res.success) {
+                logger.metric("applications.chat.action", {
+                    module: "chat-application-banner",
+                    action,
+                    applicationId: activeApplicationId,
+                    applicationTraceId: res.applicationTraceId || null,
+                    idempotent: !!res.idempotent,
+                    result: "success",
+                });
                 const successText =
                     action === 'withdraw'
                         ? 'Application withdrawn'
@@ -226,6 +244,14 @@ export function ChatApplicationBanner({
                     checkActiveConnectionStatus(),
                 ]);
             } else {
+                logger.metric("applications.chat.action", {
+                    module: "chat-application-banner",
+                    action,
+                    applicationId: activeApplicationId,
+                    applicationTraceId: res.applicationTraceId || null,
+                    errorCode: res.errorCode || "UNKNOWN",
+                    result: "failure",
+                });
                 toast.error(res.error || `Failed to ${action}`);
                 // Rollback on error
                 useChatStore.setState({ activeApplicationStatus: previousStatus });
@@ -252,12 +278,27 @@ export function ChatApplicationBanner({
 
         setIsEditSaving(true);
         try {
-            const result = await editPendingApplicationAction(activeApplicationId, nextMessage);
+            const idempotencyKey = `chat:edit:${activeApplicationId}:${hashText(nextMessage)}`;
+            const result = await editPendingApplicationAction(activeApplicationId, nextMessage, { idempotencyKey });
             if (!result.success) {
+                logger.metric("applications.chat.edit", {
+                    module: "chat-application-banner",
+                    applicationId: activeApplicationId,
+                    applicationTraceId: result.applicationTraceId || null,
+                    errorCode: result.errorCode || "UNKNOWN",
+                    result: "failure",
+                });
                 toast.error(result.error || "Failed to edit application");
                 return;
             }
 
+            logger.metric("applications.chat.edit", {
+                module: "chat-application-banner",
+                applicationId: activeApplicationId,
+                applicationTraceId: result.applicationTraceId || null,
+                idempotent: !!result.idempotent,
+                result: "success",
+            });
             toast.success("Application updated");
             setIsEditOpen(false);
 

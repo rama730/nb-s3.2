@@ -13,6 +13,21 @@ function syncIdbCache(projectId: string, nodesById: Record<string, ProjectNode>,
   }).catch(e => console.warn("Failed to save IDB cache", e));
 }
 
+function toEpochMs(value: unknown): number {
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === "string" || typeof value === "number") {
+    const parsed = new Date(value).getTime();
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+}
+
+function nodeRecencyScore(node: ProjectNode): number {
+  const updatedAt = toEpochMs((node as { updatedAt?: unknown }).updatedAt);
+  const createdAt = toEpochMs((node as { createdAt?: unknown }).createdAt);
+  return Math.max(updatedAt, createdAt);
+}
+
 export interface FilesSlice {
   upsertNodes: (projectId: string, nodes: ProjectNode[]) => void;
   setChildren: (projectId: string, parentId: string | null, childIds: string[]) => void;
@@ -76,17 +91,46 @@ export function evictLruIfNeeded(
   return result;
 }
 
-function enforceNodesBudget(nodesById: Record<string, ProjectNode>, budget: number = 5000): Record<string, ProjectNode> {
-  const keys = Object.keys(nodesById);
-  if (keys.length <= budget) return nodesById;
-
-  // Keep the most recently inserted keys
-  const keysToKeep = keys.slice(keys.length - budget);
-  const result: Record<string, ProjectNode> = {};
-  for (const k of keysToKeep) {
-    result[k] = nodesById[k];
+export function enforceNodesBudget(
+  nodesById: Record<string, ProjectNode>,
+  childrenByParentId: Record<string, string[]>,
+  budget: number = 5000
+): {
+  nodesById: Record<string, ProjectNode>;
+  childrenByParentId: Record<string, string[]>;
+} {
+  const entries = Object.entries(nodesById);
+  if (entries.length <= budget) {
+    return { nodesById, childrenByParentId };
   }
-  return result;
+
+  // Keep the most recent nodes by explicit node timestamps.
+  const entriesToKeep = entries
+    .sort(([idA, nodeA], [idB, nodeB]) => {
+      const scoreDiff = nodeRecencyScore(nodeB) - nodeRecencyScore(nodeA);
+      if (scoreDiff !== 0) return scoreDiff;
+      return idA.localeCompare(idB);
+    })
+    .slice(0, budget);
+
+  const keysToKeepSet = new Set(entriesToKeep.map(([id]) => id));
+  const result: Record<string, ProjectNode> = {};
+  for (const [id, node] of entriesToKeep) {
+    result[id] = node;
+  }
+
+  let childrenChanged = false;
+  const prunedChildrenByParentId: Record<string, string[]> = {};
+  for (const [parentId, childIds] of Object.entries(childrenByParentId)) {
+    const filteredChildIds = childIds.filter((id) => keysToKeepSet.has(id));
+    if (filteredChildIds.length !== childIds.length) childrenChanged = true;
+    prunedChildrenByParentId[parentId] = filteredChildIds;
+  }
+
+  return {
+    nodesById: result,
+    childrenByParentId: childrenChanged ? prunedChildrenByParentId : childrenByParentId,
+  };
 }
 
 export function estimateVisibleRowsBudget(ws: FilesWorkspaceState["byProjectId"][string] | undefined) {
@@ -119,11 +163,18 @@ export const createFilesSlice: StateCreator<FilesWorkspaceState, [], [], FilesSl
         }
       }
       if (!changed) return state;
-      const limitedNodesById = enforceNodesBudget(nextById, 5000);
+      const budgeted = enforceNodesBudget(nextById, ws.childrenByParentId, 5000);
+      const limitedNodesById = budgeted.nodesById;
+      const prunedChildrenByParentId = budgeted.childrenByParentId;
 
-      const newWs = { ...ws, nodesById: limitedNodesById, treeVersion: ws.treeVersion + 1 };
+      const newWs = {
+        ...ws,
+        nodesById: limitedNodesById,
+        childrenByParentId: prunedChildrenByParentId,
+        treeVersion: ws.treeVersion + 1,
+      };
 
-      syncIdbCache(projectId, limitedNodesById, ws.childrenByParentId);
+      syncIdbCache(projectId, limitedNodesById, prunedChildrenByParentId);
 
       return {
         byProjectId: {
@@ -186,10 +237,12 @@ export const createFilesSlice: StateCreator<FilesWorkspaceState, [], [], FilesSl
       const key = parentKey(parentId);
       const nextById = { ...ws.nodesById };
       for (const n of nodes) nextById[n.id] = n;
-      const limitedNodesById = enforceNodesBudget(nextById, 5000);
       const nextChildren = { ...ws.childrenByParentId, [key]: Array.from(new Set(childIds)) };
+      const budgeted = enforceNodesBudget(nextById, nextChildren, 5000);
+      const limitedNodesById = budgeted.nodesById;
+      const prunedChildrenByParentId = budgeted.childrenByParentId;
 
-      syncIdbCache(projectId, limitedNodesById, nextChildren);
+      syncIdbCache(projectId, limitedNodesById, prunedChildrenByParentId);
 
       return {
         byProjectId: {
@@ -197,7 +250,7 @@ export const createFilesSlice: StateCreator<FilesWorkspaceState, [], [], FilesSl
           [projectId]: {
             ...ws,
             nodesById: limitedNodesById,
-            childrenByParentId: nextChildren,
+            childrenByParentId: prunedChildrenByParentId,
             loadedChildren: payload?.loaded
               ? { ...ws.loadedChildren, [key]: true }
               : ws.loadedChildren,
@@ -336,14 +389,21 @@ export const createFilesSlice: StateCreator<FilesWorkspaceState, [], [], FilesSl
         }
       }
 
-      const limitedNodesById = enforceNodesBudget(nodesById, 5000);
+      const budgeted = enforceNodesBudget(nodesById, childrenByParentId, 5000);
+      const limitedNodesById = budgeted.nodesById;
+      const prunedChildrenByParentId = budgeted.childrenByParentId;
 
-      syncIdbCache(projectId, limitedNodesById, childrenByParentId);
+      syncIdbCache(projectId, limitedNodesById, prunedChildrenByParentId);
 
       return {
         byProjectId: {
           ...state.byProjectId,
-          [projectId]: { ...ws, nodesById: limitedNodesById, childrenByParentId, treeVersion: ws.treeVersion + 1 },
+          [projectId]: {
+            ...ws,
+            nodesById: limitedNodesById,
+            childrenByParentId: prunedChildrenByParentId,
+            treeVersion: ws.treeVersion + 1
+          },
         },
       };
     }),

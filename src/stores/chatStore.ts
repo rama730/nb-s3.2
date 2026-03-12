@@ -11,6 +11,7 @@ import {
     getUnreadCount,
     getPinnedMessages,
     setMessagePinned,
+    getMessageContext,
     type ConversationWithDetails,
     type MessageWithSender,
     type UploadedAttachment,
@@ -69,6 +70,17 @@ interface ProfileCacheEntry {
 
 type MessageDeliveryState = 'sending' | 'queued' | 'sent' | 'delivered' | 'read' | 'failed';
 
+function isTransientNetworkError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    const normalized = message.toLowerCase();
+    return (
+        normalized.includes('failed to fetch') ||
+        normalized.includes('network error') ||
+        normalized.includes('networkerror') ||
+        normalized.includes('abort')
+    );
+}
+
 function withDeliveryMetadata(
     metadata: Record<string, unknown> | null | undefined,
     state: MessageDeliveryState
@@ -90,6 +102,136 @@ function toEpochMs(value: unknown): number {
         return Number.isNaN(ms) ? 0 : ms;
     }
     return 0;
+}
+
+function hasSenderSnapshot(message: MessageWithSender): boolean {
+    return Boolean(message.sender?.id || message.sender?.username || message.sender?.fullName);
+}
+
+function pickPreferredMessage(
+    current: MessageWithSender,
+    candidate: MessageWithSender
+): MessageWithSender {
+    const currentIsTemp = current.id.startsWith('temp-');
+    const candidateIsTemp = candidate.id.startsWith('temp-');
+    if (currentIsTemp !== candidateIsTemp) {
+        return candidateIsTemp ? current : candidate;
+    }
+
+    const currentAttachmentCount = current.attachments?.length || 0;
+    const candidateAttachmentCount = candidate.attachments?.length || 0;
+    if (currentAttachmentCount !== candidateAttachmentCount) {
+        return candidateAttachmentCount > currentAttachmentCount ? candidate : current;
+    }
+
+    const currentHasSender = hasSenderSnapshot(current);
+    const candidateHasSender = hasSenderSnapshot(candidate);
+    if (currentHasSender !== candidateHasSender) {
+        return candidateHasSender ? candidate : current;
+    }
+
+    const currentEditedAt = toEpochMs(current.editedAt);
+    const candidateEditedAt = toEpochMs(candidate.editedAt);
+    if (currentEditedAt !== candidateEditedAt) {
+        return candidateEditedAt > currentEditedAt ? candidate : current;
+    }
+
+    const currentCreatedAt = toEpochMs(current.createdAt);
+    const candidateCreatedAt = toEpochMs(candidate.createdAt);
+    if (currentCreatedAt !== candidateCreatedAt) {
+        return candidateCreatedAt > currentCreatedAt ? candidate : current;
+    }
+
+    return candidate;
+}
+
+function mergeMessageCollections(
+    ...collections: ReadonlyArray<ReadonlyArray<MessageWithSender>>
+): MessageWithSender[] {
+    const merged: MessageWithSender[] = [];
+    const indexById = new Map<string, number>();
+    const indexByClientMessageId = new Map<string, number>();
+
+    const upsertMessage = (candidate: MessageWithSender) => {
+        const byIdIndex = indexById.get(candidate.id);
+        const byClientIdIndex = candidate.clientMessageId
+            ? indexByClientMessageId.get(candidate.clientMessageId)
+            : undefined;
+        const existingIndex = byIdIndex ?? byClientIdIndex;
+
+        if (existingIndex === undefined) {
+            const nextIndex = merged.push(candidate) - 1;
+            indexById.set(candidate.id, nextIndex);
+            if (candidate.clientMessageId) {
+                indexByClientMessageId.set(candidate.clientMessageId, nextIndex);
+            }
+            return;
+        }
+
+        const preferred = pickPreferredMessage(merged[existingIndex], candidate);
+        merged[existingIndex] = preferred;
+        indexById.set(preferred.id, existingIndex);
+        if (preferred.clientMessageId) {
+            indexByClientMessageId.set(preferred.clientMessageId, existingIndex);
+        }
+    };
+
+    for (const collection of collections) {
+        for (const message of collection) {
+            upsertMessage(message);
+        }
+    }
+
+    return merged.sort((a, b) => {
+        const diff = toEpochMs(a.createdAt) - toEpochMs(b.createdAt);
+        if (diff !== 0) return diff;
+        return a.id.localeCompare(b.id);
+    });
+}
+
+function getLatestMessageId(messages: ReadonlyArray<MessageWithSender>): string | undefined {
+    let latest: MessageWithSender | null = null;
+    for (const message of messages) {
+        if (message.id.startsWith('temp-')) continue;
+        if (!latest) {
+            latest = message;
+            continue;
+        }
+        const createdDiff = toEpochMs(message.createdAt) - toEpochMs(latest.createdAt);
+        if (createdDiff > 0 || (createdDiff === 0 && message.id.localeCompare(latest.id) > 0)) {
+            latest = message;
+        }
+    }
+    return latest?.id;
+}
+
+const SEND_LOCK_WINDOW_MS = 1500;
+const sendSignatureLocks = new Map<string, number>();
+
+function buildSendSignature(
+    conversationId: string,
+    content: string,
+    attachments: ReadonlyArray<UploadedAttachment>,
+    replyToMessageId?: string | null
+): string {
+    const attachmentSignature = attachments
+        .map((attachment) => attachment.id || attachment.url || attachment.filename)
+        .sort()
+        .join('|');
+    return `${conversationId}::${replyToMessageId || ''}::${content}::${attachmentSignature}`;
+}
+
+function emitFocusMessageEvent(
+    conversationId: string,
+    messageId: string,
+    tone: 'blue' | 'amber' = 'blue'
+) {
+    if (typeof window === 'undefined') return;
+    window.dispatchEvent(
+        new CustomEvent('chat:focus-message', {
+            detail: { conversationId, messageId, tone },
+        })
+    );
 }
 
 const PROFILE_CACHE_MAX_SIZE = 500;
@@ -227,6 +369,7 @@ interface ChatState {
     ) => Promise<{ ok: boolean; queued?: boolean }>;
     flushOutbox: () => Promise<void>;
     loadMoreMessages: (conversationId: string) => Promise<void>;
+    focusMessage: (conversationId: string, messageId: string) => Promise<{ found: boolean; source?: 'cache' | 'backfill' | 'server' }>;
     setDraft: (conversationId: string, text: string) => void;
     setReplyTarget: (conversationId: string, target: ReplyTargetDraft | null) => void;
     clearReplyTarget: (conversationId: string) => void;
@@ -445,6 +588,10 @@ export const useChatStore = create<ChatState>()(
                         });
                     }
                 } catch (error) {
+                    if (isTransientNetworkError(error)) {
+                        console.warn('Refresh conversations skipped due transient network error');
+                        return;
+                    }
                     console.error('Error refreshing conversations:', error);
                 }
             },
@@ -483,7 +630,7 @@ export const useChatStore = create<ChatState>()(
                                 messagesByConversation: {
                                     ...prev.messagesByConversation,
                                     [conversationId]: {
-                                        messages: result.messages!,
+                                        messages: mergeMessageCollections(result.messages!),
                                         hasMore: result.hasMore || false,
                                         loading: false,
                                         cursor: result.nextCursor || null,
@@ -613,18 +760,31 @@ export const useChatStore = create<ChatState>()(
                 const normalized = content.trim();
                 const attachments = options?.attachments || [];
                 const senderSnapshot = options?.senderSnapshot || null;
-	                const replyTarget =
-	                    options?.replyToMessageId
-	                        ? (state.messagesByConversation[conversationId]?.messages || []).find(
-	                            (message) => message.id === options.replyToMessageId
-	                        ) || null
-	                        : state.replyTargetByConversation[conversationId] || null;
-	                const replyToMessageId = options?.replyToMessageId || replyTarget?.id || null;
-	                const replySenderName =
-	                    replyTarget && 'senderName' in replyTarget
-	                        ? (replyTarget.senderName || null)
-	                        : (replyTarget?.sender?.fullName || replyTarget?.sender?.username || null);
-	                if (!normalized && attachments.length === 0) return { ok: false };
+                const replyTarget =
+                    options?.replyToMessageId
+                        ? (state.messagesByConversation[conversationId]?.messages || []).find(
+                            (message) => message.id === options.replyToMessageId
+                        ) || null
+                        : state.replyTargetByConversation[conversationId] || null;
+                const replyToMessageId = options?.replyToMessageId || replyTarget?.id || null;
+                const replySenderName =
+                    replyTarget && 'senderName' in replyTarget
+                        ? (replyTarget.senderName || null)
+                        : (replyTarget?.sender?.fullName || replyTarget?.sender?.username || null);
+                if (!normalized && attachments.length === 0) return { ok: false };
+
+                const sendSignature = buildSendSignature(
+                    conversationId,
+                    normalized,
+                    attachments,
+                    replyToMessageId
+                );
+                const now = Date.now();
+                const lastLockedAt = sendSignatureLocks.get(sendSignature);
+                if (lastLockedAt && now - lastLockedAt < SEND_LOCK_WINDOW_MS) {
+                    return { ok: true };
+                }
+                sendSignatureLocks.set(sendSignature, now);
 
                 const generatedClientId =
                     options?.clientMessageId ||
@@ -833,7 +993,7 @@ export const useChatStore = create<ChatState>()(
                                             loading: false,
                                             cursor: null,
                                         }),
-                                        messages: nextMessages,
+                                        messages: mergeMessageCollections(nextMessages),
                                     },
                                 },
                             };
@@ -851,6 +1011,8 @@ export const useChatStore = create<ChatState>()(
                     queueMessage('send_exception');
                     void get().flushOutbox();
                     return { ok: true, queued: true };
+                } finally {
+                    sendSignatureLocks.delete(sendSignature);
                 }
             },
 
@@ -931,7 +1093,7 @@ export const useChatStore = create<ChatState>()(
                                                 loading: false,
                                                 cursor: null,
                                             }),
-                                            messages: replacedMessages,
+                                            messages: mergeMessageCollections(replacedMessages),
                                         },
                                     },
                                 };
@@ -1020,7 +1182,10 @@ export const useChatStore = create<ChatState>()(
                             messagesByConversation: {
                                 ...prev.messagesByConversation,
                                 [conversationId]: {
-                                    messages: [...result.messages!, ...prev.messagesByConversation[conversationId].messages],
+                                    messages: mergeMessageCollections(
+                                        result.messages!,
+                                        prev.messagesByConversation[conversationId].messages
+                                    ),
                                     hasMore: result.hasMore || false,
                                     loading: false,
                                     cursor: result.nextCursor || null,
@@ -1050,6 +1215,60 @@ export const useChatStore = create<ChatState>()(
                         },
                     }));
                 }
+            },
+
+            focusMessage: async (conversationId: string, messageId: string) => {
+                const hasMessage = () =>
+                    (get().messagesByConversation[conversationId]?.messages || []).some(
+                        (message) => message.id === messageId
+                    );
+
+                if (hasMessage()) {
+                    emitFocusMessageEvent(conversationId, messageId);
+                    return { found: true as const, source: 'cache' as const };
+                }
+
+                let pagesLoaded = 0;
+                while (pagesLoaded < 8) {
+                    const cache = get().messagesByConversation[conversationId];
+                    if (!cache || cache.loading || !cache.hasMore) break;
+                    await get().loadMoreMessages(conversationId);
+                    pagesLoaded += 1;
+                    if (hasMessage()) {
+                        emitFocusMessageEvent(conversationId, messageId);
+                        return { found: true as const, source: 'backfill' as const };
+                    }
+                }
+
+                try {
+                    const context = await getMessageContext(conversationId, messageId);
+                    const contextMessage = context.message;
+                    if (context.success && context.available && contextMessage) {
+                        set((prev) => ({
+                            messagesByConversation: {
+                                ...prev.messagesByConversation,
+                                [conversationId]: {
+                                    ...(prev.messagesByConversation[conversationId] || {
+                                        messages: [],
+                                        hasMore: true,
+                                        loading: false,
+                                        cursor: null,
+                                    }),
+                                    messages: mergeMessageCollections(
+                                        prev.messagesByConversation[conversationId]?.messages || [],
+                                        [contextMessage]
+                                    ),
+                                },
+                            },
+                        }));
+                        emitFocusMessageEvent(conversationId, messageId);
+                        return { found: true as const, source: 'server' as const };
+                    }
+                } catch (error) {
+                    console.error('Error focusing message:', error);
+                }
+
+                return { found: false as const };
             },
 
             // ================================================================
@@ -1088,10 +1307,9 @@ export const useChatStore = create<ChatState>()(
             markAsRead: async (conversationId: string) => {
                 const state = get();
                 const previousUnread = state.unreadCounts[conversationId] || 0;
-                const latestMessageId =
-                    state.messagesByConversation[conversationId]?.messages[
-                        (state.messagesByConversation[conversationId]?.messages.length || 1) - 1
-                    ]?.id;
+                const latestMessageId = getLatestMessageId(
+                    state.messagesByConversation[conversationId]?.messages || []
+                );
 
                 if (previousUnread === 0) return;
 
@@ -1318,7 +1536,10 @@ export const useChatStore = create<ChatState>()(
                                 ...prev.messagesByConversation,
                                 [completeMessage.conversationId]: {
                                     ...cachedConversation,
-                                    messages: [...cachedConversation.messages, completeMessage],
+                                    messages: mergeMessageCollections(
+                                        cachedConversation.messages,
+                                        [completeMessage]
+                                    ),
                                 },
                             };
                         }
@@ -1500,9 +1721,9 @@ export const useChatStore = create<ChatState>()(
                         messagesByConversation: {
                             ...state.messagesByConversation,
                             [conversationId]: {
-                                messages: [
-                                    ...serverMessages,
-                                    ...(state.messagesByConversation[conversationId]?.messages || []).filter((localMessage) => {
+                                messages: mergeMessageCollections(
+                                    serverMessages,
+                                    (state.messagesByConversation[conversationId]?.messages || []).filter((localMessage) => {
                                         if (serverIdSet.has(localMessage.id)) return false;
                                         if (localMessage.clientMessageId && serverClientIdSet.has(localMessage.clientMessageId)) return false;
                                         const deliveryState = (localMessage.metadata as Record<string, unknown> | undefined)?.deliveryState;
@@ -1512,8 +1733,8 @@ export const useChatStore = create<ChatState>()(
                                             deliveryState === 'queued' ||
                                             deliveryState === 'failed'
                                         );
-                                    }),
-                                ],
+                                    })
+                                ),
                                 hasMore: hasMore || false,
                                 cursor: nextCursor || null,
                                 loading: false

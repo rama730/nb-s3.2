@@ -3,6 +3,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { getProjectMembersAction } from '@/app/actions/project';
 import { fetchProjectSprintsAction } from '@/app/actions/project';
+import { queryKeys } from '@/lib/query-keys';
 
 /**
  * useTaskPanelData
@@ -13,21 +14,21 @@ import { fetchProjectSprintsAction } from '@/app/actions/project';
  */
 export function useTaskPanelData(projectId: string | null) {
     const { data: membersData } = useQuery({
-        queryKey: ['workspace', 'panel-members', projectId],
+        queryKey: queryKeys.workspace.panelMembers(projectId),
         queryFn: () => getProjectMembersAction(projectId!, 50),
         enabled: !!projectId,
         staleTime: 5 * 60_000,
     });
 
     const { data: sprintsData } = useQuery({
-        queryKey: ['workspace', 'panel-sprints', projectId],
+        queryKey: queryKeys.workspace.panelSprints(projectId),
         queryFn: () => fetchProjectSprintsAction(projectId!),
         enabled: !!projectId,
         staleTime: 5 * 60_000,
     });
 
     return {
-        members: membersData?.members ?? [],
-        sprints: sprintsData?.sprints ?? [],
+        members: membersData?.success ? membersData.members : [],
+        sprints: sprintsData?.success ? sprintsData.sprints : [],
     };
 }

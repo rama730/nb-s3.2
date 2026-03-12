@@ -12,7 +12,14 @@ export async function compressAvatarOffMainThread(file: File): Promise<Blob> {
     return new Promise<Blob>((resolve, reject) => {
         const worker = new Worker(new URL('../../workers/avatar-compress.worker.ts', import.meta.url))
 
+        const TIMEOUT_MS = 30_000
+        const timeoutId = setTimeout(() => {
+            cleanup()
+            reject(new Error('Worker compression timed out'))
+        }, TIMEOUT_MS)
+
         const cleanup = () => {
+            clearTimeout(timeoutId)
             worker.onmessage = null
             worker.onerror = null
             worker.terminate()

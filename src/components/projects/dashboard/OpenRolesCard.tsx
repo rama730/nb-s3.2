@@ -47,6 +47,11 @@ export default function OpenRolesCard({
             ? "Cannot reapply"
             : null;
     const isBlocked = isPending || (isRejected && !canReapply);
+    const blockedReason = isPending
+        ? "You already have an application pending review."
+        : (isRejected && !canReapply)
+            ? (isRoleFilled ? "This role has been filled." : (cannotReapplyLabel || "You cannot reapply yet."))
+            : null;
 
     return (
         <DashboardCard
@@ -55,6 +60,11 @@ export default function OpenRolesCard({
             compact
         >
             <div className="space-y-3">
+                {blockedReason ? (
+                    <p id="open-roles-apply-disabled-reason" className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                        {blockedReason}
+                    </p>
+                ) : null}
                 {/* Status Banner */}
                 {isCollaborator ? (
                     <motion.div className="flex items-center gap-2 bg-emerald-50 dark:bg-emerald-900/10 text-emerald-700 dark:text-emerald-400 p-2 rounded-lg border border-emerald-100 dark:border-emerald-900/20">
@@ -102,8 +112,15 @@ export default function OpenRolesCard({
                                             <button
                                                 onClick={() => onApply(role.id)}
                                                 disabled={isBlocked}
+                                                aria-disabled={isBlocked}
+                                                aria-describedby={isBlocked ? "open-roles-apply-disabled-reason" : undefined}
+                                                title={
+                                                    isBlocked
+                                                        ? (blockedReason || "Application is currently unavailable")
+                                                        : `Apply for ${role.role}`
+                                                }
                                                 className={cn(
-                                                    "absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity text-[10px] px-2.5 py-1 rounded font-semibold shadow-sm",
+                                                    "absolute top-3 right-3 text-[10px] px-2.5 py-1 rounded font-semibold shadow-sm",
                                                     isBlocked
                                                         ? "bg-zinc-100 text-zinc-400 cursor-not-allowed"
                                                         : "bg-indigo-600 text-white hover:bg-indigo-700"
@@ -133,6 +150,9 @@ export default function OpenRolesCard({
                     <button
                         onClick={() => onApply()}
                         disabled={isBlocked}
+                        aria-disabled={isBlocked}
+                        aria-describedby={isBlocked ? "open-roles-apply-disabled-reason" : undefined}
+                        title={isBlocked ? (blockedReason || "Application is currently unavailable") : "Apply to this project"}
                         className={cn(
                             "w-full py-2 flex items-center justify-center gap-1.5 text-xs font-semibold rounded-lg transition-all",
                             isBlocked
@@ -144,9 +164,17 @@ export default function OpenRolesCard({
                             ? "Application Submitted"
                             : (isRejected && !canReapply)
                                 ? (isRoleFilled ? "Role filled" : cannotReapplyLabel || "Cannot reapply")
-                                : "Apply General"}
+                            : "Apply General"}
                     </button>
                 )}
+                {isCreator ? (
+                    <button
+                        onClick={onManageRoles}
+                        className="w-full py-2 text-xs font-semibold rounded-lg border border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
+                    >
+                        Manage roles
+                    </button>
+                ) : null}
             </div>
         </DashboardCard>
     );

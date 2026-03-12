@@ -8,7 +8,12 @@ export function validateCsrf(request: Request): NextResponse | null {
     const origin = request.headers.get('origin')
     const host = request.headers.get('host')
 
-    if (!origin || !host) return null
+    if (!origin || !host) {
+        return NextResponse.json(
+            { error: 'Missing origin or host header' },
+            { status: 403 }
+        )
+    }
 
     try {
         const originHost = new URL(origin).host

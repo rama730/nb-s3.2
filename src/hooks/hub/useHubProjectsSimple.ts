@@ -4,6 +4,7 @@ import { useInfiniteQuery } from '@tanstack/react-query';
 import { Project, HubFilters } from '@/types/hub';
 import { fetchHubProjectsAction } from '@/app/actions/hub';
 import { type FilterView } from '@/constants/hub';
+import { queryKeys } from '@/lib/query-keys';
 
 const PAGE_SIZE = 24;
 
@@ -17,7 +18,7 @@ export function useHubProjectsSimple(
     } | null,
 ) {
     return useInfiniteQuery({
-        queryKey: ['hub-projects-simple', view, filters],
+        queryKey: queryKeys.hub.projectsSimple(view, filters),
         queryFn: async ({ pageParam = undefined as string | undefined }) => {
             const result = await fetchHubProjectsAction(filters, pageParam, PAGE_SIZE, view);
 
@@ -64,6 +65,7 @@ function isDefaultFilters(filters: HubFilters) {
         (!filters.sort || filters.sort === 'newest') &&
         (!filters.tech || filters.tech.length === 0) &&
         !filters.search &&
-        !filters.includedIds
+        !filters.includedIds &&
+        !filters.hideOpened
     );
 }

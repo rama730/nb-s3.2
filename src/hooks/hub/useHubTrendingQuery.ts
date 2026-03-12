@@ -3,10 +3,11 @@
 import { useQuery } from '@tanstack/react-query';
 import { fetchHubProjectsAction } from '@/app/actions/hub';
 import { FILTER_VIEWS } from '@/constants/hub';
+import { queryKeys } from '@/lib/query-keys';
 
 export function useHubTrendingQuery() {
     return useQuery<Record<string, number>>({
-        queryKey: ['hub-trending'],
+        queryKey: queryKeys.hub.trending(),
         queryFn: async () => {
             // Get most recently updated projects via Server Action
             // We reuse fetchHubProjectsAction but ignore result format and mapping

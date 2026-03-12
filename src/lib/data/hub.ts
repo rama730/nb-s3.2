@@ -2,7 +2,7 @@ import { cache } from 'react';
 import { and, asc, desc, eq, ilike, inArray, isNull, or, sql, type SQL } from 'drizzle-orm';
 import { FILTER_VIEWS, SORT_OPTIONS, type FilterView } from '@/constants/hub';
 import { db } from '@/lib/db';
-import { profiles, projectFollows, projectMembers, projectOpenRoles, projects, savedProjects } from '@/lib/db/schema';
+import { profiles, projectFollows, projectMembers, projectOpenRoles, projects } from '@/lib/db/schema';
 import { recordHubMetric } from '@/lib/hub/observability';
 import { HUB_RANKING_SCHEMA_VERSION, getHubRankingWeights } from '@/lib/hub/ranking-config';
 import { buildHubSnapshotKey, getHubSnapshotCached } from '@/lib/hub/snapshot-cache';
@@ -15,6 +15,7 @@ export const DEFAULT_FILTERS: HubFilters = {
     sort: SORT_OPTIONS.NEWEST,
     search: undefined,
     includedIds: undefined,
+    hideOpened: false,
 };
 
 interface HubQueryOptions {
@@ -39,7 +40,7 @@ type RawProjectRow = {
     category: string | null;
     viewCount: number | null;
     followersCount: number | null;
-    savesCount: number | null;
+
     tags: string[] | null;
     skills: string[] | null;
     visibility: string | null;
@@ -63,7 +64,6 @@ type CandidateProject = {
     lifecycleStages: string[] | null;
     viewCount: number | null;
     followersCount: number | null;
-    savesCount: number | null;
     updatedAt: Date;
     createdAt: Date;
 };
@@ -246,6 +246,18 @@ const buildBaseConditions = (
         conditions.push(eq(projects.visibility, 'public'));
     }
 
+    if (view === FILTER_VIEWS.FOLLOWING && viewerId) {
+        conditions.push(
+            inArray(
+                projects.id,
+                db
+                    .select({ projectId: projectFollows.projectId })
+                    .from(projectFollows)
+                    .where(eq(projectFollows.userId, viewerId))
+            )
+        );
+    }
+
     if (filters.status && filters.status !== 'all') {
         conditions.push(eq(projects.status, filters.status as 'draft' | 'active' | 'completed' | 'archived'));
     }
@@ -272,10 +284,6 @@ const buildBaseConditions = (
         conditions.push(or(...techConditions)!);
     }
 
-    if (filters.includedIds && filters.includedIds.length > 0) {
-        conditions.push(inArray(projects.id, filters.includedIds));
-    }
-
     if (view === FILTER_VIEWS.MY_PROJECTS && viewerId) {
         conditions.push(
             sql<boolean>`(
@@ -287,6 +295,12 @@ const buildBaseConditions = (
                     AND pm.user_id = ${viewerId}
                 )
             )`,
+        );
+    }
+
+    if (filters.hideOpened && filters.includedIds?.length) {
+        conditions.push(
+            sql<boolean>`${projects.id} NOT IN (${sql.join(filters.includedIds.map(id => sql`${id}`), sql`, `)})`
         );
     }
 
@@ -317,14 +331,12 @@ const calculateTrendScore = (candidate: CandidateProject) => {
     const weights = getHubRankingWeights();
     const views = Math.max(0, candidate.viewCount || 0);
     const follows = Math.max(0, candidate.followersCount || 0);
-    const saves = Math.max(0, candidate.savesCount || 0);
     const hoursSinceUpdate = Math.max(0, (Date.now() - candidate.updatedAt.getTime()) / (1000 * 60 * 60));
     const recency = Math.max(0, 72 - hoursSinceUpdate);
 
     return (
         Math.log1p(views) * weights.trending.views +
         Math.log1p(follows) * weights.trending.follows +
-        Math.log1p(saves) * weights.trending.saves +
         recency * weights.trending.recency
     );
 };
@@ -471,13 +483,12 @@ const fetchSnapshotCandidates = async (
                 lifecycleStages: projects.lifecycleStages,
                 viewCount: projects.viewCount,
                 followersCount: projects.followersCount,
-                savesCount: projects.savesCount,
                 updatedAt: projects.updatedAt,
                 createdAt: projects.createdAt,
             })
             .from(projects)
             .where(and(...conditions))
-            .orderBy(desc(projects.updatedAt), desc(projects.viewCount), desc(projects.followersCount), desc(projects.savesCount))
+            .orderBy(desc(projects.updatedAt), desc(projects.viewCount), desc(projects.followersCount))
             .limit(weights.candidateLimit);
     } catch (error) {
         if (!isProjectsSelectSchemaError(error)) throw error;
@@ -496,7 +507,6 @@ const fetchSnapshotCandidates = async (
                 lifecycleStages: sql<string[] | null>`null`,
                 viewCount: sql<number | null>`0`,
                 followersCount: sql<number | null>`0`,
-                savesCount: sql<number | null>`0`,
                 updatedAt: projects.updatedAt,
                 createdAt: projects.createdAt,
             })
@@ -585,12 +595,10 @@ const fetchProjectsByIds = async (projectIds: string[]) => {
         return {
             rows: [] as RawProjectRow[],
             hasFollowersCountColumn: true,
-            hasSavesCountColumn: true,
         };
     }
 
     let hasFollowersCountColumn = true;
-    let hasSavesCountColumn = true;
 
     try {
         const rows = await db
@@ -605,7 +613,7 @@ const fetchProjectsByIds = async (projectIds: string[]) => {
                 category: projects.category,
                 viewCount: projects.viewCount,
                 followersCount: projects.followersCount,
-                savesCount: projects.savesCount,
+
                 tags: projects.tags,
                 skills: projects.skills,
                 visibility: projects.visibility,
@@ -620,11 +628,10 @@ const fetchProjectsByIds = async (projectIds: string[]) => {
 
         const rank = new Map(projectIds.map((id, index) => [id, index]));
         rows.sort((a, b) => (rank.get(a.id) ?? 0) - (rank.get(b.id) ?? 0));
-        return { rows, hasFollowersCountColumn, hasSavesCountColumn };
+        return { rows, hasFollowersCountColumn };
     } catch (error) {
         if (!isProjectsSelectSchemaError(error)) throw error;
         hasFollowersCountColumn = false;
-        hasSavesCountColumn = false;
 
         const rows = await db
             .select({
@@ -653,14 +660,13 @@ const fetchProjectsByIds = async (projectIds: string[]) => {
 
         const rank = new Map(projectIds.map((id, index) => [id, index]));
         rows.sort((a, b) => (rank.get(a.id) ?? 0) - (rank.get(b.id) ?? 0));
-        return { rows, hasFollowersCountColumn, hasSavesCountColumn };
+        return { rows, hasFollowersCountColumn };
     }
 };
 
 const hydrateProjects = async (
     rawProjects: RawProjectRow[],
     hasFollowersCountColumn: boolean,
-    hasSavesCountColumn: boolean,
     rankingReasonMap?: Map<string, string[]>,
 ): Promise<Project[]> => {
     if (rawProjects.length === 0) return [];
@@ -668,7 +674,7 @@ const hydrateProjects = async (
     const projectIds = rawProjects.map((project) => project.id);
     const ownerIds = Array.from(new Set(rawProjects.map((project) => project.ownerId)));
 
-    const [owners, roles, members, follows, saves] = await Promise.all([
+    const [owners, roles, members, follows] = await Promise.all([
         db
             .select({
                 id: profiles.id,
@@ -725,13 +731,6 @@ const hydrateProjects = async (
                 .from(projectFollows)
                 .where(inArray(projectFollows.projectId, projectIds))
                 .groupBy(projectFollows.projectId),
-        hasSavesCountColumn
-            ? Promise.resolve([])
-            : db
-                .select({ projectId: savedProjects.projectId, count: sql<number>`count(*)` })
-                .from(savedProjects)
-                .where(inArray(savedProjects.projectId, projectIds))
-                .groupBy(savedProjects.projectId),
     ]);
 
     const ownerMap = new Map(owners.map((owner) => [owner.id, owner]));
@@ -741,12 +740,7 @@ const hydrateProjects = async (
             Number(follow.count || 0),
         ]),
     );
-    const saveCountMap = new Map(
-        (saves as Array<{ projectId: string; count: number | string | null }>).map((save) => [
-            save.projectId,
-            Number(save.count || 0),
-        ]),
-    );
+
 
     type OpenRoleRow = typeof projectOpenRoles.$inferSelect;
     const rolesMap = new Map<string, OpenRoleRow[]>();
@@ -775,9 +769,7 @@ const hydrateProjects = async (
         const followersCount = hasFollowersCountColumn
             ? project.followersCount || 0
             : followCountMap.get(project.id) || 0;
-        const savesCount = hasSavesCountColumn
-            ? project.savesCount || 0
-            : saveCountMap.get(project.id) || 0;
+
 
         const normalizedStatus: Project['status'] =
             project.status === 'draft' ||
@@ -801,7 +793,7 @@ const hydrateProjects = async (
             visibility: project.visibility || 'public',
             viewCount: project.viewCount || 0,
             followersCount,
-            savesCount,
+
             ownerId: project.ownerId,
             rankingReasons: rankingReasonMap?.get(project.id) || [],
             owner: owner
@@ -855,7 +847,7 @@ export const getHubProjects = cache(async (
     const view = options.view ?? FILTER_VIEWS.ALL;
     const viewerId = options.viewerId ?? null;
 
-    if (view === FILTER_VIEWS.MY_PROJECTS && !viewerId) {
+    if ((view === FILTER_VIEWS.MY_PROJECTS || view === FILTER_VIEWS.FOLLOWING) && !viewerId) {
         return {
             projects: [],
             nextCursor: undefined,
@@ -885,8 +877,8 @@ export const getHubProjects = cache(async (
         const pageIds = pageItems.map((item) => item.id);
         const reasonsMap = new Map(pageItems.map((item) => [item.id, item.reasons]));
 
-        const { rows, hasFollowersCountColumn, hasSavesCountColumn } = await fetchProjectsByIds(pageIds);
-        const mappedProjects = await hydrateProjects(rows, hasFollowersCountColumn, hasSavesCountColumn, reasonsMap);
+        const { rows, hasFollowersCountColumn } = await fetchProjectsByIds(pageIds);
+        const mappedProjects = await hydrateProjects(rows, hasFollowersCountColumn, reasonsMap);
 
         const nextOffset = offset + pageSize;
         const nextCursor = nextOffset < snapshot.items.length ? buildOffsetCursor(nextOffset) : undefined;
@@ -916,7 +908,6 @@ export const getHubProjects = cache(async (
     const trendingScoreExpr = sql<number>`(
         (ln(1 + greatest(coalesce(${projects.viewCount}, 0), 0)) * ${weights.trending.views}) +
         (ln(1 + greatest(coalesce(${projects.followersCount}, 0), 0)) * ${weights.trending.follows}) +
-        (ln(1 + greatest(coalesce(${projects.savesCount}, 0), 0)) * ${weights.trending.saves}) +
         (greatest(0, 72 - (extract(epoch from (now() - ${projects.updatedAt})) / 3600.0)) * ${weights.trending.recency})
     )`;
 
@@ -970,7 +961,7 @@ export const getHubProjects = cache(async (
 
     let rawProjects: RawProjectRow[];
     let hasFollowersCountColumn = true;
-    let hasSavesCountColumn = true;
+
 
     try {
         rawProjects = await db
@@ -985,7 +976,6 @@ export const getHubProjects = cache(async (
                 category: projects.category,
                 viewCount: projects.viewCount,
                 followersCount: projects.followersCount,
-                savesCount: projects.savesCount,
                 tags: projects.tags,
                 skills: projects.skills,
                 visibility: projects.visibility,
@@ -1003,7 +993,6 @@ export const getHubProjects = cache(async (
         if (!isProjectsSelectSchemaError(error)) throw error;
 
         hasFollowersCountColumn = false;
-        hasSavesCountColumn = false;
 
         const fallbackOrderBy: SQL<unknown>[] = isOldestSort
             ? [asc(projects.createdAt), asc(projects.id)]
@@ -1026,7 +1015,6 @@ export const getHubProjects = cache(async (
                 category: projects.category,
                 viewCount: sql<number | null>`null`,
                 followersCount: sql<number | null>`null`,
-                savesCount: sql<number | null>`null`,
                 tags: sql<string[] | null>`null`,
                 skills: sql<string[] | null>`null`,
                 visibility: projects.visibility,
@@ -1042,8 +1030,7 @@ export const getHubProjects = cache(async (
             .limit(pageSize);
     }
 
-    const mappedProjects = await hydrateProjects(rawProjects, hasFollowersCountColumn, hasSavesCountColumn);
-
+    const mappedProjects = await hydrateProjects(rawProjects, hasFollowersCountColumn);
     const lastProject = rawProjects[rawProjects.length - 1];
     const nextCursor = rawProjects.length === pageSize
         ? scoreExpr && lastProject

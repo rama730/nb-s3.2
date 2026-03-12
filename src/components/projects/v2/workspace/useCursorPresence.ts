@@ -38,6 +38,20 @@ function fnv1a(str: string): number {
     return hash;
 }
 
+function uint8ToBase64(payload: Uint8Array): string {
+    const chunkSize = 0x8000; // 32KB chunks avoid call stack limits.
+    let binary = "";
+    for (let i = 0; i < payload.length; i += chunkSize) {
+        const chunk = payload.subarray(i, i + chunkSize);
+        let chunkBinary = "";
+        for (let j = 0; j < chunk.length; j++) {
+            chunkBinary += String.fromCharCode(chunk[j]);
+        }
+        binary += chunkBinary;
+    }
+    return btoa(binary);
+}
+
 export function useCursorPresence({
     projectId,
     currentUserId,
@@ -70,8 +84,8 @@ export function useCursorPresence({
 
         // Throttled broadcaster
         const throttle = createCursorThrottle((payload) => {
-            // Convert Uint8Array to base64 for Supabase JSON transport
-            const base64 = btoa(String.fromCharCode(...payload));
+            // Convert Uint8Array to base64 for Supabase JSON transport.
+            const base64 = uint8ToBase64(payload);
             channel.send({
                 type: "broadcast",
                 event: "cursor",

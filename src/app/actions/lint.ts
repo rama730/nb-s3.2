@@ -10,8 +10,10 @@ import type { Problem } from "@/stores/files/types";
 import { writeFile, unlink, mkdtemp } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
+import { appendSafePathSegment, sanitizePathSegment } from "@/lib/security/path-safety";
 
 const JS_EXTS = new Set([".js", ".mjs", ".ts", ".tsx", ".jsx"]);
+const PYRIGHT_TIMEOUT_MS = 20_000;
 
 /**
  * Lint file content and return Problem[].
@@ -116,16 +118,17 @@ async function lintWithPyright(
 
   try {
     const { spawn } = await import("child_process");
-    const { promisify } = await import("util");
     tmpDir = await mkdtemp(join(tmpdir(), "pyright-"));
-    const baseName = filePath.split("/").pop() ?? "file.py";
-    tmpFile = join(tmpDir, baseName);
+    const rawBaseName = filePath.split("/").pop() ?? "file.py";
+    const safeBaseName = sanitizePathSegment(rawBaseName, "file.py");
+    tmpFile = appendSafePathSegment(tmpDir, safeBaseName, "temporary lint filename");
     await writeFile(tmpFile, content, "utf-8");
 
-    const proc = spawn("npx", ["pyright", "--outputjson", tmpFile], {
+    const npxCommand = process.platform === "win32" ? "npx.cmd" : "npx";
+    const proc = spawn(npxCommand, ["pyright", "--outputjson", tmpFile], {
       cwd: tmpDir,
       stdio: ["ignore", "pipe", "pipe"],
-      shell: true,
+      shell: false,
     });
 
     const chunks: Buffer[] = [];
@@ -133,10 +136,26 @@ async function lintWithPyright(
     const stderrChunks: Buffer[] = [];
     proc.stderr?.on("data", (chunk: Buffer) => stderrChunks.push(chunk));
 
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      proc.kill("SIGKILL");
+    }, PYRIGHT_TIMEOUT_MS);
+
     await new Promise<void>((resolve, reject) => {
+      proc.on("error", reject);
       proc.on("close", (code) => {
-        if (code === 0 || code === 1) resolve();
-        else reject(new Error(`Pyright exited ${code}`));
+        clearTimeout(timeout);
+        if (timedOut) {
+          reject(new Error(`Pyright timed out after ${PYRIGHT_TIMEOUT_MS}ms`));
+          return;
+        }
+        if (code === 0 || code === 1) {
+          resolve();
+          return;
+        }
+        const stderrText = Buffer.concat(stderrChunks).toString("utf-8").trim();
+        reject(new Error(stderrText ? `Pyright exited ${code}: ${stderrText}` : `Pyright exited ${code}`));
       });
     });
 

@@ -1,48 +1,115 @@
 'use client';
 
 import { memo, useState, useEffect, useCallback, useRef } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { StickyNote, Copy, Trash2, Check, ListPlus } from 'lucide-react';
-import type { WorkspaceProject } from '@/app/actions/workspace';
+import { getWorkspacePreferences, saveWorkspaceQuickNotes, type WorkspaceProject } from '@/app/actions/workspace';
 import CreateTaskFromNoteModal from '../CreateTaskFromNoteModal';
 import type { WidgetCardSizeMode } from '@/components/workspace/dashboard/types';
 import { cn } from '@/lib/utils';
+import { queryKeys } from '@/lib/query-keys';
 
 const STORAGE_KEY = 'workspace-notes-full';
+const STORAGE_UPDATED_AT_KEY = 'workspace-notes-updated-at';
 
 interface QuickNotesProps {
     projects?: WorkspaceProject[];
     sizeMode?: WidgetCardSizeMode;
 }
 
+function readLocalNotes() {
+    try {
+        return {
+            content: localStorage.getItem(STORAGE_KEY) ?? '',
+            updatedAt: localStorage.getItem(STORAGE_UPDATED_AT_KEY) ?? '',
+        };
+    } catch {
+        return { content: '', updatedAt: '' };
+    }
+}
+
 function QuickNotes({ projects, sizeMode = 'standard' }: QuickNotesProps) {
     const [showCreateTask, setShowCreateTask] = useState(false);
     const [content, setContent] = useState('');
     const [copied, setCopied] = useState(false);
-    const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const hydratedRef = useRef(false);
     const isCompact = sizeMode === 'compact';
 
-    // Load from localStorage on mount
     useEffect(() => {
+        const local = readLocalNotes();
+        setContent(local.content);
+    }, []);
+
+    useEffect(() => {
+        return () => {
+            if (syncTimerRef.current) {
+                clearTimeout(syncTimerRef.current);
+                syncTimerRef.current = null;
+            }
+        };
+    }, []);
+
+    const { data: preferences } = useQuery({
+        queryKey: queryKeys.workspace.preferences(),
+        queryFn: async () => {
+            const result = await getWorkspacePreferences();
+            return result.success && result.data ? result.data : null;
+        },
+        staleTime: 30_000,
+    });
+
+    useEffect(() => {
+        if (!preferences) return;
+        const local = readLocalNotes();
+        const serverNotes = preferences.notes;
+
+        if (serverNotes?.content) {
+            const parsedServerTime = Date.parse(serverNotes.updatedAt || '');
+            const parsedLocalTime = Date.parse(local.updatedAt || '');
+            const serverTime = Number.isNaN(parsedServerTime) ? 0 : parsedServerTime;
+            const localTime = Number.isNaN(parsedLocalTime) ? 0 : parsedLocalTime;
+            if (serverTime >= localTime) {
+                setContent(serverNotes.content);
+                try {
+                    localStorage.setItem(STORAGE_KEY, serverNotes.content);
+                    localStorage.setItem(STORAGE_UPDATED_AT_KEY, serverNotes.updatedAt || new Date().toISOString());
+                } catch {
+                    // ignore local persistence failure
+                }
+                hydratedRef.current = true;
+                return;
+            }
+        }
+
+        if (!hydratedRef.current && local.content) {
+            hydratedRef.current = true;
+            void saveWorkspaceQuickNotes(local.content);
+        }
+    }, [preferences]);
+
+    const persistLocal = useCallback((value: string) => {
         try {
-            const saved = localStorage.getItem(STORAGE_KEY);
-            if (saved) setContent(saved);
+            localStorage.setItem(STORAGE_KEY, value);
+            localStorage.setItem(STORAGE_UPDATED_AT_KEY, new Date().toISOString());
         } catch {
-            // localStorage unavailable
+            // ignore localStorage errors
         }
     }, []);
 
-    // Debounced auto-save (500ms)
     const handleChange = useCallback((value: string) => {
         setContent(value);
-        if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-        saveTimerRef.current = setTimeout(() => {
-            try {
-                localStorage.setItem(STORAGE_KEY, value);
-            } catch {
-                // localStorage unavailable
-            }
-        }, 500);
-    }, []);
+        persistLocal(value);
+
+        if (syncTimerRef.current) {
+            clearTimeout(syncTimerRef.current);
+            syncTimerRef.current = null;
+        }
+        syncTimerRef.current = setTimeout(() => {
+            syncTimerRef.current = null;
+            void saveWorkspaceQuickNotes(value);
+        }, 800);
+    }, [persistLocal]);
 
     const handleCopy = useCallback(async () => {
         if (!content) return;
@@ -53,12 +120,9 @@ function QuickNotes({ projects, sizeMode = 'standard' }: QuickNotesProps) {
 
     const handleClear = useCallback(() => {
         setContent('');
-        try {
-            localStorage.removeItem(STORAGE_KEY);
-        } catch {
-            // localStorage unavailable
-        }
-    }, []);
+        persistLocal('');
+        void saveWorkspaceQuickNotes('');
+    }, [persistLocal]);
 
     return (
         <div className={cn(
@@ -125,7 +189,7 @@ function QuickNotes({ projects, sizeMode = 'standard' }: QuickNotesProps) {
 
             {!isCompact && (
                 <p className="text-[10px] text-zinc-400 mt-1.5 shrink-0">
-                    Auto-saves locally. Private on this device.
+                    Synced to your account with local offline fallback.
                 </p>
             )}
 

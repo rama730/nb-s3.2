@@ -1,11 +1,13 @@
 import { z } from 'zod';
-import { GRID_COLS, GRID_ROWS_MAX, DEFAULT_LAYOUT } from './types';
+import { GRID_COLS, GRID_ROWS_MAX, DEFAULT_LAYOUT, WORKSPACE_LAYOUT_VERSION } from './types';
 import type { WorkspaceLayout, WidgetPlacement } from './types';
 import { WIDGET_REGISTRY } from './widgetRegistry';
 
 // ============================================================================
 // Zod Schemas — used both client + server side
 // ============================================================================
+
+const MAX_PINS = 10;
 
 export const widgetPlacementSchema = z.object({
     widgetId: z.string().min(1),
@@ -15,9 +17,24 @@ export const widgetPlacementSchema = z.object({
     rowSpan: z.number().int().min(1).max(3),
 });
 
+const workspacePinnedItemSchema = z.object({
+    type: z.enum(['task', 'project']),
+    id: z.string().min(1),
+    title: z.string().min(1).max(200),
+    projectSlug: z.string().nullable().optional(),
+    projectKey: z.string().nullable().optional(),
+    taskNumber: z.number().int().nullable().optional(),
+    projectId: z.string().optional(),
+});
+
 export const workspaceLayoutSchema = z.object({
     version: z.number().int().min(1),
     widgets: z.array(widgetPlacementSchema).max(20),
+    quickNotes: z.object({
+        content: z.string().max(50_000),
+        updatedAt: z.string().min(1),
+    }).optional(),
+    pins: z.array(workspacePinnedItemSchema).max(MAX_PINS).optional(),
 });
 
 // ============================================================================
@@ -101,8 +118,37 @@ export function resolveLayout(raw: unknown): WorkspaceLayout {
     const parsed = workspaceLayoutSchema.safeParse(raw);
     if (!parsed.success) return DEFAULT_LAYOUT;
 
-    const layout = parsed.data as WorkspaceLayout;
+    const parsedLayout = parsed.data as WorkspaceLayout;
+    const seen = new Set<string>();
+    const layout: WorkspaceLayout = {
+        ...parsedLayout,
+        widgets: parsedLayout.widgets
+            .map((widget) => ({
+                ...widget,
+                widgetId: widget.widgetId === 'shortcuts' ? 'quick_actions' : widget.widgetId,
+            }))
+            .filter((widget) => {
+                if (seen.has(widget.widgetId)) return false;
+                seen.add(widget.widgetId);
+                return true;
+            }),
+    };
     if (!isValidLayout(layout)) return DEFAULT_LAYOUT;
 
-    return layout;
+    const normalizedVersion =
+        layout.version < WORKSPACE_LAYOUT_VERSION
+            ? WORKSPACE_LAYOUT_VERSION
+            : layout.version;
+
+    return {
+        ...layout,
+        version: normalizedVersion,
+        pins: layout.pins?.filter((pin) => pin.type !== 'task' || !!pin.projectId).slice(0, MAX_PINS) ?? [],
+        quickNotes: layout.quickNotes && layout.quickNotes.content
+            ? {
+                content: layout.quickNotes.content,
+                updatedAt: layout.quickNotes.updatedAt,
+            }
+            : undefined,
+    };
 }

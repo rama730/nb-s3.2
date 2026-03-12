@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, forwardRef, useMemo, useCallback } from "react";
+import { useState, forwardRef, useMemo, useCallback, useEffect } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import {
@@ -33,6 +33,14 @@ export default function ConnectionsClient({
     const [searchQuery, setSearchQuery] = useState("");
     const [debouncedSearch] = useDebounce(searchQuery, 300);
     const [sortBy, setSortBy] = useState<SortOption>("recent");
+    const [routeScrollParent, setRouteScrollParent] = useState<HTMLElement | null>(() => {
+        if (typeof document === 'undefined') return null;
+        return document.querySelector<HTMLElement>('[data-scroll-root="route"]');
+    });
+
+    useEffect(() => {
+        setRouteScrollParent(document.querySelector<HTMLElement>('[data-scroll-root="route"]'));
+    }, []);
 
     const {
         data: connectionsData,
@@ -244,7 +252,7 @@ export default function ConnectionsClient({
                     <div className="flex-[3] min-w-0">
                         <div style={{ minHeight: 400 }}>
                             <VirtuosoGrid
-                                useWindowScroll
+                                customScrollParent={routeScrollParent ?? undefined}
                                 increaseViewportBy={600}
                                 data={connections}
                                 endReached={() => {

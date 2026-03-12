@@ -1,5 +1,5 @@
 import { Suspense } from 'react';
-import { getWorkspaceOverview } from '@/app/actions/workspace';
+import { getWorkspaceOverviewBase } from '@/app/actions/workspace';
 import WorkspaceClient from '@/components/workspace/WorkspaceClient';
 import WorkspaceSkeleton from '@/components/workspace/WorkspaceSkeleton';
 
@@ -20,11 +20,11 @@ export default async function WorkspacePage({
     const resolvedParams = await searchParams;
     const initialTab = typeof resolvedParams.tab === 'string' ? resolvedParams.tab : 'overview';
 
-    // Server-prefetch overview data — parallel queries, single round trip
-    const result = await getWorkspaceOverview();
+    // Server-prefetch base overview data (layout + counters + lightweight refs)
+    const result = await getWorkspaceOverviewBase();
 
     return (
-        <div className="h-[calc(100vh-var(--header-height,56px)-40px)] min-h-0 overflow-hidden bg-zinc-50 dark:bg-zinc-950">
+        <div className="h-full min-h-0 overflow-hidden bg-zinc-50 dark:bg-zinc-950">
             <Suspense fallback={<WorkspaceSkeleton />}>
                 <WorkspaceClient
                     initialData={result.success && result.data ? result.data : null}

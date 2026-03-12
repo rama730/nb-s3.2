@@ -45,6 +45,19 @@ export const profiles = pgTable('profiles', {
             colSpan: number;
             rowSpan: number;
         }>;
+        quickNotes?: {
+            content: string;
+            updatedAt: string;
+        };
+        pins?: Array<{
+            type: 'task' | 'project';
+            id: string;
+            title: string;
+            projectSlug?: string | null;
+            projectKey?: string | null;
+            taskNumber?: number | null;
+            projectId?: string;
+        }>;
     } | null>().default(null),
     // Pure Optimization: Denormalized counts for 1M+ Users Scalability
     connectionsCount: integer('connections_count').default(0).notNull(),
@@ -189,7 +202,7 @@ export const projects = pgTable('projects', {
     category: text('category'),
     viewCount: integer('view_count').default(0),
     followersCount: integer('followers_count').default(0).notNull(),
-    savesCount: integer('saves_count').default(0).notNull(),
+
     tags: jsonb('tags').$type<string[]>().default([]),
     skills: jsonb('skills').$type<string[]>().default([]),
     visibility: text('visibility', { enum: ['public', 'private', 'unlisted'] }).default('public'),
@@ -325,18 +338,6 @@ export const projectFollows = pgTable('project_follows', {
     uniqueFollow: uniqueIndex('project_follows_unique_idx').on(t.projectId, t.userId),
 }))
 
-// ============================================================================
-// SAVED PROJECTS TABLE
-// ============================================================================
-export const savedProjects = pgTable('saved_projects', {
-    id: uuid('id').primaryKey().defaultRandom(),
-    userId: uuid('user_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
-    projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
-    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
-}, (t) => ({
-    userIdx: index('saved_projects_user_idx').on(t.userId),
-    uniqueSave: uniqueIndex('saved_projects_unique_idx').on(t.userId, t.projectId),
-}))
 
 // ============================================================================
 // SPRINTS TABLE
@@ -629,7 +630,7 @@ export const profilesRelations = relations(profiles, ({ many }) => ({
     projects: many(projects),
     projectMemberships: many(projectMembers),
     followedProjects: many(projectFollows),
-    savedProjects: many(savedProjects),
+
 }))
 
 export const connectionsRelations = relations(connections, ({ one }) => ({
@@ -652,7 +653,7 @@ export const projectsRelations = relations(projects, ({ one, many }) => ({
     }),
     members: many(projectMembers),
     followers: many(projectFollows),
-    saves: many(savedProjects),
+
     sprints: many(projectSprints),
     tasks: many(tasks),
     openRoles: many(projectOpenRoles),
@@ -717,16 +718,7 @@ export const projectFollowsRelations = relations(projectFollows, ({ one }) => ({
     }),
 }))
 
-export const savedProjectsRelations = relations(savedProjects, ({ one }) => ({
-    user: one(profiles, {
-        fields: [savedProjects.userId],
-        references: [profiles.id],
-    }),
-    project: one(projects, {
-        fields: [savedProjects.projectId],
-        references: [projects.id],
-    }),
-}))
+
 
 export const projectSprintsRelations = relations(projectSprints, ({ one, many }) => ({
     project: one(projects, {
@@ -877,7 +869,7 @@ export const dmPairs = pgTable('dm_pairs', {
     conversationId: uuid('conversation_id').notNull().references(() => conversations.id, { onDelete: 'cascade' }),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
-    pairUnique: uniqueIndex('dm_pairs_user_low_high_unique').on(t.userLow, t.userHigh),
+    pk: primaryKey({ name: 'dm_pairs_user_low_user_high_pk', columns: [t.userLow, t.userHigh] }),
     conversationUnique: uniqueIndex('dm_pairs_conversation_unique').on(t.conversationId),
     userLowIdx: index('dm_pairs_user_low_idx').on(t.userLow),
     userHighIdx: index('dm_pairs_user_high_idx').on(t.userHigh),
@@ -950,7 +942,7 @@ export const messageAttachments = pgTable('message_attachments', {
     storagePath: text('storage_path'),
     url: text('url').notNull(),
     filename: text('filename').notNull(),
-    sizeBytes: integer('size_bytes'),
+    sizeBytes: bigint('size_bytes', { mode: 'number' }),
     mimeType: text('mime_type'),
     thumbnailUrl: text('thumbnail_url'),
     width: integer('width'),
@@ -1001,7 +993,7 @@ export const attachmentUploads = pgTable('attachment_uploads', {
     storagePath: text('storage_path'),
     filename: text('filename').notNull(),
     mimeType: text('mime_type'),
-    sizeBytes: integer('size_bytes'),
+    sizeBytes: bigint('size_bytes', { mode: 'number' }),
     status: text('status', {
         enum: ['queued', 'uploading', 'uploaded', 'committed', 'failed', 'canceled'],
     }).default('queued').notNull(),
@@ -1104,8 +1096,6 @@ export type ProjectMember = typeof projectMembers.$inferSelect
 export type NewProjectMember = typeof projectMembers.$inferInsert
 export type ProjectFollow = typeof projectFollows.$inferSelect
 export type NewProjectFollow = typeof projectFollows.$inferInsert
-export type SavedProject = typeof savedProjects.$inferSelect
-export type NewSavedProject = typeof savedProjects.$inferInsert
 export type Conversation = typeof conversations.$inferSelect
 export type NewConversation = typeof conversations.$inferInsert
 export type DmPair = typeof dmPairs.$inferSelect
