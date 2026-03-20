@@ -25,11 +25,11 @@ const ProjectGroupItem = memo(function ProjectGroupItem({
     return (
         <button
             onClick={() => onOpen(group.id)}
-            className="w-full flex items-start gap-3 p-4 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 transition-colors text-left group"
+            className="w-full flex items-start gap-3 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 transition-colors text-left group app-density-list-row"
         >
             {/* Project Cover / Avatar */}
             <div className="relative flex-shrink-0">
-                <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center overflow-hidden ring-2 ring-white dark:ring-zinc-900">
+                <div className="w-12 h-12 rounded-xl app-accent-gradient flex items-center justify-center overflow-hidden ring-2 ring-white dark:ring-zinc-900">
                     {group.projectCoverImage ? (
                         <Image
                             src={group.projectCoverImage}
@@ -101,7 +101,7 @@ export function ProjectGroupList() {
     if (projectGroupsLoading && projectGroups.length === 0) {
         return (
             <div className="flex-1 flex items-center justify-center">
-                <Loader2 className="w-6 h-6 animate-spin text-indigo-600" />
+                <Loader2 className="w-6 h-6 animate-spin text-primary" />
             </div>
         );
     }
@@ -109,8 +109,8 @@ export function ProjectGroupList() {
     if (projectGroups.length === 0) {
         return (
             <div className="flex flex-col items-center justify-center h-full p-6 text-center">
-                <div className="w-16 h-16 bg-indigo-50 dark:bg-indigo-900/20 rounded-full flex items-center justify-center mb-4">
-                    <Folder className="w-8 h-8 text-indigo-400" />
+                <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mb-4">
+                    <Folder className="w-8 h-8 text-primary" />
                 </div>
                 <p className="text-sm text-zinc-500 dark:text-zinc-400">
                     No project groups

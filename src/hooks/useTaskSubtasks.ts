@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { useRealtime } from "@/components/providers/RealtimeProvider";
+import { subscribeTaskResource } from "@/lib/realtime/task-resource";
+import { createVisibilityAwareInterval } from "@/lib/utils/visibility";
 
 export interface Subtask {
     id: string;
@@ -19,6 +22,8 @@ export function useTaskSubtasks(taskId: string) {
     const [subtasks, setSubtasks] = useState<Subtask[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const supabase = useMemo(() => createClient(), []);
+    const { isConnected } = useRealtime();
+    const [resourceConnected, setResourceConnected] = useState(false);
 
     const fetchSubtasks = useCallback(async () => {
         if (!taskId) {
@@ -46,40 +51,45 @@ export function useTaskSubtasks(taskId: string) {
     useEffect(() => {
         if (!taskId) return;
 
-        const channel = supabase
-            .channel(`task_subtasks:${taskId}`)
-            .on(
-                "postgres_changes",
-                {
-                    event: "*",
-                    schema: "public",
-                    table: "task_subtasks",
-                    filter: `task_id=eq.${taskId}`,
-                },
-                (payload: any) => {
-                    if (payload.eventType === "INSERT") {
-                        const inserted = payload.new as Subtask;
-                        setSubtasks((prev) => {
-                            if (prev.some((st) => st.id === inserted.id)) return prev;
-                            return sortByPosition([...prev, inserted]);
-                        });
-                    } else if (payload.eventType === "UPDATE") {
-                        const updated = payload.new as Subtask;
-                        setSubtasks((prev) => {
-                            const next = prev.map((st) => (st.id === updated.id ? updated : st));
-                            return sortByPosition(next);
-                        });
-                    } else if (payload.eventType === "DELETE") {
-                        setSubtasks((prev) => prev.filter((st) => st.id !== payload.old.id));
-                    }
+        const unsubscribe = subscribeTaskResource({
+            taskId,
+            onEvent: (event) => {
+                if (event.kind !== "subtask") return;
+                if (event.payload.eventType === "INSERT") {
+                    const inserted = event.payload.new as Subtask;
+                    setSubtasks((prev) => {
+                        if (prev.some((st) => st.id === inserted.id)) return prev;
+                        return sortByPosition([...prev, inserted]);
+                    });
+                } else if (event.payload.eventType === "UPDATE") {
+                    const updated = event.payload.new as Subtask;
+                    setSubtasks((prev) => {
+                        const next = prev.map((st) => (st.id === updated.id ? updated : st));
+                        return sortByPosition(next);
+                    });
+                } else if (event.payload.eventType === "DELETE") {
+                    const previousRow = (event.payload.old ?? null) as Record<string, unknown> | null;
+                    const deletedId = typeof previousRow?.id === "string" ? previousRow.id : null;
+                    if (!deletedId) return;
+                    setSubtasks((prev) => prev.filter((st) => st.id !== deletedId));
                 }
-            )
-            .subscribe();
+            },
+            onStatus: (status) => {
+                setResourceConnected(status === "SUBSCRIBED");
+            },
+        });
+
+        const cleanup = isConnected && resourceConnected
+            ? () => undefined
+            : createVisibilityAwareInterval(() => {
+                void fetchSubtasks();
+            }, 30000);
 
         return () => {
-            supabase.removeChannel(channel);
+            cleanup();
+            unsubscribe();
         };
-    }, [supabase, taskId]);
+    }, [fetchSubtasks, isConnected, resourceConnected, taskId]);
 
     return { subtasks, isLoading };
 }

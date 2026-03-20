@@ -1,0 +1,111 @@
+{
+  "capturedAt": "2026-03-12T00:00:00.000Z",
+  "environment": "production",
+  "targetConcurrentUsers": 1000000,
+  "summary": {
+    "status": "pending",
+    "notes": "Fill this file with the measured and documented ceilings for each external dependency."
+  },
+  "services": [
+    {
+      "id": "supabase_auth",
+      "owner": "platform",
+      "plan": "enterprise-plan-name",
+      "region": "multi-region-or-primary-region",
+      "documentedLimit": "Documented signup/login/session ceiling.",
+      "measuredPeak": "Observed peak during validation.",
+      "targetCapacity": "Target capacity with headroom.",
+      "status": "pending",
+      "mitigation": "Quota increase, regional split, or traffic shaping."
+    },
+    {
+      "id": "supabase_postgres",
+      "owner": "platform",
+      "plan": "enterprise-plan-name",
+      "region": "primary-region",
+      "documentedLimit": "Documented connection and throughput ceiling.",
+      "measuredPeak": "Observed peak during validation.",
+      "targetCapacity": "Target capacity with headroom.",
+      "status": "pending",
+      "mitigation": "Read replicas, pooling, or plan change."
+    },
+    {
+      "id": "supabase_realtime",
+      "owner": "platform",
+      "plan": "enterprise-plan-name",
+      "region": "primary-region",
+      "documentedLimit": "Documented channel/subscription ceiling.",
+      "measuredPeak": "Observed peak during validation.",
+      "targetCapacity": "Target capacity with headroom.",
+      "status": "pending",
+      "mitigation": "Dedicated presence service or vendor scaling."
+    },
+    {
+      "id": "redis",
+      "owner": "platform",
+      "plan": "upstash-plan-name",
+      "region": "primary-region",
+      "documentedLimit": "Documented ops/sec and memory ceiling.",
+      "measuredPeak": "Observed peak during validation.",
+      "targetCapacity": "Target capacity with headroom.",
+      "status": "pending",
+      "mitigation": "Plan increase or key-space tuning."
+    },
+    {
+      "id": "object_storage",
+      "owner": "platform",
+      "plan": "storage-plan-name",
+      "region": "bucket-region",
+      "documentedLimit": "Documented throughput and request-rate ceiling.",
+      "measuredPeak": "Observed peak during validation.",
+      "targetCapacity": "Target capacity with headroom.",
+      "status": "pending",
+      "mitigation": "Multipart tuning, region split, or CDN offload."
+    },
+    {
+      "id": "cdn",
+      "owner": "platform",
+      "plan": "cdn-plan-name",
+      "region": "global",
+      "documentedLimit": "Documented cache and edge throughput ceiling.",
+      "measuredPeak": "Observed peak during validation.",
+      "targetCapacity": "Target capacity with headroom.",
+      "status": "pending",
+      "mitigation": "Cache tuning, shielding, or plan change."
+    },
+    {
+      "id": "hosting",
+      "owner": "platform",
+      "plan": "hosting-plan-name",
+      "region": "primary-region-or-edge",
+      "documentedLimit": "Documented request and concurrency ceiling.",
+      "measuredPeak": "Observed peak during validation.",
+      "targetCapacity": "Target capacity with headroom.",
+      "status": "pending",
+      "mitigation": "Horizontal scale, regional split, or plan change."
+    },
+    {
+      "id": "presence_service",
+      "owner": "platform",
+      "plan": "presence-service-plan-name",
+      "region": "primary-region-or-global-edge",
+      "documentedLimit": "Documented WebSocket connection and fanout ceiling.",
+      "measuredPeak": "Observed peak during validation.",
+      "targetCapacity": "Target room and connection capacity with headroom.",
+      "status": "pending",
+      "mitigation": "Horizontal scale, Redis channel sharding, or plan change."
+    },
+    {
+      "id": "worker_plane",
+      "owner": "platform",
+      "plan": "worker-plan-name",
+      "region": "primary-region",
+      "documentedLimit": "Documented queue concurrency and bytes-in-flight ceiling.",
+      "measuredPeak": "Observed peak during validation.",
+      "targetCapacity": "Target import/sync throughput with headroom.",
+      "status": "pending",
+      "mitigation": "Dedicated worker autoscaling, queue partitioning, or budget tuning."
+    }
+  ],
+  "globalBlockers": []
+}

@@ -23,6 +23,9 @@ import { inngest } from '@/inngest/client';
 import { getLifecycleStagesForProjectType } from '@/lib/projects/lifecycle-templates';
 import type { Project } from '@/types/hub';
 import { logger } from '@/lib/logger';
+import { buildProjectOwnerPresentation } from '@/lib/privacy/presentation';
+import { resolvePrivacyRelationship } from '@/lib/privacy/resolver';
+import { refreshWorkspaceCountersForUsers } from '@/lib/workspace/profile-counters';
 
 const isMissingCounterColumn = (error: unknown, column: string) => {
     const msg = error instanceof Error ? error.message : String(error);
@@ -208,6 +211,10 @@ const projectDetailProfileSchema = z.object({
     username: z.string().nullable(),
     fullName: z.string().nullable(),
     avatarUrl: z.string().nullable(),
+    displayName: z.string().optional(),
+    isMasked: z.boolean().optional(),
+    canOpenProfile: z.boolean().optional(),
+    badgeText: z.string().nullable().optional(),
 });
 
 const projectDetailOpenRoleSchema = z.object({
@@ -354,7 +361,7 @@ async function resolveProjectDetailTarget(slugOrId: string) {
     return project ?? null;
 }
 
-async function fetchProjectDetailShellData(projectId: string, ownerId: string, includeFollowersCount: boolean) {
+async function fetchProjectDetailShellData(projectId: string, ownerId: string, includeFollowersCount: boolean, viewerId: string | null) {
     const [ownerRows, followersResult, membersResult, rolesResult] = await Promise.all([
         db
             .select({
@@ -468,14 +475,26 @@ async function fetchProjectDetailShellData(projectId: string, ownerId: string, i
     }));
 
     const ownerRow = ownerRows[0];
-    const owner = ownerRow
-        ? {
-            id: ownerRow.id,
-            username: ownerRow.username,
-            fullName: ownerRow.fullName,
-            avatarUrl: ownerRow.avatarUrl,
-        }
-        : null;
+    const ownerRelationship = ownerRow ? await resolvePrivacyRelationship(viewerId, ownerRow.id) : null;
+    const owner = buildProjectOwnerPresentation(
+        ownerRow
+            ? {
+                id: ownerRow.id,
+                username: ownerRow.username,
+                fullName: ownerRow.fullName,
+                avatarUrl: ownerRow.avatarUrl,
+            }
+            : null,
+        ownerRelationship,
+    );
+    if (owner?.isMasked) {
+        logger.metric('privacy.project.owner_masked', {
+            surface: 'project_detail',
+            viewerId: viewerId ?? 'anon',
+            ownerId,
+            projectId,
+        });
+    }
 
     return {
         owner,
@@ -489,7 +508,7 @@ async function fetchProjectDetailShellData(projectId: string, ownerId: string, i
 
 const getPublicProjectDetailShellData = unstable_cache(
     async (projectId: string, ownerId: string, includeFollowersCount: boolean) =>
-        fetchProjectDetailShellData(projectId, ownerId, includeFollowersCount),
+        fetchProjectDetailShellData(projectId, ownerId, includeFollowersCount, null),
     ['public-project-detail-shell'],
     { revalidate: 60 }
 );
@@ -562,12 +581,13 @@ export async function getProjectDetailShellAction(input: {
                 const isFollowed = !!followRow[0];
 
                 const shouldUseCachedShell =
+                    !actorUserId &&
                     (project.visibility === 'public' || project.visibility === 'unlisted') &&
                     project.status !== 'draft';
                 const includeFollowersCount = project.followersCount == null;
                 const shell = shouldUseCachedShell
                     ? await getPublicProjectDetailShellData(project.id, project.ownerId, includeFollowersCount)
-                    : await fetchProjectDetailShellData(project.id, project.ownerId, includeFollowersCount);
+                    : await fetchProjectDetailShellData(project.id, project.ownerId, includeFollowersCount, actorUserId);
 
                 const normalizedStatus: Project['status'] =
                     project.status === 'draft' ||
@@ -2367,6 +2387,8 @@ export async function createTaskAction(data: z.infer<typeof createTaskSchema>) {
                 );
             }
 
+            await refreshWorkspaceCountersForUsers(tx, [validated.assigneeId ?? null]);
+
             return newTask;
         });
 
@@ -2611,9 +2633,17 @@ export async function deleteTaskAction(taskId: string, projectId: string) {
             throw new Error("Only the project owner can delete tasks");
         }
 
+        const existingTask = await db.query.tasks.findFirst({
+            where: eq(tasks.id, taskId),
+            columns: {
+                assigneeId: true,
+            },
+        });
+
         // Delete the task
         await db.delete(tasks)
             .where(eq(tasks.id, taskId));
+        await refreshWorkspaceCountersForUsers(db, [existingTask?.assigneeId ?? null]);
 
         const slugOrId = project.slug || projectId;
         revalidatePath(`/projects/${slugOrId}`);

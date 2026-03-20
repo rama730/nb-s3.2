@@ -26,7 +26,7 @@ export default function PostCard({ post, author }: PostCardProps) {
             {/* Post Header */}
             <div className="flex items-start justify-between mb-4">
                 <div className="flex items-center gap-3">
-                    <div className="relative w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center text-white font-semibold overflow-hidden">
+                    <div className="relative w-10 h-10 rounded-full app-accent-gradient flex items-center justify-center text-white font-semibold overflow-hidden">
                         {author?.avatarUrl ? (
                             <Image
                                 src={author.avatarUrl}

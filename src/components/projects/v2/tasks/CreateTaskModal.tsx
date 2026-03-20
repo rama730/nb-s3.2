@@ -24,6 +24,7 @@ import TaskTemplates from "./TaskTemplates";
 import TaskAttachmentPicker from "./components/TaskAttachmentPicker";
 import { ProjectNode } from "@/lib/db/schema";
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
+import { useReducedMotionPreference } from "@/components/providers/theme-provider";
 
 
 
@@ -46,6 +47,7 @@ export default function CreateTaskModal({
     projectId,
     projectName
 }: CreateTaskModalProps) {
+    const reduceMotion = useReducedMotionPreference();
 
     // Essential Fields
     const [title, setTitle] = useState("");
@@ -172,15 +174,17 @@ export default function CreateTaskModal({
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
+                transition={reduceMotion ? { duration: 0 } : undefined}
                 className="fixed inset-0 bg-black/60 backdrop-blur-sm" 
                 onClick={onClose}
             />
             
             {/* Modal Card */}
             <motion.div
-                initial={{ scale: 0.95, opacity: 0, y: 10 }}
-                animate={{ scale: 1, opacity: 1, y: 0 }}
-                exit={{ scale: 0.95, opacity: 0, y: 10 }}
+                initial={reduceMotion ? { opacity: 0 } : { scale: 0.95, opacity: 0, y: 10 }}
+                animate={reduceMotion ? { opacity: 1 } : { scale: 1, opacity: 1, y: 0 }}
+                exit={reduceMotion ? { opacity: 0 } : { scale: 0.95, opacity: 0, y: 10 }}
+                transition={reduceMotion ? { duration: 0 } : undefined}
                 className="relative w-full max-w-2xl bg-white dark:bg-zinc-900 rounded-2xl shadow-xl overflow-hidden flex flex-col max-h-[90vh]"
             >
                 {/* Header Section */}

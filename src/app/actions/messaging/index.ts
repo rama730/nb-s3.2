@@ -6,13 +6,17 @@
 
 export {
     // Conversations
-    getOrCreateDMConversation,
     getConversations,
     getConversationById,
     markConversationAsRead,
     setConversationArchived,
     setConversationMuted,
     getProjectGroups,
+    getUnreadCount,
+} from './conversations'
+
+export {
+    getOrCreateDMConversation,
 
     // Messages
     getMessages,
@@ -20,7 +24,6 @@ export {
     sendMessage,
     editMessage,
     deleteMessage,
-    getUnreadCount,
 
     // Search & Pins
     searchMessages,
@@ -35,8 +38,11 @@ export {
 
 export type {
     ConversationWithDetails,
+    ProjectGroupConversation,
+} from './conversations'
+
+export type {
     MessageWithSender,
     SendMessageResult,
     UploadedAttachment,
-    ProjectGroupConversation,
 } from './_all'

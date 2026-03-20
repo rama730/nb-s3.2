@@ -45,5 +45,9 @@ export function normalizeProfile(p: any) {
         connectionsCount: p.connectionsCount || 0,
         projectsCount: p.projectsCount || 0,
         followersCount: p.followersCount || 0,
+        workspaceInboxCount: p.workspaceInboxCount ?? p.workspace_inbox_count ?? 0,
+        workspaceDueTodayCount: p.workspaceDueTodayCount ?? p.workspace_due_today_count ?? 0,
+        workspaceOverdueCount: p.workspaceOverdueCount ?? p.workspace_overdue_count ?? 0,
+        workspaceInProgressCount: p.workspaceInProgressCount ?? p.workspace_in_progress_count ?? 0,
     };
 }

@@ -31,6 +31,11 @@ Optional tuning:
 - `ROUTE_BASELINE_LOAD_MAX_REGRESSION_RATIO` (default `0.35`)
 - `ROUTE_BASELINE_TTFB_MAX_REGRESSION_RATIO` (default `0.5`)
 
+JWT verification note:
+
+- If your Supabase project uses symmetric (`HS*`) JWT signing, set `SUPABASE_JWT_SECRET` to keep request-path verification local.
+- If `SUPABASE_JWT_SECRET` is absent, the app now falls back to a verified Supabase `getUser()` lookup instead of clearing valid auth cookies, but that fallback is slower and should be treated as a development or transitional mode.
+
 ## 3) Local, Staging, Production Setup
 
 ### Local
@@ -38,14 +43,18 @@ Optional tuning:
 1. Use `http://localhost:3000` as canonical browser URL.
 2. Start with `pnpm dev`.
 3. Local browser `Not Secure` indicator is expected for HTTP mode.
+4. Local OAuth now preserves the active browser origin during the handshake, but the safest path is still to start and finish on the same origin for the full sign-in flow.
 
 ### Supabase Auth Redirect Allowlist
 
 Must include all deployed callback URLs:
 
 - `http://localhost:3000/auth/callback`
+- `http://127.0.0.1:3000/auth/callback` when you open local dev on `127.0.0.1`
 - `https://<staging-domain>/auth/callback`
 - `https://<production-domain>/auth/callback`
+
+If you use a different local origin during development, that exact `.../auth/callback` URL must also be allowlisted in Supabase Auth.
 
 ## 4) Degraded Mode and Cookie-Clear Policy
 

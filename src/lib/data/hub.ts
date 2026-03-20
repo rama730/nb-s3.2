@@ -6,6 +6,9 @@ import { profiles, projectFollows, projectMembers, projectOpenRoles, projects } 
 import { recordHubMetric } from '@/lib/hub/observability';
 import { HUB_RANKING_SCHEMA_VERSION, getHubRankingWeights } from '@/lib/hub/ranking-config';
 import { buildHubSnapshotKey, getHubSnapshotCached } from '@/lib/hub/snapshot-cache';
+import { logger } from '@/lib/logger';
+import { buildProjectOwnerPresentation } from '@/lib/privacy/presentation';
+import { resolvePrivacyRelationships } from '@/lib/privacy/resolver';
 import { HubFilters, Project } from '@/types/hub';
 
 export const DEFAULT_FILTERS: HubFilters = {
@@ -26,7 +29,7 @@ interface HubQueryOptions {
 type ParsedCursor =
     | { kind: 'score'; score: number; createdAt: string; id: string }
     | { kind: 'time'; createdAt: string; id: string }
-    | { kind: 'offset'; offset: number }
+    | { kind: 'snapshot'; score: number; id: string }
     | null;
 
 type RawProjectRow = {
@@ -106,19 +109,22 @@ const dedupeTerms = (values: Array<string | null | undefined>, max = MAX_PERSONA
 const parseHubCursor = (cursor?: string): ParsedCursor => {
     if (!cursor) return null;
 
-    if (cursor.startsWith('o:')) {
-        const offset = Number(cursor.slice(2));
-        if (Number.isInteger(offset) && offset >= 0) {
-            return { kind: 'offset', offset };
-        }
-    }
-
     if (cursor.startsWith('s:')) {
         const [, payload] = cursor.split('s:');
         const [scoreRaw, createdAt, id] = payload.split('|');
         const score = Number(scoreRaw);
         if (Number.isFinite(score) && createdAt && id) {
             return { kind: 'score', score, createdAt, id };
+        }
+        return null;
+    }
+
+    if (cursor.startsWith('h:')) {
+        const [, payload] = cursor.split('h:');
+        const [scoreRaw, id] = payload.split('|');
+        const score = Number(scoreRaw);
+        if (Number.isFinite(score) && id) {
+            return { kind: 'snapshot', score, id };
         }
         return null;
     }
@@ -141,7 +147,8 @@ const parseHubCursor = (cursor?: string): ParsedCursor => {
 };
 
 const buildTimeCursor = (createdAt: Date, id: string) => `t:${createdAt.toISOString()}|${id}`;
-const buildOffsetCursor = (offset: number) => `o:${offset}`;
+const buildSnapshotCursor = (score: number, id: string) =>
+    `h:${Number.isFinite(score) ? score.toFixed(6) : '0.000000'}|${id}`;
 
 const buildScoreCursor = (score: number, createdAt: Date, id: string) =>
     `s:${Number.isFinite(score) ? score.toFixed(6) : '0.000000'}|${createdAt.toISOString()}|${id}`;
@@ -668,6 +675,7 @@ const hydrateProjects = async (
     rawProjects: RawProjectRow[],
     hasFollowersCountColumn: boolean,
     rankingReasonMap?: Map<string, string[]>,
+    viewerId: string | null = null,
 ): Promise<Project[]> => {
     if (rawProjects.length === 0) return [];
 
@@ -734,6 +742,7 @@ const hydrateProjects = async (
     ]);
 
     const ownerMap = new Map(owners.map((owner) => [owner.id, owner]));
+    const ownerRelationshipMap = await resolvePrivacyRelationships(viewerId, ownerIds);
     const followCountMap = new Map(
         (follows as Array<{ projectId: string; count: number | string | null }>).map((follow) => [
             follow.projectId,
@@ -763,6 +772,25 @@ const hydrateProjects = async (
 
     return rawProjects.map((project) => {
         const owner = ownerMap.get(project.ownerId);
+        const ownerPresentation = buildProjectOwnerPresentation(
+            owner
+                ? {
+                    id: owner.id,
+                    username: owner.username,
+                    fullName: owner.fullName,
+                    avatarUrl: owner.avatarUrl,
+                }
+                : null,
+            ownerRelationshipMap.get(project.ownerId) ?? null,
+        );
+        if (ownerPresentation?.isMasked) {
+            logger.metric('privacy.project.owner_masked', {
+                surface: 'hub',
+                viewerId: viewerId ?? 'anon',
+                ownerId: project.ownerId,
+                projectId: project.id,
+            });
+        }
         const projectRoles = rolesMap.get(project.id) || [];
         const projectMembersRows = membersMap.get(project.id) || [];
 
@@ -796,14 +824,7 @@ const hydrateProjects = async (
 
             ownerId: project.ownerId,
             rankingReasons: rankingReasonMap?.get(project.id) || [],
-            owner: owner
-                ? {
-                    id: owner.id,
-                    username: owner.username,
-                    fullName: owner.fullName,
-                    avatarUrl: owner.avatarUrl,
-                }
-                : null,
+            owner: ownerPresentation,
             collaborators: projectMembersRows
                 .map((member) =>
                     member.user
@@ -870,18 +891,28 @@ export const getHubProjects = cache(async (
         !filters.includedIds?.length;
 
     if (shouldUseSnapshot) {
-        const offset = parsedCursor?.kind === 'offset' ? parsedCursor.offset : 0;
         const { snapshot, cacheHit } = await getFeedSnapshot(view, viewerId, filters, personalizationTerms);
+        const startIndex = parsedCursor?.kind === 'snapshot'
+            ? Math.max(
+                0,
+                snapshot.items.findIndex(
+                    (item) => item.id === parsedCursor.id && Math.abs(item.score - parsedCursor.score) < 0.000001,
+                ) + 1,
+            )
+            : 0;
 
-        const pageItems = snapshot.items.slice(offset, offset + pageSize);
+        const pageItems = snapshot.items.slice(startIndex, startIndex + pageSize);
         const pageIds = pageItems.map((item) => item.id);
         const reasonsMap = new Map(pageItems.map((item) => [item.id, item.reasons]));
 
         const { rows, hasFollowersCountColumn } = await fetchProjectsByIds(pageIds);
-        const mappedProjects = await hydrateProjects(rows, hasFollowersCountColumn, reasonsMap);
+        const mappedProjects = await hydrateProjects(rows, hasFollowersCountColumn, reasonsMap, viewerId);
 
-        const nextOffset = offset + pageSize;
-        const nextCursor = nextOffset < snapshot.items.length ? buildOffsetCursor(nextOffset) : undefined;
+        const lastSnapshotItem = pageItems.at(-1);
+        const nextCursor =
+            startIndex + pageSize < snapshot.items.length && lastSnapshotItem
+                ? buildSnapshotCursor(lastSnapshotItem.score, lastSnapshotItem.id)
+                : undefined;
 
         recordHubMetric({
             view,
@@ -1030,7 +1061,7 @@ export const getHubProjects = cache(async (
             .limit(pageSize);
     }
 
-    const mappedProjects = await hydrateProjects(rawProjects, hasFollowersCountColumn);
+    const mappedProjects = await hydrateProjects(rawProjects, hasFollowersCountColumn, undefined, viewerId ?? null);
     const lastProject = rawProjects[rawProjects.length - 1];
     const nextCursor = rawProjects.length === pageSize
         ? scoreExpr && lastProject

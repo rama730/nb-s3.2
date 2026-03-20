@@ -19,12 +19,18 @@ function canonicalizeLocalHost(url: URL): URL {
     return url;
 }
 
-function toOrigin(raw: string | null | undefined): string | null {
+function toOrigin(
+    raw: string | null | undefined,
+    options: { canonicalizeLoopback?: boolean } = {},
+): string | null {
     if (!raw || typeof raw !== 'string') return null;
     const value = raw.trim();
     if (!value) return null;
     try {
-        const parsed = canonicalizeLocalHost(new URL(value));
+        const parsed = new URL(value);
+        if (options.canonicalizeLoopback) {
+            canonicalizeLocalHost(parsed);
+        }
         if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
         parsed.pathname = '/';
         parsed.search = '';
@@ -40,7 +46,7 @@ function toOriginFromRequestUrl(raw: string | null | undefined): string | null {
     const value = raw.trim();
     if (!value) return null;
     try {
-        const parsed = canonicalizeLocalHost(new URL(value));
+        const parsed = new URL(value);
         return parsed.origin;
     } catch {
         return null;
@@ -55,14 +61,21 @@ function getWindowOrigin(): string | null {
 export function resolveAuthBaseUrl(options: ResolveAuthBaseUrlOptions = {}): string {
     const appUrl = options.appUrl ?? process.env.APP_URL;
     const publicAppUrl = options.publicAppUrl ?? process.env.NEXT_PUBLIC_APP_URL;
-    const configuredOrigin = toOrigin(appUrl) ?? toOrigin(publicAppUrl);
+    const configuredOrigin =
+        toOrigin(appUrl, { canonicalizeLoopback: true })
+        ?? toOrigin(publicAppUrl, { canonicalizeLoopback: true });
     const requestOrigin = toOriginFromRequestUrl(options.requestUrl);
     const browserOrigin = toOrigin(options.browserOrigin) ?? getWindowOrigin();
-    const fallbackOrigin = toOrigin(options.defaultLocalOrigin) ?? DEFAULT_LOCAL_ORIGIN;
+    const fallbackOrigin =
+        toOrigin(options.defaultLocalOrigin, { canonicalizeLoopback: true })
+        ?? DEFAULT_LOCAL_ORIGIN;
     const requireConfiguredBaseInProduction = options.requireConfiguredBaseInProduction ?? true;
     const isProductionRuntime = process.env.NODE_ENV === 'production';
 
-    if (configuredOrigin) return configuredOrigin;
+    if (configuredOrigin) {
+        if (isProductionRuntime) return configuredOrigin;
+        return requestOrigin ?? browserOrigin ?? configuredOrigin;
+    }
 
     if (isProductionRuntime && requireConfiguredBaseInProduction) {
         throw new Error(MISSING_CANONICAL_BASE_ERROR);
@@ -105,12 +118,17 @@ export function buildOAuthRedirectTo(
     baseUrl: string,
     nextPath: string | null | undefined,
     requestId?: string | null,
+    provider?: string | null,
 ): string {
     const normalizedNext = normalizeAuthNextPath(nextPath);
-    const callbackUrl = new URL('/auth/callback', resolveAuthBaseUrl({ appUrl: baseUrl }));
+    const callbackBase = toOrigin(baseUrl) ?? resolveAuthBaseUrl({ appUrl: baseUrl });
+    const callbackUrl = new URL('/auth/callback', callbackBase);
     callbackUrl.searchParams.set('next', normalizedNext);
     if (requestId && typeof requestId === 'string' && requestId.trim().length > 0) {
         callbackUrl.searchParams.set('rid', requestId.trim());
+    }
+    if (provider && typeof provider === 'string' && provider.trim().length > 0) {
+        callbackUrl.searchParams.set('provider', provider.trim());
     }
     return callbackUrl.toString();
 }

@@ -7,6 +7,7 @@ import { projectMembers, projectSprints, tasks } from "@/lib/db/schema";
 import { getProjectAccessById } from "@/lib/data/project-access";
 import { createClient } from "@/lib/supabase/server";
 import { consumeRateLimit } from "@/lib/security/rate-limit";
+import { refreshWorkspaceCountersForUsers } from "@/lib/workspace/profile-counters";
 
 type MutableTaskField = "title" | "description" | "priority" | "sprintId" | "dueDate";
 
@@ -64,6 +65,12 @@ export async function updateTaskFieldAction(
         if (canonicalProjectId !== projectId) {
             return { success: false, error: "Task does not belong to this project" };
         }
+        const existingTask = await db.query.tasks.findFirst({
+            where: eq(tasks.id, taskId),
+            columns: {
+                assigneeId: true,
+            },
+        });
 
         const updates: Partial<typeof tasks.$inferInsert> = {
             updatedAt: new Date(),
@@ -106,6 +113,7 @@ export async function updateTaskFieldAction(
         }
 
         await db.update(tasks).set(updates).where(eq(tasks.id, taskId));
+        await refreshWorkspaceCountersForUsers(db, [existingTask?.assigneeId ?? null]);
 
         revalidatePath(`/projects/${canonicalProjectId}`);
         return { success: true };
@@ -138,11 +146,18 @@ export async function updateTaskStatusAction(
         if (canonicalProjectId !== projectId) {
             return { success: false, error: "Task does not belong to this project" };
         }
+        const existingTask = await db.query.tasks.findFirst({
+            where: eq(tasks.id, taskId),
+            columns: {
+                assigneeId: true,
+            },
+        });
 
         await db.update(tasks).set({
             status,
             updatedAt: new Date(),
         }).where(eq(tasks.id, taskId));
+        await refreshWorkspaceCountersForUsers(db, [existingTask?.assigneeId ?? null]);
 
         revalidatePath(`/projects/${canonicalProjectId}`);
         return { success: true };
@@ -171,6 +186,12 @@ export async function assignTaskAction(
         if (canonicalProjectId !== projectId) {
             return { success: false, error: "Task does not belong to this project" };
         }
+        const existingTask = await db.query.tasks.findFirst({
+            where: eq(tasks.id, taskId),
+            columns: {
+                assigneeId: true,
+            },
+        });
 
         if (assigneeId) {
             const isProjectMember = await db.query.projectMembers.findFirst({
@@ -186,6 +207,7 @@ export async function assignTaskAction(
             assigneeId: assigneeId || null,
             updatedAt: new Date(),
         }).where(eq(tasks.id, taskId));
+        await refreshWorkspaceCountersForUsers(db, [existingTask?.assigneeId ?? null, assigneeId]);
 
         revalidatePath(`/projects/${canonicalProjectId}`);
         return { success: true };

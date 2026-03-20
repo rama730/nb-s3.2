@@ -15,13 +15,13 @@ interface PeopleClientProps {
 }
 
 const GridList = forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>((props, ref) => (
-    <div {...props} ref={ref} className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 pb-8" />
+    <div {...props} ref={ref} className="grid gap-[var(--ui-section-gap)] grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 pb-8" />
 ));
 GridList.displayName = "DiscoverGridList";
 
 // Forced fixed height on the grid container for pure virtualization optimization
 const GridItem = forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>((props, ref) => (
-    <div {...props} ref={ref} className="h-[200px]" />
+    <div {...props} ref={ref} className="h-[calc(var(--ui-list-row-min-h)*3.3)] min-h-[180px]" />
 ));
 GridItem.displayName = "DiscoverGridItem";
 
@@ -112,7 +112,7 @@ export default function PeopleClient({ initialUser }: PeopleClientProps) {
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
                         placeholder="Search people by name, skills, interests, location..."
-                        className="w-full pl-12 pr-14 py-3.5 rounded-2xl border border-zinc-200/60 dark:border-white/10 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl text-base focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500/40 transition-all shadow-sm placeholder:text-zinc-400"
+                        className="w-full pl-12 pr-14 py-3.5 rounded-2xl border border-zinc-200/60 dark:border-white/10 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl text-base focus:ring-2 focus:ring-ring/40 focus:border-primary/40 transition-all shadow-sm placeholder:text-zinc-400"
                         aria-label="Search people"
                     />
                     <button
@@ -143,7 +143,7 @@ export default function PeopleClient({ initialUser }: PeopleClientProps) {
                     {recommendedProfiles.length > 0 && (
                         <div className="mb-10">
                             <div className="flex items-center gap-2 mb-4 px-1">
-                                <Sparkles className="w-4 h-4 text-indigo-500" />
+                                <Sparkles className="w-4 h-4 text-primary" />
                                 <h2 className="text-sm font-bold text-zinc-800 dark:text-zinc-200 tracking-tight">
                                     Top Picks For You
                                 </h2>

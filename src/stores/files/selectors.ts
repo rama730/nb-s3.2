@@ -26,9 +26,6 @@ export const useExpandedFolders = (projectId: string) =>
 export const useGitState = (projectId: string) =>
   useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.git);
 
-export const useTerminalState = (projectId: string) =>
-  useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.terminal);
-
 export const useUiState = (projectId: string) =>
   useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.ui);
 

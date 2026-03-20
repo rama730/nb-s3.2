@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev --webpack",
     "dev:lan": "next dev -H 0.0.0.0 --webpack",
+    "presence:dev": "tsx services/presence/src/server.ts",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
@@ -25,8 +26,10 @@
     "check:scroll-contract": "tsx scripts/check-scroll-contract.ts",
     "check:query-key-contract": "tsx scripts/check-query-key-contract.ts",
     "check:theme-contract": "tsx scripts/check-theme-contract.ts",
+    "check:appearance-contract": "tsx scripts/check-appearance-contract.ts",
     "check:page-contract": "tsx scripts/check-page-performance-contract.ts",
     "check:force-dynamic-allowlist": "tsx scripts/check-force-dynamic-allowlist.ts",
+    "check:runtime-boundaries": "tsx scripts/check-runtime-boundaries.ts",
     "check:api-versioning-contract": "tsx scripts/check-api-versioning-contract.ts",
     "check:api-envelope-contract": "tsx scripts/check-api-envelope-contract.ts",
     "check:hub-canonical-contract": "tsx scripts/check-hub-canonical-contract.ts",
@@ -42,7 +45,15 @@
     "test:e2e:nightly": "E2E_SCOPE=full E2E_BROWSER_MATRIX=nightly playwright test",
     "check:e2e:perf": "tsx scripts/check-e2e-perf-gate.ts",
     "check:hardening-rollout": "tsx scripts/check-hardening-rollout.ts",
-    "test:release-gate": "npm run typecheck && npm run check:deps:audit && npm run check:deps:lockfile && npm run check:db:migration-journal && npm run check:db:replay-env && npm run check:db:remigration-replay && npm run test:unit && npm run check:scroll-contract && npm run check:query-key-contract && npm run check:theme-contract && npm run check:page-contract && npm run check:force-dynamic-allowlist && npm run check:api-versioning-contract && npm run check:api-envelope-contract && npm run check:hub-canonical-contract && npm run check:review-guardrails && npm run test:e2e:critical:prod && npm run check:e2e:perf && npm run check:route-baseline-regression && npm run check:hardening-rollout"
+    "db:apply:workspace-counters": "tsx scripts/apply-workspace-counter-migration.ts",
+    "db:check:workspace-counters": "tsx scripts/apply-workspace-counter-migration.ts --check-only",
+    "check:stability-env": "tsx scripts/check-stability-env.ts",
+    "check:stability-release": "tsx scripts/run-stability-release-gate.ts",
+    "run:load-suite": "tsx scripts/run-load-suite.ts",
+    "check:capacity-audit": "tsx scripts/check-capacity-audit.ts",
+    "check:production-rollout": "tsx scripts/check-production-rollout-readiness.ts",
+    "check:1m-readiness": "tsx scripts/check-1m-readiness.ts",
+    "test:release-gate": "npm run typecheck && npm run check:deps:audit && npm run check:deps:lockfile && npm run check:db:migration-journal && npm run check:db:replay-env && npm run check:db:remigration-replay && npm run test:unit && npm run check:scroll-contract && npm run check:query-key-contract && npm run check:theme-contract && npm run check:page-contract && npm run check:force-dynamic-allowlist && npm run check:runtime-boundaries && npm run check:api-versioning-contract && npm run check:api-envelope-contract && npm run check:hub-canonical-contract && npm run check:review-guardrails && npm run test:e2e:critical:prod && npm run check:e2e:perf && npm run check:route-baseline-regression && npm run check:hardening-rollout"
   },
   "dependencies": {
     "@codemirror/lang-css": "^6.3.1",
@@ -104,6 +115,7 @@
     "sucrase": "^3.35.0",
     "tailwind-merge": "^3.4.0",
     "use-debounce": "^10.1.0",
+    "ws": "^8.19.0",
     "zod": "^4.3.5",
     "zustand": "^5.0.10"
   },
@@ -115,7 +127,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "dotenv": "^17.2.3",
-    "drizzle-kit": "1.0.0-beta.6-7419dcb",
+    "drizzle-kit": "^0.31.9",
     "eslint": "^9.39.4",
     "eslint-config-next": "^16.1.6",
     "playwright": "^1.58.2",

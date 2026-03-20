@@ -38,6 +38,8 @@ export default function ProfileShell({ initialData, profileId }: ProfileShellPro
             isOwner={initialData?.isOwner}
             currentUser={initialData?.currentUser}
             connectionStatus={initialData?.connectionStatus}
+            privacyRelationship={initialData?.privacyRelationship}
+            lockedShell={initialData?.lockedShell}
             projects={initialData?.projects}
         />
     );

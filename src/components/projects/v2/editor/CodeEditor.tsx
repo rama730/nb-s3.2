@@ -25,6 +25,12 @@ export interface CodeEditorProps {
   onSymbolsChange?: (symbols: EditorSymbol[]) => void;
   scrollToLine?: number | null;
   onCursorChange?: (line: number) => void;
+  onCursorActivity?: (position: {
+    line: number;
+    column: number;
+    selectionStart: number;
+    selectionEnd: number;
+  }) => void;
   gitStatus?: "modified" | "added" | "deleted" | null;
   tabId?: string;
 }
@@ -73,6 +79,7 @@ export default function CodeEditor({
   minimapEnabled = false,
   scrollToLine,
   onCursorChange,
+  onCursorActivity,
   gitStatus,
   tabId,
 }: CodeEditorProps) {
@@ -85,12 +92,22 @@ export default function CodeEditor({
     (view: EditorView, targetTabId?: string) => {
       if (!targetTabId) return;
       const pos = view.state.selection.main.head;
+      const selectionStart = view.state.selection.main.from;
+      const selectionEnd = view.state.selection.main.to;
       const line = view.state.doc.lineAt(pos);
       const lineNumber = line.number;
       const column = pos - line.from + 1;
 
       if (onCursorChange) {
         onCursorChange(lineNumber);
+      }
+      if (onCursorActivity) {
+        onCursorActivity({
+          line: lineNumber,
+          column,
+          selectionStart,
+          selectionEnd,
+        });
       }
 
       window.dispatchEvent(
@@ -99,7 +116,7 @@ export default function CodeEditor({
         })
       );
     },
-    [onCursorChange]
+    [onCursorActivity, onCursorChange]
   );
 
   const ext = getFileExtension(filename);

@@ -3,8 +3,6 @@ import { getMyApplicationsAction, getIncomingApplicationsAction } from '@/app/ac
 import { isHardeningDomainEnabled } from '@/lib/features/hardening'
 import { getViewerAuthContext } from '@/lib/server/viewer-context'
 
-export const dynamic = 'force-dynamic';
-
 interface PeoplePageProps {
     searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }

@@ -1,6 +1,6 @@
 export type ThemeMode = "light" | "dark" | "system";
 export type ResolvedTheme = "light" | "dark";
-export type AccentColor = "indigo" | "purple" | "green" | "orange" | "pink" | "teal";
+export type AccentColor = "default" | "orchid" | "forest" | "ember" | "rose" | "lagoon";
 export type Density = "compact" | "default" | "comfortable";
 
 export const APPEARANCE_SNAPSHOT_VERSION = 1 as const;
@@ -23,13 +23,21 @@ export const APPEARANCE_STORAGE_KEYS = {
 } as const;
 
 const THEME_MODES: ReadonlyArray<ThemeMode> = ["light", "dark", "system"];
-const ACCENT_COLORS: ReadonlyArray<AccentColor> = ["indigo", "purple", "green", "orange", "pink", "teal"];
+const ACCENT_COLORS: ReadonlyArray<AccentColor> = ["default", "orchid", "forest", "ember", "rose", "lagoon"];
 const DENSITIES: ReadonlyArray<Density> = ["compact", "default", "comfortable"];
+const LEGACY_ACCENT_COLOR_ALIASES = {
+  indigo: "default",
+  purple: "orchid",
+  green: "forest",
+  orange: "ember",
+  pink: "rose",
+  teal: "lagoon",
+} as const satisfies Record<string, AccentColor>;
 
 export const DEFAULT_APPEARANCE_SNAPSHOT: AppearanceSnapshot = {
   version: APPEARANCE_SNAPSHOT_VERSION,
   theme: "system",
-  accentColor: "indigo",
+  accentColor: "default",
   density: "default",
   reduceMotion: false,
   updatedAt: "1970-01-01T00:00:00.000Z",
@@ -66,6 +74,9 @@ export function normalizeAccentColor(
   value: unknown,
   fallback: AccentColor = DEFAULT_APPEARANCE_SNAPSHOT.accentColor,
 ): AccentColor {
+  if (typeof value === "string" && value in LEGACY_ACCENT_COLOR_ALIASES) {
+    return LEGACY_ACCENT_COLOR_ALIASES[value as keyof typeof LEGACY_ACCENT_COLOR_ALIASES];
+  }
   return isAccentColor(value) ? value : fallback;
 }
 
@@ -129,6 +140,19 @@ export function choosePreferredSnapshot(local: AppearanceSnapshot, remote: Appea
   return isSnapshotNewer(remote, local) ? remote : local;
 }
 
+export function areAppearanceSnapshotsEquivalent(
+  left: AppearanceSnapshot | null | undefined,
+  right: AppearanceSnapshot | null | undefined,
+): boolean {
+  if (!left || !right) return false;
+  return (
+    left.theme === right.theme &&
+    left.accentColor === right.accentColor &&
+    left.density === right.density &&
+    left.reduceMotion === right.reduceMotion
+  );
+}
+
 export function resolveThemeMode(theme: ThemeMode, systemPrefersDark: boolean): ResolvedTheme {
   if (theme === "system") return systemPrefersDark ? "dark" : "light";
   return theme;
@@ -180,15 +204,28 @@ export function buildThemePrehydrateScript(): string {
   try {
     const root = document.documentElement;
     const THEME_VALUES = new Set(["light", "dark", "system"]);
-    const ACCENT_VALUES = new Set(["indigo", "purple", "green", "orange", "pink", "teal"]);
+    const ACCENT_VALUES = new Set(["default", "orchid", "forest", "ember", "rose", "lagoon"]);
+    const LEGACY_ACCENT_ALIASES = {
+      indigo: "default",
+      purple: "orchid",
+      green: "forest",
+      orange: "ember",
+      pink: "rose",
+      teal: "lagoon",
+    };
     const DENSITY_VALUES = new Set(["compact", "default", "comfortable"]);
+    const normalizeAccent = (value, fallback) => {
+      if (typeof value !== "string") return fallback;
+      if (ACCENT_VALUES.has(value)) return value;
+      return LEGACY_ACCENT_ALIASES[value] || fallback;
+    };
     const parseSnapshot = (raw) => {
       if (!raw) return null;
       try {
         const parsed = JSON.parse(raw);
         if (!parsed || typeof parsed !== "object") return null;
         if (!THEME_VALUES.has(parsed.theme)) return null;
-        if (!ACCENT_VALUES.has(parsed.accentColor)) return null;
+        parsed.accentColor = normalizeAccent(parsed.accentColor, "${defaults.accentColor}");
         if (!DENSITY_VALUES.has(parsed.density)) return null;
         if (typeof parsed.reduceMotion !== "boolean") return null;
         return parsed;
@@ -201,12 +238,11 @@ export function buildThemePrehydrateScript(): string {
     const theme = THEME_VALUES.has(localStorage.getItem("${keys.theme}"))
       ? localStorage.getItem("${keys.theme}")
       : (snapshot?.theme || "${defaults.theme}");
-    const accent = ACCENT_VALUES.has(snapshot?.accentColor)
-      ? snapshot.accentColor
-      : (ACCENT_VALUES.has(localStorage.getItem("${keys.accent}")) ? localStorage.getItem("${keys.accent}") : "${defaults.accentColor}");
+    const accent = normalizeAccent(snapshot?.accentColor, normalizeAccent(localStorage.getItem("${keys.accent}"), "${defaults.accentColor}"));
     const density = DENSITY_VALUES.has(snapshot?.density)
       ? snapshot.density
       : (DENSITY_VALUES.has(localStorage.getItem("${keys.density}")) ? localStorage.getItem("${keys.density}") : "${defaults.density}");
+    const prefersReducedMotion = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
     const reduceMotion = typeof snapshot?.reduceMotion === "boolean"
       ? snapshot.reduceMotion
       : localStorage.getItem("${keys.reduceMotion}") === "true";
@@ -220,7 +256,7 @@ export function buildThemePrehydrateScript(): string {
     root.setAttribute("data-theme-mode", theme);
     root.setAttribute("data-accent", accent || "${defaults.accentColor}");
     root.setAttribute("data-density", density || "${defaults.density}");
-    if (reduceMotion) root.setAttribute("data-reduce-motion", "true");
+    if (reduceMotion || prefersReducedMotion) root.setAttribute("data-reduce-motion", "true");
     else root.removeAttribute("data-reduce-motion");
 
     const desired = isDark ? "#0a0a0a" : "#ffffff";

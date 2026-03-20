@@ -13,7 +13,7 @@ type FilesMetric =
   | "files.offline.flush.failure_count"
   | "files.git.push.latency_ms"
   | "files.git.pull.latency_ms"
-  | "files.terminal.command_count"
+  | "files.run.command_count"
   | "files.asset.gallery.load_ms";
 
 type FilesMetricPayload = {

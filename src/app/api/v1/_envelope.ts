@@ -10,7 +10,10 @@ export type ApiErrorCode =
   | "INTERNAL_ERROR"
   | "CURRENT_PASSWORD_INVALID"
   | "PASSWORD_CHANGE_FAILED"
-  | "SESSION_REVOKE_FAILED";
+  | "SESSION_REVOKE_FAILED"
+  | "STEP_UP_REQUIRED"
+  | "STEP_UP_INVALID"
+  | "RECOVERY_CODE_INVALID";
 
 export function jsonSuccess<T>(
   data?: T,

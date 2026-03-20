@@ -42,8 +42,8 @@ export function FeaturedProjectsCard({ projects, isOwner }: FeaturedProjectsCard
                                         />
                                     </div>
                                 ) : (
-                                    <div className="h-32 w-full bg-gradient-to-br from-indigo-500/10 to-purple-500/10 flex items-center justify-center">
-                                        <Star className="w-8 h-8 text-indigo-500/20" />
+                                    <div className="h-32 w-full bg-[linear-gradient(135deg,color-mix(in_oklch,var(--theme-gradient-start)_12%,transparent),color-mix(in_oklch,var(--theme-gradient-end)_12%,transparent))] flex items-center justify-center">
+                                        <Star className="w-8 h-8 text-primary/30" />
                                     </div>
                                 )}
                                 <div className="p-4">
@@ -52,7 +52,7 @@ export function FeaturedProjectsCard({ projects, isOwner }: FeaturedProjectsCard
                                         {project?.shortDescription || project?.description || 'No description provided'}
                                     </p>
                                     <div className="flex items-center gap-2">
-                                        <span className="text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1">
+                                        <span className="text-xs font-medium text-primary hover:underline flex items-center gap-1">
                                             Open <ExternalLink className="w-3 h-3" />
                                         </span>
                                     </div>

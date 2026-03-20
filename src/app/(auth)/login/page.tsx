@@ -1,6 +1,6 @@
 'use client'
 
-import { Suspense, useRef, useState } from 'react'
+import { Suspense, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useAuth } from '@/lib/hooks/use-auth'
@@ -9,8 +9,10 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
+import TurnstileWidget, { hasTurnstileSiteKey } from '@/components/auth/TurnstileWidget'
 import { Github, Mail, Loader2, Eye, EyeOff } from 'lucide-react'
 import { buildAuthPageHref, resolveAuthRedirectPath } from '@/lib/auth/redirects'
+import { resolveAuthPageErrorMessage } from '@/lib/auth/error-messages'
 
 const LOGIN_REQUEST_TIMEOUT_MS = 25_000
 
@@ -19,24 +21,50 @@ function LoginPageInner() {
     const searchParams = useSearchParams()
     const { signIn, signInWithGoogle, signInWithGitHub } = useAuth()
     const redirectPath = resolveAuthRedirectPath(searchParams.get('redirect'))
+    const searchErrorCode = searchParams.get('error')
     const signupHref = buildAuthPageHref('/signup', redirectPath)
 
     const [email, setEmail] = useState('')
     const [password, setPassword] = useState('')
     const [showPassword, setShowPassword] = useState(false)
     const [isLoading, setIsLoading] = useState(false)
+    const [oauthProviderLoading, setOauthProviderLoading] = useState<'google' | 'github' | null>(null)
     const [error, setError] = useState<string | null>(null)
+    const [dismissedSearchErrorCode, setDismissedSearchErrorCode] = useState<string | null>(null)
+    const [captchaToken, setCaptchaToken] = useState<string | null>(null)
     const submitRequestIdRef = useRef(0)
+    const requiresCaptcha = hasTurnstileSiteKey()
+    const queryError =
+        searchErrorCode && dismissedSearchErrorCode !== searchErrorCode
+            ? resolveAuthPageErrorMessage(searchErrorCode)
+            : null
+    const displayError = error ?? queryError
+    const isBusy = isLoading || oauthProviderLoading !== null
+
+    useEffect(() => {
+        setDismissedSearchErrorCode(null)
+    }, [searchErrorCode])
+
+    const clearVisibleError = () => {
+        setError(null)
+        if (searchErrorCode) {
+            setDismissedSearchErrorCode(searchErrorCode)
+        }
+    }
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault()
-        setError(null)
+        clearVisibleError()
+        if (requiresCaptcha && !captchaToken) {
+            setError('Please complete the Turnstile check')
+            return
+        }
         setIsLoading(true)
         const currentRequestId = ++submitRequestIdRef.current
 
         try {
             const result = await Promise.race([
-                signIn(email, password),
+                signIn(email, password, captchaToken || undefined),
                 new Promise<never>((_, reject) => {
                     setTimeout(() => reject(new Error('LOGIN_TIMEOUT')), LOGIN_REQUEST_TIMEOUT_MS)
                 }),
@@ -63,18 +91,32 @@ function LoginPageInner() {
     }
 
     const handleGoogleSignIn = async () => {
-        setError(null)
-        const { error } = await signInWithGoogle(redirectPath)
-        if (error) {
-            setError(error.message)
+        clearVisibleError()
+        setOauthProviderLoading('google')
+        try {
+            const { error } = await signInWithGoogle(redirectPath)
+            if (error) {
+                setError(error.message)
+                setOauthProviderLoading(null)
+            }
+        } catch {
+            setError('Unable to start Google sign-in. Please try again.')
+            setOauthProviderLoading(null)
         }
     }
 
     const handleGitHubSignIn = async () => {
-        setError(null)
-        const { error } = await signInWithGitHub(redirectPath)
-        if (error) {
-            setError(error.message)
+        clearVisibleError()
+        setOauthProviderLoading('github')
+        try {
+            const { error } = await signInWithGitHub(redirectPath)
+            if (error) {
+                setError(error.message)
+                setOauthProviderLoading(null)
+            }
+        } catch {
+            setError('Unable to start GitHub sign-in. Please try again.')
+            setOauthProviderLoading(null)
         }
     }
 
@@ -105,36 +147,44 @@ function LoginPageInner() {
                                 variant="outline"
                                 className="h-11"
                                 onClick={handleGoogleSignIn}
-                                disabled={isLoading}
+                                disabled={isBusy}
                             >
-                                <svg className="w-5 h-5 mr-2" viewBox="0 0 24 24">
-                                    <path
-                                        fill="currentColor"
-                                        d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-                                    />
-                                    <path
-                                        fill="currentColor"
-                                        d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-                                    />
-                                    <path
-                                        fill="currentColor"
-                                        d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
-                                    />
-                                    <path
-                                        fill="currentColor"
-                                        d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
-                                    />
-                                </svg>
-                                Google
+                                {oauthProviderLoading === 'google' ? (
+                                    <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                                ) : (
+                                    <svg className="w-5 h-5 mr-2" viewBox="0 0 24 24">
+                                        <path
+                                            fill="currentColor"
+                                            d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                                        />
+                                        <path
+                                            fill="currentColor"
+                                            d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                                        />
+                                        <path
+                                            fill="currentColor"
+                                            d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
+                                        />
+                                        <path
+                                            fill="currentColor"
+                                            d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
+                                        />
+                                    </svg>
+                                )}
+                                {oauthProviderLoading === 'google' ? 'Redirecting...' : 'Google'}
                             </Button>
                             <Button
                                 variant="outline"
                                 className="h-11"
                                 onClick={handleGitHubSignIn}
-                                disabled={isLoading}
+                                disabled={isBusy}
                             >
-                                <Github className="w-5 h-5 mr-2" />
-                                GitHub
+                                {oauthProviderLoading === 'github' ? (
+                                    <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                                ) : (
+                                    <Github className="w-5 h-5 mr-2" />
+                                )}
+                                {oauthProviderLoading === 'github' ? 'Redirecting...' : 'GitHub'}
                             </Button>
                         </div>
 
@@ -151,9 +201,9 @@ function LoginPageInner() {
 
                         {/* Email Form */}
                         <form onSubmit={handleSubmit} className="space-y-4">
-                            {error && (
+                            {displayError && (
                                 <div className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
-                                    {error}
+                                    {displayError}
                                 </div>
                             )}
 
@@ -166,10 +216,13 @@ function LoginPageInner() {
                                         type="email"
                                         placeholder="name@example.com"
                                         value={email}
-                                        onChange={(e) => setEmail(e.target.value)}
+                                        onChange={(e) => {
+                                            clearVisibleError()
+                                            setEmail(e.target.value)
+                                        }}
                                         className="pl-10 h-11"
                                         required
-                                        disabled={isLoading}
+                                        disabled={isBusy}
                                     />
                                 </div>
                             </div>
@@ -190,10 +243,13 @@ function LoginPageInner() {
                                         type={showPassword ? 'text' : 'password'}
                                         placeholder="Enter your password"
                                         value={password}
-                                        onChange={(e) => setPassword(e.target.value)}
+                                        onChange={(e) => {
+                                            clearVisibleError()
+                                            setPassword(e.target.value)
+                                        }}
                                         className="pr-10 h-11"
                                         required
-                                        disabled={isLoading}
+                                        disabled={isBusy}
                                     />
                                     <button
                                         type="button"
@@ -209,10 +265,23 @@ function LoginPageInner() {
                                 </div>
                             </div>
 
+                            {requiresCaptcha ? (
+                                <TurnstileWidget
+                                    action="login"
+                                    onVerify={(token) => {
+                                        setCaptchaToken(token)
+                                        clearVisibleError()
+                                    }}
+                                    onExpire={() => {
+                                        setCaptchaToken(null)
+                                    }}
+                                />
+                            ) : null}
+
                             <Button
                                 type="submit"
                                 className="w-full h-11"
-                                disabled={isLoading}
+                                disabled={isBusy}
                             >
                                 {isLoading ? (
                                     <>

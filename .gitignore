@@ -45,3 +45,4 @@ review.txt
 eslint_output.txt
 .review.txt.swp
 .e2e-last-run-id
+/reports/stability/

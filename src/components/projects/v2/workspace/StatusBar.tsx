@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useMemo, useEffect, useRef } from "react";
-import { Loader2, GitBranch, Terminal } from "lucide-react";
+import { Loader2, GitBranch, Play } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { FilesWorkspaceTabState, PaneId } from "../state/filesTabTypes";
 import { getFileContent, useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
@@ -114,7 +114,7 @@ export function StatusBar({ projectId, projectName, activePane, activeTabId, tab
           <span>UTF-8</span>
         </div>
         <div className="flex items-center gap-2 hover:bg-white/10 px-2 h-full transition-colors cursor-pointer">
-          <Terminal className="w-3 h-3 opacity-80" />
+          <Play className="w-3 h-3 opacity-80" />
           <span>{lang}</span>
         </div>
       </div>

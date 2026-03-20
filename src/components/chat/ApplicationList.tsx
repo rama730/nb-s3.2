@@ -23,7 +23,7 @@ export function ApplicationList() {
     if (applicationsLoading && applications.length === 0) {
         return (
             <div className="flex-1 flex items-center justify-center">
-                <Loader2 className="w-6 h-6 animate-spin text-indigo-600" />
+                <Loader2 className="w-6 h-6 animate-spin text-primary" />
             </div>
         );
     }
@@ -31,8 +31,8 @@ export function ApplicationList() {
     if (applications.length === 0) {
         return (
             <div className="flex flex-col items-center justify-center h-full p-6 text-center">
-                <div className="w-16 h-16 bg-indigo-50 dark:bg-indigo-900/20 rounded-full flex items-center justify-center mb-4">
-                    <Briefcase className="w-8 h-8 text-indigo-400" />
+                <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mb-4">
+                    <Briefcase className="w-8 h-8 text-primary" />
                 </div>
                 <p className="text-sm text-zinc-500 dark:text-zinc-400">
                     No applications
@@ -48,10 +48,10 @@ export function ApplicationList() {
         <button
             key={app.id}
             onClick={() => app.conversationId && openConversation(app.conversationId)}
-            className="w-full flex items-start gap-3 p-4 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 transition-colors text-left group border-b border-zinc-100 dark:border-zinc-800"
+            className="w-full flex items-start gap-3 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 transition-colors text-left group border-b border-zinc-100 dark:border-zinc-800 app-density-list-row"
         >
             <div className="relative flex-shrink-0">
-                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center overflow-hidden ring-2 ring-white dark:ring-zinc-900">
+                <div className="w-10 h-10 rounded-full app-accent-gradient flex items-center justify-center overflow-hidden ring-2 ring-white dark:ring-zinc-900">
                     {app.displayUser.avatarUrl ? (
                         <Image
                             src={app.displayUser.avatarUrl}
@@ -104,7 +104,7 @@ export function ApplicationList() {
                                         ? 'text-blue-600 dark:text-blue-400'
                                         : (app.lifecycleStatus || app.status) === 'rejected' || (app.lifecycleStatus || app.status) === 'withdrawn'
                                             ? 'text-red-600 dark:text-red-400'
-                                            : 'text-indigo-600 dark:text-indigo-400'
+                                            : 'text-primary'
                             }
                         >
                             {app.type === 'incoming' ? 'Applying for ' : 'Applied for '}

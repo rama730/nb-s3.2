@@ -3,8 +3,9 @@
 import React, { useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { MapPin, Briefcase, Loader2, Check, Clock, UserPlus, X, Users } from "lucide-react";
+import { Lock, MapPin, Briefcase, Loader2, Check, Clock, UserPlus, X, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { buildPrivacyPresentation } from "@/lib/privacy/presentation";
 import { profileHref } from "@/lib/routing/identifiers";
 import type { SuggestedProfile } from "@/app/actions/connections";
 
@@ -76,28 +77,53 @@ function PersonCard({ profile, onConnect, onDismiss, isConnecting, variant = "co
                 return 'bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400 cursor-default hover:bg-zinc-100 dark:hover:bg-zinc-800';
             case 'pending_received':
             default:
-                return 'bg-indigo-600 text-white hover:bg-indigo-700'; // Flat indigo matching Hub headers
+                return 'bg-primary text-primary-foreground hover:bg-primary/90';
         }
     };
 
     const getAvatarRingStyle = () => {
         switch (localStatus) {
             case 'connected': return 'ring-green-500';
-            case 'pending_received': return 'ring-indigo-500';
+            case 'pending_received': return 'ring-primary';
             case 'pending_sent': return 'ring-yellow-500';
             default: return 'ring-zinc-200 dark:ring-zinc-700';
         }
     };
 
     const isRecommended = variant === "recommended";
+    const isLockedProfile = !!profile.isLockedProfile;
+    const privacyLabel = buildPrivacyPresentation(
+        isLockedProfile
+            ? {
+                viewerId: null,
+                targetUserId: profile.id,
+                isSelf: false,
+                isConnected: localStatus === 'connected',
+                hasPendingIncomingRequest: localStatus === 'pending_received',
+                hasPendingOutgoingRequest: localStatus === 'pending_sent',
+                blockedByViewer: false,
+                blockedByTarget: false,
+                profileVisibility: profile.profileVisibility === 'private' ? 'private' : profile.profileVisibility === 'connections' ? 'connections' : 'public',
+                messagePrivacy: 'connections',
+                connectionPrivacy: 'everyone',
+                canViewProfile: false,
+                canSendConnectionRequest: profile.canConnect !== false,
+                canSendMessage: false,
+                shouldHideFromDiscovery: false,
+                visibilityReason: profile.profileVisibility === 'private' ? 'private' : 'connections_only',
+                connectionState: 'none',
+                latestConnectionId: null,
+            }
+            : null,
+    ).relationshipBadgeText;
 
     if (isRecommended) {
         return (
-            <div className="relative flex flex-col rounded-2xl bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl border border-zinc-200/60 dark:border-white/5 overflow-hidden transition-all duration-200 hover:border-indigo-500/30">
+            <div className="relative flex flex-col rounded-2xl bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl border border-zinc-200/60 dark:border-white/5 overflow-hidden transition-all duration-200 hover:border-primary/30">
                 
                 {/* Header Strip & Dismiss */}
                 <div className="flex items-center justify-between px-4 pt-4 pb-2">
-                    <span className="text-[10px] font-bold tracking-wider text-indigo-600 dark:text-indigo-400 uppercase">
+                    <span className="text-[10px] font-bold tracking-wider text-primary uppercase">
                         Recommended For You
                     </span>
                     {onDismiss && (
@@ -126,12 +152,12 @@ function PersonCard({ profile, onConnect, onDismiss, isConnecting, variant = "co
                                     priority={priority}
                                 />
                             ) : (
-                                <div className={cn("w-14 h-14 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-xl font-semibold flex-shrink-0 ring-2 ring-offset-2 dark:ring-offset-zinc-900", getAvatarRingStyle())}>
+                                <div className={cn("w-14 h-14 rounded-full app-accent-gradient flex items-center justify-center text-white text-xl font-semibold flex-shrink-0 ring-2 ring-offset-2 dark:ring-offset-zinc-900", getAvatarRingStyle())}>
                                     {(profile.fullName || profile.username || "U")[0]?.toUpperCase()}
                                 </div>
                             )}
                             <div className="flex-1 min-w-0">
-                                <h3 className="font-semibold text-zinc-900 dark:text-zinc-100 truncate text-sm group-hover/link:text-indigo-600 dark:group-hover/link:text-indigo-400 transition-colors">
+                                <h3 className="font-semibold text-zinc-900 dark:text-zinc-100 truncate text-sm group-hover/link:text-primary transition-colors">
                                     {profile.fullName || profile.username || "User"}
                                 </h3>
                                 {(profile.username || profile.fullName) && (
@@ -139,8 +165,14 @@ function PersonCard({ profile, onConnect, onDismiss, isConnecting, variant = "co
                                         @{profile.username || (profile.fullName?.toLowerCase().replace(/\s+/g, ''))}
                                     </p>
                                 )}
+                                {isLockedProfile && privacyLabel ? (
+                                    <div className="mt-1 inline-flex items-center gap-1 rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
+                                        <Lock className="w-3 h-3" />
+                                        {privacyLabel}
+                                    </div>
+                                ) : null}
                                 <div className="h-4 mt-1">
-                                    {profile.headline ? (
+                                    {profile.headline && !isLockedProfile ? (
                                         <p className="text-xs text-zinc-600 dark:text-zinc-400 line-clamp-1">
                                             {profile.headline}
                                         </p>
@@ -164,11 +196,16 @@ function PersonCard({ profile, onConnect, onDismiss, isConnecting, variant = "co
                     <div className="px-4 py-3 bg-zinc-50/50 dark:bg-zinc-800/20">
                         <div className="text-[10px] uppercase font-bold text-zinc-400 tracking-wider mb-2">Connection Strength</div>
                         <div className="h-[36px] flex flex-col justify-center gap-1.5">
-                            {(profile.mutualConnections != null && profile.mutualConnections > 0) || profile.recommendationReason ? (
+                            {isLockedProfile && privacyLabel ? (
+                                <div className="flex items-center gap-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300">
+                                    <Lock className="w-3.5 h-3.5 text-amber-500" />
+                                    {privacyLabel}
+                                </div>
+                            ) : (profile.mutualConnections != null && profile.mutualConnections > 0) || profile.recommendationReason ? (
                                 <>
                                     {profile.mutualConnections != null && profile.mutualConnections > 0 && (
                                         <div className="flex items-center gap-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300">
-                                            <Users className="w-3.5 h-3.5 text-indigo-500" />
+                                            <Users className="w-3.5 h-3.5 text-primary" />
                                             {profile.mutualConnections} Mutual Connections
                                         </div>
                                     )}
@@ -191,7 +228,7 @@ function PersonCard({ profile, onConnect, onDismiss, isConnecting, variant = "co
                     <div className="px-4 py-3">
                          <div className="text-[10px] uppercase font-bold text-zinc-400 tracking-wider mb-2">Current Focus</div>
                          <div className="h-[28px]">
-                            {profile.projects && profile.projects.length > 0 ? (
+                            {profile.projects && profile.projects.length > 0 && !isLockedProfile ? (
                                 <div className="flex items-center justify-between text-xs bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg px-2.5 py-1.5">
                                     <div className="flex items-center gap-1.5 min-w-0 pr-2">
                                         <Briefcase className="w-3.5 h-3.5 text-zinc-400 flex-shrink-0" />
@@ -202,14 +239,16 @@ function PersonCard({ profile, onConnect, onDismiss, isConnecting, variant = "co
                                         profile.projects[0].status === "active"
                                             ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
                                             : profile.projects[0].status === "completed"
-                                                ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
+                                                ? "bg-primary/10 text-primary"
                                             : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
                                     )}>
                                         {profile.projects[0].status || "draft"}
                                     </span>
                                 </div>
                             ) : (
-                                <div className="text-xs text-zinc-400 italic flex items-center h-full px-1">Available for opportunities</div>
+                                <div className="text-xs text-zinc-400 italic flex items-center h-full px-1">
+                                    {isLockedProfile ? "Profile details are limited until you are allowed access" : "Available for opportunities"}
+                                </div>
                             )}
                          </div>
                     </div>
@@ -235,7 +274,7 @@ function PersonCard({ profile, onConnect, onDismiss, isConnecting, variant = "co
 
     // ---------- COMPACT VARIANT ----------
     return (
-        <div className="relative flex flex-col h-[200px] rounded-2xl bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl border border-zinc-200/60 dark:border-white/5 overflow-hidden transition-all duration-200 hover:border-indigo-500/30 group">
+        <div className="relative flex flex-col h-[200px] rounded-2xl bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl border border-zinc-200/60 dark:border-white/5 overflow-hidden transition-all duration-200 hover:border-primary/30 group">
             {onDismiss && (
                 <button
                     type="button"
@@ -246,7 +285,7 @@ function PersonCard({ profile, onConnect, onDismiss, isConnecting, variant = "co
                     <X className="w-3.5 h-3.5" />
                 </button>
             )}
-            <Link href={profileHref(profile)} className="flex-1 flex flex-col p-4 group/link focus:outline-none focus:ring-2 focus:ring-inset focus:ring-indigo-500">
+            <Link href={profileHref(profile)} className="flex-1 flex flex-col p-4 group/link focus:outline-none focus:ring-2 focus:ring-inset focus:ring-ring">
                 <div className="flex items-start justify-between">
                     <div className="flex items-start gap-3 flex-1 min-w-0">
                         {profile.avatarUrl ? (
@@ -259,25 +298,31 @@ function PersonCard({ profile, onConnect, onDismiss, isConnecting, variant = "co
                                 priority={priority}
                             />
                         ) : (
-                            <div className={cn("w-12 h-12 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-lg font-bold flex-shrink-0 ring-2 ring-offset-2 dark:ring-offset-zinc-900", getAvatarRingStyle())}>
+                            <div className={cn("w-12 h-12 rounded-full app-accent-gradient flex items-center justify-center text-white text-lg font-bold flex-shrink-0 ring-2 ring-offset-2 dark:ring-offset-zinc-900", getAvatarRingStyle())}>
                                 {(profile.fullName || profile.username || "U")[0]?.toUpperCase()}
                             </div>
                         )}
                         
-                        <div className="flex-1 min-w-0 pt-0.5 group-hover/link:text-indigo-600 dark:group-hover/link:text-indigo-400 transition-colors">
+                        <div className="flex-1 min-w-0 pt-0.5 group-hover/link:text-primary transition-colors">
                             <h3 className="font-semibold text-zinc-900 dark:text-zinc-100 truncate text-sm leading-tight pr-6">
                                 {profile.fullName || profile.username || "User"}
                             </h3>
                             <p className="text-[11px] text-zinc-500 truncate mt-0.5">
                                 @{profile.username || (profile.fullName?.toLowerCase().replace(/\s+/g, ''))}
                             </p>
+                            {isLockedProfile && privacyLabel ? (
+                                <div className="mt-1 inline-flex items-center gap-1 rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
+                                    <Lock className="w-3 h-3" />
+                                    {privacyLabel}
+                                </div>
+                            ) : null}
                         </div>
                     </div>
                 </div>
 
                 <div className="mt-3 flex-1">
                     <div className="h-[20px]">
-                        {profile.headline ? (
+                        {profile.headline && !isLockedProfile ? (
                             <p className="text-xs text-zinc-600 dark:text-zinc-400 line-clamp-1">
                                 {profile.headline}
                             </p>
@@ -335,6 +380,8 @@ const areCardsEqual = (prevProps: PersonCardProps, nextProps: PersonCardProps) =
         prevProps.profile.avatarUrl === nextProps.profile.avatarUrl &&
         prevProps.profile.headline === nextProps.profile.headline &&
         prevProps.profile.location === nextProps.profile.location &&
+        prevProps.profile.profileVisibility === nextProps.profile.profileVisibility &&
+        prevProps.profile.isLockedProfile === nextProps.profile.isLockedProfile &&
         prevProps.profile.mutualConnections === nextProps.profile.mutualConnections &&
         prevProps.profile.recommendationReason === nextProps.profile.recommendationReason &&
         areSameProjects(prevProps.profile.projects, nextProps.profile.projects) &&

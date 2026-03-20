@@ -3,7 +3,8 @@
 import { useState, useEffect } from "react";
 import { cacheManager } from "@/lib/utils/cache-manager";
 import { toast } from "sonner";
-import { Trash2, ShieldAlert, Cpu, Database, RefreshCw } from "lucide-react";
+import { Trash2, ShieldAlert, Database, RefreshCw, HardDriveDownload } from "lucide-react";
+import { SettingsSectionCard } from "@/components/settings/ui/SettingsSectionCard";
 
 export default function CacheSettingsSection() {
     const [estimate, setEstimate] = useState<{ total: number; quota: number } | null>(null);
@@ -21,14 +22,16 @@ export default function CacheSettingsSection() {
     const handleClearCache = async () => {
         setIsClearing(true);
         try {
-            await cacheManager.clearAll();
-            toast.success("Cache cleared successfully");
-            // Refresh estimate
-            const data = await cacheManager.getStorageEstimate();
-            setEstimate(data);
+            const result = await cacheManager.clearAll();
+            toast.success("Local app data cleared. Refreshing...");
             setShowConfirm(false);
+            window.setTimeout(() => {
+                window.location.reload();
+            }, 250);
+            setEstimate({ total: 0, quota: estimate?.quota || 0 });
+            console.info("Local app data cleared", result);
         } catch (error) {
-            toast.error("Failed to clear cache");
+            toast.error("Failed to clear local app data");
             console.error(error);
         } finally {
             setIsClearing(false);
@@ -44,18 +47,16 @@ export default function CacheSettingsSection() {
     };
 
     return (
-        <section className="space-y-4">
-            <div className="flex items-center gap-2">
-                <Database className="h-5 w-5 text-zinc-500" />
-                <h2 className="text-lg font-medium text-zinc-900 dark:text-zinc-100">Cache Management</h2>
-            </div>
-
-            <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6 space-y-6">
+        <SettingsSectionCard
+            title="Cache Management"
+            description="Clear local app data stored on this device. Fresh data will load again after refresh."
+        >
+            <div className="space-y-6">
                 <div className="flex items-start justify-between">
                     <div className="space-y-1">
-                        <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">Local Data Usage</p>
+                        <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">Local data usage</p>
                         <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                            The application stores temporary data locally to improve performance and enable offline features.
+                            Drafts, history, offline data, and cached app metadata stored on this device.
                         </p>
                     </div>
                     {estimate && (
@@ -70,19 +71,29 @@ export default function CacheSettingsSection() {
                     )}
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <div className="flex items-center gap-3 p-3 rounded-xl bg-zinc-50 dark:bg-zinc-800/50">
-                        <Cpu className="h-4 w-4 text-zinc-400" />
+                        <HardDriveDownload className="h-4 w-4 text-zinc-400" />
                         <div className="space-y-0.5">
-                            <p className="text-[11px] font-medium text-zinc-700 dark:text-zinc-300">In-Memory Caches</p>
-                            <p className="text-[10px] text-zinc-500">Profiles, active states</p>
+                            <p className="text-[11px] font-medium text-zinc-700 dark:text-zinc-300">Stored on this device</p>
+                            <p className="text-[10px] text-zinc-500">Drafts, filters, offline data</p>
                         </div>
                     </div>
                     <div className="flex items-center gap-3 p-3 rounded-xl bg-zinc-50 dark:bg-zinc-800/50">
                         <RefreshCw className="h-4 w-4 text-zinc-400" />
                         <div className="space-y-0.5">
-                            <p className="text-[11px] font-medium text-zinc-700 dark:text-zinc-300">Persistence</p>
-                            <p className="text-[10px] text-zinc-500">History, filters, IndexedDB</p>
+                            <p className="text-[11px] font-medium text-zinc-700 dark:text-zinc-300">After clearing</p>
+                            <p className="text-[10px] text-zinc-500">Fresh app data reloads after refresh</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/70 dark:bg-zinc-800/30 p-3">
+                    <div className="flex items-start gap-3">
+                        <Database className="mt-0.5 h-4 w-4 text-zinc-400" />
+                        <div className="space-y-1 text-xs text-zinc-500 dark:text-zinc-400">
+                            <p>Your account stays signed in, and your appearance settings on this device stay the same.</p>
+                            <p>Browser-managed image cache may not clear in every case until the browser refreshes or evicts it.</p>
                         </div>
                     </div>
                 </div>
@@ -93,18 +104,19 @@ export default function CacheSettingsSection() {
                         className="flex items-center justify-center gap-2 w-full py-2.5 rounded-xl border border-zinc-200 dark:border-zinc-800 text-sm font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
                     >
                         <Trash2 className="h-4 w-4" />
-                        Clear Application Cache
+                        Clear Local App Data
                     </button>
                 ) : (
                     <div className="p-4 rounded-2xl bg-amber-50 dark:bg-amber-950/20 border border-amber-100 dark:border-amber-900/30 space-y-4 animate-in fade-in slide-in-from-top-2 duration-300">
                         <div className="flex items-start gap-3">
                             <ShieldAlert className="h-5 w-5 text-amber-600" />
                             <div className="space-y-1">
-                                <p className="text-sm font-medium text-amber-900 dark:text-amber-200">Are you sure?</p>
+                                <p className="text-sm font-medium text-amber-900 dark:text-amber-200">Clear local app data?</p>
                                 <ul className="text-xs text-amber-700 dark:text-amber-400/80 list-disc list-inside space-y-1">
-                                    <li>Saved drafts and search history will be removed</li>
-                                    <li>Offline messages may be cleared</li>
-                                    <li>Profiles and metadata will be re-fetched</li>
+                                    <li>Saved drafts, local history, and offline data will be removed</li>
+                                    <li>Cached app metadata will be fetched again</li>
+                                    <li>Appearance settings on this device stay the same</li>
+                                    <li>Browser-managed image cache may not clear in every case</li>
                                 </ul>
                             </div>
                         </div>
@@ -114,7 +126,7 @@ export default function CacheSettingsSection() {
                                 disabled={isClearing}
                                 className="flex-1 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold transition-colors disabled:opacity-50"
                             >
-                                {isClearing ? "Clearing..." : "Yes, Clear Everything"}
+                                {isClearing ? "Clearing..." : "Yes, Clear Local Data"}
                             </button>
                             <button
                                 onClick={() => setShowConfirm(false)}
@@ -127,6 +139,6 @@ export default function CacheSettingsSection() {
                     </div>
                 )}
             </div>
-        </section>
+        </SettingsSectionCard>
     );
 }

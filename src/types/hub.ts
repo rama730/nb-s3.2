@@ -25,6 +25,10 @@ export interface ProjectProfile {
     username: string | null;
     fullName: string | null;
     avatarUrl: string | null;
+    displayName?: string;
+    isMasked?: boolean;
+    canOpenProfile?: boolean;
+    badgeText?: string | null;
 }
 
 export interface ProjectCollaborator {

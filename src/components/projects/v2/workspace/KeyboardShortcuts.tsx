@@ -17,7 +17,7 @@ const SHORTCUTS = [
       { label: "Command Palette", keys: ["⌘", "K"] },
       { label: "Show Shortcuts", keys: ["⌘", "/"] },
       { label: "Toggle Left Panel", keys: ["⌘", "B"] },
-      { label: "Toggle Terminal", keys: ["⌘", "J"] },
+      { label: "Toggle Bottom Panel", keys: ["⌘", "J"] },
       { label: "Zen Mode", keys: ["⌘", "K", "Z"] },
     ],
   },
@@ -41,11 +41,11 @@ const SHORTCUTS = [
     ],
   },
   {
-    category: "Terminal",
+    category: "Run Panel",
     items: [
       { label: "Clear", keys: ["⌘", "K"] },
       { label: "Reverse Search", keys: ["^", "R"] },
-      { label: "Kill Process", keys: ["^", "C"] },
+      { label: "Run Command", keys: ["Enter"] },
     ],
   },
 ];

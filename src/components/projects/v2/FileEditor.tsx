@@ -37,6 +37,7 @@ import { RunnerStatusStrip } from "./panels/RunnerStatusStrip";
 import { formatProjectFileContent, getLastNodeEvent } from "@/app/actions/files";
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 import type { EditorSymbol } from "@/stores/files/types";
+import type { CursorPresenceMap } from "./workspace/cursorProtocol";
 
 interface FileEditorProps {
   file: ProjectNode;
@@ -64,6 +65,8 @@ interface FileEditorProps {
   canRun?: boolean;
   gitStatus?: "modified" | "added" | "deleted" | null;
   tabId?: string;
+  remoteCursors?: CursorPresenceMap;
+  onBroadcastCursor?: (nodeId: string, line: number, column: number, selStart?: number, selEnd?: number) => void;
 }
 
 function getErrorMessage(error: unknown, fallback: string) {
@@ -140,6 +143,8 @@ export default function FileEditor({
   canRun,
   gitStatus,
   tabId,
+  remoteCursors,
+  onBroadcastCursor,
 }: FileEditorProps) {
   const { resolvedTheme } = useTheme();
   const isDark = resolvedTheme === "dark";
@@ -205,6 +210,14 @@ export default function FileEditor({
      }
      return null;
   }, [requestedScrollPosition, file.id]);
+
+  const activeCollaborators = useMemo(() => {
+    const frames = Array.from(remoteCursors?.values() ?? []);
+    return frames
+      .filter((frame) => frame.nodeId === file.id)
+      .sort((left, right) => right.timestamp - left.timestamp)
+      .slice(0, 4);
+  }, [file.id, remoteCursors]);
 
   useEffect(() => {
       if (scrollToLine) {
@@ -505,7 +518,19 @@ export default function FileEditor({
         )}
 
         {/* Editor content */}
-        <div className="flex-1 overflow-hidden min-h-0 min-w-0">
+        <div className="relative flex-1 overflow-hidden min-h-0 min-w-0">
+        {activeCollaborators.length > 0 ? (
+          <div className="absolute right-3 top-3 z-20 pointer-events-none flex flex-wrap justify-end gap-2">
+            {activeCollaborators.map((frame) => (
+              <div
+                key={frame.userId}
+                className="rounded-full border border-emerald-200 bg-white/95 px-2.5 py-1 text-[11px] font-medium text-emerald-700 shadow-sm backdrop-blur dark:border-emerald-900/70 dark:bg-zinc-950/90 dark:text-emerald-300"
+              >
+                {(frame.userName || "Collaborator").trim()} · Ln {frame.line}, Col {frame.column}
+              </div>
+            ))}
+          </div>
+        ) : null}
         {isLoading ? (
           <div className="flex items-center justify-center h-full text-zinc-500">
             <Loader2 className="w-5 h-5 animate-spin mr-2" />
@@ -542,6 +567,9 @@ export default function FileEditor({
                 onSymbolsChange={(syms) => setActiveFileSymbols(file.projectId, syms)}
                 scrollToLine={scrollToLine}
                 onCursorChange={setCursorLine}
+                onCursorActivity={({ line, column, selectionStart, selectionEnd }) => {
+                  onBroadcastCursor?.(file.id, line, column, selectionStart, selectionEnd);
+                }}
                 gitStatus={gitStatus}
                 tabId={tabId}
               />
@@ -565,6 +593,9 @@ export default function FileEditor({
                             onSymbolsChange={(syms) => setActiveFileSymbols(file.projectId, syms)}
                             scrollToLine={scrollToLine}
                             onCursorChange={setCursorLine}
+                            onCursorActivity={({ line, column, selectionStart, selectionEnd }) => {
+                              onBroadcastCursor?.(file.id, line, column, selectionStart, selectionEnd);
+                            }}
                             gitStatus={gitStatus}
                             tabId={tabId}
                           />
@@ -587,6 +618,10 @@ export default function FileEditor({
                 minimapEnabled={minimapEnabled}
                 onSymbolsChange={(syms) => setActiveFileSymbols(file.projectId, syms)}
                 scrollToLine={scrollToLine}
+                onCursorChange={setCursorLine}
+                onCursorActivity={({ line, column, selectionStart, selectionEnd }) => {
+                  onBroadcastCursor?.(file.id, line, column, selectionStart, selectionEnd);
+                }}
                 gitStatus={gitStatus}
                 tabId={tabId}
               />

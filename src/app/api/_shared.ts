@@ -35,5 +35,6 @@ export function logApiRequest(
     success: input.success,
     userId: input.userId ?? undefined,
     errorCode: input.errorCode ?? null,
+    sampleRate: input.success ? 0.02 : 1,
   });
 }

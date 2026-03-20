@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { motion } from "framer-motion";
 import Link from "next/link";
 import { memo } from "react";
+import { useReducedMotionPreference } from "@/components/providers/theme-provider";
 
 interface ProjectOverviewCardProps {
     project: any;
@@ -27,6 +28,7 @@ const ProjectOverviewCard = memo(function ProjectOverviewCard({
     currentStageIndex,
     onAdvanceStage,
 }: ProjectOverviewCardProps) {
+    const reduceMotion = useReducedMotionPreference();
 
     const projectStages =
         Array.isArray(project?.lifecycleStages) && project.lifecycleStages.length > 0
@@ -47,7 +49,7 @@ const ProjectOverviewCard = memo(function ProjectOverviewCard({
 
     const statusColors: Record<string, string> = {
         planning: "bg-zinc-100 text-zinc-700 border-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:border-zinc-700",
-        in_progress: "bg-indigo-50 text-indigo-700 border-indigo-200 dark:bg-indigo-900/20 dark:text-indigo-300 dark:border-indigo-800",
+        in_progress: "bg-primary/10 text-primary border-primary/15",
         completed: "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-900/20 dark:text-emerald-300 dark:border-emerald-800",
     };
 
@@ -62,7 +64,7 @@ const ProjectOverviewCard = memo(function ProjectOverviewCard({
             className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-sm overflow-hidden flex flex-col h-fit"
             initial={false}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.4 }}
+            transition={reduceMotion ? { duration: 0 } : { duration: 0.4 }}
         >
             <div className="p-8">
                 {/* Header: Type & Status */}
@@ -125,7 +127,7 @@ const ProjectOverviewCard = memo(function ProjectOverviewCard({
                             {isCreator && onAdvanceStage && currentStageIndex < stages.length - 1 && (
                                 <button
                                     onClick={onAdvanceStage}
-                                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-indigo-600 text-white text-[10px] font-semibold hover:bg-indigo-700 transition-colors"
+                                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-md app-accent-solid text-[10px] font-semibold hover:bg-primary/90 transition-[background-color,box-shadow]"
                                 >
                                     Advance
                                     <ArrowRight className="w-3 h-3" />
@@ -146,19 +148,19 @@ const ProjectOverviewCard = memo(function ProjectOverviewCard({
                                                 isCompleted
                                                     ? "bg-emerald-500 border-emerald-500"
                                                     : isCurrent
-                                                        ? "bg-white dark:bg-zinc-900 border-indigo-600 ring-4 ring-indigo-50 dark:ring-indigo-900/20"
+                                                        ? "bg-white dark:bg-zinc-900 border-primary ring-4 ring-primary/10"
                                                         : "bg-white dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700"
                                             )}>
                                                 {isCompleted ? (
                                                     <CheckCircle className="w-3.5 h-3.5 text-white" />
                                                 ) : isCurrent ? (
-                                                    <div className="w-2 h-2 rounded-full bg-indigo-600 animate-pulse" />
+                                                    <div className="w-2 h-2 rounded-full bg-primary animate-pulse" />
                                                 ) : null}
                                             </div>
                                             <p className={cn(
                                                 "text-xs font-semibold",
                                                 isCompleted ? "text-emerald-600 dark:text-emerald-400" :
-                                                    isCurrent ? "text-indigo-600 dark:text-indigo-400" :
+                                                    isCurrent ? "text-primary" :
                                                         "text-zinc-400 dark:text-zinc-600"
                                             )}>
                                                 {stage}
@@ -227,7 +229,7 @@ const ProjectOverviewCard = memo(function ProjectOverviewCard({
                                 <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Tech Stack</h3>
                                 <div className="flex flex-wrap gap-2">
                                     {(project.skills || project.technologies_used).map((tech: string) => (
-                                        <div key={tech} className="px-3 py-1.5 rounded-lg bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-300 text-xs font-semibold border border-indigo-200 dark:border-indigo-800">
+                                        <div key={tech} className="px-3 py-1.5 rounded-lg bg-primary/10 text-primary text-xs font-semibold border border-primary/15">
                                             {tech}
                                         </div>
                                     ))}
@@ -240,14 +242,14 @@ const ProjectOverviewCard = memo(function ProjectOverviewCard({
                                 <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Resources</h3>
                                 <div className="flex flex-col gap-2">
                                     {project.github_url && (
-                                        <a href={project.github_url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 text-sm font-medium text-zinc-600 dark:text-zinc-300 hover:text-indigo-600 dark:hover:text-indigo-400 hover:underline">
+                                        <a href={project.github_url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 text-sm font-medium text-zinc-600 dark:text-zinc-300 hover:text-primary hover:underline">
                                             <Github className="w-4 h-4" />
                                             Source Code
                                             <ExternalLink className="w-3 h-3 text-zinc-400" />
                                         </a>
                                     )}
                                     {project.demo_url && (
-                                        <a href={project.demo_url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 text-sm font-medium text-zinc-600 dark:text-zinc-300 hover:text-indigo-600 dark:hover:text-indigo-400 hover:underline">
+                                        <a href={project.demo_url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 text-sm font-medium text-zinc-600 dark:text-zinc-300 hover:text-primary hover:underline">
                                             <ExternalLink className="w-4 h-4" />
                                             Live Demo
                                         </a>

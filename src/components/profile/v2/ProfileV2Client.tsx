@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import dynamic from 'next/dynamic'
+import { useQueryClient } from '@tanstack/react-query'
 import type { ProfilePageData, ProfileTabKey } from './types'
 import { ProfileShell } from './ProfileShell'
 import { ProfileHeader } from './ProfileHeader'
@@ -12,6 +13,9 @@ import { useConnectionMutations } from '@/hooks/useConnections';
 import { checkConnectionStatus } from '@/app/actions/connections';
 import { toast } from 'sonner';
 import { useProfileReadModel } from '@/hooks/useProfileData';
+import { useAuth } from '@/lib/hooks/use-auth';
+import { invalidatePrivacyDependents } from '@/lib/privacy/client-invalidation';
+import type { ConnectionState } from './types';
 
 // Section Imports (Kept static as they are usually in viewport)
 import { AboutCard } from './sections/AboutCard'
@@ -30,20 +34,56 @@ interface ProfileClientProps extends Omit<ProfilePageData, 'projects' | 'stats'>
     stats?: any;
 }
 
+function mapActionConnectionStatus(status?: string): ConnectionState {
+    switch (status) {
+        case 'connected':
+            return 'accepted';
+        case 'pending_sent':
+            return 'pending_outgoing';
+        case 'pending_received':
+            return 'pending_incoming';
+        case 'blocked':
+            return 'blocked';
+        case 'open':
+        case 'none':
+        default:
+            return 'none';
+    }
+}
+
 export function ProfileV2Client({
     profile,
     stats: initialStats,
     isOwner,
     currentUser,
     connectionStatus,
+    privacyRelationship: initialPrivacyRelationship,
+    lockedShell: initialLockedShell = false,
     projects: initialProjects = [],
 }: ProfileClientProps) {
+    const { user: authUser } = useAuth()
+    const viewerUser = authUser ?? currentUser
+
     // Current tab state
     const [activeTab, setActiveTab] = useState<ProfileTabKey>('overview')
     const [isEditModalOpen, setIsEditModalOpen] = useState(false)
     const [showConnectionsModal, setShowConnectionsModal] = useState(false)
     const [projectsEnabled, setProjectsEnabled] = useState(initialProjects.length > 0)
+    const [status, setStatus] = useState<ConnectionState>(connectionStatus)
+    const [privacyRelationship, setPrivacyRelationship] = useState(initialPrivacyRelationship)
+    const [lockedShell, setLockedShell] = useState(initialLockedShell)
+    const [isBlocking, setIsBlocking] = useState(false)
     const router = useRouter()
+    const queryClient = useQueryClient()
+
+    useEffect(() => {
+        setStatus(connectionStatus)
+    }, [connectionStatus])
+
+    useEffect(() => {
+        setPrivacyRelationship(initialPrivacyRelationship)
+        setLockedShell(initialLockedShell)
+    }, [initialLockedShell, initialPrivacyRelationship])
 
     useEffect(() => {
         if (projectsEnabled) return
@@ -65,8 +105,23 @@ export function ProfileV2Client({
 
     const { sendRequest, acceptRequest, rejectRequest, cancelRequest, disconnect } = useConnectionMutations();
 
-    const status = connectionStatus;
     const [isLoading, setIsLoading] = useState(false);
+
+    useEffect(() => {
+        if (!viewerUser || isOwner) return;
+
+        let cancelled = false;
+        void checkConnectionStatus(profile.id)
+            .then((result) => {
+                if (cancelled || !result.success) return;
+                setStatus(mapActionConnectionStatus(result.status));
+            })
+            .catch(() => null);
+
+        return () => {
+            cancelled = true;
+        };
+    }, [viewerUser?.id, isOwner, profile.id]);
 
     const resolveConnectionId = async () => {
         const result = await checkConnectionStatus(profile.id);
@@ -77,7 +132,7 @@ export function ProfileV2Client({
     };
 
     const handleConnectPrimary = async () => {
-        if (!currentUser || !profile) return;
+        if (!viewerUser || !profile) return;
         setIsLoading(true);
         try {
             if (status === 'none' || status === 'rejected') {
@@ -86,7 +141,7 @@ export function ProfileV2Client({
                     success: 'Connection request sent',
                     error: 'Failed to send request'
                 });
-                // Connection status will update on refetch
+                setStatus('pending_outgoing');
             } else if (status === 'pending_incoming') {
                 const connectionId = await resolveConnectionId();
                 await toast.promise(acceptRequest.mutateAsync(connectionId), {
@@ -94,7 +149,7 @@ export function ProfileV2Client({
                     success: 'Connection accepted',
                     error: 'Failed to accept request'
                 });
-                // Connection status will update on refetch
+                setStatus('accepted');
             }
         } catch (e) {
             console.error(e);
@@ -104,7 +159,7 @@ export function ProfileV2Client({
     };
 
     const handleConnectSecondary = async () => {
-        if (!currentUser || !profile) return;
+        if (!viewerUser || !profile) return;
         setIsLoading(true);
         try {
             if (status === 'pending_outgoing') {
@@ -114,7 +169,7 @@ export function ProfileV2Client({
                     success: 'Request cancelled',
                     error: 'Failed to cancel request'
                 });
-                // Connection status will update on refetch
+                setStatus('none');
             } else if (status === 'pending_incoming') {
                 const connectionId = await resolveConnectionId();
                 await toast.promise(rejectRequest.mutateAsync(connectionId), {
@@ -122,7 +177,7 @@ export function ProfileV2Client({
                     success: 'Request declined',
                     error: 'Failed to decline request'
                 });
-                // Connection status will update on refetch
+                setStatus('none');
             } else if (status === 'accepted') {
                 const connectionId = await resolveConnectionId();
                 await toast.promise(disconnect.mutateAsync(connectionId), {
@@ -130,6 +185,7 @@ export function ProfileV2Client({
                     success: 'Disconnected',
                     error: 'Failed to disconnect'
                 });
+                setStatus('none');
             }
         } catch (e) {
             console.error(e);
@@ -149,6 +205,9 @@ export function ProfileV2Client({
 
     // Derived content based on tab
     const renderMainContent = () => {
+        if (lockedShell) {
+            return null
+        }
         switch (activeTab) {
             case 'overview':
                 return (
@@ -197,6 +256,62 @@ export function ProfileV2Client({
         }
     }
 
+    const handleToggleBlock = async () => {
+        if (!viewerUser || !profile?.id || privacyRelationship.blockedByTarget) return
+        setIsBlocking(true)
+        try {
+            const isBlocked = privacyRelationship.blockedByViewer
+            const res = await fetch(isBlocked ? `/api/v1/privacy/blocks/${profile.id}` : '/api/v1/privacy/blocks', {
+                method: isBlocked ? 'DELETE' : 'POST',
+                headers: isBlocked ? undefined : { 'Content-Type': 'application/json' },
+                body: isBlocked ? undefined : JSON.stringify({ userId: profile.id }),
+            })
+            const json = await res.json().catch(() => null)
+            if (!res.ok || json?.success === false) {
+                throw new Error((typeof json?.error === 'string' && json.error) || 'Failed to update block state')
+            }
+
+            if (isBlocked) {
+                setPrivacyRelationship((current) => ({
+                    ...current,
+                    blockedByViewer: false,
+                    blockedByTarget: false,
+                    connectionState: 'none',
+                    canSendConnectionRequest: true,
+                    canSendMessage: current.connectionState === 'connected',
+                    canViewProfile: profile.visibility === 'public',
+                    visibilityReason: profile.visibility === 'connections' ? 'connections_only' : profile.visibility === 'private' ? 'private' : 'public',
+                }))
+                setStatus('none')
+                toast.success('Account unblocked')
+            } else {
+                setPrivacyRelationship((current) => ({
+                    ...current,
+                    blockedByViewer: true,
+                    blockedByTarget: false,
+                    connectionState: 'blocked_by_viewer',
+                    canSendConnectionRequest: false,
+                    canSendMessage: false,
+                    canViewProfile: false,
+                    visibilityReason: 'blocked',
+                }))
+                setLockedShell(true)
+                setStatus('blocked')
+                toast.success('Account blocked')
+            }
+            await invalidatePrivacyDependents(queryClient, {
+                profileTargetKey: profile?.username || profile?.id || null,
+                includeProjects: true,
+            })
+            router.refresh()
+        } catch (error) {
+            console.error(error)
+            toast.error(error instanceof Error ? error.message : 'Failed to update block state')
+        } finally {
+            setIsBlocking(false)
+        }
+    }
+
     return (
         <>
             <ProfileShell
@@ -204,25 +319,29 @@ export function ProfileV2Client({
                     <ProfileHeader
                         profile={profile}
                         isOwner={isOwner}
-                        isAuthenticated={!!currentUser}
+                        isAuthenticated={!!viewerUser}
                         connectionState={status}
+                        privacyRelationship={privacyRelationship}
+                        lockedShell={lockedShell}
                         isLoadingConnection={isLoading}
+                        isBlocking={isBlocking}
                         onEdit={() => setIsEditModalOpen(true)}
                         onConnectPrimary={handleConnectPrimary}
                         onConnectSecondary={handleConnectSecondary}
                         onMessage={() => router.push(`/messages?userId=${profile.id}`)}
                         onInvite={() => {}}
+                        onToggleBlock={handleToggleBlock}
                         mutualCount={safeStats.mutualCount}
                     />
                 }
-                tabs={
+                tabs={lockedShell ? null : (
                     <ProfileTabs
                         value={activeTab}
                         onChange={setActiveTab}
                     />
-                }
+                )}
                 main={renderMainContent()}
-                rail={
+                rail={lockedShell ? null : (
                     <ProfileRightRail
                         profile={profile}
                         stats={safeStats}
@@ -231,7 +350,7 @@ export function ProfileV2Client({
                         onInvite={() => {}}
                         onConnectionsClick={() => setShowConnectionsModal(true)}
                     />
-                }
+                )}
             />
 
             {isOwner && (

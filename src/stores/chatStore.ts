@@ -1,24 +1,27 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import {
-    getConversations,
-    getConversationById,
     getMessages,
     sendMessage as sendMessageAction,
     sendMessageWithAttachments,
-    markConversationAsRead,
     getOrCreateDMConversation,
-    getUnreadCount,
     getPinnedMessages,
     setMessagePinned,
     getMessageContext,
-    type ConversationWithDetails,
     type MessageWithSender,
     type UploadedAttachment,
 } from '@/app/actions/messaging';
+import {
+    getConversationById,
+    getConversations,
+    getProjectGroups,
+    getUnreadCount,
+    markConversationAsRead,
+    type ConversationWithDetails,
+    type ProjectGroupConversation,
+} from '@/app/actions/messaging/conversations';
 import { checkConnectionStatus, sendConnectionRequest } from '@/app/actions/connections';
 import { getInboxApplicationsAction } from '@/app/actions/applications';
-import { getProjectGroups, type ProjectGroupConversation } from '@/app/actions/messaging';
 import { validateSingleOutboxKey, validateUniqueConversationIds } from '@/lib/chat/contracts';
 
 // ============================================================================
@@ -69,16 +72,32 @@ interface ProfileCacheEntry {
 }
 
 type MessageDeliveryState = 'sending' | 'queued' | 'sent' | 'delivered' | 'read' | 'failed';
+const CHAT_FETCH_TIMEOUT_MS = 8_000;
+const CHAT_BOOTSTRAP_TIMEOUT_MS = 12_000;
+const CHAT_BOOTSTRAP_RETRY_COUNT = 1;
+const CHAT_BOOTSTRAP_MAX_RECOVERY_ATTEMPTS = 3;
+
+class ChatStoreTimeoutError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = 'ChatStoreTimeoutError';
+    }
+}
 
 function isTransientNetworkError(error: unknown): boolean {
     const message = error instanceof Error ? error.message : String(error);
     const normalized = message.toLowerCase();
     return (
+        error instanceof ChatStoreTimeoutError ||
         normalized.includes('failed to fetch') ||
         normalized.includes('network error') ||
         normalized.includes('networkerror') ||
         normalized.includes('abort')
     );
+}
+
+function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function withDeliveryMetadata(
@@ -234,6 +253,72 @@ function emitFocusMessageEvent(
     );
 }
 
+async function withChatStoreTimeout<T>(
+    promise: Promise<T>,
+    label: string,
+    timeoutMs: number = CHAT_FETCH_TIMEOUT_MS,
+): Promise<T> {
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+    try {
+        return await Promise.race([
+            promise,
+            new Promise<T>((_, reject) => {
+                timeoutId = setTimeout(() => {
+                    reject(new ChatStoreTimeoutError(`${label} timed out`));
+                }, timeoutMs);
+            }),
+        ]);
+    } finally {
+        if (timeoutId) clearTimeout(timeoutId);
+    }
+}
+
+type ConversationsPageResult = Awaited<ReturnType<typeof getConversations>>;
+
+let conversationBootstrapInFlight: Promise<ConversationsPageResult> | null = null;
+let conversationBootstrapRetryTimer: ReturnType<typeof setTimeout> | null = null;
+
+async function fetchConversationsPage(
+    limit: number,
+    cursor: string | undefined,
+    label: string,
+    options: { timeoutMs?: number; retryCount?: number; dedupeBootstrap?: boolean } = {},
+): Promise<ConversationsPageResult> {
+    const timeoutMs = options.timeoutMs ?? CHAT_FETCH_TIMEOUT_MS;
+    const retryCount = options.retryCount ?? 0;
+    const runFetch = async () => {
+        let attempt = 0;
+        while (true) {
+            try {
+                return await withChatStoreTimeout(
+                    getConversations(limit, cursor),
+                    label,
+                    timeoutMs,
+                );
+            } catch (error) {
+                const retryable = isTransientNetworkError(error);
+                if (!retryable || attempt >= retryCount) {
+                    throw error;
+                }
+                attempt += 1;
+                await sleep(250 * attempt);
+            }
+        }
+    };
+
+    if (!options.dedupeBootstrap) {
+        return runFetch();
+    }
+
+    if (!conversationBootstrapInFlight) {
+        conversationBootstrapInFlight = runFetch().finally(() => {
+            conversationBootstrapInFlight = null;
+        });
+    }
+    return conversationBootstrapInFlight;
+}
+
 const PROFILE_CACHE_MAX_SIZE = 500;
 
 function upsertProfileCacheEntry(
@@ -344,6 +429,7 @@ interface ChatState {
 
     // State
     isInitialized: boolean;
+    bootstrapFailureCount: number;
 
     // Actions
     // Actions
@@ -395,6 +481,39 @@ interface ChatState {
     loadMoreApplications: () => Promise<void>;
     fetchProjectGroups: (refresh?: boolean) => Promise<void>;
     loadMoreProjectGroups: () => Promise<void>;
+}
+
+type PersistedChatState = Pick<
+    ChatState,
+    'draftsByConversation' | 'replyTargetByConversation' | 'outboxByConversation'
+>;
+
+const CHAT_STORE_VERSION = 2;
+
+function extractPersistedChatState(value: unknown): PersistedChatState {
+    if (!value || typeof value !== 'object') {
+        return {
+            draftsByConversation: {},
+            replyTargetByConversation: {},
+            outboxByConversation: {},
+        };
+    }
+
+    const source = value as Partial<PersistedChatState>;
+    return {
+        draftsByConversation:
+            source.draftsByConversation && typeof source.draftsByConversation === 'object'
+                ? source.draftsByConversation
+                : {},
+        replyTargetByConversation:
+            source.replyTargetByConversation && typeof source.replyTargetByConversation === 'object'
+                ? source.replyTargetByConversation
+                : {},
+        outboxByConversation:
+            source.outboxByConversation && typeof source.outboxByConversation === 'object'
+                ? source.outboxByConversation
+                : {},
+    };
 }
 
 
@@ -452,6 +571,7 @@ export const useChatStore = create<ChatState>()(
             isPopupOpen: false,
             isPopupMinimized: false,
             isInitialized: false,
+            bootstrapFailureCount: 0,
 
             // ================================================================
             // INITIALIZE
@@ -463,8 +583,11 @@ export const useChatStore = create<ChatState>()(
                 set({ conversationsLoading: true, conversationsError: null });
 
                 try {
-                    // Initial load: Page 1 (Limit 20)
-                    const result = await getConversations(20, undefined);
+                    const result = await fetchConversationsPage(20, undefined, 'Conversations bootstrap', {
+                        timeoutMs: CHAT_BOOTSTRAP_TIMEOUT_MS,
+                        retryCount: CHAT_BOOTSTRAP_RETRY_COUNT,
+                        dedupeBootstrap: true,
+                    });
 
                     if (result.success && result.conversations) {
                         validateUniqueConversationIds(
@@ -486,6 +609,7 @@ export const useChatStore = create<ChatState>()(
                             totalUnread,
                             conversationsLoading: false,
                             isInitialized: true,
+                            bootstrapFailureCount: 0,
                             hasMoreConversations: result.hasMore || false,
                             conversationsCursor: result.nextCursor || null,
                         });
@@ -494,15 +618,32 @@ export const useChatStore = create<ChatState>()(
                         set({
                             conversationsError: result.error || 'Failed to load conversations',
                             conversationsLoading: false,
-                            isInitialized: true,
+                            isInitialized: false,
+                            bootstrapFailureCount: state.bootstrapFailureCount,
                         });
                     }
                 } catch (error) {
-                    console.error('Error initializing chat:', error);
+                    const message = error instanceof Error ? error.message : 'Failed to initialize chat';
+                    const nextFailureCount = state.bootstrapFailureCount + 1;
+                    if (isTransientNetworkError(error)) {
+                        console.warn('Chat bootstrap deferred due transient failure:', message);
+                        if (
+                            nextFailureCount <= CHAT_BOOTSTRAP_MAX_RECOVERY_ATTEMPTS &&
+                            !conversationBootstrapRetryTimer
+                        ) {
+                            conversationBootstrapRetryTimer = setTimeout(() => {
+                                conversationBootstrapRetryTimer = null;
+                                void get().initialize();
+                            }, 1500);
+                        }
+                    } else {
+                        console.error('Error initializing chat:', error);
+                    }
                     set({
-                        conversationsError: 'Failed to initialize chat',
+                        conversationsError: message,
                         conversationsLoading: false,
-                        isInitialized: true,
+                        isInitialized: false,
+                        bootstrapFailureCount: nextFailureCount,
                     });
                 }
             },
@@ -517,7 +658,10 @@ export const useChatStore = create<ChatState>()(
                 set({ conversationsLoading: true });
 
                 try {
-                    const result = await getConversations(20, state.conversationsCursor || undefined);
+                    const result = await withChatStoreTimeout(
+                        getConversations(20, state.conversationsCursor || undefined),
+                        'Conversations pagination'
+                    );
 
                     if (result.success && result.conversations) {
                         const newConversations = result.conversations;
@@ -562,9 +706,15 @@ export const useChatStore = create<ChatState>()(
             // REFRESH CONVERSATIONS
             // ================================================================
             refreshConversations: async () => {
+                const state = get();
+                if (state.conversationsLoading) return;
                 try {
-                    // Reset to Page 1
-                    const result = await getConversations(20, undefined);
+                    set({ conversationsLoading: true, conversationsError: null });
+                    const result = await fetchConversationsPage(20, undefined, 'Conversations refresh', {
+                        timeoutMs: CHAT_BOOTSTRAP_TIMEOUT_MS,
+                        retryCount: CHAT_BOOTSTRAP_RETRY_COUNT,
+                        dedupeBootstrap: true,
+                    });
 
                     if (result.success && result.conversations) {
                         validateUniqueConversationIds(
@@ -583,16 +733,32 @@ export const useChatStore = create<ChatState>()(
                             conversations: result.conversations,
                             unreadCounts,
                             totalUnread,
+                            conversationsLoading: false,
+                            conversationsError: null,
+                            bootstrapFailureCount: 0,
                             hasMoreConversations: result.hasMore || false,
                             conversationsCursor: result.nextCursor || null,
+                        });
+                    } else {
+                        set({
+                            conversationsLoading: false,
+                            conversationsError: result.error || 'Failed to refresh conversations',
                         });
                     }
                 } catch (error) {
                     if (isTransientNetworkError(error)) {
                         console.warn('Refresh conversations skipped due transient network error');
+                        set({
+                            conversationsLoading: false,
+                            conversationsError: error instanceof Error ? error.message : null,
+                        });
                         return;
                     }
                     console.error('Error refreshing conversations:', error);
+                    set({
+                        conversationsLoading: false,
+                        conversationsError: error instanceof Error ? error.message : 'Failed to refresh conversations',
+                    });
                 }
             },
 
@@ -623,7 +789,10 @@ export const useChatStore = create<ChatState>()(
                     }));
 
                     try {
-                        const result = await getMessages(conversationId);
+                        const result = await withChatStoreTimeout(
+                            getMessages(conversationId),
+                            'Conversation messages'
+                        );
 
                         if (result.success && result.messages) {
                             set(prev => ({
@@ -2067,6 +2236,12 @@ export const useChatStore = create<ChatState>()(
         }),
         {
             name: 'chat-storage',
+            version: CHAT_STORE_VERSION,
+            migrate: (persistedState) => extractPersistedChatState(persistedState),
+            merge: (persistedState, currentState) => ({
+                ...currentState,
+                ...extractPersistedChatState(persistedState),
+            }),
             partialize: (state) => ({
                 // Persist only user input state and pending outbox.
                 draftsByConversation: state.draftsByConversation,

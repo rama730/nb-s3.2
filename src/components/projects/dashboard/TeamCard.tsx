@@ -15,6 +15,9 @@ interface TeamCardOwner {
     fullName?: string | null;
     username?: string | null;
     avatarUrl?: string | null;
+    displayName?: string;
+    isMasked?: boolean;
+    canOpenProfile?: boolean;
 }
 
 interface TeamCardProject {
@@ -89,13 +92,14 @@ const TeamCard = memo(function TeamCard({
     const [isOverflowTooltipOpen, setIsOverflowTooltipOpen] = useState(false);
 
     const navigateToProfile = useCallback((avatar: AvatarEntry) => {
+        if (!avatar.username) return;
         router.push(profileHref({ username: avatar.username, id: avatar.id }));
     }, [router]);
 
     const rawLeadFocus = project?.importSource?.metadata?.leadFocus;
     const leadFocus = typeof rawLeadFocus === "string" ? rawLeadFocus.trim() : "";
     const ownerRoleLabel = leadFocus ? `LEAD / ${leadFocus}` : "LEAD";
-    const ownerName = project?.owner?.fullName || project?.owner?.username || "Creator";
+    const ownerName = project?.owner?.displayName || project?.owner?.fullName || project?.owner?.username || "Creator";
 
     const avatars = useMemo<AvatarEntry[]>(() => {
         const ownerEntry: AvatarEntry[] = project?.owner?.id
@@ -154,7 +158,7 @@ const TeamCard = memo(function TeamCard({
             action={isCreator && (
                 <button
                     onClick={onInvite}
-                    className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-indigo-600 dark:text-indigo-400 rounded transition-all opacity-65 hover:opacity-100 hover:bg-indigo-50 dark:hover:bg-indigo-900/20"
+                    className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-primary rounded transition-all opacity-65 hover:opacity-100 hover:bg-primary/10"
                 >
                     <Plus className="w-3.5 h-3.5" />
                     Invite
@@ -184,7 +188,7 @@ const TeamCard = memo(function TeamCard({
                             <div
                                 key={avatar.id}
                                 onClick={() => navigateToProfile(avatar)}
-                                className="group relative inline-flex size-12 shrink-0 cursor-pointer items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/70 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                                className="group relative inline-flex size-12 shrink-0 cursor-pointer items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
                                 role="button"
                                 tabIndex={0}
                                 onKeyDown={(e) => {
@@ -229,7 +233,7 @@ const TeamCard = memo(function TeamCard({
                                         setIsOverflowTooltipOpen(false);
                                     }
                                 }}
-                                className="size-12 border-3 border-background bg-zinc-100 dark:bg-zinc-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/70 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                                className="size-12 border-3 border-background bg-zinc-100 dark:bg-zinc-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
                             >
                                 <AvatarFallback className="text-xs font-semibold">+{hiddenCount}</AvatarFallback>
                                 <AvatarGroupTooltip open={isOverflowTooltipOpen} onOpenChange={setIsOverflowTooltipOpen}>
@@ -258,7 +262,7 @@ const TeamCard = memo(function TeamCard({
                         <button
                             onClick={fetchNextMembers}
                             disabled={loadingMembers}
-                            className="px-2 py-1 text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 border border-indigo-200/80 dark:border-indigo-900/50 rounded-md hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-colors disabled:opacity-60"
+                            className="px-2 py-1 text-[10px] font-semibold text-primary border border-primary/15 rounded-md hover:bg-primary/10 transition-colors disabled:opacity-60"
                         >
                             {loadingMembers ? "Loading..." : "Load more"}
                         </button>

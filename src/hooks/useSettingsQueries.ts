@@ -2,7 +2,7 @@
 
 import { useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import type { NotificationPreferences, SecurityData, PrivacySettings } from "@/lib/types/settingsTypes";
+import type { IntegrationsData, NotificationPreferences, PrivacyData, SecurityData, SecurityStepUpCapabilitiesData } from "@/lib/types/settingsTypes";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { queryKeys } from "@/lib/query-keys";
 
@@ -14,16 +14,93 @@ const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = {
     mentions: true,
 };
 
-const DEFAULT_PRIVACY_SETTINGS: PrivacySettings = {
-    is_private: false,
-    connection_privacy: "public",
+const DEFAULT_PRIVACY_SETTINGS: PrivacyData = {
+    settings: {
+        profileVisibility: "public",
+        messagePrivacy: "connections",
+        connectionPrivacy: "everyone",
+        blockedCount: 0,
+    },
+    blockedAccounts: [],
+    overview: {
+        profileVisibility: "public",
+        messagePrivacy: "connections",
+        connectionPrivacy: "everyone",
+        blockedCount: 0,
+        summary: "Your profile is visible to public. Messages are open to connections only. Connection requests are open to everyone.",
+    },
+    privacyActivity: [],
+    previews: {
+        profileVisibility: "Your full profile is open. Messaging and request rules still apply separately.",
+        interactionPermissions: "Only connections can message you. Anyone eligible can send a connection request.",
+        visitorProfileHref: null,
+    },
 };
 
 const DEFAULT_SECURITY_DATA: SecurityData = {
     mfaFactors: [],
-    passkeys: [],
     sessions: [],
     loginHistory: [],
+    password: {
+        hasPassword: false,
+    },
+    recoveryCodes: {
+        configured: false,
+        remainingCount: 0,
+    },
+    securityActivity: [],
+    assurance: {
+        currentLevel: null,
+        nextLevel: null,
+    },
+};
+
+const DEFAULT_INTEGRATIONS_DATA: IntegrationsData = {
+    createdWith: null,
+    createdWithLabel: "Unknown",
+    emailAddress: null,
+    emailVerified: false,
+    linkedCount: 0,
+    additionalLinkedCount: 0,
+    summary: "We could not determine how this account was created yet.",
+    recommendedNextStep: "Use your current sign-in method to keep this account accessible.",
+    infoNote: "You may see only one sign-in method if this account has not been linked to any additional providers.",
+    capabilities: {
+        canEnableEmailSignIn: false,
+        canLinkAdditionalProvider: false,
+        canUnlinkGoogle: false,
+        canUnlinkGithub: false,
+    },
+    authConnections: [
+        {
+            provider: "google",
+            label: "Google",
+            state: "not_linked",
+            detail: "Not linked to this account.",
+        },
+        {
+            provider: "github",
+            label: "GitHub",
+            state: "not_linked",
+            detail: "Not linked to this account.",
+        },
+        {
+            provider: "email",
+            label: "Email",
+            state: "not_linked",
+            detail: "Not linked to this account.",
+        },
+    ],
+    externalServices: [
+        {
+            id: "github",
+            label: "GitHub repository access",
+            status: "not_connected",
+            summary: "No GitHub repository access is currently in use.",
+            detail: "Repository import and sync become available after GitHub is attached to this account and used on a project.",
+            usageCount: 0,
+        },
+    ],
 };
 
 const SETTINGS_VIEWER_TTL_MS = 30_000;
@@ -175,87 +252,142 @@ export function useSecurityData(options?: { hardeningEnabled?: boolean }) {
     });
 }
 
+export function useIntegrationsData() {
+    return useQuery({
+        queryKey: queryKeys.settings.integrations(),
+        queryFn: async (): Promise<IntegrationsData> => {
+            const res = await fetch("/api/v1/integrations");
+            const contentType = res.headers.get("content-type") || "";
+            if (!contentType.includes("application/json")) {
+                throw new Error(`Integrations endpoint returned non-JSON response (${res.status})`);
+            }
+
+            const json = await res.json();
+            const message =
+                (typeof json?.error === "string" && json.error) ||
+                (typeof json?.message === "string" && json.message) ||
+                `Failed to load integrations data (${res.status})`;
+            if (!res.ok || json?.success === false) {
+                throw new Error(message);
+            }
+
+            return json?.data || DEFAULT_INTEGRATIONS_DATA;
+        },
+        retry: 1,
+        staleTime: 60_000,
+        gcTime: 5 * 60_000,
+    });
+}
+
+async function submitPasswordChangeRequest({
+    currentPassword,
+    newPassword,
+}: {
+    currentPassword: string;
+    newPassword: string;
+}) {
+    const toFailure = (message: string, errorCode?: string) => ({ success: false as const, message, errorCode });
+    try {
+        const res = await fetch("/api/v1/auth/change-password", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ currentPassword, newPassword }),
+        });
+
+        const contentType = res.headers.get("content-type") || "";
+        const isJson = contentType.includes("application/json");
+
+        if (!res.ok) {
+            if (isJson) {
+                try {
+                    const errorJson = await res.json();
+                    const message = errorJson?.message || errorJson?.error;
+                    if (typeof message === "string" && message.trim().length > 0) {
+                        return toFailure(message, typeof errorJson?.errorCode === "string" ? errorJson.errorCode : undefined);
+                    }
+                } catch {
+                    // Fall through to generic error
+                }
+            }
+            const fallback = res.statusText
+                ? `Password change failed (${res.status}: ${res.statusText})`
+                : `Password change failed (${res.status})`;
+            return toFailure(fallback);
+        }
+
+        if (!isJson) {
+            return { success: true as const };
+        }
+
+        const json = await res.json();
+        if (json?.success === false) {
+            const message =
+                typeof json?.message === "string" && json.message
+                    ? json.message
+                    : "Password change failed";
+            return toFailure(message, typeof json?.errorCode === "string" ? json.errorCode : undefined);
+        }
+        const success = typeof json?.success === "boolean" ? json.success : true;
+        const message = typeof json?.message === "string" ? json.message : undefined;
+        return { success, message, data: json?.data };
+    } catch (error) {
+        const message = error instanceof Error ? error.message : "Unable to change password. Please try again.";
+        return toFailure(message);
+    }
+}
+
+export async function fetchSecurityStepUpCapabilities(): Promise<SecurityStepUpCapabilitiesData> {
+    const res = await fetch("/api/v1/auth/security-step-up");
+    const contentType = res.headers.get("content-type") || "";
+    const isJson = contentType.includes("application/json");
+    const json = isJson ? await res.json() : null;
+
+    if (!res.ok || json?.success === false) {
+        throw new Error(
+            json?.message
+                || json?.error
+                || `Failed to load security verification options (${res.status})`,
+        );
+    }
+
+    return (json?.data || { availableMethods: [] }) as SecurityStepUpCapabilitiesData;
+}
+
 export function useChangePassword() {
     return useMutation({
-        mutationFn: async ({ currentPassword, newPassword }: { currentPassword: string; newPassword: string }) => {
-            const toFailure = (message: string) => ({ success: false as const, message });
-            try {
-                const res = await fetch("/api/v1/auth/change-password", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ currentPassword, newPassword }),
-                });
+        mutationFn: submitPasswordChangeRequest,
+    });
+}
 
-                const contentType = res.headers.get("content-type") || "";
-                const isJson = contentType.includes("application/json");
-
-                if (!res.ok) {
-                    if (isJson) {
-                        try {
-                            const errorJson = await res.json();
-                            const message = errorJson?.message || errorJson?.error;
-                            if (typeof message === "string" && message.trim().length > 0) {
-                                return toFailure(message);
-                            }
-                        } catch {
-                            // Fall through to generic error
-                        }
-                    }
-                    const fallback = res.statusText
-                        ? `Password change failed (${res.status}: ${res.statusText})`
-                        : `Password change failed (${res.status})`;
-                    return toFailure(fallback);
-                }
-
-                if (!isJson) {
-                    return { success: true as const };
-                }
-
-                const json = await res.json();
-                if (json?.success === false) {
-                    const message =
-                        typeof json?.message === "string" && json.message
-                            ? json.message
-                            : "Password change failed";
-                    return toFailure(message);
-                }
-                const success = typeof json?.success === "boolean" ? json.success : true;
-                const message = typeof json?.message === "string" ? json.message : undefined;
-                return { success, message, data: json?.data };
-            } catch (error) {
-                const message = error instanceof Error ? error.message : "Unable to change password. Please try again.";
-                return toFailure(message);
-            }
-        },
+export function useEnableEmailSignIn() {
+    return useMutation({
+        mutationFn: async ({ newPassword }: { newPassword: string }) =>
+            submitPasswordChangeRequest({
+                currentPassword: "",
+                newPassword,
+            }),
     });
 }
 
 // Privacy settings
 export function usePrivacySettings() {
-    const supabase = createSupabaseBrowserClient();
-    const viewerResolverStateRef = useRef<SettingsViewerResolverState>(createSettingsViewerResolverState());
-
     return useQuery({
         queryKey: queryKeys.settings.privacy(),
-        queryFn: async (): Promise<PrivacySettings> => {
-            const userId = await resolveSettingsViewerId(supabase, viewerResolverStateRef.current);
-            if (!userId) throw new Error("Not authenticated");
-
-            const { data, error } = await supabase
-                .from("profiles")
-                .select("is_private, connection_privacy")
-                .eq("id", userId)
-                .maybeSingle();
-
-            if (error) {
-                console.warn("[settings] privacy settings lookup failed", error);
-                return DEFAULT_PRIVACY_SETTINGS;
+        queryFn: async (): Promise<PrivacyData> => {
+            const res = await fetch("/api/v1/privacy");
+            const contentType = res.headers.get("content-type") || "";
+            if (!contentType.includes("application/json")) {
+                throw new Error(`Privacy endpoint returned non-JSON response (${res.status})`);
             }
-
-            return {
-                is_private: data?.is_private || DEFAULT_PRIVACY_SETTINGS.is_private,
-                connection_privacy: data?.connection_privacy || DEFAULT_PRIVACY_SETTINGS.connection_privacy,
-            };
+            const json = await res.json();
+            if (!res.ok || json?.success === false) {
+                const message =
+                    (typeof json?.error === "string" && json.error) ||
+                    (typeof json?.message === "string" && json.message) ||
+                    `Failed to load privacy settings (${res.status})`;
+                throw new Error(message);
+            }
+            return json?.data || DEFAULT_PRIVACY_SETTINGS;
         },
     });
 }
@@ -316,24 +448,20 @@ export function usePrefetchSettings() {
         queryClient.prefetchQuery({
             queryKey: queryKeys.settings.privacy(),
             queryFn: async () => {
-                const userId = await resolveSettingsViewerId(supabase, viewerResolverStateRef.current);
-                if (!userId) throw new Error("Not authenticated");
-
-                const { data, error } = await supabase
-                    .from("profiles")
-                    .select("is_private, connection_privacy")
-                    .eq("id", userId)
-                    .maybeSingle();
-
-                if (error) {
-                    console.warn("[settings] privacy prefetch failed", error);
-                    return DEFAULT_PRIVACY_SETTINGS;
+                const res = await fetch("/api/v1/privacy");
+                const contentType = res.headers.get("content-type") || "";
+                if (!contentType.includes("application/json")) {
+                    throw new Error(`Privacy endpoint returned non-JSON response (${res.status})`);
                 }
-
-                return {
-                    is_private: data?.is_private || DEFAULT_PRIVACY_SETTINGS.is_private,
-                    connection_privacy: data?.connection_privacy || DEFAULT_PRIVACY_SETTINGS.connection_privacy,
-                };
+                const json = await res.json();
+                if (!res.ok || json?.success === false) {
+                    const message =
+                        (typeof json?.error === "string" && json.error) ||
+                        (typeof json?.message === "string" && json.message) ||
+                        `Failed to load privacy settings (${res.status})`;
+                    throw new Error(message);
+                }
+                return json?.data || DEFAULT_PRIVACY_SETTINGS;
             },
         });
     };

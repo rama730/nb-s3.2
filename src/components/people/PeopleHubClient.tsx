@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Sparkles, Share2, SendHorizontal } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { motion } from "framer-motion";
+import { useReducedMotionPreference } from "@/components/providers/theme-provider";
 
 import PeopleClient from "@/components/people/PeopleClient";
 import ConnectionsClient from "@/components/people/ConnectionsClient";
@@ -40,6 +41,7 @@ export default function PeopleHubClient({
 }: PeopleHubClientProps) {
     const router = useRouter();
     const searchParams = useSearchParams();
+    const reduceMotion = useReducedMotionPreference();
 
     const isAuthed = !!initialUser?.id;
     const tabParam = (searchParams?.get("tab") || "").toLowerCase();
@@ -108,11 +110,11 @@ export default function PeopleHubClient({
                                         <motion.div
                                             layoutId="activePeopleTab"
                                             className="absolute inset-0 bg-white dark:bg-zinc-700 rounded-xl shadow-sm ring-1 ring-zinc-200/60 dark:ring-zinc-600/40"
-                                            transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
+                                            transition={reduceMotion ? { duration: 0 } : { type: "spring", bounce: 0.2, duration: 0.6 }}
                                         />
                                     )}
                                     <span className="relative z-10 flex items-center gap-2">
-                                        <Icon className={cn("w-4 h-4", selected && "text-indigo-600 dark:text-indigo-400")} />
+                                        <Icon className={cn("w-4 h-4", selected && "text-primary")} />
                                         <span>{t.label}</span>
                                         {badgeCount && (
                                             <span className="relative ml-1 flex h-5 items-center">

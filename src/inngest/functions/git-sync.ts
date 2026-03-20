@@ -12,9 +12,11 @@ import { createHash, randomUUID } from "crypto";
 import { buildProjectFileKey } from "@/lib/storage/project-file-key";
 import { appendSafePathSegment, resolvePathUnderRoot } from "@/lib/security/path-safety";
 import { resolveGithubRepoAccess } from "@/lib/github/auth-resolver";
+import { assertRepositoryWithinBudgets, GITHUB_WORKER_BUDGETS, withTenantSyncLock } from "@/lib/github/worker-guard";
 import { withGitCredentialEnv } from "@/lib/github/git-auth";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { runWithConcurrency } from "@/lib/utils/concurrency";
 import { logger } from "@/lib/logger";
 
 const execFileAsync = promisify(execFile);
@@ -23,6 +25,20 @@ const GIT_COMMAND_TIMEOUT_MS = (() => {
     return Number.isFinite(v) && v >= 30_000 ? Math.floor(v) : 120000;
 })();
 const LOCK_NAMESPACE = "project-git-sync";
+
+function resolveQueueAgeMs(event: { ts?: string | number | null }) {
+    const raw = event.ts;
+    if (typeof raw === "number" && Number.isFinite(raw)) {
+        return Math.max(0, Date.now() - raw);
+    }
+    if (typeof raw === "string" && raw.trim().length > 0) {
+        const parsed = Date.parse(raw);
+        if (Number.isFinite(parsed)) {
+            return Math.max(0, Date.now() - parsed);
+        }
+    }
+    return null;
+}
 
 function computeFileHash(content: Buffer): string {
     return createHash("sha256").update(content).digest("hex");
@@ -132,10 +148,17 @@ async function readLatestCommitSha(tempDir: string): Promise<string | null> {
 }
 
 export const gitPush = inngest.createFunction(
-    { id: "git-push", retries: 1 },
+    { id: "git-push", retries: 1, concurrency: 4 },
     { event: "git/push" },
     async ({ event, step }) => {
         const { projectId, commitMessage, userId } = event.data;
+
+        logger.metric("github.sync.push.start", {
+            projectId,
+            userId,
+            commitMessage,
+            queueAgeMs: resolveQueueAgeMs(event as { ts?: string | number | null }),
+        });
 
         await step.run("push-to-github", async () => {
             const [project] = await db
@@ -165,11 +188,12 @@ export const gitPush = inngest.createFunction(
                 sealedImportToken: sourceMetadata.importAuth,
             });
 
-            const lockedRun = await withProjectSyncLock(projectId, async () => {
+            const tenantLockedRun = await withTenantSyncLock(userId, async () => withProjectSyncLock(projectId, async () => {
                 const tempDir = await mkdtemp(join(tmpdir(), "nb-git-push-"));
 
                 try {
                     await cloneRepository(project.githubRepoUrl!, tempDir, branch, access.token);
+                    assertRepositoryWithinBudgets(tempDir, { job: "git push", projectId });
 
                     const activeNodes = await db
                         .select({
@@ -178,6 +202,7 @@ export const gitPush = inngest.createFunction(
                             parentId: projectNodes.parentId,
                             type: projectNodes.type,
                             s3Key: projectNodes.s3Key,
+                            gitHash: projectNodes.gitHash,
                         })
                         .from(projectNodes)
                         .where(
@@ -191,11 +216,24 @@ export const gitPush = inngest.createFunction(
                         activeNodes.map((n) => [n.id, { name: n.name, parentId: n.parentId }]),
                     );
                     const adminClient = await createAdminClient();
+                    const repoFiles = new Set(walkDir(tempDir));
 
                     const fileNodes = activeNodes.filter((n) => n.type === "file" && n.s3Key);
-                    for (const node of fileNodes) {
+                    await runWithConcurrency(fileNodes, GITHUB_WORKER_BUDGETS.applyConcurrency, async (node) => {
                         const filePath = buildNodePath(node.id, nodesById);
                         const targetPath = resolvePathUnderRoot(tempDir, filePath, "workspace file path");
+                        repoFiles.delete(filePath);
+
+                        if (node.gitHash) {
+                            try {
+                                const existingBuffer = await readFile(targetPath);
+                                if (computeFileHash(existingBuffer) === node.gitHash) {
+                                    return;
+                                }
+                            } catch {
+                                // Missing or unreadable file should be rewritten from workspace state.
+                            }
+                        }
 
                         await mkdir(dirname(targetPath), { recursive: true });
 
@@ -209,12 +247,25 @@ export const gitPush = inngest.createFunction(
                                 s3Key: node.s3Key,
                                 error: error.message,
                             });
-                            continue;
+                            return;
+                        }
+
+                        if (!data) {
+                            return;
                         }
 
                         const buffer = Buffer.from(await data.arrayBuffer());
                         await writeFile(targetPath, buffer);
-                    }
+                    });
+
+                    await runWithConcurrency(
+                        Array.from(repoFiles),
+                        GITHUB_WORKER_BUDGETS.applyConcurrency,
+                        async (repoFilePath) => {
+                            const targetPath = resolvePathUnderRoot(tempDir, repoFilePath, "workspace removal path");
+                            await rm(targetPath, { force: true }).catch(() => {});
+                        },
+                    );
 
                     const repoGit = simpleGit(tempDir);
                     await repoGit.addConfig("user.email", "bot@networkbuilders.local");
@@ -273,25 +324,39 @@ export const gitPush = inngest.createFunction(
                 } finally {
                     await rm(tempDir, { recursive: true, force: true }).catch(() => {});
                 }
-            });
+            }));
 
-            if (lockedRun.skipped) {
+            if (tenantLockedRun.skipped) {
+                logger.metric("github.sync.push.skipped", {
+                    projectId,
+                    reason: "tenant-concurrency",
+                });
+                return { success: true, skipped: "tenant_in_progress" as const };
+            }
+            if (tenantLockedRun.value?.skipped) {
                 logger.metric("github.sync.push.skipped", {
                     projectId,
                     reason: "lock-in-progress",
                 });
                 return { success: true, skipped: "in_progress" as const };
             }
-            return lockedRun.value;
+            return tenantLockedRun.value?.value;
         });
     },
 );
 
 export const gitPull = inngest.createFunction(
-    { id: "git-pull", retries: 1 },
+    { id: "git-pull", retries: 1, concurrency: 4 },
     { event: "git/pull" },
     async ({ event, step }) => {
         const { projectId, userId, deliveryId } = event.data;
+
+        logger.metric("github.sync.pull.start", {
+            projectId,
+            userId,
+            deliveryId: deliveryId || null,
+            queueAgeMs: resolveQueueAgeMs(event as { ts?: string | number | null }),
+        });
 
         await step.run("pull-from-github", async () => {
             const [project] = await db
@@ -321,11 +386,12 @@ export const gitPull = inngest.createFunction(
                 sealedImportToken: sourceMetadata.importAuth,
             });
 
-            const lockedRun = await withProjectSyncLock(projectId, async () => {
+            const tenantLockedRun = await withTenantSyncLock(userId, async () => withProjectSyncLock(projectId, async () => {
                 const tempDir = await mkdtemp(join(tmpdir(), "nb-git-pull-"));
 
                 try {
                     await cloneRepository(project.githubRepoUrl!, tempDir, branch, access.token);
+                    assertRepositoryWithinBudgets(tempDir, { job: "git pull", projectId });
 
                     const repoFiles = walkDir(tempDir);
 
@@ -551,9 +617,18 @@ export const gitPull = inngest.createFunction(
                 } finally {
                     await rm(tempDir, { recursive: true, force: true }).catch(() => {});
                 }
-            });
+            }));
 
-            if (lockedRun.skipped) {
+            if (tenantLockedRun.skipped) {
+                logger.metric("github.sync.pull.skipped", {
+                    projectId,
+                    reason: "tenant-concurrency",
+                    deliveryId: deliveryId ?? null,
+                });
+                return { success: true, skipped: "tenant_in_progress" as const };
+            }
+
+            if (tenantLockedRun.value?.skipped) {
                 logger.metric("github.sync.pull.skipped", {
                     projectId,
                     reason: "lock-in-progress",
@@ -562,7 +637,7 @@ export const gitPull = inngest.createFunction(
                 return { success: true, skipped: "in_progress" as const };
             }
 
-            return lockedRun.value;
+            return tenantLockedRun.value?.value;
         });
     },
 );

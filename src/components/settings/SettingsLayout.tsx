@@ -15,6 +15,7 @@ import {
     Code2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useReducedMotionPreference } from "@/components/providers/theme-provider";
 
 type SettingsItem = {
     title: string;
@@ -28,19 +29,19 @@ const settingsItems: SettingsItem[] = [
         title: "Account",
         href: "/settings/account",
         icon: User,
-        description: "Email, export, and account actions",
+        description: "Signed-in email, local app data, and account actions",
     },
     {
         title: "Security",
         href: "/settings/security",
         icon: Shield,
-        description: "Sessions, passkeys, MFA, and login history",
+        description: "Sign-in methods, trusted devices, and recent activity",
     },
     {
         title: "Privacy",
         href: "/settings/privacy",
         icon: Lock,
-        description: "Visibility, connections, and blocking",
+        description: "Profile visibility, interactions, and blocked accounts",
     },
     {
         title: "Notifications",
@@ -58,7 +59,7 @@ const settingsItems: SettingsItem[] = [
         title: "Integrations",
         href: "/settings/integrations",
         icon: Plug,
-        description: "Connected services and apps",
+        description: "Account sign-in methods and connected services",
     },
     {
         title: "Languages",
@@ -70,6 +71,7 @@ const settingsItems: SettingsItem[] = [
 
 export default function SettingsLayout({ children }: { children: React.ReactNode }) {
     const pathname = usePathname();
+    const reduceMotion = useReducedMotionPreference();
     const active = useMemo(() => {
         const found = settingsItems.find((i) => pathname === i.href);
         return found ?? settingsItems[0]!;
@@ -107,10 +109,10 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
     return (
         <div className="h-full min-h-0 overflow-hidden bg-zinc-50 dark:bg-zinc-950">
             <div className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8 py-6 h-full min-h-0">
-                <div className="flex gap-6 h-full min-h-0">
+                <div className="flex app-density-stack h-full min-h-0">
                     {/* Desktop sidebar */}
                     <aside className="hidden lg:block w-72 flex-shrink-0 h-full app-scroll app-scroll-y">
-                        <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white/80 dark:bg-zinc-950/60 backdrop-blur p-3">
+                        <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white/80 dark:bg-zinc-950/60 backdrop-blur app-density-panel">
                             <div className="px-2 py-2">
                                 <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
                                     Settings
@@ -129,7 +131,7 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
                                             key={item.href}
                                             href={item.href}
                                             className={cn(
-                                                "group flex items-start gap-3 rounded-xl px-3 py-2.5 transition-colors",
+                                                "group flex items-start gap-3 rounded-xl transition-colors app-density-nav-item",
                                                 isActive
                                                     ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900"
                                                     : "hover:bg-zinc-100 dark:bg-zinc-900 dark:hover:bg-zinc-900/50"
@@ -195,7 +197,7 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
                                 onClick={() => setMobileOpen((s) => !s)}
                                 aria-expanded={mobileOpen}
                                 aria-haspopup="listbox"
-                                className="w-full flex items-center justify-between rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 px-4 py-3"
+                                className="w-full flex items-center justify-between rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 app-density-panel"
                             >
                                 <div className="flex items-center gap-3 min-w-0">
                                     <div className="h-9 w-9 rounded-xl bg-zinc-100 dark:bg-zinc-900 flex items-center justify-center">
@@ -223,10 +225,10 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
                                     <motion.div
                                         ref={dropdownRef}
                                         role="listbox"
-                                        initial={{ opacity: 0, y: -8 }}
+                                        initial={reduceMotion ? false : { opacity: 0, y: -8 }}
                                         animate={{ opacity: 1, y: 0 }}
-                                        exit={{ opacity: 0, y: -8 }}
-                                        transition={{ duration: 0.15 }}
+                                        exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -8 }}
+                                        transition={reduceMotion ? { duration: 0 } : { duration: 0.15 }}
                                         className="mt-2 rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 p-2"
                                     >
                                         {settingsItems.map((item) => {
@@ -240,7 +242,7 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
                                                     aria-selected={isActive}
                                                     onClick={() => setMobileOpen(false)}
                                                     className={cn(
-                                                        "flex items-center gap-3 rounded-xl px-3 py-2.5",
+                                                        "flex items-center gap-3 rounded-xl app-density-nav-item",
                                                         isActive
                                                             ? "bg-zinc-100 dark:bg-zinc-900"
                                                             : "hover:bg-zinc-50 dark:bg-zinc-900 dark:hover:bg-zinc-900/50"
@@ -266,9 +268,9 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
                         </div>
 
                         <motion.div
-                            initial={{ opacity: 0, y: 8 }}
+                            initial={reduceMotion ? false : { opacity: 0, y: 8 }}
                             animate={{ opacity: 1, y: 0 }}
-                            transition={{ duration: 0.25, ease: "easeOut" }}
+                            transition={reduceMotion ? { duration: 0 } : { duration: 0.25, ease: "easeOut" }}
                             className="space-y-6 pb-10"
                         >
                             {children}

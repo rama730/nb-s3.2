@@ -1,16 +1,28 @@
+import type { RouteClass } from "@/lib/routing/route-class";
+
 export type RouteRenderingMode = "static" | "revalidate" | "dynamic";
-export type RouteDataClass = "public_cached" | "user_scoped" | "realtime";
 export type RouteHydrationBoundary = "minimal" | "standard" | "heavy";
 export type RouteCacheStrategy = "swr" | "request" | "none";
+export type RouteBootstrapReadModel =
+  | "static"
+  | "server_query"
+  | "auth_snapshot"
+  | "profile_counters"
+  | "redis_public_feed";
+export type RouteOverloadMode = "serve_stale_or_shed" | "fail_closed";
 
 export interface PagePerformanceContract {
   routeId: string;
   pageFile: string;
   renderingMode: RouteRenderingMode;
-  dataClass: RouteDataClass;
+  routeClass: RouteClass;
+  cacheStrategy: RouteCacheStrategy;
   cacheTtlSeconds: number;
   invalidationOwner: "server-action" | "api" | "realtime" | "none";
   hydrationBoundary: RouteHydrationBoundary;
+  bootstrapReadModel: RouteBootstrapReadModel;
+  maxBackgroundChannels: number;
+  overloadMode: RouteOverloadMode;
   maxInitialPayloadKb: number;
   revalidateSeconds?: number;
   allowForceDynamic?: boolean;
@@ -26,214 +38,293 @@ type ViewerContext = {
   isAuthenticated?: boolean;
 };
 
+function buildPublicContract(
+  routeId: string,
+  pageFile: string,
+  input: {
+    renderingMode: RouteRenderingMode;
+    cacheTtlSeconds: number;
+    invalidationOwner: PagePerformanceContract["invalidationOwner"];
+    hydrationBoundary: RouteHydrationBoundary;
+    bootstrapReadModel?: Extract<RouteBootstrapReadModel, "static" | "server_query" | "redis_public_feed">;
+    maxInitialPayloadKb: number;
+    revalidateSeconds?: number;
+    allowForceDynamic?: boolean;
+  },
+): PagePerformanceContract {
+  return {
+    routeId,
+    pageFile,
+    renderingMode: input.renderingMode,
+    routeClass: "public_cached",
+    cacheStrategy: "swr",
+    cacheTtlSeconds: input.cacheTtlSeconds,
+    invalidationOwner: input.invalidationOwner,
+    hydrationBoundary: input.hydrationBoundary,
+    bootstrapReadModel: input.bootstrapReadModel ?? "static",
+    maxBackgroundChannels: 0,
+    overloadMode: "serve_stale_or_shed",
+    maxInitialPayloadKb: input.maxInitialPayloadKb,
+    ...(input.revalidateSeconds ? { revalidateSeconds: input.revalidateSeconds } : {}),
+    ...(input.allowForceDynamic !== undefined ? { allowForceDynamic: input.allowForceDynamic } : {}),
+  };
+}
+
+function buildUserShellContract(
+  routeId: string,
+  pageFile: string,
+  input: {
+    renderingMode: RouteRenderingMode;
+    cacheTtlSeconds: number;
+    cacheStrategy?: Extract<RouteCacheStrategy, "request" | "none">;
+    invalidationOwner: PagePerformanceContract["invalidationOwner"];
+    hydrationBoundary: RouteHydrationBoundary;
+    bootstrapReadModel?: Extract<RouteBootstrapReadModel, "auth_snapshot" | "server_query" | "profile_counters">;
+    maxInitialPayloadKb: number;
+    revalidateSeconds?: number;
+    allowForceDynamic?: boolean;
+  },
+): PagePerformanceContract {
+  return {
+    routeId,
+    pageFile,
+    renderingMode: input.renderingMode,
+    routeClass: "user_shell",
+    cacheStrategy: input.cacheStrategy ?? "request",
+    cacheTtlSeconds: input.cacheTtlSeconds,
+    invalidationOwner: input.invalidationOwner,
+    hydrationBoundary: input.hydrationBoundary,
+    bootstrapReadModel: input.bootstrapReadModel ?? "auth_snapshot",
+    maxBackgroundChannels: 1,
+    overloadMode: "fail_closed",
+    maxInitialPayloadKb: input.maxInitialPayloadKb,
+    ...(input.revalidateSeconds ? { revalidateSeconds: input.revalidateSeconds } : {}),
+    ...(input.allowForceDynamic !== undefined ? { allowForceDynamic: input.allowForceDynamic } : {}),
+  };
+}
+
+function buildActiveSurfaceContract(
+  routeId: string,
+  pageFile: string,
+  input: {
+    renderingMode: RouteRenderingMode;
+    invalidationOwner: PagePerformanceContract["invalidationOwner"];
+    hydrationBoundary: RouteHydrationBoundary;
+    bootstrapReadModel?: Extract<RouteBootstrapReadModel, "auth_snapshot" | "profile_counters">;
+    maxInitialPayloadKb: number;
+    allowForceDynamic?: boolean;
+  },
+): PagePerformanceContract {
+  return {
+    routeId,
+    pageFile,
+    renderingMode: input.renderingMode,
+    routeClass: "active_surface",
+    cacheStrategy: "none",
+    cacheTtlSeconds: 0,
+    invalidationOwner: input.invalidationOwner,
+    hydrationBoundary: input.hydrationBoundary,
+    bootstrapReadModel: input.bootstrapReadModel ?? "auth_snapshot",
+    maxBackgroundChannels: 2,
+    overloadMode: "fail_closed",
+    maxInitialPayloadKb: input.maxInitialPayloadKb,
+    ...(input.allowForceDynamic !== undefined ? { allowForceDynamic: input.allowForceDynamic } : {}),
+  };
+}
+
 export const PAGE_PERFORMANCE_CONTRACTS: Record<string, PagePerformanceContract> = {
-  "/": {
-    routeId: "/",
-    pageFile: "src/app/page.tsx",
+  "/": buildPublicContract("/", "src/app/page.tsx", {
     renderingMode: "static",
-    dataClass: "public_cached",
     cacheTtlSeconds: 300,
     invalidationOwner: "none",
     hydrationBoundary: "minimal",
+    bootstrapReadModel: "static",
     maxInitialPayloadKb: 160,
-  },
-  "/login": {
-    routeId: "/login",
-    pageFile: "src/app/(auth)/login/page.tsx",
+  }),
+  "/login": buildPublicContract("/login", "src/app/(auth)/login/page.tsx", {
     renderingMode: "static",
-    dataClass: "public_cached",
     cacheTtlSeconds: 60,
     invalidationOwner: "none",
     hydrationBoundary: "minimal",
+    bootstrapReadModel: "static",
     maxInitialPayloadKb: 200,
-  },
-  "/signup": {
-    routeId: "/signup",
-    pageFile: "src/app/(auth)/signup/page.tsx",
+  }),
+  "/signup": buildPublicContract("/signup", "src/app/(auth)/signup/page.tsx", {
     renderingMode: "static",
-    dataClass: "public_cached",
     cacheTtlSeconds: 60,
     invalidationOwner: "none",
     hydrationBoundary: "minimal",
+    bootstrapReadModel: "static",
     maxInitialPayloadKb: 220,
-  },
-  "/onboarding": {
-    routeId: "/onboarding",
-    pageFile: "src/app/(onboarding)/onboarding/page.tsx",
+  }),
+  "/forgot-password": buildPublicContract("/forgot-password", "src/app/(auth)/forgot-password/page.tsx", {
     renderingMode: "static",
-    dataClass: "user_scoped",
+    cacheTtlSeconds: 30,
+    invalidationOwner: "none",
+    hydrationBoundary: "minimal",
+    bootstrapReadModel: "static",
+    maxInitialPayloadKb: 220,
+  }),
+  "/reset-password": buildPublicContract("/reset-password", "src/app/(auth)/reset-password/page.tsx", {
+    renderingMode: "static",
+    cacheTtlSeconds: 0,
+    invalidationOwner: "none",
+    hydrationBoundary: "minimal",
+    bootstrapReadModel: "static",
+    maxInitialPayloadKb: 220,
+  }),
+  "/verify-email": buildPublicContract("/verify-email", "src/app/(auth)/verify-email/page.tsx", {
+    renderingMode: "static",
+    cacheTtlSeconds: 30,
+    invalidationOwner: "none",
+    hydrationBoundary: "minimal",
+    bootstrapReadModel: "static",
+    maxInitialPayloadKb: 220,
+  }),
+  "/onboarding": buildUserShellContract("/onboarding", "src/app/(onboarding)/onboarding/page.tsx", {
+    renderingMode: "static",
+    cacheStrategy: "none",
     cacheTtlSeconds: 0,
     invalidationOwner: "server-action",
     hydrationBoundary: "heavy",
+    bootstrapReadModel: "auth_snapshot",
     maxInitialPayloadKb: 320,
     allowForceDynamic: false,
-  },
-  "/hub": {
-    routeId: "/hub",
-    pageFile: "src/app/(main)/hub/page.tsx",
+  }),
+  "/hub": buildUserShellContract("/hub", "src/app/(main)/hub/page.tsx", {
     renderingMode: "dynamic",
-    dataClass: "realtime",
     cacheTtlSeconds: 45,
-    invalidationOwner: "realtime",
+    invalidationOwner: "api",
     hydrationBoundary: "standard",
+    bootstrapReadModel: "auth_snapshot",
     maxInitialPayloadKb: 260,
     allowForceDynamic: true,
-  },
-  "/people": {
-    routeId: "/people",
-    pageFile: "src/app/(main)/people/page.tsx",
+  }),
+  "/people": buildUserShellContract("/people", "src/app/(main)/people/page.tsx", {
     renderingMode: "dynamic",
-    dataClass: "user_scoped",
     cacheTtlSeconds: 30,
     invalidationOwner: "server-action",
     hydrationBoundary: "standard",
+    bootstrapReadModel: "auth_snapshot",
     maxInitialPayloadKb: 260,
     allowForceDynamic: true,
-  },
-  "/projects/[slug]": {
-    routeId: "/projects/[slug]",
-    pageFile: "src/app/(main)/projects/[slug]/page.tsx",
+  }),
+  "/projects/[slug]": buildPublicContract("/projects/[slug]", "src/app/(main)/projects/[slug]/page.tsx", {
     renderingMode: "revalidate",
-    dataClass: "user_scoped",
     cacheTtlSeconds: 60,
     invalidationOwner: "server-action",
     hydrationBoundary: "standard",
+    bootstrapReadModel: "server_query",
     maxInitialPayloadKb: 300,
     revalidateSeconds: 60,
-  },
-  "/profile": {
-    routeId: "/profile",
-    pageFile: "src/app/(main)/profile/page.tsx",
+  }),
+  "/profile": buildUserShellContract("/profile", "src/app/(main)/profile/page.tsx", {
     renderingMode: "revalidate",
-    dataClass: "user_scoped",
     cacheTtlSeconds: 60,
     invalidationOwner: "server-action",
     hydrationBoundary: "standard",
+    bootstrapReadModel: "auth_snapshot",
     maxInitialPayloadKb: 240,
     revalidateSeconds: 60,
-  },
-  "/messages": {
-    routeId: "/messages",
-    pageFile: "src/app/(main)/messages/page.tsx",
+  }),
+  "/messages": buildActiveSurfaceContract("/messages", "src/app/(main)/messages/page.tsx", {
     renderingMode: "dynamic",
-    dataClass: "realtime",
-    cacheTtlSeconds: 0,
     invalidationOwner: "realtime",
     hydrationBoundary: "heavy",
+    bootstrapReadModel: "auth_snapshot",
     maxInitialPayloadKb: 320,
     allowForceDynamic: true,
-  },
-  "/u/[username]": {
-    routeId: "/u/[username]",
-    pageFile: "src/app/(main)/u/[username]/page.tsx",
+  }),
+  "/u/[username]": buildPublicContract("/u/[username]", "src/app/(main)/u/[username]/page.tsx", {
     renderingMode: "dynamic",
-    dataClass: "public_cached",
     cacheTtlSeconds: 60,
     invalidationOwner: "server-action",
     hydrationBoundary: "standard",
+    bootstrapReadModel: "server_query",
     maxInitialPayloadKb: 260,
     revalidateSeconds: 60,
     allowForceDynamic: true,
-  },
-  "/workspace": {
-    routeId: "/workspace",
-    pageFile: "src/app/(main)/workspace/page.tsx",
+  }),
+  "/workspace": buildActiveSurfaceContract("/workspace", "src/app/(main)/workspace/page.tsx", {
     renderingMode: "dynamic",
-    dataClass: "user_scoped",
-    cacheTtlSeconds: 0,
     invalidationOwner: "realtime",
     hydrationBoundary: "heavy",
+    bootstrapReadModel: "profile_counters",
     maxInitialPayloadKb: 320,
     allowForceDynamic: true,
-  },
-  "/settings": {
-    routeId: "/settings",
-    pageFile: "src/app/(main)/settings/page.tsx",
+  }),
+  "/settings": buildUserShellContract("/settings", "src/app/(main)/settings/page.tsx", {
     renderingMode: "revalidate",
-    dataClass: "user_scoped",
     cacheTtlSeconds: 30,
     invalidationOwner: "server-action",
     hydrationBoundary: "standard",
+    bootstrapReadModel: "auth_snapshot",
     maxInitialPayloadKb: 220,
     revalidateSeconds: 30,
-  },
-  "/settings/account": {
-    routeId: "/settings/account",
-    pageFile: "src/app/(main)/settings/account/page.tsx",
+  }),
+  "/settings/account": buildUserShellContract("/settings/account", "src/app/(main)/settings/account/page.tsx", {
     renderingMode: "revalidate",
-    dataClass: "user_scoped",
     cacheTtlSeconds: 30,
     invalidationOwner: "server-action",
     hydrationBoundary: "standard",
+    bootstrapReadModel: "auth_snapshot",
     maxInitialPayloadKb: 220,
     revalidateSeconds: 30,
-  },
-  "/settings/security": {
-    routeId: "/settings/security",
-    pageFile: "src/app/(main)/settings/security/page.tsx",
+  }),
+  "/settings/security": buildUserShellContract("/settings/security", "src/app/(main)/settings/security/page.tsx", {
     renderingMode: "revalidate",
-    dataClass: "user_scoped",
     cacheTtlSeconds: 30,
     invalidationOwner: "server-action",
     hydrationBoundary: "standard",
+    bootstrapReadModel: "auth_snapshot",
     maxInitialPayloadKb: 220,
     revalidateSeconds: 30,
-  },
-  "/settings/privacy": {
-    routeId: "/settings/privacy",
-    pageFile: "src/app/(main)/settings/privacy/page.tsx",
+  }),
+  "/settings/privacy": buildUserShellContract("/settings/privacy", "src/app/(main)/settings/privacy/page.tsx", {
     renderingMode: "revalidate",
-    dataClass: "user_scoped",
     cacheTtlSeconds: 30,
     invalidationOwner: "server-action",
     hydrationBoundary: "standard",
+    bootstrapReadModel: "auth_snapshot",
     maxInitialPayloadKb: 220,
     revalidateSeconds: 30,
-  },
-  "/settings/notifications": {
-    routeId: "/settings/notifications",
-    pageFile: "src/app/(main)/settings/notifications/page.tsx",
+  }),
+  "/settings/notifications": buildUserShellContract("/settings/notifications", "src/app/(main)/settings/notifications/page.tsx", {
     renderingMode: "revalidate",
-    dataClass: "user_scoped",
     cacheTtlSeconds: 30,
     invalidationOwner: "server-action",
     hydrationBoundary: "standard",
+    bootstrapReadModel: "auth_snapshot",
     maxInitialPayloadKb: 220,
     revalidateSeconds: 30,
-  },
-  "/settings/appearance": {
-    routeId: "/settings/appearance",
-    pageFile: "src/app/(main)/settings/appearance/page.tsx",
+  }),
+  "/settings/appearance": buildUserShellContract("/settings/appearance", "src/app/(main)/settings/appearance/page.tsx", {
     renderingMode: "revalidate",
-    dataClass: "user_scoped",
     cacheTtlSeconds: 30,
     invalidationOwner: "server-action",
     hydrationBoundary: "standard",
+    bootstrapReadModel: "auth_snapshot",
     maxInitialPayloadKb: 220,
     revalidateSeconds: 30,
-  },
-  "/settings/integrations": {
-    routeId: "/settings/integrations",
-    pageFile: "src/app/(main)/settings/integrations/page.tsx",
+  }),
+  "/settings/integrations": buildUserShellContract("/settings/integrations", "src/app/(main)/settings/integrations/page.tsx", {
     renderingMode: "revalidate",
-    dataClass: "user_scoped",
     cacheTtlSeconds: 30,
     invalidationOwner: "server-action",
     hydrationBoundary: "standard",
+    bootstrapReadModel: "auth_snapshot",
     maxInitialPayloadKb: 220,
     revalidateSeconds: 30,
-  },
-  "/settings/languages": {
-    routeId: "/settings/languages",
-    pageFile: "src/app/(main)/settings/languages/page.tsx",
+  }),
+  "/settings/languages": buildUserShellContract("/settings/languages", "src/app/(main)/settings/languages/page.tsx", {
     renderingMode: "revalidate",
-    dataClass: "user_scoped",
     cacheTtlSeconds: 30,
     invalidationOwner: "server-action",
     hydrationBoundary: "standard",
+    bootstrapReadModel: "auth_snapshot",
     maxInitialPayloadKb: 220,
     revalidateSeconds: 30,
-  },
+  }),
 };
 
 export const FORCE_DYNAMIC_ALLOWLIST = new Set(
@@ -256,7 +347,7 @@ export function getRouteCachePolicy(
     return { strategy: "none", ttlSeconds: 0, invalidationOwner: "none" };
   }
 
-  if (contract.dataClass === "realtime") {
+  if (contract.routeClass === "active_surface" || contract.cacheStrategy === "none") {
     return {
       strategy: "none",
       ttlSeconds: 0,
@@ -264,16 +355,16 @@ export function getRouteCachePolicy(
     };
   }
 
-  if (contract.dataClass === "user_scoped") {
+  if (contract.routeClass === "user_shell" && !viewerContext?.isAuthenticated) {
     return {
-      strategy: viewerContext?.isAuthenticated ? "request" : "none",
-      ttlSeconds: viewerContext?.isAuthenticated ? contract.cacheTtlSeconds : 0,
+      strategy: "none",
+      ttlSeconds: 0,
       invalidationOwner: contract.invalidationOwner,
     };
   }
 
   return {
-    strategy: "swr",
+    strategy: contract.cacheStrategy,
     ttlSeconds: contract.cacheTtlSeconds,
     invalidationOwner: contract.invalidationOwner,
   };

@@ -10,7 +10,7 @@ import { VirtuosoGrid } from 'react-virtuoso';
 import { useQueryClient } from '@tanstack/react-query';
 
 // Hooks
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useHubProjectsSimple } from '@/hooks/hub/useHubProjectsSimple';
 import { useAuth } from '@/hooks/useAuth';
 import { useHubSessionSeen } from '@/hooks/hub/useHubSessionSeen';
@@ -24,6 +24,7 @@ import HubNavigation from '@/components/hub/HubNavigation';
 import HubHeader from '@/components/hub/HubHeader';
 import { HubErrorBoundary } from '@/components/hub/HubErrorBoundary';
 import { AppScrollArea } from '@/components/ui/AppScrollArea';
+import { useReducedMotionPreference } from '@/components/providers/theme-provider';
 // Constants & Types
 import {
     FILTER_VIEWS,
@@ -51,6 +52,43 @@ const MobileSidebarDrawer = dynamic(() => import('@/components/hub/MobileSidebar
 import { toProjectCardViewModel, ProjectCardViewModel } from '@/lib/view-models/project-card';
 import { queryKeys } from '@/lib/query-keys';
 
+const CREATE_PROJECT_MODAL_STORAGE_KEY = 'hub:create-project-modal-state';
+
+type PersistedCreateProjectSource = 'scratch' | 'github' | 'upload' | null;
+
+type PersistedCreateProjectModalState = {
+    open: boolean;
+    source: PersistedCreateProjectSource;
+};
+
+function parsePersistedCreateProjectSource(raw: string | null | undefined): PersistedCreateProjectSource {
+    return raw === 'github' || raw === 'upload' || raw === 'scratch' ? raw : null;
+}
+
+function readPersistedCreateProjectModalState(): PersistedCreateProjectModalState | null {
+    if (typeof window === 'undefined') return null;
+    const raw = window.sessionStorage.getItem(CREATE_PROJECT_MODAL_STORAGE_KEY)?.trim();
+    if (!raw) return null;
+    try {
+        const parsed = JSON.parse(raw) as Partial<PersistedCreateProjectModalState>;
+        return {
+            open: parsed.open === true,
+            source: parsePersistedCreateProjectSource(parsed.source as string | null | undefined),
+        };
+    } catch {
+        return null;
+    }
+}
+
+function persistCreateProjectModalState(state: PersistedCreateProjectModalState | null): void {
+    if (typeof window === 'undefined') return;
+    if (!state) {
+        window.sessionStorage.removeItem(CREATE_PROJECT_MODAL_STORAGE_KEY);
+        return;
+    }
+    window.sessionStorage.setItem(CREATE_PROJECT_MODAL_STORAGE_KEY, JSON.stringify(state));
+}
+
 interface SimpleHubClientProps {
     returnUserData: User | null;
     initialProjectsPage?: {
@@ -65,6 +103,9 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
     const { showToast } = useToast();
     const { user } = useAuth();
     const router = useRouter();
+    const searchParams = useSearchParams();
+    const reduceMotion = useReducedMotionPreference();
+    const handledCreateProjectRequestRef = useRef<string | null>(null);
 
     // --- State ---
     // Essential UI State
@@ -79,6 +120,7 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
 
     // Dialog Visibility
     const [showCreateModal, setShowCreateModal] = useState(false);
+    const [createModalInitialSource, setCreateModalInitialSource] = useState<'scratch' | 'github' | 'upload' | null>(null);
     const [showNotificationSettings, setShowNotificationSettings] = useState(false);
     const [showComparisonModal, setShowComparisonModal] = useState(false);
     const [profileChecklistItems, setProfileChecklistItems] = useState<string[]>([]);
@@ -130,6 +172,42 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
             // ignore invalid local data
         }
     }, []);
+
+    useEffect(() => {
+        const liveParams =
+            typeof window !== 'undefined'
+                ? new URLSearchParams(window.location.search)
+                : new URLSearchParams(searchParams.toString());
+        const requestedSource = parsePersistedCreateProjectSource(liveParams.get('createProjectSource'));
+        const persistedModalState = readPersistedCreateProjectModalState();
+        const source = requestedSource ?? persistedModalState?.source ?? null;
+        const shouldOpenCreateModal =
+            liveParams.get('createProject') === '1'
+            || persistedModalState?.open === true;
+        if (!shouldOpenCreateModal) {
+            handledCreateProjectRequestRef.current = null;
+            return;
+        }
+
+        const requestKey = `${liveParams.get('createProject') === '1' ? 'url' : 'storage'}:${source ?? 'none'}`;
+
+        if (handledCreateProjectRequestRef.current === requestKey && showCreateModal) {
+            return;
+        }
+        handledCreateProjectRequestRef.current = requestKey;
+
+        persistCreateProjectModalState({ open: true, source });
+        setCreateModalInitialSource(source);
+        setShowCreateModal(true);
+
+        if (typeof window !== 'undefined') {
+            const nextUrl = new URL(window.location.href);
+            nextUrl.searchParams.delete('createProject');
+            nextUrl.searchParams.delete('createProjectSource');
+            const nextHref = `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`;
+            window.history.replaceState(window.history.state, '', nextHref);
+        }
+    }, [searchParams, showCreateModal]);
 
     // Construct Filters
     const currentFilters = useMemo(() => {
@@ -220,7 +298,9 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
 
     // Creating Project
     const handleProjectCreated = useCallback((projectId?: string) => {
+        persistCreateProjectModalState(null);
         setShowCreateModal(false);
+        setCreateModalInitialSource(null);
         queryClient.invalidateQueries({ queryKey: queryKeys.hub.projectsSimpleRoot() });
         showToast('Project created successfully!', 'success');
         if (projectId) {
@@ -336,7 +416,11 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
                                             hideOpened: newFilters.hideOpened ?? false,
                                         });
                                     }}
-                                    onCreateProject={() => setShowCreateModal(true)}
+                                    onCreateProject={() => {
+                                        persistCreateProjectModalState({ open: true, source: null });
+                                        setCreateModalInitialSource(null);
+                                        setShowCreateModal(true);
+                                    }}
                                     onPreloadModal={() => import('@/components/projects/create-wizard/CreateProjectWizard')}
                                     filters={currentFilters}
                                     viewMode={viewMode}
@@ -424,7 +508,12 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
                                     ))}
                                 </div>
                             ) : visibleProjects.length === 0 ? (
-                                <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="text-center py-24 bg-white dark:bg-zinc-900 rounded-3xl border border-dashed border-slate-300 dark:border-zinc-800">
+                                <motion.div
+                                    initial={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.95 }}
+                                    animate={reduceMotion ? { opacity: 1 } : { opacity: 1, scale: 1 }}
+                                    transition={reduceMotion ? { duration: 0 } : undefined}
+                                    className="text-center py-24 bg-white dark:bg-zinc-900 rounded-3xl border border-dashed border-slate-300 dark:border-zinc-800"
+                                >
                                     <div className="w-20 h-20 mx-auto mb-6 rounded-full bg-slate-50 dark:bg-zinc-800 flex items-center justify-center">
                                         <Search className="w-10 h-10 text-slate-300 dark:text-zinc-600" />
                                     </div>
@@ -436,7 +525,11 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
                                         <button onClick={handleClearFilters} className="inline-flex items-center gap-2 px-4 py-2 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 rounded-lg font-medium transition-all">
                                             Clear Filters
                                         </button>
-                                        <button onClick={() => setShowCreateModal(true)} className="inline-flex items-center gap-2 px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-semibold transition-all">
+                                        <button onClick={() => {
+                                            persistCreateProjectModalState({ open: true, source: null });
+                                            setCreateModalInitialSource(null);
+                                            setShowCreateModal(true);
+                                        }} className="inline-flex items-center gap-2 px-6 py-3 app-accent-solid hover:bg-primary/90 rounded-xl font-semibold transition-all">
                                             <Sparkles className="w-5 h-5" />
                                             Start New Project
                                         </button>
@@ -508,8 +601,17 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
 
                         {showCreateModal && (
                             <CreateProjectWizard
-                                onClose={() => setShowCreateModal(false)}
+                                onClose={() => {
+                                    persistCreateProjectModalState(null);
+                                    setShowCreateModal(false);
+                                    setCreateModalInitialSource(null);
+                                }}
                                 onSuccess={handleProjectCreated}
+                                initialSource={createModalInitialSource}
+                                onSourceChange={(source) => {
+                                    setCreateModalInitialSource(source);
+                                    persistCreateProjectModalState({ open: true, source });
+                                }}
                             />
                         )}
 

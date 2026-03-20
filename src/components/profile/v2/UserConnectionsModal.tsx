@@ -181,7 +181,7 @@ export function UserConnectionsModal({ isOpen, onClose, userId, userName }: User
                                                 className="rounded-full object-cover w-10 h-10 border border-zinc-100 dark:border-zinc-800"
                                             />
                                         ) : (
-                                            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white text-xs font-bold">
+                                            <div className="w-10 h-10 rounded-full app-accent-gradient flex items-center justify-center text-white text-xs font-bold">
                                                 {(u.fullName || u.username || 'U')[0]?.toUpperCase()}
                                             </div>
                                         )}

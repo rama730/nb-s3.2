@@ -14,6 +14,16 @@ export type GitHubContentEntry = {
   size?: number | null;
 };
 
+export class GithubApiError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "GithubApiError";
+    this.status = status;
+  }
+}
+
 export function parseGithubRepo(repoUrl: string): GitHubRepoRef | null {
   const normalized = normalizeGithubRepoUrl(repoUrl);
   if (!normalized) return null;
@@ -80,10 +90,10 @@ export async function fetchRepoMeta(args: {
 
   if (!res.ok) {
     if (res.status === 404) {
-      throw new Error(`Repository not found or private (404). Check URL/permissions.`);
+      throw new GithubApiError(`Repository not found or private (404). Check URL/permissions.`, 404);
     }
     // Keep error message compact + actionable.
-    throw new Error(`GitHub repo lookup failed (${res.status})`);
+    throw new GithubApiError(`GitHub repo lookup failed (${res.status})`, res.status);
   }
 
   const json = (await res.json()) as {
@@ -131,7 +141,7 @@ export async function fetchContents(args: {
   }
 
   if (!res.ok) {
-    throw new Error(`GitHub contents fetch failed (${res.status})`);
+    throw new GithubApiError(`GitHub contents fetch failed (${res.status})`, res.status);
   }
 
   const json = (await res.json()) as any;

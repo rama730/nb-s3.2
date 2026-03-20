@@ -14,7 +14,10 @@ export default async function ProfilePage() {
     let data;
     try {
         const profileHardeningEnabled = isHardeningDomainEnabled("profileV1", user.id);
-        data = await getProfileDetails(undefined, { skipHeavyData: profileHardeningEnabled })
+        data = await getProfileDetails(undefined, {
+            skipHeavyData: profileHardeningEnabled,
+            viewerUser: user,
+        })
     } catch (error) {
         console.error('Profile fetch error:', error)
         redirect('/onboarding')

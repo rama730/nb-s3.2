@@ -1,9 +1,8 @@
 'use client'
 
+import { MotionConfig } from 'framer-motion'
 import { ThemeProvider as NextThemesProvider, useTheme as useNextTheme } from 'next-themes'
 import { type ReactNode, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import type { User } from '@supabase/supabase-js'
-import { createSupabaseBrowserClient } from '@/lib/supabase/client'
 import { isHardeningDomainEnabled } from '@/lib/features/hardening'
 import { logger } from '@/lib/logger'
 import {
@@ -14,15 +13,22 @@ import {
     DEFAULT_APPEARANCE_SNAPSHOT,
     type ResolvedTheme,
     type ThemeMode,
+    areAppearanceSnapshotsEquivalent,
     choosePreferredSnapshot,
     createAppearanceSnapshot,
     isSnapshotNewer,
     normalizeThemeMode,
-    parseAppearanceSnapshot,
     readLocalAppearanceSnapshot,
     resolveThemeMode,
     writeAppearanceSnapshot,
 } from '@/lib/theme/appearance'
+import {
+    type AppearanceSyncState,
+    readAppearanceSettings,
+    resetAppearanceSettings,
+    writeAppearanceSettings,
+} from '@/lib/theme/appearance-client'
+import { resolveReducedMotionPreference } from '@/lib/theme/appearance-runtime'
 import { isReducedMotionEnabled, prefersReducedMotionFromSystem } from '@/lib/theme/reduced-motion'
 
 const REMOTE_SYNC_DEBOUNCE_MS = 900
@@ -45,6 +51,9 @@ interface AppearanceContextValue {
     setDensity: (density: Density) => void;
     reduceMotion: boolean;
     setReduceMotion: (reduce: boolean) => void;
+    syncState: AppearanceSyncState;
+    lastSyncedAt?: string;
+    resetAppearance: () => Promise<void>;
 }
 
 const ThemeContext = createContext<ThemeContextValue | undefined>(undefined)
@@ -66,7 +75,6 @@ function ensureThemeColorMeta(content: string) {
 
 function ThemeRuntimeProvider({ children }: ThemeProviderProps) {
     const { theme: rawTheme, resolvedTheme: rawResolvedTheme, setTheme: setNextTheme } = useNextTheme()
-    const supabase = useMemo(() => createSupabaseBrowserClient(), [])
     const theme = normalizeThemeMode(rawTheme, DEFAULT_APPEARANCE_SNAPSHOT.theme)
     const resolvedTheme: ResolvedTheme = rawResolvedTheme === 'dark' ? 'dark' : 'light'
 
@@ -81,12 +89,17 @@ function ThemeRuntimeProvider({ children }: ThemeProviderProps) {
     const [profileHardeningEnabled, setProfileHardeningEnabled] = useState(
         isHardeningDomainEnabled('profileV1', null),
     )
+    const [syncState, setSyncState] = useState<AppearanceSyncState>('idle')
+    const [lastSyncedAt, setLastSyncedAt] = useState<string | undefined>(undefined)
+    const [systemReduceMotion, setSystemReduceMotion] = useState(false)
 
     const bootstrappedRef = useRef(false)
     const pendingSyncRef = useRef<AppearanceSnapshot | null>(null)
+    const lastSyncedSnapshotRef = useRef<AppearanceSnapshot | null>(null)
     const syncInFlightRef = useRef(false)
     const syncRetryIndexRef = useRef(0)
     const syncTimerRef = useRef<number | null>(null)
+    const retryTimerRef = useRef<number | null>(null)
 
     const persistLocalSnapshot = useCallback((snapshot: AppearanceSnapshot, source: string) => {
         try {
@@ -115,6 +128,14 @@ function ThemeRuntimeProvider({ children }: ThemeProviderProps) {
         })
     }, [accentColor, density, reduceMotion, theme])
 
+    const applySnapshotLocally = useCallback((snapshot: AppearanceSnapshot, source: string) => {
+        setAccentColorState(snapshot.accentColor)
+        setDensityState(snapshot.density)
+        setReduceMotionState(snapshot.reduceMotion)
+        setNextTheme(snapshot.theme)
+        persistLocalSnapshot(snapshot, source)
+    }, [persistLocalSnapshot, setNextTheme])
+
     const flushRemoteSync = useCallback(async (reason: string) => {
         if (!profileHardeningEnabled || !viewerId) return
         if (syncInFlightRef.current) return
@@ -125,31 +146,23 @@ function ThemeRuntimeProvider({ children }: ThemeProviderProps) {
         syncInFlightRef.current = true
         pendingSyncRef.current = null
         const startedAt = performance.now()
+        let retryScheduled = false
+        setSyncState('saving')
 
         try {
-            const { data: authData, error: authError } = await supabase.auth.getUser()
-            if (authError || !authData.user) {
-                throw new Error(authError?.message || 'Unable to resolve authenticated user')
-            }
-
-            const metadata =
-                authData.user.user_metadata && typeof authData.user.user_metadata === 'object'
-                    ? (authData.user.user_metadata as Record<string, unknown>)
-                    : {}
-            const remoteSnapshot = parseAppearanceSnapshot(metadata.app_appearance)
-            if (remoteSnapshot && !isSnapshotNewer(snapshot, remoteSnapshot)) {
+            if (lastSyncedSnapshotRef.current && areAppearanceSnapshotsEquivalent(lastSyncedSnapshotRef.current, snapshot)) {
                 logger.metric('theme.sync.skip_stale', { reason, userId: viewerId })
                 syncRetryIndexRef.current = 0
+                setSyncState('saved')
+                setLastSyncedAt(lastSyncedSnapshotRef.current.updatedAt)
                 return
             }
 
-            const { error: updateError } = await supabase.auth.updateUser({
-                data: {
-                    ...metadata,
-                    app_appearance: snapshot,
-                },
-            })
-            if (updateError) throw new Error(updateError.message)
+            const result = await writeAppearanceSettings(snapshot)
+            const savedSnapshot = result.snapshot ?? snapshot
+            lastSyncedSnapshotRef.current = savedSnapshot
+            setLastSyncedAt(savedSnapshot.updatedAt)
+            setSyncState('saved')
 
             syncRetryIndexRef.current = 0
             logger.metric('theme.sync.success', {
@@ -171,28 +184,51 @@ function ThemeRuntimeProvider({ children }: ThemeProviderProps) {
             if (retryDelay !== null) {
                 syncRetryIndexRef.current = retryIndex + 1
                 pendingSyncRef.current = snapshot
-                window.setTimeout(() => {
+                if (retryTimerRef.current !== null) {
+                    window.clearTimeout(retryTimerRef.current)
+                }
+                retryTimerRef.current = window.setTimeout(() => {
+                    retryTimerRef.current = null
                     void flushRemoteSync('retry')
                 }, retryDelay)
+                retryScheduled = true
             } else {
                 syncRetryIndexRef.current = 0
+                setSyncState('save_failed')
             }
         } finally {
             syncInFlightRef.current = false
-            if (pendingSyncRef.current) {
-                window.setTimeout(() => {
+            if (pendingSyncRef.current && !retryScheduled) {
+                if (retryTimerRef.current !== null) {
+                    window.clearTimeout(retryTimerRef.current)
+                }
+                retryTimerRef.current = window.setTimeout(() => {
+                    retryTimerRef.current = null
                     void flushRemoteSync('queued')
                 }, 0)
             }
         }
-    }, [profileHardeningEnabled, supabase, viewerId])
+    }, [profileHardeningEnabled, viewerId])
 
     const queueRemoteSync = useCallback((snapshot: AppearanceSnapshot, reason: string) => {
         if (!profileHardeningEnabled || !viewerId || !bootstrappedRef.current) return
+        if (pendingSyncRef.current && areAppearanceSnapshotsEquivalent(pendingSyncRef.current, snapshot)) {
+            return
+        }
+        if (lastSyncedSnapshotRef.current && areAppearanceSnapshotsEquivalent(lastSyncedSnapshotRef.current, snapshot)) {
+            setSyncState('saved')
+            setLastSyncedAt(lastSyncedSnapshotRef.current.updatedAt)
+            return
+        }
         pendingSyncRef.current = snapshot
+        setSyncState('saving')
 
         if (syncTimerRef.current !== null) {
             window.clearTimeout(syncTimerRef.current)
+        }
+        if (retryTimerRef.current !== null) {
+            window.clearTimeout(retryTimerRef.current)
+            retryTimerRef.current = null
         }
 
         syncTimerRef.current = window.setTimeout(() => {
@@ -302,16 +338,32 @@ function ThemeRuntimeProvider({ children }: ThemeProviderProps) {
         queueRemoteSync(snapshot, 'set-reduce-motion')
     }, [buildNextSnapshot, persistLocalSnapshot, queueRemoteSync, reduceMotion])
 
+    const effectiveReduceMotion = reduceMotion || systemReduceMotion
+
     useEffect(() => {
         const root = document.documentElement
         root.style.colorScheme = resolvedTheme
         root.setAttribute('data-theme-mode', theme)
         root.setAttribute('data-accent', accentColor)
         root.setAttribute('data-density', density)
-        if (reduceMotion) root.setAttribute('data-reduce-motion', 'true')
+        if (effectiveReduceMotion) root.setAttribute('data-reduce-motion', 'true')
         else root.removeAttribute('data-reduce-motion')
         ensureThemeColorMeta(resolvedTheme === 'dark' ? '#0a0a0a' : '#ffffff')
-    }, [accentColor, density, reduceMotion, resolvedTheme, theme])
+    }, [accentColor, density, effectiveReduceMotion, resolvedTheme, theme])
+
+    useEffect(() => {
+        const media = window.matchMedia('(prefers-reduced-motion: reduce)')
+        const update = () => {
+            setSystemReduceMotion(
+                resolveReducedMotionPreference({
+                    matchMedia: window.matchMedia?.bind(window),
+                }),
+            )
+        }
+        update()
+        media.addEventListener('change', update)
+        return () => media.removeEventListener('change', update)
+    }, [])
 
     useEffect(() => {
         let cancelled = false
@@ -327,7 +379,8 @@ function ThemeRuntimeProvider({ children }: ThemeProviderProps) {
         if (root.classList.contains('dark') !== expectedDark) mismatchReasons.push('dark-class')
         if (root.getAttribute('data-accent') !== localSnapshot.accentColor) mismatchReasons.push('accent')
         if (root.getAttribute('data-density') !== localSnapshot.density) mismatchReasons.push('density')
-        if ((root.getAttribute('data-reduce-motion') === 'true') !== localSnapshot.reduceMotion) mismatchReasons.push('reduce-motion')
+        const expectedReduceMotion = localSnapshot.reduceMotion || prefersReducedMotionFromSystem(window.matchMedia?.bind(window))
+        if ((root.getAttribute('data-reduce-motion') === 'true') !== expectedReduceMotion) mismatchReasons.push('reduce-motion')
         if (mismatchReasons.length > 0) {
             logger.metric('theme.hydration_mismatch', {
                 reasons: mismatchReasons.join(','),
@@ -341,61 +394,53 @@ function ThemeRuntimeProvider({ children }: ThemeProviderProps) {
         setNextTheme(localSnapshot.theme)
         persistLocalSnapshot(localSnapshot, 'bootstrap-local')
         bootstrappedRef.current = true
+        setSyncState('idle')
 
-        void supabase.auth.getUser().then((authResult: {
-            data: { user: User | null };
-            error: { message: string } | null;
-        }) => {
-            const { data, error } = authResult
+        void readAppearanceSettings().then((result) => {
             if (cancelled) return
-            const user = data.user ?? null
-            const nextUserId = user?.id ?? null
+            const nextUserId = result.userId ?? null
 
             setViewerId(nextUserId)
             const nextShellEnabled = isHardeningDomainEnabled('shellV1', nextUserId)
             const nextProfileEnabled = isHardeningDomainEnabled('profileV1', nextUserId)
             setShellHardeningEnabled(nextShellEnabled)
             setProfileHardeningEnabled(nextProfileEnabled)
+            lastSyncedSnapshotRef.current = result.snapshot
 
-            if (error) {
-                logger.metric('theme.snapshot.fallback', {
-                    source: 'remote',
-                    reason: 'auth-error',
-                    error: error.message,
-                })
+            if (!nextUserId || !nextProfileEnabled) {
                 return
             }
 
-            if (!user || !nextProfileEnabled) {
-                return
-            }
-
-            const metadata =
-                user.user_metadata && typeof user.user_metadata === 'object'
-                    ? (user.user_metadata as Record<string, unknown>)
-                    : {}
-            const remoteSnapshot = parseAppearanceSnapshot(metadata.app_appearance)
+            const remoteSnapshot = result.snapshot
             if (!remoteSnapshot) {
                 logger.metric('theme.snapshot.fallback', {
                     source: 'remote',
                     reason: 'missing-or-invalid',
                 })
                 pendingSyncRef.current = localSnapshot
+                setSyncState('saving')
                 return
             }
 
             const preferredSnapshot = choosePreferredSnapshot(localSnapshot, remoteSnapshot)
             if (isSnapshotNewer(remoteSnapshot, localSnapshot)) {
-                setAccentColorState(preferredSnapshot.accentColor)
-                setDensityState(preferredSnapshot.density)
-                setReduceMotionState(preferredSnapshot.reduceMotion)
-                setNextTheme(preferredSnapshot.theme)
-                persistLocalSnapshot(preferredSnapshot, 'bootstrap-remote-preferred')
+                applySnapshotLocally(preferredSnapshot, 'bootstrap-remote-preferred')
+                setLastSyncedAt(remoteSnapshot.updatedAt)
+                setSyncState('saved')
                 logger.metric('theme.snapshot.remote_preferred', { userId: nextUserId })
             } else {
                 pendingSyncRef.current = localSnapshot
+                setSyncState('saving')
                 logger.metric('theme.snapshot.local_preferred', { userId: nextUserId })
             }
+        }).catch((error: unknown) => {
+            if (cancelled) return
+            logger.metric('theme.snapshot.fallback', {
+                source: 'remote',
+                reason: 'request-failed',
+                error: error instanceof Error ? error.message : 'unknown',
+            })
+            setSyncState('idle')
         }).finally(() => {
             logger.metric('theme.bootstrap.ms', {
                 durationMs: Math.round(performance.now() - startedAt),
@@ -408,14 +453,47 @@ function ThemeRuntimeProvider({ children }: ThemeProviderProps) {
                 window.clearTimeout(syncTimerRef.current)
                 syncTimerRef.current = null
             }
+            if (retryTimerRef.current !== null) {
+                window.clearTimeout(retryTimerRef.current)
+                retryTimerRef.current = null
+            }
         }
-    }, [persistLocalSnapshot, setNextTheme, supabase])
+    }, [applySnapshotLocally, persistLocalSnapshot, setNextTheme])
 
     useEffect(() => {
         if (!bootstrappedRef.current || !profileHardeningEnabled || !viewerId) return
         if (!pendingSyncRef.current) return
         void flushRemoteSync('viewer-ready')
     }, [flushRemoteSync, profileHardeningEnabled, viewerId])
+
+    const resetAppearance = useCallback(async () => {
+        const snapshot = createAppearanceSnapshot(DEFAULT_APPEARANCE_SNAPSHOT)
+        applySnapshotLocally(snapshot, 'reset-local')
+        if (!profileHardeningEnabled || !viewerId || !bootstrappedRef.current) {
+            setSyncState('idle')
+            setLastSyncedAt(undefined)
+            return
+        }
+        pendingSyncRef.current = snapshot
+        setSyncState('saving')
+        if (syncTimerRef.current !== null) {
+            window.clearTimeout(syncTimerRef.current)
+        }
+        try {
+            const result = await resetAppearanceSettings()
+            const savedSnapshot = result.snapshot ?? snapshot
+            lastSyncedSnapshotRef.current = savedSnapshot
+            setLastSyncedAt(savedSnapshot.updatedAt)
+            setSyncState('saved')
+        } catch (error) {
+            logger.metric('theme.reset.failure', {
+                userId: viewerId,
+                error: error instanceof Error ? error.message : 'unknown',
+            })
+            setSyncState('save_failed')
+            pendingSyncRef.current = snapshot
+        }
+    }, [applySnapshotLocally, profileHardeningEnabled, viewerId])
 
     const themeValue = useMemo<ThemeContextValue>(() => ({
         theme,
@@ -432,12 +510,17 @@ function ThemeRuntimeProvider({ children }: ThemeProviderProps) {
         setDensity,
         reduceMotion,
         setReduceMotion,
-    }), [accentColor, density, reduceMotion, setAccentColor, setDensity, setReduceMotion])
+        syncState,
+        lastSyncedAt,
+        resetAppearance,
+    }), [accentColor, density, lastSyncedAt, reduceMotion, resetAppearance, setAccentColor, setDensity, setReduceMotion, syncState])
 
     return (
         <ThemeContext.Provider value={themeValue}>
             <AppearanceContext.Provider value={appearanceValue}>
-                {children}
+                <MotionConfig reducedMotion={effectiveReduceMotion ? 'always' : 'never'}>
+                    {children}
+                </MotionConfig>
             </AppearanceContext.Provider>
         </ThemeContext.Provider>
     )

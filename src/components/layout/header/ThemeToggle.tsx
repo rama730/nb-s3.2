@@ -38,7 +38,7 @@ export default function ThemeToggle() {
             <Button
                 variant="ghost"
                 size="sm"
-                className="h-9 w-9 p-0 opacity-50 cursor-not-allowed"
+                className="opacity-50 cursor-not-allowed"
                 aria-label="Theme (loading)"
                 disabled
             />
@@ -50,7 +50,7 @@ export default function ThemeToggle() {
             <button
                 type="button"
                 onClick={quickToggleTheme}
-                className="relative p-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+                className="relative flex h-[var(--ui-control-height)] w-[var(--ui-control-height)] items-center justify-center hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors focus:outline-none focus:ring-2 focus:ring-ring/50"
                 aria-label="Quick toggle theme"
                 title={`Theme: ${theme} (${resolvedTheme})`}
             >
@@ -61,7 +61,7 @@ export default function ThemeToggle() {
                 <DropdownMenuTrigger asChild>
                     <button
                         type="button"
-                        className="h-full border-l border-zinc-200 dark:border-zinc-800 px-1.5 py-2 text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+                        className="flex h-[var(--ui-control-height)] items-center border-l border-zinc-200 dark:border-zinc-800 px-1.5 text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors focus:outline-none focus:ring-2 focus:ring-ring/50"
                         aria-label="Choose theme mode"
                     >
                         <ChevronDown className="w-4 h-4" />
@@ -73,17 +73,17 @@ export default function ThemeToggle() {
                     <DropdownMenuItem onClick={() => void setThemeWithTransition("light")}>
                         <Sun className="w-4 h-4" />
                         Light
-                        {theme === "light" ? <span className="ml-auto text-[10px] uppercase text-indigo-600">Active</span> : null}
+                        {theme === "light" ? <span className="ml-auto text-[10px] uppercase text-primary">Active</span> : null}
                     </DropdownMenuItem>
                     <DropdownMenuItem onClick={() => void setThemeWithTransition("dark")}>
                         <Moon className="w-4 h-4" />
                         Dark
-                        {theme === "dark" ? <span className="ml-auto text-[10px] uppercase text-indigo-600">Active</span> : null}
+                        {theme === "dark" ? <span className="ml-auto text-[10px] uppercase text-primary">Active</span> : null}
                     </DropdownMenuItem>
                     <DropdownMenuItem onClick={() => void setThemeWithTransition("system")}>
                         <Laptop className="w-4 h-4" />
                         System
-                        {theme === "system" ? <span className="ml-auto text-[10px] uppercase text-indigo-600">Active</span> : null}
+                        {theme === "system" ? <span className="ml-auto text-[10px] uppercase text-primary">Active</span> : null}
                     </DropdownMenuItem>
                 </DropdownMenuContent>
             </DropdownMenu>

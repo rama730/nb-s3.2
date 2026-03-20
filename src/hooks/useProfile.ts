@@ -5,6 +5,7 @@ import { useAuth } from '@/lib/hooks/use-auth';
 import type { Profile } from '@/lib/db/schema';
 import { normalizeProfile } from '@/lib/utils/normalize-profile';
 import { queryKeys } from '@/lib/query-keys';
+import { subscribeActiveResource } from '@/lib/realtime/subscriptions';
 
 export const useProfile = (usernameOrId?: string, initialData?: Profile | null) => {
     const queryClient = useQueryClient();
@@ -49,16 +50,16 @@ export const useProfile = (usernameOrId?: string, initialData?: Profile | null) 
     useEffect(() => {
         if (!activeProfile?.id || isMe) return;
 
-        const channel = supabase.channel(`profile-${activeProfile.id}`)
-            .on(
-                'postgres_changes',
+        const channel = subscribeActiveResource({
+            supabase,
+            resourceType: 'profile',
+            resourceId: activeProfile.id,
+            bindings: [
                 {
                     event: '*',
-                    schema: 'public',
                     table: 'profiles',
-                    filter: `id=eq.${activeProfile.id}`
-                },
-                (payload: any) => {
+                    filter: `id=eq.${activeProfile.id}`,
+                    handler: (payload) => {
                     if (payload?.eventType === 'DELETE') {
                         queryClient.invalidateQueries({ queryKey: queryKeys.profile.byTarget(targetKey || 'unknown') });
                         return;
@@ -81,9 +82,10 @@ export const useProfile = (usernameOrId?: string, initialData?: Profile | null) 
                     if (normalized.username) {
                         queryClient.setQueryData(queryKeys.profile.byTarget(normalized.username), normalized);
                     }
-                }
-            )
-            .subscribe();
+                    },
+                },
+            ],
+        });
 
         return () => {
             supabase.removeChannel(channel);

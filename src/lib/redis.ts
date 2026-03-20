@@ -1,91 +1,119 @@
-import { Redis } from '@upstash/redis';
+import { Redis } from '@upstash/redis'
 
-let redis: Redis | null = null;
-try {
-    if (process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN) {
-        redis = new Redis({
-            url: process.env.UPSTASH_REDIS_REST_URL,
-            token: process.env.UPSTASH_REDIS_REST_TOKEN,
-        });
-    }
-} catch (e) {
-    console.warn("Redis initialization failed. Caching disabled.");
+export type CacheEnvelope<T> = {
+    value: T
+    cachedAt: number
+    staleAt: number | null
+    expiresAt: number | null
 }
 
-export { redis };
+let redisClient: Redis | null | undefined
 
-type LocalRateLimitEntry = {
-    count: number;
-    resetAtMs: number;
-};
-
-const localRateLimitStore = new Map<string, LocalRateLimitEntry>();
-const LOCAL_RATE_LIMIT_MAX_KEYS = 10_000;
-let warnedRedisRateLimitFallback = false;
-
-function applyLocalRateLimit(identifier: string, limit: number, window: number): boolean {
-    const nowMs = Date.now();
-    const key = `ratelimit:${identifier}`;
-    const resetAtMs = nowMs + window * 1000;
-    const existing = localRateLimitStore.get(key);
-
-    if (!existing || existing.resetAtMs <= nowMs) {
-        localRateLimitStore.set(key, { count: 1, resetAtMs });
-        return true;
+function createRedisClient() {
+    if (!process.env.UPSTASH_REDIS_REST_URL || !process.env.UPSTASH_REDIS_REST_TOKEN) {
+        return null
     }
 
-    existing.count += 1;
-    localRateLimitStore.set(key, existing);
-
-    // Opportunistic cleanup to avoid unbounded growth in long-lived processes.
-    if (localRateLimitStore.size > LOCAL_RATE_LIMIT_MAX_KEYS) {
-        for (const [entryKey, entry] of localRateLimitStore) {
-            if (entry.resetAtMs <= nowMs) {
-                localRateLimitStore.delete(entryKey);
-            }
-        }
-    }
-
-    return existing.count <= limit;
+    return new Redis({
+        url: process.env.UPSTASH_REDIS_REST_URL,
+        token: process.env.UPSTASH_REDIS_REST_TOKEN,
+    })
 }
 
-/**
- * Cache a value in Redis with a TTL (seconds)
- */
-export async function cacheData<T>(key: string, data: T, ttl: number = 60): Promise<void> {
-    if (!redis) return;
-    await redis.set(key, JSON.stringify(data), { ex: ttl });
-}
+export function getRedisClient() {
+    if (redisClient !== undefined) return redisClient
 
-/**
- * Retrieve a cached value from Redis
- */
-export async function getCachedData<T>(key: string): Promise<T | null> {
-    if (!redis) return null;
-    const data = await redis.get<string>(key);
-    if (!data) return null;
-    return data as T;
-}
-
-/**
- * Rate Limiter helper (Fixed Window)
- * Returns true if allowed, false if blocked
- */
-export async function rateLimit(identifier: string, limit: number = 10, window: number = 60): Promise<boolean> {
-    if (!redis) return applyLocalRateLimit(identifier, limit, window);
     try {
-        const key = `ratelimit:${identifier}`;
-        const count = await redis.incr(key);
-        if (count === 1) {
-            await redis.expire(key, window);
-        }
-        return count <= limit;
+        redisClient = createRedisClient()
     } catch (error) {
-        if (!warnedRedisRateLimitFallback) {
-            warnedRedisRateLimitFallback = true;
-            const message = error instanceof Error ? error.message : String(error);
-            console.warn(`[rate-limit] Redis unavailable, using in-memory fallback: ${message}`);
-        }
-        return applyLocalRateLimit(identifier, limit, window);
+        const message = error instanceof Error ? error.message : String(error)
+        console.warn(`[redis] initialization failed: ${message}`)
+        redisClient = null
     }
+
+    return redisClient
+}
+
+export const redis = getRedisClient()
+
+function isCacheEnvelope<T>(value: unknown): value is CacheEnvelope<T> {
+    return !!value
+        && typeof value === 'object'
+        && 'value' in value
+        && 'cachedAt' in value
+}
+
+async function setJsonValue<T>(key: string, payload: T, ttlSeconds: number) {
+    const client = getRedisClient()
+    if (!client) return
+    await client.set(key, JSON.stringify(payload), { ex: ttlSeconds })
+}
+
+async function getJsonValue<T>(key: string): Promise<T | null> {
+    const client = getRedisClient()
+    if (!client) return null
+
+    const raw = await client.get<string>(key)
+    if (!raw) return null
+
+    try {
+        return JSON.parse(raw) as T
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        console.warn(`[redis] failed to parse cached value for ${key}: ${message}`)
+        return null
+    }
+}
+
+export async function cacheData<T>(key: string, data: T, ttlSeconds: number = 60): Promise<void> {
+    await setJsonValue(key, data, ttlSeconds)
+}
+
+export async function cacheStaleableData<T>(
+    key: string,
+    value: T,
+    input: {
+        freshTtlSeconds: number
+        staleTtlSeconds?: number
+    }
+): Promise<void> {
+    const freshTtlSeconds = Math.max(1, Math.trunc(input.freshTtlSeconds))
+    const staleTtlSeconds = Math.max(0, Math.trunc(input.staleTtlSeconds ?? 0))
+    const cachedAt = Date.now()
+    const envelope: CacheEnvelope<T> = {
+        value,
+        cachedAt,
+        staleAt: cachedAt + freshTtlSeconds * 1000,
+        expiresAt: cachedAt + (freshTtlSeconds + staleTtlSeconds) * 1000,
+    }
+
+    await setJsonValue(key, envelope, freshTtlSeconds + staleTtlSeconds)
+}
+
+export async function getCacheEnvelope<T>(key: string): Promise<CacheEnvelope<T> | null> {
+    const cached = await getJsonValue<CacheEnvelope<T> | T>(key)
+    if (!cached) return null
+
+    if (isCacheEnvelope<T>(cached)) {
+        return cached
+    }
+
+    const now = Date.now()
+    return {
+        value: cached,
+        cachedAt: now,
+        staleAt: null,
+        expiresAt: null,
+    }
+}
+
+export async function getCachedData<T>(key: string): Promise<T | null> {
+    const envelope = await getCacheEnvelope<T>(key)
+    return envelope?.value ?? null
+}
+
+export async function rateLimit(identifier: string, limit: number = 10, windowSeconds: number = 60): Promise<boolean> {
+    const { consumeRateLimit } = await import('@/lib/security/rate-limit')
+    const result = await consumeRateLimit(identifier, limit, windowSeconds)
+    return result.allowed
 }

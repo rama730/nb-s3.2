@@ -19,7 +19,7 @@ export function ProfileAvatar({
 
     if (profile?.avatarUrl) {
         return (
-            <div className="relative rounded-full overflow-hidden ring-2 ring-white dark:ring-zinc-950 group-hover:ring-blue-100 dark:group-hover:ring-blue-900/30 transition-all" style={{ width: size, height: size }}>
+            <div className="relative rounded-full overflow-hidden ring-2 ring-white dark:ring-zinc-950 group-hover:ring-primary/20 transition-all" style={{ width: size, height: size }}>
                 <Image
                     src={profile.avatarUrl}
                     alt={profile.fullName || profile.username || "User"}
@@ -41,7 +41,7 @@ export function ProfileAvatar({
                         }
                     }}
                 />
-                <div className="avatar-fallback absolute inset-0 bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-sm font-semibold text-white" style={{ display: "none" }}>
+                <div className="avatar-fallback absolute inset-0 app-accent-gradient flex items-center justify-center text-sm font-semibold text-white" style={{ display: "none" }}>
                     {profileInitial}
                 </div>
             </div>
@@ -50,7 +50,7 @@ export function ProfileAvatar({
 
     return (
         <div
-            className="rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-sm font-semibold text-white ring-2 ring-white dark:ring-zinc-950 group-hover:ring-blue-100 dark:group-hover:ring-blue-900/30 transition-all"
+            className="rounded-full app-accent-gradient flex items-center justify-center text-sm font-semibold text-white ring-2 ring-white dark:ring-zinc-950 group-hover:ring-primary/20 transition-all"
             style={{ width: size, height: size }}
         >
             {profileInitial}

@@ -80,9 +80,9 @@ export function toProjectCardViewModel(project: Project): ProjectCardViewModel {
 
     // Collaborators
     const collaborators = [];
-    if (extendedProject.owner) {
+    if (extendedProject.owner && !extendedProject.owner.isMasked) {
         collaborators.push({
-            full_name: extendedProject.owner.fullName,
+            full_name: extendedProject.owner.displayName || extendedProject.owner.fullName,
             avatar_url: extendedProject.owner.avatarUrl,
             username: extendedProject.owner.username,
         });

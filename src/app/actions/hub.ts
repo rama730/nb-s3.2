@@ -4,7 +4,7 @@ import { FILTER_VIEWS, type FilterView } from '@/constants/hub';
 import { consumeRateLimit } from '@/lib/security/rate-limit';
 import { getHubProjects } from '@/lib/data/hub';
 import { HUB_RANKING_SCHEMA_VERSION } from '@/lib/hub/ranking-config';
-import { createClient } from '@/lib/supabase/server';
+import { getViewerAuthContext } from '@/lib/server/viewer-context';
 import { HubFilters } from '@/types/hub';
 import { headers } from 'next/headers';
 import { unstable_cache } from 'next/cache';
@@ -17,10 +17,7 @@ export async function fetchHubProjectsAction(
     view: FilterView = FILTER_VIEWS.ALL,
 ) {
     try {
-        const supabase = await createClient();
-        const {
-            data: { user },
-        } = await supabase.auth.getUser();
+        const { user } = await getViewerAuthContext();
         const headerStore = await headers();
         const ipAddress = headerStore.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
         const normalizedSearch = (filters.search || '').trim();

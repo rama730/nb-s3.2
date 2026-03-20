@@ -17,6 +17,7 @@ import FileEditor from "../FileEditor";
 import AssetViewer from "../preview/AssetViewer";
 import { isAssetLike } from "../utils/fileKind";
 import type { FilesWorkspaceTabState, PaneId } from "../state/filesTabTypes";
+import type { CursorPresenceMap } from "./cursorProtocol";
 import { getFileContent } from "@/stores/filesWorkspaceStore";
 
 interface EditorPaneProps {
@@ -58,6 +59,8 @@ interface EditorPaneProps {
   onRun?: () => void;
   canRun?: boolean;
   gitChangedFiles: Array<{ nodeId: string; status: "modified" | "added" | "deleted" }>;
+  remoteCursors: CursorPresenceMap;
+  onBroadcastCursor: (nodeId: string, line: number, column: number, selStart?: number, selEnd?: number) => void;
 }
 
 export default function EditorPane({
@@ -99,6 +102,8 @@ export default function EditorPane({
   onRun,
   canRun,
   gitChangedFiles,
+  remoteCursors,
+  onBroadcastCursor,
 }: EditorPaneProps) {
   const activeTab = activeTabId ? tabById[activeTabId] : null;
 
@@ -468,6 +473,8 @@ export default function EditorPane({
               canRun={canRun}
               gitStatus={gitStatus}
               tabId={activeTab.id}
+              remoteCursors={remoteCursors}
+              onBroadcastCursor={onBroadcastCursor}
             />
           )
         ) : (

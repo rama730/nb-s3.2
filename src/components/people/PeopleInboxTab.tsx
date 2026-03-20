@@ -115,12 +115,12 @@ export default function PeopleInboxTab({ inboxPromise }: PeopleInboxTabProps) {
                                             className="w-10 h-10 rounded-full object-cover"
                                         />
                                     ) : (
-                                        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white font-semibold">
+                                        <div className="w-10 h-10 rounded-full app-accent-gradient flex items-center justify-center text-white font-semibold">
                                             {(req.requesterFullName || "U")[0]?.toUpperCase()}
                                         </div>
                                     )}
                                     <div className="flex-1 min-w-0">
-                                        <Link href={`/u/${req.requesterUsername}`} className="font-medium text-zinc-900 dark:text-zinc-100 hover:text-indigo-600 truncate block">
+                                        <Link href={`/u/${req.requesterUsername}`} className="font-medium text-zinc-900 dark:text-zinc-100 hover:text-primary truncate block">
                                             {req.requesterFullName || req.requesterUsername || "User"}
                                         </Link>
                                     </div>
@@ -128,7 +128,7 @@ export default function PeopleInboxTab({ inboxPromise }: PeopleInboxTabProps) {
                                 <div className="flex gap-2 mt-3">
                                     <button
                                         onClick={() => handleAccept(req.id)}
-                                        className="flex-1 px-3 py-1.5 text-sm rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 transition-colors flex items-center justify-center gap-1"
+                                        className="flex-1 px-3 py-1.5 text-sm rounded-lg app-accent-solid hover:bg-primary/90 transition-colors flex items-center justify-center gap-1"
                                     >
                                         <Check className="w-4 h-4" />
                                         Accept

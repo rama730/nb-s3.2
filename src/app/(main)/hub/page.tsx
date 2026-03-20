@@ -1,12 +1,11 @@
 import { Suspense } from "react";
 import ProjectCardSkeleton from "@/components/projects/ProjectCardSkeleton";
 import SimpleHubClient from "@/components/hub/SimpleHubClient";
-import { fetchHubProjectsAction } from "@/app/actions/hub";
 import { PROJECT_STATUS, PROJECT_TYPE, SORT_OPTIONS } from "@/constants/hub";
 import { isHardeningDomainEnabled } from "@/lib/features/hardening";
 import { getViewerAuthContext } from "@/lib/server/viewer-context";
-
-export const dynamic = 'force-dynamic'; // Real-time data fetching
+import { getPublicProjectsFeedPage } from "@/lib/projects/public-feed-service";
+import { mapPublicProjectToHubProject } from "@/lib/projects/public-feed";
 
 const INITIAL_HUB_FILTERS = {
     status: PROJECT_STATUS.ALL,
@@ -28,7 +27,13 @@ export default async function HubPage() {
     const { user } = await getViewerAuthContext();
     const dataHardeningEnabled = isHardeningDomainEnabled("dataV1", user?.id ?? null);
     const initialPageSize = dataHardeningEnabled ? 18 : 24;
-    const initialData = await fetchHubProjectsAction(INITIAL_HUB_FILTERS, undefined, initialPageSize);
+    const initialFeedPage = await getPublicProjectsFeedPage(initialPageSize, null);
+    const initialData = {
+        success: true as const,
+        projects: initialFeedPage.projects.map(mapPublicProjectToHubProject),
+        nextCursor: initialFeedPage.nextCursor || undefined,
+        hasMore: Boolean(initialFeedPage.nextCursor),
+    };
 
     return (
         <div className="h-full min-h-0 overflow-hidden bg-zinc-50 dark:bg-zinc-950 flex flex-col flex-1">
@@ -43,7 +48,7 @@ export default async function HubPage() {
                     </div>
                 </div>
             }>
-                <SimpleHubClient returnUserData={user} initialProjectsPage={initialData.success ? initialData : null} />
+                <SimpleHubClient returnUserData={user} initialProjectsPage={initialData} />
             </Suspense>
         </div>
     );

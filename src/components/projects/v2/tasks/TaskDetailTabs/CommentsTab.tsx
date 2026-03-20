@@ -89,7 +89,7 @@ export default function CommentsTab({
                         <button 
                             onClick={handleAddComment}
                             disabled={!newComment.trim() || isAdding}
-                            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            className="flex items-center gap-2 px-4 py-2 app-accent-solid rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                             {isAdding ? (
                                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -106,7 +106,7 @@ export default function CommentsTab({
             <div className="space-y-6">
                 {comments.map((comment) => (
                     <div key={comment.id} className="flex gap-4">
-                        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center text-white text-xs font-semibold flex-shrink-0">
+                        <div className="w-8 h-8 rounded-full app-accent-gradient flex items-center justify-center text-white text-xs font-semibold flex-shrink-0">
                             {comment.user_profile?.full_name?.[0]?.toUpperCase() || 'U'}
                         </div>
                         <div className="flex-1">

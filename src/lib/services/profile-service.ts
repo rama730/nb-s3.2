@@ -5,6 +5,7 @@
  */
 
 import { createClient } from '@/lib/supabase/server'
+import { isEmailVerified } from '@/lib/auth/email-verification'
 import type { Profile } from '@/lib/db/schema'
 
 // Per-instance in-memory profile cache (shared across requests on one instance).
@@ -108,6 +109,7 @@ export async function getProfile(userId: string): Promise<Profile | null> {
         interests: data.interests || [],
         socialLinks: data.social_links || {},
         visibility: data.visibility || 'public',
+        connectionPrivacy: data.connection_privacy || 'everyone',
         // New fields
         experience: data.experience || [],
         education: data.education || [],
@@ -122,6 +124,14 @@ export async function getProfile(userId: string): Promise<Profile | null> {
         connectionsCount: data.connections_count ?? 0,
         projectsCount: data.projects_count ?? 0,
         followersCount: data.followers_count ?? 0,
+        workspaceInboxCount: data.workspace_inbox_count ?? 0,
+        workspaceDueTodayCount: data.workspace_due_today_count ?? 0,
+        workspaceOverdueCount: data.workspace_overdue_count ?? 0,
+        workspaceInProgressCount: data.workspace_in_progress_count ?? 0,
+        securityRecoveryCodes: data.security_recovery_codes || [],
+        recoveryCodesGeneratedAt: data.recovery_codes_generated_at
+            ? new Date(data.recovery_codes_generated_at)
+            : null,
         deletedAt: data.deleted_at ?? null,
         createdAt: new Date(data.created_at),
         updatedAt: new Date(data.updated_at),
@@ -239,10 +249,14 @@ export async function syncProfileToJWT(
     // For now, we store in user metadata which is accessible in session
     const supabase = await createClient()
 
+    const { data: authData } = await supabase.auth.getUser()
+    const user = authData.user
+
     await supabase.auth.updateUser({
         data: {
             username,
             onboarded: true,
+            email_verified: isEmailVerified(user as Record<string, unknown> | null),
         }
     })
 }

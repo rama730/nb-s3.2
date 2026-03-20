@@ -25,6 +25,7 @@ import { useWorkspaceRealtime } from '@/hooks/useWorkspaceRealtime';
 import { useWorkspaceKeyboard } from '@/hooks/useWorkspaceKeyboard';
 import { useTaskPanelData } from '@/hooks/useTaskPanelData';
 import { queryKeys } from '@/lib/query-keys';
+import { useReducedMotionPreference } from '@/components/providers/theme-provider';
 
 interface WorkspaceClientProps {
     initialData: WorkspaceOverviewBaseData | null;
@@ -42,6 +43,7 @@ const TAB_EXIT = { opacity: 0, y: -4 };
 export default function WorkspaceClient({ initialData, initialTab }: WorkspaceClientProps) {
     const { user } = useAuth();
     const queryClient = useQueryClient();
+    const reduceMotion = useReducedMotionPreference();
 
     const { data: baseData } = useQuery({
         queryKey: queryKeys.workspace.overviewBase(),
@@ -180,17 +182,17 @@ export default function WorkspaceClient({ initialData, initialTab }: WorkspaceCl
             </div>
 
             {/* Tab Content with animation */}
-            <AnimatePresence mode="wait">
+            <AnimatePresence mode="wait" initial={!reduceMotion}>
                 {activeTab === 'overview' ? (
                     <motion.div
                         key="overview"
                         className="flex-1 min-h-0"
                         role="tabpanel"
                         id={`workspace-tab-${activeTab}`}
-                        initial={TAB_INITIAL}
-                        animate={TAB_ANIMATE}
-                        exit={TAB_EXIT}
-                        transition={TAB_TRANSITION}
+                        initial={reduceMotion ? { opacity: 0 } : TAB_INITIAL}
+                        animate={reduceMotion ? { opacity: 1 } : TAB_ANIMATE}
+                        exit={reduceMotion ? { opacity: 0 } : TAB_EXIT}
+                        transition={reduceMotion ? { duration: 0 } : TAB_TRANSITION}
                     >
                         <WorkspaceSectionBoundary sectionName="Overview">
                             <OverviewTab
@@ -207,10 +209,10 @@ export default function WorkspaceClient({ initialData, initialTab }: WorkspaceCl
                         className="flex-1 min-h-0"
                         role="tabpanel"
                         id={`workspace-tab-${activeTab}`}
-                        initial={TAB_INITIAL}
-                        animate={TAB_ANIMATE}
-                        exit={TAB_EXIT}
-                        transition={TAB_TRANSITION}
+                        initial={reduceMotion ? { opacity: 0 } : TAB_INITIAL}
+                        animate={reduceMotion ? { opacity: 1 } : TAB_ANIMATE}
+                        exit={reduceMotion ? { opacity: 0 } : TAB_EXIT}
+                        transition={reduceMotion ? { duration: 0 } : TAB_TRANSITION}
                     >
                         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
                             {activeTab === 'tasks' && (
@@ -244,7 +246,7 @@ export default function WorkspaceClient({ initialData, initialTab }: WorkspaceCl
             </AnimatePresence>
 
             {/* Inline Task Detail Panel */}
-            <AnimatePresence>
+            <AnimatePresence initial={!reduceMotion}>
                 {selectedTask && (
                     <TaskDetailPanel
                         task={{ ...selectedTask, project: { key: selectedTask.projectKey } }}

@@ -15,6 +15,7 @@ import SubtasksTab from "./TaskDetailTabs/SubtasksTab";
 import CommentsTab from "./TaskDetailTabs/CommentsTab";
 import FilesTab from "./TaskDetailTabs/FilesTab";
 import ActivityTab from "./TaskDetailTabs/ActivityTab";
+import { useReducedMotionPreference } from "@/components/providers/theme-provider";
 
 interface TaskDetailPanelProps {
     task: any;
@@ -37,6 +38,7 @@ export default function TaskDetailPanel({
     projectId,
     currentUserId
 }: TaskDetailPanelProps) {
+    const reduceMotion = useReducedMotionPreference();
     const [activeTab, setActiveTab] = useState<"details" | "subtasks" | "comments" | "files" | "activity">("details");
     const [isDeleting, setIsDeleting] = useState(false);
     const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -77,16 +79,17 @@ export default function TaskDetailPanel({
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
+                transition={reduceMotion ? { duration: 0 } : undefined}
                 className="fixed top-[var(--header-height,56px)] left-0 right-0 bottom-0 bg-black/50 backdrop-blur-sm z-[200]"
                 onClick={onClose}
             />
 
             {/* Panel */}
             <motion.div
-                initial={{ x: "100%" }}
-                animate={{ x: 0 }}
-                exit={{ x: "100%" }}
-                transition={{ type: "spring", damping: 25, stiffness: 200 }}
+                initial={reduceMotion ? { opacity: 0 } : { x: "100%" }}
+                animate={reduceMotion ? { opacity: 1 } : { x: 0 }}
+                exit={reduceMotion ? { opacity: 0 } : { x: "100%" }}
+                transition={reduceMotion ? { duration: 0 } : { type: "spring", damping: 25, stiffness: 200 }}
                 className="fixed right-0 top-[var(--header-height,56px)] bottom-0 w-full max-w-2xl bg-white dark:bg-zinc-900 shadow-2xl z-[201] flex flex-col border-l border-zinc-200 dark:border-zinc-800 lg:w-[42rem] xl:w-[48rem]"
             >
                 {/* Header */}
@@ -143,7 +146,7 @@ export default function TaskDetailPanel({
                                 className={cn(
                                     "flex items-center gap-2 pb-3 border-b-2 text-sm font-medium transition-colors whitespace-nowrap",
                                     activeTab === tab.id
-                                        ? "border-indigo-600 text-indigo-600 dark:text-indigo-400"
+                                        ? "border-primary text-primary"
                                         : "border-transparent text-zinc-500 hover:text-zinc-700"
                                 )}
                             >
@@ -153,7 +156,7 @@ export default function TaskDetailPanel({
                                     <span className={cn(
                                         "px-1.5 py-0.5 rounded-full text-[10px]",
                                         activeTab === tab.id 
-                                            ? "bg-indigo-100 text-indigo-700" 
+                                            ? "bg-primary/10 text-primary" 
                                             : "bg-zinc-100 text-zinc-600"
                                     )}>
                                         {tab.count}

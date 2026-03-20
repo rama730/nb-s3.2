@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useAuth } from "@/lib/hooks/use-auth";
+import { useRealtime } from "@/components/providers/RealtimeProvider";
 
 interface UsePeopleNotificationsReturn {
     totalPending: number;
@@ -16,6 +17,7 @@ export function usePeopleNotifications(): UsePeopleNotificationsReturn {
     const [pendingConnections, setPendingConnections] = useState(0);
     const [pendingInvites, setPendingInvites] = useState(0);
     const { user } = useAuth();
+    const { subscribeUserNotifications } = useRealtime();
     const userId = user?.id;
     const supabase = useMemo(() => createSupabaseBrowserClient(), []);
 
@@ -47,26 +49,12 @@ export function usePeopleNotifications(): UsePeopleNotificationsReturn {
 
     useEffect(() => {
         if (!userId) return;
-        const channel = supabase
-            .channel(`people-notifications-${userId}`)
-            .on(
-                "postgres_changes",
-                {
-                    event: "*",
-                    schema: "public",
-                    table: "connections",
-                    filter: `addressee_id=eq.${userId}`,
-                },
-                () => {
-                    void refresh();
-                }
-            )
-            .subscribe();
-
-        return () => {
-            void supabase.removeChannel(channel);
-        };
-    }, [supabase, userId, refresh]);
+        return subscribeUserNotifications((event) => {
+            if (event.kind === "connection") {
+                void refresh();
+            }
+        });
+    }, [refresh, subscribeUserNotifications, userId]);
 
     return {
         totalPending: pendingConnections + pendingInvites,

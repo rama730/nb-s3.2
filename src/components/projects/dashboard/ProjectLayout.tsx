@@ -112,13 +112,22 @@ export default function ProjectLayout({
                                 {/* Created by */}
                                 <div className="hidden md:flex items-center gap-1 text-xs text-zinc-500 dark:text-zinc-400 min-w-0">
                                     <span className="shrink-0">Created by</span>
-                                    <Link
-                                        href={profileHref({ id: (project as any)?.owner?.id, username: (project as any)?.owner?.username })}
-                                        className="font-medium text-indigo-600 dark:text-indigo-400 hover:underline truncate max-w-[180px]"
-                                        title={(project as any)?.owner?.fullName || (project as any)?.owner?.username || "Creator"}
-                                    >
-                                        {(project as any)?.owner?.fullName || (project as any)?.owner?.username || "Creator"}
-                                    </Link>
+                                    {(project as any)?.owner?.canOpenProfile ? (
+                                        <Link
+                                            href={profileHref({ id: (project as any)?.owner?.id, username: (project as any)?.owner?.username })}
+                                            className="font-medium text-primary hover:underline truncate max-w-[180px]"
+                                            title={(project as any)?.owner?.displayName || (project as any)?.owner?.fullName || (project as any)?.owner?.username || "Creator"}
+                                        >
+                                            {(project as any)?.owner?.displayName || (project as any)?.owner?.fullName || (project as any)?.owner?.username || "Creator"}
+                                        </Link>
+                                    ) : (
+                                        <span
+                                            className="truncate max-w-[180px] font-medium text-zinc-700 dark:text-zinc-300"
+                                            title={(project as any)?.owner?.displayName || "Private creator"}
+                                        >
+                                            {(project as any)?.owner?.displayName || "Private creator"}
+                                        </span>
+                                    )}
                                 </div>
                                 {project?.status === "active" && (
                                     <span className="hidden sm:inline-block w-2 h-2 rounded-full bg-emerald-500" title="Active Project" />
@@ -142,7 +151,7 @@ export default function ProjectLayout({
                                 <button
                                     type="button"
                                     onClick={onEdit}
-                                    className="hidden sm:flex items-center gap-1.5 px-3 py-2 rounded-md bg-indigo-600 text-white hover:bg-indigo-700 transition-colors text-sm font-medium shadow-sm"
+                                    className="hidden sm:flex items-center gap-1.5 px-3 py-2 rounded-md app-accent-solid hover:bg-primary/90 transition-[background-color,box-shadow] text-sm font-medium shadow-sm"
                                     title="Edit Project"
                                 >
                                     <Edit className="w-4 h-4" />
@@ -157,8 +166,8 @@ export default function ProjectLayout({
                                 className={cn(
                                     "p-2 rounded-md transition-all flex items-center gap-1.5 text-sm font-medium disabled:opacity-60 disabled:cursor-not-allowed",
                                     isFollowing
-                                        ? "text-indigo-600 bg-indigo-50 dark:bg-indigo-900/20"
-                                        : "text-zinc-500 hover:text-indigo-600 hover:bg-zinc-50 dark:bg-zinc-900 dark:hover:bg-zinc-800"
+                                        ? "text-primary bg-primary/10"
+                                        : "text-zinc-500 hover:text-primary hover:bg-zinc-50 dark:bg-zinc-900 dark:hover:bg-zinc-800"
                                 )}
                                 title={isFollowing ? "Unfollow Project" : "Follow Project"}
                                 data-testid="project-follow-toggle"
@@ -215,16 +224,16 @@ export default function ProjectLayout({
                                     className={cn(
                                         "relative flex items-center gap-2 px-4 py-3 text-sm font-medium transition-all whitespace-nowrap disabled:opacity-60 disabled:cursor-not-allowed",
                                         isActive
-                                            ? "text-indigo-600 dark:text-indigo-400"
+                                            ? "text-primary"
                                             : "text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200"
                                     )}
                                 >
-                                    <tab.icon className={cn("w-4 h-4", isActive ? "text-indigo-500" : "text-zinc-400")} />
+                                    <tab.icon className={cn("w-4 h-4", isActive ? "text-primary" : "text-zinc-400")} />
                                     {tab.label}
                                     {isActive && (
                                         <motion.div
                                             layoutId="activeProjectTab"
-                                            className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-500"
+                                            className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary"
                                             transition={{ type: "spring", stiffness: 380, damping: 30 }}
                                         />
                                     )}

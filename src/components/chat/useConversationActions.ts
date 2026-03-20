@@ -6,7 +6,7 @@ import {
   setConversationArchived,
   setConversationMuted,
   type ConversationWithDetails,
-} from "@/app/actions/messaging";
+} from "@/app/actions/messaging/conversations";
 import { useChatStore } from "@/stores/chatStore";
 
 export function useConversationActions(activeConversation: ConversationWithDetails | null) {
@@ -58,4 +58,3 @@ export function useConversationActions(activeConversation: ConversationWithDetai
     handleToggleMuteConversation,
   };
 }
-

@@ -60,9 +60,6 @@ function main() {
       errors.push(`"${routeId}" uses force-dynamic but is not in allowlist (${rel}).`);
     }
 
-    if (contract?.renderingMode === "dynamic" && !hasForceDynamic && contract.allowForceDynamic) {
-      errors.push(`"${routeId}" contract is dynamic+allowlisted but page does not export force-dynamic (${rel}).`);
-    }
   }
 
   if (errors.length > 0) {

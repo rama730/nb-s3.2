@@ -6,7 +6,7 @@ export default function IntegrationsPage() {
         <div className="space-y-6">
             <SettingsPageHeader
                 title="Integrations"
-                description="Connect services to enhance your workflow."
+                description="See how this account was created, which sign-in methods are attached, and which services are actively connected."
             />
             <IntegrationsSettings />
         </div>

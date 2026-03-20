@@ -2,10 +2,10 @@
 
 import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { createSupabaseBrowserClient } from '@/lib/supabase/client';
 import { queryKeys } from '@/lib/query-keys';
 import type { WorkspaceOverviewBaseData } from '@/app/actions/workspace';
 import type { WorkspaceRefreshTarget } from '@/lib/realtime/refresh-reasons';
+import { useRealtime } from '@/components/providers/RealtimeProvider';
 
 type DbRealtimePayload = {
     eventType?: 'INSERT' | 'UPDATE' | 'DELETE';
@@ -69,11 +69,11 @@ function connectionInboxCounter(row: Record<string, unknown> | undefined, userId
  */
 export function useWorkspaceRealtime(userId: string | null) {
     const queryClient = useQueryClient();
+    const { subscribeUserNotifications } = useRealtime();
 
     useEffect(() => {
         if (!userId) return;
 
-        const supabase = createSupabaseBrowserClient();
         let debounceTimer: ReturnType<typeof setTimeout> | null = null;
         const pendingTargets = new Set<WorkspaceRefreshTarget>();
 
@@ -159,35 +159,25 @@ export function useWorkspaceRealtime(userId: string | null) {
             }, 200);
         };
 
-        const ch1 = supabase
-            .channel(`ws-tasks-${userId}`)
-            .on(
-                'postgres_changes',
-                { event: '*', schema: 'public', table: 'tasks', filter: `assignee_id=eq.${userId}` },
-                (payload: DbRealtimePayload) => {
-                    const basePatched = patchOverviewBaseFromTaskPayload(payload);
-                    queueInvalidation(basePatched ? ['overviewTasks', 'tasks', 'activity'] : ['overviewBase', 'overviewTasks', 'tasks', 'activity']);
-                }
-            )
-            .subscribe();
+        const unsubscribe = subscribeUserNotifications((event) => {
+            if (event.kind === 'task') {
+                const payload = event.payload as DbRealtimePayload
+                const basePatched = patchOverviewBaseFromTaskPayload(payload);
+                queueInvalidation(basePatched ? ['overviewTasks', 'tasks', 'activity'] : ['overviewBase', 'overviewTasks', 'tasks', 'activity']);
+                return;
+            }
 
-        const ch2 = supabase
-            .channel(`ws-connections-${userId}`)
-            .on(
-                'postgres_changes',
-                { event: '*', schema: 'public', table: 'connections', filter: `addressee_id=eq.${userId}` },
-                (payload: DbRealtimePayload) => {
-                    const basePatched = patchOverviewBaseFromConnectionPayload(payload);
-                    queueInvalidation(basePatched ? ['overviewMentions', 'inbox', 'activity'] : ['overviewBase', 'overviewMentions', 'inbox', 'activity']);
-                }
-            )
-            .subscribe();
+            if (event.kind === 'connection') {
+                const payload = event.payload as DbRealtimePayload
+                const basePatched = patchOverviewBaseFromConnectionPayload(payload);
+                queueInvalidation(basePatched ? ['overviewMentions', 'inbox', 'activity'] : ['overviewBase', 'overviewMentions', 'inbox', 'activity']);
+            }
+        });
 
         return () => {
-            supabase.removeChannel(ch1);
-            supabase.removeChannel(ch2);
+            unsubscribe();
             if (debounceTimer) clearTimeout(debounceTimer);
             pendingTargets.clear();
         };
-    }, [userId, queryClient]);
+    }, [queryClient, subscribeUserNotifications, userId]);
 }

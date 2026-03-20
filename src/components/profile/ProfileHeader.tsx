@@ -30,7 +30,7 @@ export default function ProfileHeader({ profile, isOwner }: ProfileHeaderProps) 
                     <div className="flex flex-col sm:flex-row items-start gap-5 flex-1 min-w-0">
                         {/* Avatar */}
                         <div className="relative group">
-                            <div className="relative w-24 h-24 sm:w-28 sm:h-28 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center text-white text-2xl sm:text-3xl font-bold shadow-xl ring-4 ring-zinc-100 dark:ring-zinc-800 transition-all duration-300 group-hover:scale-105">
+                            <div className="relative w-24 h-24 sm:w-28 sm:h-28 rounded-full app-accent-gradient flex items-center justify-center text-white text-2xl sm:text-3xl font-bold shadow-xl ring-4 ring-zinc-100 dark:ring-zinc-800 transition-all duration-300 group-hover:scale-105">
                                 {profile?.avatarUrl ? (
                                     <Image
                                         src={profile.avatarUrl}
@@ -71,7 +71,7 @@ export default function ProfileHeader({ profile, isOwner }: ProfileHeaderProps) 
                                         href={profile.website}
                                         target="_blank"
                                         rel="noopener noreferrer"
-                                        className="flex items-center gap-1.5 hover:text-blue-600 dark:hover:text-blue-400 transition-colors truncate"
+                                        className="flex items-center gap-1.5 hover:text-primary transition-colors truncate"
                                     >
                                         <Globe className="w-4 h-4 flex-shrink-0" />
                                         <span className="truncate max-w-xs">{profile.website.replace(/^https?:\/\//, "")}</span>
@@ -128,7 +128,7 @@ export default function ProfileHeader({ profile, isOwner }: ProfileHeaderProps) 
                                     {(profile.skills as string[]).slice(0, 5).map((skill: string, idx: number) => (
                                         <span
                                             key={idx}
-                                            className="px-3 py-1 rounded-full text-xs font-semibold bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 animate-in fade-in slide-in-from-bottom-2 duration-300"
+                                            className="px-3 py-1 rounded-full text-xs font-semibold bg-primary/10 text-primary border border-primary/20 animate-in fade-in slide-in-from-bottom-2 duration-300"
                                             style={{ animationDelay: `${idx * 50}ms` }}
                                         >
                                             {skill}
@@ -156,7 +156,7 @@ export default function ProfileHeader({ profile, isOwner }: ProfileHeaderProps) 
                             </>
                         ) : (
                             <>
-                                <button className="px-4 py-2 rounded-xl bg-blue-600 text-white font-semibold hover:bg-blue-700 transition-all duration-200 flex items-center gap-2 hover:scale-105 active:scale-95 shadow-lg shadow-blue-500/30">
+                                <button className="px-4 py-2 rounded-xl app-accent-solid font-semibold transition-[background-color,transform,box-shadow] duration-200 flex items-center gap-2 hover:bg-primary/90 hover:scale-105 active:scale-95 shadow-lg shadow-primary/30">
                                     <MessageCircle className="w-4 h-4" />
                                     <span className="hidden sm:inline">Message</span>
                                 </button>

@@ -32,6 +32,7 @@ export const profiles = pgTable('profiles', {
     pronouns: text('pronouns'),
     visibility: text('visibility', { enum: ['public', 'connections', 'private'] }).default('public'),
     messagePrivacy: text('message_privacy', { enum: ['everyone', 'connections'] }).default('connections'),
+    connectionPrivacy: text('connection_privacy', { enum: ['everyone', 'mutuals_only', 'nobody'] }).default('everyone'),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
@@ -63,6 +64,17 @@ export const profiles = pgTable('profiles', {
     connectionsCount: integer('connections_count').default(0).notNull(),
     projectsCount: integer('projects_count').default(0).notNull(),
     followersCount: integer('followers_count').default(0).notNull(),
+    workspaceInboxCount: integer('workspace_inbox_count').default(0).notNull(),
+    workspaceDueTodayCount: integer('workspace_due_today_count').default(0).notNull(),
+    workspaceOverdueCount: integer('workspace_overdue_count').default(0).notNull(),
+    workspaceInProgressCount: integer('workspace_in_progress_count').default(0).notNull(),
+    securityRecoveryCodes: jsonb('security_recovery_codes').$type<Array<{
+        id: string;
+        salt: string;
+        hash: string;
+        usedAt: string | null;
+    }>>().default([]).notNull(),
+    recoveryCodesGeneratedAt: timestamp('recovery_codes_generated_at', { withTimezone: true }),
 }, (t) => ({
     // Optimize lookups by username (common in URLs) and email (auth)
     usernameIdx: index('profiles_username_idx').on(t.username),
@@ -79,6 +91,10 @@ export const profiles = pgTable('profiles', {
     // Optimization: Performance indices for stats sorting (Leaderboards/Popularity)
     connectionsCountIdx: index('profiles_connections_count_idx').on(t.connectionsCount),
     projectsCountIdx: index('profiles_projects_count_idx').on(t.projectsCount),
+    workspaceInboxCountIdx: index('profiles_workspace_inbox_count_idx').on(t.workspaceInboxCount),
+    workspaceDueTodayCountIdx: index('profiles_workspace_due_today_count_idx').on(t.workspaceDueTodayCount),
+    workspaceOverdueCountIdx: index('profiles_workspace_overdue_count_idx').on(t.workspaceOverdueCount),
+    workspaceInProgressCountIdx: index('profiles_workspace_in_progress_count_idx').on(t.workspaceInProgressCount),
 }))
 
 export const reservedUsernames = pgTable('reserved_usernames', {
@@ -144,6 +160,8 @@ export const connections = pgTable('connections', {
     requesterId: uuid('requester_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
     addresseeId: uuid('addressee_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
     status: text('status', { enum: ['pending', 'accepted', 'rejected', 'cancelled', 'disconnected', 'blocked'] }).default('pending').notNull(),
+    blockedBy: uuid('blocked_by').references(() => profiles.id, { onDelete: 'set null' }),
+    blockedAt: timestamp('blocked_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
@@ -161,7 +179,12 @@ export const connections = pgTable('connections', {
 
     // 2. "Pending Requests" Sorting (Fast List)
     pendingRequestsIdx: index('connections_pending_idx').on(t.status, t.createdAt),
+    blockedByIdx: index('connections_blocked_by_idx').on(t.blockedBy, t.blockedAt),
     noSelfCheck: check('connections_no_self_check', sql`${t.requesterId} <> ${t.addresseeId}`),
+    blockedStatusCheck: check(
+        'connections_blocked_status_check',
+        sql`(${t.status} <> 'blocked') OR (${t.blockedBy} IS NOT NULL AND ${t.blockedAt} IS NOT NULL)`
+    ),
 }))
 
 export const connectionSuggestionDismissals = pgTable('connection_suggestion_dismissals', {
@@ -384,6 +407,7 @@ export const tasks = pgTable('tasks', {
     sprintIdx: index('tasks_sprint_idx').on(t.sprintId),
     assigneeIdx: index('tasks_assignee_idx').on(t.assigneeId),
     statusIdx: index('tasks_status_idx').on(t.status),
+    assigneeStatusDueIdx: index('tasks_assignee_status_due_idx').on(t.assigneeId, t.status, t.dueDate),
     // Composite indexes for filtering
     projectStatusIdx: index('tasks_project_status_idx').on(t.projectId, t.status),
     projectSprintIdx: index('tasks_project_sprint_idx').on(t.projectId, t.sprintId),

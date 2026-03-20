@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { useRealtime } from "@/components/providers/RealtimeProvider";
+import { subscribeTaskResource } from "@/lib/realtime/task-resource";
 import { createVisibilityAwareInterval } from "@/lib/utils/visibility";
 
 export interface Comment {
@@ -33,8 +35,10 @@ export function useTaskComments(taskId: string, currentUserId?: string) {
     const [comments, setComments] = useState<Comment[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const supabase = useMemo(() => createClient(), []);
+    const { isConnected } = useRealtime();
     const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const isMountedRef = useRef(true);
+    const [resourceConnected, setResourceConnected] = useState(false);
 
     useEffect(() => {
         isMountedRef.current = true;
@@ -93,30 +97,30 @@ export function useTaskComments(taskId: string, currentUserId?: string) {
     useEffect(() => {
         if (!taskId) return;
 
-        const commentsChannel = supabase
-            .channel(`task_comments:${taskId}`)
-            .on(
-                "postgres_changes",
-                {
-                    event: "*",
-                    schema: "public",
-                    table: "task_comments",
-                    filter: `task_id=eq.${taskId}`,
-                },
-                scheduleRefresh
-            )
-            .subscribe();
+        const unsubscribe = subscribeTaskResource({
+            taskId,
+            onEvent: (event) => {
+                if (event.kind === "comment") {
+                    scheduleRefresh();
+                }
+            },
+            onStatus: (status) => {
+                setResourceConnected(status === "SUBSCRIBED");
+            },
+        });
 
-        const cleanup = createVisibilityAwareInterval(() => {
-            void refreshComments();
-        }, 30000);
+        const cleanup = isConnected && resourceConnected
+            ? () => undefined
+            : createVisibilityAwareInterval(() => {
+                void refreshComments();
+            }, 30000);
 
         return () => {
             cleanup();
             if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
-            supabase.removeChannel(commentsChannel);
+            unsubscribe();
         };
-    }, [refreshComments, scheduleRefresh, supabase, taskId]);
+    }, [isConnected, refreshComments, resourceConnected, scheduleRefresh, taskId]);
 
     const isLiked = useCallback((comment: Comment) => {
         if (!currentUserId) return false;

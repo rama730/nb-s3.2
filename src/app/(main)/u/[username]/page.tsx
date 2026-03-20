@@ -1,11 +1,11 @@
 import { notFound } from 'next/navigation';
-import { getProfileDetails, getPublicProfileMeta } from '@/lib/data/profile';
+import { getProfileDetails, getProfileVisibilityMeta, getPublicProfileMeta } from '@/lib/data/profile';
 import { ProfileV2Client } from '@/components/profile/v2/ProfileV2Client';
 import { Metadata } from 'next';
+import { getViewerAuthContext } from '@/lib/server/viewer-context';
 
 export const revalidate = 60; // ISR: Revalidate every minute
 export const dynamicParams = true; // Allow new profiles to be generated on demand
-export const dynamic = 'force-dynamic'; // Avoid build-time DB fanout (SSG) and connection pool exhaustion
 
 export async function generateStaticParams() {
     // Intentionally disabled for scalability: we don't prebuild profiles at build time.
@@ -32,15 +32,34 @@ export async function generateMetadata({ params }: { params: Promise<{ username:
     };
 }
 
-export default async function PublicProfilePage({ params }: { params: Promise<{ username: string }> }) {
+export default async function PublicProfilePage({
+    params,
+    searchParams,
+}: {
+    params: Promise<{ username: string }>;
+    searchParams?: Promise<Record<string, string | string[] | undefined>>;
+}) {
     const { username } = await params;
+    const resolvedSearchParams = (await searchParams) ?? {};
     // Decode username just in case
     const decodedUsername = decodeURIComponent(username);
-    
-    // OPTIMIZATION: usage of "Instant Shell" pattern.
-    // Fetch only the profile identity and essential connection status.
-    // Heavy data (projects, stats) is lazy loaded by the client.
-    const data = await getProfileDetails(decodedUsername, { skipHeavyData: true });
+    const viewerPreviewMode =
+        typeof resolvedSearchParams.viewer === 'string' && resolvedSearchParams.viewer === 'visitor';
+
+    const visibility = await getProfileVisibilityMeta(decodedUsername);
+    if (!visibility) {
+        notFound();
+    }
+
+    const { user } = visibility.visibility === 'public' || viewerPreviewMode
+        ? { user: null }
+        : await getViewerAuthContext();
+
+    // Public profiles stay cache-friendly; restricted profiles resolve viewer state only when needed.
+    const data = await getProfileDetails(decodedUsername, {
+        skipHeavyData: true,
+        viewerUser: user,
+    });
 
     if (!data || !data.profile) {
         notFound();
@@ -59,6 +78,8 @@ export default async function PublicProfilePage({ params }: { params: Promise<{ 
                 isOwner={data.isOwner}
                 currentUser={data.currentUser}
                 connectionStatus={data.connectionStatus}
+                privacyRelationship={data.privacyRelationship}
+                lockedShell={data.lockedShell}
                 projects={data.projects}
             />
         </div>

@@ -9,9 +9,9 @@ import { toast } from 'sonner';
 import { TOTAL_PHASES, WizardPhaseId } from '@/constants/project-wizard';
 import { createProjectAction } from '@/app/actions/project';
 import { parseGithubRepo } from '@/lib/github/repo-preview';
+import { fetchGithubImportPreviewFolder, fetchGithubImportPreviewRoot } from '@/lib/github/import-client';
 import { shouldIgnorePath } from '@/lib/import/import-filters';
 import { getLifecycleStagesForProjectType } from '@/lib/projects/lifecycle-templates';
-import { previewGithubFolderAction, previewGithubRepoRootAction } from '@/app/actions/github';
 import { buildProjectImportEventId, buildUploadManifestHash } from '@/lib/import/idempotency';
 import { buildProjectFileKey } from '@/lib/storage/project-file-key';
 
@@ -217,17 +217,11 @@ export function useCreateProjectWizard({ onClose, onSuccess, draftId }: UseCreat
             }
 
             const preferredInstallationId = (getValues('import_source.metadata') as any)?.githubInstallationId ?? null;
-            const res = await previewGithubRepoRootAction(url, watchedBranch || null, preferredInstallationId);
-            if (!res.success) {
-                setGithubPreview((prev) => ({
-                    ...prev,
-                    status: 'error',
-                    repoUrl: url,
-                    errorMessage: res.error || 'Failed to preview repository.',
-                    rootEntries: [],
-                }));
-                return;
-            }
+            const res = await fetchGithubImportPreviewRoot({
+                repoUrl: url,
+                branch: watchedBranch || null,
+                installationId: preferredInstallationId,
+            });
             const branch = res.branch || 'main';
 
             // Store branch in form so the import worker uses the same ref.
@@ -279,16 +273,12 @@ export function useCreateProjectWizard({ onClose, onSuccess, draftId }: UseCreat
 
         try {
             const preferredInstallationId = (getValues('import_source.metadata') as any)?.githubInstallationId ?? null;
-            const res = await previewGithubFolderAction(
-                `https://github.com/${parsed.owner}/${parsed.repo}`,
+            const res = await fetchGithubImportPreviewFolder({
+                repoUrl: `https://github.com/${parsed.owner}/${parsed.repo}`,
                 branch,
-                key,
-                preferredInstallationId
-            );
-            if (!res.success) {
-                setGithubFolderEntries((prev) => ({ ...prev, [key]: [] }));
-                return;
-            }
+                path: key,
+                installationId: preferredInstallationId,
+            });
             const entries = res.entries;
             setGithubFolderEntries((prev) => ({ ...prev, [key]: entries }));
         } catch {

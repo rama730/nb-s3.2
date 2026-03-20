@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { ChevronDown, ChevronUp, LucideIcon } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Task } from "../TaskCard";
+import { useReducedMotionPreference } from "@/components/providers/theme-provider";
 
 interface FocusStripProps {
     title: string;
@@ -20,6 +21,7 @@ export default function FocusStrip({
     onTaskClick,
     renderTaskAction 
 }: FocusStripProps) {
+    const reduceMotion = useReducedMotionPreference();
     const [expanded, setExpanded] = useState(true);
 
     if (tasks.length === 0) return null;
@@ -42,12 +44,13 @@ export default function FocusStrip({
                 </div>
             </button>
             
-            <AnimatePresence>
+            <AnimatePresence initial={!reduceMotion}>
                 {expanded && (
                     <motion.div 
-                        initial={{ height: 0, opacity: 0 }}
-                        animate={{ height: "auto", opacity: 1 }}
-                        exit={{ height: 0, opacity: 0 }}
+                        initial={reduceMotion ? { opacity: 0 } : { height: 0, opacity: 0 }}
+                        animate={reduceMotion ? { opacity: 1 } : { height: "auto", opacity: 1 }}
+                        exit={reduceMotion ? { opacity: 0 } : { height: 0, opacity: 0 }}
+                        transition={reduceMotion ? { duration: 0 } : undefined}
                         className="px-4 pb-4 space-y-2"
                     >
                         {tasks.map(task => (

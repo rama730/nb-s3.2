@@ -11,7 +11,6 @@ export {
   FALLBACK_WORKSPACE,
   DEFAULT_PREFS,
   DEFAULT_GIT_STATE,
-  DEFAULT_TERMINAL_STATE,
   DEFAULT_UI_STATE,
   ROOT_KEY,
   parentKey,
@@ -37,7 +36,5 @@ export type {
   ProjectWorkspaceState,
   FilesWorkspaceState,
   GitState,
-  TerminalSession,
-  TerminalState,
   UiState,
 } from "./files/types";

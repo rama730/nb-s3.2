@@ -8,6 +8,7 @@ import CreateSprintModal from "@/components/projects/v2/sprints/CreateSprintModa
 import { createSprintAction } from "@/app/actions/project";
 import { useProjectSprints, useSprintTasks } from "@/hooks/hub/useProjectData";
 import { Virtuoso } from "react-virtuoso";
+import { useReducedMotionPreference } from "@/components/providers/theme-provider";
 
 export interface Sprint {
     id: string;
@@ -52,6 +53,7 @@ export default function SprintPlanning({
     onStartSprint,
     onCompleteSprint,
 }: SprintPlanningProps) {
+    const reduceMotion = useReducedMotionPreference();
     const [selectedSprintId, setSelectedSprintId] = useState<string | null>(null);
     const [showCreateModal, setShowCreateModal] = useState(false);
 
@@ -97,13 +99,13 @@ export default function SprintPlanning({
     }, [safeSprintTasks]);
 
     const renderSprintTaskRow = useCallback((task: SprintTask) => (
-        <div className="group flex items-center gap-4 p-4 hover:bg-white dark:hover:bg-zinc-900 transition-all border-l-2 border-transparent hover:border-indigo-500">
+        <div className="group flex items-center gap-4 p-4 hover:bg-white dark:hover:bg-zinc-900 transition-all border-l-2 border-transparent hover:border-primary">
             {/* 1. Status & Identity */}
             <div className="w-[40px] shrink-0 flex justify-center">
                 <div className={cn(
                     "w-2.5 h-2.5 rounded-full ring-2 ring-offset-2 ring-offset-zinc-50 dark:ring-offset-zinc-900",
                     task.status === 'done' ? "bg-emerald-500 ring-emerald-200 dark:ring-emerald-900" :
-                    task.status === 'in_progress' ? "bg-blue-500 ring-blue-200 dark:ring-blue-900" :
+                    task.status === 'in_progress' ? "bg-primary ring-primary/20" :
                     task.status === 'blocked' ? "bg-red-500 ring-red-200 dark:ring-red-900" :
                     "bg-zinc-300 ring-zinc-200 dark:ring-zinc-700"
                 )} />
@@ -114,7 +116,7 @@ export default function SprintPlanning({
                 <div className="flex items-center gap-2">
                     <h4 className={cn(
                         "font-medium text-[15px] truncate transition-colors",
-                        task.status === 'done' ? "text-zinc-400 line-through" : "text-zinc-900 dark:text-zinc-100 group-hover:text-indigo-600 dark:group-hover:text-indigo-400"
+                        task.status === 'done' ? "text-zinc-400 line-through" : "text-zinc-900 dark:text-zinc-100 group-hover:text-primary"
                     )}>
                         {task.title}
                     </h4>
@@ -154,7 +156,7 @@ export default function SprintPlanning({
                     <span className="text-[10px] text-zinc-400 uppercase tracking-wider font-medium">Asg</span>
                     {task.assignee ? (
                             <div className="flex items-center gap-1.5" title={`Assignee: ${task.assignee.fullName}`}>
-                            <div className="w-6 h-6 rounded-full bg-indigo-50 dark:bg-indigo-900/30 flex items-center justify-center overflow-hidden border border-indigo-100 dark:border-indigo-800 text-indigo-600 dark:text-indigo-400 text-xs font-semibold">
+                            <div className="w-6 h-6 rounded-full bg-primary/10 dark:bg-primary/15 flex items-center justify-center overflow-hidden border border-primary/15 text-primary text-xs font-semibold">
                                 {task.assignee.avatarUrl ? (
                                     <img src={task.assignee.avatarUrl} alt="" className="w-full h-full object-cover" />
                                 ) : (
@@ -328,7 +330,7 @@ export default function SprintPlanning({
                                     {sprint.status}
                                 </span>
                                 {currentSprint?.id === sprint.id && (
-                                    <motion.div layoutId="active-indicator">
+                                    <motion.div layoutId="active-indicator" transition={reduceMotion ? { duration: 0 } : undefined}>
                                         <ChevronRight className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
                                     </motion.div>
                                 )}
@@ -362,7 +364,7 @@ export default function SprintPlanning({
             {/* RIGHT CONTENT: Sprint Details - Flexible width */}
             <div className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
                 {currentSprint ? (
-                    <AnimatePresence mode="wait">
+                    <AnimatePresence mode="wait" initial={!reduceMotion}>
                         <motion.div
                             key={currentSprint.id}
                             initial={{ opacity: 0 }}

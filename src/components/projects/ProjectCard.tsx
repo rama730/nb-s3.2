@@ -128,16 +128,16 @@ export default memo(function ProjectCard({
                 />
                 
                 {/* Content Container (Row Layout) */}
-                <div className="flex items-center gap-4 p-4 h-full relative z-0 pointer-events-none">
+                <div className="flex items-center gap-4 h-full relative z-0 pointer-events-none app-density-panel">
                     <div className={`w-2 h-2 rounded-full bg-gradient-to-r ${status.gradient} shrink-0`} />
                     
                     <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
-                            <h3 className="font-bold text-zinc-900 dark:text-zinc-100 truncate group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
+                            <h3 className="font-bold text-zinc-900 dark:text-zinc-100 truncate group-hover:text-primary transition-colors">
                                 {project.title}
                             </h3>
                             {totalOpenRoles > 0 && (
-                                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-600 dark:bg-indigo-900/20 dark:text-indigo-400">
+                                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/10">
                                     {totalOpenRoles} roles
                                 </span>
                             )}
@@ -148,7 +148,7 @@ export default memo(function ProjectCard({
                                 {rankingReasons.slice(0, 1).map((reason) => (
                                     <span
                                         key={reason}
-                                        className="inline-flex items-center rounded-full border border-indigo-200/60 bg-indigo-50 px-2 py-0.5 text-[10px] font-medium text-indigo-700 dark:border-indigo-700/70 dark:bg-indigo-950/40 dark:text-indigo-300"
+                                        className="inline-flex items-center rounded-full border border-primary/15 bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary"
                                     >
                                         {reason}
                                     </span>
@@ -177,7 +177,7 @@ export default memo(function ProjectCard({
             data-testid={`project-card-${project.id}`}
             onMouseEnter={() => warmPrefetchRoute(projectHref)}
         >
-            <div className={`group relative h-full rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-sm overflow-hidden flex flex-col ${disableHoverEffects ? '' : 'transition-all duration-300 hover:-translate-y-1 hover:border-indigo-500/20 dark:hover:border-indigo-500/20'}`}>
+            <div className={`group relative h-full rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-sm overflow-hidden flex flex-col ${disableHoverEffects ? '' : 'transition-all duration-300 hover:-translate-y-1 hover:border-primary/20'}`}>
                 {/* Selection Overlay */}
                 {selectionMode && (
                     <div
@@ -189,7 +189,7 @@ export default memo(function ProjectCard({
                     >
                         <div className="absolute top-4 left-4">
                             <div
-                                className={`w-6 h-6 rounded-md border-2 flex items-center justify-center transition-all ${isSelected ? 'bg-indigo-600 border-indigo-600' : 'bg-white dark:bg-zinc-900 border-zinc-300 dark:border-zinc-600'
+                                className={`w-6 h-6 rounded-md border-2 flex items-center justify-center transition-all ${isSelected ? 'bg-primary border-primary' : 'bg-white dark:bg-zinc-900 border-zinc-300 dark:border-zinc-600'
                                     }`}
                             >
                                 {isSelected && <Check className="w-4 h-4 text-white" />}
@@ -209,13 +209,13 @@ export default memo(function ProjectCard({
                     )}
 
                     {/* Header */}
-                    <div className="p-4 flex items-center justify-between relative z-20">
+                    <div className="flex items-center justify-between relative z-20 app-density-panel">
                         <span className="text-[11px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-lg bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300">
                             {viewModel.category}
                         </span>
                         
                         {totalOpenRoles > 0 && (
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-50 dark:bg-indigo-500/10 border border-indigo-100 dark:border-indigo-500/20 text-[10px] font-bold text-indigo-600 dark:text-indigo-400">
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-primary/10 border border-primary/15 text-[10px] font-bold text-primary">
                                 <Sparkles className="w-3 h-3" />
                                 {totalOpenRoles} Open Roles
                             </span>
@@ -223,10 +223,10 @@ export default memo(function ProjectCard({
                     </div>
 
                     {/* Main Content */}
-                    <div className="px-4 pb-4 flex-1 flex flex-col">
+                    <div className="px-[var(--ui-panel-padding)] pb-[var(--ui-panel-padding)] flex-1 flex flex-col">
                         {/* Title & Tagline */}
                         <div className="mb-2.5">
-                            <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 truncate leading-snug group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
+                            <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 truncate leading-snug group-hover:text-primary transition-colors">
                                 {project.title}
                             </h3>
                             {project.shortDescription && (
@@ -249,7 +249,7 @@ export default memo(function ProjectCard({
                                 {rankingReasons.map((reason) => (
                                     <span
                                         key={reason}
-                                        className="inline-flex items-center rounded-full border border-indigo-200/60 bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold text-indigo-700 dark:border-indigo-700/70 dark:bg-indigo-950/40 dark:text-indigo-300"
+                                        className="inline-flex items-center rounded-full border border-primary/15 bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary"
                                     >
                                         {reason}
                                     </span>
@@ -269,7 +269,7 @@ export default memo(function ProjectCard({
                     </div>
 
                     {/* Footer - Z-index elevated to ensure buttons are clickable over the absolute Link */}
-                    <div className="relative z-20 mt-auto px-4 py-3 border-t border-zinc-100 dark:border-zinc-800/50 bg-zinc-50/50 dark:bg-zinc-900/50 flex flex-col gap-3">
+                    <div className="relative z-20 mt-auto border-t border-zinc-100 dark:border-zinc-800/50 bg-zinc-50/50 dark:bg-zinc-900/50 flex flex-col gap-3 px-[var(--ui-panel-padding)] py-[calc(var(--ui-panel-padding)*0.75)]">
                         {/* Upper row: Metrics & Actions */}
                         <div className="flex items-center justify-between">
                             <div className="flex items-center gap-3 text-xs font-semibold text-zinc-500">
@@ -288,7 +288,7 @@ export default memo(function ProjectCard({
                                         e.stopPropagation();
                                         onQuickView?.(project);
                                     }}
-                                    className="p-1.5 hover:text-indigo-600 hover:bg-white dark:hover:bg-zinc-800 rounded-md transition-colors border border-transparent hover:border-zinc-200 dark:hover:border-zinc-700 shadow-sm"
+                                    className="p-1.5 hover:text-primary hover:bg-white dark:hover:bg-zinc-800 rounded-md transition-colors border border-transparent hover:border-zinc-200 dark:hover:border-zinc-700 shadow-sm"
                                     title="Quick View"
                                 >
                                     <Maximize2 className="w-3.5 h-3.5" />
@@ -311,7 +311,7 @@ export default memo(function ProjectCard({
                                     {p.avatar_url ? (
                                         <Image src={p.avatar_url} alt={p.full_name || 'Collaborator'} width={24} height={24} className="w-full h-full object-cover" sizes="24px" />
                                     ) : (
-                                        <div className="w-full h-full flex items-center justify-center text-[10px] font-bold text-zinc-400">
+                                        <div className="w-full h-full app-accent-gradient flex items-center justify-center text-[10px] font-bold text-white">
                                             {p.full_name?.[0] || '?'}
                                         </div>
                                     )}

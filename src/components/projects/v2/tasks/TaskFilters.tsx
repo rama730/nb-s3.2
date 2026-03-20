@@ -4,6 +4,7 @@ import React, { useState, useRef, useEffect } from "react";
 import { Filter, ChevronDown, Check, LayoutGrid, List, Layers, Archive, CheckSquare, Search } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
+import { useReducedMotionPreference } from "@/components/providers/theme-provider";
 
 interface TaskFiltersProps {
     viewMode: 'board' | 'list';
@@ -30,6 +31,7 @@ export default function TaskFilters({
     setReorderMode,
     selectedCount = 0,
 }: TaskFiltersProps) {
+    const reduceMotion = useReducedMotionPreference();
     const [isOpen, setIsOpen] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
 
@@ -58,26 +60,26 @@ export default function TaskFilters({
                 className={cn(
                     "inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-sm font-medium transition-colors",
                     hasActiveFilters
-                        ? "bg-indigo-50 border-indigo-200 text-indigo-700 dark:bg-indigo-900/20 dark:border-indigo-800 dark:text-indigo-300"
+                        ? "app-selected-surface border-primary/15"
                         : "bg-white border-zinc-200 text-zinc-700 hover:bg-zinc-50 dark:bg-zinc-900 dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-800"
                 )}
             >
                 <Filter className="w-4 h-4" />
                 <span>Filter</span>
                 {hasActiveFilters && (
-                    <span className="flex items-center justify-center min-w-5 h-5 px-1 text-xs font-bold rounded-full bg-indigo-100 text-indigo-700 dark:bg-indigo-800 dark:text-indigo-200">
+                    <span className="flex items-center justify-center min-w-5 h-5 px-1 text-xs font-bold rounded-full bg-primary/10 text-primary">
                         {activeCount || (scope !== 'all' ? 1 : 0)}
                     </span>
                 )}
             </button>
 
-            <AnimatePresence>
+            <AnimatePresence initial={!reduceMotion}>
                 {isOpen && (
                     <motion.div
-                        initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                        animate={{ opacity: 1, y: 0, scale: 1 }}
-                        exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                        transition={{ duration: 0.1 }}
+                        initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 10, scale: 0.95 }}
+                        animate={reduceMotion ? { opacity: 1 } : { opacity: 1, y: 0, scale: 1 }}
+                        exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 10, scale: 0.95 }}
+                        transition={reduceMotion ? { duration: 0 } : { duration: 0.1 }}
                         className="absolute top-full right-0 z-50 mt-2 w-[340px] max-w-[calc(100vw-2rem)] origin-top-right rounded-xl shadow-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 overflow-hidden"
                     >
                         {/* Header */}
@@ -91,7 +93,7 @@ export default function TaskFilters({
                                         setReorderMode?.(false);
                                         setViewMode('board');
                                     }}
-                                    className="text-xs text-indigo-600 hover:text-indigo-700 dark:text-indigo-400 dark:hover:text-indigo-300 font-medium"
+                                    className="text-xs text-primary hover:opacity-80 font-medium"
                                 >
                                     Reset all
                                 </button>
@@ -108,7 +110,7 @@ export default function TaskFilters({
                                         className={cn(
                                             "flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium border transition-all",
                                             viewMode === 'board'
-                                                ? "bg-indigo-50 border-indigo-200 text-indigo-700 dark:bg-indigo-900/20 dark:border-indigo-800 dark:text-indigo-300"
+                                                ? "app-selected-surface border-primary/15"
                                                 : "border-zinc-200 text-zinc-600 hover:bg-zinc-50 dark:border-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-800"
                                         )}
                                     >
@@ -120,7 +122,7 @@ export default function TaskFilters({
                                         className={cn(
                                             "flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium border transition-all",
                                             viewMode === 'list'
-                                                ? "bg-indigo-50 border-indigo-200 text-indigo-700 dark:bg-indigo-900/20 dark:border-indigo-800 dark:text-indigo-300"
+                                                ? "app-selected-surface border-primary/15"
                                                 : "border-zinc-200 text-zinc-600 hover:bg-zinc-50 dark:border-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-800"
                                         )}
                                     >
@@ -147,7 +149,7 @@ export default function TaskFilters({
                                             <Layers className="w-4 h-4" />
                                             All Tasks
                                         </span>
-                                        {scope === 'all' && <Check className="w-4 h-4 text-indigo-600" />}
+                                        {scope === 'all' && <Check className="w-4 h-4 text-primary" />}
                                     </button>
                                     <button
                                         onClick={() => setScope?.('backlog')}
@@ -162,7 +164,7 @@ export default function TaskFilters({
                                             <Archive className="w-4 h-4" />
                                             Backlog Only
                                         </span>
-                                        {scope === 'backlog' && <Check className="w-4 h-4 text-indigo-600" />}
+                                        {scope === 'backlog' && <Check className="w-4 h-4 text-primary" />}
                                     </button>
                                 </div>
                             </div>
@@ -176,7 +178,7 @@ export default function TaskFilters({
                                             type="checkbox"
                                             checked={isReorderMode}
                                             onChange={(e) => setReorderMode?.(e.target.checked)}
-                                            className="rounded border-zinc-300 text-indigo-600 focus:ring-indigo-500"
+                                            className="rounded border-zinc-300 text-primary focus:ring-ring"
                                         />
                                     </label>
                                 </div>
@@ -190,7 +192,7 @@ export default function TaskFilters({
                                     className={cn(
                                         "w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm font-medium border transition-colors",
                                         isBulkMode
-                                            ? "bg-purple-50 border-purple-200 text-purple-700 dark:bg-purple-900/20 dark:border-purple-800 dark:text-purple-300"
+                                            ? "app-selected-surface border-primary/15"
                                             : "border-zinc-200 text-zinc-700 hover:bg-zinc-50 dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-800"
                                     )}
                                 >
@@ -199,7 +201,7 @@ export default function TaskFilters({
                                         {isBulkMode ? "Bulk Mode Active" : "Enable Bulk Mode"}
                                     </span>
                                     {isBulkMode && (
-                                        <span className="text-xs bg-purple-100 text-purple-800 px-2 py-0.5 rounded-full dark:bg-purple-800 dark:text-purple-200">
+                                        <span className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-full">
                                             On
                                         </span>
                                     )}

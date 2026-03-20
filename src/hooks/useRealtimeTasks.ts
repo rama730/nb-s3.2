@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { Task } from "@/components/projects/v2/tasks/TaskCard"; // Import shared Task type
+import { subscribeActiveResource } from "@/lib/realtime/subscriptions";
 
 const taskVersionMs = (task: Partial<Task> | null | undefined) => {
     const raw = (task as any)?.updatedAt ?? (task as any)?.updated_at ?? (task as any)?.createdAt ?? (task as any)?.created_at;
@@ -73,49 +74,50 @@ export function useRealtimeTasks(projectId: string, initialTasks: Task[] = []) {
     useEffect(() => {
         if (!projectId) return;
 
-        const channel = supabase
-            .channel(`project_tasks:${projectId}`)
-            .on(
-                'postgres_changes',
+        const channel = subscribeActiveResource({
+            supabase,
+            resourceType: 'workspace',
+            resourceId: `project-tasks:${projectId}`,
+            bindings: [
                 {
-                    event: '*', // Listen to INSERT, UPDATE, DELETE
-                    schema: 'public',
+                    event: '*',
                     table: 'tasks',
-                    filter: `project_id=eq.${projectId}`
-                },
-                (payload: any) => {
-                    if (payload.eventType === 'INSERT') {
-                        const newTask = normalizeTask(payload.new);
-                        setTasks((prev) => {
-                            const existing = prev.find((task) => task.id === newTask.id);
-                            if (!existing) return [newTask, ...prev];
-                            if (taskVersionMs(existing) > taskVersionMs(newTask)) return prev;
-                            return prev.map((task) =>
-                                task.id === newTask.id ? ({ ...task, ...newTask } as Task) : task
-                            );
-                        });
-                    } else if (payload.eventType === 'UPDATE') {
-                        const updatedTask = normalizeTask(payload.new);
-                        setTasks((prev) => {
-                            const exists = prev.some((t) => t.id === updatedTask.id);
-                            if (!exists) return [updatedTask, ...prev];
-                            return prev.map((t) => {
-                                if (t.id !== updatedTask.id) return t;
-                                if (taskVersionMs(t) > taskVersionMs(updatedTask)) return t;
-                                return { ...t, ...updatedTask } as Task;
+                    filter: `project_id=eq.${projectId}`,
+                    handler: (payload) => {
+                        if (payload.eventType === 'INSERT') {
+                            const newTask = normalizeTask(payload.new);
+                            setTasks((prev) => {
+                                const existing = prev.find((task) => task.id === newTask.id);
+                                if (!existing) return [newTask, ...prev];
+                                if (taskVersionMs(existing) > taskVersionMs(newTask)) return prev;
+                                return prev.map((task) =>
+                                    task.id === newTask.id ? ({ ...task, ...newTask } as Task) : task
+                                );
                             });
-                        });
-                    } else if (payload.eventType === 'DELETE') {
-                        const deletedId = payload.old?.id;
-                        if (!deletedId) {
-                            console.warn("[useRealtimeTasks] DELETE payload missing old.id", payload);
-                            return;
+                        } else if (payload.eventType === 'UPDATE') {
+                            const updatedTask = normalizeTask(payload.new);
+                            setTasks((prev) => {
+                                const exists = prev.some((t) => t.id === updatedTask.id);
+                                if (!exists) return [updatedTask, ...prev];
+                                return prev.map((t) => {
+                                    if (t.id !== updatedTask.id) return t;
+                                    if (taskVersionMs(t) > taskVersionMs(updatedTask)) return t;
+                                    return { ...t, ...updatedTask } as Task;
+                                });
+                            });
+                        } else if (payload.eventType === 'DELETE') {
+                            const previousRow = (payload.old ?? null) as Record<string, unknown> | null;
+                            const deletedId = typeof previousRow?.id === 'string' ? previousRow.id : null;
+                            if (!deletedId) {
+                                console.warn("[useRealtimeTasks] DELETE payload missing old.id", payload);
+                                return;
+                            }
+                            setTasks((prev) => prev.filter((t) => t.id !== deletedId));
                         }
-                        setTasks((prev) => prev.filter((t) => t.id !== deletedId));
-                    }
-                }
-            )
-            .subscribe();
+                    },
+                },
+            ],
+        });
 
         return () => {
             supabase.removeChannel(channel);

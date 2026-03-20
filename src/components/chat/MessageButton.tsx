@@ -69,7 +69,7 @@ export function MessageButton({
             <button
                 onClick={handleClick}
                 disabled={isLoading}
-                className={`${iconSizeClasses[size]} flex items-center justify-center rounded-full bg-zinc-100 dark:bg-zinc-800 hover:bg-blue-100 dark:hover:bg-blue-900/30 text-zinc-600 dark:text-zinc-300 hover:text-blue-600 transition-colors disabled:opacity-50 ${className}`}
+                className={`${iconSizeClasses[size]} flex items-center justify-center rounded-full bg-zinc-100 dark:bg-zinc-800 hover:bg-primary/10 text-zinc-600 dark:text-zinc-300 hover:text-primary transition-colors disabled:opacity-50 ${className}`}
                 title={`Message ${userName || 'user'}`}
             >
                 {isLoading ? (
@@ -86,7 +86,7 @@ export function MessageButton({
             <button
                 onClick={handleClick}
                 disabled={isLoading}
-                className={`${sizeClasses[size]} flex items-center gap-2 rounded-lg border border-zinc-200 dark:border-zinc-700 hover:border-blue-500 hover:bg-blue-50 dark:hover:bg-blue-950/30 text-zinc-700 dark:text-zinc-300 hover:text-blue-600 transition-colors disabled:opacity-50 ${className}`}
+                className={`${sizeClasses[size]} flex items-center gap-2 rounded-lg border border-zinc-200 dark:border-zinc-700 hover:border-primary hover:bg-primary/10 text-zinc-700 dark:text-zinc-300 hover:text-primary transition-colors disabled:opacity-50 ${className}`}
             >
                 {isLoading ? (
                     <Loader2 className="w-4 h-4 animate-spin" />
@@ -103,7 +103,7 @@ export function MessageButton({
         <button
             onClick={handleClick}
             disabled={isLoading}
-            className={`${sizeClasses[size]} flex items-center gap-2 rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-medium shadow-sm hover:shadow-md transition-all disabled:opacity-50 ${className}`}
+            className={`${sizeClasses[size]} flex items-center gap-2 rounded-lg app-accent-solid font-medium shadow-sm hover:shadow-md hover:bg-primary/90 transition-all disabled:opacity-50 ${className}`}
         >
             {isLoading ? (
                 <Loader2 className="w-4 h-4 animate-spin" />

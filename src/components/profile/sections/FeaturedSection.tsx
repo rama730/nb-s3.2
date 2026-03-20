@@ -42,7 +42,7 @@ export default function FeaturedSection({ profile, isOwner }: FeaturedSectionPro
                             className="group relative rounded-lg border border-zinc-200 dark:border-zinc-800 overflow-hidden hover:shadow-lg transition-all duration-300 hover:scale-[1.02]"
                         >
                             {item.image && (
-                                <div className="relative h-32 bg-gradient-to-br from-blue-500 to-purple-500">
+                                <div className="relative h-32 app-accent-gradient">
                                     <Image
                                         src={item.image}
                                         alt={item.title}
@@ -63,7 +63,7 @@ export default function FeaturedSection({ profile, isOwner }: FeaturedSectionPro
                                         href={item.url}
                                         target="_blank"
                                         rel="noopener noreferrer"
-                                        className="inline-flex items-center gap-1 text-sm text-blue-600 dark:text-blue-400 hover:underline"
+                                        className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
                                     >
                                         View <ExternalLink className="w-3 h-3" />
                                     </a>

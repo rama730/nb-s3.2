@@ -30,8 +30,8 @@ import {
     getApplicationRequestHistory,
     type ApplicationRequestHistoryItem,
 } from '@/app/actions/applications';
-import { createSupabaseBrowserClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
+import { useRealtime } from '@/components/providers/RealtimeProvider';
 import { queryKeys } from '@/lib/query-keys';
 
 export type FeedStats = Pick<ConnectionStats, 'totalConnections' | 'pendingIncoming' | 'pendingSent'>;
@@ -573,6 +573,7 @@ function patchConnectionsRealtimeCaches(
 export function useConnectionsRealtimeInvalidation() {
     const queryClient = useQueryClient();
     const { user } = useAuth();
+    const { subscribeUserNotifications } = useRealtime();
     const userId = user?.id;
     const invalidateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -610,39 +611,20 @@ export function useConnectionsRealtimeInvalidation() {
             }, 250);
         };
 
-        const supabase = createSupabaseBrowserClient();
-        const channel = supabase
-            .channel(`connections-feed-${userId}`)
-            .on(
-                'postgres_changes',
-                {
-                    event: '*',
-                    schema: 'public',
-                    table: 'connections',
-                    filter: `requester_id=eq.${userId}`,
-                },
-                scheduleInvalidate,
-            )
-            .on(
-                'postgres_changes',
-                {
-                    event: '*',
-                    schema: 'public',
-                    table: 'connections',
-                    filter: `addressee_id=eq.${userId}`,
-                },
-                scheduleInvalidate,
-            )
-            .subscribe();
+        const unsubscribe = subscribeUserNotifications((event) => {
+            if (event.kind === 'connection') {
+                scheduleInvalidate(event.payload as ConnectionsRealtimePayload);
+            }
+        });
 
         return () => {
             if (invalidateTimerRef.current) {
                 clearTimeout(invalidateTimerRef.current);
                 invalidateTimerRef.current = null;
             }
-            void supabase.removeChannel(channel);
+            unsubscribe();
         };
-    }, [queryClient, userId]);
+    }, [queryClient, subscribeUserNotifications, userId]);
 }
 
 export function useConnectionsFeed<TTab extends ConnectionsFeedTab>(
@@ -714,6 +696,7 @@ function mapSentRequest(item: RequestConnectionItem): PendingSentRequest {
 }
 
 export function usePendingRequests(limit = 20) {
+    const { isConnected } = useRealtime();
     return useQuery({
         queryKey: CONNECTIONS_QUERY_KEYS.pendingRequests(limit),
         queryFn: async (): Promise<PendingRequestsData> => {
@@ -739,11 +722,12 @@ export function usePendingRequests(limit = 20) {
         },
         staleTime: 45_000,
         gcTime: 5 * 60 * 1000,
-        refetchInterval: 30_000,
+        refetchInterval: isConnected ? false : 30_000,
     });
 }
 
 export function useRequestHistory(limit = 80) {
+    const { isConnected } = useRealtime();
     return useQuery({
         queryKey: CONNECTIONS_QUERY_KEYS.requestHistory(limit),
         queryFn: async (): Promise<RequestHistoryData> => {
@@ -790,17 +774,18 @@ export function useRequestHistory(limit = 80) {
             };
         },
         staleTime: 20_000,
-        refetchInterval: 30_000,
+        refetchInterval: isConnected ? false : 30_000,
     });
 }
 
 export function useConnectionStats(userId?: string) {
+    const { isConnected } = useRealtime();
     const scope = userId || 'me';
     return useQuery({
         queryKey: CONNECTIONS_QUERY_KEYS.stats(scope),
         queryFn: () => getConnectionStats(userId),
         staleTime: 60_000,
-        refetchInterval: userId ? false : 60_000,
+        refetchInterval: userId || isConnected ? false : 60_000,
     });
 }
 

@@ -1,8 +1,9 @@
 'use client';
 
 import { useCallback, useMemo, useState } from 'react';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import Image from 'next/image';
+import { useQueryClient } from '@tanstack/react-query';
 import { useChatStore, selectUnreadTotal } from '@/stores/chatStore';
 import { type MessageWithSender } from '@/app/actions/messaging';
 import { MessageThread } from './MessageThread';
@@ -10,7 +11,7 @@ import { MessageInput } from './MessageInput';
 import { ConversationList } from './ConversationList';
 import { ApplicationList } from './ApplicationList';
 import { ProjectGroupList } from './ProjectGroupList';
-import { X, Minus, MessageSquare, ArrowLeft, MoreVertical, Archive, Bell, BellOff } from 'lucide-react';
+import { Ban, X, Minus, MessageSquare, ArrowLeft, MoreVertical, Archive, Bell, BellOff } from 'lucide-react';
 import { useConversationActions } from './useConversationActions';
 import {
     DropdownMenu,
@@ -18,6 +19,7 @@ import {
     DropdownMenuItem,
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { invalidatePrivacyDependents } from '@/lib/privacy/client-invalidation';
 
 const EMPTY_MESSAGES: MessageWithSender[] = [];
 
@@ -28,6 +30,8 @@ const EMPTY_MESSAGES: MessageWithSender[] = [];
 
 export function ChatPopup() {
     const pathname = usePathname();
+    const router = useRouter();
+    const queryClient = useQueryClient();
 
     // State for Inbox Zero Toggle (Must be at top level)
     const [activeTab, setActiveTab] = useState<'chats' | 'applications' | 'projects'>('chats');
@@ -62,6 +66,8 @@ export function ChatPopup() {
         handleToggleArchiveConversation,
         handleToggleMuteConversation,
     } = useConversationActions(activeConversation);
+    const activeConnectionStatus = useChatStore(state => state.activeConnectionStatus);
+    const [blockActionLoading, setBlockActionLoading] = useState(false);
 
     // Hide popup on /messages page
     const isOnMessagesPage = pathname.startsWith('/messages');
@@ -73,7 +79,7 @@ export function ChatPopup() {
             <button
                 type="button"
                 onClick={() => isPopupOpen ? maximizePopup() : openPopup()}
-                className="fixed bottom-6 right-6 z-50 flex items-center justify-center w-14 h-14 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-full shadow-lg hover:shadow-xl transition-all hover:scale-105"
+                className="fixed bottom-6 right-6 z-50 flex items-center justify-center w-14 h-14 app-accent-solid rounded-full shadow-lg hover:shadow-xl transition-all hover:bg-primary/90 hover:scale-105"
             >
                 <MessageSquare className="w-6 h-6" />
                 {totalUnread > 0 && (
@@ -88,10 +94,37 @@ export function ChatPopup() {
     // Get other participant for DM
     const otherParticipant = activeConversation?.participants[0];
 
+    const handleToggleBlock = async () => {
+        if (!otherParticipant?.id) return;
+        setBlockActionLoading(true);
+        try {
+            const isBlocked = activeConnectionStatus === 'blocked';
+            const res = await fetch(isBlocked ? `/api/v1/privacy/blocks/${otherParticipant.id}` : '/api/v1/privacy/blocks', {
+                method: isBlocked ? 'DELETE' : 'POST',
+                headers: isBlocked ? undefined : { 'Content-Type': 'application/json' },
+                body: isBlocked ? undefined : JSON.stringify({ userId: otherParticipant.id }),
+            });
+            const json = await res.json().catch(() => null);
+            if (!res.ok || json?.success === false) {
+                throw new Error((typeof json?.error === 'string' && json.error) || 'Failed to update block state');
+            }
+            useChatStore.setState({ activeConnectionStatus: isBlocked ? 'none' : 'blocked' });
+            await invalidatePrivacyDependents(queryClient, {
+                profileTargetKey: otherParticipant.username || otherParticipant.id,
+                includeProjects: false,
+            });
+            router.refresh();
+        } catch (error) {
+            console.error(error);
+        } finally {
+            setBlockActionLoading(false);
+        }
+    };
+
     return (
         <div className="fixed bottom-6 right-6 z-50 w-96 h-[520px] bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl border border-zinc-200 dark:border-zinc-800 flex flex-col overflow-hidden">
             {/* Header */}
-            <div className="flex flex-col bg-gradient-to-r from-blue-600 to-indigo-600 text-white">
+            <div className="flex flex-col app-accent-solid">
                 <div className="flex items-center justify-between px-4 py-3">
                     {activeConversationId ? (
                         <div className="flex items-center gap-3">
@@ -160,15 +193,22 @@ export function ChatPopup() {
                                     className="data-[state=open]:animate-none data-[state=closed]:animate-none"
                                 >
                                     <DropdownMenuItem
+                                        onClick={handleToggleBlock}
+                                        disabled={actionLoading || blockActionLoading}
+                                    >
+                                        <Ban className="w-4 h-4" />
+                                        {activeConnectionStatus === 'blocked' ? 'Unblock account' : 'Block account'}
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem
                                         onClick={handleToggleMuteConversation}
-                                        disabled={actionLoading}
+                                        disabled={actionLoading || blockActionLoading}
                                     >
                                         {activeConversation?.muted ? <Bell className="w-4 h-4" /> : <BellOff className="w-4 h-4" />}
                                         {activeConversation?.muted ? 'Unmute conversation' : 'Mute conversation'}
                                     </DropdownMenuItem>
                                     <DropdownMenuItem
                                         onClick={handleToggleArchiveConversation}
-                                        disabled={actionLoading}
+                                        disabled={actionLoading || blockActionLoading}
                                     >
                                         <Archive className="w-4 h-4" />
                                         {activeConversation?.lifecycleState === 'archived' ? 'Unarchive conversation' : 'Archive conversation'}
@@ -202,7 +242,7 @@ export function ChatPopup() {
                                 onClick={() => setActiveTab('chats')}
                                 className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-all ${
                                     activeTab === 'chats'
-                                        ? 'bg-white text-indigo-600 shadow-sm'
+                                        ? 'bg-white text-primary shadow-sm'
                                         : 'text-white/70 hover:text-white'
                                 }`}
                             >
@@ -213,7 +253,7 @@ export function ChatPopup() {
                                 onClick={() => setActiveTab('applications')}
                                 className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-all ${
                                     activeTab === 'applications'
-                                        ? 'bg-white text-indigo-600 shadow-sm'
+                                        ? 'bg-white text-primary shadow-sm'
                                         : 'text-white/70 hover:text-white'
                                 }`}
                             >
@@ -224,7 +264,7 @@ export function ChatPopup() {
                                 onClick={() => setActiveTab('projects')}
                                 className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-all ${
                                     activeTab === 'projects'
-                                        ? 'bg-white text-indigo-600 shadow-sm'
+                                        ? 'bg-white text-primary shadow-sm'
                                         : 'text-white/70 hover:text-white'
                                 }`}
                             >

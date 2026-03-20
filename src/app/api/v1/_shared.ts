@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { getSessionIdentifierFromSession } from "@/lib/auth/session-identifier";
 import { consumeRateLimitForRoute } from "@/lib/security/rate-limit";
 import { logger } from "@/lib/logger";
 import type { User } from "@supabase/supabase-js";
@@ -47,23 +48,14 @@ export function logApiRoute(
     status: input.status,
     success: input.success,
     errorCode: input.errorCode ?? null,
+    sampleRate: input.success ? 0.02 : 1,
   });
 }
 
 export function getSessionIdentifier(
   session: { access_token?: string } | null | undefined,
 ): string | null {
-  if (!session) return null;
-
-  const explicit = (session as { id?: unknown }).id;
-  if (typeof explicit === "string" && explicit.trim().length > 0) return explicit;
-
-  const maybeSessionId = (session as { session_id?: unknown }).session_id;
-  if (typeof maybeSessionId === "string" && maybeSessionId.trim().length > 0) {
-    return maybeSessionId;
-  }
-
-  return null;
+  return getSessionIdentifierFromSession(session);
 }
 
 export async function enforceRouteLimit(

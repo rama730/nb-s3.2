@@ -11,6 +11,7 @@ import {
     Activity,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useReducedMotionPreference } from '@/components/providers/theme-provider';
 
 export type WorkspaceTab = 'overview' | 'tasks' | 'inbox' | 'projects' | 'notes' | 'activity';
 
@@ -30,6 +31,8 @@ const TABS: Array<{ key: WorkspaceTab; label: string; icon: typeof LayoutDashboa
 ];
 
 function WorkspaceTabBar({ activeTab, onTabChange, badges }: WorkspaceTabBarProps) {
+    const reduceMotion = useReducedMotionPreference();
+
     return (
         <div className="flex gap-1 app-scroll app-scroll-x app-scroll-hidden -mb-px" role="tablist" aria-label="Workspace tabs">
             {TABS.map(({ key, label, icon: Icon }) => {
@@ -46,7 +49,7 @@ function WorkspaceTabBar({ activeTab, onTabChange, badges }: WorkspaceTabBarProp
                         className={cn(
                             'relative flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-t-lg transition-colors whitespace-nowrap',
                             isActive
-                                ? 'text-blue-700 dark:text-blue-400 bg-blue-50/50 dark:bg-blue-900/10'
+                                ? 'app-selected-surface'
                                 : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800/50'
                         )}
                     >
@@ -63,8 +66,8 @@ function WorkspaceTabBar({ activeTab, onTabChange, badges }: WorkspaceTabBarProp
                         {isActive && (
                             <motion.span
                                 layoutId="workspace-tab-indicator"
-                                className="absolute bottom-0 left-0 right-0 h-0.5 bg-blue-600 dark:bg-blue-500 rounded-full"
-                                transition={{ type: 'spring', stiffness: 500, damping: 30 }}
+                                className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-full"
+                                transition={reduceMotion ? { duration: 0 } : { type: 'spring', stiffness: 500, damping: 30 }}
                             />
                         )}
                     </button>

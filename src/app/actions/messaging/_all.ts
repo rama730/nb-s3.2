@@ -19,6 +19,7 @@ import { eq, and, desc, lt, gt, ne, isNull, inArray, sql, or } from 'drizzle-orm
 import { revalidatePath } from 'next/cache';
 import { consumeRateLimit } from '@/lib/security/rate-limit';
 import { runInFlightDeduped } from '@/lib/async/inflight-dedupe';
+import { resolvePrivacyRelationship } from '@/lib/privacy/resolver';
 import {
     ATTACHMENT_UPLOAD_MAX_FILE_BYTES,
     normalizeAndValidateFileSize,
@@ -107,27 +108,8 @@ async function getAuthUser() {
 }
 
 async function isDirectMessagingAllowed(viewerId: string, otherUserId: string): Promise<{ allowed: boolean; error?: string }> {
-    const [targetProfile, relation, recentApplication] = await Promise.all([
-        db
-            .select({ messagePrivacy: profiles.messagePrivacy })
-            .from(profiles)
-            .where(eq(profiles.id, otherUserId))
-            .limit(1),
-        db
-            .select({
-                status: connections.status,
-                requesterId: connections.requesterId,
-                addresseeId: connections.addresseeId,
-            })
-            .from(connections)
-            .where(
-                or(
-                    and(eq(connections.requesterId, viewerId), eq(connections.addresseeId, otherUserId)),
-                    and(eq(connections.requesterId, otherUserId), eq(connections.addresseeId, viewerId))
-                )
-            )
-            .orderBy(desc(connections.updatedAt))
-            .limit(1),
+    const [privacy, recentApplication] = await Promise.all([
+        resolvePrivacyRelationship(viewerId, otherUserId),
         db
             .select({ id: roleApplications.id })
             .from(roleApplications)
@@ -141,12 +123,11 @@ async function isDirectMessagingAllowed(viewerId: string, otherUserId: string): 
             .limit(1),
     ]);
 
-    if (targetProfile.length === 0) {
+    if (!privacy) {
         return { allowed: false, error: 'User not found' };
     }
 
-    const connection = relation[0];
-    if (connection?.status === 'blocked') {
+    if (privacy.blockedByViewer || privacy.blockedByTarget) {
         return { allowed: false, error: 'Messaging is blocked' };
     }
 
@@ -154,20 +135,11 @@ async function isDirectMessagingAllowed(viewerId: string, otherUserId: string): 
         return { allowed: true };
     }
 
-    if (connection?.status === 'accepted') {
+    if (privacy.isConnected) {
         return { allowed: true };
     }
 
-    const privacy = targetProfile[0].messagePrivacy || 'connections';
-    if (privacy === 'everyone') {
-        return { allowed: true };
-    }
-
-    const hasIncomingPending =
-        connection?.status === 'pending' &&
-        connection.addresseeId === viewerId;
-
-    if (hasIncomingPending) {
+    if (privacy.messagePrivacy === 'everyone') {
         return { allowed: true };
     }
 

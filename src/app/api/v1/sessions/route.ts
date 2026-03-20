@@ -7,13 +7,16 @@ import {
   logApiRoute,
   requireAuthenticatedUser,
 } from "@/app/api/v1/_shared";
+import { listActiveSessions } from "@/lib/security/session-activity";
 
 type SessionPayload = {
   id: string;
   device_info: { userAgent: string };
   ip_address: string;
   last_active: string;
+  created_at?: string;
   is_current?: boolean;
+  aal?: "aal1" | "aal2" | null;
 };
 
 export async function GET(request: Request) {
@@ -60,21 +63,9 @@ export async function GET(request: Request) {
     const {
       data: { session },
     } = await auth.supabase.auth.getSession();
-
-    const sessions: SessionPayload[] = [];
-    if (session) {
-      const forwardedFor = request.headers.get("x-forwarded-for") || "";
-      const ipAddress = forwardedFor.split(",")[0]?.trim() || "unknown";
-      const currentSessionId =
-        getSessionIdentifier(session) ?? `display:${auth.user.id}:current`;
-      sessions.push({
-        id: currentSessionId,
-        device_info: { userAgent: request.headers.get("user-agent") || "Unknown device" },
-        ip_address: ipAddress,
-        last_active: new Date().toISOString(),
-        is_current: true,
-      });
-    }
+    const currentSessionId =
+      session ? getSessionIdentifier(session) ?? null : null;
+    const sessions: SessionPayload[] = await listActiveSessions(auth.user.id, currentSessionId, 12);
 
     logApiRoute(request, {
       requestId,

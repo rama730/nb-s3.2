@@ -13,7 +13,7 @@ function wait(ms: number) {
 }
 
 describe("cursor protocol concurrency", () => {
-  it("broadcasts only the latest pending frame inside a throttle window", async () => {
+  it("broadcasts only the latest pending frame inside the 4Hz throttle window", async () => {
     const payloads: Uint8Array[] = [];
     const throttle = createCursorThrottle((payload) => payloads.push(payload));
 
@@ -35,7 +35,7 @@ describe("cursor protocol concurrency", () => {
 
     throttle.send(firstFrame);
     throttle.send(secondFrame);
-    await wait(30);
+    await wait(300);
 
     assert.equal(payloads.length, 1);
     const decoded = decodeCursorFrame(payloads[0]);
@@ -57,7 +57,7 @@ describe("cursor protocol concurrency", () => {
       column: 1,
       selectionStart: 1,
       selectionEnd: 1,
-      timestamp: Date.now() - 1000,
+      timestamp: Date.now() - 2_000,
     };
     const staleResult = manager.processIncoming(encodeCursorFrame(staleFrame), 0);
     assert.equal(staleResult, null);

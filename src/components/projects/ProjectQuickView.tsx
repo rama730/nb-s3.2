@@ -3,6 +3,7 @@
 import { Project } from '@/types/hub';
 import { X, ChevronLeft, ChevronRight, ExternalLink } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useReducedMotionPreference } from '@/components/providers/theme-provider';
 
 interface ProjectQuickViewProps {
     project: Project | null;
@@ -23,6 +24,7 @@ export default function ProjectQuickView({
     hasNext,
     hasPrevious,
 }: ProjectQuickViewProps) {
+    const reduceMotion = useReducedMotionPreference();
     if (!project || !isOpen) return null;
     const availableRoles =
         project.openRoles?.filter(
@@ -30,13 +32,13 @@ export default function ProjectQuickView({
         ) ?? [];
 
     return (
-        <AnimatePresence>
+        <AnimatePresence initial={!reduceMotion}>
             <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
                 {/* Backdrop */}
                 <motion.div
-                    initial={{ opacity: 0 }}
+                    initial={reduceMotion ? false : { opacity: 0 }}
                     animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
+                    exit={reduceMotion ? { opacity: 1 } : { opacity: 0 }}
                     className="fixed inset-0 bg-black/60 backdrop-blur-sm"
                     onClick={onClose}
                 />
@@ -61,9 +63,9 @@ export default function ProjectQuickView({
 
                 {/* Modal */}
                 <motion.div
-                    initial={{ opacity: 0, scale: 0.95 }}
+                    initial={reduceMotion ? false : { opacity: 0, scale: 0.95 }}
                     animate={{ opacity: 1, scale: 1 }}
-                    exit={{ opacity: 0, scale: 0.95 }}
+                    exit={reduceMotion ? { opacity: 1, scale: 1 } : { opacity: 0, scale: 0.95 }}
                     className="relative bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl max-w-2xl w-full max-h-[80vh] overflow-hidden"
                     onClick={(e) => e.stopPropagation()}
                 >
@@ -98,13 +100,13 @@ export default function ProjectQuickView({
                                         return (
                                             <div
                                                 key={role.id}
-                                                className="p-3 rounded-xl border border-indigo-100 dark:border-indigo-900/30 bg-indigo-50/50 dark:bg-indigo-900/10 flex flex-col gap-1.5"
+                                                className="p-3 rounded-xl border border-primary/15 bg-primary/10 dark:bg-primary/12 flex flex-col gap-1.5"
                                             >
                                                 <div className="flex items-start justify-between gap-2">
                                                     <span className="font-semibold text-zinc-900 dark:text-zinc-100 text-sm">
                                                         {role.title || role.role}
                                                     </span>
-                                                    <span className="px-2 py-0.5 rounded-md bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 text-[10px] font-bold">
+                                                    <span className="px-2 py-0.5 rounded-md bg-primary/15 text-primary text-[10px] font-bold">
                                                         {available} Open
                                                     </span>
                                                 </div>
@@ -154,7 +156,7 @@ export default function ProjectQuickView({
                         </button>
                         <a
                             href={`/projects/${project.slug || project.id}`}
-                            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-colors"
+                            className="flex items-center gap-2 px-4 py-2 app-accent-solid hover:bg-primary/90 rounded-lg transition-[background-color,box-shadow]"
                         >
                             View Project
                             <ExternalLink className="w-4 h-4" />

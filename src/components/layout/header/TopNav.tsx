@@ -125,7 +125,7 @@ export default function TopNav() {
     }, [mounted, isSignedIn, router]);
 
     useEffect(() => {
-        document.documentElement.style.setProperty("--header-height", "56px");
+        document.documentElement.style.setProperty("--header-height", "var(--ui-topnav-height)");
     }, []);
 
     return (
@@ -133,7 +133,7 @@ export default function TopNav() {
             className={`sticky top-0 z-40 w-full border-b border-zinc-200/50 dark:border-zinc-800/50 bg-white dark:bg-zinc-900 dark:!bg-zinc-950 transition-all duration-300 ease-in-out ${hasScrolled ? "shadow-sm dark:shadow-zinc-900/20" : ""
                 }`}
         >
-            <div className="mx-auto max-w-7xl px-4 sm:px-6 flex items-center justify-between gap-4 h-14 transition-all duration-300">
+            <div className="mx-auto max-w-7xl px-4 sm:px-6 flex items-center justify-between gap-4 h-[var(--ui-topnav-height)] transition-all duration-300">
                 <div className="flex items-center gap-4">
                     <div className="transition-transform duration-300">
                         <Logo />
@@ -207,7 +207,7 @@ export default function TopNav() {
                             {mounted && isSignedIn ? (
                                 <Link
                                     href={ROUTES.PROFILE}
-                                    className="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-zinc-100 dark:bg-zinc-900 dark:hover:bg-zinc-800 transition-colors group focus:outline-none"
+                                    className="flex items-center gap-2 rounded-lg px-2 hover:bg-zinc-100 dark:bg-zinc-900 dark:hover:bg-zinc-800 transition-colors group focus:outline-none app-density-nav-item"
                                     aria-label="Go to profile"
                                 >
                                     <ProfileAvatar profile={profile} size={32} priority />
@@ -218,7 +218,7 @@ export default function TopNav() {
                             ) : (
                                 <Link
                                     href={ROUTES.LOGIN}
-                                    className="rounded-lg border border-zinc-200 dark:border-zinc-800 px-4 py-1.5 text-sm font-medium hover:bg-zinc-50 dark:bg-zinc-900 dark:hover:bg-zinc-900 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-zinc-900"
+                                    className="rounded-lg border border-zinc-200 dark:border-zinc-800 px-4 py-1.5 text-sm font-medium hover:bg-zinc-50 dark:bg-zinc-900 dark:hover:bg-zinc-900 transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 dark:focus:ring-offset-zinc-900"
                                 >
                                     Sign in
                                 </Link>
@@ -229,7 +229,7 @@ export default function TopNav() {
                     {mounted && isSignedIn && (
                         <button
                             onClick={() => setShowMobileMenu(true)}
-                            className="md:hidden p-2 rounded-lg hover:bg-zinc-100 dark:bg-zinc-900 dark:hover:bg-zinc-800 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-zinc-900"
+                            className="md:hidden p-2 rounded-lg hover:bg-zinc-100 dark:bg-zinc-900 dark:hover:bg-zinc-800 transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 dark:focus:ring-offset-zinc-900"
                             aria-label="Open mobile menu"
                             aria-expanded={showMobileMenu}
                         >

@@ -15,8 +15,8 @@
  *   This is a 136× bandwidth reduction!
  *
  * Frame Dropping:
- * - We throttle outgoing broadcasts to 16ms (≈60fps cap).
- * - Incoming frames older than 100ms are silently dropped.
+ * - We throttle outgoing broadcasts to 250ms (4fps cap).
+ * - Incoming frames older than 1500ms are silently dropped.
  * - Only the latest frame per user is stored (Map<userId, CursorFrame>).
  */
 
@@ -94,8 +94,8 @@ export function decodeCursorFrame(data: Uint8Array): {
 
 // ─── Throttle Controller ─────────────────────────────────────────────
 
-const BROADCAST_THROTTLE_MS = 16; // ~60fps cap
-const STALE_FRAME_MS = 100; // Drop frames older than 100ms
+const BROADCAST_THROTTLE_MS = 250; // 4fps cap
+const STALE_FRAME_MS = 1_500; // Drop frames that are well outside the expected broadcast window
 const CLOCK_SKEW_MS = 50; // Allow small sender/receiver clock skew
 const PRESENCE_TIMEOUT_MS = 10_000; // Remove users after 10s of silence
 const UINT32_MS_MOD = 0x1_0000_0000;
@@ -158,6 +158,10 @@ export function createPresenceManager() {
 
     function registerNode(nodeId: string) {
         nodeHashToId.set(fnv1a(nodeId), nodeId);
+    }
+
+    function removeUser(userId: string) {
+        cursors.delete(userId);
     }
 
     function processIncoming(
@@ -224,6 +228,7 @@ export function createPresenceManager() {
         cursors,
         registerUser,
         registerNode,
+        removeUser,
         processIncoming,
         startGC,
         destroy,

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import NextImage from 'next/image';
 import { useChatStore } from '@/stores/chatStore';
 import { useTypingChannel } from '@/hooks/useTypingChannel';
@@ -11,6 +11,7 @@ import { toast } from 'sonner';
 import { ChatApplicationBanner } from './ChatApplicationBanner';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
+import { getPrivacyBlockedMessage } from '@/lib/privacy/presentation';
 
 // ============================================================================
 // MESSAGE INPUT
@@ -366,13 +367,21 @@ export function MessageInput({ conversationId, targetUserId }: MessageInputProps
     const activeProjectId = useChatStore(state => state.activeProjectId);
 
     const sendConnectionRequest = useChatStore(state => state.sendConnectionRequest);
+    const conversations = useChatStore(state => state.conversations);
     const [requestLoading, setRequestLoading] = useState(false);
+    const resolvedTargetUserId = useMemo(() => {
+        if (targetUserId) return targetUserId;
+        if (conversationId === 'new') return undefined;
+        const activeConversation = conversations.find((conversation) => conversation.id === conversationId);
+        if (!activeConversation || activeConversation.type !== 'dm') return undefined;
+        return activeConversation.participants[0]?.id;
+    }, [conversationId, conversations, targetUserId]);
     
-    // Check connection status for new chats
+    // Check connection status for DM chats so blocked/private state is enforced on both new and existing threads.
     useEffect(() => {
-        if (conversationId === 'new' && targetUserId) {
+        if (resolvedTargetUserId) {
             useChatStore.setState({ activeConnectionStatus: 'loading' });
-            checkConnectionStatus(targetUserId).then(result => {
+            checkConnectionStatus(resolvedTargetUserId).then(result => {
                 if (result.success && result.status) {
                     useChatStore.setState({ activeConnectionStatus: result.status });
                 } else {
@@ -382,7 +391,7 @@ export function MessageInput({ conversationId, targetUserId }: MessageInputProps
                  useChatStore.setState({ activeConnectionStatus: 'none' });
             });
         }
-    }, [conversationId, targetUserId]);
+    }, [resolvedTargetUserId]);
 
     const handleConnect = async () => {
         setRequestLoading(true);
@@ -470,7 +479,7 @@ export function MessageInput({ conversationId, targetUserId }: MessageInputProps
                     <button
                         onClick={handleConnect}
                         disabled={requestLoading}
-                        className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors flex items-center gap-2 disabled:opacity-50"
+                        className="px-4 py-2 app-accent-solid text-sm font-medium rounded-lg transition-[background-color,box-shadow] hover:bg-primary/90 flex items-center gap-2 disabled:opacity-50"
                     >
                         {requestLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <UserPlus className="w-4 h-4" />}
                         Connect
@@ -502,6 +511,24 @@ export function MessageInput({ conversationId, targetUserId }: MessageInputProps
         );
     }
 
+    if (connectionStatus === 'blocked') {
+        return (
+            <div className="border-t border-zinc-200 dark:border-zinc-800 p-4">
+                <div className="bg-zinc-50 dark:bg-zinc-900/50 rounded-xl p-4 flex flex-col items-center justify-center text-center space-y-2">
+                    <div className="w-10 h-10 bg-zinc-100 dark:bg-zinc-800 rounded-full flex items-center justify-center mb-1">
+                        <AlertTriangle className="w-5 h-5 text-amber-500" />
+                    </div>
+                    <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                        Messaging unavailable
+                    </p>
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                        {getPrivacyBlockedMessage(null)}
+                    </p>
+                </div>
+            </div>
+        );
+    }
+
     // If pending request (received) - BUT we want to allow messaging (status='open' + isIncomingRequest)
     // The store now returns 'open' for incoming requests, so we just check for the flag to show the banner.
     // We only block if status is strictly 'pending_received' (legacy) or if we want to force accept.
@@ -525,15 +552,15 @@ export function MessageInput({ conversationId, targetUserId }: MessageInputProps
             <div className="p-3">
              {/* Incoming Request Banner (Recipient) */}
             {isIncomingConnectionRequest && (
-                <div className="mb-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-900 rounded-lg p-3 flex items-center justify-between">
-                    <p className="text-xs text-blue-700 dark:text-blue-300 flex items-center gap-2">
+                <div className="mb-3 bg-primary/10 dark:bg-primary/15 border border-primary/15 dark:border-primary/20 rounded-lg p-3 flex items-center justify-between">
+                    <p className="text-xs text-primary flex items-center gap-2">
                         <UserPlus className="w-4 h-4" />
                         <span>This user sent you a connection request</span>
                     </p>
                     <button
                         onClick={handleAccept}
                         disabled={requestLoading}
-                        className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-md transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                        className="px-3 py-1.5 app-accent-solid text-xs font-medium rounded-md transition-[background-color,box-shadow] hover:bg-primary/90 flex items-center gap-1.5 disabled:opacity-50"
                     >
                         {requestLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
                         Accept
@@ -554,9 +581,9 @@ export function MessageInput({ conversationId, targetUserId }: MessageInputProps
             {/* Attachment previews */}
             {replyTarget && (
                 <div className="mb-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/70 px-3 py-2 flex items-start gap-2">
-                    <div className="w-1 self-stretch rounded-full bg-blue-500" />
+                    <div className="w-1 self-stretch rounded-full bg-primary" />
                     <div className="min-w-0 flex-1">
-                        <p className="text-[11px] font-semibold text-blue-600 dark:text-blue-400 truncate">
+                        <p className="text-[11px] font-semibold text-primary truncate">
                             Replying to {replyTarget.senderName || 'message'}
                         </p>
                         <p className="text-xs text-zinc-600 dark:text-zinc-300 truncate">
@@ -601,7 +628,7 @@ export function MessageInput({ conversationId, targetUserId }: MessageInputProps
                                 }`}
                         >
                             {(att.status === 'queued' || att.status === 'uploading') ? (
-                                <Loader2 className="w-4 h-4 text-blue-500 animate-spin" />
+                                <Loader2 className="w-4 h-4 text-primary animate-spin" />
                             ) : att.file.type.startsWith('image/') ? (
                                 att.preview ? (
                                     <NextImage
@@ -613,7 +640,7 @@ export function MessageInput({ conversationId, targetUserId }: MessageInputProps
                                         className="w-8 h-8 rounded object-cover"
                                     />
                                 ) : (
-                                    <ImageIcon className="w-4 h-4 text-blue-500" />
+                                    <ImageIcon className="w-4 h-4 text-primary" />
                                 )
                             ) : (
                                 <Paperclip className="w-4 h-4 text-zinc-500" />
@@ -637,7 +664,7 @@ export function MessageInput({ conversationId, targetUserId }: MessageInputProps
                                     {att.attempts >= MAX_UPLOAD_RETRIES ? (
                                         <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
                                     ) : (
-                                        <RotateCcw className="w-3.5 h-3.5 text-blue-500" />
+                                        <RotateCcw className="w-3.5 h-3.5 text-primary" />
                                     )}
                                 </button>
                             )}
@@ -681,7 +708,7 @@ export function MessageInput({ conversationId, targetUserId }: MessageInputProps
                         onKeyDown={handleKeyDown}
                         placeholder="Type a message..."
                         rows={1}
-                        className="w-full px-4 py-2.5 bg-zinc-100 dark:bg-zinc-800 rounded-2xl resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm text-zinc-900 dark:text-white placeholder-zinc-400 max-h-[120px]"
+                        className="w-full px-4 py-2.5 bg-zinc-100 dark:bg-zinc-800 rounded-2xl resize-none focus:outline-none focus:ring-2 focus:ring-ring text-sm text-zinc-900 dark:text-white placeholder-zinc-400 max-h-[120px]"
                         style={{ minHeight: '42px' }}
                     />
                 </div>
@@ -690,7 +717,7 @@ export function MessageInput({ conversationId, targetUserId }: MessageInputProps
                 <button
                     onClick={handleSend}
                     disabled={isSending || hasUploadingAttachments || (!draft.trim() && !hasValidAttachments)}
-                    className="p-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-full disabled:opacity-50 disabled:cursor-not-allowed hover:shadow-lg transition-all hover:scale-105 disabled:hover:scale-100"
+                    className="p-2.5 app-accent-solid rounded-full disabled:opacity-50 disabled:cursor-not-allowed hover:shadow-lg hover:bg-primary/90 transition-all hover:scale-105 disabled:hover:scale-100"
                 >
                     {isSending || hasUploadingAttachments ? (
                         <Loader2 className="w-5 h-5 animate-spin" />

@@ -43,7 +43,7 @@ export default function ProjectsSection({ profile, isOwner }: ProjectsSectionPro
                             className="group rounded-lg border border-zinc-200 dark:border-zinc-800 overflow-hidden hover:shadow-lg transition-all duration-300 hover:scale-[1.02]"
                         >
                             {project.image && (
-                                <div className="relative h-32 bg-gradient-to-br from-blue-500 to-purple-500">
+                                <div className="relative h-32 app-accent-gradient">
                                     <Image
                                         src={project.image}
                                         alt={project.title}
@@ -56,7 +56,7 @@ export default function ProjectsSection({ profile, isOwner }: ProjectsSectionPro
                                 <div className="flex items-start justify-between mb-2">
                                     <h3 className="font-semibold text-zinc-900 dark:text-white">{project.title}</h3>
                                     {project.role && (
-                                        <span className="px-2 py-0.5 rounded text-xs font-semibold bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300">
+                                        <span className="px-2 py-0.5 rounded text-xs font-semibold bg-primary/10 text-primary">
                                             {project.role}
                                         </span>
                                     )}
@@ -71,7 +71,7 @@ export default function ProjectsSection({ profile, isOwner }: ProjectsSectionPro
                                         href={project.url}
                                         target="_blank"
                                         rel="noopener noreferrer"
-                                        className="inline-flex items-center gap-1 text-sm text-blue-600 dark:text-blue-400 hover:underline"
+                                        className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
                                     >
                                         View project <ExternalLink className="w-3 h-3" />
                                     </a>

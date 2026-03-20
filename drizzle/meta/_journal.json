@@ -365,6 +365,27 @@
       "when": 1772816852425,
       "tag": "0051_clever_scarecrow",
       "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1773330000000,
+      "tag": "0052_workspace_profile_counters",
+      "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1773372000000,
+      "tag": "0053_security_recovery_codes",
+      "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1773489600000,
+      "tag": "0054_privacy_system_foundation",
+      "breakpoints": true
     }
   ]
 }

@@ -1,4 +1,7 @@
 import { validateCsrf } from "@/lib/security/csrf";
+import { eq } from "drizzle-orm";
+import { db } from "@/lib/db";
+import { profiles } from "@/lib/db/schema";
 import {
   enforceRouteLimit,
   getRequestId,
@@ -7,6 +10,10 @@ import {
   logApiRoute,
   requireAuthenticatedUser,
 } from "@/app/api/v1/_shared";
+import { recordSecurityEvent } from "@/lib/security/audit";
+import { getVerifiedTotpFactors, listSecurityMfaFactors } from "@/lib/security/mfa";
+import { countRemainingRecoveryCodes, parseStoredRecoveryCodes } from "@/lib/security/recovery-codes";
+import { resolveSecurityStepUp } from "@/lib/security/step-up";
 
 export async function DELETE(
   request: Request,
@@ -52,10 +59,39 @@ export async function DELETE(
     });
     return auth.response;
   }
+  const user = auth.user;
+  if (!user) {
+    return jsonError("Not authenticated", 401, "UNAUTHORIZED");
+  }
 
   const { id } = await context.params;
 
   try {
+    const factors = await listSecurityMfaFactors(auth.supabase);
+    const factorToRemove = factors.find((factor) => factor.id === id) ?? null;
+    const verifiedTotpFactors = getVerifiedTotpFactors(factors);
+    const isVerifiedTotp = factorToRemove?.type === "totp" && factorToRemove.status === "verified";
+
+    if (isVerifiedTotp) {
+      const stepUp = await resolveSecurityStepUp(user.id, ["totp", "recovery_code"]);
+      if (!stepUp.ok) {
+        logApiRoute(request, {
+          requestId,
+          action: "auth.mfaFactor.delete",
+          userId: auth.user?.id ?? null,
+          startedAt,
+          success: false,
+          status: 403,
+          errorCode: "STEP_UP_REQUIRED",
+        });
+        return jsonError(
+          "Verify this device with your authenticator app or a recovery code before removing an authenticator app",
+          403,
+          "STEP_UP_REQUIRED",
+        );
+      }
+    }
+
     const mfaApi = (auth.supabase.auth as any)?.mfa;
     if (!mfaApi?.unenroll) {
       logApiRoute(request, {
@@ -140,6 +176,43 @@ export async function DELETE(
       });
       return jsonError(message, 500, "INTERNAL_ERROR");
     }
+
+    const removingLastVerifiedTotp = isVerifiedTotp && verifiedTotpFactors.length === 1;
+    let clearedRecoveryCodes = false;
+    let previousRemainingRecoveryCodes = 0;
+
+    if (removingLastVerifiedTotp) {
+      const existingProfile = await db.query.profiles.findFirst({
+        columns: {
+          securityRecoveryCodes: true,
+        },
+        where: eq(profiles.id, user.id),
+      });
+      const storedCodes = parseStoredRecoveryCodes(existingProfile?.securityRecoveryCodes);
+      previousRemainingRecoveryCodes = countRemainingRecoveryCodes(storedCodes);
+      clearedRecoveryCodes = storedCodes.length > 0;
+
+      await db
+        .update(profiles)
+        .set({
+          securityRecoveryCodes: [],
+          recoveryCodesGeneratedAt: null,
+          updatedAt: new Date(),
+        })
+        .where(eq(profiles.id, user.id));
+    }
+
+    await recordSecurityEvent({
+      userId: user.id,
+      eventType: "authenticator_app_removed",
+      request,
+      metadata: {
+        factorId: id,
+        friendlyName: factorToRemove?.friendly_name ?? "Authenticator app",
+        clearedRecoveryCodes,
+        previousRemainingRecoveryCodes,
+      },
+    });
 
     logApiRoute(request, {
       requestId,

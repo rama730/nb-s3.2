@@ -43,7 +43,7 @@ export function MobileNav() {
             <div className="fixed inset-y-0 left-0 z-50 w-72 bg-background border-r shadow-lg md:hidden animate-in slide-in-from-left duration-300">
                 <div className="flex flex-col h-full">
                     {/* Header */}
-                    <div className="flex items-center justify-between p-4 border-b">
+                    <div className="flex items-center justify-between app-density-panel border-b">
                         <Link href="/hub" className="flex items-center space-x-2">
                             <div className="w-8 h-8 rounded-lg bg-primary text-primary-foreground flex items-center justify-center font-bold">
                                 E
@@ -60,7 +60,7 @@ export function MobileNav() {
                     </div>
 
                     {/* Create button */}
-                    <div className="p-4">
+                    <div className="app-density-panel">
                         <Button className="w-full gap-2" asChild>
                             <Link href="/projects/new" onClick={() => setMobileMenuOpen(false)}>
                                 <Plus className="h-4 w-4" />
@@ -81,9 +81,9 @@ export function MobileNav() {
                                     href={item.href}
                                     onClick={() => setMobileMenuOpen(false)}
                                     className={cn(
-                                        'flex items-center gap-3 px-3 py-3 rounded-lg text-sm font-medium transition-colors',
+                                        'flex items-center gap-3 rounded-lg text-sm font-medium transition-colors app-density-nav-item',
                                         isActive
-                                            ? 'bg-primary text-primary-foreground'
+                                            ? 'app-selected-surface'
                                             : 'text-muted-foreground hover:text-foreground hover:bg-muted'
                                     )}
                                 >

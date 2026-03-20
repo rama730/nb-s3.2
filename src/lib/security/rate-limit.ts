@@ -1,133 +1,293 @@
-interface RateLimitResult {
-    allowed: boolean;
-    count: number;
-    limit: number;
-    resetAt: number;
+import { getRedisClient } from '@/lib/redis'
+
+export interface RateLimitResult {
+    allowed: boolean
+    count: number
+    limit: number
+    remaining: number
+    resetAt: number
+    degraded: boolean
+    reason?: 'redis_unavailable' | 'redis_error'
 }
 
-interface InMemoryBucket {
-    count: number;
-    resetAt: number;
+export type RateLimitMode = 'best-effort' | 'distributed-only'
+export type RateLimitFailMode = 'fail_closed' | 'allow' | 'stale_or_shed'
+
+export interface RateLimitPolicy {
+    scope: string
+    burst: number
+    refillRate: number
+    keyParts: string[]
+    failMode: RateLimitFailMode
+    testLocal?: boolean
 }
 
-const LOCAL_BUCKETS_MAX = 10_000;
-const localBuckets = new Map<string, InMemoryBucket>();
-let hasLoggedLocalFallback = false;
-let hasLoggedRedisCommandFailure = false;
+type RouteRateLimitPolicy = {
+    mode?: RateLimitMode
+    failMode?: RateLimitFailMode
+}
 
-const RATE_LIMIT_INCREMENT_SCRIPT = `
-local current = redis.call('INCR', KEYS[1])
-if current == 1 then
-  redis.call('EXPIRE', KEYS[1], tonumber(ARGV[1]))
+type InMemoryBucket = {
+    count: number
+    resetAt: number
+}
+
+const TOKEN_BUCKET_SCRIPT = `
+local capacity = tonumber(ARGV[1])
+local refill_per_ms = tonumber(ARGV[2])
+local now_ms = tonumber(ARGV[3])
+local requested = tonumber(ARGV[4])
+local ttl_ms = tonumber(ARGV[5])
+
+local state = redis.call('HMGET', KEYS[1], 'tokens', 'updated_at', 'count')
+local tokens = tonumber(state[1])
+local updated_at = tonumber(state[2])
+local count = tonumber(state[3])
+
+if tokens == nil then
+  tokens = capacity
+  updated_at = now_ms
+  count = 0
 end
-return current
-`;
 
-export type RateLimitMode = 'best-effort' | 'distributed-only';
-export type RateLimitFallback = 'deny' | 'local' | 'allow';
+local elapsed = math.max(0, now_ms - updated_at)
+tokens = math.min(capacity, tokens + (elapsed * refill_per_ms))
+updated_at = now_ms
+count = count + 1
 
-type RateLimitRoutePolicy = {
-    mode?: RateLimitMode;
-    fallback?: RateLimitFallback;
-};
+local allowed = 0
+if tokens >= requested then
+  tokens = tokens - requested
+  allowed = 1
+end
 
-export const RATE_LIMIT_ROUTE_POLICIES: Record<string, RateLimitRoutePolicy> = {
+redis.call('HSET', KEYS[1], 'tokens', tokens, 'updated_at', updated_at, 'count', count)
+redis.call('PEXPIRE', KEYS[1], ttl_ms)
+
+local retry_after_ms = 0
+if allowed == 0 then
+  retry_after_ms = math.ceil((requested - tokens) / refill_per_ms)
+end
+
+return { allowed, count, tokens, retry_after_ms }
+`
+
+const TEST_BUCKETS = new Map<string, InMemoryBucket>()
+let hasLoggedRedisUnavailable = false
+let hasLoggedRedisCommandFailure = false
+
+export const RATE_LIMIT_ROUTE_POLICIES: Record<string, RouteRateLimitPolicy> = {
     default: {},
-    health: { mode: 'best-effort', fallback: 'allow' },
-    ready: { mode: 'best-effort', fallback: 'allow' },
-    publicRead: { mode: 'best-effort', fallback: 'local' },
-};
+    health: { mode: 'best-effort', failMode: 'allow' },
+    ready: { mode: 'best-effort', failMode: 'allow' },
+    publicRead: { mode: 'distributed-only', failMode: 'stale_or_shed' },
+}
 
 export type ConsumeRateLimitOptions = {
-    mode?: RateLimitMode;
-    fallback?: RateLimitFallback;
-    route?: keyof typeof RATE_LIMIT_ROUTE_POLICIES;
-};
+    mode?: RateLimitMode
+    failMode?: RateLimitFailMode
+    fallback?: 'deny' | 'allow' | 'local'
+    route?: keyof typeof RATE_LIMIT_ROUTE_POLICIES
+}
 
 function getRateLimitMode(): RateLimitMode {
-    if (process.env.RATE_LIMIT_MODE === 'distributed-only') return 'distributed-only';
-    if (process.env.RATE_LIMIT_MODE === 'best-effort') return 'best-effort';
-    return process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test'
-        ? 'best-effort'
-        : 'distributed-only';
+    if (process.env.RATE_LIMIT_MODE === 'distributed-only') return 'distributed-only'
+    if (process.env.RATE_LIMIT_MODE === 'best-effort') return 'best-effort'
+    return process.env.NODE_ENV === 'test' ? 'best-effort' : 'distributed-only'
 }
 
-function defaultFallbackForMode(mode: RateLimitMode): RateLimitFallback {
-    return mode === 'distributed-only' ? 'deny' : 'local';
-}
-
-function resolveConsumeOptions(options?: ConsumeRateLimitOptions): { mode: RateLimitMode; fallback: RateLimitFallback } {
-    const routePolicy = options?.route ? RATE_LIMIT_ROUTE_POLICIES[options.route] : undefined;
-    const mode = options?.mode ?? routePolicy?.mode ?? getRateLimitMode();
-    const fallback = options?.fallback ?? routePolicy?.fallback ?? defaultFallbackForMode(mode);
-    return { mode, fallback };
-}
-
-function cleanupLocalBuckets() {
-    const now = Date.now();
-    for (const [key, bucket] of localBuckets) {
-        if (bucket.resetAt <= now) {
-            localBuckets.delete(key);
-        }
-    }
-    if (localBuckets.size > LOCAL_BUCKETS_MAX) {
-        const excess = localBuckets.size - LOCAL_BUCKETS_MAX;
-        const iter = localBuckets.keys();
-        for (let i = 0; i < excess; i++) {
-            const key = iter.next().value;
-            if (key) localBuckets.delete(key);
-        }
+function normalizeFailMode(
+    options?: Pick<ConsumeRateLimitOptions, 'failMode' | 'fallback'>
+): RateLimitFailMode | undefined {
+    if (options?.failMode) return options.failMode
+    switch (options?.fallback) {
+        case 'allow':
+            return 'allow'
+        case 'deny':
+            return 'fail_closed'
+        case 'local':
+            return process.env.NODE_ENV === 'test' ? 'allow' : 'stale_or_shed'
+        default:
+            return undefined
     }
 }
 
-let cachedRedisClient: Awaited<ReturnType<typeof createRedisClient>> | undefined;
+function defaultFailMode(mode: RateLimitMode): RateLimitFailMode {
+    return mode === 'distributed-only' ? 'fail_closed' : 'allow'
+}
 
-async function createRedisClient() {
-    if (!process.env.UPSTASH_REDIS_REST_URL || !process.env.UPSTASH_REDIS_REST_TOKEN) {
-        return null;
-    }
-    try {
-        const redisPackage = await import('@upstash/redis');
-        return new redisPackage.Redis({
-            url: process.env.UPSTASH_REDIS_REST_URL,
-            token: process.env.UPSTASH_REDIS_REST_TOKEN,
-        });
-    } catch {
-        return null;
+function resolveConsumeOptions(options?: ConsumeRateLimitOptions): {
+    mode: RateLimitMode
+    failMode: RateLimitFailMode
+    testLocal: boolean
+} {
+    const routePolicy = options?.route ? RATE_LIMIT_ROUTE_POLICIES[options.route] : undefined
+    const mode = options?.mode ?? routePolicy?.mode ?? getRateLimitMode()
+    const failMode = normalizeFailMode(options) ?? routePolicy?.failMode ?? defaultFailMode(mode)
+    const testLocal =
+        process.env.NODE_ENV === 'test'
+        && options?.failMode === undefined
+        && options?.fallback === undefined
+        && routePolicy?.failMode === undefined
+    return { mode, failMode, testLocal }
+}
+
+function buildPolicy(
+    identifier: string,
+    limit: number,
+    windowSeconds: number,
+    options?: ConsumeRateLimitOptions,
+): RateLimitPolicy {
+    const effectiveLimit = Math.max(1, Math.trunc(limit))
+    const effectiveWindowSeconds = Math.max(1, Math.trunc(windowSeconds))
+    const { failMode, testLocal } = resolveConsumeOptions(options)
+
+    return {
+        scope: options?.route ?? 'default',
+        burst: effectiveLimit,
+        refillRate: effectiveLimit / effectiveWindowSeconds,
+        keyParts: [identifier],
+        failMode,
+        testLocal,
     }
 }
 
-async function getRedisClient() {
-    if (cachedRedisClient !== undefined) return cachedRedisClient;
-    cachedRedisClient = await createRedisClient();
-    return cachedRedisClient;
+function resultFromUnavailable(
+    limit: number,
+    windowSeconds: number,
+    failMode: RateLimitFailMode,
+    reason: RateLimitResult['reason'],
+): RateLimitResult {
+    const now = Date.now()
+    switch (failMode) {
+        case 'allow':
+            return {
+                allowed: true,
+                count: 1,
+                limit,
+                remaining: limit,
+                resetAt: now + windowSeconds * 1000,
+                degraded: true,
+                reason,
+            }
+        case 'stale_or_shed':
+        case 'fail_closed':
+        default:
+            return {
+                allowed: false,
+                count: 0,
+                limit,
+                remaining: 0,
+                resetAt: now + windowSeconds * 1000,
+                degraded: true,
+                reason,
+            }
+    }
 }
 
-async function consumeLocalRateLimit(identifier: string, limit: number, windowSeconds: number): Promise<RateLimitResult> {
-    cleanupLocalBuckets();
-
-    const now = Date.now();
-    const windowMs = windowSeconds * 1000;
-    const existing = localBuckets.get(identifier);
+function consumeTestRateLimit(identifier: string, limit: number, windowSeconds: number): RateLimitResult {
+    const now = Date.now()
+    const existing = TEST_BUCKETS.get(identifier)
+    const resetAt = now + windowSeconds * 1000
 
     if (!existing || existing.resetAt <= now) {
-        const next = { count: 1, resetAt: now + windowMs };
-        localBuckets.set(identifier, next);
+        TEST_BUCKETS.set(identifier, { count: 1, resetAt })
         return {
             allowed: true,
             count: 1,
             limit,
-            resetAt: next.resetAt,
-        };
+            remaining: Math.max(0, limit - 1),
+            resetAt,
+            degraded: true,
+            reason: 'redis_unavailable',
+        }
     }
 
-    existing.count += 1;
+    existing.count += 1
     return {
         allowed: existing.count <= limit,
         count: existing.count,
         limit,
+        remaining: Math.max(0, limit - existing.count),
         resetAt: existing.resetAt,
-    };
+        degraded: true,
+        reason: 'redis_unavailable',
+    }
+}
+
+export async function consumeRateLimitPolicy(policy: RateLimitPolicy): Promise<RateLimitResult> {
+    const burst = Math.max(1, Math.trunc(policy.burst))
+    const refillRate = Math.max(1 / burst, policy.refillRate)
+    const refillPerMs = refillRate / 1000
+    const limit = burst
+    const resetAtFallback = Date.now() + Math.ceil(burst / refillRate) * 1000
+    const redisKey = `ratelimit:${policy.scope}:${policy.keyParts.join(':')}`
+    const redis = getRedisClient()
+
+    if (!redis) {
+        if (process.env.NODE_ENV === 'test' && policy.testLocal) {
+            return consumeTestRateLimit(redisKey, limit, Math.ceil(burst / refillRate))
+        }
+
+        if (!hasLoggedRedisUnavailable) {
+            hasLoggedRedisUnavailable = true
+            console.warn('[rate-limit] Redis unavailable', {
+                scope: policy.scope,
+                failMode: policy.failMode,
+            })
+        }
+
+        return resultFromUnavailable(limit, Math.ceil(burst / refillRate), policy.failMode, 'redis_unavailable')
+    }
+
+    const nowMs = Date.now()
+    const ttlMs = Math.max(1_000, Math.ceil((burst / refillRate) * 1000 * 2))
+
+    try {
+        const raw = await (redis as unknown as {
+            eval: (script: string, keys: string[], args: string[]) => Promise<number[]>
+        }).eval(
+            TOKEN_BUCKET_SCRIPT,
+            [redisKey],
+            [
+                String(burst),
+                String(refillPerMs),
+                String(nowMs),
+                '1',
+                String(ttlMs),
+            ],
+        )
+
+        const [allowedRaw, countRaw, remainingTokensRaw, retryAfterMsRaw] = raw || []
+        const allowed = Number(allowedRaw) === 1
+        const count = Number.isFinite(Number(countRaw)) ? Number(countRaw) : 0
+        const remainingTokens = Number.isFinite(Number(remainingTokensRaw)) ? Number(remainingTokensRaw) : 0
+        const retryAfterMs = Number.isFinite(Number(retryAfterMsRaw)) ? Number(retryAfterMsRaw) : 0
+
+        return {
+            allowed,
+            count,
+            limit,
+            remaining: Math.max(0, Math.floor(remainingTokens)),
+            resetAt: allowed ? nowMs + Math.ceil((burst - remainingTokens) / refillPerMs) : nowMs + retryAfterMs,
+            degraded: false,
+        }
+    } catch (error) {
+        if (process.env.NODE_ENV === 'test' && policy.testLocal) {
+            return consumeTestRateLimit(redisKey, limit, Math.ceil(burst / refillRate))
+        }
+
+        if (!hasLoggedRedisCommandFailure) {
+            hasLoggedRedisCommandFailure = true
+            console.warn('[rate-limit] Redis command failed', {
+                scope: policy.scope,
+                failMode: policy.failMode,
+                error: error instanceof Error ? error.message : String(error),
+            })
+        }
+
+        return resultFromUnavailable(limit, Math.ceil(burst / refillRate), policy.failMode, 'redis_error')
+    }
 }
 
 export async function consumeRateLimit(
@@ -136,89 +296,25 @@ export async function consumeRateLimit(
     windowSeconds: number,
     options?: ConsumeRateLimitOptions,
 ): Promise<RateLimitResult> {
-    cleanupLocalBuckets();
-
-    const redis = await getRedisClient();
-    const { mode, fallback } = resolveConsumeOptions(options);
-
-    if (!redis) {
-        if (!hasLoggedLocalFallback) {
-            hasLoggedLocalFallback = true;
-            const behavior = fallback === 'deny'
-                ? 'blocking all requests'
-                : fallback === 'allow'
-                    ? 'allowing requests'
-                    : 'using in-memory fallback';
-            console.warn("[rate-limit] Redis unavailable", {
-                behavior,
-                mode,
-                fallback,
-            });
-        }
-        if (fallback === 'allow') {
-            return {
-                allowed: true,
-                count: 1,
-                limit,
-                resetAt: Date.now() + windowSeconds * 1000,
-            };
-        }
-        if (fallback === 'deny') {
-            return {
-                allowed: false,
-                count: 0,
-                limit,
-                resetAt: Date.now() + windowSeconds * 1000,
-            };
-        }
-        return consumeLocalRateLimit(identifier, limit, windowSeconds);
+    if (
+        process.env.NODE_ENV === 'test'
+        && !options
+    ) {
+        return consumeTestRateLimit(`ratelimit:default:${identifier}`, limit, windowSeconds)
     }
 
-    const windowBucket = Math.floor(Date.now() / (windowSeconds * 1000));
-    const redisKey = `ratelimit:${identifier}:${windowBucket}`;
+    const { mode } = resolveConsumeOptions(options)
+    const policy = buildPolicy(identifier, limit, windowSeconds, options)
+    const result = await consumeRateLimitPolicy(policy)
 
-    try {
-        const rawCount = await redis.eval(
-            RATE_LIMIT_INCREMENT_SCRIPT,
-            [redisKey],
-            [String(windowSeconds)],
-        );
-        const count = Number(rawCount);
-        const normalizedCount = Number.isFinite(count) ? count : 0;
-
+    if (!result.allowed && result.degraded && mode === 'best-effort' && policy.failMode === 'allow') {
         return {
-            allowed: normalizedCount <= limit,
-            count: normalizedCount,
-            limit,
-            resetAt: (windowBucket + 1) * windowSeconds * 1000,
-        };
-    } catch (error) {
-        if (!hasLoggedRedisCommandFailure) {
-            hasLoggedRedisCommandFailure = true;
-            console.warn('[rate-limit] Redis command failed, applying fallback behavior', {
-                mode,
-                fallback,
-                error: error instanceof Error ? error.message : String(error),
-            });
+            ...result,
+            allowed: true,
         }
-        if (fallback === 'allow') {
-            return {
-                allowed: true,
-                count: 1,
-                limit,
-                resetAt: Date.now() + windowSeconds * 1000,
-            };
-        }
-        if (fallback === 'deny') {
-            return {
-                allowed: false,
-                count: 0,
-                limit,
-                resetAt: Date.now() + windowSeconds * 1000,
-            };
-        }
-        return consumeLocalRateLimit(identifier, limit, windowSeconds);
     }
+
+    return result
 }
 
 export async function consumeRateLimitForRoute(
@@ -226,10 +322,6 @@ export async function consumeRateLimitForRoute(
     identifier: string,
     limit: number,
     windowSeconds: number,
-    overrides?: Omit<ConsumeRateLimitOptions, 'route'>,
-): Promise<RateLimitResult> {
-    return consumeRateLimit(identifier, limit, windowSeconds, {
-        route,
-        ...overrides,
-    });
+) {
+    return consumeRateLimit(identifier, limit, windowSeconds, { route })
 }

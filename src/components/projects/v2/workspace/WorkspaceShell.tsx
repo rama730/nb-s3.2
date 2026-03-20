@@ -233,10 +233,11 @@ export default function WorkspaceShell({
   });
 
   // Phase 5: Binary-Packed WebSocket Cursor Presence
-  const { remoteCursors, broadcastCursor, cursorVersion } = useCursorPresence({
+  const { remoteCursors, broadcastCursor } = useCursorPresence({
     projectId,
     currentUserId: currentUserId ?? "",
     enabled: !!currentUserId,
+    canBroadcast: canEdit,
   });
 
   // Lock manager
@@ -331,7 +332,6 @@ export default function WorkspaceShell({
   const problems = useFilesWorkspaceStore((s) => s._get(projectId).ui.problems ?? []);
   const setProblems = useFilesWorkspaceStore((s) => s.setProblems);
   const setStdinInputText = useFilesWorkspaceStore((s) => s.setStdinInputText);
-  const appendDebugOutput = useFilesWorkspaceStore((s) => s.appendDebugOutput);
 
   const runActiveFile = useCallback(async () => {
     if (!activeFilePath) return;
@@ -357,7 +357,6 @@ export default function WorkspaceShell({
     const logs = result.success ? [...result.logs, "Code execution successful."] : result.logs;
     setLastExecutionOutput(projectId, logs);
     setLastExecutionSettingsHref(projectId, result.success ? null : (result.settingsHref ?? null));
-    appendDebugOutput(projectId, result.logs);
 
     if (result.success) {
       setStdinInputText(projectId, "");
@@ -366,6 +365,9 @@ export default function WorkspaceShell({
       const existing = useFilesWorkspaceStore.getState()._get(projectId).ui.problems ?? [];
       const merged = [...existing.filter((p) => p.source !== "execution"), ...execProblems];
       setProblems(projectId, merged);
+      if (execProblems.length > 0) {
+        setBottomPanelTab(projectId, "problems");
+      }
     }
   }, [
     activeFilePath,
@@ -378,7 +380,6 @@ export default function WorkspaceShell({
     setBottomPanelTab,
     setLastExecutionOutput,
     setLastExecutionSettingsHref,
-    appendDebugOutput,
     setStdinInputText,
     setProblems,
   ]);
@@ -912,6 +913,8 @@ export default function WorkspaceShell({
             leftOrderedTabIds={leftOrderedTabIds}
             rightOrderedTabIds={rightOrderedTabIds}
             gitChangedFiles={gitChangedFiles}
+            remoteCursors={remoteCursors}
+            onBroadcastCursor={broadcastCursor}
           />
         ) : (
           <div className="flex-1 min-h-0 grid place-items-center text-sm text-zinc-500 dark:text-zinc-400">

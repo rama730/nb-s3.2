@@ -1,9 +1,20 @@
 import { Profile, Project } from '@/lib/db/schema'
 import { User } from '@supabase/supabase-js'
+import type { PrivacyConnectionState, PrivacyVisibilityReason } from '@/lib/privacy/relationship-state'
 
-export type ConnectionState = 'none' | 'pending_incoming' | 'pending_outgoing' | 'accepted' | 'rejected'
+export type ConnectionState = 'none' | 'pending_incoming' | 'pending_outgoing' | 'accepted' | 'rejected' | 'blocked'
 
 export type ProfileTabKey = 'overview' | 'portfolio'
+
+export interface ProfilePrivacyRelationship {
+    canViewProfile: boolean
+    canSendMessage: boolean
+    canSendConnectionRequest: boolean
+    blockedByViewer: boolean
+    blockedByTarget: boolean
+    visibilityReason: PrivacyVisibilityReason
+    connectionState: PrivacyConnectionState
+}
 
 export interface ProfileStats {
     connectionsCount: number
@@ -23,6 +34,8 @@ export interface ProfilePageData {
     isOwner: boolean
     currentUser: User | null
     connectionStatus: ConnectionState
+    privacyRelationship: ProfilePrivacyRelationship
+    lockedShell?: boolean
     projects?: any[] // Project type
 }
 

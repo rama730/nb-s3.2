@@ -3,8 +3,6 @@ import { getWorkspaceOverviewBase } from '@/app/actions/workspace';
 import WorkspaceClient from '@/components/workspace/WorkspaceClient';
 import WorkspaceSkeleton from '@/components/workspace/WorkspaceSkeleton';
 
-export const dynamic = 'force-dynamic';
-
 export async function generateMetadata() {
     return {
         title: 'Workspace | Edge',

@@ -1,164 +1,196 @@
-/**
- * Phase 5 Optimization #7: Binary-Packed Cursor Presence Hook
- *
- * Wires the binary cursor protocol into Supabase Realtime Broadcast.
- * Uses a dedicated broadcast channel for cursor positions, throttled at 16ms
- * to simulate WebTransport-style UDP flow.
- *
- * Usage:
- *   const { remoteCursors, broadcastCursor } = useCursorPresence({
- *     projectId, currentUserId, currentUserName, enabled
- *   });
- */
-
 import { useCallback, useEffect, useRef, useState } from "react";
-import { createClient } from "@/lib/supabase/client";
+
+import { subscribePresenceRoom } from "@/lib/realtime/presence-client";
+import type { PresenceMemberState, PresenceServerEvent } from "@/lib/realtime/presence-types";
 import {
-    createCursorThrottle,
-    createPresenceManager,
-    type CursorPresenceMap,
+  createCursorThrottle,
+  createPresenceManager,
+  type CursorPresenceMap,
 } from "./cursorProtocol";
 
 const EMPTY_CURSOR_MAP: CursorPresenceMap = new Map();
 
 interface UseCursorPresenceOptions {
-    projectId: string;
-    currentUserId: string;
-    currentUserName?: string;
-    enabled: boolean;
+  projectId: string;
+  currentUserId: string;
+  currentUserName?: string;
+  enabled: boolean;
+  canBroadcast?: boolean;
 }
 
 // FNV-1a 32-bit (duplicated to avoid circular imports in hot path)
 function fnv1a(str: string): number {
-    let hash = 0x811c9dc5;
-    for (let i = 0; i < str.length; i++) {
-        hash ^= str.charCodeAt(i);
-        hash = (hash * 0x01000193) >>> 0;
-    }
-    return hash;
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    hash ^= str.charCodeAt(i);
+    hash = (hash * 0x01000193) >>> 0;
+  }
+  return hash;
 }
 
 function uint8ToBase64(payload: Uint8Array): string {
-    const chunkSize = 0x8000; // 32KB chunks avoid call stack limits.
-    let binary = "";
-    for (let i = 0; i < payload.length; i += chunkSize) {
-        const chunk = payload.subarray(i, i + chunkSize);
-        let chunkBinary = "";
-        for (let j = 0; j < chunk.length; j++) {
-            chunkBinary += String.fromCharCode(chunk[j]);
-        }
-        binary += chunkBinary;
+  const chunkSize = 0x8000;
+  let binary = "";
+  for (let i = 0; i < payload.length; i += chunkSize) {
+    const chunk = payload.subarray(i, i + chunkSize);
+    let chunkBinary = "";
+    for (let j = 0; j < chunk.length; j++) {
+      chunkBinary += String.fromCharCode(chunk[j]);
     }
-    return btoa(binary);
+    binary += chunkBinary;
+  }
+  return btoa(binary);
+}
+
+function base64ToUint8(payload: string) {
+  const binaryString = atob(payload);
+  const bytes = new Uint8Array(binaryString.length);
+  for (let index = 0; index < binaryString.length; index += 1) {
+    bytes[index] = binaryString.charCodeAt(index);
+  }
+  return bytes;
 }
 
 export function useCursorPresence({
-    projectId,
-    currentUserId,
-    currentUserName,
-    enabled,
+  projectId,
+  currentUserId,
+  currentUserName,
+  enabled,
+  canBroadcast = false,
 }: UseCursorPresenceOptions) {
-    const [version, setVersion] = useState(0);
-    const [remoteMap, setRemoteMap] = useState<CursorPresenceMap>(EMPTY_CURSOR_MAP);
-    const presenceRef = useRef<ReturnType<typeof createPresenceManager> | null>(null);
-    const throttleRef = useRef<ReturnType<typeof createCursorThrottle> | null>(null);
-    const versionBumpTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [version, setVersion] = useState(0);
+  const [remoteMap, setRemoteMap] = useState<CursorPresenceMap>(EMPTY_CURSOR_MAP);
+  const [isVisible, setIsVisible] = useState(() => typeof document === "undefined" ? true : !document.hidden);
+  const presenceRef = useRef<ReturnType<typeof createPresenceManager> | null>(null);
+  const throttleRef = useRef<ReturnType<typeof createCursorThrottle> | null>(null);
+  const subscriptionRef = useRef<ReturnType<typeof subscribePresenceRoom> | null>(null);
+  const versionBumpTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-    useEffect(() => {
-        if (!enabled || !currentUserId) return;
+  const scheduleVersionBump = useCallback(() => {
+    if (versionBumpTimer.current) return;
+    versionBumpTimer.current = setTimeout(() => {
+      versionBumpTimer.current = null;
+      setVersion((prev) => prev + 1);
+      if (presenceRef.current) {
+        setRemoteMap(new Map(presenceRef.current.cursors));
+      }
+    }, 250);
+  }, []);
 
-        const supabase = createClient();
-        const myHash = fnv1a(currentUserId);
-        const presence = createPresenceManager();
-        presenceRef.current = presence;
-        setRemoteMap(presence.cursors);
+  const applyMemberCursor = useCallback((member: PresenceMemberState, event: PresenceServerEvent["type"]) => {
+    const presence = presenceRef.current;
+    if (!presence || member.userId === currentUserId) return;
 
-        presence.registerUser(currentUserId, currentUserName);
-        presence.startGC();
+    presence.registerUser(member.userId, member.userName ?? undefined);
 
-        // Supabase Broadcast channel for cursor events
-        const channelName = `cursors:${projectId}`;
-        const channel = supabase.channel(channelName, {
-            config: { broadcast: { self: false } },
-        });
+    if (event === "presence.delta" && !member.cursorFrame) {
+      return;
+    }
 
-        // Throttled broadcaster
-        const throttle = createCursorThrottle((payload) => {
-            // Convert Uint8Array to base64 for Supabase JSON transport.
-            const base64 = uint8ToBase64(payload);
-            channel.send({
-                type: "broadcast",
-                event: "cursor",
-                payload: { d: base64 },
-            });
-        });
-        throttleRef.current = throttle;
+    if (!member.cursorFrame) {
+      presence.removeUser(member.userId);
+      scheduleVersionBump();
+      return;
+    }
 
-        // Receive handler
-        channel.on("broadcast", { event: "cursor" }, (msg: any) => {
-            try {
-                const base64 = msg.payload?.d;
-                if (!base64) return;
-                // Decode base64 → Uint8Array
-                const binaryString = atob(base64);
-                const bytes = new Uint8Array(binaryString.length);
-                for (let i = 0; i < binaryString.length; i++) {
-                    bytes[i] = binaryString.charCodeAt(i);
-                }
-                const frame = presence.processIncoming(bytes, myHash);
-                if (frame) {
-                    // Throttle version bumps to max 4/sec to prevent excessive re-renders
-                    if (!versionBumpTimer.current) {
-                        versionBumpTimer.current = setTimeout(() => {
-                            setVersion((v) => v + 1);
-                            if (presenceRef.current) setRemoteMap(new Map(presenceRef.current.cursors));
-                            versionBumpTimer.current = null;
-                        }, 250);
-                    }
-                }
-            } catch {
-                // Silently drop malformed frames
-            }
-        });
+    presence.processIncoming(base64ToUint8(member.cursorFrame), fnv1a(currentUserId));
+    scheduleVersionBump();
+  }, [currentUserId, scheduleVersionBump]);
 
-        channel.subscribe();
+  useEffect(() => {
+    if (typeof document === "undefined") return;
 
-        return () => {
-            throttle.destroy();
-            presence.destroy();
-            supabase.removeChannel(channel);
-            if (versionBumpTimer.current) clearTimeout(versionBumpTimer.current);
-            presenceRef.current = null;
-            throttleRef.current = null;
-            versionBumpTimer.current = null;
-        };
-    }, [enabled, projectId, currentUserId, currentUserName]);
-
-    /** Broadcast the local user's cursor position (throttled at 16ms). */
-    const broadcastCursor = useCallback(
-        (nodeId: string, line: number, column: number, selStart = 0, selEnd = 0) => {
-            if (!throttleRef.current || !currentUserId) return;
-
-            // Register node for reverse hash lookup
-            presenceRef.current?.registerNode(nodeId);
-
-            throttleRef.current.send({
-                userId: currentUserId,
-                userName: currentUserName,
-                nodeId,
-                line,
-                column,
-                selectionStart: selStart,
-                selectionEnd: selEnd,
-                timestamp: Date.now(),
-            });
-        },
-        [currentUserId, currentUserName]
-    );
-
-    return {
-        remoteCursors: remoteMap,
-        broadcastCursor,
-        cursorVersion: version,
+    const onVisibilityChange = () => {
+      setIsVisible(!document.hidden);
     };
+
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!enabled || !currentUserId || !isVisible) {
+      setRemoteMap(EMPTY_CURSOR_MAP);
+      return;
+    }
+
+    const presence = createPresenceManager();
+    presenceRef.current = presence;
+    setRemoteMap(presence.cursors);
+    presence.registerUser(currentUserId, currentUserName);
+    presence.startGC();
+
+    const subscription = subscribePresenceRoom({
+      roomType: "workspace",
+      roomId: projectId,
+      role: canBroadcast ? "editor" : "viewer",
+      onEvent: (event) => {
+        if (event.type === "presence.state") {
+          presence.cursors.clear();
+          for (const member of event.members) {
+            applyMemberCursor(member, event.type);
+          }
+          scheduleVersionBump();
+          return;
+        }
+
+        if (event.type === "presence.delta") {
+          if (event.action === "leave") {
+            presence.removeUser(event.member.userId);
+            scheduleVersionBump();
+            return;
+          }
+          applyMemberCursor(event.member, event.type);
+        }
+      },
+    });
+    subscriptionRef.current = subscription;
+
+    const throttle = createCursorThrottle((payload) => {
+      subscription.send({
+        type: "cursor",
+        frame: uint8ToBase64(payload),
+        userName: currentUserName ?? null,
+      });
+    });
+    throttleRef.current = throttle;
+
+    return () => {
+      throttle.destroy();
+      presence.destroy();
+      subscription.unsubscribe();
+      if (versionBumpTimer.current) clearTimeout(versionBumpTimer.current);
+      presenceRef.current = null;
+      throttleRef.current = null;
+      subscriptionRef.current = null;
+      versionBumpTimer.current = null;
+    };
+  }, [applyMemberCursor, canBroadcast, currentUserId, currentUserName, enabled, isVisible, projectId, scheduleVersionBump]);
+
+  const broadcastCursor = useCallback(
+    (nodeId: string, line: number, column: number, selStart = 0, selEnd = 0) => {
+      if (!throttleRef.current || !currentUserId || !isVisible || !canBroadcast) return;
+
+      presenceRef.current?.registerNode(nodeId);
+      throttleRef.current.send({
+        userId: currentUserId,
+        userName: currentUserName,
+        nodeId,
+        line,
+        column,
+        selectionStart: selStart,
+        selectionEnd: selEnd,
+        timestamp: Date.now(),
+      });
+    },
+    [canBroadcast, currentUserId, currentUserName, isVisible],
+  );
+
+  return {
+    remoteCursors: remoteMap,
+    broadcastCursor,
+    cursorVersion: version,
+  };
 }

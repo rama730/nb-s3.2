@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import { updateProject } from "@/app/actions/project";
+import { useReducedMotionPreference } from "@/components/providers/theme-provider";
 
 // --- Types & Schema ---
 
@@ -147,6 +148,7 @@ function VisibilitySelector({ value, onChange }: { value: string; onChange: (val
 // --- Main Component ---
 
 export default function EditProjectModal({ project, isOpen, onClose, onSaved }: EditProjectModalProps) {
+    const reduceMotion = useReducedMotionPreference();
     const [activeTab, setActiveTab] = useState("essentials");
     const [isPending, startTransition] = useTransition();
     const router = useRouter();
@@ -241,27 +243,29 @@ export default function EditProjectModal({ project, isOpen, onClose, onSaved }: 
     };
 
     return (
-        <AnimatePresence>
+        <AnimatePresence initial={!reduceMotion}>
             {isOpen && (
                 <motion.div
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
+                    transition={reduceMotion ? { duration: 0 } : undefined}
                     className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md"
                 >
                     {/* Backdrop Click */}
                     <div className="absolute inset-0" onClick={onClose} />
 
                     <motion.div
-                        initial={{ scale: 0.95, opacity: 0 }}
-                        animate={{ scale: 1, opacity: 1 }}
-                        exit={{ scale: 0.95, opacity: 0 }}
+                        initial={reduceMotion ? { opacity: 0 } : { scale: 0.95, opacity: 0 }}
+                        animate={reduceMotion ? { opacity: 1 } : { scale: 1, opacity: 1 }}
+                        exit={reduceMotion ? { opacity: 0 } : { scale: 0.95, opacity: 0 }}
+                        transition={reduceMotion ? { duration: 0 } : undefined}
                         className="relative z-10 w-full max-w-5xl h-[85vh] rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-2xl flex flex-col overflow-hidden"
                     >
                         {/* Header */}
                         <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-200 dark:border-zinc-800 shrink-0">
                             <div className="flex items-center gap-3">
-                                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center ring-2 ring-indigo-500/20">
+                                <div className="w-10 h-10 rounded-xl app-accent-gradient flex items-center justify-center ring-2 ring-primary/20">
                                     <Sparkles className="w-5 h-5 text-white" />
                                 </div>
                                 <div>

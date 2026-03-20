@@ -7,9 +7,15 @@ import {
   logApiRoute,
   requireAuthenticatedUser,
 } from "@/app/api/v1/_shared";
+import { eq } from "drizzle-orm";
+import { resolvePasswordCredentialState } from "@/lib/auth/account-identity";
 import { db } from "@/lib/db";
-import { sql } from "drizzle-orm";
+import { profiles } from "@/lib/db/schema";
 import { isSecurityHardeningEnabled } from "@/lib/features/security";
+import { getLatestPasswordChangeAt, listSecurityActivity } from "@/lib/security/audit";
+import { getVerifiedTotpFactors, listSecurityMfaFactors } from "@/lib/security/mfa";
+import { countRemainingRecoveryCodes, parseStoredRecoveryCodes } from "@/lib/security/recovery-codes";
+import { listActiveSessions, listLoginHistory } from "@/lib/security/session-activity";
 
 type SecurityPayload = {
   mfaFactors: Array<{
@@ -19,17 +25,13 @@ type SecurityPayload = {
     created_at?: string;
     status: "verified" | "unverified";
   }>;
-  passkeys: Array<{
-    id: string;
-    name: string;
-    created_at?: string;
-    last_used?: string;
-  }>;
   sessions: Array<{
     id: string;
     device_info: { userAgent: string };
     ip_address: string;
     last_active: string;
+    created_at?: string;
+    aal?: "aal1" | "aal2" | null;
     is_current?: boolean;
   }>;
   loginHistory: Array<{
@@ -38,37 +40,38 @@ type SecurityPayload = {
     user_agent: string;
     created_at: string;
     location?: string;
+    aal?: "aal1" | "aal2" | null;
   }>;
-};
-
-async function fetchLoginHistory(userId: string, limit: number): Promise<SecurityPayload["loginHistory"]> {
-  const rows = await db.execute<{
+  password: {
+    hasPassword: boolean;
+    lastChangedAt?: string;
+  };
+  recoveryCodes: {
+    configured: boolean;
+    remainingCount: number;
+    generatedAt?: string;
+  };
+  securityActivity: Array<{
     id: string;
-    ip: string | null;
-    user_agent: string | null;
-    created_at: Date | string;
-  }>(sql`
-    SELECT
-      id::text AS id,
-      ip,
-      user_agent,
-      created_at
-    FROM auth.sessions
-    WHERE user_id = ${userId}::uuid
-    ORDER BY created_at DESC
-    LIMIT ${limit}
-  `);
-
-  return rows.map((row) => ({
-    id: row.id,
-    ip_address: row.ip?.trim() || "unknown",
-    user_agent: row.user_agent?.trim() || "Unknown device",
-    created_at:
-      typeof row.created_at === "string"
-        ? row.created_at
-        : row.created_at.toISOString(),
-  }));
-}
+    eventType:
+      | "authenticator_app_enabled"
+      | "authenticator_app_removed"
+      | "recovery_codes_generated"
+      | "recovery_codes_regenerated"
+      | "recovery_code_used"
+      | "password_set"
+      | "password_changed"
+      | "other_sessions_revoked";
+    createdAt: string;
+    ipAddress?: string;
+    userAgent?: string;
+    metadata: Record<string, unknown>;
+  }>;
+  assurance: {
+    currentLevel: "aal1" | "aal2" | null;
+    nextLevel: "aal1" | "aal2" | null;
+  };
+};
 
 export async function GET(request: Request) {
   const startedAt = Date.now();
@@ -112,68 +115,78 @@ export async function GET(request: Request) {
 
   try {
     const securityHardeningEnabled = isSecurityHardeningEnabled(auth.user.id);
+    const passwordLastChangedAt = await getLatestPasswordChangeAt(auth.user.id);
     const payload: SecurityPayload = {
       mfaFactors: [],
-      passkeys: [],
       sessions: [],
       loginHistory: [],
+      password: {
+        hasPassword: resolvePasswordCredentialState(auth.user, passwordLastChangedAt),
+      },
+      recoveryCodes: {
+        configured: false,
+        remainingCount: 0,
+      },
+      securityActivity: [],
+      assurance: {
+        currentLevel: null,
+        nextLevel: null,
+      },
     };
 
-    const mfaApi = (auth.supabase.auth as any)?.mfa;
-    if (mfaApi?.listFactors) {
-      const mfaResult = await mfaApi.listFactors();
-      const allFactors = Array.isArray(mfaResult?.data?.all) ? mfaResult.data.all : [];
-
-      payload.mfaFactors = allFactors
-        .filter((factor: any) => factor?.factor_type === "totp" || factor?.factor_type === "phone")
-        .map((factor: any) => {
-          const createdAt = typeof factor.created_at === "string" ? factor.created_at : undefined;
-          return {
-            id: String(factor.id),
-            type: factor.factor_type === "phone" ? "phone" : "totp",
-            friendly_name: factor.friendly_name || undefined,
-            ...(createdAt ? { created_at: createdAt } : {}),
-            status: factor.status === "verified" ? "verified" : "unverified",
-          };
-        });
-
-      payload.passkeys = allFactors
-        .filter((factor: any) => factor?.factor_type === "webauthn")
-        .map((factor: any) => {
-          const createdAt = typeof factor.created_at === "string" ? factor.created_at : undefined;
-          return {
-            id: String(factor.id),
-            name: factor.friendly_name || "Passkey",
-            ...(createdAt ? { created_at: createdAt } : {}),
-            last_used: factor.last_challenged_at || undefined,
-          };
-        });
-    }
+    payload.mfaFactors = await listSecurityMfaFactors(auth.supabase);
+    const verifiedTotpFactors = getVerifiedTotpFactors(payload.mfaFactors);
 
     const {
       data: { session },
     } = await auth.supabase.auth.getSession();
-    if (session) {
-      const currentSessionId =
-        getSessionIdentifier(session) ?? `display:${auth.user.id}:current`;
-      const userAgent = request.headers.get("user-agent") || "Unknown device";
-      const now = new Date().toISOString();
-      const forwardedFor = request.headers.get("x-forwarded-for") || "";
-      const ipAddress = forwardedFor.split(",")[0]?.trim() || "unknown";
+    const currentSessionId =
+      session ? getSessionIdentifier(session) ?? null : null;
+    payload.sessions = await listActiveSessions(
+      auth.user.id,
+      currentSessionId,
+      securityHardeningEnabled ? 12 : 8,
+    );
+    payload.loginHistory = await listLoginHistory(auth.user.id, securityHardeningEnabled ? 20 : 10);
+    payload.password.lastChangedAt = passwordLastChangedAt ?? undefined;
+    payload.securityActivity = await listSecurityActivity(auth.user.id, securityHardeningEnabled ? 20 : 12);
 
-      payload.sessions = [
-        {
-          id: currentSessionId,
-          device_info: { userAgent },
-          ip_address: ipAddress,
-          last_active: now,
-          is_current: true,
-        },
-      ];
+    const profile = await db.query.profiles.findFirst({
+      columns: {
+        securityRecoveryCodes: true,
+        recoveryCodesGeneratedAt: true,
+      },
+      where: eq(profiles.id, auth.user.id),
+    });
+    const storedRecoveryCodes = parseStoredRecoveryCodes(profile?.securityRecoveryCodes);
+    payload.recoveryCodes = {
+      configured: storedRecoveryCodes.length > 0 || !!profile?.recoveryCodesGeneratedAt,
+      remainingCount: countRemainingRecoveryCodes(storedRecoveryCodes),
+      ...(profile?.recoveryCodesGeneratedAt
+        ? { generatedAt: profile.recoveryCodesGeneratedAt.toISOString() }
+        : {}),
+    };
 
+    const mfaApi = (auth.supabase.auth as any)?.mfa;
+    if (mfaApi?.getAuthenticatorAssuranceLevel) {
+      const assuranceResult = await mfaApi.getAuthenticatorAssuranceLevel();
+      if (assuranceResult?.data) {
+        payload.assurance = {
+          currentLevel:
+            assuranceResult.data.currentLevel === "aal2" ? "aal2" : assuranceResult.data.currentLevel === "aal1" ? "aal1" : null,
+          nextLevel:
+            assuranceResult.data.nextLevel === "aal2" ? "aal2" : assuranceResult.data.nextLevel === "aal1" ? "aal1" : null,
+        };
+      }
     }
 
-    payload.loginHistory = await fetchLoginHistory(auth.user.id, securityHardeningEnabled ? 20 : 10);
+    if (verifiedTotpFactors.length === 0 && payload.recoveryCodes.configured) {
+      payload.recoveryCodes = {
+        configured: false,
+        remainingCount: 0,
+      };
+    }
+
     logApiRoute(request, {
       requestId,
       action: "security.get",

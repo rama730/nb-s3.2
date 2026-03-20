@@ -30,17 +30,21 @@ test.describe("Settings matrix @critical", () => {
 
     await page.goto("/settings/account");
     await expect(page.getByRole("heading", { name: "Account" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Export" })).toBeVisible();
+    await expect(page.getByText("Account Details")).toBeVisible();
+    await expect(page.getByText("Cache Management")).toBeVisible();
+    await expect(page.getByText("Danger Zone")).toBeVisible();
     await page.getByRole("button", { name: "Delete" }).click();
     await expect(page.getByText("Delete account").first()).toBeVisible();
     await page.getByRole("button", { name: "Cancel" }).click();
 
     await page.goto("/settings/security");
     await expect(page.getByRole("heading", { name: "Security" })).toBeVisible();
-    await page.getByLabel("Current password").fill("short");
-    await page.locator("#new").fill("aaaa1111");
-    await page.locator("#confirm").fill("bbbb1111");
-    await page.getByRole("button", { name: "Update password" }).click();
+    await expect(page.getByText("Security Overview")).toBeVisible();
+    await expect(page.getByText("Authenticator App")).toBeVisible();
+    await expect(page.getByText("Password")).toBeVisible();
+    await expect(page.getByText("Active Sessions")).toBeVisible();
+    await expect(page.getByText("Recent Login Activity")).toBeVisible();
+    await expect(page.getByText("Security Activity")).toBeVisible();
 
     await page.goto("/settings/privacy");
     await expect(page.getByRole("heading", { name: "Privacy" })).toBeVisible();
@@ -56,15 +60,26 @@ test.describe("Settings matrix @critical", () => {
 
     await page.goto("/settings/appearance");
     await expect(page.getByRole("heading", { name: "Appearance" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Reset to defaults" })).toBeVisible();
+    await expect(page.getByText(/Saved on this device|Syncing to your account|Saved to your account|Couldn’t sync account preference/i)).toBeVisible();
     const htmlRoot = page.locator("html");
     await page.getByTestId("appearance-theme-dark").click();
     await expect(htmlRoot).toHaveClass(/dark/);
     await page.reload();
     await expect(htmlRoot).toHaveClass(/dark/);
+    await page.getByTestId("appearance-accent-orchid").click();
+    await expect(htmlRoot).toHaveAttribute("data-accent", "orchid");
+    await page.getByTestId("appearance-density-compact").click();
+    await expect(htmlRoot).toHaveAttribute("data-density", "compact");
+    await page.getByTestId("appearance-reduce-motion-toggle").click();
+    await expect(htmlRoot).toHaveAttribute("data-reduce-motion", "true");
     await page.getByTestId("appearance-theme-system").click();
 
     await page.goto("/settings/integrations");
     await expect(page.getByRole("heading", { name: "Integrations", level: 1 })).toBeVisible();
+    await expect(page.getByText("Account Connections")).toBeVisible();
+    await expect(page.getByText("External Services")).toBeVisible();
+    await expect(page.getByText(/Account created with/i)).toBeVisible();
 
     await monitor.assertNoViolations();
     monitor.detach();

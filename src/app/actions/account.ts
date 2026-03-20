@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase/server';
 import { isAdminUser } from '@/lib/security/admin';
 import { eq, or } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
+import { refreshWorkspaceCountersForUsers } from '@/lib/workspace/profile-counters';
 
 const UUID_RE =
     /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
@@ -35,6 +36,22 @@ export async function deleteMyAccount(confirmationText?: string): Promise<{ succ
         }
 
         const userId = user.id;
+        const affectedConnectionRows = await db
+            .select({
+                requesterId: connections.requesterId,
+                addresseeId: connections.addresseeId,
+            })
+            .from(connections)
+            .where(
+                or(
+                    eq(connections.requesterId, userId),
+                    eq(connections.addresseeId, userId)
+                )
+            );
+        const affectedUserIds = affectedConnectionRows.flatMap((row) => [
+            row.requesterId === userId ? null : row.requesterId,
+            row.addresseeId === userId ? null : row.addresseeId,
+        ]);
 
         // 1. Delete user's projects (cascade will handle project_members, open_roles, etc.)
         await db.delete(projects).where(eq(projects.ownerId, userId));
@@ -65,6 +82,7 @@ export async function deleteMyAccount(confirmationText?: string): Promise<{ succ
 
         // 4. Delete user's profile
         await db.delete(profiles).where(eq(profiles.id, userId));
+        await refreshWorkspaceCountersForUsers(db, affectedUserIds);
 
         // 5. Delete the auth user (this signs them out automatically)
         // Note: This requires the user to be authenticated, which they are
@@ -126,6 +144,23 @@ export async function cleanupOrphanedProfile(profileId: string): Promise<{ succe
             return { success: false, error: 'Profile not found' };
         }
 
+        const affectedConnectionRows = await db
+            .select({
+                requesterId: connections.requesterId,
+                addresseeId: connections.addresseeId,
+            })
+            .from(connections)
+            .where(
+                or(
+                    eq(connections.requesterId, profileId),
+                    eq(connections.addresseeId, profileId)
+                )
+            );
+        const affectedUserIds = affectedConnectionRows.flatMap((row) => [
+            row.requesterId === profileId ? null : row.requesterId,
+            row.addresseeId === profileId ? null : row.addresseeId,
+        ]);
+
         // Delete associated data
         await db.delete(projects).where(eq(projects.ownerId, profileId));
         await db.delete(connections).where(
@@ -137,6 +172,7 @@ export async function cleanupOrphanedProfile(profileId: string): Promise<{ succe
 
         // Delete the profile
         await db.delete(profiles).where(eq(profiles.id, profileId));
+        await refreshWorkspaceCountersForUsers(db, affectedUserIds);
 
         revalidatePath('/people');
         return { success: true };

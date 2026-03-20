@@ -5,6 +5,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { Plus, Grid3X3, List, CheckSquare, Filter } from 'lucide-react';
 import { FILTER_VIEWS, VIEW_MODES, FilterView, ViewMode } from '@/constants/hub';
 import { HubFilters } from '@/types/hub';
+import { useReducedMotionPreference } from '@/components/providers/theme-provider';
 
 interface HubHeaderProps {
     filterView: FilterView;
@@ -29,6 +30,7 @@ const HubHeader = memo(function HubHeader({
     viewMode,
     onViewModeChange,
 }: HubHeaderProps) {
+    const reduceMotion = useReducedMotionPreference();
     const [isFilterDropdownOpen, setIsFilterDropdownOpen] = useState(false);
     const [isResetting, setIsResetting] = useState(false);
     const [isDoneResetting, setIsDoneResetting] = useState(false);
@@ -117,7 +119,7 @@ const HubHeader = memo(function HubHeader({
                     <button
                         onClick={() => onViewModeChange(VIEW_MODES.GRID)}
                         className={`p-2 rounded-md transition-colors ${viewMode === VIEW_MODES.GRID
-                                ? 'bg-white dark:bg-zinc-700 shadow-sm text-indigo-600'
+                                ? 'bg-white dark:bg-zinc-700 shadow-sm text-primary'
                                 : 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'
                             }`}
                     >
@@ -126,7 +128,7 @@ const HubHeader = memo(function HubHeader({
                     <button
                         onClick={() => onViewModeChange(VIEW_MODES.LIST)}
                         className={`p-2 rounded-md transition-colors ${viewMode === VIEW_MODES.LIST
-                                ? 'bg-white dark:bg-zinc-700 shadow-sm text-indigo-600'
+                                ? 'bg-white dark:bg-zinc-700 shadow-sm text-primary'
                                 : 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'
                             }`}
                     >
@@ -138,7 +140,7 @@ const HubHeader = memo(function HubHeader({
                 <button
                     onClick={onToggleSelectionMode}
                     className={`p-2 rounded-lg transition-colors ${selectionMode
-                            ? 'bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600'
+                            ? 'app-selected-surface'
                             : 'text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800'
                         }`}
                     title="Selection mode"
@@ -151,7 +153,7 @@ const HubHeader = memo(function HubHeader({
                     <button
                         onClick={() => setIsFilterDropdownOpen((prev) => !prev)}
                         className={`p-2 rounded-lg transition-colors ${isFilterDropdownOpen
-                                ? 'bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600'
+                                ? 'app-selected-surface'
                                 : 'text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800'
                             }`}
                         title="Filters"
@@ -160,13 +162,13 @@ const HubHeader = memo(function HubHeader({
                     </button>
 
                     {/* Filter Dropdown Menu */}
-                    <AnimatePresence>
+                    <AnimatePresence initial={!reduceMotion}>
                         {isFilterDropdownOpen && (
                             <motion.div
-                                initial={{ opacity: 0, scale: 0.95, y: -10 }}
-                                animate={{ opacity: 1, scale: 1, y: 0 }}
-                                exit={{ opacity: 0, scale: 0.95, y: -10 }}
-                                transition={{ duration: 0.15 }}
+                                initial={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.95, y: -10 }}
+                                animate={reduceMotion ? { opacity: 1 } : { opacity: 1, scale: 1, y: 0 }}
+                                exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.95, y: -10 }}
+                                transition={reduceMotion ? { duration: 0 } : { duration: 0.15 }}
                                 className="absolute right-0 top-full mt-2 w-72 bg-white dark:bg-zinc-900 rounded-2xl shadow-xl border border-zinc-200 dark:border-zinc-800 z-50 overflow-hidden"
                             >
                                 <div className="p-4 flex flex-col gap-4">
@@ -193,8 +195,8 @@ const HubHeader = memo(function HubHeader({
                                                     hideOpened: newValue 
                                                 });
                                             }}
-                                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 dark:focus:ring-offset-zinc-900 ${
-                                                filters.hideOpened ? 'bg-indigo-600' : 'bg-zinc-200 dark:bg-zinc-700'
+                                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 dark:focus:ring-offset-zinc-900 ${
+                                                filters.hideOpened ? 'bg-primary' : 'bg-zinc-200 dark:bg-zinc-700'
                                             }`}
                                         >
                                             <span
@@ -239,7 +241,7 @@ const HubHeader = memo(function HubHeader({
                 <button
                     onClick={onCreateProject}
                     onMouseEnter={onPreloadModal}
-                    className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-medium transition-colors"
+                    className="flex items-center gap-2 px-4 py-2 app-accent-solid hover:bg-primary/90 rounded-xl font-medium transition-colors"
                 >
                     <Plus className="w-4 h-4" />
                     <span className="hidden sm:inline">New Project</span>

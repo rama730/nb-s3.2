@@ -1,8 +1,9 @@
 import { createServerClient } from '@supabase/ssr'
+import type { User } from '@supabase/supabase-js'
 import { cookies } from 'next/headers'
+import { resolveAuthSnapshot, type AuthSnapshotResolution } from '@/lib/auth/snapshot'
 import { resolveSupabasePublicEnv, resolveSupabaseServiceEnv } from '@/lib/supabase/env'
 
-const SERVER_AUTH_LOOKUP_TIMEOUT_MS = 3500
 const AUTH_COOKIE_MARKERS = ['auth-token', 'sb-access-token', 'sb-refresh-token']
 
 function hasAnyAuthCookie(
@@ -19,26 +20,12 @@ function hasAnyAuthCookie(
     return false
 }
 
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
-    const basePromise = Promise.resolve(promise)
-    let timer: ReturnType<typeof setTimeout> | undefined
-    let timedOut = false
-    try {
-        return await Promise.race([
-            basePromise,
-            new Promise<T>((_, reject) => {
-                timer = setTimeout(() => {
-                    timedOut = true
-                    reject(new Error(`${label} timed out after ${timeoutMs}ms`))
-                }, timeoutMs)
-            }),
-        ])
-    } finally {
-        if (timer) clearTimeout(timer)
-        if (timedOut) {
-            void basePromise.catch(() => undefined)
-        }
-    }
+type AuthSnapshotAwareClient = Awaited<ReturnType<typeof createServerClient>> & {
+    __resolveAuthSnapshot?: () => Promise<AuthSnapshotResolution>
+    __getUserFromAuthServer?: (jwt?: string) => Promise<{
+        data: { user: User | null }
+        error: { message?: string; status?: number } | null
+    }>
 }
 
 export async function createClient() {
@@ -66,10 +53,17 @@ export async function createClient() {
             },
         }
     )
-
     const originalGetUser = client.auth.getUser.bind(client.auth)
+
+    let authResolutionPromise: Promise<AuthSnapshotResolution> | null = null
+    const resolveClientAuthSnapshot = () => {
+        if (!authResolutionPromise) {
+            authResolutionPromise = resolveAuthSnapshot(client)
+        }
+        return authResolutionPromise
+    }
+
     const wrappedGetUser = async () => {
-        // Signed-out requests should not block on network auth lookups.
         if (!hasAnyAuthCookie(cookieStore)) {
             return {
                 data: { user: null },
@@ -77,25 +71,17 @@ export async function createClient() {
             }
         }
 
-        try {
-            return await withTimeout(
-                originalGetUser(),
-                SERVER_AUTH_LOOKUP_TIMEOUT_MS,
-                'server auth lookup'
-            )
-        } catch (authError) {
-            const message = authError instanceof Error ? authError.message : 'Auth lookup failed'
-            return {
-                data: { user: null },
-                error: {
-                    name: 'AuthError',
-                    message,
-                    status: 503,
-                },
-            }
+        const resolution = await resolveClientAuthSnapshot()
+        return {
+            data: {
+                user: resolution.user,
+            },
+            error: resolution.error,
         }
     }
     ;(client.auth as { getUser: typeof wrappedGetUser }).getUser = wrappedGetUser
+    ;(client as AuthSnapshotAwareClient).__resolveAuthSnapshot = resolveClientAuthSnapshot
+    ;(client as AuthSnapshotAwareClient).__getUserFromAuthServer = originalGetUser
 
     return client
 }

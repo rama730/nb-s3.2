@@ -8,6 +8,8 @@ import {
   logApiRoute,
   requireAuthenticatedUser,
 } from "@/app/api/v1/_shared";
+import { resolveCurrentSessionRowId } from "@/lib/security/session-current";
+import { listActiveSessions } from "@/lib/security/session-activity";
 
 export async function DELETE(
   request: Request,
@@ -69,9 +71,18 @@ export async function DELETE(
   const {
     data: { session },
   } = await auth.supabase.auth.getSession();
-  const currentSessionId =
-    getSessionIdentifier(session) ?? `display:${auth.user.id}:current`;
-  if (id !== currentSessionId) {
+  const currentSessionId = getSessionIdentifier(session);
+  let resolvedCurrentSessionId = currentSessionId;
+
+  if (!resolvedCurrentSessionId || id !== resolvedCurrentSessionId) {
+    const activeSessions = await listActiveSessions(auth.user.id, currentSessionId, 12);
+    resolvedCurrentSessionId = resolveCurrentSessionRowId(
+      activeSessions.map((activeSession) => activeSession.id),
+      currentSessionId,
+    );
+  }
+
+  if (id !== resolvedCurrentSessionId) {
     logApiRoute(request, {
       requestId,
       action: "sessions.delete",

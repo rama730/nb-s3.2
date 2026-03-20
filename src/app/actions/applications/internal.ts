@@ -38,6 +38,7 @@ import type {
     ApplicationStatusResult,
     ApplicationActionErrorCode,
 } from './types';
+import { refreshWorkspaceCountersForUsers } from '@/lib/workspace/profile-counters';
 
 // ============================================================================
 // TYPES
@@ -317,6 +318,9 @@ async function ensureAcceptedConnectionInternal(tx: any, userA: string, userB: s
             .where(eq(connections.id, row.id));
 
         await applyConnectionsCountDelta(tx, [userA, userB], 1);
+        if (row.status === 'pending') {
+            await refreshWorkspaceCountersForUsers(tx, [userA, userB]);
+        }
         return;
     }
 

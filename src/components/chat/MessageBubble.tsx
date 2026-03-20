@@ -233,7 +233,7 @@ export function MessageBubble({ message, showAvatar = true }: MessageBubbleProps
                 className={`group max-w-full flex items-end gap-2 ${isOwn ? 'flex-row-reverse' : 'flex-row'}`}
             >
                 {!isOwn && showAvatar && (
-                    <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center overflow-hidden">
+                    <div className="flex-shrink-0 w-8 h-8 rounded-full app-accent-gradient flex items-center justify-center overflow-hidden">
                         {message.sender?.avatarUrl ? (
                             <Image
                                 src={message.sender.avatarUrl}
@@ -285,7 +285,7 @@ export function MessageBubble({ message, showAvatar = true }: MessageBubbleProps
                                         onChange={(event) => setDraftContent(event.target.value)}
                                         rows={3}
                                         maxLength={4000}
-                                        className="w-full rounded-md bg-zinc-50 dark:bg-zinc-800 px-3 py-2 text-sm text-zinc-900 dark:text-zinc-100 border border-zinc-200 dark:border-zinc-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                        className="w-full rounded-md bg-zinc-50 dark:bg-zinc-800 px-3 py-2 text-sm text-zinc-900 dark:text-zinc-100 border border-zinc-200 dark:border-zinc-700 focus:outline-none focus:ring-2 focus:ring-ring"
                                     />
                                     <div className="mt-2 flex items-center justify-end gap-2">
                                         <button
@@ -301,7 +301,7 @@ export function MessageBubble({ message, showAvatar = true }: MessageBubbleProps
                                         </button>
                                         <button
                                             type="button"
-                                            className="px-3 py-1.5 text-xs rounded-md bg-blue-600 text-white disabled:opacity-60"
+                                            className="px-3 py-1.5 text-xs rounded-md bg-primary text-primary-foreground disabled:opacity-60"
                                             onClick={handleSaveEdit}
                                             disabled={isActionLoading}
                                         >
@@ -312,7 +312,7 @@ export function MessageBubble({ message, showAvatar = true }: MessageBubbleProps
                             ) : message.content && (
                                 <div
                                     className={`px-4 py-2 rounded-2xl text-sm ${isOwn
-                                        ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-br-md'
+                                        ? 'app-accent-solid rounded-br-md'
                                         : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-white rounded-bl-md'
                                         }`}
                                 >
@@ -444,7 +444,7 @@ export function MessageBubble({ message, showAvatar = true }: MessageBubbleProps
                             {format(new Date(message.createdAt), 'h:mm a')}
                         </span>
                         {isOwn && (
-                            <span className="text-blue-500">
+                            <span className="text-primary">
                                 {getDeliveryIcon(metadata?.deliveryState)}
                             </span>
                         )}
@@ -503,7 +503,7 @@ function MessageTextContent({
                                     href={normalizedUrl}
                                     target="_blank"
                                     rel="noopener noreferrer nofollow ugc"
-                                    className={isOwn ? "underline text-white break-all" : "underline text-blue-600 dark:text-blue-400 break-all"}
+                                    className={isOwn ? "underline text-white break-all" : "underline text-primary break-all"}
                                 >
                                     {value}
                                 </a>
@@ -547,7 +547,7 @@ function renderTextWithMentions(text: string, isOwn: boolean) {
                     key={`mention-${index}`}
                     href={`/u/${username}`}
                     className={`font-semibold underline underline-offset-2 ${
-                        isOwn ? 'text-white' : 'text-blue-600 dark:text-blue-400'
+                        isOwn ? 'text-white' : 'text-primary'
                     }`}
                 >
                     {part}
@@ -563,7 +563,7 @@ function renderTextWithMentions(text: string, isOwn: boolean) {
                         target="_blank"
                         rel="noopener noreferrer nofollow ugc"
                         className={`underline break-all ${
-                            isOwn ? 'text-white' : 'text-blue-600 dark:text-blue-400'
+                            isOwn ? 'text-white' : 'text-primary'
                         }`}
                     >
                         {safeLink.display}
@@ -703,7 +703,7 @@ function MediaAttachmentTile({
         <button
             type="button"
             onClick={onClick}
-            className={`relative rounded-lg overflow-hidden bg-zinc-100 dark:bg-zinc-800 ${isSingle ? 'h-auto' : 'h-36'} focus:outline-none focus:ring-2 focus:ring-blue-500/60`}
+            className={`relative rounded-lg overflow-hidden bg-zinc-100 dark:bg-zinc-800 ${isSingle ? 'h-auto' : 'h-36'} focus:outline-none focus:ring-2 focus:ring-ring/60`}
         >
             {!loaded && <div className="absolute inset-0 animate-pulse bg-zinc-200/80 dark:bg-zinc-700/70" />}
             <Image
@@ -739,8 +739,8 @@ function FileAttachmentCard({ attachment, onPreview }: { attachment: ChatAttachm
                 onClick={onPreview}
                 className="w-full max-w-full min-w-0 overflow-hidden text-left flex items-center gap-3 p-3 bg-zinc-100 dark:bg-zinc-800 rounded-lg hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-colors"
             >
-                <div className="w-10 h-10 shrink-0 bg-blue-100 dark:bg-blue-900/30 rounded-lg flex items-center justify-center">
-                    <File className="w-5 h-5 text-blue-600" />
+                <div className="w-10 h-10 shrink-0 bg-primary/10 dark:bg-primary/15 rounded-lg flex items-center justify-center">
+                    <File className="w-5 h-5 text-primary" />
                 </div>
                 <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-zinc-900 dark:text-white truncate break-all">{attachment.filename}</p>
@@ -759,8 +759,8 @@ function FileAttachmentCard({ attachment, onPreview }: { attachment: ChatAttachm
             download={attachment.filename}
             className="w-full max-w-full min-w-0 overflow-hidden flex items-center gap-3 p-3 bg-zinc-100 dark:bg-zinc-800 rounded-lg hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-colors"
         >
-            <div className="w-10 h-10 shrink-0 bg-blue-100 dark:bg-blue-900/30 rounded-lg flex items-center justify-center">
-                <File className="w-5 h-5 text-blue-600" />
+            <div className="w-10 h-10 shrink-0 bg-primary/10 dark:bg-primary/15 rounded-lg flex items-center justify-center">
+                <File className="w-5 h-5 text-primary" />
             </div>
             <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium text-zinc-900 dark:text-white truncate break-all">{attachment.filename}</p>

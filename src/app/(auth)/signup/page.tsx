@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
+import TurnstileWidget, { hasTurnstileSiteKey } from '@/components/auth/TurnstileWidget'
 import { Github, Mail, Loader2, Eye, EyeOff, User, Check, X } from 'lucide-react'
 import { buildAuthPageHref, resolveAuthRedirectPath } from '@/lib/auth/redirects'
 
@@ -26,7 +27,9 @@ function SignupPageInner() {
     const [isLoading, setIsLoading] = useState(false)
     const [error, setError] = useState<string | null>(null)
     const [success, setSuccess] = useState<string | null>(null)
+    const [captchaToken, setCaptchaToken] = useState<string | null>(null)
     const submitRequestIdRef = useRef(0)
+    const requiresCaptcha = hasTurnstileSiteKey()
 
     const DUPLICATE_EMAIL_MESSAGE = 'This email has already been used to create an account'
 
@@ -72,12 +75,17 @@ function SignupPageInner() {
             return
         }
 
+        if (requiresCaptcha && !captchaToken) {
+            setError('Please complete the Turnstile check')
+            return
+        }
+
         const requestId = ++submitRequestIdRef.current
         setIsLoading(true)
 
         try {
             const signUpResult = await Promise.race([
-                signUp(email.trim(), password, fullName.trim()),
+                signUp(email.trim(), password, fullName.trim(), captchaToken || undefined),
                 new Promise<never>((_, reject) => {
                     setTimeout(() => reject(new Error('Request timeout')), 15_000)
                 }),
@@ -322,6 +330,19 @@ function SignupPageInner() {
                                     </div>
                                 )}
                             </div>
+
+                            {requiresCaptcha ? (
+                                <TurnstileWidget
+                                    action="signup"
+                                    onVerify={(token) => {
+                                        setCaptchaToken(token)
+                                        setError(null)
+                                    }}
+                                    onExpire={() => {
+                                        setCaptchaToken(null)
+                                    }}
+                                />
+                            ) : null}
 
                             <Button
                                 type="submit"

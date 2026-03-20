@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { AnimatePresence } from "framer-motion";
 import { useRealtimeTasks } from "@/hooks/useRealtimeTasks";
 import { createTaskAction } from "@/app/actions/project";
+import { useReducedMotionPreference } from "@/components/providers/theme-provider";
 
 import TaskFilters from "@/components/projects/v2/tasks/TaskFilters";
 import KanbanBoard from "@/components/projects/v2/tasks/KanbanBoard";
@@ -43,6 +44,7 @@ export default function TasksTab({
     members = [],
     sprints = [],
 }: TasksTabProps) {
+    const reduceMotion = useReducedMotionPreference();
     // Local State
     const [viewMode, setViewMode] = useState<'board' | 'list'>('board');
     const [scope, setScope] = useState<'all' | 'backlog' | 'sprint'>('all');
@@ -165,7 +167,7 @@ export default function TasksTab({
                                 className={cn(
                                     "p-2 rounded-md transition-colors",
                                     viewMode === 'board'
-                                        ? "bg-white dark:bg-zinc-700 shadow-sm text-indigo-600"
+                                        ? "bg-white dark:bg-zinc-700 shadow-sm text-primary"
                                         : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
                                 )}
                                 title="Board view"
@@ -177,7 +179,7 @@ export default function TasksTab({
                                 className={cn(
                                     "p-2 rounded-md transition-colors",
                                     viewMode === 'list'
-                                        ? "bg-white dark:bg-zinc-700 shadow-sm text-indigo-600"
+                                        ? "bg-white dark:bg-zinc-700 shadow-sm text-primary"
                                         : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
                                 )}
                                 title="List view"
@@ -206,7 +208,7 @@ export default function TasksTab({
                         {/* New Task — Hub-style indigo rounded-xl */}
                         <button
                             onClick={() => setShowCreateModal(true)}
-                            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-medium transition-colors"
+                            className="flex items-center gap-2 px-4 py-2 app-accent-solid hover:bg-primary/90 rounded-xl font-medium transition-[background-color,box-shadow]"
                         >
                             <Plus className="w-4 h-4" />
                             <span className="hidden sm:inline">New Task</span>
@@ -220,7 +222,7 @@ export default function TasksTab({
                  <FocusStrip 
                     title="My Focus" 
                     icon={Users} 
-                    iconColorClass="text-indigo-500"
+                    iconColorClass="text-primary"
                     tasks={myFocusTasks}
                     onTaskClick={setEditingTask}
                  />
@@ -231,7 +233,7 @@ export default function TasksTab({
                     tasks={needsOwnerTasks}
                     onTaskClick={setEditingTask}
                     renderTaskAction={() => (
-                        <button className="px-2 py-1 text-xs bg-blue-50 text-blue-600 rounded border border-blue-100 hover:bg-blue-100">Claim</button>
+                        <button className="px-2 py-1 text-xs bg-primary/10 text-primary rounded border border-primary/15 hover:bg-primary/15">Claim</button>
                     )}
                  />
             </div>
@@ -278,7 +280,7 @@ export default function TasksTab({
                 sprints={sprints}
             />
 
-            <AnimatePresence>
+            <AnimatePresence initial={!reduceMotion}>
                 {editingTask && (
                     <TaskDetailPanel
                         task={editingTask}

@@ -37,6 +37,7 @@ export function ConversationList({
 }: ConversationListProps) {
     const conversations = useChatStore(state => state.conversations);
     const conversationsLoading = useChatStore(state => state.conversationsLoading);
+    const conversationsError = useChatStore(state => state.conversationsError);
     const unreadCounts = useChatStore(state => state.unreadCounts);
     const storeActiveConversationId = useChatStore(state => state.activeConversationId);
     const openConversation = useChatStore(state => state.openConversation);
@@ -74,7 +75,32 @@ export function ConversationList({
     if (conversationsLoading && conversations.length === 0) {
         return (
             <div className="flex-1 flex items-center justify-center">
-                <div className="animate-spin rounded-full h-8 w-8 border-2 border-blue-600 border-t-transparent" />
+                <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" />
+            </div>
+        );
+    }
+
+    if (conversationsError && conversations.length === 0 && !effectiveSearchQuery.trim()) {
+        return (
+            <div className="flex-1 flex flex-col items-center justify-center gap-3 p-6 text-center">
+                <div className="w-16 h-16 bg-zinc-100 dark:bg-zinc-800 rounded-full flex items-center justify-center">
+                    <MessageSquare className="w-8 h-8 text-zinc-400" />
+                </div>
+                <div className="space-y-1">
+                    <p className="text-sm font-medium text-zinc-900 dark:text-white">
+                        Unable to load conversations
+                    </p>
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                        {conversationsError}
+                    </p>
+                </div>
+                <button
+                    type="button"
+                    onClick={() => void refreshConversations()}
+                    className="inline-flex items-center justify-center rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+                >
+                    Retry
+                </button>
             </div>
         );
     }
@@ -94,14 +120,14 @@ export function ConversationList({
                 aria-label={`Conversation with ${participant?.fullName || participant?.username || 'Unknown'}${unread > 0 ? `, ${unread} unread` : ''}`}
                 aria-current={isSelected ? 'true' : undefined}
                 onClick={() => (onConversationSelect ? onConversationSelect(conv.id) : openConversation(conv.id))}
-                className={`w-full flex items-center gap-3 p-3 transition-colors text-left border-l-2 ${
+                className={`w-full flex items-center gap-3 transition-colors text-left border-l-2 app-density-list-row ${
                     isSelected
-                        ? 'bg-blue-50 dark:bg-blue-950/30 border-l-blue-600'
+                        ? 'bg-primary/10 border-l-primary'
                         : 'hover:bg-zinc-50 dark:hover:bg-zinc-800/50 border-l-transparent'
                 }`}
             >
                 <div className="relative flex-shrink-0">
-                    <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center overflow-hidden">
+                    <div className="w-12 h-12 rounded-full app-accent-gradient flex items-center justify-center overflow-hidden">
                         {participant?.avatarUrl ? (
                             <Image
                                 src={participant.avatarUrl}
@@ -164,7 +190,7 @@ export function ConversationList({
                             placeholder="Search conversations..."
                             value={effectiveSearchQuery}
                             onChange={(e) => handleSearchChange(e.target.value)}
-                            className="w-full pl-9 pr-4 py-2 text-sm bg-zinc-100 dark:bg-zinc-800 rounded-lg border-0 focus:ring-2 focus:ring-blue-500 placeholder-zinc-400"
+                            className="w-full pl-9 pr-4 h-[var(--ui-control-height)] text-sm bg-zinc-100 dark:bg-zinc-800 rounded-lg border-0 focus:ring-2 focus:ring-ring placeholder-zinc-400"
                         />
                     </div>
                 </div>

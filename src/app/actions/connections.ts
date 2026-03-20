@@ -14,6 +14,8 @@ import {
 import { runInFlightDeduped } from '@/lib/async/inflight-dedupe';
 import { APPLICATION_BANNER_HIDE_AFTER_MS } from '@/lib/chat/banner-lifecycle';
 import { cacheData, getCachedData, redis } from '@/lib/redis';
+import { refreshWorkspaceCountersForUsers } from '@/lib/workspace/profile-counters';
+import { resolvePrivacyRelationship } from '@/lib/privacy/resolver';
 
 // ============================================================================
 // TYPES
@@ -36,6 +38,8 @@ export interface SuggestedProfile {
     location: string | null;
     connectionStatus: 'none' | 'pending_sent' | 'pending_received' | 'connected';
     canConnect?: boolean;
+    profileVisibility?: 'public' | 'connections' | 'private';
+    isLockedProfile?: boolean;
     mutualConnections?: number;
     recommendationReason?: string;
     projects?: Array<{ id: string; title: string; status: string | null }>;
@@ -553,6 +557,16 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
         WHERE ${connectionSuggestionDismissals.userId} = ${user.id}
         AND ${connectionSuggestionDismissals.dismissedProfileId} = ${profiles.id}
     )`);
+    candidateBaseConditions.push(sql`NOT EXISTS (
+        SELECT 1
+        FROM ${connections} privacy_block
+        WHERE privacy_block.status = 'blocked'
+        AND (
+            (privacy_block.requester_id = ${user.id} AND privacy_block.addressee_id = ${profiles.id} AND privacy_block.blocked_by = ${user.id})
+            OR
+            (privacy_block.requester_id = ${profiles.id} AND privacy_block.addressee_id = ${user.id} AND privacy_block.blocked_by = ${profiles.id})
+        )
+    )`);
     if (searchPattern) {
         candidateBaseConditions.push(
             sql`(
@@ -573,6 +587,7 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
             avatarUrl: profiles.avatarUrl,
             headline: profiles.headline,
             location: profiles.location,
+            visibility: profiles.visibility,
             skills: isHeavyLoad ? profiles.skills : sql`NULL::text[]`, // Only fetch JSON/Arrays if heavy
             interests: isHeavyLoad ? profiles.interests : sql`NULL::text[]`,
             createdAt: profiles.createdAt,
@@ -753,6 +768,8 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
         location: candidate.location,
         connectionStatus: candidate.status as SuggestedProfile['connectionStatus'],
         canConnect: candidate.canConnect,
+        profileVisibility: (candidate.visibility || 'public') as SuggestedProfile['profileVisibility'],
+        isLockedProfile: candidate.status !== 'connected' && candidate.visibility !== 'public',
         mutualConnections: isHeavyLoad ? candidate.mutual : undefined,
         recommendationReason: isHeavyLoad ? candidate.recommendationReason : undefined,
         projects: isHeavyLoad ? projectsByOwner.get(candidate.id) || [] : undefined,
@@ -873,16 +890,21 @@ export async function sendConnectionRequest(
             return { success: false, error: 'Too many requests. Please wait and try again.' };
         }
 
-        const [targetProfile] = await db
-            .select({ id: profiles.id, visibility: profiles.visibility })
-            .from(profiles)
-            .where(eq(profiles.id, addresseeId))
-            .limit(1);
-        if (!targetProfile) {
+        const privacy = await resolvePrivacyRelationship(user.id, addresseeId);
+        if (!privacy) {
             return { success: false, error: 'User not found' };
         }
-        if (targetProfile.visibility === 'private') {
-            return { success: false, error: 'This user is not accepting connection requests.' };
+        if (!privacy.canSendConnectionRequest) {
+            if (privacy.blockedByViewer || privacy.blockedByTarget) {
+                return { success: false, error: 'You cannot send a request to this account.' };
+            }
+            if (privacy.connectionPrivacy === 'nobody') {
+                return { success: false, error: 'This user is not accepting connection requests.' };
+            }
+            if (privacy.connectionPrivacy === 'mutuals_only') {
+                return { success: false, error: 'This user only accepts requests from mutual connections.' };
+            }
+            return { success: false, error: 'Cannot send request right now.' };
         }
 
         const txResult = await db.transaction(async (tx) => {
@@ -958,6 +980,7 @@ export async function sendConnectionRequest(
             return { success: false, error: txResult.error || 'Failed to send request' };
         }
 
+        await refreshWorkspaceCountersForUsers(db, [addresseeId]);
         await invalidateDiscoverCacheForUsers([user.id, addresseeId]);
         await revalidateConnectionsPaths();
         return { success: true, connectionId: txResult.connectionId };
@@ -1051,6 +1074,9 @@ export async function acceptAllIncomingConnectionRequests(
         });
 
         const acceptedCount = acceptedRows.length;
+        if (acceptedCount > 0) {
+            await refreshWorkspaceCountersForUsers(db, [user.id]);
+        }
         await invalidateDiscoverCacheForUsers(
             acceptedRows.flatMap((row) => [row.requesterId, row.addresseeId]),
         );
@@ -1106,6 +1132,9 @@ export async function rejectAllIncomingConnectionRequests(
         });
 
         const rejectedCount = rejectedRows.length;
+        if (rejectedCount > 0) {
+            await refreshWorkspaceCountersForUsers(db, [user.id]);
+        }
         await invalidateDiscoverCacheForUsers(
             rejectedRows.flatMap((row) => [row.requesterId, row.addresseeId]),
         );
@@ -1184,6 +1213,7 @@ export async function cancelConnectionRequest(
 
         if (!cancelled) return { success: false, error: 'Request not found or cannot be cancelled' };
 
+        await refreshWorkspaceCountersForUsers(db, [cancelled.addresseeId]);
         await invalidateDiscoverCacheForUsers([cancelled.requesterId, cancelled.addresseeId]);
         await revalidateConnectionsPaths();
         return { success: true };
@@ -1242,6 +1272,7 @@ export async function acceptConnectionRequest(
             return { success: false, error: 'Request not found' };
         }
 
+        await refreshWorkspaceCountersForUsers(db, [accepted.addresseeId]);
         await invalidateDiscoverCacheForUsers([accepted.requesterId, accepted.addresseeId]);
         await revalidateConnectionsPaths();
         return { success: true };
@@ -1290,6 +1321,7 @@ export async function rejectConnectionRequest(
             return { success: false, error: 'Request not found' };
         }
 
+        await refreshWorkspaceCountersForUsers(db, [rejected.addresseeId]);
         await invalidateDiscoverCacheForUsers([rejected.requesterId, rejected.addresseeId]);
         await revalidateConnectionsPaths();
         return {
@@ -1338,6 +1370,7 @@ export async function undoRejectConnectionRequest(
             return { success: false, error: 'Undo window expired' };
         }
 
+        await refreshWorkspaceCountersForUsers(db, [restored.addresseeId]);
         await invalidateDiscoverCacheForUsers([restored.requesterId, restored.addresseeId]);
         await revalidateConnectionsPaths();
         return { success: true };
@@ -1904,24 +1937,8 @@ export async function checkConnectionStatus(
         const user = await getAuthUser();
         if (!user) return { success: false, error: 'Not authenticated' };
 
-        // 1. Fetch Connection, Target Privacy, AND Role Applications in parallel
-        const [existing, targetProfileRes, activeApplications] = await Promise.all([
-            db
-                .select()
-                .from(connections)
-                .where(
-                    or(
-                        and(eq(connections.requesterId, user.id), eq(connections.addresseeId, otherUserId)),
-                        and(eq(connections.requesterId, otherUserId), eq(connections.addresseeId, user.id))
-                    )
-                )
-                .orderBy(desc(connections.updatedAt))
-                .limit(1),
-            db
-                .select({ messagePrivacy: profiles.messagePrivacy })
-                .from(profiles)
-                .where(eq(profiles.id, otherUserId))
-                .limit(1),
+        const [privacy, activeApplications] = await Promise.all([
+            resolvePrivacyRelationship(user.id, otherUserId),
             db
                 .select({
                     id: roleApplications.id,
@@ -1943,14 +1960,13 @@ export async function checkConnectionStatus(
                 .orderBy(desc(roleApplications.updatedAt), desc(roleApplications.id))
                 .limit(1)
         ]);
-
-        const targetPrivacy = targetProfileRes[0]?.messagePrivacy || 'connections';
         const activeApp = activeApplications[0];
+        if (!privacy) {
+            return { success: false, error: 'User not found' };
+        }
 
         // RULE: If there is an active application, the gate is OPEN
         if (activeApp) {
-            let connectionId: string | undefined;
-            if (existing.length > 0) connectionId = existing[0].id;
             const appStatus = activeApp.status as 'pending' | 'accepted' | 'rejected';
             const isPending = appStatus === 'pending';
             const updatedAtMs = new Date(activeApp.updatedAt).getTime();
@@ -1961,7 +1977,7 @@ export async function checkConnectionStatus(
             return {
                 success: true,
                 status: 'open',
-                connectionId,
+                connectionId: privacy.latestConnectionId ?? undefined,
                 hasActiveApplication: isPending || isFreshTerminal,
                 activeApplicationId: activeApp.id,
                 activeApplicationStatus: appStatus,
@@ -1971,46 +1987,36 @@ export async function checkConnectionStatus(
             };
         }
 
-        if (existing.length > 0) {
-            const conn = existing[0];
-
-            // BLOCKED
-            if (conn.status === 'blocked') {
-                return { success: true, status: 'blocked', connectionId: conn.id };
-            }
-
-            // ACCEPTED
-            if (conn.status === 'accepted') {
-                return { success: true, status: 'connected', connectionId: conn.id };
-            }
-
-            // PENDING
-            if (conn.status === 'pending') {
-                const isRequester = conn.requesterId === user.id;
-
-                if (isRequester) {
-                    if (targetPrivacy === 'everyone') {
-                        return {
-                            success: true,
-                            status: 'open',
-                            connectionId: conn.id,
-                            isPendingSent: true
-                        };
-                    }
-                    return { success: true, status: 'pending_sent', connectionId: conn.id };
-                } else {
-                    return {
-                        success: true,
-                        status: 'open',
-                        connectionId: conn.id,
-                        isIncomingRequest: true
-                    };
-                }
-            }
+        if (privacy.blockedByViewer || privacy.blockedByTarget) {
+            return { success: true, status: 'blocked', connectionId: privacy.latestConnectionId ?? undefined };
         }
 
-        // NO CONNECTION
-        if (targetPrivacy === 'everyone') {
+        if (privacy.connectionState === 'connected') {
+            return { success: true, status: 'connected', connectionId: privacy.latestConnectionId ?? undefined };
+        }
+
+        if (privacy.connectionState === 'pending_outgoing') {
+            if (privacy.canSendMessage) {
+                return {
+                    success: true,
+                    status: 'open',
+                    connectionId: privacy.latestConnectionId ?? undefined,
+                    isPendingSent: true,
+                };
+            }
+            return { success: true, status: 'pending_sent', connectionId: privacy.latestConnectionId ?? undefined };
+        }
+
+        if (privacy.connectionState === 'pending_incoming') {
+            return {
+                success: true,
+                status: 'open',
+                connectionId: privacy.latestConnectionId ?? undefined,
+                isIncomingRequest: true,
+            };
+        }
+
+        if (privacy.canSendMessage) {
             return { success: true, status: 'open' };
         }
 

@@ -1,7 +1,9 @@
 'use client';
 
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import Image from 'next/image';
+import { useQueryClient } from '@tanstack/react-query';
 import { useChatStore } from '@/stores/chatStore';
 import { useAuth } from '@/lib/hooks/use-auth';
 import { MessageThread } from '@/components/chat/MessageThread';
@@ -11,7 +13,7 @@ import {
     type MessageWithSender,
     type ConversationWithDetails
 } from '@/app/actions/messaging';
-import { MessageSquare, Search, X, Loader2, PenSquare, Archive, BellOff, Bell, MoreVertical } from 'lucide-react';
+import { Ban, MessageSquare, Search, X, Loader2, PenSquare, Archive, BellOff, Bell, MoreVertical } from 'lucide-react';
 import { useDebounce } from '@/hooks/hub/useDebounce';
 import { NewChatModal } from './NewChatModal';
 import { useTargetUser } from '@/hooks/useMessagesData';
@@ -26,6 +28,8 @@ import {
     DropdownMenuItem,
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { toast } from 'sonner';
+import { invalidatePrivacyDependents } from '@/lib/privacy/client-invalidation';
 
 // ============================================================================
 // MESSAGES CLIENT
@@ -77,6 +81,8 @@ export default function MessagesClient({
     initialConversationId,
     hardeningEnabled = true,
 }: MessagesClientProps) {
+    const router = useRouter();
+    const queryClient = useQueryClient();
     const { user, isLoading: authLoading } = useAuth();
     const userId = user?.id ?? null;
     
@@ -210,6 +216,7 @@ export default function MessagesClient({
         handleToggleArchiveConversation,
         handleToggleMuteConversation,
     } = useConversationActions(activeConversation);
+    const [blockActionLoading, setBlockActionLoading] = useState(false);
 
     // Initialize store with data from hook
     // This replaces the old separate effects
@@ -317,11 +324,40 @@ export default function MessagesClient({
 
     // Helper for participant
     const otherParticipant = activeConversation?.participants[0];
+    const connectionStatus = useChatStore(state => state.activeConnectionStatus);
+    const handleToggleBlock = async () => {
+        if (!otherParticipant?.id) return;
+        setBlockActionLoading(true);
+        try {
+            const isBlocked = connectionStatus === 'blocked';
+            const res = await fetch(isBlocked ? `/api/v1/privacy/blocks/${otherParticipant.id}` : '/api/v1/privacy/blocks', {
+                method: isBlocked ? 'DELETE' : 'POST',
+                headers: isBlocked ? undefined : { 'Content-Type': 'application/json' },
+                body: isBlocked ? undefined : JSON.stringify({ userId: otherParticipant.id }),
+            });
+            const json = await res.json().catch(() => null);
+            if (!res.ok || json?.success === false) {
+                throw new Error((typeof json?.error === 'string' && json.error) || 'Failed to update block state');
+            }
+            useChatStore.setState({ activeConnectionStatus: isBlocked ? 'none' : 'blocked' });
+            toast.success(isBlocked ? 'Account unblocked' : 'Account blocked');
+            await invalidatePrivacyDependents(queryClient, {
+                profileTargetKey: otherParticipant.username || otherParticipant.id,
+                includeProjects: false,
+            });
+            router.refresh();
+        } catch (error) {
+            console.error(error);
+            toast.error(error instanceof Error ? error.message : 'Failed to update block state');
+        } finally {
+            setBlockActionLoading(false);
+        }
+    };
 
     if (authLoading) {
         return (
             <div className="flex h-full min-h-0 items-center justify-center">
-                <div className="animate-spin rounded-full h-8 w-8 border-2 border-blue-600 border-t-transparent" />
+                <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" />
             </div>
         );
     }
@@ -413,7 +449,7 @@ export default function MessagesClient({
                                 placeholder="Search messages..."
                                 value={searchQuery}
                                 onChange={(e) => setSearchQuery(e.target.value)}
-                                className="w-full pl-9 pr-8 py-2 text-sm bg-zinc-100 dark:bg-zinc-800 rounded-lg border-0 focus:ring-1 focus:ring-blue-500 placeholder-zinc-400"
+                                className="w-full pl-9 pr-8 py-2 text-sm bg-zinc-100 dark:bg-zinc-800 rounded-lg border-0 focus:ring-1 focus:ring-ring placeholder-zinc-400"
                             />
                             {searchQuery && (
                                 <button
@@ -446,7 +482,7 @@ export default function MessagesClient({
                     ) : showSearchResults ? (
                         isSearching ? (
                             <div className="h-full flex items-center justify-center p-8">
-                                <Loader2 className="w-6 h-6 animate-spin text-blue-600" />
+                                <Loader2 className="w-6 h-6 animate-spin text-primary" />
                             </div>
                         ) : searchResults.length === 0 ? (
                             <div className="flex flex-col items-center justify-center h-full p-6 text-center">
@@ -469,7 +505,7 @@ export default function MessagesClient({
                                                 className="w-full flex flex-col gap-1 p-4 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 text-left transition-colors"
                                             >
                                                 <div className="flex items-center gap-2">
-                                                    <div className="w-6 h-6 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center overflow-hidden">
+                                                    <div className="w-6 h-6 rounded-full app-accent-gradient flex items-center justify-center overflow-hidden">
                                                         {participant?.avatarUrl ? (
                                                             <Image
                                                                 src={participant.avatarUrl}
@@ -501,9 +537,9 @@ export default function MessagesClient({
                     ) : (
                         <div className="h-full min-h-0 overflow-hidden">
                             {isDraftMode && targetUser && (
-                                <div className="w-full flex items-center gap-3 p-4 bg-blue-50 dark:bg-blue-950/30 border-l-2 border-blue-600 border-b border-zinc-100 dark:border-zinc-800">
+                                <div className="w-full flex items-center gap-3 p-4 bg-primary/10 border-l-2 border-l-primary border-b border-zinc-100 dark:border-zinc-800">
                                     <div className="relative flex-shrink-0">
-                                        <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center overflow-hidden">
+                                        <div className="w-12 h-12 rounded-full app-accent-gradient flex items-center justify-center overflow-hidden">
                                             {targetUser.avatarUrl ? (
                                                 <Image src={targetUser.avatarUrl} alt="" width={48} height={48} unoptimized className="w-full h-full object-cover" />
                                             ) : (
@@ -518,7 +554,7 @@ export default function MessagesClient({
                                             <span className="font-medium text-sm text-zinc-900 dark:text-white truncate">
                                                 {targetUser.fullName || targetUser.username}
                                             </span>
-                                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-600 dark:bg-blue-900/50 dark:text-blue-300 font-medium">
+                                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-primary/10 text-primary font-medium">
                                                 New
                                             </span>
                                         </div>
@@ -548,7 +584,7 @@ export default function MessagesClient({
                         {/* Conversation Header */}
                         <div className="flex items-center justify-between gap-3 px-6 py-4 border-b border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
                             <div className="flex items-center gap-3">
-                                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center overflow-hidden">
+                                <div className="w-10 h-10 rounded-full app-accent-gradient flex items-center justify-center overflow-hidden">
                                     {otherParticipant.avatarUrl ? (
                                         <Image
                                             src={otherParticipant.avatarUrl}
@@ -587,15 +623,22 @@ export default function MessagesClient({
                                 </DropdownMenuTrigger>
                                 <DropdownMenuContent align="end">
                                     <DropdownMenuItem
+                                        onClick={handleToggleBlock}
+                                        disabled={conversationActionLoading || blockActionLoading}
+                                    >
+                                        <Ban className="w-4 h-4" />
+                                        {connectionStatus === 'blocked' ? 'Unblock account' : 'Block account'}
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem
                                         onClick={handleToggleMuteConversation}
-                                        disabled={conversationActionLoading}
+                                        disabled={conversationActionLoading || blockActionLoading}
                                     >
                                         {activeConversation?.muted ? <Bell className="w-4 h-4" /> : <BellOff className="w-4 h-4" />}
                                         {activeConversation?.muted ? 'Unmute conversation' : 'Mute conversation'}
                                     </DropdownMenuItem>
                                     <DropdownMenuItem
                                         onClick={handleToggleArchiveConversation}
-                                        disabled={conversationActionLoading}
+                                        disabled={conversationActionLoading || blockActionLoading}
                                     >
                                         <Archive className="w-4 h-4" />
                                         {activeConversation?.lifecycleState === 'archived' ? 'Unarchive conversation' : 'Archive conversation'}
@@ -630,7 +673,7 @@ export default function MessagesClient({
                                  <h2 className="font-semibold text-zinc-900 dark:text-white">
                                      {targetUser.fullName || targetUser.username}
                                  </h2>
-                                 <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
+                                     <span className="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary">
                                      New Conversation
                                  </span>
                              </div>
@@ -645,8 +688,9 @@ export default function MessagesClient({
                     </>
                 ) : (
                     <div className="flex-1 flex flex-col items-center justify-center text-center p-6">
-                        <div className="w-20 h-20 bg-gradient-to-br from-blue-100 to-indigo-100 dark:from-blue-950/30 dark:to-indigo-950/30 rounded-full flex items-center justify-center mb-6">
-                            <MessageSquare className="w-10 h-10 text-blue-600" />
+                        <div className="relative mb-6 flex h-20 w-20 items-center justify-center overflow-hidden rounded-full">
+                            <div className="absolute inset-0 app-accent-gradient opacity-15" />
+                            <MessageSquare className="relative w-10 h-10 text-primary" />
                         </div>
                         <h2 className="text-xl font-bold text-zinc-900 dark:text-white mb-2">
                             Your Messages

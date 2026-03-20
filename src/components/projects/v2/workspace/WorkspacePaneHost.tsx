@@ -4,6 +4,7 @@ import React from "react";
 import { DndContext, closestCenter, type DragEndEvent } from "@dnd-kit/core";
 import { FileCode } from "lucide-react";
 import type { ProjectNode } from "@/lib/db/schema";
+import type { CursorPresenceMap } from "./cursorProtocol";
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 import type { FilesWorkspaceTabState, PaneId } from "../state/filesTabTypes";
 import EditorPane from "./EditorPane";
@@ -64,6 +65,8 @@ interface WorkspacePaneHostProps {
   leftOrderedTabIds: string[];
   rightOrderedTabIds: string[];
   gitChangedFiles: Array<{ nodeId: string; status: "modified" | "added" | "deleted" }>;
+  remoteCursors: CursorPresenceMap;
+  onBroadcastCursor: (nodeId: string, line: number, column: number, selStart?: number, selEnd?: number) => void;
 }
 
 export function WorkspacePaneHost({
@@ -113,6 +116,8 @@ export function WorkspacePaneHost({
   leftOrderedTabIds,
   rightOrderedTabIds,
   gitChangedFiles,
+  remoteCursors,
+  onBroadcastCursor,
 }: WorkspacePaneHostProps) {
   const nothingOpen =
     panes.left.openTabIds.length === 0 && (!splitEnabled || panes.right.openTabIds.length === 0);
@@ -160,6 +165,8 @@ export function WorkspacePaneHost({
             onRun={activePane === "left" ? onRunActiveFile : undefined}
             canRun={activePane === "left" && !!activeFilePath}
             gitChangedFiles={gitChangedFiles}
+            remoteCursors={remoteCursors}
+            onBroadcastCursor={onBroadcastCursor}
           />
 
           {splitEnabled ? (
@@ -210,6 +217,8 @@ export function WorkspacePaneHost({
               onRun={activePane === "right" ? onRunActiveFile : undefined}
               canRun={activePane === "right" && !!activeFilePath}
               gitChangedFiles={gitChangedFiles}
+              remoteCursors={remoteCursors}
+              onBroadcastCursor={onBroadcastCursor}
             />
           ) : null}
         </DndContext>

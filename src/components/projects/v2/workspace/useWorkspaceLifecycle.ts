@@ -8,6 +8,7 @@ import { get } from "idb-keyval";
 import { runWithConcurrency } from "@/lib/utils/concurrency";
 import { FILES_RUNTIME_BUDGETS } from "@/lib/files/runtime-budgets";
 import { createClient } from "@/lib/supabase/client";
+import { subscribeActiveResource } from "@/lib/realtime/subscriptions";
 
 type NodeLockResult = {
   ok: boolean;
@@ -118,58 +119,57 @@ export function useWorkspaceLifecycle({
       realtimeTimeout = null;
     };
 
-    const realtimeChannel = supabase.channel(`public:project_nodes:${projectId}`)
-      .on(
-        'postgres_changes',
+    const workspaceChannel = subscribeActiveResource({
+      supabase,
+      resourceType: 'workspace',
+      resourceId: `files:${projectId}`,
+      bindings: [
         {
           event: '*',
-          schema: 'public',
           table: 'project_nodes',
-          filter: `project_id=eq.${projectId}`
+          filter: `project_id=eq.${projectId}`,
+          handler: (payload) => {
+            const previousRow = (payload.old ?? null) as Record<string, unknown> | null;
+            if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+              realtimeBuffer.push(payload.new as ProjectNode);
+            } else if (payload.eventType === 'DELETE') {
+              const deletedId = typeof previousRow?.id === 'string' ? previousRow.id : null;
+              if (deletedId) {
+                deleteBuffer.push(deletedId);
+              }
+            }
+
+            if (!realtimeTimeout) {
+              realtimeTimeout = setTimeout(flushRealtime, 250);
+            }
+          },
         },
-        (payload: any) => {
-          if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
-            realtimeBuffer.push(payload.new as ProjectNode);
-          } else if (payload.eventType === 'DELETE') {
-            deleteBuffer.push(payload.old.id);
-          }
-
-          if (!realtimeTimeout) {
-            realtimeTimeout = setTimeout(flushRealtime, 250);
-          }
-        }
-      )
-      .subscribe();
-
-    const locksChannel = supabase.channel(`public:project_node_locks:${projectId}`)
-      .on(
-        'postgres_changes',
         {
           event: '*',
-          schema: 'public',
           table: 'project_node_locks',
-          filter: `project_id=eq.${projectId}`
+          filter: `project_id=eq.${projectId}`,
+          handler: (payload) => {
+            const store = useFilesWorkspaceStore.getState();
+            const nextRow = (payload.new ?? null) as Record<string, unknown> | null;
+            const previousRow = (payload.old ?? null) as Record<string, unknown> | null;
+            if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+              store.setLock(projectId, {
+                nodeId: String(nextRow?.node_id || ''),
+                projectId: String(nextRow?.project_id || ''),
+                lockedBy: String(nextRow?.locked_by || ''),
+                expiresAt: new Date(String(nextRow?.expires_at || Date.now())).getTime(),
+              });
+            } else if (payload.eventType === 'DELETE' && typeof previousRow?.node_id === 'string') {
+              store.clearLock(projectId, previousRow.node_id);
+            }
+          },
         },
-        (payload: any) => {
-          const store = useFilesWorkspaceStore.getState();
-          if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
-            store.setLock(projectId, {
-              nodeId: payload.new.node_id,
-              projectId: payload.new.project_id,
-              lockedBy: payload.new.locked_by,
-              expiresAt: new Date(payload.new.expires_at).getTime(),
-            });
-          } else if (payload.eventType === 'DELETE') {
-            store.clearLock(projectId, payload.old.node_id);
-          }
-        }
-      )
-      .subscribe();
+      ],
+    });
 
     return () => {
       if (realtimeTimeout) clearTimeout(realtimeTimeout);
-      supabase.removeChannel(realtimeChannel);
-      supabase.removeChannel(locksChannel);
+      supabase.removeChannel(workspaceChannel);
     };
 
   }, [ensureProjectWorkspace, projectId, initialFileNodes, setFolderPayload, setNodes, hydrateFromIdb]);

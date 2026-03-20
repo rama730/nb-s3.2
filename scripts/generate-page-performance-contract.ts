@@ -20,10 +20,14 @@ function main() {
     routeId,
     pageFile,
     renderingMode: "revalidate",
-    dataClass: "user_scoped",
+    routeClass: "user_shell",
+    cacheStrategy: "request",
     cacheTtlSeconds: 30,
     invalidationOwner: "server-action",
     hydrationBoundary: "standard",
+    bootstrapReadModel: "auth_snapshot",
+    maxBackgroundChannels: 1,
+    overloadMode: "fail_closed",
     maxInitialPayloadKb: 220,
     revalidateSeconds: 30,
   };
@@ -32,4 +36,3 @@ function main() {
 }
 
 main();
-

@@ -1,13 +1,15 @@
 'use server';
 
 import { createClient } from '@/lib/supabase/server';
-import { fetchContents, fetchRepoMeta, parseGithubRepo } from '@/lib/github/repo-preview';
+import { fetchContents, fetchRepoMeta, GithubApiError, parseGithubRepo } from '@/lib/github/repo-preview';
+import { openGithubImportToken, sealGithubImportToken } from '@/lib/github/repo-security';
 import { isTooLarge, shouldIgnorePath } from '@/lib/import/import-filters';
 import { normalizeGithubBranch, normalizeGithubRepoUrl } from '@/lib/github/repo-validation';
 import { consumeRateLimit } from '@/lib/security/rate-limit';
 import { resolveGithubRepoAccess } from '@/lib/github/auth-resolver';
 import { runInFlightDeduped } from '@/lib/async/inflight-dedupe';
 import { logger } from '@/lib/logger';
+import { getGithubImportAccessState } from '@/lib/github/import-access-state';
 
 type PreviewEntry = {
   name: string;
@@ -273,27 +275,57 @@ async function resolveAuthForRepo(
   auth: GithubAuthSession,
   repoUrl: string,
   preferredInstallationId?: number | string | null,
+  sealedImportToken?: unknown,
 ) {
   return await resolveGithubRepoAccess({
     repoUrl,
     preferredInstallationId,
     oauthToken: auth.oauthToken,
+    sealedImportToken,
   });
+}
+
+function isEmptyGithubRepositoryError(
+  error: unknown,
+  repoMeta: { sizeKb: number | null } | null | undefined,
+  path: string,
+) {
+  return (
+    error instanceof GithubApiError &&
+    error.status === 404 &&
+    path.trim().length === 0 &&
+    (repoMeta?.sizeKb === 0 || repoMeta?.sizeKb === null)
+  );
+}
+
+function normalizeGithubImportError(error: unknown) {
+  if (error instanceof GithubApiError) {
+    if (error.status === 404) {
+      return 'Repository files could not be loaded. The repository may be empty, the branch may not exist yet, or access is missing.';
+    }
+    if (error.status === 409) {
+      return 'GitHub cannot read this repository yet. It may be empty or have no default branch.';
+    }
+    return error.message;
+  }
+  return error instanceof Error ? error.message : 'GitHub import failed.';
 }
 
 export async function listGithubRepositories(input?: {
   cursor?: string | null;
   q?: string | null;
   perPage?: number | null;
+  sealedImportToken?: unknown;
 }) {
   const authResult = await getAuthorizedGithubSession();
   if (!authResult.ok) return { success: false as const, error: authResult.error };
   const { session } = authResult;
+  const oauthToken = session.oauthToken || openGithubImportToken(input?.sealedImportToken);
 
-  if (!session.oauthToken) {
+  if (!oauthToken) {
     return {
       success: false as const,
-      error: 'GitHub account is not connected. Connect GitHub to list your repositories.',
+      error: 'GitHub repository access is not available. Connect or reconnect GitHub to browse repositories.',
     };
   }
 
@@ -304,29 +336,53 @@ export async function listGithubRepositories(input?: {
 
   return await withCachedValue(cacheKey, CACHE_TTL_MS.repositories, async () => {
     const startedAt = Date.now();
-    const url = new URL('https://api.github.com/user/repos');
-    url.searchParams.set('per_page', String(perPage));
-    url.searchParams.set('page', String(page));
-    url.searchParams.set('sort', 'updated');
-    url.searchParams.set('direction', 'desc');
-    url.searchParams.set('affiliation', 'owner,collaborator,organization_member');
+    let url: URL;
+    const headers: HeadersInit = {
+      Authorization: `Bearer ${oauthToken}`,
+    };
 
-    const { data } = await fetchGithubJson<any[]>(
+    if (query) {
+      const userResponse = await fetchGithubJson<{ login?: string }>(
+        'https://api.github.com/user',
+        {
+          method: 'GET',
+          headers,
+        },
+      );
+      const login = typeof userResponse.data?.login === 'string' ? userResponse.data.login.trim() : '';
+      url = new URL('https://api.github.com/search/repositories');
+      url.searchParams.set('per_page', String(perPage));
+      url.searchParams.set('page', String(page));
+      url.searchParams.set('sort', 'updated');
+      url.searchParams.set('order', 'desc');
+      const q = login
+        ? `${query} user:${login} in:name,description`
+        : `${query} in:name,description`;
+      url.searchParams.set('q', q);
+    } else {
+      url = new URL('https://api.github.com/user/repos');
+      url.searchParams.set('per_page', String(perPage));
+      url.searchParams.set('page', String(page));
+      url.searchParams.set('sort', 'updated');
+      url.searchParams.set('direction', 'desc');
+      url.searchParams.set('affiliation', 'owner,collaborator,organization_member');
+    }
+
+    const { data } = await fetchGithubJson<any[] | { items?: any[] }>(
       url.toString(),
       {
         method: 'GET',
-        headers: {
-          Authorization: `Bearer ${session.oauthToken}`,
-        },
+        headers,
       },
     );
 
-    const repos = (Array.isArray(data) ? data : [])
+    const items = Array.isArray(data) ? data : Array.isArray(data?.items) ? data.items : [];
+    const repos = items
       .map(normalizeRepoItem)
       .filter((item): item is GithubRepoPickerItem => !!item)
       .filter((repo) => matchRepoQuery(repo, query));
 
-    const hasMore = (Array.isArray(data) ? data.length : 0) >= perPage;
+    const hasMore = items.length >= perPage;
     logger.metric('github.repo_picker.result', {
       userId: session.userId,
       page,
@@ -349,6 +405,7 @@ export async function listGithubRepositories(input?: {
 export async function listGithubBranches(args: {
   repoUrl: string;
   installationId?: number | string | null;
+  sealedImportToken?: unknown;
 }) {
   const authResult = await getAuthorizedGithubSession();
   if (!authResult.ok) return { success: false as const, error: authResult.error };
@@ -365,7 +422,7 @@ export async function listGithubBranches(args: {
     const parsed = parseGithubRepo(normalizedRepoUrl);
     if (!parsed) return { success: false as const, error: 'Invalid repository URL.' };
 
-    const access = await resolveAuthForRepo(session, normalizedRepoUrl, args.installationId);
+    const access = await resolveAuthForRepo(session, normalizedRepoUrl, args.installationId, args.sealedImportToken);
     const token = access.token || undefined;
     const { data } = await fetchGithubJson<Array<{ name?: string }>>(
       `https://api.github.com/repos/${parsed.owner}/${parsed.repo}/branches?per_page=100`,
@@ -402,6 +459,7 @@ export async function preflightGithubImport(args: {
   repoUrl: string;
   branch?: string | null;
   installationId?: number | string | null;
+  sealedImportToken?: unknown;
 }) {
   const authResult = await getAuthorizedGithubSession();
   if (!authResult.ok) return { success: false as const, error: authResult.error };
@@ -420,7 +478,7 @@ export async function preflightGithubImport(args: {
       return { success: false as const, error: 'Invalid repository URL.' };
     }
 
-    const access = await resolveAuthForRepo(session, normalizedRepoUrl, args.installationId);
+    const access = await resolveAuthForRepo(session, normalizedRepoUrl, args.installationId, args.sealedImportToken);
     const token = access.token || undefined;
     const meta = await fetchRepoMeta({ ...parsed, token });
 
@@ -436,12 +494,22 @@ export async function preflightGithubImport(args: {
       return { success: false as const, error: 'Invalid branch name.' };
     }
 
-    const rootEntries = (await fetchContents({
-      ...parsed,
-      token,
-      ref: branch,
-      path: '',
-    })).map(decorateEntry);
+    let rawRootEntries: Array<{ name: string; path: string; type: 'file' | 'dir'; size?: number | null }> = [];
+    try {
+      rawRootEntries = await fetchContents({
+        ...parsed,
+        token,
+        ref: branch,
+        path: '',
+      });
+    } catch (error) {
+      if (!isEmptyGithubRepositoryError(error, meta, '')) {
+        throw error;
+      }
+      rawRootEntries = [];
+    }
+
+    const rootEntries = rawRootEntries.map(decorateEntry);
 
     const summary = rootEntries.reduce(
       (acc, entry) => {
@@ -457,6 +525,9 @@ export async function preflightGithubImport(args: {
     const warnings: string[] = [];
     if (summary.ignored > 0) warnings.push(`${summary.ignored} root path(s) will be ignored by import filters.`);
     if (summary.tooLarge > 0) warnings.push(`${summary.tooLarge} root file(s) exceed the file-size limit and will be skipped.`);
+    if (summary.rootFiles === 0 && summary.rootFolders === 0) {
+      warnings.push('This repository does not contain files on the selected branch yet.');
+    }
     if (typeof meta.sizeKb === 'number' && meta.sizeKb > 500_000) {
       warnings.push('Repository is large (>500 MB). Import may take longer than usual.');
     }
@@ -509,6 +580,7 @@ export async function previewGithubRepoRootAction(
   repoUrl: string,
   preferredBranch?: string | null,
   preferredInstallationId?: number | string | null,
+  sealedImportToken?: unknown,
 ) {
   const authResult = await getAuthorizedGithubSession();
   if (!authResult.ok) return { success: false as const, error: authResult.error };
@@ -523,13 +595,23 @@ export async function previewGithubRepoRootAction(
       const parsed = parseGithubRepo(normalizedRepoUrl);
       if (!parsed) return { success: false as const, error: 'Invalid repository URL.' };
 
-      const access = await resolveAuthForRepo(session, normalizedRepoUrl, preferredInstallationId);
+      const access = await resolveAuthForRepo(session, normalizedRepoUrl, preferredInstallationId, sealedImportToken);
       const token = access.token || undefined;
       const meta = await fetchRepoMeta({ ...parsed, token });
       const branch = normalizeGithubBranch(preferredBranch || meta.defaultBranch || 'main');
       if (!branch) return { success: false as const, error: 'Invalid branch name.' };
 
-      const rootEntries = (await fetchContents({ ...parsed, token, ref: branch, path: '' })).map(decorateEntry);
+      let rawRootEntries: Array<{ name: string; path: string; type: 'file' | 'dir'; size?: number | null }> = [];
+      try {
+        rawRootEntries = await fetchContents({ ...parsed, token, ref: branch, path: '' });
+      } catch (error) {
+        if (!isEmptyGithubRepositoryError(error, meta, '')) {
+          throw error;
+        }
+        rawRootEntries = [];
+      }
+
+      const rootEntries = rawRootEntries.map(decorateEntry);
       return {
         success: true as const,
         branch,
@@ -539,7 +621,7 @@ export async function previewGithubRepoRootAction(
         installationId: access.installationId,
       };
     } catch (e: any) {
-      return { success: false as const, error: typeof e?.message === 'string' ? e.message : 'Failed to preview repository.' };
+      return { success: false as const, error: normalizeGithubImportError(e) };
     }
   });
 }
@@ -549,6 +631,7 @@ export async function previewGithubFolderAction(
   branch: string,
   folderPath: string,
   preferredInstallationId?: number | string | null,
+  sealedImportToken?: unknown,
 ) {
   const authResult = await getAuthorizedGithubSession();
   if (!authResult.ok) return { success: false as const, error: authResult.error };
@@ -566,7 +649,7 @@ export async function previewGithubFolderAction(
       const parsed = parseGithubRepo(normalizedRepoUrl);
       if (!parsed) return { success: false as const, error: 'Invalid repository URL.' };
 
-      const access = await resolveAuthForRepo(session, normalizedRepoUrl, preferredInstallationId);
+      const access = await resolveAuthForRepo(session, normalizedRepoUrl, preferredInstallationId, sealedImportToken);
       const token = access.token || undefined;
       const entries = (await fetchContents({
         ...parsed,
@@ -576,7 +659,7 @@ export async function previewGithubFolderAction(
       })).map(decorateEntry);
       return { success: true as const, entries };
     } catch (e: any) {
-      return { success: false as const, error: typeof e?.message === 'string' ? e.message : 'Failed to load folder.' };
+      return { success: false as const, error: normalizeGithubImportError(e) };
     }
   });
 }
@@ -584,6 +667,7 @@ export async function previewGithubFolderAction(
 export async function analyzeGithubRepoAction(
   repoUrl: string,
   preferredInstallationId?: number | string | null,
+  sealedImportToken?: unknown,
 ) {
   const authResult = await getAuthorizedGithubSession();
   if (!authResult.ok) {
@@ -620,7 +704,7 @@ export async function analyzeGithubRepoAction(
       .replace(/\b\w/g, (c) => c.toUpperCase());
 
     try {
-      const access = await resolveAuthForRepo(session, normalizedRepoUrl, preferredInstallationId);
+      const access = await resolveAuthForRepo(session, normalizedRepoUrl, preferredInstallationId, sealedImportToken);
       const token = access.token || undefined;
       const rawHeaders: HeadersInit = {
         Accept: 'application/vnd.github.v3.raw',
@@ -703,3 +787,29 @@ export async function analyzeGithubRepoAction(
   });
 }
 
+export async function sealGithubProviderTokenAction(providerToken: string) {
+  const token = (providerToken || '').trim();
+  if (!token) {
+    return { success: false as const, error: 'GitHub provider token is missing.' };
+  }
+
+  const supabase = await createClient();
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session?.user?.id) {
+    return { success: false as const, error: 'Unauthorized. Please sign in first.' };
+  }
+
+  const sealed = sealGithubImportToken(token);
+  if (!sealed) {
+    return { success: false as const, error: 'GitHub import token encryption is not configured.' };
+  }
+
+  return {
+    success: true as const,
+    sealed,
+  };
+}
+
+export async function getGithubImportAccessStateAction() {
+  return getGithubImportAccessState();
+}

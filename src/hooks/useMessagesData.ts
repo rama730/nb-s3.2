@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { getConversations, type ConversationWithDetails } from "@/app/actions/messaging";
+import { getConversations, type ConversationWithDetails } from "@/app/actions/messaging/conversations";
 import { getProfileBasic } from "@/app/actions/profile";
 import { queryKeys } from "@/lib/query-keys";
 

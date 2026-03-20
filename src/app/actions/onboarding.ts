@@ -24,6 +24,7 @@ import { onboardingError, type OnboardingError } from '@/lib/onboarding/errors'
 import { checkUsernameAvailabilityWithClient } from '@/lib/onboarding/username-check'
 import { consumeRateLimit } from '@/lib/security/rate-limit'
 import { createClient } from '@/lib/supabase/server'
+import { isEmailVerified } from '@/lib/auth/email-verification'
 import type { OnboardingPayloadInput } from '@/lib/validations/onboarding'
 import { normalizeOnboardingPayload } from '@/lib/validations/onboarding'
 import { normalizeUsername, sanitizeUsernameInput, validateUsername } from '@/lib/validations/username'
@@ -320,6 +321,7 @@ async function syncOnboardingClaims(params: {
     username: string
     fullName: string
     avatarUrl?: string
+    emailVerified?: boolean
 }): Promise<boolean> {
     const payload = {
         data: {
@@ -327,6 +329,7 @@ async function syncOnboardingClaims(params: {
             onboarded: true,
             full_name: params.fullName,
             avatar_url: params.avatarUrl || null,
+            email_verified: params.emailVerified === true,
         },
     }
 
@@ -577,6 +580,13 @@ export async function completeOnboarding(
             const error = onboardingError('NOT_AUTHENTICATED', 'Session expired. Please login again.')
             return { success: false, error: error.message, errorDetails: error }
         }
+        if (!isEmailVerified(user as unknown as Record<string, unknown>)) {
+            const error = onboardingError(
+                'INVALID_INPUT',
+                'Verify your email before completing onboarding.'
+            )
+            return { success: false, error: error.message, errorDetails: error }
+        }
 
         const rateKeys = buildOnboardingCompleteRateLimitKeys({
             userId: user.id,
@@ -714,6 +724,7 @@ export async function completeOnboarding(
             username: payload.username,
             fullName: payload.fullName,
             avatarUrl: avatarUrl || undefined,
+            emailVerified: true,
         })
 
         await db.insert(onboardingEvents).values({
@@ -774,6 +785,7 @@ export async function repairOnboardingClaims(): Promise<{ success: boolean; erro
             username: profile.username,
             fullName: profile.full_name || user.user_metadata?.full_name || user.email || 'User',
             avatarUrl: profile.avatar_url || undefined,
+            emailVerified: isEmailVerified(user as unknown as Record<string, unknown>),
         })
 
         return synced

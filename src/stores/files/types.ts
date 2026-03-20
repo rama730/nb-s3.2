@@ -99,23 +99,9 @@ export type GitState = {
   gitStatusLoaded?: boolean;
 };
 
-// ─── Terminal ────────────────────────────────────────────────────────
-export type TerminalSession = {
-  id: string;
-  label: string;
-  output: string[];
-  isRunning: boolean;
-  startedAt: number;
-};
-
-export type TerminalState = {
-  sessions: TerminalSession[];
-  activeSessionId: string | null;
-};
-
 // ─── UI ──────────────────────────────────────────────────────────────
 export type UiState = {
-  bottomPanelTab: "terminal" | "output" | "problems" | "debug";
+  bottomPanelTab: "run" | "output" | "problems";
   bottomPanelHeight: number;
   bottomPanelCollapsed: boolean;
   sidebarWidth: number;
@@ -131,9 +117,7 @@ export type UiState = {
   stdinInputText: string;
   /** Linter and execution problems. */
   problems: Problem[];
-  /** Debug console accumulated output. */
-  debugOutput: string[];
-  /** Terminal command history (max 50). */
+  /** Run command history (max 50). */
   commandHistory: string[];
   /** Persisted output mode filter */
   outputFilterMode: "all" | "out" | "err";
@@ -208,9 +192,6 @@ export type ProjectWorkspaceState = {
 
   // Git
   git: GitState;
-
-  // Terminal
-  terminal: TerminalState;
 
   // UI
   ui: UiState;
@@ -301,14 +282,6 @@ export type FilesWorkspaceState = {
   setGitStatusLoaded: (projectId: string, loaded: boolean) => void;
   clearGitState: (projectId: string) => void;
 
-  // terminal actions
-  addTerminalSession: (projectId: string, session: TerminalSession) => void;
-  removeTerminalSession: (projectId: string, sessionId: string) => void;
-  setActiveTerminalSession: (projectId: string, sessionId: string | null) => void;
-  appendTerminalOutput: (projectId: string, sessionId: string, line: string) => void;
-  clearTerminalOutput: (projectId: string, sessionId: string) => void;
-  setTerminalRunning: (projectId: string, sessionId: string, running: boolean) => void;
-
   // ui actions
   setBottomPanelTab: (projectId: string, tab: UiState["bottomPanelTab"]) => void;
   setLastExecutionOutput: (projectId: string, lines: string[]) => void;
@@ -322,9 +295,6 @@ export type FilesWorkspaceState = {
   setProblems: (projectId: string, problems: Problem[]) => void;
   clearProblems: (projectId: string) => void;
   applyQuickFix: (projectId: string, problemId: string) => void;
-  setDebugOutput: (projectId: string, lines: string[]) => void;
-  appendDebugOutput: (projectId: string, lines: string[]) => void;
-  clearDebugOutput: (projectId: string) => void;
   pushCommandToHistory: (projectId: string, command: string) => void;
   setSidebarWidth: (projectId: string, width: number) => void;
   toggleSidebar: (projectId: string) => void;
@@ -354,13 +324,8 @@ export const DEFAULT_GIT_STATE: GitState = {
   gitStatusLoaded: false,
 };
 
-export const DEFAULT_TERMINAL_STATE: TerminalState = {
-  sessions: [],
-  activeSessionId: null,
-};
-
 export const DEFAULT_UI_STATE: UiState = {
-  bottomPanelTab: "terminal",
+  bottomPanelTab: "run",
   bottomPanelHeight: 200,
   bottomPanelCollapsed: true,
   sidebarWidth: 290,
@@ -373,7 +338,6 @@ export const DEFAULT_UI_STATE: UiState = {
   lastExecutionSettingsHref: null,
   stdinInputText: "",
   problems: [],
-  debugOutput: [],
   commandHistory: [],
   outputFilterMode: "all",
   _prevBottomPanelCollapsed: undefined,
@@ -426,7 +390,6 @@ export function defaultWorkspace(): ProjectWorkspaceState {
     requestedScrollPosition: null,
 
     git: { ...DEFAULT_GIT_STATE },
-    terminal: { ...DEFAULT_TERMINAL_STATE },
     ui: { ...DEFAULT_UI_STATE },
   };
 }

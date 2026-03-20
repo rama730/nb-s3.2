@@ -2,8 +2,6 @@ import MessagesClient from '@/components/chat/MessagesClient';
 import { isMessagesHardeningEnabled } from '@/lib/features/messages';
 import { getViewerAuthContext } from '@/lib/server/viewer-context';
 
-export const dynamic = 'force-dynamic';
-
 export default async function MessagesPage({ searchParams }: { searchParams: Promise<{ [key: string]: string | string[] | undefined }> }) {
     // OPTIMIZATION: usage of "Instant Shell" pattern.
     // We do NOT fetch conversations or target user on the server.

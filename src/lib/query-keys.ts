@@ -42,6 +42,9 @@ export const queryKeys = {
     userProjectIds: (userId: string | null) => ["hub", "user-project-ids", asNullable(userId)] as const,
     projectPrefetch: (projectId: string) => ["hub", "project-prefetch", projectId] as const,
   },
+  connections: {
+    root: () => ["connections"] as const,
+  },
   messages: {
     conversations: () => ["chat", "conversations"] as const,
     targetUser: (userId: string) => ["chat", "targetUser", userId] as const,
@@ -77,5 +80,6 @@ export const queryKeys = {
     notifications: () => ["settings", "notifications"] as const,
     security: () => ["settings", "security"] as const,
     privacy: () => ["settings", "privacy"] as const,
+    integrations: () => ["settings", "integrations"] as const,
   },
 } as const;

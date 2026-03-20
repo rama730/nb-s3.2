@@ -92,7 +92,7 @@ test.describe("Files tab smoke", () => {
         await context.close();
     });
 
-    test("bottom panel: terminal, output, problems", async ({ browser }) => {
+    test("bottom panel: run, output, problems", async ({ browser }) => {
         const context = await browser.newContext();
         const page = await context.newPage();
         const monitor = attachPageMonitoring(page, {
@@ -109,36 +109,38 @@ test.describe("Files tab smoke", () => {
         // Wait for Files workspace to load (header Panel button)
         await expect(page.getByTestId("files-workspace-toolbar-panel-toggle").first()).toBeVisible({ timeout: 15000 });
 
-        // Expand bottom panel (if needed) and verify Terminal, Output, Problems tabs
-        const terminalTab = page.getByTestId("files-bottom-panel-tab-terminal").first();
-        const terminalAlreadyVisible = await terminalTab.isVisible().catch(() => false);
-        if (!terminalAlreadyVisible) {
+        // Expand bottom panel (if needed) and verify Run, Output, Problems tabs
+        const runTab = page.getByTestId("files-bottom-panel-tab-run").first();
+        const runAlreadyVisible = await runTab.isVisible().catch(() => false);
+        if (!runAlreadyVisible) {
             await page.getByTestId("files-workspace-toolbar-panel-toggle").first().click();
         }
-        await expect(page.getByTestId("files-bottom-panel-tab-terminal")).toBeVisible({ timeout: 5000 });
+        await expect(page.getByTestId("files-bottom-panel-tab-run")).toBeVisible({ timeout: 5000 });
         await expect(page.getByTestId("files-bottom-panel-tab-output").first()).toBeVisible();
         await expect(page.getByTestId("files-bottom-panel-tab-problems")).toBeVisible();
 
-        // Open Terminal tab and run a command (if command input is available)
-        await page.getByTestId("files-bottom-panel-tab-terminal").click();
+        // Open Run tab and run the current file or a custom command
+        await page.getByTestId("files-bottom-panel-tab-run").click();
 
-        const terminalInput = page.getByTestId("terminal-command-input");
-        if (await terminalInput.count()) {
-            await expect(terminalInput).toBeVisible({ timeout: 5000 });
-            await terminalInput.fill("python hello.py");
-            await terminalInput.press("Enter");
-
-            // Wait for execution (output appears or error)
-            await expect(
-                page.getByText(/\$ python hello\.py|Hello|File not found|error/i).first()
-            ).toBeVisible({ timeout: 20000 });
-
-            // Output tab shows execution result
-            await page.getByTestId("files-bottom-panel-tab-output").first().click();
-            await expect(page.getByText(/\$ python hello\.py|Hello|File not found|No output/i).first()).toBeVisible({ timeout: 5000 });
+        const runCurrentFile = page.getByRole("button", { name: /Run current file/i });
+        const runInput = page.getByTestId("run-command-input");
+        if (await runCurrentFile.count()) {
+            await runCurrentFile.click();
         } else {
-            await expect(page.getByText(/No terminal session|Waiting for output/i)).toBeVisible({ timeout: 5000 });
+            await page.getByRole("button", { name: /Custom command/i }).click();
+            await expect(runInput).toBeVisible({ timeout: 5000 });
+            await runInput.fill("python hello.py");
+            await page.getByRole("button", { name: /Run command/i }).click();
         }
+
+        // Wait for execution (output appears or error)
+        await expect(
+            page.getByText(/\$ python hello\.py|Hello|File not found|error/i).first()
+        ).toBeVisible({ timeout: 20000 });
+
+        // Output tab shows execution result
+        await page.getByTestId("files-bottom-panel-tab-output").first().click();
+        await expect(page.getByText(/\$ python hello\.py|Hello|File not found|No output/i).first()).toBeVisible({ timeout: 5000 });
 
         // Problems tab renders
         await page.getByTestId("files-bottom-panel-tab-problems").first().click();

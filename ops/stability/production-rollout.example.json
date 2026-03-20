@@ -1,0 +1,60 @@
+{
+  "preparedAt": "2026-03-12T00:00:00.000Z",
+  "environment": "production",
+  "owner": "release-owner",
+  "status": "pending",
+  "rollback": {
+    "owner": "incident-owner",
+    "command": "Set the prior deployment live and disable the rollout target.",
+    "dashboardUrl": "https://observability.example.com/dashboards/stability",
+    "alertPolicyUrl": "https://observability.example.com/alerts/stability"
+  },
+  "stages": [
+    {
+      "name": "10-percent",
+      "status": "pending",
+      "soakHours": 24,
+      "entryCriteria": [
+        "Staging release gate is green.",
+        "Load suite is green.",
+        "Capacity audit is approved."
+      ],
+      "exitCriteria": [
+        "No sustained error-rate increase.",
+        "Redis and database saturation remain within budget.",
+        "Presence service joins and worker-plane ingress remain healthy."
+      ]
+    },
+    {
+      "name": "50-percent",
+      "status": "pending",
+      "soakHours": 24,
+      "entryCriteria": [
+        "10% stage completed without blockers.",
+        "Auth, hub, workspace, and messages remain stable."
+      ],
+      "exitCriteria": [
+        "No reconnect storm instability.",
+        "Load-shedding stays within expected thresholds.",
+        "Worker-plane traffic remains isolated from shell latency."
+      ]
+    },
+    {
+      "name": "100-percent",
+      "status": "pending",
+      "soakHours": 72,
+      "entryCriteria": [
+        "50% stage completed without blockers.",
+        "Rollback owner is on call."
+      ],
+      "exitCriteria": [
+        "72h stability window is complete.",
+        "Final 1M readiness report is READY."
+      ]
+    }
+  ],
+  "notes": [
+    "Keep this file environment-specific and update statuses as the rollout advances.",
+    "Track presence service and worker-plane health explicitly during each canary stage."
+  ]
+}

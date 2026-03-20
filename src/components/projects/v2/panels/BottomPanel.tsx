@@ -2,14 +2,13 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
-import { Terminal, FileOutput, AlertTriangle, Bug, ChevronDown, ChevronUp, X } from "lucide-react";
+import { Play, FileOutput, AlertTriangle, ChevronDown, ChevronUp, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 import type { UiState, Problem } from "@/stores/files/types";
-import { TerminalTab } from "./TerminalTab";
+import { RunTab } from "./RunTab";
 import { OutputTab } from "./OutputTab";
 import { ProblemsTab } from "./ProblemsTab";
-import { DebugTab } from "./DebugTab";
 
 interface BottomPanelProps {
   projectId: string;
@@ -27,10 +26,9 @@ interface BottomPanelProps {
 type TabId = UiState["bottomPanelTab"];
 
 const TABS: { id: TabId; label: string; icon: React.ElementType }[] = [
-  { id: "terminal", label: "Terminal", icon: Terminal },
+  { id: "run", label: "Run", icon: Play },
   { id: "output", label: "Output", icon: FileOutput },
   { id: "problems", label: "Problems", icon: AlertTriangle },
-  { id: "debug", label: "Debug Console", icon: Bug },
 ];
 
 const MIN_HEIGHT = 100;
@@ -50,11 +48,9 @@ export function BottomPanel({
   const activeTab = useFilesWorkspaceStore((s) => s._get(projectId).ui.bottomPanelTab);
   const panelHeight = useFilesWorkspaceStore((s) => s._get(projectId).ui.bottomPanelHeight);
   const collapsed = useFilesWorkspaceStore((s) => s._get(projectId).ui.bottomPanelCollapsed);
-  const stdinInputText = useFilesWorkspaceStore((s) => s._get(projectId).ui.stdinInputText);
   const setTab = useFilesWorkspaceStore((s) => s.setBottomPanelTab);
   const setHeight = useFilesWorkspaceStore((s) => s.setBottomPanelHeight);
   const toggle = useFilesWorkspaceStore((s) => s.toggleBottomPanel);
-  const setStdinInputText = useFilesWorkspaceStore((s) => s.setStdinInputText);
 
   const panelRef = useRef<HTMLDivElement>(null);
   const dragStartRef = useRef<{ y: number; h: number } | null>(null);
@@ -145,6 +141,9 @@ export function BottomPanel({
 
       {/* Tab bar */}
       <div className="flex items-center gap-0.5 px-1 shrink-0 bg-zinc-50 dark:bg-zinc-900/50 border-b border-zinc-200 dark:border-zinc-800">
+        <span className="px-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-400">
+          Console
+        </span>
         {TABS.map((tab) => {
           const Icon = tab.icon;
           const isActive = activeTab === tab.id && !collapsed;
@@ -200,62 +199,16 @@ export function BottomPanel({
         </div>
       </div>
 
-      {/* Shared Input strip — visible for Terminal, Output, etc. conditionally */}
-      {!collapsed && (() => {
-        // Only show the input box if the file content seems to ask for input
-        let needsInput = false;
-        if (activeFileContent) {
-          const content = activeFileContent;
-          if (activeFilePath?.endsWith('.py') && /input\s*\(/.test(content)) needsInput = true;
-          if (activeFilePath?.endsWith('.java') && /new\s+Scanner\s*\(/.test(content)) needsInput = true;
-          if (activeFilePath?.endsWith('.js') && /readline|prompt/.test(content)) needsInput = true;
-          if (activeFilePath?.endsWith('.ts') && /readline|prompt/.test(content)) needsInput = true;
-          if (activeFilePath?.endsWith('.cpp') || activeFilePath?.endsWith('.c') || activeFilePath?.endsWith('.cc')) {
-            if (/cin\s*>>|scanf/.test(content)) needsInput = true;
-          }
-        }
-        
-        if (!needsInput) return null;
-
-        return (
-        <div
-          className="shrink-0 px-2 py-1.5 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-900/50"
-          title="Provide values for Python input() calls — one per line"
-        >
-          <label htmlFor={`stdin-${projectId}`} className="text-[10px] text-zinc-500 block mb-1">
-            Input (for input())
-            {activeFileContent &&
-              activeFilePath?.toLowerCase().endsWith(".py") &&
-              (() => {
-                const n = (activeFileContent.match(/input\s*\(/g) || []).length;
-                return n > 0 ? (
-                  <span className="ml-1">— Enter {n} value{n === 1 ? "" : "s"} (one per line)</span>
-                ) : null;
-              })()}
-          </label>
-          <textarea
-            id={`stdin-${projectId}`}
-            value={stdinInputText}
-            onChange={(e) => setStdinInputText(projectId, e.target.value)}
-            placeholder="e.g. 2 and 3 (one per line)"
-            rows={2}
-            className={cn(
-              "w-full resize-none px-2 py-1 text-[11px] font-mono",
-              "rounded border border-zinc-300 dark:border-zinc-700",
-              "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100",
-              "placeholder:text-zinc-400 dark:placeholder:text-zinc-500",
-              "focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
-            )}
-          />
-        </div>
-        );
-      })()}
-
       {/* Tab content — only the active tab renders */}
       {!collapsed && (
         <div className="flex-1 min-h-0 overflow-hidden">
-          {activeTab === "terminal" && (
-            <TerminalTab projectId={projectId} canEdit={canEdit} activeFilePath={activeFilePath} />
+          {activeTab === "run" && (
+            <RunTab
+              projectId={projectId}
+              canEdit={canEdit}
+              activeFilePath={activeFilePath}
+              activeFileContent={activeFileContent}
+            />
           )}
           {activeTab === "output" && <OutputTab projectId={projectId} onRun={onRun} />}
           {activeTab === "problems" && (
@@ -264,9 +217,6 @@ export function BottomPanel({
               problems={problems}
               onNavigateToFile={onNavigateToFile}
             />
-          )}
-          {activeTab === "debug" && (
-            <DebugTab projectId={projectId} />
           )}
         </div>
       )}

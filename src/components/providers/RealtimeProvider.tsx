@@ -1,51 +1,77 @@
 'use client';
 
-import { createContext, useContext, useEffect } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { useAuthContext } from '@/components/providers/AuthProvider';
+import { subscribeUserNotifications, type UserNotificationEvent } from '@/lib/realtime/subscriptions';
 
 interface RealtimeContextType {
     isConnected: boolean;
+    subscribeUserNotifications: (listener: (event: UserNotificationEvent) => void) => () => void;
 }
 
-const RealtimeContext = createContext<RealtimeContextType>({ isConnected: false });
+const RealtimeContext = createContext<RealtimeContextType>({
+    isConnected: false,
+    subscribeUserNotifications: () => () => { },
+});
 
 export function RealtimeProvider({ children }: { children: React.ReactNode }) {
     const { user, refreshProfile } = useAuthContext();
+    const [isConnected, setIsConnected] = useState(false);
+    const listenersRef = useRef(new Set<(event: UserNotificationEvent) => void>());
+
+    const handleUserNotification = useCallback((event: UserNotificationEvent) => {
+        if (event.kind === 'profile') {
+            void refreshProfile();
+        }
+
+        for (const listener of listenersRef.current) {
+            listener(event);
+        }
+    }, [refreshProfile]);
+
+    const registerUserNotificationListener = useCallback((listener: (event: UserNotificationEvent) => void) => {
+        listenersRef.current.add(listener);
+        return () => {
+            listenersRef.current.delete(listener);
+        };
+    }, []);
 
     useEffect(() => {
-        if (!user) return;
+        if (!user) {
+            setIsConnected(false);
+            listenersRef.current.clear();
+            return;
+        }
 
         const supabase = createClient();
         const userId = user.id;
 
-        // Keep this provider focused on profile synchronization only.
-        // Chat realtime is handled by useChatRealtime inside ChatProvider.
-        const channel = supabase.channel(`profile-${userId}`);
-
-        channel.on(
-            'postgres_changes',
-            {
-                event: '*',
-                schema: 'public',
-                table: 'profiles',
-                filter: `id=eq.${userId}`
+        const channel = subscribeUserNotifications({
+            supabase,
+            userId,
+            onEvent: handleUserNotification,
+            onStatus: (status: string) => {
+                setIsConnected(status === 'SUBSCRIBED');
             },
-            (payload: any) => {
-                console.log('[Realtime] Profile updated:', payload);
-                refreshProfile();
-            }
-        );
-
-        channel.subscribe();
+        });
 
         return () => {
+            setIsConnected(false);
             supabase.removeChannel(channel);
         };
-    }, [user, refreshProfile]);
+    }, [user, handleUserNotification]);
+
+    const value = useMemo(
+        () => ({
+            isConnected,
+            subscribeUserNotifications: registerUserNotificationListener,
+        }),
+        [isConnected, registerUserNotificationListener],
+    );
 
     return (
-        <RealtimeContext.Provider value={{ isConnected: true }}>
+        <RealtimeContext.Provider value={value}>
             {children}
         </RealtimeContext.Provider>
     );

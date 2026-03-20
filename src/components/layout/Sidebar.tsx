@@ -35,12 +35,13 @@ export function Sidebar() {
     return (
         <aside
             className={cn(
-                'hidden md:flex flex-col h-[calc(100vh-3.5rem)] sticky top-14 border-r bg-background transition-all duration-300',
+                'hidden md:flex flex-col sticky border-r bg-background transition-all duration-300',
                 sidebarCollapsed ? 'w-16' : 'w-64'
             )}
+            style={{ top: 'var(--ui-topnav-height)', height: 'calc(100vh - var(--ui-topnav-height))' }}
         >
             {/* Create button */}
-            <div className="p-3">
+            <div className="app-density-panel">
                 <Button
                     className={cn(
                         'w-full gap-2 transition-all',
@@ -67,9 +68,9 @@ export function Sidebar() {
                             href={item.href}
                             prefetch={true}
                             className={cn(
-                                'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors',
+                                'flex items-center gap-3 rounded-lg text-sm font-medium transition-colors app-density-nav-item',
                                 isActive
-                                    ? 'bg-primary text-primary-foreground'
+                                    ? 'app-selected-surface'
                                     : 'text-muted-foreground hover:text-foreground hover:bg-muted',
                                 sidebarCollapsed && 'justify-center px-0'
                             )}
@@ -93,9 +94,9 @@ export function Sidebar() {
                             href={item.href}
                             prefetch={true}
                             className={cn(
-                                'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors',
+                                'flex items-center gap-3 rounded-lg text-sm font-medium transition-colors app-density-nav-item',
                                 isActive
-                                    ? 'bg-primary text-primary-foreground'
+                                    ? 'app-selected-surface'
                                     : 'text-muted-foreground hover:text-foreground hover:bg-muted',
                                 sidebarCollapsed && 'justify-center px-0'
                             )}
@@ -108,7 +109,7 @@ export function Sidebar() {
             </div>
 
             {/* Collapse toggle */}
-            <div className="p-3 border-t">
+            <div className="app-density-panel border-t">
                 <Button
                     variant="ghost"
                     size="sm"

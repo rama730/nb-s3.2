@@ -3,8 +3,9 @@
 import React from 'react'
 import Image from 'next/image'
 import { cn } from '@/lib/utils'
-import { MapPin, Link2, Pencil, MessageSquare, UserPlus, UserCheck, UserMinus, Clock, Shield, Users } from 'lucide-react'
-import type { ConnectionState } from './types'
+import { Ban, Lock, MapPin, Link2, Pencil, MessageSquare, UserPlus, UserCheck, UserMinus, Clock, Shield, Users } from 'lucide-react'
+import { buildPrivacyPresentation } from '@/lib/privacy/presentation'
+import type { ConnectionState, ProfilePrivacyRelationship } from './types'
 import { normalizeProfileVM } from './utils/normalizeProfileVM'
 
 function Chip({ children, className }: { children: React.ReactNode; className?: string }) {
@@ -40,7 +41,7 @@ function PrimaryButton({
             className={cn(
                 'inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
                 variant === 'solid'
-                    ? 'bg-indigo-600 hover:bg-indigo-700 text-white'
+                    ? 'app-accent-solid hover:bg-primary/90 transition-[background-color,box-shadow]'
                     : 'border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 hover:bg-zinc-50 dark:hover:bg-zinc-700'
             )}
         >
@@ -59,9 +60,13 @@ export const ProfileHeader = React.memo(function ProfileHeader({
     onConnectSecondary,
     onMessage,
     onInvite,
+    onToggleBlock,
     isAdaptive = false,
     isLoadingConnection = false,
+    isBlocking = false,
     mutualCount = 0,
+    privacyRelationship,
+    lockedShell = false,
 }: {
     profile: any
     isOwner: boolean
@@ -72,9 +77,13 @@ export const ProfileHeader = React.memo(function ProfileHeader({
     onConnectSecondary?: () => void
     onMessage: () => void
     onInvite: () => void
+    onToggleBlock?: () => void
     isAdaptive?: boolean
     isLoadingConnection?: boolean
+    isBlocking?: boolean
     mutualCount?: number
+    privacyRelationship: ProfilePrivacyRelationship
+    lockedShell?: boolean
 }) {
     // CamelCase accessors
     const vm = normalizeProfileVM(profile)
@@ -109,6 +118,42 @@ export const ProfileHeader = React.memo(function ProfileHeader({
     const secondaryConnectIcon =
         connectionState === 'accepted' ? <UserMinus className="w-4 h-4" /> : <Clock className="w-4 h-4" />
 
+    const blockActionLabel = privacyRelationship.blockedByViewer ? 'Unblock' : 'Block'
+    const privacyPresentation = buildPrivacyPresentation({
+        viewerId: null,
+        targetUserId: profile.id,
+        isSelf: false,
+        isConnected: connectionState === 'accepted',
+        hasPendingIncomingRequest: connectionState === 'pending_incoming',
+        hasPendingOutgoingRequest: connectionState === 'pending_outgoing',
+        blockedByViewer: privacyRelationship.blockedByViewer,
+        blockedByTarget: privacyRelationship.blockedByTarget,
+        profileVisibility: profile.visibility || 'public',
+        messagePrivacy: privacyRelationship.canSendMessage ? 'everyone' : 'connections',
+        connectionPrivacy: privacyRelationship.canSendConnectionRequest ? 'everyone' : 'nobody',
+        canViewProfile: privacyRelationship.canViewProfile,
+        canSendConnectionRequest: privacyRelationship.canSendConnectionRequest,
+        canSendMessage: privacyRelationship.canSendMessage,
+        shouldHideFromDiscovery: false,
+        visibilityReason: privacyRelationship.visibilityReason,
+        connectionState:
+            privacyRelationship.connectionState === 'blocked_by_viewer'
+                ? 'blocked_by_viewer'
+                : privacyRelationship.connectionState === 'blocked_by_target'
+                    ? 'blocked_by_target'
+                    : privacyRelationship.connectionState === 'connected'
+                        ? 'connected'
+                        : privacyRelationship.connectionState === 'pending_incoming'
+                            ? 'pending_incoming'
+                            : privacyRelationship.connectionState === 'pending_outgoing'
+                                ? 'pending_outgoing'
+                                : 'none',
+        latestConnectionId: null,
+    })
+    const showConnectAction = !privacyRelationship.blockedByViewer && !privacyRelationship.blockedByTarget
+    const canMessage = privacyPresentation.canSendMessage && !privacyRelationship.blockedByViewer && !privacyRelationship.blockedByTarget
+    const lockLabel = privacyPresentation.relationshipBadgeText
+
     return (
         <div className="rounded-3xl overflow-hidden border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-sm">
             <div className="px-5 sm:px-8 py-6">
@@ -128,7 +173,7 @@ export const ProfileHeader = React.memo(function ProfileHeader({
                             ) : avatarSrc && isAdaptive ? (
                                 <Image src={avatarSrc} alt={name} fill className="object-cover" sizes="(max-width: 640px) 80px, 96px" />
                             ) : (
-                                <div className="w-full h-full flex items-center justify-center text-xl font-bold text-zinc-700 dark:text-zinc-200">
+                                <div className="w-full h-full app-accent-gradient flex items-center justify-center text-xl font-bold text-white">
                                     {String(name).slice(0, 1).toUpperCase()}
                                 </div>
                             )}
@@ -154,6 +199,12 @@ export const ProfileHeader = React.memo(function ProfileHeader({
                             ) : null}
 
                             <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-zinc-600 dark:text-zinc-400">
+                                {lockLabel ? (
+                                    <span className="inline-flex items-center gap-1 rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
+                                        <Lock className="w-3.5 h-3.5" />
+                                        {lockLabel}
+                                    </span>
+                                ) : null}
                                 {location ? (
                                     <span className="inline-flex items-center gap-1">
                                         <MapPin className="w-4 h-4" />
@@ -165,7 +216,7 @@ export const ProfileHeader = React.memo(function ProfileHeader({
                                         href={vm.website}
                                         target="_blank"
                                         rel="noopener noreferrer"
-                                        className="inline-flex items-center gap-1 hover:text-indigo-600 dark:hover:text-indigo-400"
+                                        className="inline-flex items-center gap-1 hover:text-primary"
                                     >
                                         <Link2 className="w-4 h-4" />
                                         {vm.website}
@@ -188,24 +239,41 @@ export const ProfileHeader = React.memo(function ProfileHeader({
                             </div>
                         ) : (
                             <>
-                                <PrimaryButton
-                                    onClick={onConnectPrimary}
-                                    disabled={!isAuthenticated && connectionState !== 'none'}
-                                >
-                                    {connectIcon}
-                                    {connectLabel}
-                                </PrimaryButton>
-                                <PrimaryButton onClick={onMessage} variant="outline" disabled={!isAuthenticated}>
-                                    <MessageSquare className="w-4 h-4" />
-                                    Message
-                                </PrimaryButton>
-                                <PrimaryButton onClick={onInvite} variant="outline" disabled={!isAuthenticated}>
-                                    Invite
-                                </PrimaryButton>
-                                {secondaryConnectLabel && onConnectSecondary ? (
-                                    <PrimaryButton onClick={onConnectSecondary} variant="outline">
-                                        {secondaryConnectIcon}
-                                        {secondaryConnectLabel}
+                                {showConnectAction ? (
+                                    <>
+                                        <PrimaryButton
+                                            onClick={onConnectPrimary}
+                                            disabled={!isAuthenticated || (!privacyRelationship.canSendConnectionRequest && connectionState === 'none')}
+                                        >
+                                            {connectIcon}
+                                            {connectLabel}
+                                        </PrimaryButton>
+                                        <PrimaryButton onClick={onMessage} variant="outline" disabled={!isAuthenticated || !canMessage}>
+                                            <MessageSquare className="w-4 h-4" />
+                                            Message
+                                        </PrimaryButton>
+                                        {!lockedShell ? (
+                                            <PrimaryButton onClick={onInvite} variant="outline" disabled={!isAuthenticated}>
+                                                Invite
+                                            </PrimaryButton>
+                                        ) : null}
+                                        {secondaryConnectLabel && onConnectSecondary ? (
+                                            <PrimaryButton onClick={onConnectSecondary} variant="outline">
+                                                {secondaryConnectIcon}
+                                                {secondaryConnectLabel}
+                                            </PrimaryButton>
+                                        ) : null}
+                                    </>
+                                ) : (
+                                    <Chip className="border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900 dark:bg-rose-950/20 dark:text-rose-300">
+                                        <Ban className="mr-1 w-3.5 h-3.5" />
+                                        {privacyPresentation.blockedBannerText || 'You cannot interact with this account'}
+                                    </Chip>
+                                )}
+                                {isAuthenticated && onToggleBlock && !privacyRelationship.blockedByTarget ? (
+                                    <PrimaryButton onClick={onToggleBlock} variant="outline" disabled={isBlocking}>
+                                        <Ban className="w-4 h-4" />
+                                        {blockActionLabel}
                                     </PrimaryButton>
                                 ) : null}
                             </>
@@ -213,11 +281,22 @@ export const ProfileHeader = React.memo(function ProfileHeader({
                     </div>
                 </div>
 
-                {openTo.length ? (
+                {!lockedShell && openTo.length ? (
                     <div className="mt-4 flex flex-wrap gap-2">
                         {openTo.slice(0, 8).map((item: string) => (
                             <Chip key={item}>{item}</Chip>
                         ))}
+                    </div>
+                ) : null}
+                {lockedShell ? (
+                    <div className="mt-4 rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-zinc-600 dark:border-zinc-800 dark:bg-zinc-950/40 dark:text-zinc-300">
+                        {privacyRelationship.blockedByViewer
+                            ? `${privacyPresentation.blockedBannerText}. Their profile remains limited until you unblock them.`
+                            : privacyRelationship.blockedByTarget
+                                ? 'This account is not available for profile viewing or interaction.'
+                                : privacyRelationship.visibilityReason === 'connections_only'
+                                    ? 'Only accepted connections can view the full profile.'
+                                    : 'This account is private. Limited identity is shown until you are allowed to view more.'}
                     </div>
                 ) : null}
             </div>

@@ -14,7 +14,7 @@ import {
 } from '@/lib/db/schema';
 import { createClient } from '@/lib/supabase/server';
 import { eq, and, ne, or, inArray, sql, lt, desc, lte, isNull } from 'drizzle-orm';
-import { getConversations, type ConversationWithDetails } from './messaging';
+import { getConversations, type ConversationWithDetails } from './messaging/conversations';
 import { getPendingRequests } from './connections';
 import { getInboxApplicationsAction, getIncomingApplicationsAction } from './applications';
 import { workspaceLayoutSchema } from '@/components/workspace/dashboard/validation';
@@ -245,159 +245,6 @@ function sanitizePins(raw: unknown): WorkspacePinnedItem[] {
         .slice(0, 10);
 }
 
-// ============================================================================
-// getWorkspaceOverview — Server-prefetch for the Overview tab
-// Runs 4 parallel queries in a single round trip to the DB pool.
-// ============================================================================
-
-export async function getWorkspaceOverview(): Promise<{
-    success: boolean;
-    error?: string;
-    data?: WorkspaceOverviewData;
-}> {
-    try {
-        const user = await getAuthUser();
-        if (!user) return { success: false, error: 'Not authenticated' };
-        return await runInFlightDeduped(`workspace:overview:${user.id}`, async () => {
-
-            const now = new Date();
-            const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
-            const taskCountsByProject = db
-                .select({
-                    projectId: tasks.projectId,
-                    openTaskCount: sql<number>`count(*) FILTER (WHERE ${tasks.status} != 'done')::int`.as('open_task_count'),
-                    totalTaskCount: sql<number>`count(*)::int`.as('total_task_count'),
-                })
-                .from(tasks)
-                .groupBy(tasks.projectId)
-                .as('task_counts_by_project');
-
-            const activeSprintByProject = db
-                .select({
-                    projectId: projectSprints.projectId,
-                    activeSprintTitle: sql<string | null>`max(${projectSprints.name})`.as('active_sprint_title'),
-                })
-                .from(projectSprints)
-                .where(eq(projectSprints.status, 'active'))
-                .groupBy(projectSprints.projectId)
-                .as('active_sprint_by_project');
-
-            const [myTasks, myProjects, convResult, dueCountResult, inboxCountResult, recentActivity, layoutResult] = await Promise.all([
-            // Query 1: My active tasks across all projects (JOIN, single query)
-            db
-                .select({
-                    id: tasks.id,
-                    title: tasks.title,
-                    status: tasks.status,
-                    priority: tasks.priority,
-                    dueDate: tasks.dueDate,
-                    taskNumber: tasks.taskNumber,
-                    projectId: tasks.projectId,
-                    createdAt: tasks.createdAt,
-                    projectTitle: projects.title,
-                    projectSlug: projects.slug,
-                    projectKey: projects.key,
-                })
-                .from(tasks)
-                .innerJoin(projects, eq(tasks.projectId, projects.id))
-                .where(
-                    and(
-                        eq(tasks.assigneeId, user.id),
-                        inArray(tasks.status, ['todo', 'in_progress']),
-                    )
-                )
-                .orderBy(
-                    sql`CASE ${tasks.priority} WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 END`,
-                    sql`${tasks.dueDate} ASC NULLS LAST`
-                )
-                .limit(10),
-
-            // Query 2: My projects with open task counts and active sprint
-            db
-                .select({
-                    id: projects.id,
-                    title: projects.title,
-                    shortDescription: projects.shortDescription,
-                    slug: projects.slug,
-                    key: projects.key,
-                    status: projects.status,
-                    coverImage: projects.coverImage,
-                    currentStageIndex: projects.currentStageIndex,
-                    role: projectMembers.role,
-                    openTaskCount: sql<number>`COALESCE(${taskCountsByProject.openTaskCount}, 0)::int`,
-                    totalTaskCount: sql<number>`COALESCE(${taskCountsByProject.totalTaskCount}, 0)::int`,
-                    activeSprintTitle: activeSprintByProject.activeSprintTitle,
-                })
-                .from(projectMembers)
-                .innerJoin(projects, eq(projectMembers.projectId, projects.id))
-                .leftJoin(taskCountsByProject, eq(taskCountsByProject.projectId, projects.id))
-                .leftJoin(activeSprintByProject, eq(activeSprintByProject.projectId, projects.id))
-                .where(
-                    and(
-                        eq(projectMembers.userId, user.id),
-                        ne(projects.status, 'archived'),
-                    )
-                )
-                .orderBy(desc(projectMembers.joinedAt)),
-
-            // Query 3: Recent conversations (reuse existing optimized action, limit 5)
-            getConversations(5),
-
-            // Query 4: Tasks due today count (single aggregate, instant)
-            db
-                .select({ count: sql<number>`count(*)::int` })
-                .from(tasks)
-                .where(
-                    and(
-                        eq(tasks.assigneeId, user.id),
-                        ne(tasks.status, 'done'),
-                        lte(tasks.dueDate, todayEnd),
-                    )
-                ),
-
-            // Query 5: Pending inbox count (connections waiting for user)
-            db
-                .select({ count: sql<number>`count(*)::int` })
-                .from(connections)
-                .where(
-                    and(
-                        eq(connections.addresseeId, user.id),
-                        eq(connections.status, 'pending'),
-                    )
-                ),
-
-            // Query 6: Recent activity (events from others that affect this user)
-            getRecentActivityForOverview(user.id),
-
-            // Query 7: Workspace layout (single column from profiles, PK lookup — O(1))
-            db
-                .select({ workspaceLayout: profiles.workspaceLayout })
-                .from(profiles)
-                .where(eq(profiles.id, user.id))
-                .limit(1),
-        ]);
-
-            return {
-                success: true,
-                data: {
-                    tasks: myTasks as WorkspaceTask[],
-                    projects: myProjects as WorkspaceProject[],
-                    conversations: convResult.conversations ?? [],
-                    tasksDueCount: dueCountResult[0]?.count ?? 0,
-                    inboxCount: inboxCountResult[0]?.count ?? 0,
-                    recentActivity,
-                    workspaceLayout: layoutResult[0]?.workspaceLayout
-                        ? parseWorkspaceLayout(layoutResult[0].workspaceLayout)
-                        : null,
-                },
-            };
-        });
-    } catch (error) {
-        console.error('[getWorkspaceOverview] Error:', error);
-        return { success: false, error: 'Failed to load workspace data' };
-    }
-}
-
 export async function getWorkspaceOverviewBase(): Promise<{
     success: boolean;
     error?: string;
@@ -408,48 +255,18 @@ export async function getWorkspaceOverviewBase(): Promise<{
         if (!user) return { success: false, error: 'Not authenticated' };
         return await runInFlightDeduped(`workspace:overview-base:${user.id}`, async () => {
             const startedAt = performance.now();
-            const now = new Date();
-            const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
-
-            const [overdueCountRows, inProgressCountRows, dueCountRows, inboxCountRows, projectRefsRows, layoutRow] = await Promise.all([
+            const [profileRows, projectRefsRows] = await Promise.all([
                 db
-                    .select({ count: sql<number>`count(*)::int` })
-                    .from(tasks)
-                    .where(
-                        and(
-                            eq(tasks.assigneeId, user.id),
-                            ne(tasks.status, 'done'),
-                            lt(tasks.dueDate, now),
-                        )
-                    ),
-                db
-                    .select({ count: sql<number>`count(*)::int` })
-                    .from(tasks)
-                    .where(
-                        and(
-                            eq(tasks.assigneeId, user.id),
-                            eq(tasks.status, 'in_progress'),
-                        )
-                    ),
-                db
-                    .select({ count: sql<number>`count(*)::int` })
-                    .from(tasks)
-                    .where(
-                        and(
-                            eq(tasks.assigneeId, user.id),
-                            ne(tasks.status, 'done'),
-                            lte(tasks.dueDate, todayEnd),
-                        )
-                    ),
-                db
-                    .select({ count: sql<number>`count(*)::int` })
-                    .from(connections)
-                    .where(
-                        and(
-                            eq(connections.addresseeId, user.id),
-                            eq(connections.status, 'pending'),
-                        )
-                    ),
+                    .select({
+                        workspaceLayout: profiles.workspaceLayout,
+                        workspaceInboxCount: profiles.workspaceInboxCount,
+                        workspaceDueTodayCount: profiles.workspaceDueTodayCount,
+                        workspaceOverdueCount: profiles.workspaceOverdueCount,
+                        workspaceInProgressCount: profiles.workspaceInProgressCount,
+                    })
+                    .from(profiles)
+                    .where(eq(profiles.id, user.id))
+                    .limit(1),
                 db
                     .select({
                         id: projects.id,
@@ -467,14 +284,10 @@ export async function getWorkspaceOverviewBase(): Promise<{
                     )
                     .orderBy(desc(projectMembers.joinedAt))
                     .limit(40),
-                db
-                    .select({ workspaceLayout: profiles.workspaceLayout })
-                    .from(profiles)
-                    .where(eq(profiles.id, user.id))
-                    .limit(1),
             ]);
 
-            const rawLayout = layoutRow[0]?.workspaceLayout;
+            const profileRow = profileRows[0];
+            const rawLayout = profileRow?.workspaceLayout;
             const layout = rawLayout ? parseWorkspaceLayout(rawLayout) : null;
 
             logWorkspaceMetric('workspace.base.fetch_ms', startedAt, user.id);
@@ -482,10 +295,10 @@ export async function getWorkspaceOverviewBase(): Promise<{
                 success: true,
                 data: {
                     workspaceLayout: layout,
-                    tasksDueCount: dueCountRows[0]?.count ?? 0,
-                    inboxCount: inboxCountRows[0]?.count ?? 0,
-                    overdueCount: overdueCountRows[0]?.count ?? 0,
-                    inProgressCount: inProgressCountRows[0]?.count ?? 0,
+                    tasksDueCount: profileRow?.workspaceDueTodayCount ?? 0,
+                    inboxCount: profileRow?.workspaceInboxCount ?? 0,
+                    overdueCount: profileRow?.workspaceOverdueCount ?? 0,
+                    inProgressCount: profileRow?.workspaceInProgressCount ?? 0,
                     projectRefs: projectRefsRows,
                 },
             };

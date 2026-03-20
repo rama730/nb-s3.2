@@ -6,8 +6,7 @@ import {
   logApiRoute,
   requireAuthenticatedUser,
 } from "@/app/api/v1/_shared";
-import { db } from "@/lib/db";
-import { sql } from "drizzle-orm";
+import { listLoginHistory } from "@/lib/security/session-activity";
 
 type LoginHistoryEntry = {
   id: string;
@@ -15,6 +14,7 @@ type LoginHistoryEntry = {
   user_agent: string;
   created_at: string;
   location?: string;
+  aal?: "aal1" | "aal2" | null;
 };
 
 export async function GET(request: Request) {
@@ -58,32 +58,7 @@ export async function GET(request: Request) {
   }
 
   try {
-    const rows = await db.execute<{
-      id: string;
-      ip: string | null;
-      user_agent: string | null;
-      created_at: Date | string;
-    }>(sql`
-      SELECT
-        id::text AS id,
-        ip,
-        user_agent,
-        created_at
-      FROM auth.sessions
-      WHERE user_id = ${auth.user.id}::uuid
-      ORDER BY created_at DESC
-      LIMIT 20
-    `);
-
-    const history: LoginHistoryEntry[] = rows.map((row) => ({
-      id: row.id,
-      ip_address: row.ip?.trim() || "unknown",
-      user_agent: row.user_agent?.trim() || "Unknown device",
-      created_at:
-        typeof row.created_at === "string"
-          ? row.created_at
-          : row.created_at.toISOString(),
-    }));
+    const history: LoginHistoryEntry[] = await listLoginHistory(auth.user.id, 20);
 
     logApiRoute(request, {
       requestId,

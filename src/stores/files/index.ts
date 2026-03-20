@@ -16,7 +16,6 @@ import { createFilesSlice } from "./filesSlice";
 import { createEditorSlice } from "./editorSlice";
 import { createLocksSlice } from "./locksSlice";
 import { createGitSlice } from "./gitSlice";
-import { createTerminalSlice } from "./terminalSlice";
 import { createUiSlice } from "./uiSlice";
 
 export const useFilesWorkspaceStore = create<FilesWorkspaceState>()(
@@ -43,7 +42,6 @@ export const useFilesWorkspaceStore = create<FilesWorkspaceState>()(
       ...createEditorSlice(set, get, api),
       ...createLocksSlice(set, get, api),
       ...createGitSlice(set, get, api),
-      ...createTerminalSlice(set, get, api),
       ...createUiSlice(set, get, api),
     }),
     {
@@ -136,8 +134,6 @@ export type {
   ProjectWorkspaceState,
   FilesWorkspaceState,
   GitState,
-  TerminalSession,
-  TerminalState,
   UiState,
 } from "./types";
 
@@ -147,7 +143,6 @@ export {
   FALLBACK_WORKSPACE,
   DEFAULT_PREFS,
   DEFAULT_GIT_STATE,
-  DEFAULT_TERMINAL_STATE,
   DEFAULT_UI_STATE,
   ROOT_KEY,
   parentKey,

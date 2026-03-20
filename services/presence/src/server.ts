@@ -1,0 +1,482 @@
+import { createServer } from "node:http";
+import { randomUUID } from "node:crypto";
+
+import { WebSocketServer, WebSocket } from "ws";
+
+import { recordOtlpMetric } from "../../../src/lib/telemetry/otlp";
+import { getRedisClient } from "../../../src/lib/redis";
+import { verifyPresenceToken, type PresenceTokenClaims } from "../../../src/lib/realtime/presence-token";
+import type {
+  PresenceClientEvent,
+  PresenceMemberProfile,
+  PresenceMemberState,
+  PresenceRoomType,
+  PresenceServerEvent,
+} from "../../../src/lib/realtime/presence-types";
+
+const PRESENCE_SERVICE_PORT = Number(process.env.PRESENCE_SERVICE_PORT || 4010);
+const PRESENCE_TTL_SECONDS = 45;
+
+type Subscriber<TMessage = unknown> = {
+  on: (type: "message" | "error", listener: (event: any) => void) => void;
+  unsubscribe: (channels?: string[]) => Promise<void>;
+};
+
+type RoomKeys = {
+  roomKey: string;
+  memberIndexKey: string;
+  channelKey: string;
+};
+
+type RoomConnectionContext = {
+  connectionId: string;
+  claims: PresenceTokenClaims;
+  roomKeys: RoomKeys;
+  memberKey: string;
+  state: PresenceMemberState;
+};
+
+type LocalRoom = {
+  roomKeys: RoomKeys;
+  sockets: Set<WebSocket>;
+  subscriber: Subscriber<PresenceServerEvent> | null;
+};
+
+const redisClient = getRedisClient();
+if (!redisClient) {
+  throw new Error("Upstash Redis is required for the dedicated presence service");
+}
+const redis = redisClient;
+
+const rooms = new Map<string, LocalRoom>();
+const socketContexts = new WeakMap<WebSocket, RoomConnectionContext>();
+
+function emitMetric(name: string, payload: Record<string, unknown>) {
+  recordOtlpMetric(name, payload);
+  if (process.env.NODE_ENV !== "production") {
+    console.info("[presence]", name, payload);
+  }
+}
+
+function buildRoomKeys(claims: Pick<PresenceTokenClaims, "roomType" | "roomId">): RoomKeys {
+  const roomKey = `${claims.roomType}:${claims.roomId}`;
+  return {
+    roomKey,
+    memberIndexKey: `presence:room:${roomKey}:members`,
+    channelKey: `presence:room:${roomKey}:events`,
+  };
+}
+
+function buildMemberKey(roomKeys: RoomKeys, connectionId: string) {
+  return `presence:room:${roomKeys.roomKey}:member:${connectionId}`;
+}
+
+function toPresenceState(input: {
+  claims: PresenceTokenClaims;
+  connectionId: string;
+  cursorFrame?: string | null;
+  typing?: boolean;
+  userName?: string | null;
+  profile?: PresenceMemberProfile | null;
+}) {
+  return {
+    connectionId: input.connectionId,
+    userId: input.claims.userId,
+    sessionId: input.claims.sessionId,
+    roomType: input.claims.roomType,
+    roomId: input.claims.roomId,
+    role: input.claims.role,
+    lastSeenAt: Date.now(),
+    cursorFrame: input.cursorFrame ?? null,
+    typing: input.typing ?? false,
+    userName: input.userName ?? null,
+    profile: input.profile ?? null,
+  } satisfies PresenceMemberState;
+}
+
+async function persistMemberState(context: RoomConnectionContext) {
+  await redis.set(context.memberKey, JSON.stringify(context.state), { ex: PRESENCE_TTL_SECONDS });
+  await redis.sadd(context.roomKeys.memberIndexKey, context.memberKey);
+  await redis.expire(context.roomKeys.memberIndexKey, PRESENCE_TTL_SECONDS * 2);
+}
+
+async function removeMemberState(context: RoomConnectionContext) {
+  await redis.del(context.memberKey);
+  await redis.srem(context.roomKeys.memberIndexKey, context.memberKey);
+}
+
+async function readRoomMembers(roomKeys: RoomKeys) {
+  const memberKeys = await redis.smembers<string[]>(roomKeys.memberIndexKey);
+  if (!Array.isArray(memberKeys) || memberKeys.length === 0) {
+    return [] as PresenceMemberState[];
+  }
+
+  const members = await Promise.all(
+    memberKeys.map(async (memberKey) => {
+      const raw = await redis.get<string>(memberKey);
+      if (!raw) {
+        await redis.srem(roomKeys.memberIndexKey, memberKey);
+        return null;
+      }
+
+      try {
+        return JSON.parse(raw) as PresenceMemberState;
+      } catch {
+        await redis.del(memberKey);
+        await redis.srem(roomKeys.memberIndexKey, memberKey);
+        return null;
+      }
+    }),
+  );
+
+  return members.filter((member): member is PresenceMemberState => Boolean(member));
+}
+
+function sendJson(socket: WebSocket, event: PresenceServerEvent) {
+  if (socket.readyState !== WebSocket.OPEN) return;
+  socket.send(JSON.stringify(event));
+}
+
+function broadcastRoom(room: LocalRoom, event: PresenceServerEvent) {
+  for (const socket of room.sockets) {
+    sendJson(socket, event);
+  }
+}
+
+async function publishPresenceEvent(roomKeys: RoomKeys, event: PresenceServerEvent) {
+  await redis.publish(roomKeys.channelKey, JSON.stringify(event));
+}
+
+async function ensureRoom(roomKeys: RoomKeys) {
+  const existing = rooms.get(roomKeys.roomKey);
+  if (existing) return existing;
+
+  const room: LocalRoom = {
+    roomKeys,
+    sockets: new Set(),
+    subscriber: null,
+  };
+  rooms.set(roomKeys.roomKey, room);
+
+  const subscriber = (redis as unknown as {
+    subscribe: <TMessage>(channel: string | string[]) => Subscriber<TMessage>;
+  }).subscribe<PresenceServerEvent>(roomKeys.channelKey);
+  room.subscriber = subscriber;
+  subscriber.on("message", (event: { message?: PresenceServerEvent | string }) => {
+    try {
+      const payload = typeof event.message === "string"
+        ? JSON.parse(event.message) as PresenceServerEvent
+        : event.message;
+      if (!payload) return;
+      broadcastRoom(room, payload);
+    } catch (error) {
+      console.warn("[presence] room subscriber message parse failed", {
+        roomKey: roomKeys.roomKey,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      emitMetric("presence.room.subscriber_message_parse_failed", {
+        roomKey: roomKeys.roomKey,
+        value: 1,
+      });
+    }
+  });
+  subscriber.on("error", (error: Error) => {
+    console.warn("[presence] room subscriber error", {
+      roomKey: roomKeys.roomKey,
+      error: error.message,
+    });
+    emitMetric("presence.room.subscriber_error", {
+      roomKey: roomKeys.roomKey,
+      value: 1,
+    });
+  });
+
+  return room;
+}
+
+async function cleanupRoom(roomKeys: RoomKeys) {
+  const room = rooms.get(roomKeys.roomKey);
+  if (!room || room.sockets.size > 0) return;
+  if (room.subscriber) {
+    await room.subscriber.unsubscribe([roomKeys.channelKey]).catch(() => null);
+  }
+  rooms.delete(roomKeys.roomKey);
+}
+
+function buildAck(context: RoomConnectionContext, ackType: "heartbeat" | "cursor" | "typing"): PresenceServerEvent {
+  return {
+    type: "ack",
+    ackType,
+    roomType: context.claims.roomType,
+    roomId: context.claims.roomId,
+    serverTime: Date.now(),
+  };
+}
+
+async function handlePresenceEvent(socket: WebSocket, event: PresenceClientEvent) {
+  const context = socketContexts.get(socket);
+  if (!context) {
+    sendJson(socket, {
+      type: "error",
+      code: "UNAUTHORIZED",
+      message: "Presence connection context is missing.",
+    });
+    return;
+  }
+
+  context.state.lastSeenAt = Date.now();
+
+  switch (event.type) {
+    case "heartbeat": {
+      await persistMemberState(context);
+      sendJson(socket, buildAck(context, "heartbeat"));
+      return;
+    }
+    case "cursor": {
+      if (context.claims.roomType === "workspace" && context.claims.role !== "editor") {
+        sendJson(socket, {
+          type: "error",
+          code: "UNAUTHORIZED",
+          message: "Workspace cursor updates require editor access.",
+        });
+        return;
+      }
+      context.state.cursorFrame = event.frame;
+      context.state.userName = event.userName ?? context.state.userName;
+      await persistMemberState(context);
+      const delta: PresenceServerEvent = {
+        type: "presence.delta",
+        action: "upsert",
+        roomType: context.claims.roomType,
+        roomId: context.claims.roomId,
+        member: context.state,
+      };
+      await publishPresenceEvent(context.roomKeys, delta);
+      sendJson(socket, buildAck(context, "cursor"));
+      emitMetric("presence.room.cursor", {
+        roomType: context.claims.roomType,
+        roomId: context.claims.roomId,
+        value: 1,
+      });
+      return;
+    }
+    case "typing": {
+      context.state.typing = event.isTyping;
+      context.state.profile = event.profile ?? context.state.profile;
+      await persistMemberState(context);
+      const delta: PresenceServerEvent = {
+        type: "presence.delta",
+        action: "upsert",
+        roomType: context.claims.roomType,
+        roomId: context.claims.roomId,
+        member: context.state,
+      };
+      await publishPresenceEvent(context.roomKeys, delta);
+      sendJson(socket, buildAck(context, "typing"));
+      emitMetric("presence.room.typing", {
+        roomType: context.claims.roomType,
+        roomId: context.claims.roomId,
+        value: 1,
+      });
+      return;
+    }
+    default: {
+      sendJson(socket, {
+        type: "error",
+        code: "BAD_PAYLOAD",
+        message: "Unsupported presence event.",
+      });
+    }
+  }
+}
+
+async function initializePresenceConnection(websocket: WebSocket, claims: PresenceTokenClaims) {
+  const roomKeys = buildRoomKeys(claims);
+  const room = await ensureRoom(roomKeys);
+  const connectionId = randomUUID();
+  const memberKey = buildMemberKey(roomKeys, connectionId);
+  const state = toPresenceState({
+    claims,
+    connectionId,
+  });
+
+  const context: RoomConnectionContext = {
+    connectionId,
+    claims,
+    roomKeys,
+    memberKey,
+    state,
+  };
+  socketContexts.set(websocket, context);
+  room.sockets.add(websocket);
+
+  try {
+    await persistMemberState(context);
+
+    const snapshotMembers = await readRoomMembers(roomKeys);
+    sendJson(websocket, {
+      type: "presence.state",
+      roomType: claims.roomType,
+      roomId: claims.roomId,
+      members: snapshotMembers,
+    });
+
+    await publishPresenceEvent(roomKeys, {
+      type: "presence.delta",
+      action: "upsert",
+      roomType: claims.roomType,
+      roomId: claims.roomId,
+      member: state,
+    });
+
+    emitMetric("presence.room.join", {
+      roomType: claims.roomType,
+      roomId: claims.roomId,
+      value: 1,
+    });
+
+    websocket.on("message", (message) => {
+      void (async () => {
+        let payload: PresenceClientEvent;
+        try {
+          payload = JSON.parse(message.toString()) as PresenceClientEvent;
+        } catch (error) {
+          sendJson(websocket, {
+            type: "error",
+            code: "BAD_PAYLOAD",
+            message: error instanceof Error ? error.message : "Malformed presence payload.",
+          });
+          return;
+        }
+
+        try {
+          await handlePresenceEvent(websocket, payload);
+        } catch (error) {
+          sendJson(websocket, {
+            type: "error",
+            code: "INTERNAL",
+            message: "Presence event handling failed.",
+          });
+          emitMetric("presence.room.event_error", {
+            roomType: claims.roomType,
+            roomId: claims.roomId,
+            value: 1,
+          });
+          closeSocket(websocket, 1011, "Presence event handling failed");
+        }
+      })();
+    });
+
+    websocket.on("close", () => {
+      void (async () => {
+        room.sockets.delete(websocket);
+        const closedContext = socketContexts.get(websocket);
+        if (!closedContext) {
+          await cleanupRoom(roomKeys);
+          return;
+        }
+
+        await removeMemberState(closedContext);
+        await publishPresenceEvent(roomKeys, {
+          type: "presence.delta",
+          action: "leave",
+          roomType: closedContext.claims.roomType,
+          roomId: closedContext.claims.roomId,
+          member: closedContext.state,
+        }).catch(() => null);
+
+        emitMetric("presence.room.leave", {
+          roomType: closedContext.claims.roomType,
+          roomId: closedContext.claims.roomId,
+          value: 1,
+        });
+
+        await cleanupRoom(roomKeys);
+      })().catch((error) => {
+        console.warn("[presence] close cleanup failed", {
+          roomType: claims.roomType,
+          roomId: claims.roomId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    });
+
+    websocket.on("error", () => {
+      closeSocket(websocket, 1011, "Presence connection error");
+    });
+  } catch (error) {
+    room.sockets.delete(websocket);
+    socketContexts.delete(websocket);
+    await removeMemberState(context).catch(() => null);
+    await cleanupRoom(roomKeys).catch(() => null);
+    throw error;
+  }
+}
+
+function closeSocket(socket: WebSocket, code: number, message: string) {
+  try {
+    socket.close(code, message);
+  } catch {
+    socket.terminate();
+  }
+}
+
+const server = createServer((request, response) => {
+  if (request.url === "/health") {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
+  response.writeHead(404, { "content-type": "application/json" });
+  response.end(JSON.stringify({ ok: false, error: "Not found" }));
+});
+
+const websocketServer = new WebSocketServer({ noServer: true });
+
+server.on("upgrade", async (request, socket, head) => {
+  try {
+    const requestUrl = new URL(request.url || "/", "http://presence.local");
+    if (requestUrl.pathname !== "/ws") {
+      socket.destroy();
+      return;
+    }
+
+    const token = requestUrl.searchParams.get("token")?.trim() || "";
+    if (!token) {
+      socket.destroy();
+      return;
+    }
+
+    let claims: PresenceTokenClaims;
+    try {
+      claims = verifyPresenceToken(token);
+    } catch (error) {
+      socket.destroy(error instanceof Error ? error : undefined);
+      return;
+    }
+
+    websocketServer.handleUpgrade(request, socket, head, (websocket) => {
+      void initializePresenceConnection(websocket, claims).catch((error) => {
+        console.error("[presence] connection initialization failed", {
+          roomType: claims.roomType,
+          roomId: claims.roomId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        emitMetric("presence.room.join_failed", {
+          roomType: claims.roomType,
+          roomId: claims.roomId,
+          value: 1,
+        });
+        closeSocket(websocket, 1011, "Presence connection setup failed");
+      });
+    });
+  } catch (error) {
+    console.error("[presence] upgrade failed", error);
+    socket.destroy();
+  }
+});
+
+server.listen(PRESENCE_SERVICE_PORT, () => {
+  console.info(`[presence] listening on :${PRESENCE_SERVICE_PORT}`);
+});

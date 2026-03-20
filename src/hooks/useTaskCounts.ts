@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { useRealtime } from "@/components/providers/RealtimeProvider";
+import { subscribeTaskResource } from "@/lib/realtime/task-resource";
 import { countTaskAttachments } from "@/app/actions/files";
+import { createVisibilityAwareInterval } from "@/lib/utils/visibility";
 
 type TaskCounts = {
     subtasks: number;
@@ -18,8 +21,10 @@ export function useTaskCounts(taskId: string) {
     const [counts, setCounts] = useState<TaskCounts>(EMPTY_COUNTS);
     const [isLoading, setIsLoading] = useState(true);
     const supabase = useMemo(() => createClient(), []);
+    const { isConnected } = useRealtime();
     const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const isMountedRef = useRef(true);
+    const [resourceConnected, setResourceConnected] = useState(false);
 
     useEffect(() => {
         isMountedRef.current = true;
@@ -77,40 +82,89 @@ export function useTaskCounts(taskId: string) {
     useEffect(() => {
         if (!taskId) return;
 
-        const subtasksChannel = supabase
-            .channel(`task_counts_subtasks:${taskId}`)
-            .on(
-                "postgres_changes",
-                { event: "*", schema: "public", table: "task_subtasks", filter: `task_id=eq.${taskId}` },
-                scheduleRefresh
-            )
-            .subscribe();
+        const unsubscribe = subscribeTaskResource({
+            taskId,
+            onEvent: (event) => {
+                const nextPayload = event.payload.new as Record<string, unknown> | undefined
+                const previousPayload = event.payload.old as Record<string, unknown> | undefined
 
-        const commentsChannel = supabase
-            .channel(`task_counts_comments:${taskId}`)
-            .on(
-                "postgres_changes",
-                { event: "*", schema: "public", table: "task_comments", filter: `task_id=eq.${taskId}` },
-                scheduleRefresh
-            )
-            .subscribe();
+                if (event.kind === "subtask") {
+                    setCounts((prev) => ({
+                        ...prev,
+                        subtasks: Math.max(
+                            0,
+                            prev.subtasks + (
+                                event.payload.eventType === "INSERT"
+                                    ? 1
+                                    : event.payload.eventType === "DELETE"
+                                        ? -1
+                                        : 0
+                            ),
+                        ),
+                    }));
+                    return;
+                }
 
-        const attachmentsChannel = supabase
-            .channel(`task_counts_attachments:${taskId}`)
-            .on(
-                "postgres_changes",
-                { event: "*", schema: "public", table: "task_node_links", filter: `task_id=eq.${taskId}` },
-                scheduleRefresh
-            )
-            .subscribe();
+                if (event.kind === "comment") {
+                    setCounts((prev) => ({
+                        ...prev,
+                        comments: Math.max(
+                            0,
+                            prev.comments + (
+                                event.payload.eventType === "INSERT"
+                                    ? 1
+                                    : event.payload.eventType === "DELETE"
+                                        ? -1
+                                        : 0
+                            ),
+                        ),
+                    }));
+                    return;
+                }
+
+                if (event.kind === "attachment_link") {
+                    const nextTaskId = typeof nextPayload?.task_id === "string" ? nextPayload.task_id : null;
+                    const previousTaskId = typeof previousPayload?.task_id === "string" ? previousPayload.task_id : null;
+                    const delta =
+                        event.payload.eventType === "INSERT" && nextTaskId === taskId
+                            ? 1
+                            : event.payload.eventType === "DELETE" && previousTaskId === taskId
+                                ? -1
+                                : 0;
+
+                    if (delta === 0) {
+                        scheduleRefresh();
+                        return;
+                    }
+
+                    setCounts((prev) => ({
+                        ...prev,
+                        files: Math.max(0, prev.files + delta),
+                    }));
+                }
+            },
+            onStatus: (status) => {
+                setResourceConnected(status === "SUBSCRIBED");
+            },
+        });
 
         return () => {
             if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
-            supabase.removeChannel(subtasksChannel);
-            supabase.removeChannel(commentsChannel);
-            supabase.removeChannel(attachmentsChannel);
+            unsubscribe();
         };
-    }, [scheduleRefresh, supabase, taskId]);
+    }, [scheduleRefresh, taskId]);
+
+    useEffect(() => {
+        if (!taskId || (isConnected && resourceConnected)) return;
+
+        const cleanup = createVisibilityAwareInterval(() => {
+            void fetchCounts();
+        }, 30000);
+
+        return () => {
+            cleanup();
+        };
+    }, [fetchCounts, isConnected, resourceConnected, taskId]);
 
     return { counts, isLoading };
 }

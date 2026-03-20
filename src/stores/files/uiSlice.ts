@@ -17,9 +17,6 @@ export interface UiSlice {
   setProblems: (projectId: string, problems: import("./types").Problem[]) => void;
   clearProblems: (projectId: string) => void;
   applyQuickFix: (projectId: string, problemId: string) => void;
-  setDebugOutput: (projectId: string, lines: string[]) => void;
-  appendDebugOutput: (projectId: string, lines: string[]) => void;
-  clearDebugOutput: (projectId: string) => void;
   pushCommandToHistory: (projectId: string, command: string) => void;
   setSidebarWidth: (projectId: string, width: number) => void;
   toggleSidebar: (projectId: string) => void;
@@ -260,51 +257,6 @@ export const createUiSlice: StateCreator<FilesWorkspaceState, [], [], UiSlice> =
         }
       }
       return state;
-    }),
-
-  setDebugOutput: (projectId, lines) =>
-    set((state) => {
-      const ws = state.byProjectId[projectId] ?? defaultWorkspace();
-      return {
-        byProjectId: {
-          ...state.byProjectId,
-          [projectId]: {
-            ...ws,
-            ui: { ...ws.ui, debugOutput: lines },
-          },
-        },
-      };
-    }),
-
-  appendDebugOutput: (projectId, lines) =>
-    set((state) => {
-      const ws = state.byProjectId[projectId] ?? defaultWorkspace();
-      const existing = ws.ui.debugOutput ?? [];
-      const merged = [...existing, ...lines];
-      const capped = merged.length > 500 ? merged.slice(-500) : merged;
-      return {
-        byProjectId: {
-          ...state.byProjectId,
-          [projectId]: {
-            ...ws,
-            ui: { ...ws.ui, debugOutput: capped },
-          },
-        },
-      };
-    }),
-
-  clearDebugOutput: (projectId) =>
-    set((state) => {
-      const ws = state.byProjectId[projectId] ?? defaultWorkspace();
-      return {
-        byProjectId: {
-          ...state.byProjectId,
-          [projectId]: {
-            ...ws,
-            ui: { ...ws.ui, debugOutput: [] },
-          },
-        },
-      };
     }),
 
   pushCommandToHistory: (projectId, command) =>

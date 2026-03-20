@@ -55,7 +55,7 @@ export default function ConnectionsClient({
 
     const GridList = useMemo(() => {
         const Component = forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>((props, ref) => (
-            <div {...props} ref={ref} className="grid gap-4 grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 pb-8" />
+            <div {...props} ref={ref} className="grid gap-[var(--ui-section-gap)] grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 pb-8" />
         ));
         Component.displayName = "ConnectionsListLayout";
         return Component;
@@ -63,7 +63,7 @@ export default function ConnectionsClient({
 
     const GridItem = useMemo(() => {
         const Component = forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>((props, ref) => (
-            <div {...props} ref={ref} className="h-[200px]" />
+            <div {...props} ref={ref} className="h-[calc(var(--ui-list-row-min-h)*3.3)] min-h-[180px]" />
         ));
         Component.displayName = "ConnectionsListItem";
         return Component;
@@ -175,8 +175,8 @@ export default function ConnectionsClient({
             {/* ── COMPACT STATS STRIP ── */}
             <div className="flex flex-wrap gap-3 mb-6">
                 <div className="flex items-center gap-3 px-4 py-2.5 rounded-2xl bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl border border-zinc-200/60 dark:border-white/5">
-                    <div className="w-8 h-8 rounded-full bg-indigo-100 dark:bg-indigo-500/20 flex items-center justify-center">
-                        <UserCheck className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                    <div className="w-8 h-8 rounded-full bg-primary/10 dark:bg-primary/15 flex items-center justify-center">
+                        <UserCheck className="w-4 h-4 text-primary" />
                     </div>
                     <div>
                         <div className="text-lg font-bold text-zinc-900 dark:text-zinc-100 leading-tight">
@@ -218,14 +218,14 @@ export default function ConnectionsClient({
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
                         placeholder="Search your connections..."
-                        className="w-full pl-12 pr-4 py-3 rounded-2xl border border-zinc-200/60 dark:border-white/10 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500/40 transition-all"
+                        className="w-full pl-12 pr-4 py-3 rounded-2xl border border-zinc-200/60 dark:border-white/10 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl focus:ring-2 focus:ring-ring/40 focus:border-primary/40 transition-all"
                         aria-label="Search connections"
                     />
                 </div>
                 <select
                     value={sortBy}
                     onChange={(e) => setSortBy(e.target.value as SortOption)}
-                    className="px-4 py-3 rounded-2xl border border-zinc-200/60 dark:border-white/10 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl text-sm font-medium text-zinc-700 dark:text-zinc-300 focus:ring-2 focus:ring-indigo-500/40 transition-all appearance-none cursor-pointer"
+                    className="px-4 py-3 rounded-2xl border border-zinc-200/60 dark:border-white/10 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl text-sm font-medium text-zinc-700 dark:text-zinc-300 focus:ring-2 focus:ring-ring/40 transition-all appearance-none cursor-pointer"
                 >
                     <option value="recent">Recently Connected</option>
                     <option value="name">Alphabetical</option>
@@ -241,7 +241,7 @@ export default function ConnectionsClient({
                         {searchQuery ? "No connections match your search." : "No connections yet."}
                     </p>
                     {!searchQuery && (
-                        <Link href="/people?tab=discover" className="text-indigo-600 dark:text-indigo-400 hover:underline mt-2 inline-block text-sm">
+                        <Link href="/people?tab=discover" className="text-primary hover:underline mt-2 inline-block text-sm">
                             Discover people to connect with
                         </Link>
                     )}
@@ -307,7 +307,7 @@ export default function ConnectionsClient({
                                                         e.stopPropagation();
                                                         handleMessage(user.id);
                                                     }}
-                                                    className="p-1.5 rounded-full bg-white/90 dark:bg-zinc-800/90 shadow-sm border border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-all"
+                                                    className="p-1.5 rounded-full bg-white/90 dark:bg-zinc-800/90 shadow-sm border border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-400 hover:text-primary transition-all"
                                                     title="Message"
                                                 >
                                                     <MessageSquare className="w-3.5 h-3.5" />
@@ -341,7 +341,7 @@ export default function ConnectionsClient({
                         {/* Connection Growth */}
                         <div className="rounded-2xl border border-zinc-200/60 dark:border-white/5 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl p-5">
                             <div className="flex items-center gap-2 mb-4">
-                                <TrendingUp className="w-4 h-4 text-indigo-500" />
+                                <TrendingUp className="w-4 h-4 text-primary" />
                                 <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Connection Growth</h3>
                             </div>
                             {connectionsGrowth.length > 0 ? (
@@ -350,7 +350,7 @@ export default function ConnectionsClient({
                                         {connectionsGrowth.map((height, i) => (
                                             <div
                                                 key={`${height}-${i}`}
-                                                className="flex-1 rounded-sm bg-gradient-to-t from-indigo-500/30 to-indigo-500/80 dark:from-indigo-500/20 dark:to-indigo-500/60 transition-all hover:from-indigo-500/50 hover:to-indigo-600"
+                                                className="flex-1 rounded-sm bg-gradient-to-t from-[var(--theme-gradient-start)]/35 to-[var(--theme-gradient-end)]/80 dark:from-[var(--theme-gradient-start)]/25 dark:to-[var(--theme-gradient-end)]/60 transition-all hover:brightness-110"
                                                 style={{ height: `${height}%` }}
                                             />
                                         ))}
@@ -392,19 +392,19 @@ export default function ConnectionsClient({
                                                     className="w-8 h-8 rounded-full object-cover"
                                                 />
                                             ) : (
-                                                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-xs font-semibold">
+                                                <div className="w-8 h-8 rounded-full app-accent-gradient flex items-center justify-center text-white text-xs font-semibold">
                                                     {(user.fullName || user.username || "U")[0]?.toUpperCase()}
                                                 </div>
                                             )}
                                             <div className="flex-1 min-w-0">
-                                                <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100 truncate group-hover/item:text-indigo-600 dark:group-hover/item:text-indigo-400 transition-colors">
+                                                <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100 truncate group-hover/item:text-primary transition-colors">
                                                     {user.fullName || user.username || "User"}
                                                 </p>
                                                 <p className="text-xs text-zinc-400 dark:text-zinc-500 truncate">
                                                     {conn.updatedAt ? formatDistanceToNow(new Date(conn.updatedAt), { addSuffix: true }) : ""}
                                                 </p>
                                             </div>
-                                            <ArrowUpRight className="w-3.5 h-3.5 text-zinc-300 dark:text-zinc-700 group-hover/item:text-indigo-500 transition-colors" />
+                                            <ArrowUpRight className="w-3.5 h-3.5 text-zinc-300 dark:text-zinc-700 group-hover/item:text-primary transition-colors" />
                                         </Link>
                                     );
                                 })}
@@ -420,21 +420,21 @@ export default function ConnectionsClient({
                             <div className="space-y-2">
                                 <Link
                                     href="/people?tab=discover"
-                                    className="flex items-center gap-2 px-3 py-2 rounded-xl text-sm text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 hover:text-indigo-600 dark:hover:text-indigo-400 transition-all"
+                                    className="flex items-center gap-2 px-3 py-2 rounded-xl text-sm text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 hover:text-primary transition-all"
                                 >
                                     <Users className="w-4 h-4" />
                                     Discover new people
                                 </Link>
                                 <Link
                                     href="/people?tab=requests"
-                                    className="flex items-center gap-2 px-3 py-2 rounded-xl text-sm text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 hover:text-indigo-600 dark:hover:text-indigo-400 transition-all"
+                                    className="flex items-center gap-2 px-3 py-2 rounded-xl text-sm text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 hover:text-primary transition-all"
                                 >
                                     <MessageSquare className="w-4 h-4" />
                                     View pending requests
                                 </Link>
                                 <Link
                                     href="/messages"
-                                    className="flex items-center gap-2 px-3 py-2 rounded-xl text-sm text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 hover:text-indigo-600 dark:hover:text-indigo-400 transition-all"
+                                    className="flex items-center gap-2 px-3 py-2 rounded-xl text-sm text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 hover:text-primary transition-all"
                                 >
                                     <MessageSquare className="w-4 h-4" />
                                     Open messages

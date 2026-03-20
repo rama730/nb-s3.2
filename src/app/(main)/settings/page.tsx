@@ -15,12 +15,12 @@ const items: SettingsItem[] = [
     {
         href: "/settings/account",
         title: "Account",
-        desc: "Email, export, and account actions",
+        desc: "Signed-in email, local app data, and account actions",
     },
     {
         href: "/settings/security",
         title: "Security",
-        desc: "Sessions, passkeys, MFA, and login history",
+        desc: "Sign-in methods, trusted devices, and recent activity",
         prefetchKey: "security",
     },
     {

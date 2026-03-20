@@ -73,6 +73,9 @@ test.describe("Auth and landing matrix @critical", () => {
 
     await page.goto("/auth/callback?code=invalid-test-code");
     await expect(page).toHaveURL(/\/login\?error=auth-code-error/);
+    await expect(
+      page.getByText(/sign-in could not be completed/i),
+    ).toBeVisible();
 
     await monitor.assertNoViolations();
     monitor.detach();

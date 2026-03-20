@@ -2,6 +2,7 @@
 
 import { useEffect } from 'react'
 import { useRouter } from 'next/navigation'
+import { isEmailVerified } from '@/lib/auth/email-verification'
 import { useAuth } from '@/lib/hooks/use-auth'
 
 interface OnboardingGuardProps {
@@ -20,6 +21,11 @@ export function OnboardingGuard({ children }: OnboardingGuardProps) {
             return
         }
 
+        if (!isEmailVerified(user as unknown as Record<string, unknown>)) {
+            router.push('/verify-email')
+            return
+        }
+
         // Check if user has completed onboarding (has username)
         // profile comes from AuthProvider which already mapped it
         if (!profile?.username) {
@@ -33,7 +39,7 @@ export function OnboardingGuard({ children }: OnboardingGuardProps) {
         return null 
     }
 
-    if (!user || !profile?.username) {
+    if (!user || !isEmailVerified(user as unknown as Record<string, unknown>) || !profile?.username) {
         return null
     }
 

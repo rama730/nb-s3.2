@@ -45,6 +45,10 @@ export function RoutePerformanceObserver() {
       path: pathname,
       valueMs: Math.round(ttfbMs),
       navType: nav.type,
+      routeClass: routeContract?.routeClass ?? null,
+      bootstrapReadModel: routeContract?.bootstrapReadModel ?? null,
+      overloadMode: routeContract?.overloadMode ?? null,
+      maxBackgroundChannels: routeContract?.maxBackgroundChannels ?? null,
       cacheStrategy: cachePolicy.strategy,
       renderingMode,
     });
@@ -53,6 +57,10 @@ export function RoutePerformanceObserver() {
       path: pathname,
       valueMs: Math.round(loadMs),
       navType: nav.type,
+      routeClass: routeContract?.routeClass ?? null,
+      bootstrapReadModel: routeContract?.bootstrapReadModel ?? null,
+      overloadMode: routeContract?.overloadMode ?? null,
+      maxBackgroundChannels: routeContract?.maxBackgroundChannels ?? null,
       cacheStrategy: cachePolicy.strategy,
       renderingMode,
     });
@@ -61,6 +69,10 @@ export function RoutePerformanceObserver() {
       path: pathname,
       valueMs: Math.round(hydrationMs),
       navType: nav.type,
+      routeClass: routeContract?.routeClass ?? null,
+      bootstrapReadModel: routeContract?.bootstrapReadModel ?? null,
+      overloadMode: routeContract?.overloadMode ?? null,
+      maxBackgroundChannels: routeContract?.maxBackgroundChannels ?? null,
       cacheStrategy: cachePolicy.strategy,
       renderingMode,
     });

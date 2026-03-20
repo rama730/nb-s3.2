@@ -3,6 +3,8 @@ import { createClient } from '@/lib/supabase/server'
 import { logger } from '@/lib/logger'
 import { normalizeAuthNextPath, resolveAuthBaseUrl } from '@/lib/auth/redirects'
 import { getAuthHardeningPhase } from '@/lib/auth/hardening'
+import { setGithubImportAccessCookie } from '@/lib/github/import-access-cookie'
+import { sealGithubImportToken } from '@/lib/github/repo-security'
 
 export async function GET(request: Request) {
     const startedAt = Date.now()
@@ -54,7 +56,7 @@ export async function GET(request: Request) {
     }
 
     const supabase = await createClient()
-    const { error } = await supabase.auth.exchangeCodeForSession(code)
+    const { data, error } = await supabase.auth.exchangeCodeForSession(code)
     if (error) {
         logger.metric('auth.callback.exchange.failure', {
             requestId,
@@ -84,6 +86,15 @@ export async function GET(request: Request) {
 
     const successUrl = new URL(nextPath, baseUrl)
     const response = NextResponse.redirect(successUrl)
+    const providerToken = typeof (data?.session as { provider_token?: unknown } | null | undefined)?.provider_token === 'string'
+        ? (data?.session as { provider_token?: string }).provider_token?.trim() || ''
+        : ''
+    if (provider === 'github' && providerToken) {
+        const sealed = sealGithubImportToken(providerToken)
+        if (sealed) {
+            setGithubImportAccessCookie(response, sealed)
+        }
+    }
     response.headers.set('x-request-id', requestId)
     return response
 }

@@ -5,6 +5,7 @@ import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { AnimatePresence, motion } from "framer-motion";
 import { formatDistanceToNow } from "date-fns";
+import { useReducedMotionPreference } from "@/components/providers/theme-provider";
 
 interface PulseActivity {
     id: string;
@@ -43,6 +44,7 @@ export default function ProjectPulseCard({
     onViewBoard,
     onTaskClick,
 }: ProjectPulseCardProps) {
+    const reduceMotion = useReducedMotionPreference();
     const [activeTab, setActiveTab] = useState<"focus" | "stream" | "team">("focus");
 
     const myFocusTasks = tasks
@@ -59,7 +61,7 @@ export default function ProjectPulseCard({
             {/* Header & Tabs */}
             <div className="px-3 py-2 border-b border-zinc-100 dark:border-zinc-800 flex items-center justify-between shrink-0">
                 <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
-                    <Activity className="w-4 h-4 text-indigo-500" />
+                    <Activity className="w-4 h-4 text-primary" />
                     Project Pulse
                 </h3>
 
@@ -85,7 +87,7 @@ export default function ProjectPulseCard({
                                 <span className={cn(
                                     "px-1 rounded-full text-[9px] min-w-[14px] flex items-center justify-center h-3.5",
                                     activeTab === tab.id
-                                        ? "bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400"
+                                        ? "bg-primary/10 text-primary"
                                         : "bg-zinc-200 dark:bg-zinc-700 text-zinc-500 dark:text-zinc-400"
                                 )}>
                                     {tab.count}
@@ -98,27 +100,28 @@ export default function ProjectPulseCard({
 
             {/* Main Content Area */}
             <div className="flex-1 overflow-hidden p-2 min-h-0 relative">
-                <AnimatePresence mode="wait">
-                    {activeTab === "focus" && (
-                        <motion.div
-                            key="focus"
-                            initial={{ opacity: 0, x: -10 }}
-                            animate={{ opacity: 1, x: 0 }}
-                            exit={{ opacity: 0, x: 10 }}
-                            className="h-full overflow-y-auto space-y-1.5 p-1"
-                        >
+                    <AnimatePresence mode="wait" initial={!reduceMotion}>
+                        {activeTab === "focus" && (
+                            <motion.div
+                                key="focus"
+                                initial={reduceMotion ? { opacity: 0 } : { opacity: 0, x: -10 }}
+                                animate={reduceMotion ? { opacity: 1 } : { opacity: 1, x: 0 }}
+                                exit={reduceMotion ? { opacity: 0 } : { opacity: 0, x: 10 }}
+                                transition={reduceMotion ? { duration: 0 } : undefined}
+                                className="h-full overflow-y-auto space-y-1.5 p-1"
+                            >
                             {myFocusTasks.length > 0 ? myFocusTasks.map(task => (
                                 <button
                                     key={task.id}
                                     onClick={() => onTaskClick(task.id)}
-                                    className="w-full text-left p-2 rounded-lg bg-zinc-50 dark:bg-zinc-800/30 border border-zinc-100 dark:border-zinc-800 hover:bg-white dark:hover:bg-zinc-800 hover:border-indigo-200 dark:hover:border-indigo-900/50 transition-colors group"
+                                    className="w-full text-left p-2 rounded-lg bg-zinc-50 dark:bg-zinc-800/30 border border-zinc-100 dark:border-zinc-800 hover:bg-white dark:hover:bg-zinc-800 hover:border-primary/20 transition-colors group"
                                 >
                                     <div className="flex items-start gap-2">
                                         <div className="mt-0.5">
                                             <Zap className="w-3.5 h-3.5 text-amber-500 fill-current" />
                                         </div>
                                         <div>
-                                            <p className="text-xs font-medium text-zinc-900 dark:text-zinc-100 line-clamp-1 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
+                                            <p className="text-xs font-medium text-zinc-900 dark:text-zinc-100 line-clamp-1 group-hover:text-primary transition-colors">
                                                 {task.title}
                                             </p>
                                             <p className="text-[10px] text-zinc-500 dark:text-zinc-400 mt-0.5">
@@ -139,13 +142,14 @@ export default function ProjectPulseCard({
                     )}
 
                     {activeTab === "stream" && (
-                        <motion.div
-                            key="stream"
-                            initial={{ opacity: 0, x: -10 }}
-                            animate={{ opacity: 1, x: 0 }}
-                            exit={{ opacity: 0, x: 10 }}
-                            className="h-full overflow-y-auto space-y-3 p-1"
-                        >
+                            <motion.div
+                                key="stream"
+                                initial={reduceMotion ? { opacity: 0 } : { opacity: 0, x: -10 }}
+                                animate={reduceMotion ? { opacity: 1 } : { opacity: 1, x: 0 }}
+                                exit={reduceMotion ? { opacity: 0 } : { opacity: 0, x: 10 }}
+                                transition={reduceMotion ? { duration: 0 } : undefined}
+                                className="h-full overflow-y-auto space-y-3 p-1"
+                            >
                             {activities.length > 0 ? activities.map(activity => (
                                 <div key={activity.id} className="flex gap-2.5">
                                     <div className="mt-1 w-1.5 h-1.5 rounded-full bg-zinc-300 dark:bg-zinc-600 shrink-0" />
@@ -170,13 +174,14 @@ export default function ProjectPulseCard({
                     )}
 
                     {activeTab === "team" && (
-                        <motion.div
-                            key="team"
-                            initial={{ opacity: 0, x: -10 }}
-                            animate={{ opacity: 1, x: 0 }}
-                            exit={{ opacity: 0, x: 10 }}
-                            className="h-full overflow-y-auto space-y-1.5 p-1"
-                        >
+                            <motion.div
+                                key="team"
+                                initial={reduceMotion ? { opacity: 0 } : { opacity: 0, x: -10 }}
+                                animate={reduceMotion ? { opacity: 1 } : { opacity: 1, x: 0 }}
+                                exit={reduceMotion ? { opacity: 0 } : { opacity: 0, x: 10 }}
+                                transition={reduceMotion ? { duration: 0 } : undefined}
+                                className="h-full overflow-y-auto space-y-1.5 p-1"
+                            >
                             {teamTasks.length > 0 ? teamTasks.map(task => (
                                 <button
                                     key={task.id}
@@ -209,7 +214,7 @@ export default function ProjectPulseCard({
             <div className="p-2 border-t border-zinc-100 dark:border-zinc-800 shrink-0">
                 <button
                     onClick={onViewBoard}
-                    className="w-full py-1.5 flex items-center justify-center gap-1.5 rounded-lg text-[10px] font-medium text-zinc-500 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors"
+                    className="w-full py-1.5 flex items-center justify-center gap-1.5 rounded-lg text-[10px] font-medium text-zinc-500 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800 hover:text-primary transition-colors"
                 >
                     <Layout className="w-3.5 h-3.5" />
                     Go to Task Board

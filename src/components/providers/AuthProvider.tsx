@@ -8,6 +8,7 @@ import type { Profile } from '@/lib/db/schema';
 import { logger } from '@/lib/logger';
 import { getAuthHardeningPhase } from '@/lib/auth/hardening';
 import { buildOAuthRedirectTo, normalizeAuthNextPath, resolveAuthBaseUrl } from '@/lib/auth/redirects';
+import { continueBrowserOAuthRedirect } from '@/lib/auth/oauth';
 import { resetMonotonicEntity, runMonotonicUpdate } from '@/lib/state/monotonic';
 
 const AUTH_SIGN_IN_TIMEOUT_MS = 8_000;
@@ -39,8 +40,8 @@ interface OAuthResult {
 
 interface AuthContextType extends AuthState {
     isAuthenticated: boolean;
-    signIn: (email: string, password: string) => Promise<AuthResult>;
-    signUp: (email: string, password: string, fullName?: string) => Promise<AuthResult>;
+    signIn: (email: string, password: string, captchaToken?: string) => Promise<AuthResult>;
+    signUp: (email: string, password: string, fullName?: string, captchaToken?: string) => Promise<AuthResult>;
     signOut: () => Promise<void>;
     signInWithGoogle: (nextPath?: string | null) => Promise<OAuthResult>;
     signInWithGitHub: (nextPath?: string | null) => Promise<OAuthResult>;
@@ -70,12 +71,25 @@ function transformProfile(profile: any): Profile | null {
             socialLinks: profile.social_links || {},
             availabilityStatus: profile.availability_status,
             openTo: profile.open_to || [],
+            workspaceInboxCount: profile.workspace_inbox_count ?? 0,
+            workspaceDueTodayCount: profile.workspace_due_today_count ?? 0,
+            workspaceOverdueCount: profile.workspace_overdue_count ?? 0,
+            workspaceInProgressCount: profile.workspace_in_progress_count ?? 0,
             // Ensure all required fields from Profile type are present
             // We cast because we know the shape matches roughly
         } as unknown as Profile;
     }
     
     return profile as Profile;
+}
+
+function profileNeedsHydration(profile: any): boolean {
+    if (!profile || typeof profile !== 'object') return false;
+    return (
+        profile.experience === undefined
+        || profile.education === undefined
+        || profile.workspaceLayout === undefined
+    );
 }
 
 // --- Provider ---
@@ -97,6 +111,7 @@ export function AuthProvider({
     });
     const activeUserIdRef = useRef<string | null>(initialUser?.id || null);
     const authEventVersionRef = useRef(0);
+    const bootstrapHydrationPendingRef = useRef(Boolean(initialUser) && (!initialProfile || profileNeedsHydration(initialProfile)));
     const router = useRouter();
 
     // Sync with Supabase Auth Listener
@@ -185,11 +200,15 @@ export function AuthProvider({
     }, [router]);
 
     // --- Actions ---
-    const signIn = useCallback(async (email: string, password: string) => {
+    const signIn = useCallback(async (email: string, password: string, captchaToken?: string) => {
         const supabase = createClient();
         try {
             const result = await Promise.race([
-                supabase.auth.signInWithPassword({ email, password }),
+                supabase.auth.signInWithPassword({
+                    email,
+                    password,
+                    options: captchaToken ? { captchaToken } : undefined,
+                }),
                 new Promise<never>((_, reject) => {
                     setTimeout(() => reject(new Error('AUTH_TIMEOUT')), AUTH_SIGN_IN_TIMEOUT_MS);
                 }),
@@ -221,12 +240,13 @@ export function AuthProvider({
         }
     }, []);
 
-    const signUp = useCallback(async (email: string, password: string, fullName?: string) => {
+    const signUp = useCallback(async (email: string, password: string, fullName?: string, captchaToken?: string) => {
         const supabase = createClient();
         return await supabase.auth.signUp({
             email,
             password,
             options: {
+                ...(captchaToken ? { captchaToken } : {}),
                 data: {
                     full_name: fullName || '',
                 }
@@ -240,7 +260,7 @@ export function AuthProvider({
         const baseUrl = resolveAuthBaseUrl();
         const oauthRequestId = createAuthRequestId();
         const hardeningPhase = getAuthHardeningPhase();
-        const redirectTo = buildOAuthRedirectTo(baseUrl, normalizedNextPath, oauthRequestId);
+        const redirectTo = buildOAuthRedirectTo(baseUrl, normalizedNextPath, oauthRequestId, 'google');
         logger.metric('auth.oauth.start', {
             requestId: oauthRequestId,
             provider: 'google',
@@ -248,10 +268,14 @@ export function AuthProvider({
             baseUrl,
             phase: hardeningPhase,
         });
-        return await supabase.auth.signInWithOAuth({
+        const result = await supabase.auth.signInWithOAuth({
             provider: 'google',
             options: { redirectTo },
         });
+        if (!result.error) {
+            continueBrowserOAuthRedirect(result);
+        }
+        return result;
     }, []);
 
     const signInWithGitHub = useCallback(async (nextPath?: string | null) => {
@@ -260,7 +284,7 @@ export function AuthProvider({
         const baseUrl = resolveAuthBaseUrl();
         const oauthRequestId = createAuthRequestId();
         const hardeningPhase = getAuthHardeningPhase();
-        const redirectTo = buildOAuthRedirectTo(baseUrl, normalizedNextPath, oauthRequestId);
+        const redirectTo = buildOAuthRedirectTo(baseUrl, normalizedNextPath, oauthRequestId, 'github');
         logger.metric('auth.oauth.start', {
             requestId: oauthRequestId,
             provider: 'github',
@@ -268,10 +292,14 @@ export function AuthProvider({
             baseUrl,
             phase: hardeningPhase,
         });
-        return await supabase.auth.signInWithOAuth({
+        const result = await supabase.auth.signInWithOAuth({
             provider: 'github',
             options: { redirectTo },
         });
+        if (!result.error) {
+            continueBrowserOAuthRedirect(result);
+        }
+        return result;
     }, []);
 
     const signOut = useCallback(async () => {
@@ -301,6 +329,39 @@ export function AuthProvider({
             setState(prev => ({ ...prev, profile: transformProfile(profile) }));
         }
     }, [state.user]);
+
+    useEffect(() => {
+        if (!bootstrapHydrationPendingRef.current || !state.user) return;
+
+        let cancelled = false;
+        const hydrate = () => {
+            if (cancelled) return;
+            bootstrapHydrationPendingRef.current = false;
+            void refreshProfile();
+        };
+
+        const requestIdle = (window as Window & {
+            requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
+        }).requestIdleCallback;
+        if (typeof requestIdle === 'function') {
+            const handle = requestIdle(hydrate, { timeout: 1_500 });
+            return () => {
+                cancelled = true;
+                const cancelIdle = (window as Window & {
+                    cancelIdleCallback?: (handle: number) => void;
+                }).cancelIdleCallback;
+                if (typeof cancelIdle === 'function') {
+                    cancelIdle(handle);
+                }
+            };
+        }
+
+        const timer = window.setTimeout(hydrate, 250);
+        return () => {
+            cancelled = true;
+            window.clearTimeout(timer);
+        };
+    }, [refreshProfile, state.user]);
 
 
     const value = {

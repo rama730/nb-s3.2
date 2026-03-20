@@ -1,12 +1,10 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
-import { createClient } from '@/lib/supabase/client';
-import { type RealtimeChannel } from '@supabase/supabase-js';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 
-// ============================================================================
-// TYPING CHANNEL HOOK (Scalable Broadcast + Singleton Subscription)
-// ============================================================================
+import { useAuth } from '@/lib/hooks/use-auth';
+import { subscribePresenceRoom } from '@/lib/realtime/presence-client';
+import type { PresenceMemberState, PresenceMemberProfile } from '@/lib/realtime/presence-types';
 
 interface TypingUser {
     id: string;
@@ -20,274 +18,136 @@ interface UseTypingChannelReturn {
     sendTyping: (isTyping: boolean) => Promise<void>;
 }
 
-let supabaseClient: ReturnType<typeof createClient> | null = null;
+const TYPING_VISIBLE_TTL_MS = 3_500;
 
-function getSupabaseClient() {
-    if (supabaseClient) return supabaseClient;
-    supabaseClient = createClient();
-    return supabaseClient;
-}
-
-// ----------------------------------------------------------------------------
-// SINGLETON REGISTRY
-// Manages one connection per conversation, preventing duplicate subscriptions
-// ----------------------------------------------------------------------------
-
-interface ChannelEntry {
-    channel: RealtimeChannel;
-    refCount: number;
-    typingUsers: TypingUser[]; // Current state
-    listeners: Set<(users: TypingUser[]) => void>; // Local state setters
-    timers: Map<string, NodeJS.Timeout>; // Debounce timers
-    lastSent: number; // For throttling sends
-}
-
-// Map<ConversationID, ChannelEntry>
-const channelRegistry = new Map<string, ChannelEntry>();
-
-let cachedCurrentUserId: string | null = null;
-let cachedCurrentUserProfile: TypingUser | null = null;
-let cachedCurrentUserFetchedAt = 0;
-const CURRENT_USER_CACHE_TTL_MS = 30_000;
-
-async function getCurrentUserId() {
-    try {
-        if (cachedCurrentUserId && Date.now() - cachedCurrentUserFetchedAt < CURRENT_USER_CACHE_TTL_MS) {
-            return cachedCurrentUserId;
-        }
-        const supabase = getSupabaseClient();
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) {
-            cachedCurrentUserId = null;
-            cachedCurrentUserProfile = null;
-            cachedCurrentUserFetchedAt = Date.now();
-            return null;
-        }
-        cachedCurrentUserId = user.id;
-        cachedCurrentUserFetchedAt = Date.now();
-        return user.id;
-    } catch {
-        cachedCurrentUserId = null;
-        cachedCurrentUserProfile = null;
-        cachedCurrentUserFetchedAt = 0;
-        return null;
-    }
-}
-
-async function getCurrentUserProfile() {
-    const userId = await getCurrentUserId();
-    if (!userId) return null;
-    if (cachedCurrentUserProfile && cachedCurrentUserProfile.id === userId) {
-        return cachedCurrentUserProfile;
-    }
-
-    try {
-        const supabase = getSupabaseClient();
-        const { data: profile } = await supabase
-            .from('profiles')
-            .select('id, username, full_name, avatar_url')
-            .eq('id', userId)
-            .single();
-
-        if (!profile) {
-            cachedCurrentUserId = userId;
-            cachedCurrentUserProfile = null;
-            return null;
-        }
-
-        const nextProfile = {
-            id: profile.id,
-            username: profile.username || null,
-            fullName: profile.full_name || null,
-            avatarUrl: profile.avatar_url || null,
-        };
-
-        cachedCurrentUserId = userId;
-        cachedCurrentUserProfile = nextProfile;
-        return nextProfile;
-    } catch (error) {
-        console.error('Failed to fetch current user for typing:', error);
-        return null;
-    }
+function toTypingUser(member: PresenceMemberState): TypingUser {
+    return {
+        id: member.userId,
+        username: member.profile?.username ?? null,
+        fullName: member.profile?.fullName ?? member.userName ?? null,
+        avatarUrl: member.profile?.avatarUrl ?? null,
+    };
 }
 
 export function useTypingChannel(conversationId: string | null, options: { listen?: boolean } = { listen: true }): UseTypingChannelReturn {
-    const [typingUsers, setTypingUsers] = useState<TypingUser[]>([]);
     const { listen } = options;
+    const [typingUsers, setTypingUsers] = useState<TypingUser[]>([]);
+    const [isVisible, setIsVisible] = useState(() => typeof document === 'undefined' ? true : !document.hidden);
+    const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+    const subscriptionRef = useRef<ReturnType<typeof subscribePresenceRoom> | null>(null);
+    const { user, profile } = useAuth();
+    const currentUserId = user?.id ?? null;
 
-    const notifyListeners = useCallback((entry: ChannelEntry) => {
-        entry.listeners.forEach(cb => cb(entry.typingUsers));
+    const currentUserProfile = useMemo<PresenceMemberProfile | null>(() => (
+        currentUserId
+            ? {
+                username: profile?.username ?? (user?.user_metadata?.username as string | undefined) ?? null,
+                fullName: profile?.fullName ?? (user?.user_metadata?.full_name as string | undefined) ?? null,
+                avatarUrl: profile?.avatarUrl ?? (user?.user_metadata?.avatar_url as string | undefined) ?? null,
+            }
+            : null
+    ), [currentUserId, profile?.avatarUrl, profile?.fullName, profile?.username, user?.user_metadata]);
+
+    const clearUserTimer = useCallback((userId: string) => {
+        const timer = timersRef.current.get(userId);
+        if (timer) {
+            clearTimeout(timer);
+            timersRef.current.delete(userId);
+        }
     }, []);
 
-    // Helper: Handle Event at Registry Level
-    const handleRegistryEvent = useCallback((convId: string, user: TypingUser, isTyping: boolean) => {
-        const entry = channelRegistry.get(convId);
-        if (!entry) return;
+    const scheduleRemoval = useCallback((member: TypingUser) => {
+        clearUserTimer(member.id);
+        const timer = setTimeout(() => {
+            timersRef.current.delete(member.id);
+            setTypingUsers((prev) => prev.filter((item) => item.id !== member.id));
+        }, TYPING_VISIBLE_TTL_MS);
+        timersRef.current.set(member.id, timer);
+    }, [clearUserTimer]);
 
-        const exists = entry.typingUsers.some(u => u.id === user.id);
-
-        // Logic for timers/state
-        if (!isTyping) {
-            // STOP
-            if (exists) {
-                const timer = entry.timers.get(user.id);
-                if (timer) clearTimeout(timer);
-                entry.timers.delete(user.id);
-
-                entry.typingUsers = entry.typingUsers.filter(u => u.id !== user.id);
-                notifyListeners(entry);
-            }
-        } else {
-            // START
-            const existingTimer = entry.timers.get(user.id);
-            if (existingTimer) clearTimeout(existingTimer);
-
-            const newTimer = setTimeout(() => {
-                const e = channelRegistry.get(convId);
-                if (e) {
-                    e.typingUsers = e.typingUsers.filter(u => u.id !== user.id);
-                    e.timers.delete(user.id);
-                    notifyListeners(e);
-                }
-            }, 3500);
-
-            entry.timers.set(user.id, newTimer);
-
-            if (!exists) {
-                entry.typingUsers = [...entry.typingUsers, user];
-                notifyListeners(entry);
-            }
-        }
-    }, [notifyListeners]);
-
-    // Effect: Manage Subscription via Registry
     useEffect(() => {
-        if (!conversationId || conversationId === 'new') {
+        if (typeof document === 'undefined') return;
+
+        const onVisibilityChange = () => {
+            setIsVisible(!document.hidden);
+        };
+
+        document.addEventListener('visibilitychange', onVisibilityChange);
+        return () => {
+            document.removeEventListener('visibilitychange', onVisibilityChange);
+        };
+    }, []);
+
+    useEffect(() => {
+        if (!conversationId || conversationId === 'new' || !isVisible) {
             setTypingUsers([]);
+            timersRef.current.forEach(clearTimeout);
+            timersRef.current.clear();
             return;
         }
 
-        // Warm the viewer identity once per mount cycle to avoid auth lookups on each typing event.
-        void getCurrentUserId();
+        const subscription = subscribePresenceRoom({
+            roomType: 'conversation',
+            roomId: conversationId,
+            role: 'viewer',
+            onEvent: (event) => {
+                if (!listen) return;
 
-        // 1. Get or Create Entry
-        let entry = channelRegistry.get(conversationId);
-
-        if (!entry) {
-            const channelId = `typing:${conversationId}`;
-            const supabase = getSupabaseClient();
-            const channel = supabase.channel(channelId);
-
-            entry = {
-                channel,
-                refCount: 0,
-                typingUsers: [],
-                listeners: new Set(),
-                timers: new Map(),
-                lastSent: 0
-            };
-
-            channelRegistry.set(conversationId, entry);
-
-            // Subscribe logic
-            channel
-                .on('broadcast', { event: 'typing' }, async ({ payload }: { payload: { user: TypingUser; isTyping: boolean } }) => {
-                    const currentEntry = channelRegistry.get(conversationId);
-                    if (!currentEntry) return;
-
-                    const cachedViewerId = cachedCurrentUserId;
-                    if (cachedViewerId) {
-                        if (payload.user?.id === cachedViewerId) return;
-                        handleRegistryEvent(conversationId, payload.user, payload.isTyping);
-                        return;
+                if (event.type === 'presence.state') {
+                    timersRef.current.forEach(clearTimeout);
+                    timersRef.current.clear();
+                    const nextUsers = event.members
+                        .filter((member) => member.typing && member.userId !== currentUserId)
+                        .map((member) => toTypingUser(member));
+                    for (const member of nextUsers) {
+                        scheduleRemoval(member);
                     }
-
-                    // Fallback for first event before cache warm-up completes.
-                    const resolvedViewerId = await getCurrentUserId();
-                    const entryAfterUserLookup = channelRegistry.get(conversationId);
-                    if (!entryAfterUserLookup) return;
-                    if (payload.user?.id === resolvedViewerId) return;
-
-                    handleRegistryEvent(conversationId, payload.user, payload.isTyping);
-                })
-                .subscribe(() => {
-                    // if (status === 'SUBSCRIBED') console.log(`[Typing] Connected ${channelId}`);
-                });
-        }
-
-        // 2. Register Listener
-        entry.refCount++;
-
-        // Listener callback updates LOCAL state
-        const listener = (users: TypingUser[]) => {
-            if (listen) {
-                setTypingUsers(users);
-            }
-        };
-
-        if (listen) {
-            entry.listeners.add(listener);
-            // Initialize with current state
-            setTypingUsers(entry.typingUsers);
-        }
-
-        // 3. Cleanup
-        return () => {
-            const currentEntry = channelRegistry.get(conversationId);
-            if (!currentEntry) return;
-
-            currentEntry.refCount--;
-            if (listen) {
-                currentEntry.listeners.delete(listener);
-            }
-
-            // Only destroy channel if NO refs left
-            if (currentEntry.refCount <= 0) {
-                const supabase = getSupabaseClient();
-                supabase.removeChannel(currentEntry.channel);
-                // Clear timers
-                currentEntry.timers.forEach(clearTimeout);
-                channelRegistry.delete(conversationId);
-            }
-        };
-    }, [conversationId, listen, handleRegistryEvent]);
-
-    // Send Typing (Uses Registry Channel)
-    const sendTyping = useCallback(async (isTyping: boolean) => {
-        if (!conversationId || conversationId === 'new') return;
-
-        const entry = channelRegistry.get(conversationId);
-        // Note: Even if listen=false, the hook calls register() so an entry exists.
-        // However, if listen=false, refCount is incremented.
-        // If the channel is not ready?
-        // Wait, if options.listen=false, we still create/get the entry and refCount++.
-        // So an entry IS guaranteed.
-
-        if (!entry) return;
-
-        const currentUser = await getCurrentUserProfile();
-        if (!currentUser) return;
-
-        const now = Date.now();
-        if (isTyping && now - entry.lastSent < 2000) return;
-
-        try {
-            await entry.channel.send({
-                type: 'broadcast',
-                event: 'typing',
-                payload: {
-                    user: currentUser,
-                    isTyping
+                    setTypingUsers(nextUsers);
+                    return;
                 }
-            });
 
-            if (isTyping) entry.lastSent = now;
-            else entry.lastSent = 0;
+                if (event.type !== 'presence.delta' || event.member.userId === currentUserId) {
+                    return;
+                }
 
-        } catch {
-            // fail silently
-        }
-    }, [conversationId]);
+                const member = toTypingUser(event.member);
+                if (event.action === 'leave' || !event.member.typing) {
+                    clearUserTimer(member.id);
+                    setTypingUsers((prev) => prev.filter((item) => item.id !== member.id));
+                    return;
+                }
 
-    return { typingUsers, sendTyping };
+                scheduleRemoval(member);
+                setTypingUsers((prev) => {
+                    const existing = prev.some((item) => item.id === member.id);
+                    if (existing) {
+                        return prev.map((item) => item.id === member.id ? member : item);
+                    }
+                    return [...prev, member];
+                });
+            },
+        });
+        subscriptionRef.current = subscription;
+        const activeTimers = timersRef.current;
+
+        return () => {
+            subscription.unsubscribe();
+            subscriptionRef.current = null;
+            activeTimers.forEach(clearTimeout);
+            activeTimers.clear();
+        };
+    }, [clearUserTimer, conversationId, currentUserId, isVisible, listen, scheduleRemoval]);
+
+    const sendTyping = useCallback(async (isTyping: boolean) => {
+        if (!conversationId || conversationId === 'new' || !isVisible) return;
+        if (!currentUserProfile) return;
+
+        subscriptionRef.current?.send({
+            type: 'typing',
+            isTyping,
+            profile: currentUserProfile,
+        });
+    }, [conversationId, currentUserProfile, isVisible]);
+
+    return { typingUsers: listen ? typingUsers : [], sendTyping };
 }
