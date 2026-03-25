@@ -1,6 +1,8 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
+import { buildPseudonymizedAuditRequestMetadata } from "@/lib/audit/request-metadata";
 import { db } from "@/lib/db";
 import { profileAuditEvents } from "@/lib/db/schema";
+import { logger } from "@/lib/logger";
 
 export const SECURITY_ACTIVITY_EVENT_TYPES = [
   "authenticator_app_enabled",
@@ -19,19 +21,41 @@ export type SecurityActivityEntry = {
   id: string;
   eventType: SecurityActivityEventType;
   createdAt: string;
-  ipAddress?: string;
-  userAgent?: string;
+  networkFingerprint?: string;
+  deviceFingerprint?: string;
   metadata: Record<string, unknown>;
 };
 
-function getRequestIp(request: Request): string | null {
-  const forwardedFor = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
-  return forwardedFor || null;
+type SecurityAuditExecutor = Pick<typeof db, "insert">;
+const SECURITY_AUDIT_MAX_ATTEMPTS = 2;
+const SECURITY_AUDIT_RETRYABLE_CODES = new Set([
+  "40001",
+  "40P01",
+  "53300",
+  "57P03",
+]);
+
+function getDbErrorCode(error: unknown): string | null {
+  if (!error || typeof error !== "object") return null;
+  const candidate = (error as { code?: unknown }).code;
+  return typeof candidate === "string" && candidate.length > 0 ? candidate : null;
 }
 
-function getUserAgent(request: Request): string | null {
-  const userAgent = request.headers.get("user-agent")?.trim();
-  return userAgent || null;
+function isTransientAuditInsertError(error: unknown): boolean {
+  const code = getDbErrorCode(error);
+  if (code && SECURITY_AUDIT_RETRYABLE_CODES.has(code)) {
+    return true;
+  }
+
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  return /timeout|timed out|connection reset|connection terminated|temporar|deadlock|serialization/i.test(error.message);
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export async function recordSecurityEvent(input: {
@@ -41,24 +65,63 @@ export async function recordSecurityEvent(input: {
   metadata?: Record<string, unknown>;
   previousValue?: Record<string, unknown> | null;
   nextValue?: Record<string, unknown> | null;
+  executor?: SecurityAuditExecutor;
 }) {
-  const ipAddress = getRequestIp(input.request);
-  const userAgent = getUserAgent(input.request);
+  const requestMetadata = buildPseudonymizedAuditRequestMetadata(input.request);
+  const auditPayload = {
+    userId: input.userId,
+    eventType: input.eventType,
+    previousValue: input.previousValue ?? null,
+    nextValue: input.nextValue ?? null,
+    metadata: {
+      ...(input.metadata ?? {}),
+      ...requestMetadata,
+    },
+  };
 
-  try {
-    await db.insert(profileAuditEvents).values({
-      userId: input.userId,
-      eventType: input.eventType,
-      previousValue: input.previousValue ?? null,
-      nextValue: input.nextValue ?? null,
-      metadata: {
-        ...(input.metadata ?? {}),
-        ...(ipAddress ? { ipAddress } : {}),
-        ...(userAgent ? { userAgent } : {}),
-      },
-    });
-  } catch (error) {
-    console.warn("[security-audit] insert failed", error);
+  if (input.executor) {
+    await input.executor.insert(profileAuditEvents).values(auditPayload);
+    return;
+  }
+
+  for (let attempt = 1; attempt <= SECURITY_AUDIT_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      // Operational basis: these rows power the user-visible security activity history.
+      // Compliance boundary: store only keyed pseudonymous request fingerprints here, never raw
+      // IP addresses or full user-agent strings. Account erasure deletes these rows explicitly.
+      await db.insert(profileAuditEvents).values(auditPayload);
+      return;
+    } catch (error) {
+      const code = getDbErrorCode(error);
+      const retryable = attempt < SECURITY_AUDIT_MAX_ATTEMPTS && isTransientAuditInsertError(error);
+
+      logger.error("security.audit.write_failed", {
+        userId: input.userId,
+        eventType: input.eventType,
+        attempt,
+        maxAttempts: SECURITY_AUDIT_MAX_ATTEMPTS,
+        retryable,
+        error: {
+          message: error instanceof Error ? error.message : String(error),
+          code,
+        },
+        errorCode: code,
+        auditMetadata: auditPayload.metadata,
+      });
+      logger.metric("security.audit.write.failure", {
+        userId: input.userId,
+        eventType: input.eventType,
+        attempt,
+        retryable,
+        errorCode: code ?? "unknown",
+      });
+
+      if (!retryable) {
+        throw error;
+      }
+
+      await delay(50 * attempt);
+    }
   }
 }
 
@@ -87,8 +150,8 @@ export async function listSecurityActivity(
       id: row.id,
       eventType: row.eventType as SecurityActivityEventType,
       createdAt: row.createdAt.toISOString(),
-      ipAddress: typeof metadata.ipAddress === "string" ? metadata.ipAddress : undefined,
-      userAgent: typeof metadata.userAgent === "string" ? metadata.userAgent : undefined,
+      networkFingerprint: typeof metadata.networkFingerprint === "string" ? metadata.networkFingerprint : undefined,
+      deviceFingerprint: typeof metadata.deviceFingerprint === "string" ? metadata.deviceFingerprint : undefined,
       metadata,
     };
   });

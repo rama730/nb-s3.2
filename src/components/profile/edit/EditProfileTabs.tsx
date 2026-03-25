@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import Image from "next/image";
-import { Loader2, Camera, Plus, X, Trash2, Calendar, GripVertical } from "lucide-react";
+import { Loader2, Camera, Plus, X, Trash2, Calendar, GripVertical, CheckCircle2, AlertTriangle } from "lucide-react";
 import { createProfileImageUploadUrlAction } from "@/app/actions/profile";
 import { useToast } from "@/components/ui-custom/Toast";
 import Input from "@/components/ui-custom/Input";
@@ -15,11 +15,9 @@ import { cn } from "@/lib/utils";
 interface EditProfileTabsProps {
     profile: any;
     onChange: (updates: any) => void;
-    onSaveSection?: (section: 'general' | 'experience' | 'education' | 'skills' | 'social') => void;
-    onResetSection?: (section: 'general' | 'experience' | 'education' | 'skills' | 'social') => void;
 }
 
-export function EditProfileTabs({ profile, onChange, onSaveSection, onResetSection }: EditProfileTabsProps) {
+export function EditProfileTabs({ profile, onChange }: EditProfileTabsProps) {
     const { showToast } = useToast();
 
     // -- STATES --
@@ -157,19 +155,29 @@ export function EditProfileTabs({ profile, onChange, onSaveSection, onResetSecti
     // Let's do a simple "Append" form at the bottom of the list.
 
     return (
-        <Tabs defaultValue="general" className="w-full h-full flex flex-col">
-            <div className="px-5 pt-3">
-                <TabsList className="grid w-full grid-cols-6 h-9 py-0.5">
-                    <TabsTrigger value="general" className="text-xs sm:text-sm">General</TabsTrigger>
-                    <TabsTrigger value="experience" className="text-xs sm:text-sm">Exp</TabsTrigger>
-                    <TabsTrigger value="education" className="text-xs sm:text-sm">Edu</TabsTrigger>
-                    <TabsTrigger value="skills" className="text-xs sm:text-sm">Skills</TabsTrigger>
-                    <TabsTrigger value="social" className="text-xs sm:text-sm">Social</TabsTrigger>
-                    <TabsTrigger value="preview" className="text-xs sm:text-sm">Preview</TabsTrigger>
+        <Tabs defaultValue="general" className="w-full h-full flex flex-col md:flex-row" orientation="vertical">
+            <div className="w-full md:w-64 shrink-0 border-r border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900/50 p-4 md:p-6 overflow-y-auto">
+                <TabsList className="flex flex-col h-auto w-full bg-transparent space-y-1 p-0">
+                    <TabsTrigger value="general" className="w-full justify-start px-3 py-2 text-sm font-medium data-[state=active]:bg-zinc-100 dark:data-[state=active]:bg-zinc-800 data-[state=active]:shadow-none rounded-lg text-zinc-600 data-[state=active]:text-zinc-900 dark:text-zinc-400 dark:data-[state=active]:text-zinc-100">
+                        General Properties
+                    </TabsTrigger>
+                    <TabsTrigger value="experience" className="w-full justify-start px-3 py-2 text-sm font-medium data-[state=active]:bg-zinc-100 dark:data-[state=active]:bg-zinc-800 data-[state=active]:shadow-none rounded-lg text-zinc-600 data-[state=active]:text-zinc-900 dark:text-zinc-400 dark:data-[state=active]:text-zinc-100">
+                        Work Experience
+                    </TabsTrigger>
+                    <TabsTrigger value="education" className="w-full justify-start px-3 py-2 text-sm font-medium data-[state=active]:bg-zinc-100 dark:data-[state=active]:bg-zinc-800 data-[state=active]:shadow-none rounded-lg text-zinc-600 data-[state=active]:text-zinc-900 dark:text-zinc-400 dark:data-[state=active]:text-zinc-100">
+                        Education History
+                    </TabsTrigger>
+                    <TabsTrigger value="skills" className="w-full justify-start px-3 py-2 text-sm font-medium data-[state=active]:bg-zinc-100 dark:data-[state=active]:bg-zinc-800 data-[state=active]:shadow-none rounded-lg text-zinc-600 data-[state=active]:text-zinc-900 dark:text-zinc-400 dark:data-[state=active]:text-zinc-100">
+                        Skills & Expertise
+                    </TabsTrigger>
+                    <TabsTrigger value="social" className="w-full justify-start px-3 py-2 text-sm font-medium data-[state=active]:bg-zinc-100 dark:data-[state=active]:bg-zinc-800 data-[state=active]:shadow-none rounded-lg text-zinc-600 data-[state=active]:text-zinc-900 dark:text-zinc-400 dark:data-[state=active]:text-zinc-100">
+                        Social Presence
+                    </TabsTrigger>
                 </TabsList>
             </div>
 
-            <div className="flex-1 app-scroll app-scroll-y px-5 py-4 pb-6">
+            <div className="flex-1 app-scroll app-scroll-y p-6 md:p-10 bg-zinc-50 dark:bg-zinc-950">
+                <div className="max-w-2xl mx-auto w-full">
 
                 {/* --- GENERAL TAB --- */}
                 <TabsContent value="general" className="space-y-4 mt-0">
@@ -177,8 +185,10 @@ export function EditProfileTabs({ profile, onChange, onSaveSection, onResetSecti
                     <div className="space-y-4">
                         {/* Banner Removed as per request */}
 
-                        {/* Avatar - Compact Layout */}
-                        <div className="flex items-center gap-4 pl-0 relative z-10">
+                        {/* Avatar - Prominent Layout */}
+                        <div className="flex flex-col items-center sm:items-start pb-4">
+                            <h2 className="text-xl font-semibold text-zinc-900 dark:text-white mb-6">General Properties</h2>
+                            <div className="flex items-center gap-5 relative z-10 w-full">
                             <div className="w-20 h-20 rounded-2xl bg-zinc-200 dark:bg-zinc-800 border-4 border-white dark:border-zinc-900 overflow-hidden relative group shrink-0">
                                 {formData.avatar_url ? (
                                     <Image
@@ -193,20 +203,22 @@ export function EditProfileTabs({ profile, onChange, onSaveSection, onResetSecti
                                         {(formData.full_name?.[0] || formData.username?.[0] || "?").toUpperCase()}
                                     </div>
                                 )}
-                                <label className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center cursor-pointer transition-opacity">
-                                    {avatarUploading ? <Loader2 className="w-4 h-4 text-white animate-spin" /> : <Camera className="w-4 h-4 text-white" />}
+                                <label className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex flex-col items-center justify-center cursor-pointer transition-opacity text-white">
+                                    {avatarUploading ? <Loader2 className="w-6 h-6 animate-spin mb-1" /> : <Camera className="w-6 h-6 mb-1" />}
+                                    <span className="text-xs font-medium">{avatarUploading ? 'Uploading...' : 'Change'}</span>
                                     <input type="file" accept="image/*" className="hidden" onChange={(e) => handleImageUpload(e, 'avatar')} disabled={avatarUploading} />
                                 </label>
                             </div>
                             <div className="flex flex-col">
                                 <h3 className="font-semibold text-base">Profile Photo</h3>
-                                <p className="text-xs text-zinc-500">Recommended 400x400px</p>
+                                <p className="text-sm text-zinc-500 mt-1">Recommended size: 400x400px. <br className="hidden sm:block"/>Max 5MB.</p>
                             </div>
                         </div>
                     </div>
+                </div>
 
                     {/* Basic Info */}
-                    <div className="grid gap-4">
+                    <div className="grid gap-6">
                         <div className="grid grid-cols-2 gap-4">
                             <div>
                                 <Label>Full Name</Label>
@@ -224,17 +236,42 @@ export function EditProfileTabs({ profile, onChange, onSaveSection, onResetSecti
                                         onChange={handleUsernameChange}
                                         className={cn(
                                             usernameStatus === 'taken' && "border-red-500 focus:ring-red-500",
-                                            usernameStatus === 'available' && "border-green-500 focus:ring-green-500"
+                                            usernameStatus === 'available' && "border-green-500 focus:ring-green-500",
+                                            formData.username === profile.username && "pr-10"
                                         )}
                                     />
+                                    {/* Status Overlay for Current Username */}
+                                    {formData.username === profile.username && (
+                                        <div className="absolute right-3 top-2.5 flex items-center gap-1.5 text-emerald-600 dark:text-emerald-500 bg-emerald-50/50 dark:bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-100/50 dark:border-emerald-500/20">
+                                            <CheckCircle2 className="w-3.5 h-3.5" />
+                                            <span className="text-[10px] font-bold uppercase tracking-wider">Secured</span>
+                                        </div>
+                                    )}
+                                    
                                     {usernameStatus === 'checking' && <Loader2 className="absolute right-3 top-2.5 w-4 h-4 animate-spin text-zinc-400" />}
                                 </div>
-                                {usernameMessage && (
-                                    <p className={cn("text-xs mt-1",
-                                        usernameStatus === 'available' ? "text-green-600" : "text-red-500"
+                                
+                                {/* Availability / Error Message */}
+                                {usernameMessage && formData.username !== profile.username && (
+                                    <p className={cn("text-xs mt-2 font-medium flex items-center gap-1.5",
+                                        usernameStatus === 'available' ? "text-emerald-600 dark:text-emerald-500" : "text-red-500"
                                     )}>
+                                        {usernameStatus === 'available' ? <CheckCircle2 className="w-3.5 h-3.5" /> : <X className="w-3.5 h-3.5" />}
                                         {usernameMessage}
                                     </p>
+                                )}
+
+                                {/* Prominent Change Warning */}
+                                {formData.username !== profile.username && formData.username.length > 0 && (
+                                    <div className="mt-3 flex items-start gap-3 rounded-2xl border border-amber-200/50 bg-amber-50/50 dark:border-amber-900/30 dark:bg-amber-900/20 p-4 text-[13px] text-amber-900 dark:text-amber-200 shadow-sm animate-in fade-in slide-in-from-top-1">
+                                        <div className="mt-0.5 bg-amber-100 dark:bg-amber-900/50 p-1 rounded-lg">
+                                            <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+                                        </div>
+                                        <div className="space-y-1">
+                                            <p className="font-semibold">Changing your identity</p>
+                                            <p className="leading-relaxed opacity-80 text-xs">This will update your profile URL and break existing mentions/links across the network. Changes to usernames are strictly regulated.</p>
+                                        </div>
+                                    </div>
                                 )}
                             </div>
                         </div>
@@ -261,7 +298,7 @@ export function EditProfileTabs({ profile, onChange, onSaveSection, onResetSecti
 
                         <div className="grid grid-cols-2 gap-4">
                             <div>
-                                <Label>Location</Label>
+                                <Label className="text-zinc-600 dark:text-zinc-400">Location</Label>
                                 <Input
                                     value={formData.location}
                                     onChange={(e) => updateForm('location', e.target.value)}
@@ -270,7 +307,7 @@ export function EditProfileTabs({ profile, onChange, onSaveSection, onResetSecti
                                 />
                             </div>
                             <div>
-                                <Label>Website</Label>
+                                <Label className="text-zinc-600 dark:text-zinc-400">Website</Label>
                                 <Input
                                     value={formData.website}
                                     onChange={(e) => updateForm('website', e.target.value)}
@@ -281,7 +318,7 @@ export function EditProfileTabs({ profile, onChange, onSaveSection, onResetSecti
                         </div>
 
                         <div>
-                            <Label>Availability Status</Label>
+                            <Label className="text-zinc-600 dark:text-zinc-400">Availability Status</Label>
                             <div className="flex flex-wrap gap-2 mt-2">
                                 {['available', 'busy', 'focusing', 'offline'].map((status) => (
                                     <button
@@ -301,134 +338,49 @@ export function EditProfileTabs({ profile, onChange, onSaveSection, onResetSecti
                             </div>
                         </div>
                     </div>
-                    <SectionActions
-                        onSave={() => onSaveSection?.('general')}
-                        onReset={() => onResetSection?.('general')}
-                    />
                 </TabsContent>
 
                 {/* --- EXPERIENCE TAB --- */}
-                <TabsContent value="experience" className="space-y-4 mt-0">
+                <TabsContent value="experience" className="space-y-6 mt-0">
+                    <h2 className="text-xl font-semibold text-zinc-900 dark:text-white">Work Experience</h2>
                     <HistoryList
                         items={formData.experience}
                         onChange={(items) => updateForm('experience', items)}
                         type="experience"
                     />
-                    <SectionActions
-                        onSave={() => onSaveSection?.('experience')}
-                        onReset={() => onResetSection?.('experience')}
-                    />
                 </TabsContent>
 
                 {/* --- EDUCATION TAB --- */}
-                <TabsContent value="education" className="space-y-4 mt-0">
+                <TabsContent value="education" className="space-y-6 mt-0">
+                    <h2 className="text-xl font-semibold text-zinc-900 dark:text-white">Education History</h2>
                     <HistoryList
                         items={formData.education}
                         onChange={(items) => updateForm('education', items)}
                         type="education"
                     />
-                    <SectionActions
-                        onSave={() => onSaveSection?.('education')}
-                        onReset={() => onResetSection?.('education')}
-                    />
                 </TabsContent>
 
                 {/* --- SKILLS TAB --- */}
-                <TabsContent value="skills" className="space-y-4 mt-0">
+                <TabsContent value="skills" className="space-y-6 mt-0">
+                    <h2 className="text-xl font-semibold text-zinc-900 dark:text-white">Skills & Expertise</h2>
                     <SkillsEditor
                         skills={formData.skills}
                         onChange={(skills) => updateForm('skills', skills)}
                     />
-                    <SectionActions
-                        onSave={() => onSaveSection?.('skills')}
-                        onReset={() => onResetSection?.('skills')}
-                    />
                 </TabsContent>
 
                 {/* --- SOCIAL TAB --- */}
-                <TabsContent value="social" className="space-y-4 mt-0">
+                <TabsContent value="social" className="space-y-6 mt-0">
+                    <h2 className="text-xl font-semibold text-zinc-900 dark:text-white">Social Presence</h2>
                     <SocialLinksEditor
                         links={formData.socialLinks}
                         onChange={(links) => updateForm('socialLinks', links)}
                     />
-                    <SectionActions
-                        onSave={() => onSaveSection?.('social')}
-                        onReset={() => onResetSection?.('social')}
-                    />
                 </TabsContent>
-
-                {/* --- PREVIEW TAB --- */}
-                <TabsContent value="preview" className="space-y-4 mt-0">
-                    <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
-                        <div className="flex items-center gap-3">
-                            <div className="relative w-14 h-14 rounded-xl overflow-hidden bg-zinc-200 dark:bg-zinc-800">
-                                {formData.avatar_url ? (
-                                    <Image
-                                        src={formData.avatar_url}
-                                        alt="Preview avatar"
-                                        fill
-                                        className="object-cover"
-                                        sizes="56px"
-                                    />
-                                ) : (
-                                    <div className="w-full h-full flex items-center justify-center text-lg font-semibold text-zinc-500">
-                                        {(formData.full_name?.[0] || formData.username?.[0] || "?").toUpperCase()}
-                                    </div>
-                                )}
-                            </div>
-                            <div className="min-w-0">
-                                <div className="font-semibold text-zinc-900 dark:text-zinc-100 truncate">
-                                    {formData.full_name || "Your name"}
-                                </div>
-                                <div className="text-xs text-zinc-500 truncate">
-                                    @{formData.username || "username"}
-                                </div>
-                                {formData.headline ? (
-                                    <div className="text-sm text-zinc-600 dark:text-zinc-300 truncate">
-                                        {formData.headline}
-                                    </div>
-                                ) : null}
-                            </div>
-                        </div>
-                        {formData.bio ? (
-                            <p className="mt-3 text-sm text-zinc-700 dark:text-zinc-300 whitespace-pre-wrap">
-                                {formData.bio}
-                            </p>
-                        ) : null}
-                        <div className="mt-3 flex flex-wrap gap-2">
-                            {(formData.skills || []).slice(0, 6).map((skill: string) => (
-                                <span
-                                    key={skill}
-                                    className="px-2.5 py-1 rounded-full text-xs border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800"
-                                >
-                                    {skill}
-                                </span>
-                            ))}
-                        </div>
-                    </div>
-                </TabsContent>
+                </div>
             </div>
         </Tabs>
     );
-}
-
-function SectionActions({
-    onSave,
-    onReset,
-}: {
-    onSave?: () => void;
-    onReset?: () => void;
-}) {
-    return (
-        <div className="pt-2 flex items-center justify-end gap-2">
-            <Button type="button" variant="ghost" size="sm" onClick={onReset} disabled={!onReset}>
-                Reset section
-            </Button>
-            <Button type="button" size="sm" onClick={onSave} disabled={!onSave}>
-                Save section
-            </Button>
-        </div>
-    )
 }
 
 // --- SUB COMPONENTS ---

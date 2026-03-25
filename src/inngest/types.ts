@@ -33,8 +33,40 @@ type GitPullEvent = {
     };
 };
 
+type AccountCleanupEvent = {
+    data: {
+        userId: string;
+        deletionId: string;
+    };
+};
+
+type WorkspaceCountersRefreshEvent = {
+    data: {
+        userId: string;
+    };
+};
+
+type ConnectionsBulkEvent = {
+    data: {
+        userId: string;
+        action: 'accept' | 'reject';
+        limit: number;
+    };
+};
+
+type ConnectionsSyncSuggestionsEvent = {
+    data: {
+        userId: string;
+    };
+};
+
 export const schemas = new EventSchemas().fromRecord<{
     "project/import": ProjectImportEvent;
     "git/push": GitPushEvent;
     "git/pull": GitPullEvent;
+    "account/cleanup": AccountCleanupEvent;
+    "workspace/counters.refresh": WorkspaceCountersRefreshEvent;
+    "workspace/connections.bulk": ConnectionsBulkEvent;
+    "workspace/connections.sync_suggestions": ConnectionsSyncSuggestionsEvent;
 }>();
+

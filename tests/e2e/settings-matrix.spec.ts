@@ -33,15 +33,48 @@ test.describe("Settings matrix @critical", () => {
     await expect(page.getByText("Account Details")).toBeVisible();
     await expect(page.getByText("Cache Management")).toBeVisible();
     await expect(page.getByText("Danger Zone")).toBeVisible();
+
+    // Test deletion wizard opens with multi-step UI
     await page.getByRole("button", { name: "Delete" }).click();
-    await expect(page.getByText("Delete account").first()).toBeVisible();
+    await expect(page.getByText("Delete Account").first()).toBeVisible();
+    await expect(page.getByText("Step 1 of 5")).toBeVisible();
+    await expect(page.getByText("Summary")).toBeVisible();
+
+    // Verify data summary is shown (Step 1)
+    await expect(page.getByText("Projects").first()).toBeVisible();
+    await expect(page.getByText("Connections").first()).toBeVisible();
+
+    // Navigate to Step 2 (Export)
+    await page.getByRole("button", { name: "Continue" }).click();
+    await expect(page.getByText("Step 2 of 5")).toBeVisible();
+    await expect(page.getByText("Download Your Data")).toBeVisible();
+
+    // Navigate to Step 3 (Transfer)
+    await page.getByRole("button", { name: "Continue" }).click();
+    await expect(page.getByText("Step 3 of 5")).toBeVisible();
+
+    // Navigate to Step 4 (Consequences)
+    await page.getByRole("button", { name: "Continue" }).click();
+    await expect(page.getByText("Step 4 of 5")).toBeVisible();
+    await expect(page.getByText("30-Day Grace Period")).toBeVisible();
+
+    // Navigate to Step 5 (Confirm)
+    await page.getByRole("button", { name: "Continue" }).click();
+    await expect(page.getByText("Step 5 of 5")).toBeVisible();
+    await expect(page.getByPlaceholder("Type DELETE")).toBeVisible();
+
+    // Go back to verify Back button works
+    await page.getByRole("button", { name: "Back" }).click();
+    await expect(page.getByText("Step 4 of 5")).toBeVisible();
+
+    // Cancel the wizard
     await page.getByRole("button", { name: "Cancel" }).click();
 
     await page.goto("/settings/security");
     await expect(page.getByRole("heading", { name: "Security" })).toBeVisible();
     await expect(page.getByText("Security Overview")).toBeVisible();
     await expect(page.getByText("Authenticator App")).toBeVisible();
-    await expect(page.getByText("Password")).toBeVisible();
+    await expect(page.getByTestId("security-password-section")).toBeVisible();
     await expect(page.getByText("Active Sessions")).toBeVisible();
     await expect(page.getByText("Recent Login Activity")).toBeVisible();
     await expect(page.getByText("Security Activity")).toBeVisible();

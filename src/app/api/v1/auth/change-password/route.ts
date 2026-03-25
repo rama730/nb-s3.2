@@ -13,6 +13,7 @@ import { isEmailVerified } from "@/lib/auth/email-verification";
 import { getVerifiedTotpFactors, listSecurityMfaFactors } from "@/lib/security/mfa";
 import { verifyPasswordCredential } from "@/lib/security/password-auth";
 import { resolveSecurityStepUp } from "@/lib/security/step-up";
+import { logger } from "@/lib/logger";
 
 type ChangePasswordBody = {
   currentPassword?: string;
@@ -187,16 +188,21 @@ export async function POST(request: Request) {
     if (accountHasPassword) {
       const verifyResult = await verifyPasswordCredential(auth.user.email, currentPassword);
       if (!verifyResult.ok) {
+        const invalidCredentials = verifyResult.reason === "invalid_credentials";
         logApiRoute(request, {
           requestId,
           action: "auth.changePassword.post",
           userId: auth.user.id,
           startedAt,
           success: false,
-          status: 400,
-          errorCode: "CURRENT_PASSWORD_INVALID",
+          status: invalidCredentials ? 400 : 500,
+          errorCode: invalidCredentials ? "CURRENT_PASSWORD_INVALID" : "INTERNAL_ERROR",
         });
-        return jsonError(verifyResult.message || "Current password is incorrect", 400, "CURRENT_PASSWORD_INVALID");
+        return jsonError(
+          verifyResult.message || (invalidCredentials ? "Current password is incorrect" : "Unable to verify password"),
+          invalidCredentials ? 400 : 500,
+          invalidCredentials ? "CURRENT_PASSWORD_INVALID" : "INTERNAL_ERROR",
+        );
       }
     }
 
@@ -214,16 +220,25 @@ export async function POST(request: Request) {
       return jsonError(updateResult.error.message || "Password update failed", 400, "PASSWORD_CHANGE_FAILED");
     }
 
-    await recordSecurityEvent({
-      userId: auth.user.id,
-      eventType: accountHasPassword ? "password_changed" : "password_set",
-      request,
-      previousValue: { hasPassword: accountHasPassword },
-      nextValue: { hasPassword: true },
-      metadata: {
-        hasAuthenticatorApp: hasVerifiedTotp,
-      },
-    });
+    try {
+      await recordSecurityEvent({
+        userId: auth.user.id,
+        eventType: accountHasPassword ? "password_changed" : "password_set",
+        request,
+        previousValue: { hasPassword: accountHasPassword },
+        nextValue: { hasPassword: true },
+        metadata: {
+          hasAuthenticatorApp: hasVerifiedTotp,
+        },
+      });
+    } catch (auditError) {
+      logger.error("auth.change_password.audit_failed", {
+        requestId,
+        userId: auth.user.id,
+        eventType: accountHasPassword ? "password_changed" : "password_set",
+        error: auditError,
+      });
+    }
 
     logApiRoute(request, {
       requestId,

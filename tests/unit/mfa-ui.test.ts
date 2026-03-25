@@ -14,10 +14,15 @@ describe("mfa ui helpers", () => {
         );
     });
 
+    it("does not double-encode an already encoded svg data url payload", () => {
+        const value = "data:image/svg+xml;utf-8,%3Csvg%3E%3C%2Fsvg%3E";
+        assert.equal(normalizeTotpQrCodeSource(value), value);
+    });
+
     it("wraps raw svg qr payloads into a data url", () => {
         const value = '<?xml version=\"1.0\"?><svg></svg>';
         const normalized = normalizeTotpQrCodeSource(value);
-        assert.ok(normalized?.startsWith("data:image/svg+xml;utf-8,"));
+        assert.ok(normalized?.startsWith("data:image/svg+xml;charset=utf-8,"));
     });
 
     it("maps invalid totp codes to a clearer user message", () => {

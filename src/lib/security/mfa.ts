@@ -1,5 +1,5 @@
 type AuthMfaFactor = {
-  id: string;
+  id?: string | number | null;
   factor_type: string;
   friendly_name?: string;
   created_at?: string;
@@ -13,6 +13,14 @@ export type SecurityMfaFactor = {
   created_at?: string;
   status: "verified" | "unverified";
 };
+
+function requireSecurityMfaFactorId(factor: AuthMfaFactor) {
+  if (factor.id === undefined || factor.id === null) {
+    throw new Error(`MFA factor is missing an id for factor_type "${factor.factor_type}"`);
+  }
+
+  return String(factor.id);
+}
 
 export async function listSecurityMfaFactors(
   supabase: {
@@ -32,12 +40,15 @@ export async function listSecurityMfaFactors(
   }
 
   const result = await mfaApi.listFactors();
+  if (result.error) {
+    throw result.error instanceof Error ? result.error : new Error("Failed to list MFA factors");
+  }
   const allFactors = Array.isArray(result?.data?.all) ? result.data.all : [];
 
   return allFactors
     .filter((factor) => factor?.factor_type === "totp" || factor?.factor_type === "phone")
     .map((factor) => ({
-      id: String(factor.id),
+      id: requireSecurityMfaFactorId(factor),
       type: factor.factor_type === "phone" ? "phone" : "totp",
       friendly_name: factor.friendly_name || undefined,
       created_at: typeof factor.created_at === "string" ? factor.created_at : undefined,

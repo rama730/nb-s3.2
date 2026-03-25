@@ -7,10 +7,22 @@
 import { createClient } from '@/lib/supabase/server'
 import { isEmailVerified } from '@/lib/auth/email-verification'
 import type { Profile } from '@/lib/db/schema'
+import { logger } from '@/lib/logger'
+import { parseStoredRecoveryCodes, type StoredRecoveryCode } from '@/lib/security/recovery-codes'
 
 // Per-instance in-memory profile cache (shared across requests on one instance).
 // In multi-instance deployments this may serve stale data until TTL expires.
-const profileCache = new Map<string, { profile: Profile; timestamp: number }>()
+export type StandardProfile = Omit<Profile, 'securityRecoveryCodes' | 'recoveryCodesGeneratedAt'> & {
+    hasRecoveryCodes: boolean
+}
+
+export type ProtectedRecoveryCodes = {
+    securityRecoveryCodes: StoredRecoveryCode[]
+    recoveryCodesGeneratedAt: Date | null
+    hasRecoveryCodes: boolean
+}
+
+const profileCache = new Map<string, { profile: StandardProfile; timestamp: number }>()
 const CACHE_TTL = 60 * 1000 // 1 minute
 const PROFILE_CACHE_MAX_ENTRIES = 1000
 const PROFILE_IN_MEMORY_CACHE_ENABLED =
@@ -32,7 +44,7 @@ function pruneProfileCache(now = Date.now()) {
     }
 }
 
-function setCachedProfile(userId: string, profile: Profile, now = Date.now()) {
+function setCachedProfile(userId: string, profile: StandardProfile, now = Date.now()) {
     profileCache.delete(userId)
     pruneProfileCache(now)
     profileCache.set(userId, { profile, timestamp: now })
@@ -66,7 +78,7 @@ export interface ProfileUpdateData {
 /**
  * Get profile by user ID with caching
  */
-export async function getProfile(userId: string): Promise<Profile | null> {
+export async function getProfile(userId: string): Promise<StandardProfile | null> {
     // Check per-instance in-memory cache first.
     const now = Date.now()
     if (PROFILE_IN_MEMORY_CACHE_ENABLED) {
@@ -85,16 +97,68 @@ export async function getProfile(userId: string): Promise<Profile | null> {
 
     const { data, error } = await supabase
         .from('profiles')
-        .select('*')
+        .select(`
+            id,
+            email,
+            username,
+            full_name,
+            avatar_url,
+            banner_url,
+            bio,
+            headline,
+            location,
+            website,
+            skills,
+            interests,
+            social_links,
+            visibility,
+            connection_privacy,
+            experience,
+            education,
+            open_to,
+            availability_status,
+            message_privacy,
+            experience_level,
+            hours_per_week,
+            gender_identity,
+            pronouns,
+            workspace_layout,
+            connections_count,
+            projects_count,
+            followers_count,
+            workspace_inbox_count,
+            workspace_due_today_count,
+            workspace_overdue_count,
+            workspace_in_progress_count,
+            security_recovery_codes,
+            recovery_codes_generated_at,
+            deleted_at,
+            created_at,
+            updated_at
+        `)
         .eq('id', userId)
         .maybeSingle() // Use maybeSingle to return null instead of erroring when no profile exists
 
-    if (error || !data) {
+    if (error) {
+        logger.error('profile-service.getProfile.failed', {
+            userId,
+            error: error.message,
+        })
         return null
     }
 
-    // Map snake_case to camelCase for type safety
-    const profile: Profile = {
+    if (!data) {
+        return null
+    }
+
+    const hasRecoveryCodes =
+        (Array.isArray(data.security_recovery_codes) && data.security_recovery_codes.length > 0)
+        || !!data.recovery_codes_generated_at
+
+    // Map snake_case to camelCase for type safety.
+    // Recovery-code hashes stay out of the standard profile surface and must be loaded
+    // through getProtectedRecoveryCodes() from an explicitly authorized security path.
+    const profile: StandardProfile = {
         id: data.id,
         email: data.email,
         username: data.username,
@@ -128,10 +192,7 @@ export async function getProfile(userId: string): Promise<Profile | null> {
         workspaceDueTodayCount: data.workspace_due_today_count ?? 0,
         workspaceOverdueCount: data.workspace_overdue_count ?? 0,
         workspaceInProgressCount: data.workspace_in_progress_count ?? 0,
-        securityRecoveryCodes: data.security_recovery_codes || [],
-        recoveryCodesGeneratedAt: data.recovery_codes_generated_at
-            ? new Date(data.recovery_codes_generated_at)
-            : null,
+        hasRecoveryCodes,
         deletedAt: data.deleted_at ?? null,
         createdAt: new Date(data.created_at),
         updatedAt: new Date(data.updated_at),
@@ -144,13 +205,51 @@ export async function getProfile(userId: string): Promise<Profile | null> {
     return profile
 }
 
+export async function getProtectedRecoveryCodes(
+    userId: string,
+    options: { authorized: boolean },
+): Promise<ProtectedRecoveryCodes | null> {
+    if (!options.authorized) {
+        throw new Error('Recovery code access is not authorized')
+    }
+
+    const supabase = await createClient()
+    const { data, error } = await supabase
+        .from('profiles')
+        .select('security_recovery_codes, recovery_codes_generated_at')
+        .eq('id', userId)
+        .maybeSingle()
+
+    if (error) {
+        logger.error('profile-service.getProtectedRecoveryCodes.failed', {
+            userId,
+            error: error.message,
+        })
+        return null
+    }
+
+    if (!data) {
+        return null
+    }
+
+    const securityRecoveryCodes = parseStoredRecoveryCodes(data.security_recovery_codes)
+    return {
+        // Stored recovery codes are hashed + salted entries only, never plaintext values.
+        securityRecoveryCodes,
+        recoveryCodesGeneratedAt: data.recovery_codes_generated_at
+            ? new Date(data.recovery_codes_generated_at)
+            : null,
+        hasRecoveryCodes: securityRecoveryCodes.length > 0 || !!data.recovery_codes_generated_at,
+    }
+}
+
 /**
  * Update profile with automatic cache invalidation
  */
 export async function updateProfile(
     userId: string,
     data: ProfileUpdateData
-): Promise<{ success: boolean; error?: string; profile?: Profile }> {
+): Promise<{ success: boolean; error?: string; profile?: StandardProfile }> {
     const supabase = await createClient()
 
     // Build update object with snake_case keys
@@ -249,14 +348,22 @@ export async function syncProfileToJWT(
     // For now, we store in user metadata which is accessible in session
     const supabase = await createClient()
 
-    const { data: authData } = await supabase.auth.getUser()
+    const { data: authData, error: authError } = await supabase.auth.getUser()
+    if (authError || !authData.user) {
+        console.error('Failed to get user for JWT sync', {
+            userId,
+            error: authError?.message ?? 'missing_user',
+        })
+        return
+    }
+
     const user = authData.user
 
     await supabase.auth.updateUser({
         data: {
             username,
             onboarded: true,
-            email_verified: isEmailVerified(user as Record<string, unknown> | null),
+            email_verified: isEmailVerified(user),
         }
     })
 }

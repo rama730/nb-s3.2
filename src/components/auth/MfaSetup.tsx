@@ -234,12 +234,21 @@ export function MfaSetup({ initialFactors, recoveryCodes }: MfaSetupProps) {
         throw result.error;
       }
 
-      await handleGenerateRecoveryCodes("initial");
       toast.success("Authenticator app enabled");
       resetSetupDialog();
       setSetupOpen(false);
       await loadFactors();
       await refreshSecurity();
+
+      try {
+        await handleGenerateRecoveryCodes("initial");
+      } catch (recoveryError) {
+        toast.error(
+          recoveryError instanceof Error
+            ? `Authenticator app enabled, but recovery code generation failed: ${recoveryError.message}`
+            : "Authenticator app enabled, but recovery code generation failed. Generate them from Security settings.",
+        );
+      }
     } catch (error) {
       toast.error(getTotpVerificationErrorMessage(error as Error));
     } finally {
@@ -323,7 +332,11 @@ export function MfaSetup({ initialFactors, recoveryCodes }: MfaSetupProps) {
       toast.error("Could not open the print dialog on this device");
       return;
     }
-    printWindow.document.write(`<pre>${formatRecoveryCodesForExport(revealedRecoveryCodes.codes)}</pre>`);
+    const recoveryCodesText = formatRecoveryCodesForExport(revealedRecoveryCodes.codes);
+    const pre = printWindow.document.createElement("pre");
+    pre.textContent = recoveryCodesText;
+    printWindow.document.body.innerHTML = "";
+    printWindow.document.body.appendChild(pre);
     printWindow.document.close();
     printWindow.focus();
     printWindow.print();

@@ -161,6 +161,11 @@ export function createPresenceManager() {
     }
 
     function removeUser(userId: string) {
+        for (const [userHash, mappedUserId] of userHashToId) {
+            if (mappedUserId !== userId) continue;
+            userHashToId.delete(userHash);
+            userHashToName.delete(userHash);
+        }
         cursors.delete(userId);
     }
 

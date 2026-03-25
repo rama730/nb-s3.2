@@ -49,7 +49,12 @@ export function useTaskSubtasks(taskId: string) {
     }, [fetchSubtasks]);
 
     useEffect(() => {
-        if (!taskId) return;
+        if (!taskId) {
+            setResourceConnected(false);
+            return;
+        }
+
+        setResourceConnected(false);
 
         const unsubscribe = subscribeTaskResource({
             taskId,
@@ -79,16 +84,20 @@ export function useTaskSubtasks(taskId: string) {
             },
         });
 
-        const cleanup = isConnected && resourceConnected
-            ? () => undefined
-            : createVisibilityAwareInterval(() => {
-                void fetchSubtasks();
-            }, 30000);
-
         return () => {
-            cleanup();
             unsubscribe();
         };
+    }, [taskId]);
+
+    useEffect(() => {
+        if (!taskId) return;
+        if (isConnected && resourceConnected) return;
+
+        const cleanup = createVisibilityAwareInterval(() => {
+            void fetchSubtasks();
+        }, 30000);
+
+        return cleanup;
     }, [fetchSubtasks, isConnected, resourceConnected, taskId]);
 
     return { subtasks, isLoading };

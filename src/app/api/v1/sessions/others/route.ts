@@ -1,8 +1,5 @@
 import { validateCsrf } from "@/lib/security/csrf";
-import { eq } from "drizzle-orm";
 import { resolvePasswordCredentialState } from "@/lib/auth/account-identity";
-import { db } from "@/lib/db";
-import { profiles } from "@/lib/db/schema";
 import {
   enforceRouteLimit,
   getSessionIdentifier,
@@ -12,10 +9,11 @@ import {
   logApiRoute,
   requireAuthenticatedUser,
 } from "@/app/api/v1/_shared";
+import { getProtectedRecoveryCodes } from "@/lib/services/profile-service";
 import { getLatestPasswordChangeAt, recordSecurityEvent } from "@/lib/security/audit";
 import { getVerifiedTotpFactors, listSecurityMfaFactors } from "@/lib/security/mfa";
-import { countRemainingRecoveryCodes, parseStoredRecoveryCodes } from "@/lib/security/recovery-codes";
-import { listActiveSessions } from "@/lib/security/session-activity";
+import { countRemainingRecoveryCodes } from "@/lib/security/recovery-codes";
+import { countOtherActiveSessions } from "@/lib/security/session-activity";
 import { resolveSecurityStepUp, type SecurityStepUpMethod } from "@/lib/security/step-up";
 
 export async function DELETE(request: Request) {
@@ -75,14 +73,8 @@ export async function DELETE(request: Request) {
   try {
     const factors = await listSecurityMfaFactors(auth.supabase);
     const hasVerifiedTotp = getVerifiedTotpFactors(factors).length > 0;
-    const profile = await db.query.profiles.findFirst({
-      columns: {
-        securityRecoveryCodes: true,
-      },
-      where: eq(profiles.id, user.id),
-    });
     const remainingRecoveryCodes = countRemainingRecoveryCodes(
-      parseStoredRecoveryCodes(profile?.securityRecoveryCodes),
+      (await getProtectedRecoveryCodes(user.id, { authorized: true }))?.securityRecoveryCodes ?? [],
     );
     const availableMethods: SecurityStepUpMethod[] = [];
     if (hasVerifiedTotp) availableMethods.push("totp");
@@ -110,8 +102,7 @@ export async function DELETE(request: Request) {
       data: { session },
     } = await auth.supabase.auth.getSession();
     const currentSessionId = session ? getSessionIdentifier(session) ?? null : null;
-    const sessions = await listActiveSessions(user.id, currentSessionId, 20);
-    const revokedCount = sessions.filter((entry) => !entry.is_current).length;
+    const revokedCount = await countOtherActiveSessions(user.id, currentSessionId);
 
     const result = await auth.supabase.auth.signOut({ scope: "others" });
     if (result.error) {

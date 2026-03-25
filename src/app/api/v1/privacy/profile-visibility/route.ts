@@ -1,4 +1,3 @@
-import { eq } from "drizzle-orm";
 import {
   enforceRouteLimit,
   getRequestId,
@@ -7,9 +6,10 @@ import {
   logApiRoute,
   requireAuthenticatedUser,
 } from "@/app/api/v1/_shared";
-import { db } from "@/lib/db";
-import { profiles } from "@/lib/db/schema";
-import { recordPrivacyEvent } from "@/lib/privacy/audit";
+import {
+  isProfileNotFoundError,
+  updateProfileVisibilitySetting,
+} from "@/lib/privacy/settings";
 
 const VALID_PROFILE_VISIBILITY = new Set(["public", "connections", "private"]);
 
@@ -31,26 +31,10 @@ export async function PATCH(request: Request) {
       return jsonError("Invalid profile visibility", 400, "BAD_REQUEST");
     }
 
-    const [current] = await db
-      .select({ visibility: profiles.visibility })
-      .from(profiles)
-      .where(eq(profiles.id, auth.user.id))
-      .limit(1);
-
-    await db
-      .update(profiles)
-      .set({
-        visibility: nextVisibility as "public" | "connections" | "private",
-        updatedAt: new Date(),
-      })
-      .where(eq(profiles.id, auth.user.id));
-
-    await recordPrivacyEvent({
+    const result = await updateProfileVisibilitySetting({
       userId: auth.user.id,
-      eventType: "profile_visibility_changed",
+      nextValue: nextVisibility as "public" | "connections" | "private",
       request,
-      previousValue: { visibility: current?.visibility ?? "public" },
-      nextValue: { visibility: nextVisibility },
     });
 
     logApiRoute(request, {
@@ -61,9 +45,12 @@ export async function PATCH(request: Request) {
       success: true,
       status: 200,
     });
-    return jsonSuccess({ visibility: nextVisibility });
+    return jsonSuccess({ visibility: result.nextValue });
   } catch (error) {
     console.error("[api/v1/privacy/profile-visibility] failed", error);
+    if (isProfileNotFoundError(error)) {
+      return jsonError("Profile not found", 404, "NOT_FOUND");
+    }
     return jsonError("Failed to update profile visibility", 500, "INTERNAL_ERROR");
   }
 }

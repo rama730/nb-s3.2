@@ -2,15 +2,13 @@
 
 import { memo, useState, useRef, useEffect } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Plus, Grid3X3, List, CheckSquare, Filter } from 'lucide-react';
+import { Plus, Grid3X3, List, Filter } from 'lucide-react';
 import { FILTER_VIEWS, VIEW_MODES, FilterView, ViewMode } from '@/constants/hub';
 import { HubFilters } from '@/types/hub';
 import { useReducedMotionPreference } from '@/components/providers/theme-provider';
 
 interface HubHeaderProps {
     filterView: FilterView;
-    selectionMode: boolean;
-    onToggleSelectionMode: () => void;
     onApplyFilters: (filters: { status: string; type: string; sort: string; tech: string[]; hideOpened?: boolean }) => void;
     onCreateProject: () => void;
     onPreloadModal: () => void;
@@ -21,8 +19,6 @@ interface HubHeaderProps {
 
 const HubHeader = memo(function HubHeader({
     filterView,
-    selectionMode,
-    onToggleSelectionMode,
     onApplyFilters,
     onCreateProject,
     onPreloadModal,
@@ -136,17 +132,7 @@ const HubHeader = memo(function HubHeader({
                     </button>
                 </div>
 
-                {/* Selection Mode Toggle */}
-                <button
-                    onClick={onToggleSelectionMode}
-                    className={`p-2 rounded-lg transition-colors ${selectionMode
-                            ? 'app-selected-surface'
-                            : 'text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800'
-                        }`}
-                    title="Selection mode"
-                >
-                    <CheckSquare className="w-5 h-5" />
-                </button>
+
 
                 {/* Main Filter Dropdown Toggle */}
                 <div className="relative" ref={filterDropdownRef}>

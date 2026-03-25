@@ -70,11 +70,25 @@ function transformProfile(profile: any): Profile | null {
             // JSON fields need no mapping usually if they are standard in DB
             socialLinks: profile.social_links || {},
             availabilityStatus: profile.availability_status,
+            messagePrivacy: profile.message_privacy,
+            connectionPrivacy: profile.connection_privacy,
             openTo: profile.open_to || [],
+            experienceLevel: profile.experience_level,
+            hoursPerWeek: profile.hours_per_week,
+            genderIdentity: profile.gender_identity,
+            workspaceLayout: profile.workspace_layout,
+            connectionsCount: profile.connections_count ?? 0,
+            projectsCount: profile.projects_count ?? 0,
+            followersCount: profile.followers_count ?? 0,
             workspaceInboxCount: profile.workspace_inbox_count ?? 0,
             workspaceDueTodayCount: profile.workspace_due_today_count ?? 0,
             workspaceOverdueCount: profile.workspace_overdue_count ?? 0,
             workspaceInProgressCount: profile.workspace_in_progress_count ?? 0,
+            securityRecoveryCodes: profile.security_recovery_codes ?? [],
+            recoveryCodesGeneratedAt: profile.recovery_codes_generated_at,
+            createdAt: profile.created_at ? new Date(profile.created_at) : undefined,
+            updatedAt: profile.updated_at ? new Date(profile.updated_at) : undefined,
+            deletedAt: profile.deleted_at ? new Date(profile.deleted_at) : undefined,
             // Ensure all required fields from Profile type are present
             // We cast because we know the shape matches roughly
         } as unknown as Profile;
@@ -85,10 +99,14 @@ function transformProfile(profile: any): Profile | null {
 
 function profileNeedsHydration(profile: any): boolean {
     if (!profile || typeof profile !== 'object') return false;
+    const experience = profile.experience ?? profile.experience_data;
+    const education = profile.education ?? profile.education_data;
+    const workspaceLayout = profile.workspaceLayout ?? profile.workspace_layout;
+
     return (
-        profile.experience === undefined
-        || profile.education === undefined
-        || profile.workspaceLayout === undefined
+        experience === undefined
+        || education === undefined
+        || workspaceLayout === undefined
     );
 }
 

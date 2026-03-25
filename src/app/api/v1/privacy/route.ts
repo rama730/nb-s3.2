@@ -95,6 +95,14 @@ function formatPrivacyActivityEntry(entry: Awaited<ReturnType<typeof listPrivacy
         label: "Account unblocked",
         summary: "Removed a blocked account restriction.",
       };
+    default:
+      return {
+        id: entry.id,
+        eventType: entry.eventType,
+        createdAt: entry.createdAt,
+        label: "Unknown privacy event",
+        summary: "A privacy event was recorded.",
+      };
   }
 }
 

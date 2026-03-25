@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+
 import { jsonError, jsonSuccess } from '@/app/api/v1/_envelope'
 import { consumeRateLimitForRoute } from '@/lib/security/rate-limit'
 import { decodePublicProjectsCursor } from '@/lib/projects/public-feed'
@@ -24,7 +26,31 @@ function getRequestPath(request: Request) {
 }
 
 function getRequestIp(request: Request) {
-    return request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown'
+    const forwardedFor = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
+    if (forwardedFor) {
+        return forwardedFor
+    }
+
+    const realIp = request.headers.get('x-real-ip')?.trim()
+    if (realIp) {
+        return realIp
+    }
+
+    const requestPath = getRequestPath(request)
+    const userAgent = request.headers.get('user-agent')?.trim() || 'ua:missing'
+    const acceptLanguage = request.headers.get('accept-language')?.trim() || 'lang:missing'
+    const fingerprint = createHash('sha1')
+        .update(`${userAgent}|${acceptLanguage}|${request.url}`)
+        .digest('hex')
+        .slice(0, 16)
+
+    logger.warn('api.v1.projects.missing_forwarded_ip', {
+        route: requestPath,
+        missingHeaders: ['x-forwarded-for', 'x-real-ip'],
+        fingerprint,
+    })
+
+    return `missing-ip:${fingerprint}`
 }
 
 function parsePositiveInt(value: string | null, fallback: number) {
@@ -138,9 +164,6 @@ export async function GET(request: Request) {
         return jsonError('Feed temporarily unavailable', 503, 'INTERNAL_ERROR')
     }
 
-    const rateLimitKey = `api:v1:projects:get:${getRequestIp(request)}`
-    const rateLimit = await consumeRateLimitForRoute('publicRead', rateLimitKey, 180, 60)
-
     if (freshCache) {
         logProjectsRequest(request, {
             requestId,
@@ -165,6 +188,9 @@ export async function GET(request: Request) {
             },
         )
     }
+
+    const rateLimitKey = `api:v1:projects:get:${getRequestIp(request)}`
+    const rateLimit = await consumeRateLimitForRoute('publicRead', rateLimitKey, 180, 60)
 
     if (!rateLimit.allowed) {
         if (rateLimit.degraded && staleCache) {

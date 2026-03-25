@@ -1,4 +1,4 @@
-import { readdirSync, statSync } from 'fs'
+import { lstatSync, readdirSync } from 'fs'
 
 import { sql } from 'drizzle-orm'
 
@@ -39,18 +39,49 @@ export async function withTenantSyncLock<T>(tenantId: string | null | undefined,
         return { skipped: true, value: null }
     }
 
+    let taskResult: T | null = null
+    let taskError: unknown = null
+
     try {
-        return {
-            skipped: false,
-            value: await task(),
-        }
+        taskResult = await task()
+    } catch (error) {
+        taskError = error
     } finally {
-        await db.execute(sql`
-            SELECT pg_advisory_unlock(
-                hashtext(${TENANT_LOCK_NAMESPACE}),
-                hashtext(CAST(${tenantId} AS text))
-            )
-        `)
+        let unlockError: unknown = null
+
+        try {
+            const unlockResult = await db.execute<{ pg_advisory_unlock: boolean }>(sql`
+                SELECT pg_advisory_unlock(
+                    hashtext(${TENANT_LOCK_NAMESPACE}),
+                    hashtext(CAST(${tenantId} AS text))
+                ) AS pg_advisory_unlock
+            `)
+            const unlockRow = Array.from(unlockResult)[0]
+            if (!unlockRow?.pg_advisory_unlock) {
+                unlockError = new Error(`Failed to release advisory lock for tenant ${tenantId}`)
+                console.error('[github-worker-guard] advisory unlock returned false', {
+                    tenantId,
+                })
+            }
+        } catch (error) {
+            unlockError = error
+            console.error('[github-worker-guard] advisory unlock threw', {
+                tenantId,
+                error,
+            })
+        }
+
+        if (taskError) {
+            throw taskError
+        }
+        if (unlockError) {
+            throw unlockError
+        }
+    }
+
+    return {
+        skipped: false,
+        value: taskResult,
     }
 }
 
@@ -63,7 +94,11 @@ export function assertRepositoryWithinBudgets(rootDir: string, input: { job: str
             if (entry === '.git') continue
 
             const fullPath = appendSafePathSegment(dir, entry, 'repository entry')
-            const stat = statSync(fullPath)
+            const stat = lstatSync(fullPath)
+
+            if (stat.isSymbolicLink()) {
+                continue
+            }
 
             if (stat.isDirectory()) {
                 scan(fullPath)
@@ -100,4 +135,3 @@ export function assertRepositoryWithinBudgets(rootDir: string, input: { job: str
         totalBytes,
     }
 }
-

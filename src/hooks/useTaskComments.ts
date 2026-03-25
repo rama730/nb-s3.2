@@ -38,7 +38,9 @@ export function useTaskComments(taskId: string, currentUserId?: string) {
     const { isConnected } = useRealtime();
     const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const isMountedRef = useRef(true);
-    const [resourceConnected, setResourceConnected] = useState(false);
+    const resourceConnectedRef = useRef(false);
+    const pollingRef = useRef<ReturnType<typeof createVisibilityAwareInterval> | null>(null);
+    const isConnectedRef = useRef(isConnected);
 
     useEffect(() => {
         isMountedRef.current = true;
@@ -90,12 +92,34 @@ export function useTaskComments(taskId: string, currentUserId?: string) {
         }, 120);
     }, [refreshComments]);
 
+    const syncPolling = useCallback(() => {
+        const polling = pollingRef.current;
+        if (!polling) return;
+
+        if (isConnectedRef.current && resourceConnectedRef.current) {
+            polling.stop();
+            return;
+        }
+
+        polling.start();
+    }, []);
+
+    useEffect(() => {
+        isConnectedRef.current = isConnected;
+        syncPolling();
+    }, [isConnected, syncPolling]);
+
     useEffect(() => {
         void refreshComments();
     }, [refreshComments]);
 
     useEffect(() => {
-        if (!taskId) return;
+        if (!taskId) {
+            resourceConnectedRef.current = false;
+            return;
+        }
+
+        resourceConnectedRef.current = false;
 
         const unsubscribe = subscribeTaskResource({
             taskId,
@@ -105,22 +129,34 @@ export function useTaskComments(taskId: string, currentUserId?: string) {
                 }
             },
             onStatus: (status) => {
-                setResourceConnected(status === "SUBSCRIBED");
+                resourceConnectedRef.current = status === "SUBSCRIBED";
+                syncPolling();
             },
         });
 
-        const cleanup = isConnected && resourceConnected
-            ? () => undefined
-            : createVisibilityAwareInterval(() => {
-                void refreshComments();
-            }, 30000);
-
         return () => {
-            cleanup();
             if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+            resourceConnectedRef.current = false;
             unsubscribe();
         };
-    }, [isConnected, refreshComments, resourceConnected, scheduleRefresh, taskId]);
+    }, [scheduleRefresh, syncPolling, taskId]);
+
+    useEffect(() => {
+        if (!taskId) return;
+
+        const polling = createVisibilityAwareInterval(() => {
+            void refreshComments();
+        }, 30000);
+        pollingRef.current = polling;
+        syncPolling();
+
+        return () => {
+            if (pollingRef.current === polling) {
+                pollingRef.current = null;
+            }
+            polling();
+        };
+    }, [isConnected, refreshComments, syncPolling, taskId]);
 
     const isLiked = useCallback((comment: Comment) => {
         if (!currentUserId) return false;

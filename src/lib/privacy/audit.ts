@@ -1,4 +1,5 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
+import { buildPseudonymizedAuditRequestMetadata } from "@/lib/audit/request-metadata";
 import { db } from "@/lib/db";
 import { profileAuditEvents } from "@/lib/db/schema";
 
@@ -21,15 +22,9 @@ export type PrivacyActivityEntry = {
   metadata: Record<string, unknown>;
 };
 
-function getRequestIp(request: Request): string | null {
-  const forwardedFor = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
-  return forwardedFor || null;
-}
-
-function getUserAgent(request: Request): string | null {
-  const userAgent = request.headers.get("user-agent")?.trim();
-  return userAgent || null;
-}
+type PrivacyAuditExecutor = Pick<typeof db, "insert">;
+const DEFAULT_PRIVACY_ACTIVITY_LIMIT = 20;
+const MAX_PRIVACY_ACTIVITY_LIMIT = 100;
 
 export async function recordPrivacyEvent(input: {
   userId: string;
@@ -38,24 +33,34 @@ export async function recordPrivacyEvent(input: {
   previousValue?: Record<string, unknown> | null;
   nextValue?: Record<string, unknown> | null;
   metadata?: Record<string, unknown>;
+  executor?: PrivacyAuditExecutor;
 }) {
-  const ipAddress = getRequestIp(input.request);
-  const userAgent = getUserAgent(input.request);
+  const requestMetadata = buildPseudonymizedAuditRequestMetadata(input.request);
 
-  await db.insert(profileAuditEvents).values({
+  // Operational basis: these rows power the user-visible privacy activity history.
+  // Compliance boundary: store only keyed pseudonymous request fingerprints here, never raw
+  // IP addresses or full user-agent strings. Account erasure deletes these rows explicitly.
+  await (input.executor ?? db).insert(profileAuditEvents).values({
     userId: input.userId,
     eventType: input.eventType,
     previousValue: input.previousValue ?? null,
     nextValue: input.nextValue ?? null,
     metadata: {
       ...(input.metadata ?? {}),
-      ...(ipAddress ? { ipAddress } : {}),
-      ...(userAgent ? { userAgent } : {}),
+      ...requestMetadata,
     },
   });
 }
 
 export async function listPrivacyActivity(userId: string, limit: number = 20): Promise<PrivacyActivityEntry[]> {
+  const normalizedLimit = Number.isFinite(limit)
+    ? Math.trunc(limit)
+    : DEFAULT_PRIVACY_ACTIVITY_LIMIT;
+  const safeLimit = Math.min(
+    MAX_PRIVACY_ACTIVITY_LIMIT,
+    Math.max(1, normalizedLimit),
+  );
+
   const rows = await db.query.profileAuditEvents.findMany({
     columns: {
       id: true,
@@ -70,7 +75,7 @@ export async function listPrivacyActivity(userId: string, limit: number = 20): P
       inArray(profileAuditEvents.eventType, [...PRIVACY_ACTIVITY_EVENT_TYPES]),
     ),
     orderBy: [desc(profileAuditEvents.createdAt)],
-    limit,
+    limit: safeLimit,
   });
 
   return rows.map((row) => ({

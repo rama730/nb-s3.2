@@ -13,9 +13,10 @@ import {
     type AppearanceSnapshot,
 } from "@/lib/theme/appearance";
 
+const parsedAppearanceSyncTimeoutMs = Number(process.env.AUTH_MIDDLEWARE_LOOKUP_TIMEOUT_MS);
 const APPEARANCE_SYNC_TIMEOUT_MS = Math.max(
     1_000,
-    Number(process.env.AUTH_MIDDLEWARE_LOOKUP_TIMEOUT_MS || 4_000),
+    Number.isFinite(parsedAppearanceSyncTimeoutMs) ? parsedAppearanceSyncTimeoutMs : 4_000,
 );
 
 function readUserMetadata(user: { user_metadata?: unknown }) {

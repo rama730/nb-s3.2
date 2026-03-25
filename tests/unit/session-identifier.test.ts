@@ -8,6 +8,41 @@ function createJwtWithSessionId(sessionId: string): string {
     return `${header}.${payload}.`;
 }
 
+function encodeBase64BrowserStyle(value: string): string {
+    return Buffer.from(value, "utf8").toString("base64");
+}
+
+async function withBrowserDecodeRuntime<T>(run: () => T | Promise<T>): Promise<T> {
+    const originalBuffer = globalThis.Buffer;
+    const originalAtob = globalThis.atob;
+
+    Object.defineProperty(globalThis, "Buffer", {
+        configurable: true,
+        writable: true,
+        value: undefined,
+    });
+    Object.defineProperty(globalThis, "atob", {
+        configurable: true,
+        writable: true,
+        value: (input: string) => originalBuffer.from(input, "base64").toString("binary"),
+    });
+
+    try {
+        return await run();
+    } finally {
+        Object.defineProperty(globalThis, "Buffer", {
+            configurable: true,
+            writable: true,
+            value: originalBuffer,
+        });
+        Object.defineProperty(globalThis, "atob", {
+            configurable: true,
+            writable: true,
+            value: originalAtob,
+        });
+    }
+}
+
 describe("session identifier helpers", () => {
     it("prefers the explicit session id when present", () => {
         assert.equal(
@@ -36,6 +71,28 @@ describe("session identifier helpers", () => {
             }),
             "jwt-session-id"
         );
+    });
+
+    it("decodes non-ASCII JWT payloads correctly in the browser fallback path", async () => {
+        const sessionId = "sess-雪-🙂";
+        const header = encodeBase64BrowserStyle(JSON.stringify({ alg: "none", typ: "JWT" }))
+            .replace(/\+/g, "-")
+            .replace(/\//g, "_")
+            .replace(/=+$/g, "");
+        const payload = encodeBase64BrowserStyle(JSON.stringify({ session_id: sessionId }))
+            .replace(/\+/g, "-")
+            .replace(/\//g, "_")
+            .replace(/=+$/g, "");
+        const token = `${header}.${payload}.`;
+
+        await withBrowserDecodeRuntime(async () => {
+            assert.equal(
+                getSessionIdentifierFromSession({
+                    access_token: token,
+                }),
+                sessionId
+            );
+        });
     });
 
     it("returns null when no session identifier can be resolved", () => {

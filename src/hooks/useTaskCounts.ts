@@ -82,6 +82,8 @@ export function useTaskCounts(taskId: string) {
     useEffect(() => {
         if (!taskId) return;
 
+        setResourceConnected(false);
+
         const unsubscribe = subscribeTaskResource({
             taskId,
             onEvent: (event) => {

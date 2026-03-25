@@ -129,7 +129,7 @@ export function buildProjectOwnerPresentation(
     ...owner,
     displayName: owner.fullName || owner.username || "Creator",
     isMasked: false,
-    canOpenProfile: true,
+    canOpenProfile: presentation.canOpenProfile,
     badgeText: null,
   };
 }

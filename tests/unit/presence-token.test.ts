@@ -18,6 +18,24 @@ afterEach(() => {
 });
 
 describe("presence token", () => {
+  it("requires a dedicated presence token secret", () => {
+    delete process.env.PRESENCE_TOKEN_SECRET;
+
+    const claims = createPresenceTokenClaims({
+      userId: "user-1",
+      sessionId: "session-1",
+      roomType: "workspace",
+      roomId: "project-1",
+      role: "editor",
+      ttlSeconds: 60,
+    });
+
+    assert.throws(
+      () => signPresenceToken(claims),
+      /PRESENCE_TOKEN_SECRET is required to issue presence room tokens/i,
+    );
+  });
+
   it("signs and verifies room-scoped claims", () => {
     process.env.PRESENCE_TOKEN_SECRET = "presence-test-secret";
 

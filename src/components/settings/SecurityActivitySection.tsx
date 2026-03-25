@@ -56,7 +56,7 @@ export default function SecurityActivitySection({ activity }: SecurityActivitySe
   const [showAll, setShowAll] = useState(false);
   const items = useMemo(() => activity ?? [], [activity]);
   const visibleItems = useMemo(
-    () => items.slice(0, showAll ? 12 : DEFAULT_VISIBLE_ITEMS),
+    () => (showAll ? items : items.slice(0, DEFAULT_VISIBLE_ITEMS)),
     [items, showAll],
   );
 
@@ -86,11 +86,11 @@ export default function SecurityActivitySection({ activity }: SecurityActivitySe
               </div>
             </div>
             <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400">
-              {entry.ipAddress ? <span>{entry.ipAddress}</span> : null}
-              {entry.userAgent ? (
+              {entry.networkFingerprint ? <span>Network {entry.networkFingerprint}</span> : null}
+              {entry.deviceFingerprint ? (
                 <>
-                  {entry.ipAddress ? <span>•</span> : null}
-                  <span>{entry.userAgent}</span>
+                  {entry.networkFingerprint ? <span>•</span> : null}
+                  <span>Device {entry.deviceFingerprint}</span>
                 </>
               ) : null}
             </div>
@@ -103,13 +103,17 @@ export default function SecurityActivitySection({ activity }: SecurityActivitySe
         );
       })}
 
+      <div className="rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-600 dark:border-zinc-800 dark:bg-zinc-950/40 dark:text-zinc-400">
+        Security activity stores pseudonymous network and device fingerprints instead of raw IP addresses or full user-agent strings. These records are removed when you delete your account.
+      </div>
+
       {items.length > DEFAULT_VISIBLE_ITEMS ? (
         <Button
           variant="outline"
           size="sm"
           onClick={() => setShowAll((value) => !value)}
         >
-          {showAll ? "Show less" : `Show ${Math.min(items.length, 12)} security events`}
+          {showAll ? "Show fewer security events" : `Show all ${items.length} security events`}
         </Button>
       ) : null}
     </div>

@@ -224,17 +224,6 @@ export const gitPush = inngest.createFunction(
                         const targetPath = resolvePathUnderRoot(tempDir, filePath, "workspace file path");
                         repoFiles.delete(filePath);
 
-                        if (node.gitHash) {
-                            try {
-                                const existingBuffer = await readFile(targetPath);
-                                if (computeFileHash(existingBuffer) === node.gitHash) {
-                                    return;
-                                }
-                            } catch {
-                                // Missing or unreadable file should be rewritten from workspace state.
-                            }
-                        }
-
                         await mkdir(dirname(targetPath), { recursive: true });
 
                         const { data, error } = await adminClient.storage
@@ -251,10 +240,27 @@ export const gitPush = inngest.createFunction(
                         }
 
                         if (!data) {
+                            logger.warn("github.sync.push.storage.empty_data", {
+                                projectId,
+                                nodeId: node.id,
+                                filePath,
+                                s3Key: node.s3Key,
+                            });
                             return;
                         }
 
                         const buffer = Buffer.from(await data.arrayBuffer());
+                        const workspaceHash = computeFileHash(buffer);
+
+                        try {
+                            const existingBuffer = await readFile(targetPath);
+                            if (computeFileHash(existingBuffer) === workspaceHash) {
+                                return;
+                            }
+                        } catch {
+                            // Missing or unreadable file should be rewritten from workspace state.
+                        }
+
                         await writeFile(targetPath, buffer);
                     });
 

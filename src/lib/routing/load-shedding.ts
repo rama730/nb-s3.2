@@ -8,6 +8,15 @@ export type RouteLoadSheddingPolicy = {
     failMode: 'fail_closed' | 'stale_or_shed'
 }
 
+export type RouteLoadSheddingResult = {
+    enabled: boolean
+    allowed: boolean
+    degraded: boolean
+    resetAt: number | null
+    remaining: number | null
+    policy: RouteLoadSheddingPolicy
+}
+
 function readEnabledFlag() {
     if (process.env.LOAD_SHEDDING_ENABLED === 'true') return true
     if (process.env.LOAD_SHEDDING_ENABLED === 'false') return false
@@ -40,16 +49,20 @@ const ROUTE_LOAD_SHEDDING_POLICIES: Record<RouteClass, RouteLoadSheddingPolicy> 
     },
 }
 
-export async function consumeRouteClassLoadShedding(routeClass: RouteClass) {
+export async function consumeRouteClassLoadShedding(routeClass: RouteClass): Promise<RouteLoadSheddingResult> {
+    const policy = ROUTE_LOAD_SHEDDING_POLICIES[routeClass]
+
     if (!readEnabledFlag()) {
         return {
             enabled: false,
             allowed: true,
-            policy: ROUTE_LOAD_SHEDDING_POLICIES[routeClass],
+            degraded: false,
+            resetAt: null,
+            remaining: null,
+            policy,
         }
     }
 
-    const policy = ROUTE_LOAD_SHEDDING_POLICIES[routeClass]
     const result = await consumeRateLimitPolicy({
         scope: `load-shed:${routeClass}`,
         burst: policy.burst,
@@ -67,4 +80,3 @@ export async function consumeRouteClassLoadShedding(routeClass: RouteClass) {
         policy,
     }
 }
-

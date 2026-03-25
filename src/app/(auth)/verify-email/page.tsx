@@ -14,6 +14,7 @@ function VerifyEmailPageInner() {
     const { user, signOut } = useAuth()
     const supabase = useMemo(() => createClient(), [])
     const [isSending, setIsSending] = useState(false)
+    const [isSigningOut, setIsSigningOut] = useState(false)
     const [message, setMessage] = useState<string | null>(null)
     const [error, setError] = useState<string | null>(null)
 
@@ -103,12 +104,24 @@ function VerifyEmailPageInner() {
                             </Link>
                             <button
                                 type="button"
-                                className="text-muted-foreground hover:text-foreground"
-                                onClick={() => {
-                                    void signOut()
+                                className="text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
+                                disabled={isSigningOut}
+                                onClick={async () => {
+                                    setError(null)
+                                    setIsSigningOut(true)
+                                    try {
+                                        await signOut()
+                                    } catch (signOutError) {
+                                        setError(
+                                            signOutError instanceof Error
+                                                ? signOutError.message
+                                                : 'Failed to sign out. Please try again.',
+                                        )
+                                        setIsSigningOut(false)
+                                    }
                                 }}
                             >
-                                Sign out
+                                {isSigningOut ? 'Signing out...' : 'Sign out'}
                             </button>
                         </div>
                     </CardFooter>
@@ -118,9 +131,29 @@ function VerifyEmailPageInner() {
     )
 }
 
+function VerifyEmailPageFallback() {
+    return (
+        <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-background via-background to-muted/30 p-4">
+            <div className="w-full max-w-md">
+                <Card className="border-0 shadow-xl bg-card/60 backdrop-blur-sm">
+                    <CardHeader className="space-y-3 text-center">
+                        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+                            <Loader2 className="h-7 w-7 animate-spin" />
+                        </div>
+                        <div className="space-y-1">
+                            <CardTitle className="text-2xl">Verify Your Email</CardTitle>
+                            <CardDescription>Loading verification status...</CardDescription>
+                        </div>
+                    </CardHeader>
+                </Card>
+            </div>
+        </div>
+    )
+}
+
 export default function VerifyEmailPage() {
     return (
-        <Suspense>
+        <Suspense fallback={<VerifyEmailPageFallback />}>
             <VerifyEmailPageInner />
         </Suspense>
     )

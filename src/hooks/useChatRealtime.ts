@@ -3,7 +3,7 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { useChatStore } from '@/stores/chatStore';
-import type { RealtimeChannel } from '@supabase/supabase-js';
+import { REALTIME_SUBSCRIBE_STATES, type RealtimeChannel } from '@supabase/supabase-js';
 import type { ConversationRefreshReason, MessageRefreshReason } from '@/lib/realtime/refresh-reasons';
 import { useRealtime } from '@/components/providers/RealtimeProvider';
 import { subscribeActiveResource } from '@/lib/realtime/subscriptions';
@@ -266,8 +266,8 @@ export function useChatRealtime(userId: string | null) {
                     handler: handleMessageVisibilityChange,
                 },
             ],
-            onStatus: (status: string) => {
-                if (status === 'SUBSCRIBED') {
+            onStatus: (status: REALTIME_SUBSCRIBE_STATES) => {
+                if (status === REALTIME_SUBSCRIBE_STATES.SUBSCRIBED) {
                     reconnectAttemptsRef.current = 0;
                     setActiveResourceConnected(true);
                     if (reconnectTimerRef.current) {
@@ -277,7 +277,11 @@ export function useChatRealtime(userId: string | null) {
                     return;
                 }
 
-                if (status === 'CLOSED' || status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+                if (
+                    status === REALTIME_SUBSCRIBE_STATES.CLOSED
+                    || status === REALTIME_SUBSCRIBE_STATES.CHANNEL_ERROR
+                    || status === REALTIME_SUBSCRIBE_STATES.TIMED_OUT
+                ) {
                     scheduleReconnect();
                 }
             },

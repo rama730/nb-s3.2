@@ -28,8 +28,8 @@ type RouteRateLimitPolicy = {
 }
 
 type InMemoryBucket = {
-    count: number
-    resetAt: number
+    tokens: number
+    lastRefillAt: number
 }
 
 const TOKEN_BUCKET_SCRIPT = `
@@ -188,28 +188,39 @@ function resultFromUnavailable(
 function consumeTestRateLimit(identifier: string, limit: number, windowSeconds: number): RateLimitResult {
     const now = Date.now()
     const existing = TEST_BUCKETS.get(identifier)
-    const resetAt = now + windowSeconds * 1000
-
-    if (!existing || existing.resetAt <= now) {
-        TEST_BUCKETS.set(identifier, { count: 1, resetAt })
-        return {
-            allowed: true,
-            count: 1,
-            limit,
-            remaining: Math.max(0, limit - 1),
-            resetAt,
-            degraded: true,
-            reason: 'redis_unavailable',
-        }
+    const refillRate = limit / Math.max(1, windowSeconds)
+    const refillPerMs = refillRate / 1000
+    const capacity = Math.max(1, limit)
+    const bucket = existing ?? {
+        tokens: capacity,
+        lastRefillAt: now,
     }
 
-    existing.count += 1
+    const elapsedMs = Math.max(0, now - bucket.lastRefillAt)
+    const refilledTokens = elapsedMs * refillPerMs
+    bucket.tokens = Math.min(capacity, bucket.tokens + refilledTokens)
+    bucket.lastRefillAt = now
+
+    const allowed = bucket.tokens >= 1
+    if (allowed) {
+        bucket.tokens -= 1
+    }
+
+    TEST_BUCKETS.set(identifier, bucket)
+
+    const remaining = Math.max(0, Math.floor(bucket.tokens))
+    const usedCount = Math.min(capacity, Math.max(0, capacity - remaining))
+    const msPerToken = refillPerMs > 0 ? 1 / refillPerMs : Infinity
+    const resetAt = allowed
+        ? now + Math.ceil(Math.max(0, capacity - bucket.tokens) * msPerToken)
+        : now + Math.ceil(Math.max(0, 1 - bucket.tokens) * msPerToken)
+
     return {
-        allowed: existing.count <= limit,
-        count: existing.count,
+        allowed,
+        count: usedCount,
         limit,
-        remaining: Math.max(0, limit - existing.count),
-        resetAt: existing.resetAt,
+        remaining,
+        resetAt: Number.isFinite(resetAt) ? resetAt : now + windowSeconds * 1000,
         degraded: true,
         reason: 'redis_unavailable',
     }
@@ -220,7 +231,6 @@ export async function consumeRateLimitPolicy(policy: RateLimitPolicy): Promise<R
     const refillRate = Math.max(1 / burst, policy.refillRate)
     const refillPerMs = refillRate / 1000
     const limit = burst
-    const resetAtFallback = Date.now() + Math.ceil(burst / refillRate) * 1000
     const redisKey = `ratelimit:${policy.scope}:${policy.keyParts.join(':')}`
     const redis = getRedisClient()
 
@@ -303,18 +313,8 @@ export async function consumeRateLimit(
         return consumeTestRateLimit(`ratelimit:default:${identifier}`, limit, windowSeconds)
     }
 
-    const { mode } = resolveConsumeOptions(options)
     const policy = buildPolicy(identifier, limit, windowSeconds, options)
-    const result = await consumeRateLimitPolicy(policy)
-
-    if (!result.allowed && result.degraded && mode === 'best-effort' && policy.failMode === 'allow') {
-        return {
-            ...result,
-            allowed: true,
-        }
-    }
-
-    return result
+    return consumeRateLimitPolicy(policy)
 }
 
 export async function consumeRateLimitForRoute(

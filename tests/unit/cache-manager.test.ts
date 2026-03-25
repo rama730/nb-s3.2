@@ -103,7 +103,7 @@ describe("cache manager", () => {
         assert.equal(sessionStorage.length, 0);
         assert.deepEqual(deletedCacheNames, ["app-shell", "image-previews"]);
         assert.deepEqual(deletedDatabaseNames, ["keyval-store"]);
-        assert.equal(result.clearedLocalStorageKeys, 2);
+        assert.equal(result.clearedLocalStorageKeys, 1);
         assert.equal(result.clearedSessionStorageKeys, 1);
         assert.equal(result.clearedIndexedDbDatabases, 1);
         assert.equal(result.clearedCacheBuckets, 2);

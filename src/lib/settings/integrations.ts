@@ -287,7 +287,7 @@ export function buildIntegrationsData(input: BuildIntegrationsDataInput): Integr
             : "You may see only one sign-in method if this account has not been linked to any additional providers yet.",
         capabilities: {
             canEnableEmailSignIn,
-            canLinkAdditionalProvider: false,
+            canLinkAdditionalProvider: authConnections.some(p => (p.provider === 'google' || p.provider === 'github') && p.state === 'not_linked'),
             canUnlinkGoogle: false,
             canUnlinkGithub: false,
         },

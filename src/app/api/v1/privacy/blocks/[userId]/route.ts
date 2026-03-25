@@ -24,10 +24,10 @@ export async function DELETE(request: Request, context: { params: Promise<{ user
     return auth.response ?? jsonError("Not authenticated", 401, "UNAUTHORIZED");
   }
 
-  try {
-    const { userId } = await context.params;
-    if (!userId) return jsonError("User is required", 400, "BAD_REQUEST");
+  const { userId } = await context.params;
+  if (!userId) return jsonError("User is required", 400, "BAD_REQUEST");
 
+  try {
     const [target] = await db
       .select({ id: profiles.id, username: profiles.username })
       .from(profiles)
@@ -59,9 +59,10 @@ export async function DELETE(request: Request, context: { params: Promise<{ user
     });
     return jsonSuccess({ userId, blocked: false });
   } catch (error) {
-    console.error("[api/v1/privacy/blocks/[userId]] failed", error);
+    logger.error("[api/v1/privacy/blocks/[userId]] failed", { error, requestId, targetUserId: userId });
     logger.metric("privacy.block.result", {
       viewerId: auth.user.id,
+      targetUserId: userId ?? null,
       success: false,
       action: "unblock",
     });

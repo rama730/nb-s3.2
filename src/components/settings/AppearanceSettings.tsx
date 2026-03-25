@@ -129,7 +129,7 @@ export default function AppearanceSettings() {
                         Accent color defines the solid action color and the softer selected surface used across the app.
                     </p>
                 </div>
-                <div className="flex flex-wrap gap-3">
+                <div className="flex flex-wrap gap-4 py-3 pl-3 pr-2">
                     {Object.values(ACCENT_PALETTES).map((accent) => (
                         <button
                             key={accent.id}

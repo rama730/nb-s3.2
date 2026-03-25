@@ -47,20 +47,39 @@ class PresenceConnectError extends Error {
 const HEARTBEAT_INTERVAL_MS = 20_000;
 const LOCAL_PRESENCE_FALLBACK_URL = "ws://127.0.0.1:4010/ws";
 const presenceEntries = new Map<string, PresenceRoomEntry>();
+const utf8Decoder = new TextDecoder();
 
 function getRoomKey(roomType: PresenceRoomType, roomId: string) {
   return `${roomType}:${roomId}`;
 }
 
 function notifyStatus(entry: PresenceRoomEntry, status: PresenceStatus) {
-  for (const listener of entry.statusListeners) {
-    listener(status);
+  for (const listener of Array.from(entry.statusListeners)) {
+    try {
+      listener(status);
+    } catch (error) {
+      logger.warn("presence.room.status_listener_failed", {
+        roomType: entry.roomType,
+        roomId: entry.roomId,
+        status,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 }
 
 function broadcastEvent(entry: PresenceRoomEntry, event: PresenceServerEvent) {
-  for (const listener of entry.listeners) {
-    listener(event);
+  for (const listener of Array.from(entry.listeners)) {
+    try {
+      listener(event);
+    } catch (error) {
+      logger.warn("presence.room.event_listener_failed", {
+        roomType: entry.roomType,
+        roomId: entry.roomId,
+        eventType: event.type,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 }
 
@@ -82,6 +101,26 @@ function resolvePresenceWsUrl(preferredUrl?: string | null) {
   }
 
   return null;
+}
+
+async function decodePresenceMessageData(data: unknown) {
+  if (typeof data === "string") {
+    return data;
+  }
+
+  if (typeof Blob !== "undefined" && data instanceof Blob) {
+    return data.text();
+  }
+
+  if (data instanceof ArrayBuffer) {
+    return utf8Decoder.decode(new Uint8Array(data));
+  }
+
+  if (ArrayBuffer.isView(data)) {
+    return utf8Decoder.decode(data);
+  }
+
+  throw new Error(`Unsupported presence message data type: ${Object.prototype.toString.call(data)}`);
 }
 
 async function fetchPresenceToken(entry: PresenceRoomEntry) {
@@ -233,9 +272,10 @@ async function openPresenceRoom(entry: PresenceRoomEntry) {
       });
     };
 
-    socket.onmessage = (message) => {
+    socket.onmessage = async (message) => {
       try {
-        const parsed = JSON.parse(String(message.data)) as PresenceServerEvent;
+        const raw = await decodePresenceMessageData(message.data);
+        const parsed = JSON.parse(raw) as PresenceServerEvent;
         broadcastEvent(entry, parsed);
       } catch (error) {
         logger.warn("presence.room.message_parse_failed", {

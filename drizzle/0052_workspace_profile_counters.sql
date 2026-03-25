@@ -26,7 +26,8 @@ WITH task_counts AS (
             WHERE deleted_at IS NULL
               AND status <> 'done'
               AND due_date IS NOT NULL
-              AND due_date <= date_trunc('day', now()) + interval '1 day' - interval '1 millisecond'
+              AND due_date >= date_trunc('day', now())
+              AND due_date < date_trunc('day', now()) + interval '1 day'
         )::int AS due_today_count,
         COUNT(*) FILTER (
             WHERE deleted_at IS NULL

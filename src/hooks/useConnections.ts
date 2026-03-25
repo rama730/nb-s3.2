@@ -653,7 +653,7 @@ export function useConnectionsFeed<TTab extends ConnectionsFeedTab>(
         },
         initialPageParam: undefined as string | undefined,
         getNextPageParam: (lastPage) => lastPage.nextCursor || undefined,
-        staleTime: 60_000,
+        staleTime: tab === 'network' ? 0 : 60_000,
         gcTime: 5 * 60_000,
         enabled,
     });
@@ -802,7 +802,8 @@ export function useConnectionMutations() {
 
     const sendRequest = useMutation({
         mutationFn: async ({ userId, message }: { userId: string; message?: string }) => {
-            const result = await sendConnectionRequest(userId, message);
+            const idempotencyKey = crypto.randomUUID();
+            const result = await sendConnectionRequest(userId, idempotencyKey, message);
             if (!result.success) throw new Error(result.error || 'Failed to send request');
             return { ...result, userId };
         },

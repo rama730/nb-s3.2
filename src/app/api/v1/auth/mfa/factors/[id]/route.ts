@@ -14,6 +14,7 @@ import { recordSecurityEvent } from "@/lib/security/audit";
 import { getVerifiedTotpFactors, listSecurityMfaFactors } from "@/lib/security/mfa";
 import { countRemainingRecoveryCodes, parseStoredRecoveryCodes } from "@/lib/security/recovery-codes";
 import { resolveSecurityStepUp } from "@/lib/security/step-up";
+import { logger } from "@/lib/logger";
 
 export async function DELETE(
   request: Request,
@@ -177,42 +178,51 @@ export async function DELETE(
       return jsonError(message, 500, "INTERNAL_ERROR");
     }
 
-    const removingLastVerifiedTotp = isVerifiedTotp && verifiedTotpFactors.length === 1;
-    let clearedRecoveryCodes = false;
-    let previousRemainingRecoveryCodes = 0;
+    try {
+      const removingLastVerifiedTotp = isVerifiedTotp && verifiedTotpFactors.length === 1;
+      let clearedRecoveryCodes = false;
+      let previousRemainingRecoveryCodes = 0;
 
-    if (removingLastVerifiedTotp) {
-      const existingProfile = await db.query.profiles.findFirst({
-        columns: {
-          securityRecoveryCodes: true,
+      if (removingLastVerifiedTotp) {
+        const existingProfile = await db.query.profiles.findFirst({
+          columns: {
+            securityRecoveryCodes: true,
+          },
+          where: eq(profiles.id, user.id),
+        });
+        const storedCodes = parseStoredRecoveryCodes(existingProfile?.securityRecoveryCodes);
+        previousRemainingRecoveryCodes = countRemainingRecoveryCodes(storedCodes);
+        clearedRecoveryCodes = storedCodes.length > 0;
+
+        await db
+          .update(profiles)
+          .set({
+            securityRecoveryCodes: [],
+            recoveryCodesGeneratedAt: null,
+            updatedAt: new Date(),
+          })
+          .where(eq(profiles.id, user.id));
+      }
+
+      await recordSecurityEvent({
+        userId: user.id,
+        eventType: "authenticator_app_removed",
+        request,
+        metadata: {
+          factorId: id,
+          friendlyName: factorToRemove?.friendly_name ?? "Authenticator app",
+          clearedRecoveryCodes,
+          previousRemainingRecoveryCodes,
         },
-        where: eq(profiles.id, user.id),
       });
-      const storedCodes = parseStoredRecoveryCodes(existingProfile?.securityRecoveryCodes);
-      previousRemainingRecoveryCodes = countRemainingRecoveryCodes(storedCodes);
-      clearedRecoveryCodes = storedCodes.length > 0;
-
-      await db
-        .update(profiles)
-        .set({
-          securityRecoveryCodes: [],
-          recoveryCodesGeneratedAt: null,
-          updatedAt: new Date(),
-        })
-        .where(eq(profiles.id, user.id));
-    }
-
-    await recordSecurityEvent({
-      userId: user.id,
-      eventType: "authenticator_app_removed",
-      request,
-      metadata: {
+    } catch (cleanupError) {
+      logger.error("auth.mfaFactor.delete.post_unenroll_cleanup_failed", {
+        requestId,
+        userId: user.id,
         factorId: id,
-        friendlyName: factorToRemove?.friendly_name ?? "Authenticator app",
-        clearedRecoveryCodes,
-        previousRemainingRecoveryCodes,
-      },
-    });
+        error: cleanupError,
+      });
+    }
 
     logApiRoute(request, {
       requestId,

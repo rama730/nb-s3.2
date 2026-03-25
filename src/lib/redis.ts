@@ -36,11 +36,19 @@ export function getRedisClient() {
 
 export const redis = getRedisClient()
 
+function isFiniteNumberOrNull(value: unknown) {
+    return value === null || (typeof value === 'number' && Number.isFinite(value))
+}
+
 function isCacheEnvelope<T>(value: unknown): value is CacheEnvelope<T> {
+    const candidate = value as CacheEnvelope<T>
     return !!value
         && typeof value === 'object'
-        && 'value' in value
-        && 'cachedAt' in value
+        && 'value' in candidate
+        && typeof candidate.cachedAt === 'number'
+        && Number.isFinite(candidate.cachedAt)
+        && isFiniteNumberOrNull(candidate.staleAt)
+        && isFiniteNumberOrNull(candidate.expiresAt)
 }
 
 async function setJsonValue<T>(key: string, payload: T, ttlSeconds: number) {
@@ -53,8 +61,12 @@ async function getJsonValue<T>(key: string): Promise<T | null> {
     const client = getRedisClient()
     if (!client) return null
 
-    const raw = await client.get<string>(key)
+    const raw = await client.get<unknown>(key)
     if (!raw) return null
+
+    if (typeof raw !== 'string') {
+        return raw as T
+    }
 
     try {
         return JSON.parse(raw) as T

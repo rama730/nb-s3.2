@@ -8,6 +8,18 @@ type JwtPayloadLike = {
     session_id?: unknown;
 };
 
+function decodeUtf8Bytes(bytes: Uint8Array): string {
+    if (typeof TextDecoder !== "undefined") {
+        return new TextDecoder().decode(bytes);
+    }
+
+    let escaped = "";
+    for (const byte of bytes) {
+        escaped += `%${byte.toString(16).padStart(2, "0")}`;
+    }
+    return decodeURIComponent(escaped);
+}
+
 function decodeBase64UrlSegment(value: string): string | null {
     const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
     const padding = normalized.length % 4 === 0 ? "" : "=".repeat(4 - (normalized.length % 4));
@@ -19,7 +31,9 @@ function decodeBase64UrlSegment(value: string): string | null {
         }
 
         if (typeof atob === "function") {
-            return atob(input);
+            const binaryString = atob(input);
+            const bytes = Uint8Array.from(binaryString, (char) => char.charCodeAt(0));
+            return decodeUtf8Bytes(bytes);
         }
     } catch {
         return null;

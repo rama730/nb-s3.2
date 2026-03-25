@@ -2633,17 +2633,19 @@ export async function deleteTaskAction(taskId: string, projectId: string) {
             throw new Error("Only the project owner can delete tasks");
         }
 
-        const existingTask = await db.query.tasks.findFirst({
-            where: eq(tasks.id, taskId),
-            columns: {
-                assigneeId: true,
-            },
-        });
+        await db.transaction(async (tx) => {
+            const existingTask = await tx.query.tasks.findFirst({
+                where: eq(tasks.id, taskId),
+                columns: {
+                    assigneeId: true,
+                },
+            });
 
-        // Delete the task
-        await db.delete(tasks)
-            .where(eq(tasks.id, taskId));
-        await refreshWorkspaceCountersForUsers(db, [existingTask?.assigneeId ?? null]);
+            await tx.delete(tasks)
+                .where(eq(tasks.id, taskId));
+
+            await refreshWorkspaceCountersForUsers(tx, [existingTask?.assigneeId ?? null]);
+        });
 
         const slugOrId = project.slug || projectId;
         revalidatePath(`/projects/${slugOrId}`);

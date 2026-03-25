@@ -32,14 +32,25 @@ export default function TurnstileWidget({
     action,
     onVerify,
     onExpire,
+    onError,
 }: {
     action: string
     onVerify: (token: string) => void
     onExpire: () => void
+    onError?: () => void
 }) {
     const containerRef = useRef<HTMLDivElement | null>(null)
     const widgetIdRef = useRef<string | null>(null)
     const [scriptReady, setScriptReady] = useState(false)
+    const verifyRef = useRef(onVerify)
+    const expireRef = useRef(onExpire)
+    const errorRef = useRef(onError)
+
+    useEffect(() => {
+        verifyRef.current = onVerify
+        expireRef.current = onExpire
+        errorRef.current = onError
+    }, [onError, onExpire, onVerify])
 
     useEffect(() => {
         if (!TURNSTILE_SITE_KEY || !scriptReady || !containerRef.current || !window.turnstile) {
@@ -55,9 +66,9 @@ export default function TurnstileWidget({
             sitekey: TURNSTILE_SITE_KEY,
             action,
             theme: 'auto',
-            callback: onVerify,
-            'expired-callback': onExpire,
-            'error-callback': onExpire,
+            callback: (token) => verifyRef.current(token),
+            'expired-callback': () => expireRef.current(),
+            'error-callback': () => errorRef.current?.(),
         })
 
         return () => {
@@ -66,7 +77,7 @@ export default function TurnstileWidget({
                 widgetIdRef.current = null
             }
         }
-    }, [action, onExpire, onVerify, scriptReady])
+    }, [action, scriptReady])
 
     if (!TURNSTILE_SITE_KEY) return null
 
@@ -76,6 +87,7 @@ export default function TurnstileWidget({
                 src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"
                 strategy="afterInteractive"
                 onLoad={() => setScriptReady(true)}
+                onError={() => errorRef.current?.()}
             />
             <div className="space-y-2">
                 <div ref={containerRef} />

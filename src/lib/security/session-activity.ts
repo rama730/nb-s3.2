@@ -71,6 +71,29 @@ export async function listActiveSessions(
     }));
 }
 
+export async function countOtherActiveSessions(
+    userId: string,
+    currentSessionId?: string | null,
+): Promise<number> {
+    const rows = currentSessionId
+        ? await db.execute<{ count: number | string }>(sql`
+          SELECT COUNT(*)::int AS count
+          FROM auth.sessions
+          WHERE user_id = ${userId}::uuid
+            AND (not_after IS NULL OR not_after > now())
+            AND id <> ${currentSessionId}::uuid
+        `)
+        : await db.execute<{ count: number | string }>(sql`
+          SELECT COUNT(*)::int AS count
+          FROM auth.sessions
+          WHERE user_id = ${userId}::uuid
+            AND (not_after IS NULL OR not_after > now())
+        `);
+
+    const value = Array.from(rows)[0]?.count;
+    return Number.isFinite(Number(value)) ? Number(value) : 0;
+}
+
 export async function listLoginHistory(
     userId: string,
     limit: number = 20,

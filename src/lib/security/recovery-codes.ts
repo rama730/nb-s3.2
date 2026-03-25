@@ -19,7 +19,7 @@ function resolveRecoveryCodeSecret(): string {
     ?? "";
 
   if (!secret.trim()) {
-    throw new Error("Missing SECURITY_RECOVERY_CODE_SECRET and SUPABASE_JWT_SECRET");
+    throw new Error("Missing SECURITY_RECOVERY_CODE_SECRET, SECURITY_STEPUP_SECRET, and SUPABASE_JWT_SECRET");
   }
 
   return secret;

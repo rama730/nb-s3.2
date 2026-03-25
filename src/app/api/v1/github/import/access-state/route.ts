@@ -31,6 +31,7 @@ export async function GET(request: Request) {
     });
     return response;
   } catch (error) {
+    console.error("[api/v1/github/import/access-state] failed", error);
     const response = jsonError('Failed to load GitHub access state', 500, 'INTERNAL_ERROR');
     logApiRoute(request, {
       requestId,

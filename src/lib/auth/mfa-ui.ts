@@ -8,6 +8,10 @@ function normalizeAuthMessage(value: string | null | undefined): string {
     return typeof value === "string" ? value.trim() : "";
 }
 
+function isSvgMarkup(value: string): boolean {
+    return value.startsWith("<svg") || value.startsWith("<?xml");
+}
+
 export function normalizeTotpQrCodeSource(qrCode: string | null | undefined): string | null {
     const value = normalizeAuthMessage(qrCode);
     if (!value) return null;
@@ -17,15 +21,23 @@ export function normalizeTotpQrCodeSource(qrCode: string | null | undefined): st
         if (commaIndex > -1) {
             const prefix = value.slice(0, commaIndex + 1);
             const payload = value.slice(commaIndex + 1);
-            if (payload.startsWith("<svg") || payload.startsWith("<?xml")) {
+            if (isSvgMarkup(payload)) {
                 return `${prefix}${encodeURIComponent(payload)}`;
+            }
+
+            try {
+                if (isSvgMarkup(decodeURIComponent(payload))) {
+                    return value;
+                }
+            } catch {
+                // Ignore invalid percent-encoding and fall through to the original value.
             }
         }
         return value;
     }
 
-    if (value.startsWith("<svg") || value.startsWith("<?xml")) {
-        return `data:image/svg+xml;utf-8,${encodeURIComponent(value)}`;
+    if (isSvgMarkup(value)) {
+        return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(value)}`;
     }
 
     return value;

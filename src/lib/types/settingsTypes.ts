@@ -57,8 +57,8 @@ export interface SecurityActivityEntry {
         | 'password_changed'
         | 'other_sessions_revoked';
     createdAt: string;
-    ipAddress?: string;
-    userAgent?: string;
+    networkFingerprint?: string;
+    deviceFingerprint?: string;
     metadata: Record<string, unknown>;
 }
 

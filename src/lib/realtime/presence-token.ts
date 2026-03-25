@@ -28,10 +28,7 @@ function fromBase64Url(value: string) {
 }
 
 function resolvePresenceTokenSecret() {
-  const secret =
-    process.env.PRESENCE_TOKEN_SECRET?.trim()
-    || process.env.SUPABASE_SERVICE_ROLE_KEY?.trim()
-    || "";
+  const secret = process.env.PRESENCE_TOKEN_SECRET?.trim() || "";
 
   if (!secret) {
     throw new Error("PRESENCE_TOKEN_SECRET is required to issue presence room tokens");
@@ -108,7 +105,10 @@ export function verifyPresenceToken(token: string) {
   const claims = JSON.parse(Buffer.from(encodedClaims, "base64url").toString("utf8")) as PresenceTokenClaims;
   if (
     typeof claims.userId !== "string"
+    || claims.userId.trim().length === 0
+    || (claims.sessionId !== null && typeof claims.sessionId !== "string")
     || typeof claims.roomId !== "string"
+    || claims.roomId.trim().length === 0
     || (claims.roomType !== "conversation" && claims.roomType !== "workspace")
     || (claims.role !== "viewer" && claims.role !== "editor")
     || typeof claims.exp !== "number"

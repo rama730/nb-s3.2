@@ -350,14 +350,19 @@ export async function listGithubRepositories(input?: {
         },
       );
       const login = typeof userResponse.data?.login === 'string' ? userResponse.data.login.trim() : '';
+      if (!login) {
+        return {
+          success: false as const,
+          error: 'Could not determine GitHub username for search. Please try again.',
+        };
+      }
+
       url = new URL('https://api.github.com/search/repositories');
       url.searchParams.set('per_page', String(perPage));
       url.searchParams.set('page', String(page));
       url.searchParams.set('sort', 'updated');
       url.searchParams.set('order', 'desc');
-      const q = login
-        ? `${query} user:${login} in:name,description`
-        : `${query} in:name,description`;
+      const q = `${query} user:${login} in:name,description`;
       url.searchParams.set('q', q);
     } else {
       url = new URL('https://api.github.com/user/repos');
@@ -793,10 +798,9 @@ export async function sealGithubProviderTokenAction(providerToken: string) {
     return { success: false as const, error: 'GitHub provider token is missing.' };
   }
 
-  const supabase = await createClient();
-  const { data: { session } } = await supabase.auth.getSession();
-  if (!session?.user?.id) {
-    return { success: false as const, error: 'Unauthorized. Please sign in first.' };
+  const authResult = await getAuthorizedGithubSession();
+  if (!authResult.ok) {
+    return { success: false as const, error: authResult.error };
   }
 
   const sealed = sealGithubImportToken(token);

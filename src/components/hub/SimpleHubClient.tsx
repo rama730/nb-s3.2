@@ -43,8 +43,6 @@ import { User, Project } from '@/types/hub';
 // Dynamic Modals
 const CreateProjectWizard = dynamic(() => import('@/components/projects/create-wizard/CreateProjectWizard'), { ssr: false });
 const ProjectQuickView = dynamic(() => import('@/components/projects/ProjectQuickView'), { ssr: false });
-const BulkActionBar = dynamic(() => import('@/components/hub/BulkActionBar'), { ssr: false });
-const ProjectComparisonModal = dynamic(() => import('@/components/hub/ProjectComparisonModal'), { ssr: false });
 const NotificationSettingsModal = dynamic(() => import('@/components/hub/NotificationSettingsModal'), { ssr: false });
 // Optimization: Defer mobile sidebar code until interaction
 const MobileSidebarDrawer = dynamic(() => import('@/components/hub/MobileSidebarDrawer'), { ssr: false });
@@ -115,14 +113,11 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
 
     // Selection & Modal State
     const [selectedProject, setSelectedProject] = useState<Project | null>(null);
-    const [selectionMode, setSelectionMode] = useState(false);
-    const [selectedProjectIds, setSelectedProjectIds] = useState<Set<string>>(new Set());
 
     // Dialog Visibility
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [createModalInitialSource, setCreateModalInitialSource] = useState<'scratch' | 'github' | 'upload' | null>(null);
     const [showNotificationSettings, setShowNotificationSettings] = useState(false);
-    const [showComparisonModal, setShowComparisonModal] = useState(false);
     const [profileChecklistItems, setProfileChecklistItems] = useState<string[]>([]);
     const [showProfileChecklist, setShowProfileChecklist] = useState(false);
     const [isFeedScrolling, setIsFeedScrolling] = useState(false);
@@ -319,25 +314,7 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
         });
     }, [updateUrlFilters]);
 
-    // Selection
-    const toggleSelection = useCallback((projectId: string) => {
-        setSelectedProjectIds((prev) => {
-            const next = new Set(prev);
-            if (next.has(projectId)) next.delete(projectId);
-            else next.add(projectId);
-            return next;
-        });
-    }, []);
-
-    const selectAll = useCallback(() => {
-        if (selectedProjectIds.size === visibleProjects.length && visibleProjects.length > 0) {
-            setSelectedProjectIds(new Set());
-        } else {
-            setSelectedProjectIds(new Set(visibleProjects.map(p => p.id)));
-        }
-    }, [visibleProjects, selectedProjectIds]);
-
-    // Sidebar Navigation
+    // Clear Filters
     const handleSelectView = (view: string) => {
         updateUrlFilters({ view: view as FilterView });
         setShowMobileSidebar(false);
@@ -402,11 +379,6 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
                             <div className={`bg-white dark:bg-zinc-900 p-4 rounded-2xl border border-zinc-200 dark:border-zinc-800 transition-shadow duration-300 ${isSticky ? 'shadow-md' : 'shadow-sm'}`}>
                                 <HubHeader
                                     filterView={filterView}
-                                    selectionMode={selectionMode}
-                                    onToggleSelectionMode={() => {
-                                        setSelectionMode(!selectionMode);
-                                        if (selectionMode) setSelectedProjectIds(new Set());
-                                    }}
                                     onApplyFilters={(newFilters) => {
                                         updateUrlFilters({
                                             status: newFilters.status as ProjectStatus,
@@ -476,29 +448,7 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
                                 </div>
                             )}
 
-                            {/* Bulk Actions */}
-                            {selectionMode && (
-                                <BulkActionBar
-                                    selectedCount={selectedProjectIds.size}
-                                    totalCount={visibleProjects.length}
-                                    onSelectAll={selectAll}
-                                    onCompare={() => setShowComparisonModal(true)}
-                                    onCancel={() => {
-                                        setSelectionMode(false);
-                                        setSelectedProjectIds(new Set());
-                                    }}
-                                    onShare={() => {
-                                        const ids = Array.from(selectedProjectIds).join(',');
-                                        const shareUrl = `${window.location.origin}/hub?projects=${ids}`;
-                                        navigator.clipboard.writeText(shareUrl);
-                                        showToast('Share link copied', 'success');
-                                    }}
-                                    onExport={() => {
-                                        showToast('Export functionality placeholder', 'success');
-                                    }}
-                                    canCompare={selectedProjectIds.size >= 2 && selectedProjectIds.size <= 4}
-                                />
-                            )}
+
 
                             {/* Projects Grid */}
                             {isLoading && visibleProjects.length === 0 ? (
@@ -565,9 +515,6 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
                                                     project={project}
                                                     viewModel={projectViewModels[project.id]}
                                                     viewMode={viewMode}
-                                                    selectionMode={selectionMode}
-                                                    isSelected={selectedProjectIds.has(project.id)}
-                                                    onToggleSelection={() => toggleSelection(project.id)}
                                                     onQuickView={setSelectedProject}
                                                     isFollowing={myFollowedProjects?.has(project.id)}
                                                     followersCount={project.followersCount ?? 0}
@@ -602,6 +549,7 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
                         {showCreateModal && (
                             <CreateProjectWizard
                                 onClose={() => {
+                                    handledCreateProjectRequestRef.current = null;
                                     persistCreateProjectModalState(null);
                                     setShowCreateModal(false);
                                     setCreateModalInitialSource(null);
@@ -616,10 +564,6 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
                         )}
 
                         <NotificationSettingsModal isOpen={showNotificationSettings} onClose={() => setShowNotificationSettings(false)} />
-
-                        {showComparisonModal && selectedProjectIds.size >= 2 && (
-                            <ProjectComparisonModal projects={visibleProjects.filter(p => selectedProjectIds.has(p.id))} onClose={() => setShowComparisonModal(false)} />
-                        )}
                     </div>
                 </div>
 

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import type { FormEvent } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { AuthChangeEvent, Session } from "@supabase/supabase-js";
 import { Loader2 } from "lucide-react";
@@ -18,11 +18,21 @@ type RecoveryState = "loading" | "ready" | "invalid" | "success";
 export default function ResetPasswordPage() {
     const router = useRouter();
     const supabase = useMemo(() => createSupabaseBrowserClient(), []);
+    const redirectTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
     const [status, setStatus] = useState<RecoveryState>("loading");
     const [newPassword, setNewPassword] = useState("");
     const [confirmPassword, setConfirmPassword] = useState("");
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState<string | null>(null);
+
+    useEffect(() => {
+        return () => {
+            if (redirectTimeoutRef.current !== undefined) {
+                clearTimeout(redirectTimeoutRef.current);
+                redirectTimeoutRef.current = undefined;
+            }
+        };
+    }, []);
 
     useEffect(() => {
         let active = true;
@@ -73,7 +83,11 @@ export default function ResetPasswordPage() {
 
             await supabase.auth.signOut().catch(() => null);
             setStatus("success");
-            setTimeout(() => {
+            if (redirectTimeoutRef.current !== undefined) {
+                clearTimeout(redirectTimeoutRef.current);
+            }
+            redirectTimeoutRef.current = setTimeout(() => {
+                redirectTimeoutRef.current = undefined;
                 router.replace("/login");
             }, 1200);
         } catch (submitError) {

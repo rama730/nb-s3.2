@@ -1,4 +1,9 @@
-import type { RealtimeChannel, RealtimePostgresChangesPayload, SupabaseClient } from '@supabase/supabase-js'
+import type {
+    RealtimeChannel,
+    RealtimePostgresChangesPayload,
+    SupabaseClient,
+    REALTIME_SUBSCRIBE_STATES,
+} from '@supabase/supabase-js'
 
 type DbRealtimeEventType = 'INSERT' | 'UPDATE' | 'DELETE'
 
@@ -32,7 +37,7 @@ export function subscribeActiveResource(params: {
     resourceType: ActiveResourceType
     resourceId: string
     bindings: ActiveResourceBinding[]
-    onStatus?: (status: string) => void
+    onStatus?: (status: REALTIME_SUBSCRIBE_STATES) => void
 }): RealtimeChannel {
     const { supabase, resourceType, resourceId, bindings, onStatus } = params
     let channel = supabase.channel(`active-resource:${resourceType}:${resourceId}`)
@@ -59,7 +64,7 @@ export function subscribeUserNotifications(params: {
     supabase: SupabaseClient
     userId: string
     onEvent: (event: UserNotificationEvent) => void
-    onStatus?: (status: string) => void
+    onStatus?: (status: REALTIME_SUBSCRIBE_STATES) => void
 }): RealtimeChannel {
     const { supabase, userId, onEvent, onStatus } = params
 
@@ -84,6 +89,12 @@ export function subscribeUserNotifications(params: {
                 event: '*',
                 table: 'connections',
                 filter: `addressee_id=eq.${userId}`,
+                handler: (payload) => onEvent({ kind: 'connection', payload }),
+            },
+            {
+                event: '*',
+                table: 'connections',
+                filter: `requester_id=eq.${userId}`,
                 handler: (payload) => onEvent({ kind: 'connection', payload }),
             },
             {

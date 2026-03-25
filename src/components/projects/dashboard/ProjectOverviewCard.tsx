@@ -154,7 +154,12 @@ const ProjectOverviewCard = memo(function ProjectOverviewCard({
                                                 {isCompleted ? (
                                                     <CheckCircle className="w-3.5 h-3.5 text-white" />
                                                 ) : isCurrent ? (
-                                                    <div className="w-2 h-2 rounded-full bg-primary animate-pulse" />
+                                                    <div
+                                                        className={cn(
+                                                            "w-2 h-2 rounded-full bg-primary motion-reduce:animate-none",
+                                                            !reduceMotion && "motion-safe:animate-pulse",
+                                                        )}
+                                                    />
                                                 ) : null}
                                             </div>
                                             <p className={cn(

@@ -4,7 +4,14 @@ import {
   replaceRelationshipWithBlockedState,
 } from "@/lib/privacy/relationship-transition";
 
+function assertValidBlockOperation(blockerId: string, blockedUserId: string) {
+  if (blockerId === blockedUserId) {
+    throw new Error("cannot block self");
+  }
+}
+
 export async function blockUser(blockerId: string, blockedUserId: string) {
+  assertValidBlockOperation(blockerId, blockedUserId);
   const now = new Date();
   return db.transaction((tx) => replaceRelationshipWithBlockedState(tx, blockerId, blockedUserId, now));
 }

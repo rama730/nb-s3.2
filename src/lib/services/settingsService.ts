@@ -1,10 +1,13 @@
-// Delete user account
-export async function deleteAccount(confirmationText: string): Promise<{ success: boolean; message?: string }> {
+// Delete user account (schedules soft-delete with grace period)
+export async function deleteAccount(
+    confirmationText: string,
+    reason?: string,
+): Promise<{ success: boolean; message?: string; deletionId?: string; hardDeleteAt?: string }> {
     try {
         const res = await fetch("/api/v1/account/delete", {
             method: "DELETE",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ confirmationText }),
+            body: JSON.stringify({ confirmationText, reason }),
         });
 
         const json = await res.json();
@@ -13,10 +16,44 @@ export async function deleteAccount(confirmationText: string): Promise<{ success
             return { success: false, message: json.message || "Failed to delete account" };
         }
 
-        return { success: true };
+        return {
+            success: true,
+            deletionId: json.data?.deletionId,
+            hardDeleteAt: json.data?.hardDeleteAt,
+        };
     } catch (error) {
         console.error("Error deleting account:", error);
         return { success: false, message: "An error occurred while deleting account" };
+    }
+}
+
+// Export account data (GDPR data portability)
+export async function downloadAccountData(): Promise<{ success: boolean; message?: string }> {
+    try {
+        const res = await fetch("/api/v1/account/export", {
+            method: "GET",
+        });
+
+        if (!res.ok) {
+            const json = await res.json();
+            return { success: false, message: json.message || "Failed to export data" };
+        }
+
+        // Trigger file download
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `account-data-${new Date().toISOString().slice(0, 10)}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        return { success: true };
+    } catch (error) {
+        console.error("Error exporting account data:", error);
+        return { success: false, message: "An error occurred while exporting data" };
     }
 }
 

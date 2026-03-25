@@ -22,12 +22,13 @@ const dbPreparedStatementsEnabled = process.env.DB_PREPARE_STATEMENTS !== 'false
 
 /**
  * Singleton connection pattern for Next.js HMR
- * Prevents multiple connection pools during development
  */
 const globalForDb = globalThis as unknown as {
     conn: postgres.Sql | undefined
+    readConn: postgres.Sql | undefined
 }
 
+// Write Client (Primary)
 const client = globalForDb.conn ?? postgres(connectionString, {
     prepare: dbPreparedStatementsEnabled,
     max: dbPoolMax,
@@ -37,11 +38,26 @@ const client = globalForDb.conn ?? postgres(connectionString, {
     onclose: () => logger.warn('pg connection closed', { module: 'db' }),
 })
 
+// Read Client (Replica Fallback)
+const readConnectionString = env.READ_DATABASE_URL || connectionString
+const readClient = globalForDb.readConn ?? (
+    readConnectionString === connectionString 
+        ? client 
+        : postgres(readConnectionString, {
+            prepare: dbPreparedStatementsEnabled,
+            max: dbPoolMax,
+            idle_timeout: dbIdleTimeoutSeconds,
+            connect_timeout: dbConnectTimeoutSeconds,
+        })
+)
+
 if (process.env.NODE_ENV !== 'production') {
     globalForDb.conn = client
+    globalForDb.readConn = readClient
 }
 
 export const db = drizzle(client, { schema })
+export const readDb = drizzle(readClient, { schema })
 
 export async function pingDb(): Promise<boolean> {
     try {

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import dynamic from 'next/dynamic'
 import { useQueryClient } from '@tanstack/react-query'
@@ -16,6 +16,7 @@ import { useProfileReadModel } from '@/hooks/useProfileData';
 import { useAuth } from '@/lib/hooks/use-auth';
 import { invalidatePrivacyDependents } from '@/lib/privacy/client-invalidation';
 import type { ConnectionState } from './types';
+import { getProfileViewerOverlayAction } from '@/app/actions/profile';
 
 // Section Imports (Kept static as they are usually in viewport)
 import { AboutCard } from './sections/AboutCard'
@@ -32,10 +33,15 @@ const UserConnectionsModal = dynamic(() => import('@/components/profile/v2/UserC
 interface ProfileClientProps extends Omit<ProfilePageData, 'projects' | 'stats'> {
     projects?: any[];
     stats?: any;
+    viewerPreviewMode?: boolean;
 }
 
-function mapActionConnectionStatus(status?: string): ConnectionState {
-    switch (status) {
+function mapActionConnectionStatus(result?: any): ConnectionState {
+    if (!result) return 'none';
+    if (result.isIncomingRequest) return 'pending_incoming';
+    if (result.isPendingSent) return 'pending_outgoing';
+
+    switch (result.status) {
         case 'connected':
             return 'accepted';
         case 'pending_sent':
@@ -60,9 +66,10 @@ export function ProfileV2Client({
     privacyRelationship: initialPrivacyRelationship,
     lockedShell: initialLockedShell = false,
     projects: initialProjects = [],
+    viewerPreviewMode = false,
 }: ProfileClientProps) {
     const { user: authUser } = useAuth()
-    const viewerUser = authUser ?? currentUser
+    const viewerUser = viewerPreviewMode ? null : (authUser ?? currentUser)
 
     // Current tab state
     const [activeTab, setActiveTab] = useState<ProfileTabKey>('overview')
@@ -73,10 +80,14 @@ export function ProfileV2Client({
     const [privacyRelationship, setPrivacyRelationship] = useState(initialPrivacyRelationship)
     const [lockedShell, setLockedShell] = useState(initialLockedShell)
     const [isBlocking, setIsBlocking] = useState(false)
+    const [viewerMutualCount, setViewerMutualCount] = useState((initialStats as any)?.mutualCount ?? 0)
+    const fetchedStatusRef = useRef(false)
+    const statusFetchInFlightRef = useRef(false)
     const router = useRouter()
     const queryClient = useQueryClient()
 
     useEffect(() => {
+        if (fetchedStatusRef.current || statusFetchInFlightRef.current) return
         setStatus(connectionStatus)
     }, [connectionStatus])
 
@@ -84,6 +95,10 @@ export function ProfileV2Client({
         setPrivacyRelationship(initialPrivacyRelationship)
         setLockedShell(initialLockedShell)
     }, [initialLockedShell, initialPrivacyRelationship])
+
+    useEffect(() => {
+        setViewerMutualCount((initialStats as any)?.mutualCount ?? 0)
+    }, [initialStats])
 
     useEffect(() => {
         if (projectsEnabled) return
@@ -108,15 +123,61 @@ export function ProfileV2Client({
     const [isLoading, setIsLoading] = useState(false);
 
     useEffect(() => {
-        if (!viewerUser || isOwner) return;
+        if (!viewerUser || isOwner) {
+            fetchedStatusRef.current = false
+            statusFetchInFlightRef.current = false
+            return;
+        }
 
         let cancelled = false;
+        fetchedStatusRef.current = false;
+        statusFetchInFlightRef.current = true;
+
         void checkConnectionStatus(profile.id)
             .then((result) => {
                 if (cancelled || !result.success) return;
-                setStatus(mapActionConnectionStatus(result.status));
+                fetchedStatusRef.current = true;
+                setStatus(mapActionConnectionStatus(result));
             })
-            .catch(() => null);
+            .catch((error) => {
+                if (cancelled) return;
+                console.error('[ProfileV2Client] failed to refresh connection status', {
+                    profileId: profile.id,
+                    viewerUserId: viewerUser.id,
+                    error,
+                });
+            })
+            .finally(() => {
+                if (cancelled) return;
+                statusFetchInFlightRef.current = false;
+            });
+
+        return () => {
+            cancelled = true;
+            statusFetchInFlightRef.current = false;
+        };
+    }, [viewerUser?.id, isOwner, profile.id]);
+
+    useEffect(() => {
+        if (!viewerUser || isOwner) return;
+
+        let cancelled = false;
+
+        void getProfileViewerOverlayAction(profile.id)
+            .then((result) => {
+                if (cancelled || !result.success) return;
+                setPrivacyRelationship(result.privacyRelationship);
+                setLockedShell(result.lockedShell);
+                setViewerMutualCount(result.mutualCount);
+            })
+            .catch((error) => {
+                if (cancelled) return;
+                console.error('[ProfileV2Client] failed to refresh viewer privacy relationship', {
+                    profileId: profile.id,
+                    viewerUserId: viewerUser.id,
+                    error,
+                });
+            });
 
         return () => {
             cancelled = true;
@@ -200,7 +261,7 @@ export function ProfileV2Client({
     const safeProjects = projects || [];
     const safeStats = {
         ...(stats || initialStats || {}),
-        mutualCount: (stats as any)?.mutualCount ?? (initialStats as any)?.mutualCount ?? 0
+        mutualCount: viewerMutualCount
     };
 
     // Derived content based on tab
@@ -272,15 +333,24 @@ export function ProfileV2Client({
             }
 
             if (isBlocked) {
+                const nextConnectionState = 'none'
+                const nextVisibilityReason = profile.visibility === 'connections'
+                    ? 'connections_only'
+                    : profile.visibility === 'private'
+                        ? 'private'
+                        : 'public'
+                const nextCanViewProfile = profile.visibility === 'public'
+                const nextCanSendMessage = profile.messagePrivacy === 'everyone'
+
                 setPrivacyRelationship((current) => ({
                     ...current,
                     blockedByViewer: false,
                     blockedByTarget: false,
-                    connectionState: 'none',
+                    connectionState: nextConnectionState,
                     canSendConnectionRequest: true,
-                    canSendMessage: current.connectionState === 'connected',
-                    canViewProfile: profile.visibility === 'public',
-                    visibilityReason: profile.visibility === 'connections' ? 'connections_only' : profile.visibility === 'private' ? 'private' : 'public',
+                    canSendMessage: nextCanSendMessage,
+                    canViewProfile: nextCanViewProfile,
+                    visibilityReason: nextVisibilityReason,
                 }))
                 setStatus('none')
                 toast.success('Account unblocked')
@@ -316,11 +386,12 @@ export function ProfileV2Client({
         <>
             <ProfileShell
                 header={
-                    <ProfileHeader
-                        profile={profile}
-                        isOwner={isOwner}
-                        isAuthenticated={!!viewerUser}
-                        connectionState={status}
+                        <ProfileHeader
+                            profile={profile}
+                            viewerId={viewerUser?.id ?? null}
+                            isOwner={isOwner}
+                            isAuthenticated={!!viewerUser}
+                            connectionState={status}
                         privacyRelationship={privacyRelationship}
                         lockedShell={lockedShell}
                         isLoadingConnection={isLoading}

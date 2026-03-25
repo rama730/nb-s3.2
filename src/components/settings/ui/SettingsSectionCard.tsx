@@ -8,14 +8,17 @@ export function SettingsSectionCard({
     description,
     children,
     className,
+    testId,
 }: {
     title: string;
     description?: string;
     children: React.ReactNode;
     className?: string;
+    testId?: string;
 }) {
     return (
         <section
+            data-testid={testId}
             className={cn(
                 "rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900",
                 className

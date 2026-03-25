@@ -6,6 +6,7 @@ import { queryKeys } from '@/lib/query-keys';
 import type { WorkspaceOverviewBaseData } from '@/app/actions/workspace';
 import type { WorkspaceRefreshTarget } from '@/lib/realtime/refresh-reasons';
 import { useRealtime } from '@/components/providers/RealtimeProvider';
+import { getWorkspaceCounterWindow, isWorkspaceTaskDueToday, isWorkspaceTaskOverdue } from '@/lib/workspace/counter-logic';
 
 type DbRealtimePayload = {
     eventType?: 'INSERT' | 'UPDATE' | 'DELETE';
@@ -48,8 +49,8 @@ function taskCountersForViewer(row: Record<string, unknown> | undefined, userId:
 
     return {
         inProgressCount: status === 'in_progress' ? 1 : 0,
-        overdueCount: hasDue && !!dueDate && dueDate < now ? 1 : 0,
-        tasksDueCount: hasDue && !!dueDate && dueDate <= todayEnd ? 1 : 0,
+        overdueCount: hasDue ? (isWorkspaceTaskOverdue(dueDate, status, now) ? 1 : 0) : 0,
+        tasksDueCount: hasDue ? (isWorkspaceTaskDueToday(dueDate, status, now, todayEnd) ? 1 : 0) : 0,
     };
 }
 
@@ -78,9 +79,7 @@ export function useWorkspaceRealtime(userId: string | null) {
         const pendingTargets = new Set<WorkspaceRefreshTarget>();
 
         const patchOverviewBaseFromTaskPayload = (payload: DbRealtimePayload) => {
-            const now = new Date();
-            const todayEnd = new Date(now);
-            todayEnd.setHours(23, 59, 59, 999);
+            const { now, todayEnd } = getWorkspaceCounterWindow();
 
             const before = taskCountersForViewer(payload.old, userId, now, todayEnd);
             const after = taskCountersForViewer(payload.new, userId, now, todayEnd);

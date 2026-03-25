@@ -3,6 +3,14 @@ import { APPEARANCE_STORAGE_KEYS } from "@/lib/theme/appearance";
 const KNOWN_INDEXED_DB_NAMES = ["keyval-store"] as const;
 const PRESERVED_LOCAL_STORAGE_KEYS = Object.values(APPEARANCE_STORAGE_KEYS);
 
+export type StorageCategoryUsage = {
+    id: string;
+    label: string;
+    description: string;
+    size: number;
+    isPrimary: boolean;
+};
+
 export type CacheClearReport = {
     clearedLocalStorageKeys: number;
     clearedSessionStorageKeys: number;
@@ -11,8 +19,15 @@ export type CacheClearReport = {
     preservedLocalStorageKeys: string[];
 };
 
-// Cache manager for handling browser storage and caches
+// Prefixes used by the application for user-specific data
+const USER_DATA_PREFIXES = [
+    "files-offline-queue:",
+    "chat-draft:",
+    "quick-notes:",
+    "user-preferences:",
+];
 
+// Cache manager for handling browser storage and caches
 export class CacheManager {
     private readPreservedLocalStorageEntries(): Array<[string, string]> {
         if (typeof localStorage === "undefined") return [];
@@ -31,24 +46,18 @@ export class CacheManager {
         }
     }
 
-    private async deleteIndexedDb(name: string): Promise<void> {
-        if (typeof indexedDB === "undefined" || !name) return;
+    private async deleteIndexedDb(name: string): Promise<boolean> {
+        if (typeof indexedDB === "undefined") return false;
 
-        await new Promise<void>((resolve) => {
+        return new Promise<boolean>((resolve) => {
             try {
                 const request = indexedDB.deleteDatabase(name);
-                request.onsuccess = () => resolve();
-                request.onerror = () => {
-                    console.error("Failed to delete IndexedDB database", { name });
-                    resolve();
-                };
-                request.onblocked = () => {
-                    console.warn("IndexedDB delete blocked", { name });
-                    resolve();
-                };
+                request.onsuccess = () => resolve(true);
+                request.onerror = () => resolve(false);
+                request.onblocked = () => resolve(false);
             } catch (error) {
-                console.error("Error deleting IndexedDB database", { name, error });
-                resolve();
+                console.error("Error deleting IndexedDB database:", error);
+                resolve(false);
             }
         });
     }
@@ -60,119 +69,188 @@ export class CacheManager {
         if (typeof enumerateDatabases === "function") {
             try {
                 const databases = await enumerateDatabases.call(indexedDB);
-                const names = Array.from(
-                    new Set(
-                        (databases || [])
-                            .map((db) => db.name)
-                            .filter((name): name is string => typeof name === "string" && name.length > 0)
-                    )
-                );
-
-                if (names.length > 0) {
-                    return names;
-                }
-            } catch (error) {
-                console.warn("Failed to enumerate IndexedDB databases", error);
+                return (databases || [])
+                    .map((db) => db.name)
+                    .filter((name): name is string => !!name);
+            } catch {
+                return [...KNOWN_INDEXED_DB_NAMES];
             }
         }
-
         return [...KNOWN_INDEXED_DB_NAMES];
     }
 
-    async getStorageEstimate(): Promise<{ total: number; quota: number }> {
+    async getStorageEstimate(): Promise<{ total: number; quota: number; persistent: boolean }> {
         if (typeof navigator === "undefined" || !navigator.storage) {
-            return { total: 0, quota: 0 };
+            return { total: 0, quota: 0, persistent: false };
         }
 
         try {
-            const estimate = await navigator.storage.estimate();
+            const [estimate, persistent] = await Promise.all([
+                navigator.storage.estimate(),
+                navigator.storage.persisted ? navigator.storage.persisted() : Promise.resolve(false),
+            ]);
             return {
                 total: estimate.usage || 0,
                 quota: estimate.quota || 0,
+                persistent,
             };
-        } catch (error) {
-            console.error("Failed to get storage estimate:", error);
-            return { total: 0, quota: 0 };
+        } catch {
+            return { total: 0, quota: 0, persistent: false };
         }
+    }
+
+    async requestPersistence(): Promise<boolean> {
+        if (typeof navigator !== "undefined" && navigator.storage && navigator.storage.persist) {
+            return await navigator.storage.persist();
+        }
+        return false;
+    }
+
+    async getDetailedBreakdown(): Promise<StorageCategoryUsage[]> {
+        const breakdown: StorageCategoryUsage[] = [];
+
+        // 1. App Bundle Cache (Cache API)
+        let cacheSize = 0;
+        if (typeof caches !== "undefined") {
+            const keys = await caches.keys();
+            for (const key of keys) {
+                const cache = await caches.open(key);
+                const reqs = await cache.keys();
+                for (const req of reqs) {
+                    const res = await cache.match(req);
+                    if (res) {
+                        try {
+                            const blob = await res.blob();
+                            cacheSize += blob.size;
+                        } catch {
+                            // ignore opaque or errored responses
+                        }
+                    }
+                }
+            }
+        }
+        breakdown.push({
+            id: "app-cache",
+            label: "Application Bundle",
+            description: "Static assets, fonts, icons, and code chunks for faster loading.",
+            size: cacheSize,
+            isPrimary: false,
+        });
+
+        // 2. User Workspace (LocalStorage - Offline Queues & Drafts)
+        let workspaceSize = 0;
+        let hasPendingWork = false;
+        if (typeof localStorage !== "undefined") {
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                if (key) {
+                    const value = localStorage.getItem(key) || "";
+                    const size = key.length + value.length;
+                    if (USER_DATA_PREFIXES.some(p => key.startsWith(p))) {
+                        workspaceSize += size;
+                        if (key.includes("queue")) hasPendingWork = true;
+                    }
+                }
+            }
+        }
+        breakdown.push({
+            id: "user-workspace",
+            label: "Workspace Data",
+            description: hasPendingWork ? "Contains unsaved offline changes." : "Local drafts and workspace history.",
+            size: workspaceSize,
+            isPrimary: true,
+        });
+
+        return breakdown;
+    }
+
+    async clearStaticsOnly(): Promise<void> {
+        // Clear Cache API (Static assets)
+        if (typeof caches !== "undefined") {
+            const keys = await caches.keys();
+            await Promise.all(keys.map(k => caches.delete(k)));
+        }
+        // Clear non-essential items from LocalStorage
+        if (typeof localStorage !== "undefined") {
+            const preserved = this.readPreservedLocalStorageEntries();
+            const userEntries: Array<[string, string]> = [];
+            
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                if (key && USER_DATA_PREFIXES.some(p => key.startsWith(p))) {
+                    userEntries.push([key, localStorage.getItem(key)!]);
+                }
+            }
+
+            localStorage.clear();
+            this.restoreLocalStorageEntries([...preserved, ...userEntries]);
+        }
+    }
+
+    async backupUserStore(): Promise<string | null> {
+        if (typeof localStorage === "undefined") return null;
+        
+        const backup: Record<string, string> = {};
+        for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (key && USER_DATA_PREFIXES.some(p => key.startsWith(p))) {
+                backup[key] = localStorage.getItem(key)!;
+            }
+        }
+
+        if (Object.keys(backup).length === 0) return null;
+        return JSON.stringify(backup, null, 2);
     }
 
     async clearAll(): Promise<CacheClearReport> {
-        const preservedEntries = this.readPreservedLocalStorageEntries();
-        let clearedLocalStorageKeys = 0;
-        let clearedSessionStorageKeys = 0;
-        let clearedIndexedDbDatabases = 0;
-        let clearedCacheBuckets = 0;
+        const preserved = this.readPreservedLocalStorageEntries();
+        const initialLocalStorageCount = typeof localStorage !== "undefined" ? localStorage.length : 0;
+        const initialSessionStorageCount = typeof sessionStorage !== "undefined" ? sessionStorage.length : 0;
 
-        // Clear localStorage while preserving the user's appearance settings.
-        if (typeof localStorage !== "undefined") {
-            clearedLocalStorageKeys = localStorage.length;
-            localStorage.clear();
-            this.restoreLocalStorageEntries(preservedEntries);
-        }
+        // Perform clearing
+        await Promise.all([
+            this.clearLocalStorage(),
+            this.clearSessionStorage(),
+            this.clearIndexedDB(),
+            this.clearCacheAPI(),
+        ]);
 
-        // Clear sessionStorage
-        if (typeof sessionStorage !== "undefined") {
-            clearedSessionStorageKeys = sessionStorage.length;
-            sessionStorage.clear();
-        }
-
-        // Clear IndexedDB databases
-        if (typeof indexedDB !== "undefined") {
-            const databaseNames = await this.listIndexedDbNames();
-            for (const name of databaseNames) {
-                await this.deleteIndexedDb(name);
-                clearedIndexedDbDatabases += 1;
-            }
-        }
-
-        // Clear Cache API caches
-        if (typeof caches !== "undefined") {
-            const cacheNames = await caches.keys();
-            for (const name of cacheNames) {
-                await caches.delete(name);
-                clearedCacheBuckets += 1;
-            }
-        }
+        const dbNames = await this.listIndexedDbNames();
+        const cacheNames = typeof caches !== "undefined" ? await caches.keys() : [];
 
         return {
-            clearedLocalStorageKeys,
-            clearedSessionStorageKeys,
-            clearedIndexedDbDatabases,
-            clearedCacheBuckets,
-            preservedLocalStorageKeys: preservedEntries.map(([key]) => key),
+            clearedLocalStorageKeys: Math.max(0, initialLocalStorageCount - preserved.length),
+            clearedSessionStorageKeys: initialSessionStorageCount,
+            clearedIndexedDbDatabases: dbNames.length, // approximation as we just cleared them
+            clearedCacheBuckets: cacheNames.length, // approximation
+            preservedLocalStorageKeys: preserved.map(([k]) => k),
         };
     }
 
-    // Clear specific cache types
+    // Individual clearing methods for granular UI
     async clearLocalStorage(): Promise<void> {
         if (typeof localStorage !== "undefined") {
-            const preservedEntries = this.readPreservedLocalStorageEntries();
+            const preserved = this.readPreservedLocalStorageEntries();
             localStorage.clear();
-            this.restoreLocalStorageEntries(preservedEntries);
+            this.restoreLocalStorageEntries(preserved);
         }
     }
 
     async clearSessionStorage(): Promise<void> {
-        if (typeof sessionStorage !== "undefined") {
-            sessionStorage.clear();
-        }
+        if (typeof sessionStorage !== "undefined") sessionStorage.clear();
     }
 
     async clearIndexedDB(): Promise<void> {
         if (typeof indexedDB !== "undefined") {
-            const databaseNames = await this.listIndexedDbNames();
-            for (const name of databaseNames) {
-                await this.deleteIndexedDb(name);
-            }
+            const names = await this.listIndexedDbNames();
+            await Promise.all(names.map(name => this.deleteIndexedDb(name)));
         }
     }
 
     async clearCacheAPI(): Promise<void> {
         if (typeof caches !== "undefined") {
-            const cacheNames = await caches.keys();
-            for (const name of cacheNames) {
-                await caches.delete(name);
-            }
+            const names = await caches.keys();
+            await Promise.all(names.map(name => caches.delete(name)));
         }
     }
 }

@@ -156,6 +156,7 @@ export function EditProfileModal({ open, onOpenChange, profile, onOptimisticUpda
     const [saveState, setSaveState] = useState<SaveState>("idle");
     const [saveErrorMessage, setSaveErrorMessage] = useState<string | null>(null);
     const [hasChanges, setHasChanges] = useState(false);
+    const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
     const inFlightRef = useRef(false);
     const wasOpenRef = useRef(false);
     const lastKnownUpdatedAtRef = useRef<string>(
@@ -212,6 +213,7 @@ export function EditProfileModal({ open, onOpenChange, profile, onOptimisticUpda
             setHasChanges(false);
             setSaveState("idle");
             setSaveErrorMessage(null);
+            setShowDiscardConfirm(false);
         }
     }, [open, profile?.id, profile?.updatedAt, profile?.updated_at]);
 
@@ -395,21 +397,19 @@ export function EditProfileModal({ open, onOpenChange, profile, onOptimisticUpda
         await persistChanges(payload, true);
     };
 
-    const handleSaveSection = async (section: EditSection) => {
-        if (!formState) return;
-        const payload = buildPartialPayload(formState, section, lastKnownUpdatedAtRef.current);
-        await persistChanges(payload, false);
-    };
+    // Section saves removed in favor of global save
 
-    const handleResetSection = (section: EditSection) => {
-        if (!formState) return;
-        const keys = sectionKeys(section);
-        const next = { ...formState };
-        for (const key of keys) {
-            next[key] = baseProfileRef.current[key];
+    // Section resets removed
+
+    const handleOpenChange = (openValue: boolean) => {
+        if (!openValue && hasChanges && !showDiscardConfirm) {
+            setShowDiscardConfirm(true);
+            return;
         }
-        setFormState(next);
-        setHasChanges(hasFormChanges(next, baseProfileRef.current));
+        if (!openValue) {
+            setShowDiscardConfirm(false);
+        }
+        onOpenChange(openValue);
     };
 
     const usernameChanged = Boolean(
@@ -419,14 +419,14 @@ export function EditProfileModal({ open, onOpenChange, profile, onOptimisticUpda
     );
 
     return (
-        <Dialog open={open} onOpenChange={onOpenChange}>
-            <DialogContent className="sm:max-w-[500px] h-[640px] max-h-[90vh] flex flex-col p-0 gap-0 overflow-hidden">
-                <DialogHeader className="px-6 py-4 border-b border-zinc-100 dark:border-zinc-800">
+        <Dialog open={open} onOpenChange={handleOpenChange}>
+            <DialogContent className="sm:max-w-4xl h-[700px] max-h-[90vh] flex flex-col p-0 gap-0 overflow-hidden bg-zinc-50 dark:bg-zinc-950 border-zinc-200 dark:border-zinc-800 rounded-2xl">
+                <DialogHeader className="px-6 py-4 bg-white dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800 z-10">
                     <DialogTitle className="flex items-center justify-between">
                         <span>Edit Profile</span>
                         <span className="text-xs font-normal text-zinc-500">{completion.score}% complete</span>
                     </DialogTitle>
-                    <div className="h-1.5 rounded-full bg-zinc-100 dark:bg-zinc-800 overflow-hidden">
+                    <div className="h-1.5 rounded-full bg-zinc-100 dark:bg-zinc-800 overflow-hidden mt-3">
                         <div
                             className="h-full bg-indigo-600 transition-all"
                             style={{ width: `${completion.score}%` }}
@@ -439,7 +439,7 @@ export function EditProfileModal({ open, onOpenChange, profile, onOptimisticUpda
                     ) : null}
                 </DialogHeader>
 
-                <div className="flex-1 min-h-0">
+                <div className="flex-1 min-h-0 flex flex-col md:flex-row w-full overflow-hidden">
                     <EditProfileTabs
                         profile={formState || profile}
                         onChange={(updates) => {
@@ -450,22 +450,36 @@ export function EditProfileModal({ open, onOpenChange, profile, onOptimisticUpda
                                 setSaveErrorMessage(null);
                             }
                         }}
-                        onSaveSection={handleSaveSection}
-                        onResetSection={handleResetSection}
                     />
                 </div>
 
-                <DialogFooter className="px-6 py-4 border-t border-zinc-100 dark:border-zinc-800 bg-white dark:bg-zinc-900 rounded-b-lg">
-                    {saveErrorMessage ? (
-                        <p className="mr-auto text-xs text-red-500">{saveErrorMessage}</p>
-                    ) : null}
-                    <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saveState === "saving"}>
-                        Cancel
-                    </Button>
-                    <Button onClick={handleSave} disabled={saveState === "saving" || !hasChanges}>
-                        {saveState === "saving" && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                        Save Changes
-                    </Button>
+                <DialogFooter className="px-6 py-4 border-t border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 z-10">
+                    {showDiscardConfirm ? (
+                        <>
+                            <p className="mr-auto text-sm font-medium text-zinc-900 dark:text-zinc-100 flex items-center">
+                                Discard unsaved changes?
+                            </p>
+                            <Button variant="ghost" onClick={() => setShowDiscardConfirm(false)}>
+                                Keep Editing
+                            </Button>
+                            <Button variant="danger" onClick={() => handleOpenChange(false)}>
+                                Discard
+                            </Button>
+                        </>
+                    ) : (
+                        <>
+                            {saveErrorMessage ? (
+                                <p className="mr-auto text-xs text-red-500">{saveErrorMessage}</p>
+                            ) : null}
+                            <Button variant="outline" onClick={() => handleOpenChange(false)} disabled={saveState === "saving"}>
+                                Cancel
+                            </Button>
+                            <Button onClick={handleSave} disabled={saveState === "saving" || !hasChanges}>
+                                {saveState === "saving" && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                                Save Changes
+                            </Button>
+                        </>
+                    )}
                 </DialogFooter>
             </DialogContent>
         </Dialog>

@@ -269,6 +269,24 @@ CREATE INDEX IF NOT EXISTS idx_connections_requester ON connections(requester_id
 CREATE INDEX IF NOT EXISTS idx_connections_addressee ON connections(addressee_id);
 CREATE INDEX IF NOT EXISTS idx_connections_status ON connections(status);
 
+-- Deduplicate existing connections before creating unique index
+WITH duplicates AS (
+    SELECT 
+        id,
+        ROW_NUMBER() OVER (
+            PARTITION BY LEAST(requester_id, addressee_id), GREATEST(requester_id, addressee_id) 
+            ORDER BY 
+                CASE WHEN status = 'accepted' THEN 1 ELSE 2 END,
+                updated_at DESC
+        ) as rn
+    FROM connections
+)
+DELETE FROM connections WHERE id IN (SELECT id FROM duplicates WHERE rn > 1);
+
+-- Unique index to prevent duplicate pairs natively
+CREATE UNIQUE INDEX IF NOT EXISTS connections_active_pair_uidx 
+ON connections (LEAST(requester_id, addressee_id), GREATEST(requester_id, addressee_id));
+
 -- Post queries (feed, user posts)
 CREATE INDEX IF NOT EXISTS idx_posts_author ON posts(author_id);
 CREATE INDEX IF NOT EXISTS idx_posts_created_at ON posts(created_at DESC);

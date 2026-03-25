@@ -27,17 +27,20 @@ ADD COLUMN IF NOT EXISTS "blocked_at" timestamp with time zone;
 
 DO $$
 BEGIN
-    IF NOT EXISTS (
+    IF EXISTS (
         SELECT 1
         FROM pg_constraint
         WHERE conname = 'connections_blocked_by_profiles_id_fk'
     ) THEN
         ALTER TABLE "connections"
-        ADD CONSTRAINT "connections_blocked_by_profiles_id_fk"
-        FOREIGN KEY ("blocked_by") REFERENCES "profiles"("id")
-        ON DELETE SET NULL ON UPDATE NO ACTION;
+        DROP CONSTRAINT "connections_blocked_by_profiles_id_fk";
     END IF;
 END $$;
+
+ALTER TABLE "connections"
+ADD CONSTRAINT "connections_blocked_by_profiles_id_fk"
+FOREIGN KEY ("blocked_by") REFERENCES "profiles"("id")
+ON DELETE CASCADE ON UPDATE NO ACTION;
 
 DO $$
 BEGIN

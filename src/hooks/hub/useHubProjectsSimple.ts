@@ -45,7 +45,20 @@ async function fetchPublicProjectsPage(cursor: string | undefined) {
             'Accept': 'application/json',
         },
     })
-    const payload = await response.json() as PublicProjectsApiResponse
+    const fallbackResponse = response.clone()
+    let payload: PublicProjectsApiResponse
+
+    try {
+        payload = await response.json() as PublicProjectsApiResponse
+    } catch {
+        const responseText = (await fallbackResponse.text().catch(() => '')).trim()
+        const statusMessage = `Failed to fetch projects (${response.status})`
+        throw new Error(
+            responseText
+                ? `${statusMessage}: ${responseText}`
+                : `${statusMessage}: Invalid server response`,
+        )
+    }
 
     if (!response.ok || !payload.success) {
         const errorMessage =

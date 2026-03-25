@@ -9,7 +9,6 @@ import {
     UserPlus,
     Sparkles,
     Maximize2,
-    Check,
     Clock,
 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
@@ -25,9 +24,6 @@ interface ProjectCardProps {
     fromTab?: string;
     onQuickView?: (project: Project) => void;
     viewMode?: string;
-    selectionMode?: boolean;
-    isSelected?: boolean;
-    onToggleSelection?: () => void;
     previewMode?: boolean;
     isFollowing?: boolean;
     followersCount?: number;
@@ -41,9 +37,6 @@ export default memo(function ProjectCard({
     fromTab = 'projects',
     onQuickView,
     viewMode = 'grid',
-    selectionMode,
-    isSelected,
-    onToggleSelection,
     previewMode = false,
     isFollowing: propIsFollowing,
     followersCount: propFollowersCount = 0,
@@ -178,25 +171,6 @@ export default memo(function ProjectCard({
             onMouseEnter={() => warmPrefetchRoute(projectHref)}
         >
             <div className={`group relative h-full rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-sm overflow-hidden flex flex-col ${disableHoverEffects ? '' : 'transition-all duration-300 hover:-translate-y-1 hover:border-primary/20'}`}>
-                {/* Selection Overlay */}
-                {selectionMode && (
-                    <div
-                        onClick={(e) => {
-                            e.preventDefault();
-                            onToggleSelection?.();
-                        }}
-                        className="absolute inset-0 z-30 cursor-pointer bg-black/10 hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
-                    >
-                        <div className="absolute top-4 left-4">
-                            <div
-                                className={`w-6 h-6 rounded-md border-2 flex items-center justify-center transition-all ${isSelected ? 'bg-primary border-primary' : 'bg-white dark:bg-zinc-900 border-zinc-300 dark:border-zinc-600'
-                                    }`}
-                            >
-                                {isSelected && <Check className="w-4 h-4 text-white" />}
-                            </div>
-                        </div>
-                    </div>
-                )}
 
                 <div className={previewMode ? 'flex flex-col h-full pointer-events-none' : 'flex flex-col h-full'}>
                     {!previewMode && (

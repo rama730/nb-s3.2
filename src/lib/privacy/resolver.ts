@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { connections, profiles } from "@/lib/db/schema";
 import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
 import { logger } from "@/lib/logger";
+import { getRedisClient } from "@/lib/redis";
 import {
   derivePrivacyRelationshipState,
   type ConnectionPrivacySetting,
@@ -89,8 +90,12 @@ async function countMutualAcceptedConnectionsBatch(viewerId: string, targetUserI
 
   const counts = new Map<string, number>();
   for (const row of rows) {
-    const targetUserId = normalizedTargetIds.includes(row.requesterId) ? row.requesterId : row.addresseeId;
-    counts.set(targetUserId, (counts.get(targetUserId) ?? 0) + 1);
+    if (normalizedTargetIds.includes(row.requesterId)) {
+      counts.set(row.requesterId, (counts.get(row.requesterId) ?? 0) + 1);
+    }
+    if (normalizedTargetIds.includes(row.addresseeId)) {
+      counts.set(row.addresseeId, (counts.get(row.addresseeId) ?? 0) + 1);
+    }
   }
 
   return counts;
@@ -114,23 +119,79 @@ export async function resolvePrivacyRelationship(
 
   if (!targetProfile) return null;
 
-  const latestConnection =
-    viewerId && viewerId !== targetUserId
-      ? await db.query.connections.findFirst({
-          columns: {
-            id: true,
-            requesterId: true,
-            addresseeId: true,
-            status: true,
-            blockedBy: true,
-          },
-          where: or(
-            and(eq(connections.requesterId, viewerId), eq(connections.addresseeId, targetUserId)),
-            and(eq(connections.requesterId, targetUserId), eq(connections.addresseeId, viewerId)),
-          ),
-          orderBy: [desc(connections.updatedAt), desc(connections.id)],
-        })
-      : null;
+  // =========================================================================
+  // PURE OPTIMIZATION: Redis Fast Path for Connected Users
+  // If the viewer's connection set exists in Redis and contains the target,
+  // we KNOW they are connected — skip the DB query entirely.
+  // =========================================================================
+  let latestConnection: ConnectionRow | null = null;
+  let usedFastPath = false;
+
+  if (viewerId && viewerId !== targetUserId) {
+    const redis = getRedisClient();
+
+    // Step 1: Bloom Filter pre-check for blocked pairs
+    // If BF says "definitely not blocked", skip the block DB lookup entirely.
+    let mightBeBlocked = true;
+    try {
+      const { isBlockedPair } = await import("@/lib/privacy/bloom-filter");
+      mightBeBlocked = await isBlockedPair(viewerId, targetUserId);
+    } catch {
+      // If bloom filter fails, assume might be blocked (safe fallback)
+    }
+
+    // Step 2: Redis SISMEMBER fast path for connection status
+    if (redis && !mightBeBlocked) {
+      try {
+        const key = `user:${viewerId}:connections`;
+        const exists = await redis.exists(key);
+        if (exists) {
+          const isMember = await redis.sismember(key, targetUserId);
+          if (isMember) {
+            // Synthesize a "connected" row without hitting DB
+            latestConnection = {
+              id: `redis-fast-path-${viewerId}-${targetUserId}`,
+              requesterId: viewerId,
+              addresseeId: targetUserId,
+              status: "accepted",
+              blockedBy: null,
+            };
+            usedFastPath = true;
+          }
+        }
+      } catch {
+        // Redis failure — fall through to DB
+      }
+    }
+
+    // Step 3: DB fallback (only if fast path didn't resolve)
+    if (!latestConnection) {
+      const dbConnection = await db.query.connections.findFirst({
+        columns: {
+          id: true,
+          requesterId: true,
+          addresseeId: true,
+          status: true,
+          blockedBy: true,
+        },
+        where: or(
+          and(eq(connections.requesterId, viewerId), eq(connections.addresseeId, targetUserId)),
+          and(eq(connections.requesterId, targetUserId), eq(connections.addresseeId, viewerId)),
+        ),
+        orderBy: [
+          sql`CASE
+            WHEN status = 'accepted' THEN 1
+            WHEN status = 'blocked' THEN 2
+            WHEN status = 'pending' THEN 3
+            ELSE 4
+          END`,
+          desc(connections.updatedAt),
+          desc(connections.id)
+        ],
+      });
+      latestConnection = dbConnection ?? null;
+    }
+  }
 
   const needsMutualResolution =
     !!viewerId &&
@@ -153,8 +214,8 @@ export async function resolvePrivacyRelationship(
   });
   logger.metric("privacy.relationship.resolve", {
     mode: "single",
-    viewerId: viewerId ?? "anon",
-    targetUserId,
+    hasViewer: !!viewerId,
+    usedFastPath,
     durationMs: Date.now() - startedAt,
     visibilityReason: result.visibilityReason,
   });
@@ -198,7 +259,16 @@ export async function resolvePrivacyRelationships(
             and(eq(connections.addresseeId, viewerId), inArray(connections.requesterId, uniqueTargetIds)),
           ),
         )
-        .orderBy(desc(connections.updatedAt), desc(connections.id))
+        .orderBy(
+            sql`CASE 
+              WHEN ${connections.status} = 'accepted' THEN 1
+              WHEN ${connections.status} = 'blocked' THEN 2
+              WHEN ${connections.status} = 'pending' THEN 3
+              ELSE 4
+            END`,
+            desc(connections.updatedAt),
+            desc(connections.id)
+        )
     : [];
 
   const latestConnectionByTarget = new Map<string, ConnectionRow>();

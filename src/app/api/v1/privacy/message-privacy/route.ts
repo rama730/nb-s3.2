@@ -1,4 +1,3 @@
-import { eq } from "drizzle-orm";
 import {
   enforceRouteLimit,
   getRequestId,
@@ -7,9 +6,10 @@ import {
   logApiRoute,
   requireAuthenticatedUser,
 } from "@/app/api/v1/_shared";
-import { db } from "@/lib/db";
-import { profiles } from "@/lib/db/schema";
-import { recordPrivacyEvent } from "@/lib/privacy/audit";
+import {
+  isProfileNotFoundError,
+  updateMessagePrivacySetting,
+} from "@/lib/privacy/settings";
 
 const VALID_MESSAGE_PRIVACY = new Set(["everyone", "connections"]);
 
@@ -31,26 +31,10 @@ export async function PATCH(request: Request) {
       return jsonError("Invalid messaging privacy", 400, "BAD_REQUEST");
     }
 
-    const [current] = await db
-      .select({ messagePrivacy: profiles.messagePrivacy })
-      .from(profiles)
-      .where(eq(profiles.id, auth.user.id))
-      .limit(1);
-
-    await db
-      .update(profiles)
-      .set({
-        messagePrivacy: nextValue as "everyone" | "connections",
-        updatedAt: new Date(),
-      })
-      .where(eq(profiles.id, auth.user.id));
-
-    await recordPrivacyEvent({
+    await updateMessagePrivacySetting({
       userId: auth.user.id,
-      eventType: "message_privacy_changed",
+      nextValue: nextValue as "everyone" | "connections",
       request,
-      previousValue: { messagePrivacy: current?.messagePrivacy ?? "connections" },
-      nextValue: { messagePrivacy: nextValue },
     });
 
     logApiRoute(request, {
@@ -64,6 +48,9 @@ export async function PATCH(request: Request) {
     return jsonSuccess({ messagePrivacy: nextValue });
   } catch (error) {
     console.error("[api/v1/privacy/message-privacy] failed", error);
+    if (isProfileNotFoundError(error)) {
+      return jsonError("Profile not found", 404, "NOT_FOUND");
+    }
     return jsonError("Failed to update messaging privacy", 500, "INTERNAL_ERROR");
   }
 }

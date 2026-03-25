@@ -23,7 +23,7 @@ export default async function ProfilePage() {
         redirect('/onboarding')
     }
 
-    if (!data?.profile?.username) {
+    if (data.privacyStatus === 'not_found' || !data.profile?.username) {
         redirect('/onboarding')
     }
 

@@ -1,4 +1,4 @@
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { validateCsrf } from "@/lib/security/csrf";
 import { db } from "@/lib/db";
 import { profileAuditEvents, profiles } from "@/lib/db/schema";
@@ -22,7 +22,7 @@ import { resolveSecurityStepUp } from "@/lib/security/step-up";
 type RecoveryCodeMode = "initial" | "regenerate";
 
 type RecoveryCodeBody = {
-  mode?: RecoveryCodeMode;
+  mode?: string;
 };
 
 function parseBody(payload: unknown): RecoveryCodeBody {
@@ -140,6 +140,45 @@ export async function POST(request: Request) {
         })
         .where(eq(profiles.id, user.id));
 
+      await recordSecurityEvent({
+        userId: user.id,
+        eventType: mode === "initial" ? "recovery_codes_generated" : "recovery_codes_regenerated",
+        request,
+        metadata: {
+          remainingCount: generated.codes.length,
+          previousRemainingCount: countRemainingRecoveryCodes(existingCodes),
+          ...(existingGeneratedAt ? { previousGeneratedAt: existingGeneratedAt } : {}),
+        },
+        executor: tx,
+      });
+
+      if (mode === "initial") {
+        const [existingEnableEvent] = await tx
+          .select({
+            id: profileAuditEvents.id,
+          })
+          .from(profileAuditEvents)
+          .where(
+            and(
+              eq(profileAuditEvents.userId, user.id),
+              eq(profileAuditEvents.eventType, "authenticator_app_enabled"),
+            ),
+          )
+          .limit(1);
+
+        if (!existingEnableEvent) {
+          await recordSecurityEvent({
+            userId: user.id,
+            eventType: "authenticator_app_enabled",
+            request,
+            metadata: {
+              factorCount: verifiedTotpFactors.length,
+            },
+            executor: tx,
+          });
+        }
+      }
+
       return {
         conflict: false,
         previousRemainingCount: countRemainingRecoveryCodes(existingCodes),
@@ -151,39 +190,8 @@ export async function POST(request: Request) {
       return jsonError(
         "Recovery codes were already generated. Regenerate them from the Security tab instead.",
         409,
-        "BAD_REQUEST",
+        "CONFLICT",
       );
-    }
-
-    await recordSecurityEvent({
-      userId: user.id,
-      eventType: mode === "initial" ? "recovery_codes_generated" : "recovery_codes_regenerated",
-      request,
-      metadata: {
-        remainingCount: generated.codes.length,
-        previousRemainingCount: result.previousRemainingCount,
-        ...(result.previousGeneratedAt ? { previousGeneratedAt: result.previousGeneratedAt } : {}),
-      },
-    });
-
-    if (mode === "initial") {
-      const existingEnableEvent = await db.query.profileAuditEvents.findFirst({
-        columns: {
-          id: true,
-        },
-        where: sql`${profileAuditEvents.userId} = ${user.id}::uuid AND ${profileAuditEvents.eventType} = 'authenticator_app_enabled'`,
-      });
-
-      if (!existingEnableEvent) {
-        await recordSecurityEvent({
-          userId: user.id,
-          eventType: "authenticator_app_enabled",
-          request,
-          metadata: {
-            factorCount: verifiedTotpFactors.length,
-          },
-        });
-      }
     }
 
     logApiRoute(request, {

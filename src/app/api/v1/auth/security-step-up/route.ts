@@ -11,6 +11,8 @@ import {
   logApiRoute,
   requireAuthenticatedUser,
 } from "@/app/api/v1/_shared";
+import { logger } from "@/lib/logger";
+import { getProtectedRecoveryCodes } from "@/lib/services/profile-service";
 import { issueSecurityStepUpCookie, type SecurityStepUpMethod } from "@/lib/security/step-up";
 import {
   consumeRecoveryCode,
@@ -39,14 +41,8 @@ async function resolveStepUpCapabilities(input: {
 }) {
   const factors = await listSecurityMfaFactors(input.supabase);
   const verifiedTotpFactor = getVerifiedTotpFactors(factors)[0];
-  const profile = await db.query.profiles.findFirst({
-    columns: {
-      securityRecoveryCodes: true,
-    },
-    where: eq(profiles.id, input.user.id),
-  });
   const remainingRecoveryCodes = countRemainingRecoveryCodes(
-    parseStoredRecoveryCodes(profile?.securityRecoveryCodes),
+    (await getProtectedRecoveryCodes(input.user.id, { authorized: true }))?.securityRecoveryCodes ?? [],
   );
   const passwordLastChangedAt = await getLatestPasswordChangeAt(input.user.id);
   const availableMethods: SecurityStepUpMethod[] = [];
@@ -189,10 +185,52 @@ export async function POST(request: Request) {
 
   const method = body.method;
   if (method !== "totp" && method !== "recovery_code" && method !== "password") {
+    logApiRoute(request, {
+      requestId,
+      action: "auth.securityStepUp.post",
+      userId: user.id,
+      startedAt,
+      success: false,
+      status: 400,
+      errorCode: "BAD_REQUEST",
+    });
+    logger.info("auth.step_up.invalid_method", {
+      requestId,
+      userId: user.id,
+      method: typeof method === "string" ? method : null,
+      status: 400,
+      errorCode: "BAD_REQUEST",
+    });
     return jsonError("A valid verification method is required", 400, "BAD_REQUEST");
   }
 
   try {
+    const logAndJsonError = (
+      message: string,
+      status: number,
+      errorCode: "BAD_REQUEST" | "STEP_UP_INVALID" | "RECOVERY_CODE_INVALID" | "INTERNAL_ERROR",
+      failureReason: string,
+    ) => {
+      logApiRoute(request, {
+        requestId,
+        action: "auth.securityStepUp.post",
+        userId: user.id,
+        startedAt,
+        success: false,
+        status,
+        errorCode,
+      });
+      logger.info("auth.securityStepUp.failure", {
+        requestId,
+        userId: user.id,
+        method,
+        failureReason,
+        status,
+        errorCode,
+      });
+      return jsonError(message, status, errorCode);
+    };
+
     if (method === "totp") {
       const factorId = typeof body.factorId === "string" ? body.factorId.trim() : "";
       const code = typeof body.code === "string" ? body.code.trim() : "";
@@ -205,10 +243,11 @@ export async function POST(request: Request) {
         code,
       });
       if (result?.error) {
-        return jsonError(
+        return logAndJsonError(
           result.error.message || "That code did not match. Use the current 6-digit code from your authenticator app.",
           400,
           "STEP_UP_INVALID",
+          "TOTP_MISMATCH",
         );
       }
     }
@@ -248,9 +287,10 @@ export async function POST(request: Request) {
       });
 
       if (!recoveryResult.matched) {
-        return jsonError(
+        return logAndJsonError(
           "That recovery code did not match. Check the code and try again.",
           400,
+          "RECOVERY_CODE_INVALID",
           "RECOVERY_CODE_INVALID",
         );
       }
@@ -277,7 +317,13 @@ export async function POST(request: Request) {
 
       const verification = await verifyPasswordCredential(user.email, password);
       if (!verification.ok) {
-        return jsonError(verification.message || "Current password is incorrect", 400, "STEP_UP_INVALID");
+        const invalidCredentials = verification.reason === "invalid_credentials";
+        return logAndJsonError(
+          verification.message || (invalidCredentials ? "Current password is incorrect" : "Unable to verify password"),
+          invalidCredentials ? 400 : 500,
+          invalidCredentials ? "STEP_UP_INVALID" : "INTERNAL_ERROR",
+          invalidCredentials ? "PASSWORD_INCORRECT" : "PASSWORD_VERIFICATION_FAILED",
+        );
       }
     }
 

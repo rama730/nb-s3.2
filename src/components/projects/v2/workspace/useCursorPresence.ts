@@ -43,12 +43,16 @@ function uint8ToBase64(payload: Uint8Array): string {
 }
 
 function base64ToUint8(payload: string) {
-  const binaryString = atob(payload);
-  const bytes = new Uint8Array(binaryString.length);
-  for (let index = 0; index < binaryString.length; index += 1) {
-    bytes[index] = binaryString.charCodeAt(index);
+  try {
+    const binaryString = atob(payload);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let index = 0; index < binaryString.length; index += 1) {
+      bytes[index] = binaryString.charCodeAt(index);
+    }
+    return bytes;
+  } catch {
+    return null;
   }
-  return bytes;
 }
 
 export function useCursorPresence({
@@ -93,7 +97,12 @@ export function useCursorPresence({
       return;
     }
 
-    presence.processIncoming(base64ToUint8(member.cursorFrame), fnv1a(currentUserId));
+    const cursorFrame = base64ToUint8(member.cursorFrame);
+    if (!cursorFrame) {
+      return;
+    }
+
+    presence.processIncoming(cursorFrame, fnv1a(currentUserId));
     scheduleVersionBump();
   }, [currentUserId, scheduleVersionBump]);
 

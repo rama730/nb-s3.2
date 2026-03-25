@@ -1,10 +1,16 @@
 import { sql } from 'drizzle-orm'
 import { db } from '@/lib/db'
+import { buildWorkspaceTaskCounterFilters, getWorkspaceCounterWindow } from '@/lib/workspace/counter-logic'
 
 type WorkspaceCounterExecutor = Pick<typeof db, 'execute'>
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 function normalizeUserIds(userIds: Array<string | null | undefined>) {
-    return [...new Set(userIds.filter((userId): userId is string => typeof userId === 'string' && userId.trim().length > 0))]
+    return [...new Set(
+        userIds
+            .map((userId) => typeof userId === 'string' ? userId.trim() : '')
+            .filter((userId): userId is string => UUID_REGEX.test(userId)),
+    )]
 }
 
 export async function refreshWorkspaceCountersForUsers(
@@ -14,9 +20,17 @@ export async function refreshWorkspaceCountersForUsers(
     const targetUserIds = normalizeUserIds(userIds)
     if (targetUserIds.length === 0) return
 
-    const now = new Date()
-    const todayEnd = new Date(now)
-    todayEnd.setHours(23, 59, 59, 999)
+    const { now, todayEnd } = getWorkspaceCounterWindow()
+    const deletedAtColumn = sql.raw('"deleted_at"')
+    const statusColumn = sql.raw('"status"')
+    const dueDateColumn = sql.raw('"due_date"')
+    const taskCounterFilters = buildWorkspaceTaskCounterFilters(
+        deletedAtColumn,
+        statusColumn,
+        dueDateColumn,
+        now,
+        todayEnd,
+    )
 
     const values = sql.join(targetUserIds.map((userId) => sql`(${userId}::uuid)`), sql`, `)
 
@@ -28,20 +42,13 @@ export async function refreshWorkspaceCountersForUsers(
             SELECT
                 ${sql.raw('"assignee_id"')} AS user_id,
                 COUNT(*) FILTER (
-                    WHERE ${sql.raw('"deleted_at"')} IS NULL
-                      AND ${sql.raw('"status"')} <> 'done'
-                      AND ${sql.raw('"due_date"')} IS NOT NULL
-                      AND ${sql.raw('"due_date"')} <= ${todayEnd}
+                    WHERE ${taskCounterFilters.dueToday}
                 )::int AS due_today_count,
                 COUNT(*) FILTER (
-                    WHERE ${sql.raw('"deleted_at"')} IS NULL
-                      AND ${sql.raw('"status"')} <> 'done'
-                      AND ${sql.raw('"due_date"')} IS NOT NULL
-                      AND ${sql.raw('"due_date"')} < ${now}
+                    WHERE ${taskCounterFilters.overdue}
                 )::int AS overdue_count,
                 COUNT(*) FILTER (
-                    WHERE ${sql.raw('"deleted_at"')} IS NULL
-                      AND ${sql.raw('"status"')} = 'in_progress'
+                    WHERE ${taskCounterFilters.inProgress}
                 )::int AS in_progress_count
             FROM ${sql.raw('"tasks"')}
             WHERE ${sql.raw('"assignee_id"')} IN (SELECT user_id FROM target_users)
@@ -66,13 +73,27 @@ export async function refreshWorkspaceCountersForUsers(
             LEFT JOIN task_counts tc ON tc.user_id = tu.user_id
             LEFT JOIN connection_counts cc ON cc.user_id = tu.user_id
         )
-        UPDATE ${sql.raw('"profiles"')} p
-        SET
-            ${sql.raw('"workspace_inbox_count"')} = counts.inbox_count,
-            ${sql.raw('"workspace_due_today_count"')} = counts.due_today_count,
-            ${sql.raw('"workspace_overdue_count"')} = counts.overdue_count,
-            ${sql.raw('"workspace_in_progress_count"')} = counts.in_progress_count
+        INSERT INTO ${sql.raw('"profile_counters"')} (
+            ${sql.raw('"user_id"')},
+            ${sql.raw('"workspace_inbox_count"')},
+            ${sql.raw('"workspace_due_today_count"')},
+            ${sql.raw('"workspace_overdue_count"')},
+            ${sql.raw('"workspace_in_progress_count"')},
+            ${sql.raw('"updated_at"')}
+        )
+        SELECT
+            user_id,
+            inbox_count,
+            due_today_count,
+            overdue_count,
+            in_progress_count,
+            NOW()
         FROM counts
-        WHERE p.${sql.raw('"id"')} = counts.user_id
+        ON CONFLICT (${sql.raw('"user_id"')}) DO UPDATE SET
+            ${sql.raw('"workspace_inbox_count"')} = EXCLUDED.${sql.raw('"workspace_inbox_count"')},
+            ${sql.raw('"workspace_due_today_count"')} = EXCLUDED.${sql.raw('"workspace_due_today_count"')},
+            ${sql.raw('"workspace_overdue_count"')} = EXCLUDED.${sql.raw('"workspace_overdue_count"')},
+            ${sql.raw('"workspace_in_progress_count"')} = EXCLUDED.${sql.raw('"workspace_in_progress_count"')},
+            ${sql.raw('"updated_at"')} = EXCLUDED.${sql.raw('"updated_at"')}
     `)
 }

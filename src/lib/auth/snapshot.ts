@@ -390,6 +390,11 @@ export function buildAuthSnapshotFromClaims(payload: JwtPayload): AuthSnapshot |
 
 export function buildUserFromSnapshot(snapshot: AuthSnapshot): User {
     const createdAtIso = new Date((snapshot.issuedAt ?? Math.floor(Date.now() / 1000)) * 1000).toISOString()
+    const isAnonymous =
+        snapshot.appMetadata.provider === 'anonymous'
+        || snapshot.appMetadata.anonymous === true
+        || snapshot.appMetadata.is_anonymous === true
+        || snapshot.roles.includes('anonymous')
 
     return {
         id: snapshot.userId,
@@ -404,7 +409,7 @@ export function buildUserFromSnapshot(snapshot: AuthSnapshot): User {
         role: snapshot.roles[0],
         factors: undefined,
         identities: [],
-        is_anonymous: false,
+        is_anonymous: isAnonymous,
     } as unknown as User
 }
 
@@ -508,6 +513,18 @@ export async function resolveAuthSnapshot(
 ): Promise<AuthSnapshotResolution> {
     const sessionResponse = await supabase.auth.getSession()
     const session = sessionResponse.data.session ?? null
+
+    if (sessionResponse.error) {
+        return {
+            session,
+            snapshot: null,
+            user: null,
+            error: authError(
+                sessionResponse.error.message,
+                sessionResponse.error.status ?? 500,
+            ),
+        }
+    }
 
     if (!session?.access_token) {
         return {

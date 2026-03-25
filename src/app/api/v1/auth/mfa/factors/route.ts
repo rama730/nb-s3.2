@@ -6,6 +6,7 @@ import {
   logApiRoute,
   requireAuthenticatedUser,
 } from "@/app/api/v1/_shared";
+import { listSecurityMfaFactors } from "@/lib/security/mfa";
 
 type MfaFactorPayload = {
   id: string;
@@ -58,17 +59,7 @@ export async function GET(request: Request) {
       return jsonSuccess({ factors: [] as MfaFactorPayload[] }, "MFA factors are not available for this project");
     }
 
-    const mfaResult = await mfaApi.listFactors();
-    const allFactors = Array.isArray(mfaResult?.data?.all) ? mfaResult.data.all : [];
-    const factors: MfaFactorPayload[] = allFactors
-      .filter((factor: any) => factor?.factor_type === "totp" || factor?.factor_type === "phone")
-      .map((factor: any) => ({
-        id: String(factor.id),
-        type: factor.factor_type === "phone" ? "phone" : "totp",
-        friendly_name: factor.friendly_name || undefined,
-        created_at: typeof factor.created_at === "string" ? factor.created_at : undefined,
-        status: factor.status === "verified" ? "verified" : "unverified",
-      }));
+    const factors: MfaFactorPayload[] = await listSecurityMfaFactors(auth.supabase);
 
     logApiRoute(request, {
       requestId,

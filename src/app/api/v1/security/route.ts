@@ -7,14 +7,12 @@ import {
   logApiRoute,
   requireAuthenticatedUser,
 } from "@/app/api/v1/_shared";
-import { eq } from "drizzle-orm";
 import { resolvePasswordCredentialState } from "@/lib/auth/account-identity";
-import { db } from "@/lib/db";
-import { profiles } from "@/lib/db/schema";
 import { isSecurityHardeningEnabled } from "@/lib/features/security";
+import { getProtectedRecoveryCodes } from "@/lib/services/profile-service";
 import { getLatestPasswordChangeAt, listSecurityActivity } from "@/lib/security/audit";
 import { getVerifiedTotpFactors, listSecurityMfaFactors } from "@/lib/security/mfa";
-import { countRemainingRecoveryCodes, parseStoredRecoveryCodes } from "@/lib/security/recovery-codes";
+import { countRemainingRecoveryCodes } from "@/lib/security/recovery-codes";
 import { listActiveSessions, listLoginHistory } from "@/lib/security/session-activity";
 
 type SecurityPayload = {
@@ -63,8 +61,8 @@ type SecurityPayload = {
       | "password_changed"
       | "other_sessions_revoked";
     createdAt: string;
-    ipAddress?: string;
-    userAgent?: string;
+    networkFingerprint?: string;
+    deviceFingerprint?: string;
     metadata: Record<string, unknown>;
   }>;
   assurance: {
@@ -151,19 +149,13 @@ export async function GET(request: Request) {
     payload.password.lastChangedAt = passwordLastChangedAt ?? undefined;
     payload.securityActivity = await listSecurityActivity(auth.user.id, securityHardeningEnabled ? 20 : 12);
 
-    const profile = await db.query.profiles.findFirst({
-      columns: {
-        securityRecoveryCodes: true,
-        recoveryCodesGeneratedAt: true,
-      },
-      where: eq(profiles.id, auth.user.id),
-    });
-    const storedRecoveryCodes = parseStoredRecoveryCodes(profile?.securityRecoveryCodes);
+    const recoveryCodesState = await getProtectedRecoveryCodes(auth.user.id, { authorized: true });
+    const storedRecoveryCodes = recoveryCodesState?.securityRecoveryCodes ?? [];
     payload.recoveryCodes = {
-      configured: storedRecoveryCodes.length > 0 || !!profile?.recoveryCodesGeneratedAt,
+      configured: recoveryCodesState?.hasRecoveryCodes ?? false,
       remainingCount: countRemainingRecoveryCodes(storedRecoveryCodes),
-      ...(profile?.recoveryCodesGeneratedAt
-        ? { generatedAt: profile.recoveryCodesGeneratedAt.toISOString() }
+      ...(recoveryCodesState?.recoveryCodesGeneratedAt
+        ? { generatedAt: recoveryCodesState.recoveryCodesGeneratedAt.toISOString() }
         : {}),
     };
 

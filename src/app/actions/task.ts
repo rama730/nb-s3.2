@@ -7,7 +7,7 @@ import { projectMembers, projectSprints, tasks } from "@/lib/db/schema";
 import { getProjectAccessById } from "@/lib/data/project-access";
 import { createClient } from "@/lib/supabase/server";
 import { consumeRateLimit } from "@/lib/security/rate-limit";
-import { refreshWorkspaceCountersForUsers } from "@/lib/workspace/profile-counters";
+import { queueCounterRefreshBestEffort } from "@/lib/workspace/counter-buffer";
 
 type MutableTaskField = "title" | "description" | "priority" | "sprintId" | "dueDate";
 
@@ -113,7 +113,7 @@ export async function updateTaskFieldAction(
         }
 
         await db.update(tasks).set(updates).where(eq(tasks.id, taskId));
-        await refreshWorkspaceCountersForUsers(db, [existingTask?.assigneeId ?? null]);
+        await queueCounterRefreshBestEffort([existingTask?.assigneeId ?? null]);
 
         revalidatePath(`/projects/${canonicalProjectId}`);
         return { success: true };
@@ -157,7 +157,7 @@ export async function updateTaskStatusAction(
             status,
             updatedAt: new Date(),
         }).where(eq(tasks.id, taskId));
-        await refreshWorkspaceCountersForUsers(db, [existingTask?.assigneeId ?? null]);
+        await queueCounterRefreshBestEffort([existingTask?.assigneeId ?? null]);
 
         revalidatePath(`/projects/${canonicalProjectId}`);
         return { success: true };
@@ -207,7 +207,7 @@ export async function assignTaskAction(
             assigneeId: assigneeId || null,
             updatedAt: new Date(),
         }).where(eq(tasks.id, taskId));
-        await refreshWorkspaceCountersForUsers(db, [existingTask?.assigneeId ?? null, assigneeId]);
+        await queueCounterRefreshBestEffort([existingTask?.assigneeId ?? null, assigneeId]);
 
         revalidatePath(`/projects/${canonicalProjectId}`);
         return { success: true };

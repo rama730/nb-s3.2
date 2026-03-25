@@ -34,7 +34,7 @@ describe('consumeRateLimit (local fallback)', () => {
         }
         const result = await consumeRateLimit(key, 5, 60)
         assert.equal(result.allowed, false)
-        assert.equal(result.count, 6)
+        assert.equal(result.count, 5)
     })
 
     it('resets after window expires', async () => {

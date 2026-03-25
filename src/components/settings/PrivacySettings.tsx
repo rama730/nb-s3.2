@@ -317,6 +317,11 @@ export default function PrivacySettings() {
         connectionPrivacyMutation.mutate(connectionPrivacy);
     };
 
+    const handleMessagePrivacyChange = (messagePrivacy: MessagePrivacy) => {
+        if (messagePrivacy === settings?.messagePrivacy) return;
+        messagePrivacyMutation.mutate(messagePrivacy);
+    };
+
     const handleUnblock = (userId: string) => {
         if (
             typeof window !== "undefined" &&
@@ -412,14 +417,14 @@ export default function PrivacySettings() {
                                 description="Only accepted connections can start direct messages with you."
                                 selected={settings?.messagePrivacy === "connections"}
                                 disabled={messagePrivacyMutation.isPending || !settings}
-                                onClick={() => messagePrivacyMutation.mutate("connections")}
+                                onClick={() => handleMessagePrivacyChange("connections")}
                             />
                             <SegmentedChoice
                                 title="Everyone"
                                 description="Anyone can start a direct message unless they are blocked."
                                 selected={settings?.messagePrivacy === "everyone"}
                                 disabled={messagePrivacyMutation.isPending || !settings}
-                                onClick={() => messagePrivacyMutation.mutate("everyone")}
+                                onClick={() => handleMessagePrivacyChange("everyone")}
                             />
                         </div>
                     </div>
@@ -497,12 +502,16 @@ export default function PrivacySettings() {
             </SettingsSectionCard>
 
             <SettingsSectionCard title="Recent Privacy Changes" description="Recent high-signal changes to visibility, interaction rules, and blocked accounts.">
-                {!data || data.privacyActivity.length === 0 ? (
-                    <div className="rounded-2xl border border-dashed border-zinc-200 bg-zinc-50 px-4 py-8 text-center text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/40 dark:text-zinc-400">
-                        No recent privacy changes.
+                <div className="space-y-3">
+                    <div className="rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-zinc-600 dark:border-zinc-800 dark:bg-zinc-950/40 dark:text-zinc-400">
+                        Privacy activity keeps pseudonymous network and device fingerprints for account-history integrity instead of raw IP addresses or full user-agent strings. These records are removed when you delete your account.
                     </div>
-                ) : (
-                    <div className="space-y-3">
+                    {!data || data.privacyActivity.length === 0 ? (
+                        <div className="rounded-2xl border border-dashed border-zinc-200 bg-zinc-50 px-4 py-8 text-center text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/40 dark:text-zinc-400">
+                            No recent privacy changes.
+                        </div>
+                    ) : (
+                        <div className="space-y-3">
                         {data.privacyActivity.map((entry) => (
                             <div
                                 key={entry.id}
@@ -519,8 +528,9 @@ export default function PrivacySettings() {
                                 </div>
                             </div>
                         ))}
-                    </div>
-                )}
+                        </div>
+                    )}
+                </div>
             </SettingsSectionCard>
         </div>
     );

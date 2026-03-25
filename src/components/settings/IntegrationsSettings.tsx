@@ -16,6 +16,7 @@ import { SettingsSectionCard } from "@/components/settings/ui/SettingsSectionCar
 import { fetchSecurityStepUpCapabilities, useEnableEmailSignIn, useIntegrationsData } from "@/hooks/useSettingsQueries";
 import { queryKeys } from "@/lib/query-keys";
 import { cn } from "@/lib/utils";
+import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import type {
     AuthConnectionMethod,
     IntegrationsAuthProvider,
@@ -118,10 +119,14 @@ function ProviderRow({
     provider,
     onEnableEmailSignIn,
     enablingEmailSignIn,
+    onLinkProvider,
+    isLinkingProvider,
 }: {
     provider: AuthConnectionMethod;
     onEnableEmailSignIn?: () => void;
     enablingEmailSignIn?: boolean;
+    onLinkProvider?: () => void;
+    isLinkingProvider?: boolean;
 }) {
     const lastUsed = formatRelativeTimestamp(provider.lastUsedAt);
     const showVerificationBadge = provider.provider === "email" && provider.verificationState;
@@ -188,6 +193,24 @@ function ProviderRow({
                             </>
                         ) : (
                             "Set a password"
+                        )}
+                    </Button>
+                ) : null}
+                {onLinkProvider ? (
+                    <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={onLinkProvider}
+                        disabled={isLinkingProvider}
+                    >
+                        {isLinkingProvider ? (
+                            <>
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                                Linking...
+                            </>
+                        ) : (
+                            "Link"
                         )}
                     </Button>
                 ) : null}
@@ -275,6 +298,7 @@ export default function IntegrationsSettings() {
     const [stepUpOpen, setStepUpOpen] = useState(false);
     const [stepUpMethods, setStepUpMethods] = useState<SecurityStepUpMethod[]>([]);
     const [primaryTotpFactorId, setPrimaryTotpFactorId] = useState<string | undefined>();
+    const [linkingProviderId, setLinkingProviderId] = useState<string | null>(null);
 
     const errorMessage = (() => {
         if (!error) return null;
@@ -290,6 +314,29 @@ export default function IntegrationsSettings() {
     const resetEmailForm = () => {
         setNewPassword("");
         setConfirmPassword("");
+    };
+
+    const handleLinkOAuthProvider = async (providerId: "google" | "github") => {
+        if (linkingProviderId) return;
+        setLinkingProviderId(providerId);
+        
+        try {
+            const supabase = createSupabaseBrowserClient();
+            const { error } = await supabase.auth.linkIdentity({
+                provider: providerId,
+                options: {
+                    redirectTo: `${window.location.origin}/settings/integrations`,
+                },
+            });
+            
+            if (error) {
+                showToast(error.message || `Failed to link ${providerId}`, "error");
+                setLinkingProviderId(null);
+            }
+        } catch (err) {
+            showToast(`Failed to link ${providerId}`, "error");
+            setLinkingProviderId(null);
+        }
     };
 
     async function loadStepUpOptions() {
@@ -317,37 +364,46 @@ export default function IntegrationsSettings() {
             return;
         }
 
-        const result = await enableEmailSignInMutation.mutateAsync({
-            newPassword,
-        });
+        try {
+            const result = await enableEmailSignInMutation.mutateAsync({
+                newPassword,
+            });
 
-        if (!result.success) {
-            const errorCode = "errorCode" in result ? result.errorCode : undefined;
-            if (errorCode === "STEP_UP_REQUIRED") {
-                try {
-                    await loadStepUpOptions();
-                } catch (stepUpError) {
-                    showToast(
-                        stepUpError instanceof Error
-                            ? stepUpError.message
-                            : "Unable to load verification methods.",
-                        "error",
-                    );
+            if (!result.success) {
+                const errorCode = "errorCode" in result ? result.errorCode : undefined;
+                if (errorCode === "STEP_UP_REQUIRED") {
+                    try {
+                        await loadStepUpOptions();
+                    } catch (stepUpError) {
+                        showToast(
+                            stepUpError instanceof Error
+                                ? stepUpError.message
+                                : "Unable to load verification methods.",
+                            "error",
+                        );
+                    }
+                    return;
                 }
+
+                showToast(result.message || "Failed to enable email sign-in", "error");
                 return;
             }
 
-            showToast(result.message || "Failed to enable email sign-in", "error");
-            return;
+            showToast("Password added successfully. Email sign-in is now enabled for this account", "success");
+            resetEmailForm();
+            setEmailSignInOpen(false);
+            await Promise.all([
+                queryClient.invalidateQueries({ queryKey: queryKeys.settings.integrations() }),
+                queryClient.invalidateQueries({ queryKey: queryKeys.settings.security() }),
+            ]);
+        } catch (error) {
+            showToast(
+                error instanceof Error
+                    ? error.message
+                    : "Failed to enable email sign-in",
+                "error",
+            );
         }
-
-        showToast("Password added successfully. Email sign-in is now enabled for this account", "success");
-        resetEmailForm();
-        setEmailSignInOpen(false);
-        await Promise.all([
-            queryClient.invalidateQueries({ queryKey: queryKeys.settings.integrations() }),
-            queryClient.invalidateQueries({ queryKey: queryKeys.settings.security() }),
-        ]);
     }
 
     if (isLoading) {
@@ -404,6 +460,11 @@ export default function IntegrationsSettings() {
                             provider.provider === "email" &&
                             provider.state === "not_linked" &&
                             data.capabilities.canEnableEmailSignIn;
+                        
+                        const showLinkAction = 
+                            (provider.provider === "google" || provider.provider === "github") &&
+                            provider.state === "not_linked" &&
+                            data.capabilities.canLinkAdditionalProvider;
 
                         return (
                             <Fragment key={provider.provider}>
@@ -411,6 +472,8 @@ export default function IntegrationsSettings() {
                                     provider={provider}
                                     onEnableEmailSignIn={showEmailAction ? () => setEmailSignInOpen((current) => !current) : undefined}
                                     enablingEmailSignIn={showEmailAction && emailSignInOpen}
+                                    onLinkProvider={showLinkAction ? () => void handleLinkOAuthProvider(provider.provider as "google" | "github") : undefined}
+                                    isLinkingProvider={linkingProviderId === provider.provider}
                                 />
                                 {showEmailAction && emailSignInOpen ? (
                                     <div className="rounded-2xl border border-zinc-200 bg-white px-4 py-4 dark:border-zinc-800 dark:bg-zinc-900">

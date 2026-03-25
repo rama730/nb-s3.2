@@ -58,6 +58,13 @@ export interface ProjectGroupConversation {
 
 const UUID_V4_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+function resolveLastMessageCreatedAt(
+    createdAt: Date | null | undefined,
+    fallback: Date | null | undefined,
+) {
+    return createdAt ?? fallback ?? new Date();
+}
+
 async function getAuthUser() {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
@@ -198,11 +205,12 @@ export async function getConversations(
             const result: ConversationWithDetails[] = paginatedConvs.map((userConv) => {
                 const details = detailsMap.get(userConv.conversation_id);
                 if (!details) return null;
+                const conversationUpdatedAt = userConv.sort_at || userConv.last_message_at || userConv.updated_at || new Date();
 
                 return {
                     id: details.id,
                     type: details.type as 'dm' | 'group' | 'project_group',
-                    updatedAt: userConv.sort_at || userConv.last_message_at || userConv.updated_at || new Date(),
+                    updatedAt: conversationUpdatedAt,
                     lifecycleState: details.last_message_id ? 'active' : 'draft',
                     muted: Boolean(userConv.muted),
                     participants: (participantMap.get(details.id) || []).map((participant) => ({
@@ -215,7 +223,7 @@ export async function getConversations(
                         id: details.last_message_id,
                         content: details.last_message_content,
                         senderId: details.last_message_sender_id,
-                        createdAt: details.last_message_created_at!,
+                        createdAt: resolveLastMessageCreatedAt(details.last_message_created_at, conversationUpdatedAt),
                         type: details.last_message_type,
                     } : null,
                     unreadCount: userConv.unread_count || 0,
@@ -343,7 +351,10 @@ export async function getConversationById(
                             id: details.last_message_id,
                             content: details.last_message_content,
                             senderId: details.last_message_sender_id,
-                            createdAt: details.last_message_created_at!,
+                            createdAt: resolveLastMessageCreatedAt(
+                                details.last_message_created_at,
+                                details.updated_at || null,
+                            ),
                             type: details.last_message_type,
                         }
                         : null,
@@ -393,7 +404,13 @@ export async function markConversationAsRead(
                     and(
                         eq(messages.id, lastReadMessageId),
                         eq(messages.conversationId, conversationId),
-                        isNull(messages.deletedAt)
+                        isNull(messages.deletedAt),
+                        sql`NOT EXISTS (
+                            SELECT 1
+                            FROM ${messageHiddenForUsers} h
+                            WHERE h.message_id = ${messages.id}
+                            AND h.user_id = ${user.id}
+                        )`
                     )
                 )
                 .limit(1);
@@ -641,7 +658,7 @@ export async function getProjectGroups(
                 id: project.last_message_id,
                 content: project.last_message_content,
                 senderId: project.last_message_sender_id,
-                createdAt: project.last_message_created_at!,
+                createdAt: resolveLastMessageCreatedAt(project.last_message_created_at, project.updated_at),
                 type: project.last_message_type,
             } : null,
             unreadCount: project.unread_count || 0,

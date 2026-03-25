@@ -52,6 +52,7 @@ function PrimaryButton({
 
 export const ProfileHeader = React.memo(function ProfileHeader({
     profile,
+    viewerId,
     isOwner,
     isAuthenticated,
     connectionState,
@@ -69,6 +70,7 @@ export const ProfileHeader = React.memo(function ProfileHeader({
     lockedShell = false,
 }: {
     profile: any
+    viewerId?: string | null
     isOwner: boolean
     isAuthenticated: boolean
     connectionState: ConnectionState
@@ -120,9 +122,9 @@ export const ProfileHeader = React.memo(function ProfileHeader({
 
     const blockActionLabel = privacyRelationship.blockedByViewer ? 'Unblock' : 'Block'
     const privacyPresentation = buildPrivacyPresentation({
-        viewerId: null,
+        viewerId: viewerId ?? null,
         targetUserId: profile.id,
-        isSelf: false,
+        isSelf: isOwner,
         isConnected: connectionState === 'accepted',
         hasPendingIncomingRequest: connectionState === 'pending_incoming',
         hasPendingOutgoingRequest: connectionState === 'pending_outgoing',
@@ -291,7 +293,7 @@ export const ProfileHeader = React.memo(function ProfileHeader({
                 {lockedShell ? (
                     <div className="mt-4 rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-zinc-600 dark:border-zinc-800 dark:bg-zinc-950/40 dark:text-zinc-300">
                         {privacyRelationship.blockedByViewer
-                            ? `${privacyPresentation.blockedBannerText}. Their profile remains limited until you unblock them.`
+                            ? `${privacyPresentation.blockedBannerText || 'You blocked this account'}. Their profile remains limited until you unblock them.`
                             : privacyRelationship.blockedByTarget
                                 ? 'This account is not available for profile viewing or interaction.'
                                 : privacyRelationship.visibilityReason === 'connections_only'

@@ -108,6 +108,7 @@ export function derivePrivacyRelationshipState(input: {
 
   const hasMutualAcceptedConnection = (input.mutualAcceptedCount ?? 0) > 0;
   const canSendConnectionRequest =
+    !!viewerId &&
     !isSelf &&
     !blockedByViewer &&
     !blockedByTarget &&
@@ -118,6 +119,7 @@ export function derivePrivacyRelationshipState(input: {
       (connectionPrivacy === "mutuals_only" && hasMutualAcceptedConnection));
 
   const canSendMessage =
+    !!viewerId &&
     !isSelf &&
     !blockedByViewer &&
     !blockedByTarget &&

@@ -1,4 +1,10 @@
-import type { AppearanceSnapshot } from "@/lib/theme/appearance";
+import {
+    APPEARANCE_SNAPSHOT_VERSION,
+    isAccentColor,
+    isDensity,
+    isThemeMode,
+    type AppearanceSnapshot,
+} from "@/lib/theme/appearance";
 
 export type AppearanceSyncState = "idle" | "saving" | "saved" | "save_failed";
 
@@ -9,12 +15,29 @@ export type AppearanceSettingsPayload = {
 
 const APPEARANCE_REQUEST_TIMEOUT_MS = 4_000;
 
+function isAppearanceSnapshot(snapshot: unknown): snapshot is AppearanceSnapshot {
+    if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) {
+        return false;
+    }
+
+    const candidate = snapshot as Record<string, unknown>;
+    return (
+        candidate.version === APPEARANCE_SNAPSHOT_VERSION &&
+        isThemeMode(candidate.theme) &&
+        isAccentColor(candidate.accentColor) &&
+        isDensity(candidate.density) &&
+        typeof candidate.reduceMotion === "boolean" &&
+        typeof candidate.updatedAt === "string" &&
+        Number.isFinite(new Date(candidate.updatedAt).getTime())
+    );
+}
+
 async function fetchAppearanceWithTimeout(
     input: RequestInfo | URL,
     init: RequestInit,
 ) {
     const controller = new AbortController();
-    const timeoutId = window.setTimeout(() => controller.abort(), APPEARANCE_REQUEST_TIMEOUT_MS);
+    const timeoutId = setTimeout(() => controller.abort(), APPEARANCE_REQUEST_TIMEOUT_MS);
 
     try {
         return await fetch(input, {
@@ -27,7 +50,7 @@ async function fetchAppearanceWithTimeout(
         }
         throw error;
     } finally {
-        window.clearTimeout(timeoutId);
+        clearTimeout(timeoutId);
     }
 }
 
@@ -49,7 +72,7 @@ async function readAppearanceJson(response: Response): Promise<AppearanceSetting
 
     return {
         userId: typeof json?.data?.userId === "string" ? json.data.userId : null,
-        snapshot: json?.data?.snapshot ?? null,
+        snapshot: isAppearanceSnapshot(json?.data?.snapshot) ? json.data.snapshot : null,
     };
 }
 

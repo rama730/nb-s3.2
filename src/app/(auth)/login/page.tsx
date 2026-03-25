@@ -275,6 +275,11 @@ function LoginPageInner() {
                                     onExpire={() => {
                                         setCaptchaToken(null)
                                     }}
+                                    onError={() => {
+                                        setCaptchaToken(null)
+                                        clearVisibleError()
+                                        setError('CAPTCHA failed to load — please try again or disable ad blockers.')
+                                    }}
                                 />
                             ) : null}
 

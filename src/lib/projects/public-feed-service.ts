@@ -102,7 +102,7 @@ export async function queryAndCachePublicProjectsFeed(limit: number, cursor: Pub
             ownerId: projects.ownerId,
             viewCount: projects.viewCount,
             followersCount: projects.followersCount,
-            savesCount: sql<number | null>`0`,
+            savesCount: projects.savesCount,
             coverImage: projects.coverImage,
             createdAt: projects.createdAt,
             updatedAt: projects.updatedAt,

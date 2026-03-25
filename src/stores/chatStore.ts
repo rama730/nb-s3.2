@@ -613,6 +613,10 @@ export const useChatStore = create<ChatState>()(
                             hasMoreConversations: result.hasMore || false,
                             conversationsCursor: result.nextCursor || null,
                         });
+                        if (conversationBootstrapRetryTimer) {
+                            clearTimeout(conversationBootstrapRetryTimer);
+                            conversationBootstrapRetryTimer = null;
+                        }
                         void get().flushOutbox();
                     } else {
                         set({
@@ -626,7 +630,11 @@ export const useChatStore = create<ChatState>()(
                     const message = error instanceof Error ? error.message : 'Failed to initialize chat';
                     const nextFailureCount = state.bootstrapFailureCount + 1;
                     if (isTransientNetworkError(error)) {
-                        console.warn('Chat bootstrap deferred due transient failure:', message);
+                        console.warn('Chat bootstrap deferred due to transient failure:', message);
+                        if (conversationBootstrapRetryTimer) {
+                            clearTimeout(conversationBootstrapRetryTimer);
+                            conversationBootstrapRetryTimer = null;
+                        }
                         if (
                             nextFailureCount <= CHAT_BOOTSTRAP_MAX_RECOVERY_ATTEMPTS &&
                             !conversationBootstrapRetryTimer
@@ -1104,11 +1112,8 @@ export const useChatStore = create<ChatState>()(
                     },
                 }));
 
-                const isOnline = typeof navigator === 'undefined' ? true : navigator.onLine;
-                if (!isOnline) {
-                    queueMessage('offline');
-                    return { ok: true, queued: true };
-                }
+                // Remove aggressive navigator.onLine check to prevent false negatives
+                // We will try to send and catch real network errors instead.
 
                 try {
                     const result = attachments.length > 0
@@ -1172,14 +1177,15 @@ export const useChatStore = create<ChatState>()(
                         return { ok: true };
                     }
 
-                    queueMessage(result.error || 'send_failed');
+                    const errorReason = result.error || 'send_failed';
+                    queueMessage(errorReason);
                     void get().flushOutbox();
-                    return { ok: true, queued: true };
+                    return { ok: true, queued: true, error: errorReason };
                 } catch (error) {
                     console.error('Error sending message:', error);
                     queueMessage('send_exception');
                     void get().flushOutbox();
-                    return { ok: true, queued: true };
+                    return { ok: true, queued: true, error: 'network_error' };
                 } finally {
                     sendSignatureLocks.delete(sendSignature);
                 }
@@ -1191,7 +1197,7 @@ export const useChatStore = create<ChatState>()(
             flushOutbox: async () => {
                 const state = get();
                 if (state.outboxFlushing) return;
-                if (typeof navigator !== 'undefined' && !navigator.onLine) return;
+                // Allow flush even if navigator.onLine is false (due to potential false negatives)
 
                 const allQueue = Object.values(state.outboxByConversation).flat();
                 if (allQueue.length === 0) return;
@@ -1958,7 +1964,8 @@ export const useChatStore = create<ChatState>()(
                 if (!otherUser) return false;
 
                 try {
-                    const result = await sendConnectionRequest(otherUser.id);
+                    const idempotencyKey = crypto.randomUUID();
+                    const result = await sendConnectionRequest(otherUser.id, idempotencyKey);
                     if (result.success) {
                         set({ activeConnectionStatus: 'pending_sent' });
                         return true;
@@ -2237,7 +2244,7 @@ export const useChatStore = create<ChatState>()(
         {
             name: 'chat-storage',
             version: CHAT_STORE_VERSION,
-            migrate: (persistedState) => extractPersistedChatState(persistedState),
+            migrate: (persistedState, _version) => extractPersistedChatState(persistedState),
             merge: (persistedState, currentState) => ({
                 ...currentState,
                 ...extractPersistedChatState(persistedState),

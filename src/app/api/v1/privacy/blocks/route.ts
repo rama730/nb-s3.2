@@ -61,11 +61,20 @@ export async function POST(request: Request) {
     });
     return jsonSuccess({ userId: targetUserId, blocked: true });
   } catch (error) {
-    console.error("[api/v1/privacy/blocks] failed", error);
+    logger.error("[api/v1/privacy/blocks] failed", { error, requestId });
     logger.metric("privacy.block.result", {
       viewerId: auth.user.id,
       success: false,
       action: "block",
+    });
+    logApiRoute(request, {
+      requestId,
+      action: "privacy.blocks.post",
+      userId: auth.user.id,
+      startedAt,
+      success: false,
+      status: 500,
+      errorCode: "INTERNAL_ERROR",
     });
     return jsonError("Failed to block account", 500, "INTERNAL_ERROR");
   }

@@ -59,7 +59,10 @@ function parseSecurityStepUpValue(
 ): SecurityStepUpPayload | null {
   if (!cookieValue) return null;
 
-  const [serializedPayload, signature] = cookieValue.split(".");
+  const parts = cookieValue.split(".");
+  if (parts.length !== 2) return null;
+
+  const [serializedPayload, signature] = parts;
   if (!serializedPayload || !signature) return null;
 
   const expectedSignature = Buffer.from(signPayload(serializedPayload));

@@ -69,7 +69,7 @@ export default function SecurityPage() {
         (factor) => factor.type === "totp" && factor.status === "verified"
     );
     const primaryVerifiedFactorId = verifiedTotpFactors[0]?.id;
-    const recoveryCodeMethods = (securityData?.recoveryCodes.remainingCount ?? 0) > 0 ? ["recovery_code" as const] : [];
+    const recoveryCodeMethods = (securityData?.recoveryCodes?.remainingCount ?? 0) > 0 ? ["recovery_code" as const] : [];
     const passwordStepUpMethods = [
         ...(primaryVerifiedFactorId ? (["totp" as const]) : []),
         ...recoveryCodeMethods,
@@ -157,7 +157,7 @@ export default function SecurityPage() {
 
                 <PasswordManagementSection
                     hasPassword={passwordAvailable}
-                    lastChangedAt={securityData?.password.lastChangedAt}
+                    lastChangedAt={securityData?.password?.lastChangedAt}
                     availableStepUpMethods={passwordStepUpMethods}
                     primaryTotpFactorId={primaryVerifiedFactorId}
                     onPasswordConfigured={() => setPasswordConfiguredLocally(true)}

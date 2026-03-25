@@ -16,6 +16,7 @@ import {
 import { clearProfileCache } from '@/lib/services/profile-service'
 import { runInFlightDeduped } from '@/lib/async/inflight-dedupe'
 import { normalizeAndValidateFileSize, normalizeAndValidateMimeType } from '@/lib/upload/security'
+import { resolvePrivacyRelationship } from '@/lib/privacy/resolver'
 
 export type UpdateProfileInput = ProfileUpdateInput
 export type ProfileUpdateErrorCode =
@@ -503,5 +504,58 @@ export async function getProfileStatsAction(userId: string) {
     } catch (error) {
         console.error('Error fetching profile stats:', error);
         return { connectionsCount: 0, projectsCount: 0, followersCount: 0 };
+    }
+}
+
+export async function getProfileViewerOverlayAction(profileId: string) {
+    if (!profileId) {
+        return { success: false as const, error: 'Profile is required' };
+    }
+
+    try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+
+        if (!user) {
+            return { success: false as const, error: 'Not authenticated' };
+        }
+
+        const privacyRelationship = await resolvePrivacyRelationship(user.id, profileId);
+        if (!privacyRelationship) {
+            return { success: false as const, error: 'Profile not found' };
+        }
+
+        let mutualCount = 0;
+        if (user.id !== profileId && privacyRelationship.canViewProfile) {
+            try {
+                const res = await supabase.rpc('get_mutual_connections', {
+                    p_viewer_id: user.id,
+                    p_profile_id: profileId,
+                });
+                mutualCount = (res.data as { count?: number } | null)?.count || 0;
+            } catch {
+                mutualCount = 0;
+            }
+        }
+
+        return {
+            success: true as const,
+            privacyRelationship: {
+                canViewProfile: privacyRelationship.canViewProfile,
+                canSendMessage: privacyRelationship.canSendMessage,
+                canSendConnectionRequest: privacyRelationship.canSendConnectionRequest,
+                blockedByViewer: privacyRelationship.blockedByViewer,
+                blockedByTarget: privacyRelationship.blockedByTarget,
+                visibilityReason: privacyRelationship.visibilityReason,
+                connectionState: privacyRelationship.connectionState,
+            },
+            lockedShell: !privacyRelationship.canViewProfile,
+            mutualCount,
+        };
+    } catch (error) {
+        return {
+            success: false as const,
+            error: error instanceof Error ? error.message : 'Failed to load profile viewer state',
+        };
     }
 }

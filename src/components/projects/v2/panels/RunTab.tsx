@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -17,7 +17,9 @@ interface RunTabProps {
 
 function getSuggestedCommand(activeFilePath?: string): string {
   if (!activeFilePath) return "";
-  const ext = activeFilePath.slice(activeFilePath.lastIndexOf(".")).toLowerCase();
+  const dotIndex = activeFilePath.lastIndexOf(".");
+  if (dotIndex === -1) return "";
+  const ext = activeFilePath.slice(dotIndex).toLowerCase();
   switch (ext) {
     case ".py":
       return `python ${activeFilePath}`;
@@ -58,6 +60,7 @@ export function RunTab({ projectId, canEdit, activeFilePath, activeFileContent }
   const [showCustomCommand, setShowCustomCommand] = useState(false);
   const [showProgramInput, setShowProgramInput] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
+  const isRunningRef = useRef(false);
 
   const stdinInputText = useFilesWorkspaceStore((s) => s._get(projectId).ui.stdinInputText);
   const commandHistory = useFilesWorkspaceStore((s) => s._get(projectId).ui.commandHistory ?? []);
@@ -77,17 +80,15 @@ export function RunTab({ projectId, canEdit, activeFilePath, activeFileContent }
   const executeCommand = useCallback(
     async (command: string) => {
       const trimmed = command.trim();
-      if (!trimmed || isRunning) return;
+      if (!trimmed || isRunningRef.current) return;
 
+      isRunningRef.current = true;
       setIsRunning(true);
       pushCommandToHistory(projectId, trimmed);
       setBottomPanelTab(projectId, "output");
 
       try {
-        const stdinLines = stdinInputText
-          .split("\n")
-          .map((s) => s.trim())
-          .filter((s) => s !== "");
+        const stdinLines = stdinInputText.split("\n");
 
         const result = await runFileInBrowser(projectId, trimmed, activeFilePath, {
           stdinLines: stdinLines.length > 0 ? stdinLines : undefined,
@@ -112,12 +113,12 @@ export function RunTab({ projectId, canEdit, activeFilePath, activeFileContent }
           }
         }
       } finally {
+        isRunningRef.current = false;
         setIsRunning(false);
       }
     },
     [
       activeFilePath,
-      isRunning,
       projectId,
       pushCommandToHistory,
       setBottomPanelTab,
@@ -261,9 +262,9 @@ export function RunTab({ projectId, canEdit, activeFilePath, activeFileContent }
             <div className="rounded-lg border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900">
               <div className="text-sm font-medium text-zinc-900 dark:text-zinc-100">Recent commands</div>
               <div className="mt-3 flex flex-wrap gap-2">
-                {recentCommands.map((command) => (
+                {recentCommands.map((command, index) => (
                   <button
-                    key={command}
+                    key={`${command}-${index}`}
                     type="button"
                     className="rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-mono text-zinc-700 transition-colors hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
                     onClick={() => {

@@ -892,14 +892,26 @@ export const getHubProjects = cache(async (
 
     if (shouldUseSnapshot) {
         const { snapshot, cacheHit } = await getFeedSnapshot(view, viewerId, filters, personalizationTerms);
-        const startIndex = parsedCursor?.kind === 'snapshot'
-            ? Math.max(
-                0,
-                snapshot.items.findIndex(
-                    (item) => item.id === parsedCursor.id && Math.abs(item.score - parsedCursor.score) < 0.000001,
-                ) + 1,
-            )
-            : 0;
+        let startIndex = 0;
+        if (parsedCursor?.kind === 'snapshot') {
+            const cursorIndex = snapshot.items.findIndex(
+                (item) => item.id === parsedCursor.id && Math.abs(item.score - parsedCursor.score) < 0.000001,
+            );
+
+            if (cursorIndex === -1) {
+                logger.warn('hub.snapshot.cursor_not_found', {
+                    view,
+                    cursorId: parsedCursor.id,
+                    cursorScore: parsedCursor.score,
+                    snapshotItemsLength: snapshot.items.length,
+                    schemaVersion: HUB_RANKING_SCHEMA_VERSION,
+                    filtersFingerprint,
+                    cacheHit,
+                });
+            } else {
+                startIndex = cursorIndex + 1;
+            }
+        }
 
         const pageItems = snapshot.items.slice(startIndex, startIndex + pageSize);
         const pageIds = pageItems.map((item) => item.id);

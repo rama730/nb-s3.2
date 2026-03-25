@@ -29,11 +29,18 @@ export async function getGithubImportAccessState() {
       : '';
 
   const cookieSealed = await readGithubImportAccessCookie();
-  const sealedImportToken = sessionProviderToken
-    ? sealGithubImportToken(sessionProviderToken)
-    : cookieSealed;
+  let sealedImportToken = cookieSealed;
+  let didReseal = false;
 
-  if (sessionProviderToken && sealedImportToken) {
+  if (sessionProviderToken) {
+    const existingPlain = openGithubImportToken(cookieSealed);
+    if (existingPlain !== sessionProviderToken) {
+      sealedImportToken = sealGithubImportToken(sessionProviderToken);
+      didReseal = true;
+    }
+  }
+
+  if (didReseal && sealedImportToken) {
     await persistGithubImportAccessCookie(sealedImportToken);
   }
 

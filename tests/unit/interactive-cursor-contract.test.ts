@@ -16,6 +16,6 @@ test("interactive cursor contract defines pointer baseline for semantic controls
 
 test("interactive cursor contract defines not-allowed cursor for disabled controls", () => {
   assert.match(globalsCss, /button:disabled/);
-  assert.match(globalsCss, /\[aria-disabled="true"\]/);
+  assert.ok(globalsCss.includes('[aria-disabled="true"],'));
   assert.match(globalsCss, /cursor:\s*not-allowed;/);
 });

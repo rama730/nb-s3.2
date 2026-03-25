@@ -20,6 +20,7 @@ import {
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { invalidatePrivacyDependents } from '@/lib/privacy/client-invalidation';
+import { toast } from 'sonner';
 
 const EMPTY_MESSAGES: MessageWithSender[] = [];
 
@@ -116,6 +117,7 @@ export function ChatPopup() {
             router.refresh();
         } catch (error) {
             console.error(error);
+            toast.error(error instanceof Error ? error.message : 'Failed to update block state');
         } finally {
             setBlockActionLoading(false);
         }

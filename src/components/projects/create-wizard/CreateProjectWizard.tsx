@@ -95,13 +95,44 @@ export default function CreateProjectWizard({ onClose, onSuccess, draftId, initi
     useEffect(() => {
         const onKeyDown = (event: KeyboardEvent) => {
             if (event.key !== 'Escape') return;
+            if (event.defaultPrevented) return;
+
+            const target = event.target instanceof Element ? event.target : null;
+            if (
+                target instanceof HTMLInputElement
+                || target instanceof HTMLTextAreaElement
+                || target instanceof HTMLSelectElement
+                || target?.closest('[contenteditable="true"]')
+            ) {
+                return;
+            }
+
+            const path = typeof event.composedPath === 'function' ? event.composedPath() : [];
+            const hasNestedEscapeHandler = path.some((node) => (
+                node instanceof Element
+                && node !== document.body
+                && node !== document.documentElement
+                && (
+                    node.hasAttribute('data-escape-handled')
+                    || node.getAttribute('role') === 'menu'
+                    || node.getAttribute('role') === 'listbox'
+                    || node.getAttribute('role') === 'alertdialog'
+                    || node.hasAttribute('data-radix-popper-content-wrapper')
+                )
+            ));
+            if (hasNestedEscapeHandler) return;
+
             event.preventDefault();
+            if (showExitConfirm) {
+                setShowExitConfirm(false);
+                return;
+            }
             handleCloseAttempt();
         };
 
         window.addEventListener('keydown', onKeyDown);
         return () => window.removeEventListener('keydown', onKeyDown);
-    }, [handleCloseAttempt]);
+    }, [handleCloseAttempt, setShowExitConfirm, showExitConfirm]);
 
     return (
         <AnimatePresence initial={!reduceMotion}>

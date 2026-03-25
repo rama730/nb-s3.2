@@ -328,7 +328,13 @@ export function MessageInput({ conversationId, targetUserId }: MessageInputProps
                 }
 
                 if (result.queued) {
-                    toast.info('Message queued. It will send automatically when connection is stable.');
+                    if (result.error === 'Rate limit exceeded') {
+                        toast.error('Rate limit reached. Your message was queued and will retry soon.');
+                    } else if (result.error === 'network_error' || result.error === 'offline') {
+                        toast.info('Message queued. It will send automatically when connection is stable.');
+                    } else {
+                        toast.info(`Message queued: ${result.error || 'will retry soon'}`);
+                    }
                 }
             } else {
                 toast.error('Failed to queue/send message');

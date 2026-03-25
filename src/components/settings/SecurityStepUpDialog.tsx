@@ -109,7 +109,7 @@ export default function SecurityStepUpDialog({
   const submitDisabled = submitting
     || (isTotp && (!factorId || !/^[0-9]{6}$/.test(code.trim())))
     || (isRecoveryCode && code.trim().length < 6)
-    || (method === "password" && password.trim().length === 0);
+    || (method === "password" && password.length === 0);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

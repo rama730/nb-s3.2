@@ -1,6 +1,7 @@
 'use client';
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { REALTIME_SUBSCRIBE_STATES } from '@supabase/supabase-js';
 import { createClient } from '@/lib/supabase/client';
 import { useAuthContext } from '@/components/providers/AuthProvider';
 import { subscribeUserNotifications, type UserNotificationEvent } from '@/lib/realtime/subscriptions';
@@ -26,7 +27,15 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
         }
 
         for (const listener of listenersRef.current) {
-            listener(event);
+            try {
+                listener(event);
+            } catch (error) {
+                console.error('Error in user notification listener', {
+                    error,
+                    event,
+                    listener: listener.name || 'anonymous',
+                });
+            }
         }
     }, [refreshProfile]);
 
@@ -40,7 +49,6 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
     useEffect(() => {
         if (!user) {
             setIsConnected(false);
-            listenersRef.current.clear();
             return;
         }
 
@@ -51,8 +59,8 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
             supabase,
             userId,
             onEvent: handleUserNotification,
-            onStatus: (status: string) => {
-                setIsConnected(status === 'SUBSCRIBED');
+            onStatus: (status: REALTIME_SUBSCRIBE_STATES) => {
+                setIsConnected(status === REALTIME_SUBSCRIBE_STATES.SUBSCRIBED);
             },
         });
 

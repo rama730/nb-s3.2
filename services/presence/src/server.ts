@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 
 import { WebSocketServer, WebSocket } from "ws";
+import { z } from "zod";
 
 import { recordOtlpMetric } from "../../../src/lib/telemetry/otlp";
 import { getRedisClient } from "../../../src/lib/redis";
@@ -16,6 +17,21 @@ import type {
 
 const PRESENCE_SERVICE_PORT = Number(process.env.PRESENCE_SERVICE_PORT || 4010);
 const PRESENCE_TTL_SECONDS = 45;
+const cursorEventSchema = z.object({
+  type: z.literal("cursor"),
+  frame: z.string().max(1000).nullable().optional(),
+  userName: z.string().max(100).nullable().optional(),
+});
+const presenceMemberProfileSchema = z.object({
+  username: z.string().max(100).nullable(),
+  fullName: z.string().max(200).nullable(),
+  avatarUrl: z.string().max(2048).nullable(),
+}).strict();
+const typingEventSchema = z.object({
+  type: z.literal("typing"),
+  isTyping: z.boolean(),
+  profile: presenceMemberProfileSchema.nullable().optional(),
+});
 
 type Subscriber<TMessage = unknown> = {
   on: (type: "message" | "error", listener: (event: any) => void) => void;
@@ -24,7 +40,7 @@ type Subscriber<TMessage = unknown> = {
 
 type RoomKeys = {
   roomKey: string;
-  memberIndexKey: string;
+  memberHashKey: string;
   channelKey: string;
 };
 
@@ -32,7 +48,6 @@ type RoomConnectionContext = {
   connectionId: string;
   claims: PresenceTokenClaims;
   roomKeys: RoomKeys;
-  memberKey: string;
   state: PresenceMemberState;
 };
 
@@ -40,6 +55,7 @@ type LocalRoom = {
   roomKeys: RoomKeys;
   sockets: Set<WebSocket>;
   subscriber: Subscriber<PresenceServerEvent> | null;
+  lastShatterCheck: number;
 };
 
 const redisClient = getRedisClient();
@@ -62,13 +78,9 @@ function buildRoomKeys(claims: Pick<PresenceTokenClaims, "roomType" | "roomId">)
   const roomKey = `${claims.roomType}:${claims.roomId}`;
   return {
     roomKey,
-    memberIndexKey: `presence:room:${roomKey}:members`,
+    memberHashKey: `presence:room:${roomKey}:members_v2`,
     channelKey: `presence:room:${roomKey}:events`,
   };
-}
-
-function buildMemberKey(roomKeys: RoomKeys, connectionId: string) {
-  return `presence:room:${roomKeys.roomKey}:member:${connectionId}`;
 }
 
 function toPresenceState(input: {
@@ -95,41 +107,31 @@ function toPresenceState(input: {
 }
 
 async function persistMemberState(context: RoomConnectionContext) {
-  await redis.set(context.memberKey, JSON.stringify(context.state), { ex: PRESENCE_TTL_SECONDS });
-  await redis.sadd(context.roomKeys.memberIndexKey, context.memberKey);
-  await redis.expire(context.roomKeys.memberIndexKey, PRESENCE_TTL_SECONDS * 2);
+  await redis.hset(context.roomKeys.memberHashKey, {
+    [context.connectionId]: JSON.stringify(context.state),
+  });
+  await redis.expire(context.roomKeys.memberHashKey, PRESENCE_TTL_SECONDS * 2);
 }
 
 async function removeMemberState(context: RoomConnectionContext) {
-  await redis.del(context.memberKey);
-  await redis.srem(context.roomKeys.memberIndexKey, context.memberKey);
+  await redis.hdel(context.roomKeys.memberHashKey, context.connectionId);
 }
 
 async function readRoomMembers(roomKeys: RoomKeys) {
-  const memberKeys = await redis.smembers<string[]>(roomKeys.memberIndexKey);
-  if (!Array.isArray(memberKeys) || memberKeys.length === 0) {
+  const rawMembers = await redis.hgetall<Record<string, string>>(roomKeys.memberHashKey);
+  if (!rawMembers) {
     return [] as PresenceMemberState[];
   }
 
-  const members = await Promise.all(
-    memberKeys.map(async (memberKey) => {
-      const raw = await redis.get<string>(memberKey);
-      if (!raw) {
-        await redis.srem(roomKeys.memberIndexKey, memberKey);
-        return null;
-      }
-
+  return Object.values(rawMembers)
+    .map((raw) => {
       try {
         return JSON.parse(raw) as PresenceMemberState;
       } catch {
-        await redis.del(memberKey);
-        await redis.srem(roomKeys.memberIndexKey, memberKey);
         return null;
       }
-    }),
-  );
-
-  return members.filter((member): member is PresenceMemberState => Boolean(member));
+    })
+    .filter((member): member is PresenceMemberState => Boolean(member));
 }
 
 function sendJson(socket: WebSocket, event: PresenceServerEvent) {
@@ -155,6 +157,7 @@ async function ensureRoom(roomKeys: RoomKeys) {
     roomKeys,
     sockets: new Set(),
     subscriber: null,
+    lastShatterCheck: 0,
   };
   rooms.set(roomKeys.roomKey, room);
 
@@ -233,6 +236,40 @@ async function handlePresenceEvent(socket: WebSocket, event: PresenceClientEvent
       return;
     }
     case "cursor": {
+      const parsedEvent = cursorEventSchema.safeParse(event);
+      if (!parsedEvent.success) {
+        sendJson(socket, {
+          type: "error",
+          code: "BAD_PAYLOAD",
+          message: "Invalid cursor event.",
+        });
+        return;
+      }
+
+      // Load Shattering (QoS): If room is very large, throttle cursor updates
+      const room = rooms.get(context.roomKeys.roomKey);
+      if (room) {
+        const now = Date.now();
+        // Check room size roughly every 2 seconds or if room is locally heavy
+        if (now - room.lastShatterCheck > 2000) {
+          const roomSize = await redis.hlen(context.roomKeys.memberHashKey);
+          room.lastShatterCheck = now;
+          
+          if (roomSize > 100) {
+             // 1M Readiness: Load-shatter if room > 100 to protect Redis Pub/Sub integrity
+             emitMetric("presence.room.load_shatter", {
+               roomKey: context.roomKeys.roomKey,
+               size: roomSize,
+               value: 1
+             });
+             // For now we just ack but don't publish the delta to the whole room
+             // This preserves room integrity under extreme load
+             sendJson(socket, buildAck(context, "cursor"));
+             return;
+          }
+        }
+      }
+
       if (context.claims.roomType === "workspace" && context.claims.role !== "editor") {
         sendJson(socket, {
           type: "error",
@@ -241,8 +278,8 @@ async function handlePresenceEvent(socket: WebSocket, event: PresenceClientEvent
         });
         return;
       }
-      context.state.cursorFrame = event.frame;
-      context.state.userName = event.userName ?? context.state.userName;
+      context.state.cursorFrame = parsedEvent.data.frame ?? null;
+      context.state.userName = parsedEvent.data.userName ?? context.state.userName;
       await persistMemberState(context);
       const delta: PresenceServerEvent = {
         type: "presence.delta",
@@ -261,8 +298,17 @@ async function handlePresenceEvent(socket: WebSocket, event: PresenceClientEvent
       return;
     }
     case "typing": {
-      context.state.typing = event.isTyping;
-      context.state.profile = event.profile ?? context.state.profile;
+      const parsedEvent = typingEventSchema.safeParse(event);
+      if (!parsedEvent.success) {
+        sendJson(socket, {
+          type: "error",
+          code: "BAD_PAYLOAD",
+          message: "Invalid typing event.",
+        });
+        return;
+      }
+      context.state.typing = parsedEvent.data.isTyping;
+      context.state.profile = parsedEvent.data.profile ?? context.state.profile;
       await persistMemberState(context);
       const delta: PresenceServerEvent = {
         type: "presence.delta",
@@ -294,7 +340,6 @@ async function initializePresenceConnection(websocket: WebSocket, claims: Presen
   const roomKeys = buildRoomKeys(claims);
   const room = await ensureRoom(roomKeys);
   const connectionId = randomUUID();
-  const memberKey = buildMemberKey(roomKeys, connectionId);
   const state = toPresenceState({
     claims,
     connectionId,
@@ -304,7 +349,6 @@ async function initializePresenceConnection(websocket: WebSocket, claims: Presen
     connectionId,
     claims,
     roomKeys,
-    memberKey,
     state,
   };
   socketContexts.set(websocket, context);

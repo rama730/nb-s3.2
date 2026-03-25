@@ -1,4 +1,3 @@
-import { eq } from "drizzle-orm";
 import {
   enforceRouteLimit,
   getRequestId,
@@ -7,9 +6,10 @@ import {
   logApiRoute,
   requireAuthenticatedUser,
 } from "@/app/api/v1/_shared";
-import { db } from "@/lib/db";
-import { profiles } from "@/lib/db/schema";
-import { recordPrivacyEvent } from "@/lib/privacy/audit";
+import {
+  isProfileNotFoundError,
+  updateConnectionPrivacySetting,
+} from "@/lib/privacy/settings";
 
 const VALID_CONNECTION_PRIVACY = new Set(["everyone", "mutuals_only", "nobody"]);
 
@@ -31,26 +31,10 @@ export async function PATCH(request: Request) {
       return jsonError("Invalid connection request privacy", 400, "BAD_REQUEST");
     }
 
-    const [current] = await db
-      .select({ connectionPrivacy: profiles.connectionPrivacy })
-      .from(profiles)
-      .where(eq(profiles.id, auth.user.id))
-      .limit(1);
-
-    await db
-      .update(profiles)
-      .set({
-        connectionPrivacy: nextValue as "everyone" | "mutuals_only" | "nobody",
-        updatedAt: new Date(),
-      })
-      .where(eq(profiles.id, auth.user.id));
-
-    await recordPrivacyEvent({
+    await updateConnectionPrivacySetting({
       userId: auth.user.id,
-      eventType: "connection_privacy_changed",
+      nextValue: nextValue as "everyone" | "mutuals_only" | "nobody",
       request,
-      previousValue: { connectionPrivacy: current?.connectionPrivacy ?? "everyone" },
-      nextValue: { connectionPrivacy: nextValue },
     });
 
     logApiRoute(request, {
@@ -64,6 +48,9 @@ export async function PATCH(request: Request) {
     return jsonSuccess({ connectionPrivacy: nextValue });
   } catch (error) {
     console.error("[api/v1/privacy/connection-privacy] failed", error);
+    if (isProfileNotFoundError(error)) {
+      return jsonError("Profile not found", 404, "NOT_FOUND");
+    }
     return jsonError("Failed to update connection request privacy", 500, "INTERNAL_ERROR");
   }
 }

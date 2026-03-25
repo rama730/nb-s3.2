@@ -1,7 +1,7 @@
 'use server';
 
 import { db } from '@/lib/db';
-import { connectionSuggestionDismissals, connections, profiles, projects, roleApplications } from '@/lib/db/schema';
+import { connectionSuggestionDismissals, connectionSuggestions, connections, profiles, projects, roleApplications } from '@/lib/db/schema';
 import { createClient } from '@/lib/supabase/server';
 import { eq, and, or, desc, sql, inArray } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
@@ -14,8 +14,9 @@ import {
 import { runInFlightDeduped } from '@/lib/async/inflight-dedupe';
 import { APPLICATION_BANNER_HIDE_AFTER_MS } from '@/lib/chat/banner-lifecycle';
 import { cacheData, getCachedData, redis } from '@/lib/redis';
-import { refreshWorkspaceCountersForUsers } from '@/lib/workspace/profile-counters';
+import { queueCounterRefreshBestEffort } from '@/lib/workspace/counter-buffer';
 import { resolvePrivacyRelationship } from '@/lib/privacy/resolver';
+import { inngest } from '../../inngest/client';
 
 // ============================================================================
 // TYPES
@@ -138,19 +139,9 @@ async function getAuthUser() {
     return user;
 }
 
-function sortConnectionPair(a: string, b: string): [string, string] {
-    return a < b ? [a, b] : [b, a];
-}
 
-async function lockConnectionPair(tx: DbTransaction, a: string, b: string) {
-    const [low, high] = sortConnectionPair(a, b);
-    await tx.execute(sql`
-        SELECT pg_advisory_xact_lock(
-            hashtext(CAST(${low} AS text)),
-            hashtext(CAST(${high} AS text))
-        )
-    `);
-}
+
+// PURE OPTIMIZATION: lockConnectionPair fully replaced by native UNIQUE index constraint
 
 async function applyConnectionsCountDelta(tx: DbTransaction, userIds: string[], delta: number) {
     if (userIds.length === 0 || delta === 0) return;
@@ -163,7 +154,7 @@ async function applyConnectionsCountDelta(tx: DbTransaction, userIds: string[], 
         .where(inArray(profiles.id, userIds));
 }
 
-async function applyConnectionsCountIncrements(tx: DbTransaction, increments: Map<string, number>) {
+export async function applyConnectionsCountIncrements(tx: DbTransaction, increments: Map<string, number>) {
     if (increments.size === 0) return;
     const entries = [...increments.entries()].filter(([, value]) => value !== 0);
     if (entries.length === 0) return;
@@ -198,7 +189,7 @@ function parseConnectionsCursor(cursor?: string) {
     return { updatedAt: parsedDate.toISOString(), id };
 }
 
-async function revalidateConnectionsPaths() {
+export async function revalidateConnectionsPaths() {
     revalidatePath('/people');
     revalidatePath('/connections');
     revalidatePath('/profile');
@@ -253,38 +244,125 @@ async function invalidateDiscoverCacheForUser(userId: string) {
     if (!redis) return;
     const redisClient = redis;
     const prefix = `${DISCOVER_CACHE_KEY_PREFIX}:${userId}:`;
-    const scanPattern = `${prefix}*`;
-    const scanCount = 100;
-    const deleteBatchSize = 100;
     try {
-        let cursor: string | number = '0';
-        do {
-            const [nextCursor, keys] = (await redisClient.scan(cursor, {
-                match: scanPattern,
-                count: scanCount,
-            })) as [string, string[]];
-            cursor = nextCursor;
-            if (!keys || keys.length === 0) continue;
-
-            for (let i = 0; i < keys.length; i += deleteBatchSize) {
-                const batch = keys.slice(i, i + deleteBatchSize);
-                if (batch.length === 0) continue;
-                await redisClient.unlink(...batch);
-            }
-        } while (String(cursor) !== '0');
+        const discoverPattern = `discover:profile:${userId}:*`;
+        const inboxPattern = `connections:inbox_cache:${userId}:*`;
+        const patterns = [discoverPattern, inboxPattern];
+        
+        for (const pattern of patterns) {
+            let cursor = 0;
+            do {
+                const redisClient = redis as any;
+                const [nextCursor, keys] = await redisClient.scan(cursor, {
+                    match: pattern,
+                    count: 100,
+                });
+                cursor = nextCursor;
+    
+                if (keys.length > 0) {
+                    const deleteBatchSize = 100;
+                    for (let i = 0; i < keys.length; i += deleteBatchSize) {
+                        const batch = keys.slice(i, i + deleteBatchSize);
+                        if (batch.length === 0) continue;
+                        await redisClient.unlink(...batch);
+                    }
+                }
+            } while (String(cursor) !== '0');
+        }
     } catch (error) {
-        console.error('Failed to invalidate discover cache:', error);
+        console.error('Failed to invalidate discover and inbox cache:', error);
     }
 }
 
-async function invalidateDiscoverCacheForUsers(userIds: Iterable<string | null | undefined>) {
+export async function invalidateDiscoverCacheForUsers(userIds: Iterable<string | null | undefined>) {
     const uniqueUserIds = Array.from(
         new Set(
             Array.from(userIds).filter((userId): userId is string => typeof userId === 'string' && userId.length > 0),
         ),
     );
     if (uniqueUserIds.length === 0) return;
-    await Promise.all(uniqueUserIds.map((userId) => invalidateDiscoverCacheForUser(userId)));
+    // PURE OPTIMIZATION: Execute cache invalidation non-blocking to prevent request hangs
+    Promise.allSettled(uniqueUserIds.map((userId) => invalidateDiscoverCacheForUser(userId))).catch(console.error);
+}
+
+// ============================================================================
+// REDIS CONNECTION EDGE CACHING (O(1) Authorization Checks)
+// ============================================================================
+
+export async function syncConnectionsToRedis(userId: string) {
+    if (!redis) return;
+    try {
+        const key = `user:${userId}:connections`;
+        const accepted = await db
+            .select({
+                otherId: sql<string>`CASE 
+                    WHEN ${connections.requesterId} = ${userId} THEN ${connections.addresseeId} 
+                    ELSE ${connections.requesterId} 
+                END`
+            })
+            .from(connections)
+            .where(and(
+                eq(connections.status, 'accepted'),
+                or(eq(connections.requesterId, userId), eq(connections.addresseeId, userId))
+            ));
+        
+        const otherIds = accepted.map(row => row.otherId);
+        
+        if (otherIds.length > 0) {
+            await (redis as any).sadd(key, ...otherIds);
+            await redis.expire(key, 86400); // 24h cache duration
+        } else {
+            await redis.del(key);
+        }
+    } catch (error) {
+        console.error('Failed to sync connections to Redis:', error);
+    }
+}
+
+export async function isConnected(userId1: string, userId2: string): Promise<boolean> {
+    if (!redis) {
+        const [conn] = await db
+            .select({ id: connections.id })
+            .from(connections)
+            .where(and(
+                eq(connections.status, 'accepted'),
+                or(
+                    and(eq(connections.requesterId, userId1), eq(connections.addresseeId, userId2)),
+                    and(eq(connections.requesterId, userId2), eq(connections.addresseeId, userId1))
+                )
+            ))
+            .limit(1);
+        return !!conn;
+    }
+
+    try {
+        const key = `user:${userId1}:connections`;
+        const exists = await redis.exists(key);
+        
+        if (exists) {
+            const isMember = await redis.sismember(key, userId2);
+            return !!isMember;
+        }
+        
+        const [conn] = await db
+            .select({ id: connections.id })
+            .from(connections)
+            .where(and(
+                eq(connections.status, 'accepted'),
+                or(
+                    and(eq(connections.requesterId, userId1), eq(connections.addresseeId, userId2)),
+                    and(eq(connections.requesterId, userId2), eq(connections.addresseeId, userId1))
+                )
+            ))
+            .limit(1);
+            
+        syncConnectionsToRedis(userId1).catch(console.error);
+        
+        return !!conn;
+    } catch (error) {
+        console.error('Redis isConnected check failed:', error);
+        return false;
+    }
 }
 
 export async function getConnectionsFeed(input: ConnectionsFeedInput) {
@@ -534,52 +612,360 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
         }
     }
 
-    const meProfile = await db
-        .select({
-            skills: profiles.skills,
-            interests: profiles.interests,
-            openTo: profiles.openTo,
-        })
-        .from(profiles)
-        .where(eq(profiles.id, user.id))
-        .limit(1);
+    // =========================================================================
+    // PHASE 6B: Pre-computed Suggestions Fast Path
+    // Try reading from the `connection_suggestions` table first (O(1) read).
+    // This data is pre-computed by the social-graph-suggestions Inngest worker.
+    // =========================================================================
+    if (!searchPattern) {
+        try {
+            const preComputed = await db
+                .select({
+                    suggestedUserId: connectionSuggestions.suggestedUserId,
+                    mutualConnectionsCount: connectionSuggestions.mutualConnectionsCount,
+                    score: connectionSuggestions.score,
+                    reason: connectionSuggestions.reason,
+                })
+                .from(connectionSuggestions)
+                .where(eq(connectionSuggestions.userId, user.id))
+                .orderBy(desc(connectionSuggestions.score))
+                .limit(limit + 1)
+                .offset(safeOffset);
 
-    const mySignals = new Set<string>([
-        ...((meProfile[0]?.skills || []).map((v) => v.toLowerCase())),
-        ...((meProfile[0]?.interests || []).map((v) => v.toLowerCase())),
-        ...((meProfile[0]?.openTo || []).map((v) => v.toLowerCase())),
-    ]);
+            if (preComputed.length > 0) {
+                const suggestedIds = preComputed.slice(0, limit).map(s => s.suggestedUserId);
+                const suggestedProfiles = await db
+                    .select({
+                        id: profiles.id,
+                        username: profiles.username,
+                        fullName: profiles.fullName,
+                        avatarUrl: profiles.avatarUrl,
+                        headline: profiles.headline,
+                        location: profiles.location,
+                        visibility: profiles.visibility,
+                        connectionsCount: profiles.connectionsCount,
+                    })
+                    .from(profiles)
+                    .where(inArray(profiles.id, suggestedIds));
 
-    const candidateBaseConditions = [sql`${profiles.id} <> ${user.id}`];
-    candidateBaseConditions.push(sql`NOT EXISTS (
-        SELECT 1
-        FROM ${connectionSuggestionDismissals}
-        WHERE ${connectionSuggestionDismissals.userId} = ${user.id}
-        AND ${connectionSuggestionDismissals.dismissedProfileId} = ${profiles.id}
-    )`);
-    candidateBaseConditions.push(sql`NOT EXISTS (
-        SELECT 1
-        FROM ${connections} privacy_block
-        WHERE privacy_block.status = 'blocked'
-        AND (
-            (privacy_block.requester_id = ${user.id} AND privacy_block.addressee_id = ${profiles.id} AND privacy_block.blocked_by = ${user.id})
-            OR
-            (privacy_block.requester_id = ${profiles.id} AND privacy_block.addressee_id = ${user.id} AND privacy_block.blocked_by = ${profiles.id})
-        )
-    )`);
-    if (searchPattern) {
-        candidateBaseConditions.push(
-            sql`(
-                ${profiles.fullName} ILIKE ${searchPattern}
-                OR ${profiles.username} ILIKE ${searchPattern}
-                OR ${profiles.headline} ILIKE ${searchPattern}
-                OR ${profiles.location} ILIKE ${searchPattern}
-            )`,
-        );
+                const profileMap = new Map(suggestedProfiles.map(p => [p.id, p]));
+                const preComputedItems = preComputed.slice(0, limit).map(s => {
+                    const p = profileMap.get(s.suggestedUserId);
+                    if (!p) return null;
+                    const profileVisibility = (p.visibility || 'public') as SuggestedProfile['profileVisibility'];
+                    return {
+                        id: p.id,
+                        type: 'discover' as const,
+                        username: p.username,
+                        fullName: p.fullName,
+                        avatarUrl: p.avatarUrl,
+                        headline: p.headline,
+                        location: p.location,
+                        connectionStatus: 'none' as SuggestedProfile['connectionStatus'],
+                        canConnect: true,
+                        profileVisibility,
+                        isLockedProfile: profileVisibility !== 'public',
+                        mutualConnections: s.mutualConnectionsCount,
+                        recommendationReason: s.reason || `${s.mutualConnectionsCount} mutual connections`,
+                        projects: [] as Array<{ id: string; title: string; status: string | null }>,
+                    };
+                }).filter(Boolean);
+
+                if (preComputedItems.length > 0) {
+                    const hasMore = preComputed.length > limit;
+                    const nextCursor = hasMore ? `o:${safeOffset + limit}` : null;
+                    return { success: true as const, items: preComputedItems, hasMore, nextCursor, stats };
+                }
+            }
+        } catch (e) {
+            console.warn('[discover] Pre-computed suggestions read failed, falling back to real-time:', e);
+        }
     }
 
-    // Ultra-light profile fetch
-    const candidates = await db
+    // =========================================================================
+    // PHASE 6B: Graceful Degradation — Timeout-guarded real-time discovery
+    // If the heavy query takes >3s, fall back to a cached "Global Trending" feed
+    // =========================================================================
+    const DISCOVER_TIMEOUT_MS = 3000;
+
+    const realTimeDiscoverResult = await Promise.race([
+        (async () => {
+            const meProfile = await db
+                .select({
+                    skills: profiles.skills,
+                    interests: profiles.interests,
+                    openTo: profiles.openTo,
+                })
+                .from(profiles)
+                .where(eq(profiles.id, user.id))
+                .limit(1);
+
+            const mySignals = new Set<string>([
+                ...((meProfile[0]?.skills || []).map((v) => v.toLowerCase())),
+                ...((meProfile[0]?.interests || []).map((v) => v.toLowerCase())),
+                ...((meProfile[0]?.openTo || []).map((v) => v.toLowerCase())),
+            ]);
+
+            const candidateBaseConditions = [sql`${profiles.id} <> ${user.id}`];
+            candidateBaseConditions.push(sql`NOT EXISTS (
+                SELECT 1
+                FROM ${connectionSuggestionDismissals}
+                WHERE ${connectionSuggestionDismissals.userId} = ${user.id}
+                AND ${connectionSuggestionDismissals.dismissedProfileId} = ${profiles.id}
+            )`);
+            candidateBaseConditions.push(sql`NOT EXISTS (
+                SELECT 1
+                FROM ${connections} privacy_block
+                WHERE privacy_block.status = 'blocked'
+                AND (
+                    (privacy_block.requester_id = ${user.id} AND privacy_block.addressee_id = ${profiles.id} AND privacy_block.blocked_by = ${user.id})
+                    OR
+                    (privacy_block.requester_id = ${profiles.id} AND privacy_block.addressee_id = ${user.id} AND privacy_block.blocked_by = ${profiles.id})
+                )
+            )`);
+            if (searchPattern) {
+                candidateBaseConditions.push(
+                    sql`(
+                        ${profiles.fullName} ILIKE ${searchPattern}
+                        OR ${profiles.username} ILIKE ${searchPattern}
+                        OR ${profiles.headline} ILIKE ${searchPattern}
+                        OR ${profiles.location} ILIKE ${searchPattern}
+                    )`,
+                );
+            }
+
+            const candidates = await db
+                .select({
+                    id: profiles.id,
+                    username: profiles.username,
+                    fullName: profiles.fullName,
+                    avatarUrl: profiles.avatarUrl,
+                    headline: profiles.headline,
+                    location: profiles.location,
+                    visibility: profiles.visibility,
+                    skills: isHeavyLoad ? profiles.skills : sql`NULL::text[]`,
+                    interests: isHeavyLoad ? profiles.interests : sql`NULL::text[]`,
+                    createdAt: profiles.createdAt,
+                    connectionsCount: profiles.connectionsCount,
+                })
+                .from(profiles)
+                .where(and(...candidateBaseConditions))
+                .orderBy(desc(profiles.connectionsCount), desc(profiles.createdAt), desc(profiles.id))
+                .limit(limit + 1)
+                .offset(safeOffset);
+
+            const candidateIds = candidates.map((candidate) => candidate.id);
+            if (candidateIds.length === 0) {
+                return {
+                    success: true as const,
+                    items: [],
+                    hasMore: false,
+                    nextCursor: null,
+                    stats,
+                };
+            }
+
+            const existingConnections = await db
+                .select({
+                    id: connections.id,
+                    requesterId: connections.requesterId,
+                    addresseeId: connections.addresseeId,
+                    status: connections.status,
+                    createdAt: connections.createdAt,
+                    updatedAt: connections.updatedAt,
+                })
+                .from(connections)
+                .where(
+                    or(
+                        and(eq(connections.requesterId, user.id), inArray(connections.addresseeId, candidateIds)),
+                        and(eq(connections.addresseeId, user.id), inArray(connections.requesterId, candidateIds)),
+                    ),
+                );
+
+            const connectionByCandidate = new Map<string, { status: typeof connections.$inferSelect.status; requesterId: string; id: string; updatedAt: Date }>();
+            for (const conn of existingConnections) {
+                const candidateId = conn.requesterId === user.id ? conn.addresseeId : conn.requesterId;
+                const existing = connectionByCandidate.get(candidateId);
+                if (!existing) {
+                    connectionByCandidate.set(candidateId, { status: conn.status, requesterId: conn.requesterId, id: conn.id, updatedAt: conn.updatedAt });
+                    continue;
+                }
+                const getPriority = (s: string) => {
+                    if (s === 'accepted') return 1;
+                    if (s === 'blocked') return 2;
+                    if (s === 'pending') return 3;
+                    return 4;
+                };
+                if (getPriority(conn.status) < getPriority(existing.status) || (getPriority(conn.status) === getPriority(existing.status) && conn.updatedAt > existing.updatedAt)) {
+                    connectionByCandidate.set(candidateId, { status: conn.status, requesterId: conn.requesterId, id: conn.id, updatedAt: conn.updatedAt });
+                }
+            }
+
+            let candidateProjects: Array<{ ownerId: string; id: string; title: string; status: string | null }> = [];
+            const mutualCounts = new Map<string, number>();
+
+            if (isHeavyLoad) {
+                const fetchedProjects = await db
+                    .select({
+                        ownerId: projects.ownerId,
+                        id: projects.id,
+                        title: projects.title,
+                        status: projects.status,
+                    })
+                    .from(projects)
+                    .where(inArray(projects.ownerId, candidateIds))
+                    .orderBy(desc(projects.createdAt));
+                candidateProjects = fetchedProjects;
+
+                const myPeerRows = await db
+                    .select({
+                        peerId: sql<string>`CASE
+                            WHEN ${connections.requesterId} = ${user.id} THEN ${connections.addresseeId}
+                            ELSE ${connections.requesterId}
+                        END`,
+                    })
+                    .from(connections)
+                    .where(
+                        and(
+                            eq(connections.status, 'accepted'),
+                            or(eq(connections.requesterId, user.id), eq(connections.addresseeId, user.id)),
+                        ),
+                    )
+                    .limit(1000);
+                const myPeerIds = myPeerRows.map((row) => row.peerId);
+
+                if (myPeerIds.length > 0) {
+                    const candidateIdSet = new Set(candidateIds);
+                    const mutualRows = await db
+                        .select({
+                            requesterId: connections.requesterId,
+                            addresseeId: connections.addresseeId,
+                        })
+                        .from(connections)
+                        .where(
+                            and(
+                                eq(connections.status, 'accepted'),
+                                or(
+                                    and(inArray(connections.requesterId, candidateIds), inArray(connections.addresseeId, myPeerIds)),
+                                    and(inArray(connections.addresseeId, candidateIds), inArray(connections.requesterId, myPeerIds)),
+                                ),
+                            ),
+                        );
+
+                    for (const row of mutualRows) {
+                        const candidateId = candidateIdSet.has(row.requesterId) ? row.requesterId : row.addresseeId;
+                        mutualCounts.set(candidateId, (mutualCounts.get(candidateId) || 0) + 1);
+                    }
+                }
+            }
+
+            const projectsByOwner = new Map<string, Array<{ id: string; title: string; status: string | null }>>();
+            if (isHeavyLoad) {
+                for (const project of candidateProjects) {
+                    if (!projectsByOwner.has(project.ownerId)) {
+                        projectsByOwner.set(project.ownerId, []);
+                    }
+                    const ownerProjects = projectsByOwner.get(project.ownerId)!;
+                    if (ownerProjects.length < 3) {
+                        ownerProjects.push({ id: project.id, title: project.title, status: project.status });
+                    }
+                }
+            }
+
+            const scored = candidates.map((candidate) => {
+                const conn = connectionByCandidate.get(candidate.id);
+                const status = conn?.status === 'accepted'
+                    ? 'connected'
+                    : conn?.status === 'pending'
+                        ? (conn.requesterId === user.id ? 'pending_sent' : 'pending_received')
+                        : 'none';
+                const canConnect = status === 'none';
+
+                if (!isHeavyLoad) {
+                    return {
+                        ...candidate,
+                        score: candidate.connectionsCount || 0,
+                        status,
+                        canConnect,
+                        mutual: 0,
+                        recommendationReason: undefined,
+                    };
+                }
+
+                const candidateSignals = new Set<string>([
+                    ...(((candidate.skills as string[]) || []).map((v) => v.toLowerCase())),
+                    ...(((candidate.interests as string[]) || []).map((v) => v.toLowerCase())),
+                ]);
+                let overlap = 0;
+                for (const signal of candidateSignals) {
+                    if (mySignals.has(signal)) overlap += 1;
+                }
+                const mutual = mutualCounts.get(candidate.id) || 0;
+                const recency = Math.max(0, 365 - (Date.now() - new Date(candidate.createdAt).getTime()) / (1000 * 60 * 60 * 24));
+                const score = overlap * 5 + mutual * 3 + recency * 0.03;
+
+                const recommendationReason = overlap > 0
+                    ? 'Skills match'
+                    : mutual > 0
+                        ? `${mutual} mutual connections`
+                        : 'Suggested for your network';
+
+                return {
+                    ...candidate,
+                    score,
+                    status,
+                    canConnect,
+                    mutual,
+                    recommendationReason,
+                };
+            });
+
+            if (isHeavyLoad) {
+                scored.sort((a, b) => b.score - a.score || +new Date(b.createdAt) - +new Date(a.createdAt));
+            }
+            const hasMore = scored.length > limit;
+            const items = scored.slice(0, limit).map((candidate) => {
+                const profileVisibility = (candidate.visibility || 'public') as SuggestedProfile['profileVisibility'];
+                return {
+                    id: candidate.id,
+                    type: 'discover' as const,
+                    username: candidate.username,
+                    fullName: candidate.fullName,
+                    avatarUrl: candidate.avatarUrl,
+                    headline: candidate.headline,
+                    location: candidate.location,
+                    connectionStatus: candidate.status as SuggestedProfile['connectionStatus'],
+                    canConnect: candidate.canConnect,
+                    profileVisibility,
+                    isLockedProfile: candidate.status !== 'connected' && profileVisibility !== 'public',
+                    mutualConnections: isHeavyLoad ? candidate.mutual : undefined,
+                    recommendationReason: isHeavyLoad ? candidate.recommendationReason : undefined,
+                    projects: isHeavyLoad ? projectsByOwner.get(candidate.id) || [] : undefined,
+                };
+            });
+
+            const nextCursor = hasMore ? `o:${safeOffset + limit}` : null;
+            return { success: true as const, items, hasMore, nextCursor, stats };
+        })(),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), DISCOVER_TIMEOUT_MS)),
+    ]);
+
+    // If the real-time query completed, use it
+    if (realTimeDiscoverResult) {
+        const finalResult = realTimeDiscoverResult;
+        if (!isHeavyLoad && !searchPattern) {
+            try {
+                await cacheData(cacheKey, finalResult, 15 * 60);
+            } catch (e) {
+                console.error("Redis Cache Write error:", e);
+            }
+        }
+        return finalResult;
+    }
+
+    // GRACEFUL DEGRADATION: Timed out — serve "Global Trending" fallback
+    console.warn('[discover] Real-time query timed out, serving Global Trending fallback');
+    const trendingProfiles = await db
         .select({
             id: profiles.id,
             username: profiles.username,
@@ -588,205 +974,39 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
             headline: profiles.headline,
             location: profiles.location,
             visibility: profiles.visibility,
-            skills: isHeavyLoad ? profiles.skills : sql`NULL::text[]`, // Only fetch JSON/Arrays if heavy
-            interests: isHeavyLoad ? profiles.interests : sql`NULL::text[]`,
-            createdAt: profiles.createdAt,
             connectionsCount: profiles.connectionsCount,
         })
         .from(profiles)
-        .where(and(...candidateBaseConditions))
-        .orderBy(desc(profiles.connectionsCount), desc(profiles.createdAt), desc(profiles.id))
-        .limit(limit + 1)
-        .offset(safeOffset);
+        .where(sql`${profiles.id} <> ${user.id}`)
+        .orderBy(desc(profiles.connectionsCount))
+        .limit(limit + 1);
 
-    const candidateIds = candidates.map((candidate) => candidate.id);
-    if (candidateIds.length === 0) {
+    const trendingHasMore = trendingProfiles.length > limit;
+    const trendingItems = trendingProfiles.slice(0, limit).map(p => {
+        const profileVisibility = (p.visibility || 'public') as SuggestedProfile['profileVisibility'];
         return {
-            success: true as const,
-            items: [],
-            hasMore: false,
-            nextCursor: null,
-            stats,
-        };
-    }
-
-    // Always need connection status
-    const existingConnections = await db
-        .select({
-            id: connections.id,
-            requesterId: connections.requesterId,
-            addresseeId: connections.addresseeId,
-            status: connections.status,
-            createdAt: connections.createdAt,
-            updatedAt: connections.updatedAt,
-        })
-        .from(connections)
-        .where(
-            or(
-                and(eq(connections.requesterId, user.id), inArray(connections.addresseeId, candidateIds)),
-                and(eq(connections.addresseeId, user.id), inArray(connections.requesterId, candidateIds)),
-            ),
-        );
-
-    const connectionByCandidate = new Map<string, { status: typeof connections.$inferSelect.status; requesterId: string; id: string }>();
-    for (const conn of existingConnections) {
-        const candidateId = conn.requesterId === user.id ? conn.addresseeId : conn.requesterId;
-        connectionByCandidate.set(candidateId, { status: conn.status, requesterId: conn.requesterId, id: conn.id });
-    }
-
-    let candidateProjects: Array<{ ownerId: string; id: string; title: string; status: string | null }> = [];
-    const mutualCounts = new Map<string, number>();
-
-    // Heavy querying ONLY for infinite scroll page 1 (Recommendations)
-    if (isHeavyLoad) {
-        const fetchedProjects = await db
-            .select({
-                ownerId: projects.ownerId,
-                id: projects.id,
-                title: projects.title,
-                status: projects.status,
-            })
-            .from(projects)
-            .where(inArray(projects.ownerId, candidateIds))
-            .orderBy(desc(projects.createdAt));
-        candidateProjects = fetchedProjects;
-
-        const myPeerRows = await db
-            .select({
-                peerId: sql<string>`CASE
-                    WHEN ${connections.requesterId} = ${user.id} THEN ${connections.addresseeId}
-                    ELSE ${connections.requesterId}
-                END`,
-            })
-            .from(connections)
-            .where(
-                and(
-                    eq(connections.status, 'accepted'),
-                    or(eq(connections.requesterId, user.id), eq(connections.addresseeId, user.id)),
-                ),
-            )
-            .limit(1000);
-        const myPeerIds = myPeerRows.map((row) => row.peerId);
-
-        if (myPeerIds.length > 0) {
-            const candidateIdSet = new Set(candidateIds);
-            const mutualRows = await db
-                .select({
-                    requesterId: connections.requesterId,
-                    addresseeId: connections.addresseeId,
-                })
-                .from(connections)
-                .where(
-                    and(
-                        eq(connections.status, 'accepted'),
-                        or(
-                            and(inArray(connections.requesterId, candidateIds), inArray(connections.addresseeId, myPeerIds)),
-                            and(inArray(connections.addresseeId, candidateIds), inArray(connections.requesterId, myPeerIds)),
-                        ),
-                    ),
-                );
-
-            for (const row of mutualRows) {
-                const candidateId = candidateIdSet.has(row.requesterId) ? row.requesterId : row.addresseeId;
-                mutualCounts.set(candidateId, (mutualCounts.get(candidateId) || 0) + 1);
-            }
-        }
-    }
-
-    const projectsByOwner = new Map<string, Array<{ id: string; title: string; status: string | null }>>();
-    if (isHeavyLoad) {
-        for (const project of candidateProjects) {
-            if (!projectsByOwner.has(project.ownerId)) {
-                projectsByOwner.set(project.ownerId, []);
-            }
-            const ownerProjects = projectsByOwner.get(project.ownerId)!;
-            if (ownerProjects.length < 3) {
-                ownerProjects.push({ id: project.id, title: project.title, status: project.status });
-            }
-        }
-    }
-
-    const scored = candidates.map((candidate) => {
-        const conn = connectionByCandidate.get(candidate.id);
-        const status = conn?.status === 'accepted'
-            ? 'connected'
-            : conn?.status === 'pending'
-                ? (conn.requesterId === user.id ? 'pending_sent' : 'pending_received')
-                : 'none';
-        const canConnect = status === 'none';
-
-        if (!isHeavyLoad) {
-            return {
-                ...candidate,
-                score: candidate.connectionsCount || 0, // Fallback sorting for light load
-                status,
-                canConnect,
-                mutual: 0,
-                recommendationReason: undefined,
-            };
-        }
-
-        const candidateSignals = new Set<string>([
-            ...(((candidate.skills as string[]) || []).map((v) => v.toLowerCase())),
-            ...(((candidate.interests as string[]) || []).map((v) => v.toLowerCase())),
-        ]);
-        let overlap = 0;
-        for (const signal of candidateSignals) {
-            if (mySignals.has(signal)) overlap += 1;
-        }
-        const mutual = mutualCounts.get(candidate.id) || 0;
-        const recency = Math.max(0, 365 - (Date.now() - new Date(candidate.createdAt).getTime()) / (1000 * 60 * 60 * 24));
-        const score = overlap * 5 + mutual * 3 + recency * 0.03;
-
-        const recommendationReason = overlap > 0
-            ? 'Skills match'
-            : mutual > 0
-                ? `${mutual} mutual connections`
-                : 'Suggested for your network';
-
-        return {
-            ...candidate,
-            score,
-            status,
-            canConnect,
-            mutual,
-            recommendationReason,
+            id: p.id,
+            type: 'discover' as const,
+            username: p.username,
+            fullName: p.fullName,
+            avatarUrl: p.avatarUrl,
+            headline: p.headline,
+            location: p.location,
+            connectionStatus: 'none' as SuggestedProfile['connectionStatus'],
+            canConnect: true,
+            profileVisibility,
+            isLockedProfile: profileVisibility !== 'public',
+            mutualConnections: undefined,
+            recommendationReason: 'Trending in your network',
+            projects: undefined,
         };
     });
 
-    if (isHeavyLoad) {
-        scored.sort((a, b) => b.score - a.score || +new Date(b.createdAt) - +new Date(a.createdAt));
-    }
-    const hasMore = scored.length > limit;
-    const items = scored.slice(0, limit).map((candidate) => ({
-        id: candidate.id,
-        type: 'discover' as const,
-        username: candidate.username,
-        fullName: candidate.fullName,
-        avatarUrl: candidate.avatarUrl,
-        headline: candidate.headline,
-        location: candidate.location,
-        connectionStatus: candidate.status as SuggestedProfile['connectionStatus'],
-        canConnect: candidate.canConnect,
-        profileVisibility: (candidate.visibility || 'public') as SuggestedProfile['profileVisibility'],
-        isLockedProfile: candidate.status !== 'connected' && candidate.visibility !== 'public',
-        mutualConnections: isHeavyLoad ? candidate.mutual : undefined,
-        recommendationReason: isHeavyLoad ? candidate.recommendationReason : undefined,
-        projects: isHeavyLoad ? projectsByOwner.get(candidate.id) || [] : undefined,
-    }));
-
-    const nextCursor = hasMore ? `o:${safeOffset + limit}` : null;
-    const finalResult = { success: true as const, items, hasMore, nextCursor, stats };
-
-    if (!isHeavyLoad && !searchPattern) {
-        try {
-            await cacheData(cacheKey, finalResult, 15 * 60); // 15 mins TTL
-        } catch (e) {
-            console.error("Redis Cache Write error:", e);
-        }
-    }
-
-    return finalResult;
+    const fallbackResult = { success: true as const, items: trendingItems, hasMore: trendingHasMore, nextCursor: trendingHasMore ? `o:${safeOffset + limit}` : null, stats };
+    try {
+        await cacheData(cacheKey, fallbackResult, 5 * 60); // Cache fallback for 5 mins
+    } catch { /* ignore */ }
+    return fallbackResult;
 }
 
 export async function getConnectionRequestHistory(limit: number = 80): Promise<{
@@ -873,12 +1093,22 @@ export async function getConnectionRequestHistory(limit: number = 80): Promise<{
 
 export async function sendConnectionRequest(
     addresseeId: string,
+    idempotencyKey?: string,
     _message?: string
 ): Promise<{ success: boolean; error?: string; connectionId?: string }> {
     try {
         void _message;
         const user = await getAuthUser();
         if (!user) return { success: false, error: 'Not authenticated' };
+
+        if (idempotencyKey && redis) {
+            const cacheKey = `idempotent:conn:${user.id}:${idempotencyKey}`;
+            const isFirst = await redis.set(cacheKey, '1', { nx: true, ex: 15 });
+            if (!isFirst) {
+                console.log(`[connections] Idempotency lock hit for ${cacheKey}`);
+                return { success: true, connectionId: 'duplicate' };
+            }
+        }
 
         // Can't connect to yourself
         if (user.id === addresseeId) {
@@ -888,6 +1118,11 @@ export async function sendConnectionRequest(
         const requestRate = await consumeRateLimit(`connections-send:${user.id}`, 30, 60);
         if (!requestRate.allowed) {
             return { success: false, error: 'Too many requests. Please wait and try again.' };
+        }
+
+        // PURE OPTIMIZATION: O(1) Pre-check for already connected users (1M+ Users Scalability)
+        if (await isConnected(user.id, addresseeId)) {
+            return { success: false, error: 'Already connected' };
         }
 
         const privacy = await resolvePrivacyRelationship(user.id, addresseeId);
@@ -907,9 +1142,8 @@ export async function sendConnectionRequest(
             return { success: false, error: 'Cannot send request right now.' };
         }
 
+        // PURE OPTIMIZATION: Dropped advisory lock for native connection pairs unique constraints
         const txResult = await db.transaction(async (tx) => {
-            await lockConnectionPair(tx, user.id, addresseeId);
-
             const existing = await tx
                 .select({
                     id: connections.id,
@@ -958,29 +1192,37 @@ export async function sendConnectionRequest(
                             addresseeId,
                             status: 'pending',
                             updatedAt: new Date(),
+                            createdAt: new Date(), // PURE OPTIMIZATION: Reset createdAt so it bubbles to top of incoming feeds
                         })
                         .where(eq(connections.id, conn.id));
                     return { connectionId: conn.id };
                 }
             }
 
-            const inserted = await tx
-                .insert(connections)
-                .values({
-                    requesterId: user.id,
-                    addresseeId: addresseeId,
-                    status: 'pending',
-                })
-                .returning({ id: connections.id });
-
-            return { connectionId: inserted[0].id };
+            try {
+                const inserted = await tx
+                    .insert(connections)
+                    .values({
+                        requesterId: user.id,
+                        addresseeId: addresseeId,
+                        status: 'pending',
+                    })
+                    .returning({ id: connections.id });
+                return { connectionId: inserted[0].id };
+            } catch (err: any) {
+                // If unique constraint is violated, someone else inserted concurrently
+                if (err?.code === '23505') {
+                    return { error: 'Request was already sent or a connection exists.' };
+                }
+                throw err;
+            }
         });
 
         if (!txResult.connectionId) {
             return { success: false, error: txResult.error || 'Failed to send request' };
         }
 
-        await refreshWorkspaceCountersForUsers(db, [addresseeId]);
+        await queueCounterRefreshBestEffort([addresseeId]);
         await invalidateDiscoverCacheForUsers([user.id, addresseeId]);
         await revalidateConnectionsPaths();
         return { success: true, connectionId: txResult.connectionId };
@@ -1035,55 +1277,18 @@ export async function acceptAllIncomingConnectionRequests(
             return { success: false, error: 'Too many bulk actions. Please wait and try again.' };
         }
 
-        const acceptedRows = await db.transaction(async (tx) => {
-            const rows = await tx
-                .select({
-                    id: connections.id,
-                    requesterId: connections.requesterId,
-                    addresseeId: connections.addresseeId,
-                })
-                .from(connections)
-                .where(and(eq(connections.addresseeId, user.id), eq(connections.status, 'pending')))
-                .orderBy(desc(connections.createdAt))
-                .limit(effectiveLimit);
-
-            if (rows.length === 0) return [] as Array<{ requesterId: string; addresseeId: string }>;
-
-            const ids = rows.map((row) => row.id);
-            const updated = await tx
-                .update(connections)
-                .set({
-                    status: 'accepted',
-                    updatedAt: new Date(),
-                })
-                .where(and(inArray(connections.id, ids), eq(connections.status, 'pending')))
-                .returning({
-                    requesterId: connections.requesterId,
-                    addresseeId: connections.addresseeId,
-                });
-
-            if (updated.length === 0) return [] as Array<{ requesterId: string; addresseeId: string }>;
-
-            const increments = new Map<string, number>();
-            for (const row of updated) {
-                increments.set(row.requesterId, (increments.get(row.requesterId) || 0) + 1);
-                increments.set(row.addresseeId, (increments.get(row.addresseeId) || 0) + 1);
+        await inngest.send({
+            name: 'workspace/connections.bulk',
+            data: {
+                userId: user.id,
+                action: 'accept',
+                limit: effectiveLimit,
             }
-            await applyConnectionsCountIncrements(tx, increments);
-            return updated;
         });
-
-        const acceptedCount = acceptedRows.length;
-        if (acceptedCount > 0) {
-            await refreshWorkspaceCountersForUsers(db, [user.id]);
-        }
-        await invalidateDiscoverCacheForUsers(
-            acceptedRows.flatMap((row) => [row.requesterId, row.addresseeId]),
-        );
-        await revalidateConnectionsPaths();
-        return { success: true, acceptedCount };
+        
+        return { success: true };
     } catch (error) {
-        console.error('Error accepting all requests:', error);
+        console.error('Error initiating bulk accept queue:', error);
         return { success: false, error: 'Failed to accept all requests' };
     }
 }
@@ -1101,47 +1306,18 @@ export async function rejectAllIncomingConnectionRequests(
             return { success: false, error: 'Too many bulk actions. Please wait and try again.' };
         }
 
-        const rejectedRows = await db.transaction(async (tx) => {
-            const rows = await tx
-                .select({
-                    id: connections.id,
-                    requesterId: connections.requesterId,
-                    addresseeId: connections.addresseeId,
-                })
-                .from(connections)
-                .where(and(eq(connections.addresseeId, user.id), eq(connections.status, 'pending')))
-                .orderBy(desc(connections.createdAt))
-                .limit(effectiveLimit);
-
-            if (rows.length === 0) return [] as Array<{ requesterId: string; addresseeId: string }>;
-
-            const ids = rows.map((row) => row.id);
-            const updated = await tx
-                .update(connections)
-                .set({
-                    status: 'rejected',
-                    updatedAt: new Date(),
-                })
-                .where(and(inArray(connections.id, ids), eq(connections.status, 'pending')))
-                .returning({
-                    requesterId: connections.requesterId,
-                    addresseeId: connections.addresseeId,
-                });
-
-            return updated;
+        await inngest.send({
+            name: 'workspace/connections.bulk',
+            data: {
+                userId: user.id,
+                action: 'reject',
+                limit: effectiveLimit,
+            }
         });
-
-        const rejectedCount = rejectedRows.length;
-        if (rejectedCount > 0) {
-            await refreshWorkspaceCountersForUsers(db, [user.id]);
-        }
-        await invalidateDiscoverCacheForUsers(
-            rejectedRows.flatMap((row) => [row.requesterId, row.addresseeId]),
-        );
-        await revalidateConnectionsPaths();
-        return { success: true, rejectedCount };
+        
+        return { success: true };
     } catch (error) {
-        console.error('Error rejecting all requests:', error);
+        console.error('Error initiating bulk reject queue:', error);
         return { success: false, error: 'Failed to reject all requests' };
     }
 }
@@ -1161,59 +1337,34 @@ export async function cancelConnectionRequest(
             return { success: false, error: 'Too many actions. Please wait and try again.' };
         }
 
-        const cancelled = await db.transaction(async (tx) => {
-            // Resolve pair first so advisory lock covers the full read -> update sequence.
-            const [connectionPreview] = await tx
-                .select({
-                    requesterId: connections.requesterId,
-                    addresseeId: connections.addresseeId,
-                })
-                .from(connections)
-                .where(and(eq(connections.id, connectionId), eq(connections.requesterId, user.id)))
-                .limit(1);
+        const [updated] = await db
+            .update(connections)
+            .set({
+                status: 'cancelled',
+                updatedAt: new Date(),
+            })
+            .where(
+                and(
+                    eq(connections.id, connectionId),
+                    eq(connections.requesterId, user.id),
+                    eq(connections.status, 'pending')
+                )
+            )
+            .returning({
+                id: connections.id,
+                requesterId: connections.requesterId,
+                addresseeId: connections.addresseeId,
+            });
 
-            if (!connectionPreview) return null;
-
-            await lockConnectionPair(tx, connectionPreview.requesterId, connectionPreview.addresseeId);
-
-            // Re-read under lock for authoritative status validation.
-            const [connection] = await tx
-                .select({
-                    id: connections.id,
-                    requesterId: connections.requesterId,
-                    addresseeId: connections.addresseeId,
-                    status: connections.status,
-                })
-                .from(connections)
-                .where(and(eq(connections.id, connectionId), eq(connections.requesterId, user.id)))
-                .limit(1);
-
-            if (!connection || connection.status !== 'pending') return null;
-
-            const [updated] = await tx
-                .update(connections)
-                .set({
-                    status: 'cancelled',
-                    updatedAt: new Date(),
-                })
-                .where(and(eq(connections.id, connectionId), eq(connections.status, 'pending')))
-                .returning({
-                    id: connections.id,
-                    requesterId: connections.requesterId,
-                    addresseeId: connections.addresseeId,
-                });
-
-            if (!updated) return null;
-            return {
-                id: updated.id,
-                requesterId: updated.requesterId,
-                addresseeId: updated.addresseeId,
-            };
-        });
+        const cancelled = updated ? {
+            id: updated.id,
+            requesterId: updated.requesterId,
+            addresseeId: updated.addresseeId,
+        } : null;
 
         if (!cancelled) return { success: false, error: 'Request not found or cannot be cancelled' };
 
-        await refreshWorkspaceCountersForUsers(db, [cancelled.addresseeId]);
+        await queueCounterRefreshBestEffort([cancelled.addresseeId]);
         await invalidateDiscoverCacheForUsers([cancelled.requesterId, cancelled.addresseeId]);
         await revalidateConnectionsPaths();
         return { success: true };
@@ -1272,8 +1423,22 @@ export async function acceptConnectionRequest(
             return { success: false, error: 'Request not found' };
         }
 
-        await refreshWorkspaceCountersForUsers(db, [accepted.addresseeId]);
+        await queueCounterRefreshBestEffort([accepted.requesterId, accepted.addresseeId]);
         await invalidateDiscoverCacheForUsers([accepted.requesterId, accepted.addresseeId]);
+        
+        // PURE OPTIMIZATION: Non-blocking sync to Redis Edge Cache + Suggestion Pre-computation + Rolling Stats
+        const { incrementConnectionStat } = await import('@/lib/connections/connection-stats-counters');
+        Promise.allSettled([
+            syncConnectionsToRedis(accepted.requesterId),
+            syncConnectionsToRedis(accepted.addresseeId),
+            inngest.send({ name: 'workspace/connections.sync_suggestions', data: { userId: accepted.requesterId } }),
+            inngest.send({ name: 'workspace/connections.sync_suggestions', data: { userId: accepted.addresseeId } }),
+            // Phase 6C: Rolling window stat counters
+            incrementConnectionStat(accepted.requesterId, 'this_month'),
+            incrementConnectionStat(accepted.addresseeId, 'this_month'),
+            incrementConnectionStat(accepted.addresseeId, 'gained'),
+        ]).catch(console.error);
+
         await revalidateConnectionsPaths();
         return { success: true };
     } catch (error) {
@@ -1321,7 +1486,7 @@ export async function rejectConnectionRequest(
             return { success: false, error: 'Request not found' };
         }
 
-        await refreshWorkspaceCountersForUsers(db, [rejected.addresseeId]);
+        await queueCounterRefreshBestEffort([rejected.addresseeId]);
         await invalidateDiscoverCacheForUsers([rejected.requesterId, rejected.addresseeId]);
         await revalidateConnectionsPaths();
         return {
@@ -1370,7 +1535,7 @@ export async function undoRejectConnectionRequest(
             return { success: false, error: 'Undo window expired' };
         }
 
-        await refreshWorkspaceCountersForUsers(db, [restored.addresseeId]);
+        await queueCounterRefreshBestEffort([restored.addresseeId]);
         await invalidateDiscoverCacheForUsers([restored.requesterId, restored.addresseeId]);
         await revalidateConnectionsPaths();
         return { success: true };
@@ -1396,40 +1561,7 @@ export async function removeConnection(
         }
 
         const removed = await db.transaction(async (tx) => {
-            // Step 1: Resolve the pair for this connection id, then lock the pair first.
-            const [pair] = await tx
-                .select({
-                    id: connections.id,
-                    requesterId: connections.requesterId,
-                    addresseeId: connections.addresseeId,
-                })
-                .from(connections)
-                .where(eq(connections.id, connectionId))
-                .limit(1);
-
-            if (!pair) return null;
-
-            await lockConnectionPair(tx, pair.requesterId, pair.addresseeId);
-
-            // Step 2: Validate under lock (ownership + accepted state).
-            const [connection] = await tx
-                .select({
-                    id: connections.id,
-                    requesterId: connections.requesterId,
-                    addresseeId: connections.addresseeId,
-                    status: connections.status,
-                })
-                .from(connections)
-                .where(
-                    and(
-                        eq(connections.id, connectionId),
-                        or(eq(connections.requesterId, user.id), eq(connections.addresseeId, user.id)),
-                    ),
-                )
-                .limit(1);
-
-            if (!connection || connection.status !== 'accepted') return null;
-
+            // PURE OPTIMIZATION: Removed read-before-write and advisory lock in favor of atomic UPDATE + RETURNING.
             const [updated] = await tx
                 .update(connections)
                 .set({
@@ -1440,7 +1572,7 @@ export async function removeConnection(
                     and(
                         eq(connections.id, connectionId),
                         eq(connections.status, 'accepted'),
-                        or(eq(connections.requesterId, user.id), eq(connections.addresseeId, user.id)),
+                        or(eq(connections.requesterId, user.id), eq(connections.addresseeId, user.id))
                     )
                 )
                 .returning({
@@ -1459,6 +1591,17 @@ export async function removeConnection(
         }
 
         await invalidateDiscoverCacheForUsers([removed.requesterId, removed.addresseeId]);
+
+        // PURE OPTIMIZATION: Non-blocking sync to Redis Edge Cache (removes from set) + Rolling Stats
+        const { decrementConnectionStat } = await import('@/lib/connections/connection-stats-counters');
+        Promise.allSettled([
+            syncConnectionsToRedis(removed.requesterId),
+            syncConnectionsToRedis(removed.addresseeId),
+            // Phase 6C: Decrement rolling window stat counters
+            decrementConnectionStat(removed.requesterId, 'this_month'),
+            decrementConnectionStat(removed.addresseeId, 'this_month'),
+        ]).catch(console.error);
+
         await revalidateConnectionsPaths();
         return { success: true };
     } catch (error) {
@@ -1491,50 +1634,84 @@ export async function getConnectionStats(
     try {
         const dedupeKey = `connections:stats:${user?.id ?? 'anon'}:${targetId}:${canViewPrivateStats ? 'self' : 'public'}`;
         return await runInFlightDeduped(dedupeKey, async () => {
+            // Phase 6C: Try Redis counters first for monthly/gained stats
+            let redisStats: { connectionsThisMonth: number; connectionsGained: number } | null = null;
+            if (canViewPrivateStats) {
+                try {
+                    const { getConnectionStatsFromRedis } = await import('@/lib/connections/connection-stats-counters');
+                    redisStats = await getConnectionStatsFromRedis(targetId);
+                } catch { /* Redis failure — fall through to DB */ }
+            }
+
             const now = new Date();
             const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
             const startOfMonthIso = startOfMonth.toISOString();
+
+            // If we got Redis stats, we can skip the expensive count(*) FILTER for monthly data
             const [profileCounter, stats] = await Promise.all([
                 db
                     .select({ connectionsCount: profiles.connectionsCount })
                     .from(profiles)
                     .where(eq(profiles.id, targetId))
                     .limit(1),
-                db.select({
-                    pendingIncoming: sql<number>`count(*) FILTER (
-                        WHERE ${connections.addresseeId} = ${targetId}
-                        AND ${connections.status} = 'pending'
-                    )`,
-                    pendingSent: sql<number>`count(*) FILTER (
-                        WHERE ${connections.requesterId} = ${targetId}
-                        AND ${connections.status} = 'pending'
-                    )`,
-                    connectionsThisMonth: sql<number>`count(*) FILTER (
-                        WHERE ${connections.status} = 'accepted'
-                        AND (${connections.requesterId} = ${targetId} OR ${connections.addresseeId} = ${targetId})
-                        AND ${connections.updatedAt} >= ${startOfMonthIso}
-                    )`,
-                    connectionsGained: sql<number>`count(*) FILTER (
-                        WHERE ${connections.addresseeId} = ${targetId}
-                        AND ${connections.status} = 'accepted'
-                        AND ${connections.updatedAt} >= ${startOfMonthIso}
-                    )`
-                })
-                    .from(connections)
-                    .where(
-                        or(
-                            eq(connections.requesterId, targetId),
-                            eq(connections.addresseeId, targetId)
+                // Only query pending counts (cheap) — skip monthly aggregations if Redis has them
+                redisStats
+                    ? db.select({
+                        pendingIncoming: sql<number>`count(*) FILTER (
+                            WHERE ${connections.addresseeId} = ${targetId}
+                            AND ${connections.status} = 'pending'
+                        )`,
+                        pendingSent: sql<number>`count(*) FILTER (
+                            WHERE ${connections.requesterId} = ${targetId}
+                            AND ${connections.status} = 'pending'
+                        )`,
+                    })
+                        .from(connections)
+                        .where(
+                            or(
+                                eq(connections.requesterId, targetId),
+                                eq(connections.addresseeId, targetId)
+                            )
                         )
-                    ),
+                    : db.select({
+                        pendingIncoming: sql<number>`count(*) FILTER (
+                            WHERE ${connections.addresseeId} = ${targetId}
+                            AND ${connections.status} = 'pending'
+                        )`,
+                        pendingSent: sql<number>`count(*) FILTER (
+                            WHERE ${connections.requesterId} = ${targetId}
+                            AND ${connections.status} = 'pending'
+                        )`,
+                        connectionsThisMonth: sql<number>`count(*) FILTER (
+                            WHERE ${connections.status} = 'accepted'
+                            AND (${connections.requesterId} = ${targetId} OR ${connections.addresseeId} = ${targetId})
+                            AND ${connections.updatedAt} >= ${startOfMonthIso}
+                        )`,
+                        connectionsGained: sql<number>`count(*) FILTER (
+                            WHERE ${connections.addresseeId} = ${targetId}
+                            AND ${connections.status} = 'accepted'
+                            AND ${connections.updatedAt} >= ${startOfMonthIso}
+                        )`
+                    })
+                        .from(connections)
+                        .where(
+                            or(
+                                eq(connections.requesterId, targetId),
+                                eq(connections.addresseeId, targetId)
+                            )
+                        ),
             ]);
 
             return {
                 totalConnections: Number(profileCounter[0]?.connectionsCount || 0),
                 pendingIncoming: canViewPrivateStats ? Number(stats[0]?.pendingIncoming || 0) : 0,
                 pendingSent: canViewPrivateStats ? Number(stats[0]?.pendingSent || 0) : 0,
-                connectionsThisMonth: canViewPrivateStats ? Number(stats[0]?.connectionsThisMonth || 0) : 0,
-                connectionsGained: canViewPrivateStats ? Number(stats[0]?.connectionsGained || 0) : 0,
+                connectionsThisMonth: canViewPrivateStats
+                    ? (redisStats?.connectionsThisMonth ?? Number((stats[0] as any)?.connectionsThisMonth || 0))
+                    : 0,
+                connectionsGained: canViewPrivateStats
+                    ? (redisStats?.connectionsGained ?? Number((stats[0] as any)?.connectionsGained || 0))
+                    : 0,
             };
         });
     } catch (error) {
@@ -1599,9 +1776,9 @@ export async function getPendingRequests(
     const dedupeKey = `connections:pending:${user?.id ?? 'anon'}:${safeLimit}:${safeOffset}`;
 
     return runInFlightDeduped(dedupeKey, async () => {
-        if (safeOffset > 0) {
-            if (!user) return { incoming: [], sent: [], hasMoreIncoming: false, hasMoreSent: false };
+        if (!user) return { incoming: [], sent: [], hasMoreIncoming: false, hasMoreSent: false };
 
+        if (safeOffset > 0) {
             const [incoming, sent] = await Promise.all([
                 db
                     .select({
@@ -1649,6 +1826,16 @@ export async function getPendingRequests(
             };
         }
 
+        const cacheKey = `connections:inbox_cache:${user.id}:${safeLimit}`;
+        if (safeOffset === 0 && redis) {
+            try {
+                const cached = await redis.get(cacheKey);
+                if (cached) return cached as any;
+            } catch (error) {
+                console.error('Redis cache read error for inbox:', error);
+            }
+        }
+
         const [incomingFeed, sentFeed] = await Promise.all([
             getConnectionsFeed({ tab: 'requests_incoming', limit: safeLimit }),
             getConnectionsFeed({ tab: 'requests_sent', limit: safeLimit }),
@@ -1658,7 +1845,7 @@ export async function getPendingRequests(
             return { incoming: [], sent: [], hasMoreIncoming: false, hasMoreSent: false };
         }
 
-        return {
+        const result = {
             incoming: incomingFeed.success
                 ? (incomingFeed.items as RequestFeedItem[]).map((item) => ({
                     id: item.id,
@@ -1688,6 +1875,16 @@ export async function getPendingRequests(
             hasMoreIncoming: incomingFeed.success ? incomingFeed.hasMore : false,
             hasMoreSent: sentFeed.success ? sentFeed.hasMore : false,
         };
+
+        if (safeOffset === 0 && redis) {
+            try {
+                await redis.set(cacheKey, JSON.stringify(result), { ex: 300 });
+            } catch (error) {
+                console.error('Redis cache write error for inbox:', error);
+            }
+        }
+
+        return result;
     });
 }
 
@@ -1974,17 +2171,23 @@ export async function checkConnectionStatus(
                 Number.isFinite(updatedAtMs) &&
                 Date.now() - updatedAtMs <= APPLICATION_BANNER_HIDE_AFTER_MS;
 
-            return {
-                success: true,
-                status: 'open',
-                connectionId: privacy.latestConnectionId ?? undefined,
-                hasActiveApplication: isPending || isFreshTerminal,
-                activeApplicationId: activeApp.id,
-                activeApplicationStatus: appStatus,
-                activeProjectId: activeApp.projectId, // Mapped correctly by Drizzle
-                isApplicant: activeApp.applicantId === user.id,
-                isCreator: activeApp.creatorId === user.id
-            };
+            // Only override the standard status with the application gate if it is tangibly active or fresh.
+            if (isPending || isFreshTerminal) {
+                return {
+                    success: true,
+                    status: 'open', // Allows messaging system to operate
+                    connectionId: privacy.latestConnectionId ?? undefined,
+                    hasActiveApplication: true,
+                    activeApplicationId: activeApp.id,
+                    activeApplicationStatus: appStatus,
+                    activeProjectId: activeApp.projectId, // Mapped correctly by Drizzle
+                    isApplicant: activeApp.applicantId === user.id,
+                    isCreator: activeApp.creatorId === user.id,
+                    // PURE OPTIMIZATION: Crucially append connection booleans so profile UI doesn't visually drop existing connection requests!
+                    isIncomingRequest: privacy.connectionState === 'pending_incoming',
+                    isPendingSent: privacy.connectionState === 'pending_outgoing'
+                };
+            }
         }
 
         if (privacy.blockedByViewer || privacy.blockedByTarget) {

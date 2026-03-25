@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { ProjectNode } from "@/lib/db/schema";
 import { getTaskAttachments } from "@/app/actions/files";
 import { useRealtime } from "@/components/providers/RealtimeProvider";
@@ -9,10 +9,11 @@ export function useTaskAttachments(taskId: string) {
     const [attachments, setAttachments] = useState<ProjectNode[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const { isConnected } = useRealtime();
-    const [resourceConnected, setResourceConnected] = useState(false);
+    const resourceConnectedRef = useRef(false);
 
     useEffect(() => {
         let isMounted = true;
+        resourceConnectedRef.current = false;
 
         const fetchAttachments = async () => {
             try {
@@ -29,6 +30,20 @@ export function useTaskAttachments(taskId: string) {
 
         fetchAttachments();
 
+        const polling = createVisibilityAwareInterval(() => {
+            void fetchAttachments();
+        }, 30000);
+
+        const syncPolling = () => {
+            if (isConnected && resourceConnectedRef.current) {
+                polling.stop();
+                return;
+            }
+            polling.start();
+        };
+
+        syncPolling();
+
         const unsubscribe = subscribeTaskResource({
             taskId,
             onEvent: (event) => {
@@ -37,22 +52,18 @@ export function useTaskAttachments(taskId: string) {
                 }
             },
             onStatus: (status) => {
-                setResourceConnected(status === "SUBSCRIBED");
+                resourceConnectedRef.current = status === "SUBSCRIBED";
+                syncPolling();
             },
         });
 
-        const cleanup = isConnected && resourceConnected
-            ? () => undefined
-            : createVisibilityAwareInterval(() => {
-                void fetchAttachments();
-            }, 30000);
-
         return () => {
             isMounted = false;
-            cleanup();
+            resourceConnectedRef.current = false;
+            polling();
             unsubscribe();
         };
-    }, [isConnected, resourceConnected, taskId]);
+    }, [isConnected, taskId]);
 
     return { attachments, isLoading };
 }

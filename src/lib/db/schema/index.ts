@@ -10,7 +10,7 @@ type ImportSourceMetadata = Record<string, unknown>;
 // ============================================================================
 export const profiles = pgTable('profiles', {
     id: uuid('id').primaryKey(), // References auth.users.id
-    email: text('email').notNull(),
+    email: text('email').notNull().unique(),
     username: text('username').unique(),
     fullName: text('full_name'),
     avatarUrl: text('avatar_url'),
@@ -116,6 +116,26 @@ export const profileAuditEvents = pgTable('profile_audit_events', {
     userCreatedIdx: index('profile_audit_events_user_created_idx').on(t.userId, t.createdAt),
 }))
 
+// ============================================================================
+// PROFILE COUNTERS TABLE (Decoupled for 1M+ Users Scalability)
+// ============================================================================
+export const profileCounters = pgTable('profile_counters', {
+    userId: uuid('user_id').primaryKey().references(() => profiles.id, { onDelete: 'cascade' }),
+    connectionsCount: integer('connections_count').default(0).notNull(),
+    projectsCount: integer('projects_count').default(0).notNull(),
+    followersCount: integer('followers_count').default(0).notNull(),
+    workspaceInboxCount: integer('workspace_inbox_count').default(0).notNull(),
+    workspaceDueTodayCount: integer('workspace_due_today_count').default(0).notNull(),
+    workspaceOverdueCount: integer('workspace_overdue_count').default(0).notNull(),
+    workspaceInProgressCount: integer('workspace_in_progress_count').default(0).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+    workspaceInboxCountIdx: index('profile_counters_workspace_inbox_count_idx').on(t.workspaceInboxCount),
+    workspaceDueTodayCountIdx: index('profile_counters_workspace_due_today_count_idx').on(t.workspaceDueTodayCount),
+    workspaceOverdueCountIdx: index('profile_counters_workspace_overdue_count_idx').on(t.workspaceOverdueCount),
+    workspaceInProgressCountIdx: index('profile_counters_workspace_in_progress_count_idx').on(t.workspaceInProgressCount),
+}))
+
 export const onboardingDrafts = pgTable('onboarding_drafts', {
     userId: uuid('user_id').primaryKey().references(() => profiles.id, { onDelete: 'cascade' }),
     step: integer('step').default(1).notNull(),
@@ -160,7 +180,7 @@ export const connections = pgTable('connections', {
     requesterId: uuid('requester_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
     addresseeId: uuid('addressee_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
     status: text('status', { enum: ['pending', 'accepted', 'rejected', 'cancelled', 'disconnected', 'blocked'] }).default('pending').notNull(),
-    blockedBy: uuid('blocked_by').references(() => profiles.id, { onDelete: 'set null' }),
+    blockedBy: uuid('blocked_by').references(() => profiles.id, { onDelete: 'cascade' }),
     blockedAt: timestamp('blocked_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
@@ -180,6 +200,10 @@ export const connections = pgTable('connections', {
     // 2. "Pending Requests" Sorting (Fast List)
     pendingRequestsIdx: index('connections_pending_idx').on(t.status, t.createdAt),
     blockedByIdx: index('connections_blocked_by_idx').on(t.blockedBy, t.blockedAt),
+    activePairUidx: uniqueIndex('connections_active_pair_uidx').on(
+        sql`LEAST(${t.requesterId}, ${t.addresseeId})`,
+        sql`GREATEST(${t.requesterId}, ${t.addresseeId})`
+    ),
     noSelfCheck: check('connections_no_self_check', sql`${t.requesterId} <> ${t.addresseeId}`),
     blockedStatusCheck: check(
         'connections_blocked_status_check',
@@ -195,6 +219,23 @@ export const connectionSuggestionDismissals = pgTable('connection_suggestion_dis
 }, (t) => ({
     userDismissedUniqueIdx: uniqueIndex('connection_suggestion_dismissals_user_profile_uidx').on(t.userId, t.dismissedProfileId),
     userCreatedIdx: index('connection_suggestion_dismissals_user_created_idx').on(t.userId, t.createdAt),
+}))
+
+// ============================================================================
+// CONNECTION SUGGESTIONS TABLE (Pre-computed for 1M+ Users Scalability)
+// ============================================================================
+export const connectionSuggestions = pgTable('connection_suggestions', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
+    suggestedUserId: uuid('suggested_user_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
+    mutualConnectionsCount: integer('mutual_connections_count').default(0).notNull(),
+    score: integer('score').default(0).notNull(),
+    reason: text('reason'),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+    userSuggestionUniqueIdx: uniqueIndex('connection_suggestions_user_suggested_uidx').on(t.userId, t.suggestedUserId),
+    userScoreIdx: index('connection_suggestions_user_score_idx').on(t.userId, t.score),
 }))
 
 // ============================================================================
@@ -225,6 +266,7 @@ export const projects = pgTable('projects', {
     category: text('category'),
     viewCount: integer('view_count').default(0),
     followersCount: integer('followers_count').default(0).notNull(),
+    savesCount: integer('saves_count').default(0).notNull(),
 
     tags: jsonb('tags').$type<string[]>().default([]),
     skills: jsonb('skills').$type<string[]>().default([]),
@@ -1159,6 +1201,37 @@ export const collectionProjectsRelations = relations(collectionProjects, ({ one 
         references: [projects.id],
     }),
 }));
+
+// ============================================================================
+// ACCOUNT DELETIONS TABLE (Immutable Audit Trail)
+// Persists after the profile is hard-deleted. No FK to profiles intentionally.
+// ============================================================================
+export const accountDeletions = pgTable('account_deletions', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id').notNull(),  // NO FK — user record will be deleted
+    email: text('email').notNull(),
+    username: text('username'),
+    reason: text('reason'),  // Optional user-provided reason
+    scheduledAt: timestamp('scheduled_at', { withTimezone: true }).defaultNow().notNull(),
+    hardDeleteAt: timestamp('hard_delete_at', { withTimezone: true }).notNull(),
+    cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+    confirmationToken: text('confirmation_token'),
+    tokenExpiresAt: timestamp('token_expires_at', { withTimezone: true }),
+    cleanupStatus: text('cleanup_status', {
+        enum: ['pending', 'in_progress', 'completed', 'failed']
+    }).default('pending').notNull(),
+    cleanupDetails: jsonb('cleanup_details').$type<Record<string, unknown>>().default({}),
+    metadata: jsonb('metadata').$type<Record<string, unknown>>().default({}),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+    userIdx: index('account_deletions_user_idx').on(t.userId),
+    hardDeleteIdx: index('account_deletions_hard_delete_idx').on(t.hardDeleteAt, t.completedAt),
+    tokenIdx: index('account_deletions_token_idx').on(t.confirmationToken),
+}))
+
+export type AccountDeletion = typeof accountDeletions.$inferSelect
+export type NewAccountDeletion = typeof accountDeletions.$inferInsert
 
 export type NewDmPair = typeof dmPairs.$inferInsert
 export type ConversationParticipant = typeof conversationParticipants.$inferSelect

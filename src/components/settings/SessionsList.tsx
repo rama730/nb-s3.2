@@ -133,6 +133,7 @@ export function SessionsList({
                 setStepUpOpen(true);
                 return;
               }
+              setPendingAction({ type: "others" });
               void handleLogOutOthers();
             }}
           >
@@ -189,7 +190,9 @@ export function SessionsList({
                         </>
                       ) : null}
                       <span>•</span>
-                      <span>Last active {new Date(session.last_active).toLocaleString()}</span>
+                      <span>
+                        Last active {session.last_active ? new Date(session.last_active).toLocaleString() : "unknown"}
+                      </span>
                     </div>
                   </div>
                 </div>

@@ -2,42 +2,66 @@
  * Creates an interval that only runs when the page is visible.
  * Pauses when tab is hidden, resumes when visible.
  */
+export type VisibilityAwareIntervalController = (() => void) & {
+    start: () => void
+    stop: () => void
+}
+
 export function createVisibilityAwareInterval(
     callback: () => void,
     intervalMs: number,
-): () => void {
+): VisibilityAwareIntervalController {
     let timerId: ReturnType<typeof setInterval> | null = null;
+    let enabled = true;
 
-    function start() {
+    function startTimer() {
         if (timerId !== null) return;
         timerId = setInterval(callback, intervalMs);
     }
 
-    function stop() {
+    function stopTimer() {
         if (timerId !== null) {
             clearInterval(timerId);
             timerId = null;
         }
     }
 
+    function start() {
+        enabled = true;
+        if (typeof document !== 'undefined' && document.hidden) return;
+        startTimer();
+    }
+
+    function stop() {
+        enabled = false;
+        stopTimer();
+    }
+
     function onVisibilityChange() {
         if (document.hidden) {
-            stop();
+            stopTimer();
         } else {
+            if (!enabled) return;
             callback();
-            start();
+            startTimer();
         }
     }
 
     if (typeof document !== 'undefined') {
         document.addEventListener('visibilitychange', onVisibilityChange);
-        if (!document.hidden) start();
+        if (!document.hidden) startTimer();
     }
 
-    return () => {
-        stop();
+    const cleanup = (() => {
+        stopTimer();
+        enabled = false;
         if (typeof document !== 'undefined') {
             document.removeEventListener('visibilitychange', onVisibilityChange);
         }
-    };
+    }) as VisibilityAwareIntervalController;
+
+    cleanup.start = start;
+    cleanup.stop = stop;
+
+    return cleanup;
 }

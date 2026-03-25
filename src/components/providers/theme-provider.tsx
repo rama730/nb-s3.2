@@ -478,22 +478,42 @@ function ThemeRuntimeProvider({ children }: ThemeProviderProps) {
         setSyncState('saving')
         if (syncTimerRef.current !== null) {
             window.clearTimeout(syncTimerRef.current)
+            syncTimerRef.current = null
+        }
+        if (retryTimerRef.current !== null) {
+            window.clearTimeout(retryTimerRef.current)
+            retryTimerRef.current = null
         }
         try {
             const result = await resetAppearanceSettings()
             const savedSnapshot = result.snapshot ?? snapshot
             lastSyncedSnapshotRef.current = savedSnapshot
+            pendingSyncRef.current = null
+            syncRetryIndexRef.current = 0
             setLastSyncedAt(savedSnapshot.updatedAt)
             setSyncState('saved')
         } catch (error) {
+            const retryIndex = syncRetryIndexRef.current
+            const retryDelay = REMOTE_SYNC_RETRY_DELAYS_MS[retryIndex] ?? null
             logger.metric('theme.reset.failure', {
                 userId: viewerId,
+                retryIndex,
+                retryDelayMs: retryDelay ?? 0,
                 error: error instanceof Error ? error.message : 'unknown',
             })
-            setSyncState('save_failed')
             pendingSyncRef.current = snapshot
+            if (retryDelay !== null) {
+                syncRetryIndexRef.current = retryIndex + 1
+                retryTimerRef.current = window.setTimeout(() => {
+                    retryTimerRef.current = null
+                    void flushRemoteSync('reset-retry')
+                }, retryDelay)
+                return
+            }
+            syncRetryIndexRef.current = 0
+            setSyncState('save_failed')
         }
-    }, [applySnapshotLocally, profileHardeningEnabled, viewerId])
+    }, [applySnapshotLocally, flushRemoteSync, profileHardeningEnabled, viewerId])
 
     const themeValue = useMemo<ThemeContextValue>(() => ({
         theme,

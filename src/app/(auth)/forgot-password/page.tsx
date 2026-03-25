@@ -48,6 +48,7 @@ export default function ForgotPasswordPage() {
 
             setSent(true);
         } catch (submitError) {
+            setCaptchaToken(null);
             setError(submitError instanceof Error ? submitError.message : "Unable to send reset email.");
         } finally {
             setIsSubmitting(false);

@@ -2,7 +2,6 @@ import { notFound } from 'next/navigation';
 import { getProfileDetails, getProfileVisibilityMeta, getPublicProfileMeta } from '@/lib/data/profile';
 import { ProfileV2Client } from '@/components/profile/v2/ProfileV2Client';
 import { Metadata } from 'next';
-import { getViewerAuthContext } from '@/lib/server/viewer-context';
 
 export const revalidate = 60; // ISR: Revalidate every minute
 export const dynamicParams = true; // Allow new profiles to be generated on demand
@@ -51,17 +50,14 @@ export default async function PublicProfilePage({
         notFound();
     }
 
-    const { user } = visibility.visibility === 'public' || viewerPreviewMode
-        ? { user: null }
-        : await getViewerAuthContext();
-
-    // Public profiles stay cache-friendly; restricted profiles resolve viewer state only when needed.
+    // Always render the ISR page with a visitor-safe snapshot.
+    // Viewer-specific relationship state is resolved client-side after hydration.
     const data = await getProfileDetails(decodedUsername, {
         skipHeavyData: true,
-        viewerUser: user,
+        viewerUser: null,
     });
 
-    if (!data || !data.profile) {
+    if (data.privacyStatus === 'not_found' || !data.profile) {
         notFound();
     }
 
@@ -81,6 +77,7 @@ export default async function PublicProfilePage({
                 privacyRelationship={data.privacyRelationship}
                 lockedShell={data.lockedShell}
                 projects={data.projects}
+                viewerPreviewMode={viewerPreviewMode}
             />
         </div>
     );

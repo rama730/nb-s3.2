@@ -5,7 +5,7 @@ import { cache } from 'react'
 import type { User } from '@supabase/supabase-js'
 import type { ConnectionState } from '@/components/profile/v2/types'
 import { createClient } from '@/lib/supabase/server'
-import { getProfile } from '@/lib/services/profile-service'
+import { getProfile, type StandardProfile } from '@/lib/services/profile-service'
 import { resolvePrivacyRelationship } from '@/lib/privacy/resolver'
 import { logger } from '@/lib/logger'
 export { normalizeProfile } from '@/lib/utils/normalize-profile'
@@ -13,7 +13,7 @@ import { normalizeProfile } from '@/lib/utils/normalize-profile'
 
 function toBootstrapProfile(
     profile: Pick<
-        Profile,
+        StandardProfile,
         | 'id'
         | 'email'
         | 'username'
@@ -26,6 +26,8 @@ function toBootstrapProfile(
         | 'website'
         | 'skills'
         | 'interests'
+        | 'experience'
+        | 'education'
         | 'openTo'
         | 'availabilityStatus'
         | 'socialLinks'
@@ -43,13 +45,13 @@ function toBootstrapProfile(
         | 'workspaceOverdueCount'
         | 'workspaceInProgressCount'
     >
-): Profile {
+): StandardProfile {
     return {
         ...profile,
         skills: profile.skills ?? [],
         interests: profile.interests ?? [],
-        experience: [],
-        education: [],
+        experience: profile.experience ?? [],
+        education: profile.education ?? [],
         openTo: profile.openTo ?? [],
         availabilityStatus: profile.availabilityStatus ?? 'available',
         socialLinks: profile.socialLinks ?? {},
@@ -59,8 +61,7 @@ function toBootstrapProfile(
         pronouns: null,
         connectionPrivacy: profile.connectionPrivacy ?? 'everyone',
         workspaceLayout: null,
-        securityRecoveryCodes: [],
-        recoveryCodesGeneratedAt: null,
+        hasRecoveryCodes: false,
     }
 }
 
@@ -82,6 +83,8 @@ export const getUserProfile = cache(async (userId: string) => {
                 website: profiles.website,
                 skills: profiles.skills,
                 interests: profiles.interests,
+                experience: profiles.experience,
+                education: profiles.education,
                 openTo: profiles.openTo,
                 availabilityStatus: profiles.availabilityStatus,
                 socialLinks: profiles.socialLinks,
@@ -116,33 +119,108 @@ interface ProfileDetailsOptions {
     viewerUser?: User | null;
 }
 
+export type ProfilePrivacyStatus = 'not_found' | 'private' | 'public';
+
+export interface ProfileDetailsResult {
+    privacyStatus: ProfilePrivacyStatus;
+    visibilityReason?: string;
+    profile: ReturnType<typeof normalizeProfile> | null;
+    projects: any[];
+    posts: any[];
+    stats: {
+        connectionsCount: number;
+        projectsCount: number;
+        followersCount: number;
+        mutualCount?: number;
+    };
+    connectionStatus: ConnectionState;
+    privacyRelationship: {
+        canViewProfile: boolean;
+        canSendMessage: boolean;
+        canSendConnectionRequest: boolean;
+        blockedByViewer: boolean;
+        blockedByTarget: boolean;
+        visibilityReason: string;
+        connectionState: ConnectionState | string;
+    } | null;
+    lockedShell: boolean;
+    isOwner: boolean;
+    currentUser: User | null;
+}
+
 export async function getProfileDetails(username?: string, options: ProfileDetailsOptions = {}) {
     const viewerUser = options.viewerUser ?? null;
 
     // 2. Fetch Target Profile (Optimized Parallel approach)
-    const profileData = username
-        ? await db.query.profiles.findFirst({ where: eq(profiles.username, username) })
-        : viewerUser
-            ? await getProfile(viewerUser.id)
-            : null;
+    let profileData = null;
+    if (username) {
+        // We do a soft UUID format check. If it matches a UUID format, we can safely attempt ID lookup fallback
+        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(username);
+        
+        profileData = await db.query.profiles.findFirst({ 
+            where: isUuid 
+                ? or(eq(profiles.username, username), eq(profiles.id, username))
+                : eq(profiles.username, username)
+        });
+    } else if (viewerUser) {
+        profileData = await getProfile(viewerUser.id);
+    }
 
-    if (!profileData) return null;
+    if (!profileData) {
+        return {
+            privacyStatus: 'not_found',
+            profile: null,
+            projects: [],
+            posts: [],
+            stats: {
+                connectionsCount: 0,
+                projectsCount: 0,
+                followersCount: 0,
+                mutualCount: 0,
+            },
+            connectionStatus: 'none',
+            privacyRelationship: null,
+            lockedShell: false,
+            isOwner: false,
+            currentUser: viewerUser,
+        } satisfies ProfileDetailsResult;
+    }
 
     const isOwner = viewerUser?.id === profileData.id;
     const shouldResolveViewerState = !!viewerUser && !isOwner;
     const privacyRelationship = await resolvePrivacyRelationship(viewerUser?.id ?? null, profileData.id);
-    if (!privacyRelationship) return null;
+    if (!privacyRelationship) {
+        return {
+            privacyStatus: 'not_found',
+            profile: null,
+            projects: [],
+            posts: [],
+            stats: {
+                connectionsCount: 0,
+                projectsCount: 0,
+                followersCount: 0,
+                mutualCount: 0,
+            },
+            connectionStatus: 'none',
+            privacyRelationship: null,
+            lockedShell: false,
+            isOwner: !!isOwner,
+            currentUser: viewerUser,
+        } satisfies ProfileDetailsResult;
+    }
     const canViewProfile = privacyRelationship.canViewProfile;
     const lockedShell = !canViewProfile;
     if (lockedShell) {
         logger.metric('privacy.profile.locked_shell', {
-            viewerId: viewerUser?.id ?? 'anon',
-            targetUserId: profileData.id,
+            hasViewer: !!viewerUser?.id,
             visibilityReason: privacyRelationship.visibilityReason,
-        })
+            connectionState: privacyRelationship.connectionState,
+            lockedShell,
+            isOwner: !!isOwner,
+        });
     }
 
-    const shouldLoadProjects = !options.skipHeavyData;
+    const shouldLoadProjects = !options.skipHeavyData && canViewProfile;
     const shouldLoadMutualCount = shouldResolveViewerState && !options.skipHeavyData && canViewProfile;
     const canViewAllProjects = !!isOwner;
 
@@ -217,6 +295,8 @@ export async function getProfileDetails(username?: string, options: ProfileDetai
     }
 
     return {
+        privacyStatus: lockedShell ? 'private' : 'public',
+        visibilityReason: privacyRelationship.visibilityReason,
         profile: normalizeProfile(profileData),
         projects: canViewProfile ? userProjects : [],
         posts: [],
@@ -239,7 +319,7 @@ export async function getProfileDetails(username?: string, options: ProfileDetai
         lockedShell,
         isOwner: !!isOwner,
         currentUser: viewerUser,
-    };
+    } satisfies ProfileDetailsResult;
 }
 
 export const getProfileVisibilityMeta = cache(async (username: string) => {

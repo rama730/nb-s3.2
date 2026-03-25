@@ -29,8 +29,8 @@ export const getProjectDetails = async (rawProjectId: string) => {
             return null;
         }
 
-        const followersCount = Number((project as any).followersCount || 0);
-        const savesCount = Number((project as any).savesCount || 0);
+        const followersCount = Number(project.followersCount || 0);
+        const savesCount = Number(project.savesCount || 0);
 
         const [openRoles, members] = await Promise.all([
             db.select().from(projectOpenRoles).where(eq(projectOpenRoles.projectId, project.id)),
