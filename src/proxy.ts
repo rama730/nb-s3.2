@@ -15,6 +15,7 @@ export const config = {
         '/people/:path*',
         '/workspace/:path*',
         '/monitor/:path*',
+        '/u/:path*',
         '/onboarding/:path*',
         '/login',
         '/signup',

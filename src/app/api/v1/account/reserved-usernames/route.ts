@@ -4,11 +4,11 @@ import { getRequestId, jsonError, jsonSuccess, logApiRoute } from '@/app/api/v1/
 import { isAdminUser } from '@/lib/security/admin'
 import { validateCsrf } from '@/lib/security/csrf'
 import { createClient } from '@/lib/supabase/server'
-import { RESERVED_USERNAMES, normalizeUsername } from '@/lib/validations/username'
+import { CORE_RESERVED_USERNAMES, normalizeUsername } from '@/lib/validations/username'
 import { asc, eq } from 'drizzle-orm'
 
 const USERNAME_PATTERN = /^[a-z0-9_]{3,20}$/
-const CORE_RESERVED_SET = new Set<string>(RESERVED_USERNAMES)
+const CORE_RESERVED_SET = new Set<string>(CORE_RESERVED_USERNAMES)
 
 async function requireAdmin() {
     const supabase = await createClient()

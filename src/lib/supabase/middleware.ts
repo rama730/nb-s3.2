@@ -38,6 +38,21 @@ function redirectWithRequestId(url: URL, requestId: string, routeClass: string):
     return withRequestId(NextResponse.redirect(url), requestId, routeClass)
 }
 
+function getCanonicalPublicUsernamePath(pathname: string): string | null {
+    if (!pathname.startsWith('/u/')) return null
+
+    const segments = pathname.split('/')
+    if (segments.length !== 3) return null
+
+    const username = segments[2] ?? ''
+    if (!username) return null
+
+    const normalizedUsername = username.toLowerCase()
+    if (normalizedUsername === username) return null
+
+    return `/u/${normalizedUsername}`
+}
+
 function hasAnyAuthCookie(request: NextRequest): boolean {
     const cookies = request.cookies.getAll()
     for (const cookie of cookies) {
@@ -82,6 +97,13 @@ export async function updateSession(request: NextRequest) {
 
     if (pathname.startsWith('/_next')) {
         return withRequestId(supabaseResponse, requestId, routeClass)
+    }
+
+    const canonicalPublicUsernamePath = getCanonicalPublicUsernamePath(pathname)
+    if (canonicalPublicUsernamePath) {
+        const url = request.nextUrl.clone()
+        url.pathname = canonicalPublicUsernamePath
+        return redirectWithRequestId(url, requestId, routeClass)
     }
 
     const loadShedding = await consumeRouteClassLoadShedding(routeClass)

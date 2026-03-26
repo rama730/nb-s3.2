@@ -49,6 +49,31 @@ const LOCAL_PRESENCE_FALLBACK_URL = "ws://127.0.0.1:4010/ws";
 const presenceEntries = new Map<string, PresenceRoomEntry>();
 const utf8Decoder = new TextDecoder();
 
+export function enqueuePendingPresenceEvent(
+  queue: PresenceClientEvent[],
+  event: PresenceClientEvent,
+  limit = 4,
+) {
+  if (event.type === "heartbeat") {
+    return queue;
+  }
+
+  if (event.type === "typing" || event.type === "cursor") {
+    const nextQueue = queue.filter((queuedEvent) => queuedEvent.type !== event.type);
+    nextQueue.push(event);
+    if (nextQueue.length > limit) {
+      nextQueue.splice(0, nextQueue.length - limit);
+    }
+    return nextQueue;
+  }
+
+  const nextQueue = [...queue, event];
+  if (nextQueue.length > limit) {
+    nextQueue.splice(0, nextQueue.length - limit);
+  }
+  return nextQueue;
+}
+
 function getRoomKey(roomType: PresenceRoomType, roomId: string) {
   return `${roomType}:${roomId}`;
 }
@@ -179,14 +204,7 @@ function sendPresenceEvent(entry: PresenceRoomEntry, event: PresenceClientEvent)
     return;
   }
 
-  if (event.type === "heartbeat") {
-    return;
-  }
-
-  entry.pendingEvents.push(event);
-  if (entry.pendingEvents.length > 4) {
-    entry.pendingEvents.splice(0, entry.pendingEvents.length - 4);
-  }
+  entry.pendingEvents = enqueuePendingPresenceEvent(entry.pendingEvents, event);
 }
 
 function flushPendingEvents(entry: PresenceRoomEntry) {

@@ -18,10 +18,10 @@ test('sanitizeUsernameInput strips invalid chars and enforces max length', () =>
     assert.equal(sanitized.length <= 20, true)
 })
 
-test('validateUsername rejects reserved usernames', () => {
+test('validateUsername only enforces local format rules', () => {
     const result = validateUsername('onboarding')
-    assert.equal(result.valid, false)
-    assert.equal(result.message, 'This username is reserved')
+    assert.equal(result.valid, true)
+    assert.equal(result.message, 'Looks good!')
 })
 
 test('validateUsername accepts valid usernames', () => {

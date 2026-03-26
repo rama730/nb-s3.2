@@ -1,7 +1,8 @@
-import { notFound } from 'next/navigation';
-import { getProfileDetails, getProfileVisibilityMeta, getPublicProfileMeta } from '@/lib/data/profile';
+import { notFound, permanentRedirect } from 'next/navigation';
+import { getProfileDetails, getPublicProfileMeta } from '@/lib/data/profile';
 import { ProfileV2Client } from '@/components/profile/v2/ProfileV2Client';
 import { Metadata } from 'next';
+import { resolvePublicUsernameRoute } from '@/lib/usernames/service';
 
 export const revalidate = 60; // ISR: Revalidate every minute
 export const dynamicParams = true; // Allow new profiles to be generated on demand
@@ -14,7 +15,14 @@ export async function generateStaticParams() {
 
 export async function generateMetadata({ params }: { params: Promise<{ username: string }> }): Promise<Metadata> {
     const { username } = await params;
-    const data = await getPublicProfileMeta(username);
+    const route = await resolvePublicUsernameRoute({ username });
+    if (route.status === 'not_found') {
+        return {
+            title: 'Profile Not Found',
+        };
+    }
+
+    const data = await getPublicProfileMeta(route.currentUsername);
 
     if (!data) {
         return {
@@ -40,19 +48,20 @@ export default async function PublicProfilePage({
 }) {
     const { username } = await params;
     const resolvedSearchParams = (await searchParams) ?? {};
-    // Decode username just in case
-    const decodedUsername = decodeURIComponent(username);
     const viewerPreviewMode =
         typeof resolvedSearchParams.viewer === 'string' && resolvedSearchParams.viewer === 'visitor';
 
-    const visibility = await getProfileVisibilityMeta(decodedUsername);
-    if (!visibility) {
+    const route = await resolvePublicUsernameRoute({ username: decodeURIComponent(username) });
+    if (route.status === 'not_found') {
         notFound();
+    }
+    if (route.status === 'redirect') {
+        permanentRedirect(`/u/${route.currentUsername}`);
     }
 
     // Always render the ISR page with a visitor-safe snapshot.
     // Viewer-specific relationship state is resolved client-side after hydration.
-    const data = await getProfileDetails(decodedUsername, {
+    const data = await getProfileDetails(route.currentUsername, {
         skipHeavyData: true,
         viewerUser: null,
     });

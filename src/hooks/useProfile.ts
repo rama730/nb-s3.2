@@ -6,6 +6,7 @@ import type { Profile } from '@/lib/db/schema';
 import { normalizeProfile } from '@/lib/utils/normalize-profile';
 import { queryKeys } from '@/lib/query-keys';
 import { subscribeActiveResource } from '@/lib/realtime/subscriptions';
+import { normalizeUsername } from '@/lib/validations/username';
 
 export const useProfile = (usernameOrId?: string, initialData?: Profile | null) => {
     const queryClient = useQueryClient();
@@ -30,7 +31,7 @@ export const useProfile = (usernameOrId?: string, initialData?: Profile | null) 
             if (targetKey.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
                 query = query.eq('id', targetKey);
             } else {
-                query = query.eq('username', targetKey);
+                query = query.eq('username', normalizeUsername(targetKey));
             }
 
             const { data, error } = await query.single();

@@ -33,6 +33,8 @@ export function useTypingChannel(conversationId: string | null, options: { liste
     const { listen } = options;
     const [typingUsers, setTypingUsers] = useState<TypingUser[]>([]);
     const [isVisible, setIsVisible] = useState(() => typeof document === 'undefined' ? true : !document.hidden);
+    const requestedTypingStateRef = useRef<boolean | null>(null);
+    const connectionStatusRef = useRef<'connecting' | 'connected' | 'disconnected' | 'error'>('connecting');
     const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
     const subscriptionRef = useRef<ReturnType<typeof subscribePresenceRoom> | null>(null);
     const { user, profile } = useAuth();
@@ -81,6 +83,8 @@ export function useTypingChannel(conversationId: string | null, options: { liste
     useEffect(() => {
         if (!conversationId || conversationId === 'new' || !isVisible) {
             setTypingUsers([]);
+            requestedTypingStateRef.current = null;
+            connectionStatusRef.current = 'disconnected';
             timersRef.current.forEach(clearTimeout);
             timersRef.current.clear();
             return;
@@ -90,6 +94,20 @@ export function useTypingChannel(conversationId: string | null, options: { liste
             roomType: 'conversation',
             roomId: conversationId,
             role: 'viewer',
+            onStatus: (status) => {
+                connectionStatusRef.current = status;
+                if (
+                    status === 'connected'
+                    && requestedTypingStateRef.current !== null
+                    && currentUserProfile
+                ) {
+                    subscription.send({
+                        type: 'typing',
+                        isTyping: requestedTypingStateRef.current,
+                        profile: currentUserProfile,
+                    });
+                }
+            },
             onEvent: (event) => {
                 if (!listen) return;
 
@@ -133,13 +151,32 @@ export function useTypingChannel(conversationId: string | null, options: { liste
         return () => {
             subscription.unsubscribe();
             subscriptionRef.current = null;
+            connectionStatusRef.current = 'disconnected';
             activeTimers.forEach(clearTimeout);
             activeTimers.clear();
         };
-    }, [clearUserTimer, conversationId, currentUserId, isVisible, listen, scheduleRemoval]);
+    }, [clearUserTimer, conversationId, currentUserId, currentUserProfile, isVisible, listen, scheduleRemoval]);
+
+    useEffect(() => {
+        if (
+            !subscriptionRef.current
+            || !currentUserProfile
+            || connectionStatusRef.current !== 'connected'
+            || requestedTypingStateRef.current === null
+        ) {
+            return;
+        }
+
+        subscriptionRef.current.send({
+            type: 'typing',
+            isTyping: requestedTypingStateRef.current,
+            profile: currentUserProfile,
+        });
+    }, [currentUserProfile]);
 
     const sendTyping = useCallback(async (isTyping: boolean) => {
         if (!conversationId || conversationId === 'new' || !isVisible) return;
+        requestedTypingStateRef.current = isTyping;
         if (!currentUserProfile) return;
 
         subscriptionRef.current?.send({

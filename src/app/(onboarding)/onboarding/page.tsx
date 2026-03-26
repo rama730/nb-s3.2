@@ -12,6 +12,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import UsernameInput from '@/components/onboarding/UsernameInput'
+import type { UsernameAvailabilityStatus } from '@/hooks/useUsernameAvailability'
 import {
     clearOnboardingDraft,
     completeOnboarding,
@@ -351,6 +352,7 @@ export default function OnboardingPage() {
     const queryClient = useQueryClient()
     const { refreshProfile } = useAuth()
     const [step, setStep] = useState(1)
+    const [usernameStatus, setUsernameStatus] = useState<UsernameAvailabilityStatus>('idle')
     const [step2Section, setStep2Section] = useState<OnboardingStep2SectionId>(ONBOARDING_STEP2_SECTIONS[0].id)
     const [isLoading, setIsLoading] = useState(false)
     const [isInitializing, setIsInitializing] = useState(true)
@@ -974,7 +976,10 @@ export default function OnboardingPage() {
     const canProceed = () => {
         const required = ONBOARDING_REQUIRED_FIELDS[step as 1 | 2 | 3 | 4] || []
         for (const field of required) {
-            if (field === 'username' && !validateUsername(data.username).valid) return false
+            if (field === 'username') {
+                if (!validateUsername(data.username).valid) return false
+                if (usernameStatus !== 'valid') return false
+            }
             if (field === 'fullName' && data.fullName.trim().length < 2) return false
             if (field === 'skills' && data.skills.length < 1) return false
         }
@@ -1097,6 +1102,7 @@ export default function OnboardingPage() {
                                     value={data.username}
                                     onChange={(username) => updateData({ username })}
                                     fullName={data.fullName}
+                                    onStatusChange={setUsernameStatus}
                                 />
                             </div>
                         </CardContent>

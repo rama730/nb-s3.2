@@ -76,8 +76,7 @@ export const profiles = pgTable('profiles', {
     }>>().default([]).notNull(),
     recoveryCodesGeneratedAt: timestamp('recovery_codes_generated_at', { withTimezone: true }),
 }, (t) => ({
-    // Optimize lookups by username (common in URLs) and email (auth)
-    usernameIdx: index('profiles_username_idx').on(t.username),
+    // Optimize lookups by email (auth)
     emailIdx: index('profiles_email_idx').on(t.email),
     // Optimization: GIN Index for fast skill matching (1M Users Scalability)
     skillsIdx: index('profiles_skills_idx').using('gin', t.skills),
@@ -102,6 +101,17 @@ export const reservedUsernames = pgTable('reserved_usernames', {
     reason: text('reason'),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 })
+
+export const usernameAliases = pgTable('username_aliases', {
+    username: text('username').primaryKey(),
+    userId: uuid('user_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
+    isPrimary: boolean('is_primary').default(false).notNull(),
+    claimedAt: timestamp('claimed_at', { withTimezone: true }).defaultNow().notNull(),
+    replacedAt: timestamp('replaced_at', { withTimezone: true }),
+}, (t) => ({
+    userPrimaryIdx: index('username_aliases_user_primary_idx').on(t.userId, t.isPrimary),
+    userClaimedAtIdx: index('username_aliases_user_claimed_at_idx').on(t.userId, t.claimedAt),
+}))
 
 export const profileAuditEvents = pgTable('profile_audit_events', {
     id: uuid('id').primaryKey().defaultRandom(),
@@ -1144,6 +1154,8 @@ export type Profile = typeof profiles.$inferSelect
 export type NewProfile = typeof profiles.$inferInsert
 export type ReservedUsername = typeof reservedUsernames.$inferSelect
 export type NewReservedUsername = typeof reservedUsernames.$inferInsert
+export type UsernameAlias = typeof usernameAliases.$inferSelect
+export type NewUsernameAlias = typeof usernameAliases.$inferInsert
 export type ProfileAuditEvent = typeof profileAuditEvents.$inferSelect
 export type NewProfileAuditEvent = typeof profileAuditEvents.$inferInsert
 export type OnboardingDraft = typeof onboardingDrafts.$inferSelect

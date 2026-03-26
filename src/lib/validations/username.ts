@@ -1,6 +1,6 @@
 const USERNAME_PATTERN = /^[a-z0-9_]+$/
 
-export const RESERVED_USERNAMES = [
+export const CORE_RESERVED_USERNAMES = [
     'admin',
     'edge',
     'api',
@@ -15,6 +15,8 @@ export const RESERVED_USERNAMES = [
     'auth',
     'onboarding',
 ] as const
+
+export const RESERVED_USERNAMES = CORE_RESERVED_USERNAMES
 
 export type UsernameValidationResult = {
     valid: boolean
@@ -31,7 +33,7 @@ export function sanitizeUsernameInput(value: string): string {
 
 export function isReservedUsername(username: string): boolean {
     const normalized = username.trim().normalize('NFC').toLowerCase()
-    return RESERVED_USERNAMES.includes(normalized as (typeof RESERVED_USERNAMES)[number])
+    return CORE_RESERVED_USERNAMES.includes(normalized as (typeof CORE_RESERVED_USERNAMES)[number])
 }
 
 export function validateUsername(username: string): UsernameValidationResult {
@@ -50,10 +52,6 @@ export function validateUsername(username: string): UsernameValidationResult {
             valid: false,
             message: 'Only lowercase letters, numbers, and underscores allowed',
         }
-    }
-
-    if (isReservedUsername(normalized)) {
-        return { valid: false, message: 'This username is reserved' }
     }
 
     return { valid: true, message: 'Looks good!' }

@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { normalizeUsername, validateUsername } from '@/lib/validations/username'
 
 export const PROFILE_LIMITS = {
     usernameMin: 3,
@@ -22,14 +23,16 @@ const optionalTrimmedString = (maxLength: number) =>
 export const profileUpdateSchema = z.object({
     username: z
         .string()
-        .transform((value) => value.trim().toLowerCase())
-        .pipe(
-            z
-                .string()
-                .min(PROFILE_LIMITS.usernameMin)
-                .max(PROFILE_LIMITS.usernameMax)
-                .regex(/^[a-z0-9_]+$/, 'Only lowercase letters, numbers, and underscores allowed')
-        )
+        .transform((value) => normalizeUsername(value))
+        .superRefine((value, ctx) => {
+            const result = validateUsername(value)
+            if (!result.valid) {
+                ctx.addIssue({
+                    code: 'custom',
+                    message: result.message,
+                })
+            }
+        })
         .optional(),
     fullName: optionalTrimmedString(PROFILE_LIMITS.fullNameMax),
     headline: optionalTrimmedString(PROFILE_LIMITS.headlineMax),

@@ -1,6 +1,7 @@
 import { consumeRateLimit } from '@/lib/security/rate-limit'
 import { onboardingError, type OnboardingError } from '@/lib/onboarding/errors'
-import { normalizeUsername, validateUsername } from '@/lib/validations/username'
+import { logger } from '@/lib/logger'
+import { getUsernameAvailability } from '@/lib/usernames/service'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
 export type UsernameAvailabilityResult = {
@@ -42,20 +43,13 @@ export function buildOnboardingRateLimitKeys(params: {
 }
 
 export async function checkUsernameAvailabilityWithClient(params: {
-    supabase: Pick<SupabaseClient, 'from'>
+    supabase?: Pick<SupabaseClient, 'from'>
     username: string
     viewerKey: string
     viewerId?: string | null
     ipAddress?: string | null
     userAgent?: string | null
 }): Promise<UsernameAvailabilityResult> {
-    const normalizedUsername = normalizeUsername(params.username)
-    const usernameValidation = validateUsername(normalizedUsername)
-    if (!usernameValidation.valid) {
-        const error = onboardingError('USERNAME_INVALID', usernameValidation.message)
-        return { available: false, message: error.message, code: error.code, error }
-    }
-
     const rateConfig = getUsernameCheckRateLimitConfig()
     const keys = buildOnboardingRateLimitKeys({
         viewerKey: params.viewerKey,
@@ -87,6 +81,12 @@ export async function checkUsernameAvailabilityWithClient(params: {
             'Too many checks. Please wait and try again.',
             true
         )
+        logger.metric('username.availability.rate_limited', {
+            viewerKey: params.viewerKey,
+            userAllowed: userRate.allowed,
+            ipAllowed: ipRate.allowed,
+            fingerprintAllowed: fingerprintRate.allowed,
+        })
         return {
             available: false,
             message: error.message,
@@ -96,22 +96,25 @@ export async function checkUsernameAvailabilityWithClient(params: {
         }
     }
 
-    const { data, error: queryError } = await params.supabase
-        .from('profiles')
-        .select('id')
-        .eq('username', normalizedUsername)
-        .maybeSingle()
-
-    if (queryError) {
+    try {
+        const result = await getUsernameAvailability({
+            username: params.username,
+            viewerId: params.viewerId,
+        })
+        return {
+            available: result.available,
+            message: result.message,
+            code: result.code,
+            error: result.error,
+        }
+    } catch (queryError) {
         console.error('Error checking username availability:', queryError)
         const error = onboardingError('DB_ERROR', 'Error checking availability', true)
+        logger.metric('username.availability.result', {
+            normalizedUsername: params.username,
+            available: false,
+            reason: error.code,
+        })
         return { available: false, message: error.message, code: error.code, error }
     }
-
-    if (data && data.id !== params.viewerId) {
-        const error = onboardingError('USERNAME_TAKEN', 'Username is already taken')
-        return { available: false, message: error.message, code: error.code, error }
-    }
-
-    return { available: true, message: 'Username is available!' }
 }

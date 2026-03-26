@@ -3,7 +3,7 @@
 import { randomUUID } from 'crypto'
 import { createAdminClient, createClient } from '@/lib/supabase/server'
 import { db } from '@/lib/db'
-import { profileAuditEvents, profiles, projects } from '@/lib/db/schema'
+import { profileAuditEvents, profiles, projects, usernameAliases } from '@/lib/db/schema'
 import { eq, and, ne, desc, sql } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { consumeRateLimit } from '@/lib/security/rate-limit'
@@ -17,6 +17,8 @@ import { clearProfileCache } from '@/lib/services/profile-service'
 import { runInFlightDeduped } from '@/lib/async/inflight-dedupe'
 import { normalizeAndValidateFileSize, normalizeAndValidateMimeType } from '@/lib/upload/security'
 import { resolvePrivacyRelationship } from '@/lib/privacy/resolver'
+import { logger } from '@/lib/logger'
+import { UsernamePersistenceError, getUsernameAvailability, mapUsernamePersistenceError } from '@/lib/usernames/service'
 
 export type UpdateProfileInput = ProfileUpdateInput
 export type ProfileUpdateErrorCode =
@@ -28,6 +30,8 @@ export type ProfileUpdateErrorCode =
     | 'USERNAME_HISTORY_UNAVAILABLE'
     | 'USERNAME_COOLDOWN'
     | 'USERNAME_TAKEN'
+    | 'USERNAME_INVALID'
+    | 'USERNAME_RESERVED'
     | 'PROFILE_CONFLICT'
     | 'PROFILE_UPDATE_FAILED'
 
@@ -262,15 +266,18 @@ export async function updateProfileAction(data: UpdateProfileInput): Promise<Upd
                 }
             }
 
-            const existing = await db.query.profiles.findFirst({
-                columns: { id: true },
-                where: and(
-                    sql`lower(${profiles.username}) = ${patch.username.toLowerCase()}`,
-                    ne(profiles.id, user.id)
-                ),
+            const availability = await getUsernameAvailability({
+                username: patch.username,
+                viewerId: user.id,
             })
-            if (existing) {
-                return { success: false, error: 'Username is already taken', errorCode: 'USERNAME_TAKEN' }
+            if (!availability.available) {
+                const errorCode =
+                    availability.code === 'USERNAME_RESERVED'
+                        ? 'USERNAME_RESERVED'
+                        : availability.code === 'USERNAME_INVALID'
+                            ? 'USERNAME_INVALID'
+                            : 'USERNAME_TAKEN'
+                return { success: false, error: availability.message, errorCode }
             }
         }
 
@@ -315,24 +322,6 @@ export async function updateProfileAction(data: UpdateProfileInput): Promise<Upd
                 )
                 : eq(profiles.id, user.id)
 
-        const updatedRows = await db
-            .update(profiles)
-            .set(updateData)
-            .where(whereClause)
-            .returning({ id: profiles.id, updatedAt: profiles.updatedAt, username: profiles.username })
-
-        if (updatedRows.length === 0) {
-            if (expectedUpdatedAt) {
-                return {
-                    success: false,
-                    error: 'Profile was updated elsewhere. Please refresh and retry.',
-                    errorCode: 'PROFILE_CONFLICT',
-                    code: 'PROFILE_CONFLICT',
-                }
-            }
-            return { success: false, error: 'Profile not found', errorCode: 'PROFILE_NOT_FOUND' }
-        }
-
         const sensitiveFields: Array<{
             key: keyof ProfileUpdateInput
             eventType: string
@@ -352,12 +341,89 @@ export async function updateProfileAction(data: UpdateProfileInput): Promise<Upd
                 metadata: {},
             }))
 
-        if (auditRows.length > 0) {
-            try {
-                await db.insert(profileAuditEvents).values(auditRows)
-            } catch (auditInsertError) {
-                console.warn('Profile audit logging unavailable, skipping insert', auditInsertError)
+        let updatedRows: Array<{ id: string; updatedAt: Date; username: string | null }> = []
+        try {
+            updatedRows = await db.transaction(async (tx) => {
+                const rows = await tx
+                    .update(profiles)
+                    .set(updateData)
+                    .where(whereClause)
+                    .returning({ id: profiles.id, updatedAt: profiles.updatedAt, username: profiles.username })
+
+                if (rows.length === 0) {
+                    return rows
+                }
+
+                if (patch.username && patch.username !== current.username) {
+                    const nextUsername = patch.username
+                    const previousUsername = current.username
+                    if (previousUsername && previousUsername !== nextUsername) {
+                        await tx
+                            .update(usernameAliases)
+                            .set({
+                                isPrimary: false,
+                                replacedAt: new Date(),
+                            })
+                            .where(eq(usernameAliases.username, previousUsername))
+                    }
+
+                    const existingAlias = await tx.query.usernameAliases.findFirst({
+                        where: eq(usernameAliases.username, nextUsername),
+                        columns: { userId: true, isPrimary: true },
+                    })
+
+                    if (existingAlias) {
+                        if (existingAlias.userId !== user.id || !existingAlias.isPrimary) {
+                            throw new UsernamePersistenceError('USERNAME_TAKEN', 'Username is already taken')
+                        }
+                    } else {
+                        await tx.insert(usernameAliases).values({
+                            username: nextUsername,
+                            userId: user.id,
+                            isPrimary: true,
+                            claimedAt: new Date(),
+                            replacedAt: null,
+                        })
+                    }
+                }
+
+                if (auditRows.length > 0) {
+                    try {
+                        await tx.insert(profileAuditEvents).values(auditRows)
+                    } catch (auditInsertError) {
+                        console.warn('Profile audit logging unavailable, skipping insert', auditInsertError)
+                    }
+                }
+
+                return rows
+            })
+        } catch (error) {
+            const usernameError = mapUsernamePersistenceError(error)
+            if (usernameError.code !== 'DB_ERROR') {
+                logger.metric('username.rename.result', {
+                    userId: user.id,
+                    success: false,
+                    reason: usernameError.code,
+                })
+                return {
+                    success: false,
+                    error: usernameError.message,
+                    errorCode: usernameError.code as ProfileUpdateErrorCode,
+                }
             }
+            throw error
+        }
+
+        if (updatedRows.length === 0) {
+            if (expectedUpdatedAt) {
+                return {
+                    success: false,
+                    error: 'Profile was updated elsewhere. Please refresh and retry.',
+                    errorCode: 'PROFILE_CONFLICT',
+                    code: 'PROFILE_CONFLICT',
+                }
+            }
+            return { success: false, error: 'Profile not found', errorCode: 'PROFILE_NOT_FOUND' }
         }
 
         if (patch.username || patch.fullName || patch.avatarUrl) {
@@ -395,8 +461,30 @@ export async function updateProfileAction(data: UpdateProfileInput): Promise<Upd
         if (current.username) revalidatePath(`/u/${current.username}`)
         if (patch.username) revalidatePath(`/u/${patch.username}`)
 
+        if (patch.username && patch.username !== current.username) {
+            logger.metric('username.rename.result', {
+                userId: user.id,
+                success: true,
+                previousUsername: current.username ?? null,
+                username: patch.username,
+            })
+        }
+
         return { success: true, updatedAt: updatedRows[0].updatedAt.toISOString() }
     } catch (error) {
+        const usernameError = mapUsernamePersistenceError(error)
+        if (usernameError.code !== 'DB_ERROR') {
+            logger.metric('username.rename.result', {
+                userId: 'unknown',
+                success: false,
+                reason: usernameError.code,
+            })
+            return {
+                success: false,
+                error: usernameError.message,
+                errorCode: usernameError.code as ProfileUpdateErrorCode,
+            }
+        }
         console.error('Error updating profile:', error)
         return { success: false, error: 'Failed to update profile', errorCode: 'PROFILE_UPDATE_FAILED' }
     }

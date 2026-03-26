@@ -452,7 +452,7 @@ interface ChatState {
             replyToMessageId?: string | null;
             senderSnapshot?: SenderSnapshot;
         }
-    ) => Promise<{ ok: boolean; queued?: boolean }>;
+    ) => Promise<{ ok: boolean; queued?: boolean; error?: string }>;
     flushOutbox: () => Promise<void>;
     loadMoreMessages: (conversationId: string) => Promise<void>;
     focusMessage: (conversationId: string, messageId: string) => Promise<{ found: boolean; source?: 'cache' | 'backfill' | 'server' }>;

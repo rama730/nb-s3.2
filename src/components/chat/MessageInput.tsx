@@ -38,6 +38,7 @@ interface PendingAttachment {
 const MAX_ATTACHMENTS = 12;
 const UPLOAD_CONCURRENCY = 3;
 const MAX_UPLOAD_RETRIES = 3;
+const TYPING_IDLE_MS = 1800;
 
 export function MessageInput({ conversationId, targetUserId }: MessageInputProps) {
     const { user } = useAuth();
@@ -55,6 +56,8 @@ export function MessageInput({ conversationId, targetUserId }: MessageInputProps
     const fileInputRef = useRef<HTMLInputElement>(null);
     const attachmentsRef = useRef<PendingAttachment[]>([]);
     const activeUploadIdsRef = useRef<Set<string>>(new Set());
+    const typingIdleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const typingActiveRef = useRef(false);
     const sendingRef = useRef(false);
     const lastSendRef = useRef<{ signature: string; at: number } | null>(null);
     const router = useRouter();
@@ -76,11 +79,55 @@ export function MessageInput({ conversationId, targetUserId }: MessageInputProps
     // Typing indicator - Scalable Broadcast
     const { sendTyping } = useTypingChannel(conversationId !== 'new' ? conversationId : null, { listen: false });
 
+    const clearTypingIdleTimer = useCallback(() => {
+        if (typingIdleTimerRef.current) {
+            clearTimeout(typingIdleTimerRef.current);
+            typingIdleTimerRef.current = null;
+        }
+    }, []);
+
+    const updateTypingState = useCallback((isTyping: boolean) => {
+        if (conversationId === 'new') return;
+        if (typingActiveRef.current === isTyping) return;
+        typingActiveRef.current = isTyping;
+        void sendTyping(isTyping);
+    }, [conversationId, sendTyping]);
+
+    const scheduleTypingIdleStop = useCallback(() => {
+        clearTypingIdleTimer();
+        typingIdleTimerRef.current = setTimeout(() => {
+            typingIdleTimerRef.current = null;
+            updateTypingState(false);
+        }, TYPING_IDLE_MS);
+    }, [clearTypingIdleTimer, updateTypingState]);
+
+    useEffect(() => {
+        return () => {
+            clearTypingIdleTimer();
+            updateTypingState(false);
+        };
+    }, [clearTypingIdleTimer, updateTypingState]);
+
+    useEffect(() => {
+        if (conversationId === 'new') return;
+        if (!draft.length) {
+            clearTypingIdleTimer();
+            updateTypingState(false);
+        }
+    }, [clearTypingIdleTimer, conversationId, draft.length, updateTypingState]);
+
     // Handle input change
     const handleChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
-        setDraft(conversationId, e.target.value);
+        const nextValue = e.target.value;
+        setDraft(conversationId, nextValue);
         if (conversationId !== 'new') {
-            sendTyping(true);
+            if (nextValue.length > 0) {
+                updateTypingState(true);
+                scheduleTypingIdleStop();
+            } else {
+                clearTypingIdleTimer();
+                updateTypingState(false);
+            }
         }
 
         // Auto-resize textarea
@@ -88,7 +135,7 @@ export function MessageInput({ conversationId, targetUserId }: MessageInputProps
             inputRef.current.style.height = 'auto';
             inputRef.current.style.height = `${Math.min(inputRef.current.scrollHeight, 120)}px`;
         }
-    }, [conversationId, setDraft, sendTyping]);
+    }, [clearTypingIdleTimer, conversationId, scheduleTypingIdleStop, setDraft, updateTypingState]);
 
     const startQueuedUploads = useCallback(() => {
         if (uploadsPaused) return;
@@ -262,7 +309,8 @@ export function MessageInput({ conversationId, targetUserId }: MessageInputProps
         lastSendRef.current = { signature, at: now };
         setIsSending(true);
         if (conversationId !== 'new') {
-            sendTyping(false);
+            clearTypingIdleTimer();
+            updateTypingState(false);
         }
 
         try {
@@ -349,7 +397,7 @@ export function MessageInput({ conversationId, targetUserId }: MessageInputProps
 
         // Focus back on input
         inputRef.current?.focus();
-    }, [conversationId, targetUserId, draft, attachments, isSending, sendTyping, setDraft, sendMessage, refreshConversations, openConversation, router, replyTarget, clearReplyTarget, user]);
+    }, [attachments, clearReplyTarget, clearTypingIdleTimer, conversationId, draft, isSending, openConversation, refreshConversations, replyTarget, router, sendMessage, setDraft, targetUserId, updateTypingState, user]);
 
     // Handle key press
     const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -711,6 +759,10 @@ export function MessageInput({ conversationId, targetUserId }: MessageInputProps
                         ref={inputRef}
                         value={draft}
                         onChange={handleChange}
+                        onBlur={() => {
+                            clearTypingIdleTimer();
+                            updateTypingState(false);
+                        }}
                         onKeyDown={handleKeyDown}
                         placeholder="Type a message..."
                         rows={1}

@@ -1,7 +1,7 @@
 'use server'
 
 import { db } from '@/lib/db'
-import { onboardingDrafts, onboardingEvents, onboardingSubmissions, profiles, reservedUsernames } from '@/lib/db/schema'
+import { onboardingDrafts, onboardingEvents, onboardingSubmissions, profiles, usernameAliases } from '@/lib/db/schema'
 import {
     ONBOARDING_AVAILABILITY_VALUES,
     ONBOARDING_EXPERIENCE_LEVEL_VALUES,
@@ -21,7 +21,7 @@ import {
 } from '@/lib/onboarding/contracts'
 import { onboardingEventInputSchema, type OnboardingEventInput } from '@/lib/onboarding/events'
 import { onboardingError, type OnboardingError } from '@/lib/onboarding/errors'
-import { checkUsernameAvailabilityWithClient } from '@/lib/onboarding/username-check'
+import { UsernamePersistenceError, findUnavailableUsernames, generateDeterministicUsernameCandidates, getUsernameAvailability, mapUsernamePersistenceError } from '@/lib/usernames/service'
 import { consumeRateLimit } from '@/lib/security/rate-limit'
 import { createClient } from '@/lib/supabase/server'
 import { isEmailVerified } from '@/lib/auth/email-verification'
@@ -282,13 +282,11 @@ function buildOnboardingCompleteRateLimitKeys(params: {
 }
 
 function mapOnboardingPersistenceError(error: unknown): OnboardingError {
+    const usernameError = mapUsernamePersistenceError(error)
+    if (usernameError.code !== 'DB_ERROR') {
+        return usernameError
+    }
     const code = (error as { code?: string })?.code
-    if (code === '23505') {
-        return onboardingError('USERNAME_TAKEN', 'Username is already taken')
-    }
-    if (code === '23514') {
-        return onboardingError('USERNAME_INVALID', 'Username is reserved or invalid')
-    }
     if (code === '22P02') {
         return onboardingError('INVALID_INPUT', 'Invalid onboarding input')
     }
@@ -346,33 +344,14 @@ async function ensureUsernameIsAvailable(params: {
     userId: string
 }) {
     try {
-        const normalized = normalizeUsername(params.username)
-        const [reserved, conflict] = await Promise.all([
-            db.query.reservedUsernames.findFirst({
-                where: eq(reservedUsernames.username, normalized),
-                columns: { username: true },
-            }),
-            db.query.profiles.findFirst({
-                where: and(
-                    sql`lower(${profiles.username}) = ${normalized}`,
-                    sql`${profiles.id} <> ${params.userId}`,
-                    isNotNull(profiles.username)
-                ),
-                columns: { id: true },
-            }),
-        ])
-
-        if (reserved) {
+        const availability = await getUsernameAvailability({
+            username: params.username,
+            viewerId: params.userId,
+        })
+        if (!availability.available) {
             return {
                 ok: false as const,
-                error: onboardingError('USERNAME_RESERVED', 'This username is reserved'),
-            }
-        }
-
-        if (conflict) {
-            return {
-                ok: false as const,
-                error: onboardingError('USERNAME_TAKEN', 'Username is already taken'),
+                error: availability.error || onboardingError(availability.code || 'USERNAME_TAKEN', availability.message),
             }
         }
 
@@ -415,37 +394,7 @@ function buildProfileOnboardingValues(params: {
 }
 
 function generateCandidateUsernames(fullName: string): string[] {
-    const normalizedName = fullName.trim().toLowerCase()
-    const parts = normalizedName
-        .split(/\s+/)
-        .map((value) => value.replace(/[^a-z0-9]/g, ''))
-        .filter(Boolean)
-
-    if (parts.length === 0) return []
-
-    const first = parts[0] || ''
-    const last = parts[parts.length - 1] || ''
-    const currentYear = String(new Date().getFullYear())
-    const currentYearShort = currentYear.slice(-2)
-
-    const rawCandidates = [
-        first,
-        `${first}${last}`,
-        `${first}_${last}`,
-        `${first}${currentYearShort}`,
-        `${first}_${currentYearShort}`,
-        `${first}${currentYear}`,
-        `${first}${Math.floor(100 + Math.random() * 900)}`,
-    ]
-
-    const unique = new Set<string>()
-    for (const candidate of rawCandidates) {
-        const sanitized = sanitizeUsernameInput(candidate)
-        if (!sanitized) continue
-        if (!validateUsername(sanitized).valid) continue
-        unique.add(sanitized)
-    }
-    return Array.from(unique)
+    return generateDeterministicUsernameCandidates(fullName)
 }
 
 async function beginOnboardingSubmission(params: {
@@ -676,6 +625,14 @@ export async function completeOnboarding(
             avatarUrl,
         })
         await db.transaction(async (tx) => {
+            const existingProfile = await tx.query.profiles.findFirst({
+                where: eq(profiles.id, user.id),
+                columns: {
+                    username: true,
+                },
+            })
+            const previousUsername = existingProfile?.username ? normalizeUsername(existingProfile.username) : null
+
             await tx
                 .insert(profiles)
                 .values({
@@ -690,6 +647,37 @@ export async function completeOnboarding(
                         updatedAt: new Date(),
                     },
                 })
+
+            if (previousUsername && previousUsername !== payload.username) {
+                await tx
+                    .update(usernameAliases)
+                    .set({
+                        isPrimary: false,
+                        replacedAt: new Date(),
+                    })
+                    .where(eq(usernameAliases.username, previousUsername))
+            }
+
+            const existingAlias = await tx.query.usernameAliases.findFirst({
+                where: eq(usernameAliases.username, payload.username),
+                columns: {
+                    userId: true,
+                    isPrimary: true,
+                },
+            })
+            if (existingAlias) {
+                if (existingAlias.userId !== user.id || !existingAlias.isPrimary) {
+                    throw new UsernamePersistenceError('USERNAME_TAKEN', 'Username is already taken')
+                }
+            } else {
+                await tx.insert(usernameAliases).values({
+                    username: payload.username,
+                    userId: user.id,
+                    isPrimary: true,
+                    claimedAt: new Date(),
+                    replacedAt: null,
+                })
+            }
 
             await tx
                 .delete(onboardingDrafts)
@@ -797,62 +785,13 @@ export async function repairOnboardingClaims(): Promise<{ success: boolean; erro
     }
 }
 
-/**
- * Check if username is available.
- */
-export async function checkUsernameAvailability(username: string): Promise<{
-    available: boolean
-    message: string
-    code?: OnboardingError['code']
-}> {
-    try {
-        const { supabase, user, viewerKey, ipAddress, userAgent } = await getViewerIdentity()
-        const result = await checkUsernameAvailabilityWithClient({
-            supabase,
-            username,
-            viewerKey,
-            viewerId: user?.id || null,
-            ipAddress,
-            userAgent,
-        })
-        return { available: result.available, message: result.message, code: result.code }
-    } catch (error) {
-        console.error('Error checking username:', error)
-        return { available: false, message: 'Error checking availability', code: 'DB_ERROR' }
-    }
-}
-
 export async function getUsernameSuggestions(fullName: string): Promise<{ suggestions: string[] }> {
     const candidates = generateCandidateUsernames(fullName).slice(0, 12)
     if (candidates.length === 0) return { suggestions: [] }
 
     const normalizedCandidates = candidates.map((candidate) => normalizeUsername(candidate))
     try {
-        const [takenRows, reservedRows] = await Promise.all([
-            db
-                .select({
-                    username: sql<string>`lower(${profiles.username})`,
-                })
-                .from(profiles)
-                .where(
-                    and(
-                        isNotNull(profiles.username),
-                        inArray(sql`lower(${profiles.username})`, normalizedCandidates)
-                    )
-                ),
-            db
-                .select({ username: reservedUsernames.username })
-                .from(reservedUsernames)
-                .where(inArray(reservedUsernames.username, normalizedCandidates)),
-        ])
-
-        const taken = new Set<string>()
-        for (const row of takenRows) {
-            taken.add(normalizeUsername(row.username))
-        }
-        for (const row of reservedRows) {
-            taken.add(normalizeUsername(row.username))
-        }
+        const taken = await findUnavailableUsernames(normalizedCandidates)
 
         const suggestions = normalizedCandidates
             .filter((candidate) => !taken.has(candidate))

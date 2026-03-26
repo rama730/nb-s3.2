@@ -8,6 +8,7 @@ import { createClient } from '@/lib/supabase/server'
 import { getProfile, type StandardProfile } from '@/lib/services/profile-service'
 import { resolvePrivacyRelationship } from '@/lib/privacy/resolver'
 import { logger } from '@/lib/logger'
+import { normalizeUsername, validateUsername } from '@/lib/validations/username'
 export { normalizeProfile } from '@/lib/utils/normalize-profile'
 import { normalizeProfile } from '@/lib/utils/normalize-profile'
 
@@ -154,14 +155,19 @@ export async function getProfileDetails(username?: string, options: ProfileDetai
     // 2. Fetch Target Profile (Optimized Parallel approach)
     let profileData = null;
     if (username) {
+        const normalizedUsername = normalizeUsername(username)
         // We do a soft UUID format check. If it matches a UUID format, we can safely attempt ID lookup fallback
         const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(username);
-        
-        profileData = await db.query.profiles.findFirst({ 
-            where: isUuid 
-                ? or(eq(profiles.username, username), eq(profiles.id, username))
-                : eq(profiles.username, username)
-        });
+
+        if (!isUuid && !validateUsername(normalizedUsername).valid) {
+            profileData = null
+        } else {
+            profileData = await db.query.profiles.findFirst({
+                where: isUuid
+                    ? or(eq(profiles.username, normalizedUsername), eq(profiles.id, username))
+                    : eq(profiles.username, normalizedUsername)
+            });
+        }
     } else if (viewerUser) {
         profileData = await getProfile(viewerUser.id);
     }
@@ -324,13 +330,15 @@ export async function getProfileDetails(username?: string, options: ProfileDetai
 
 export const getProfileVisibilityMeta = cache(async (username: string) => {
     if (!username) return null;
+    const normalizedUsername = normalizeUsername(username)
+    if (!validateUsername(normalizedUsername).valid) return null
     const [profile] = await db
         .select({
             id: profiles.id,
             visibility: profiles.visibility,
         })
         .from(profiles)
-        .where(eq(profiles.username, username))
+        .where(eq(profiles.username, normalizedUsername))
         .limit(1);
 
     return profile || null;
@@ -338,6 +346,8 @@ export const getProfileVisibilityMeta = cache(async (username: string) => {
 
 export const getPublicProfileMeta = cache(async (username: string) => {
     if (!username) return null;
+    const normalizedUsername = normalizeUsername(username)
+    if (!validateUsername(normalizedUsername).valid) return null
     try {
         const [profile] = await db
             .select({
@@ -350,7 +360,7 @@ export const getPublicProfileMeta = cache(async (username: string) => {
             .from(profiles)
             .where(
                 and(
-                    eq(profiles.username, username),
+                    eq(profiles.username, normalizedUsername),
                     eq(profiles.visibility, 'public')
                 )
             )

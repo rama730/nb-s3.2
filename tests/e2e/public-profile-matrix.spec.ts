@@ -29,4 +29,25 @@ test.describe("Public profile matrix @critical", () => {
     monitor.detach();
     await context.close();
   });
+
+  test("public profile route canonicalizes mixed-case handles", async ({ browser }) => {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+
+    await login(page);
+    await page.goto("/profile");
+
+    const handleNode = page.locator("text=/@[-_a-zA-Z0-9]+/").first();
+    await expect(handleNode).toBeVisible({ timeout: 15000 });
+
+    const handleText = ((await handleNode.textContent()) || "").trim();
+    const username = handleText.replace(/^@/, "");
+    expect(username.length).toBeGreaterThan(0);
+
+    const mixedCaseUsername = username.replace(/[a-z]/, (value) => value.toUpperCase());
+    await page.goto(`/u/${encodeURIComponent(mixedCaseUsername)}`);
+    await expect(page).toHaveURL(new RegExp(`/u/${username}$`));
+
+    await context.close();
+  });
 });

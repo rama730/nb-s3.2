@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState } from "react";
 import Image from "next/image";
 import { Loader2, Camera, Plus, X, Trash2, Calendar, GripVertical, CheckCircle2, AlertTriangle } from "lucide-react";
 import { createProfileImageUploadUrlAction } from "@/app/actions/profile";
@@ -8,9 +8,10 @@ import { useToast } from "@/components/ui-custom/Toast";
 import Input from "@/components/ui-custom/Input";
 import { Label } from "@/components/ui-custom/Label";
 import Button from "@/components/ui-custom/Button";
-import { checkUsernameAvailability } from "@/app/actions/onboarding";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
+import { sanitizeUsernameInput } from "@/lib/validations/username";
+import { useUsernameAvailability } from "@/hooks/useUsernameAvailability";
 
 interface EditProfileTabsProps {
     profile: any;
@@ -24,11 +25,6 @@ export function EditProfileTabs({ profile, onChange }: EditProfileTabsProps) {
     // General
     const [avatarUploading, setAvatarUploading] = useState(false);
     const [bannerUploading, setBannerUploading] = useState(false);
-
-    // Username Check
-    const [usernameStatus, setUsernameStatus] = useState<'idle' | 'checking' | 'available' | 'taken' | 'error'>('idle');
-    const [usernameMessage, setUsernameMessage] = useState('');
-    const usernameDebounceRef = useRef<NodeJS.Timeout>(null);
 
     // Initial state matching profile
     const [formData, setFormData] = useState({
@@ -49,6 +45,12 @@ export function EditProfileTabs({ profile, onChange }: EditProfileTabsProps) {
         socialLinks: profile.socialLinks || profile.social_links || {},
         experience: profile.experience || [],
         education: profile.education || [],
+    });
+
+    const { status: usernameStatus, message: usernameMessage } = useUsernameAvailability({
+        value: formData.username,
+        currentUsername: profile.username || "",
+        debounceMs: 500,
     });
 
     // Use useEffect to bubble up changes to parent to avoid "setState during render" error
@@ -120,33 +122,8 @@ export function EditProfileTabs({ profile, onChange }: EditProfileTabsProps) {
 
     // -- USERNAME CHECK --
     const handleUsernameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const val = e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ''); // Enforce basics immediately
+        const val = sanitizeUsernameInput(e.target.value);
         updateForm('username', val);
-
-        if (val === profile.username) {
-            setUsernameStatus('idle');
-            setUsernameMessage('');
-            return;
-        }
-
-        setUsernameStatus('checking');
-        if (usernameDebounceRef.current) clearTimeout(usernameDebounceRef.current);
-
-        usernameDebounceRef.current = setTimeout(async () => {
-            if (val.length < 3) {
-                setUsernameStatus('error');
-                setUsernameMessage('Too short');
-                return;
-            }
-            const res = await checkUsernameAvailability(val);
-            if (res.available) {
-                setUsernameStatus('available');
-                setUsernameMessage('Available');
-            } else {
-                setUsernameStatus('taken');
-                setUsernameMessage(res.message);
-            }
-        }, 500);
     };
 
     // -- ARRAYS (Experience/Education) --
@@ -235,8 +212,8 @@ export function EditProfileTabs({ profile, onChange }: EditProfileTabsProps) {
                                         value={formData.username}
                                         onChange={handleUsernameChange}
                                         className={cn(
-                                            usernameStatus === 'taken' && "border-red-500 focus:ring-red-500",
-                                            usernameStatus === 'available' && "border-green-500 focus:ring-green-500",
+                                            usernameStatus === 'invalid' && "border-red-500 focus:ring-red-500",
+                                            usernameStatus === 'valid' && "border-green-500 focus:ring-green-500",
                                             formData.username === profile.username && "pr-10"
                                         )}
                                     />
@@ -254,9 +231,18 @@ export function EditProfileTabs({ profile, onChange }: EditProfileTabsProps) {
                                 {/* Availability / Error Message */}
                                 {usernameMessage && formData.username !== profile.username && (
                                     <p className={cn("text-xs mt-2 font-medium flex items-center gap-1.5",
-                                        usernameStatus === 'available' ? "text-emerald-600 dark:text-emerald-500" : "text-red-500"
+                                        usernameStatus === 'valid' && "text-emerald-600 dark:text-emerald-500",
+                                        usernameStatus === 'checking' && "text-zinc-500 dark:text-zinc-400",
+                                        usernameStatus === 'invalid' && "text-red-500",
+                                        usernameStatus === 'error' && "text-amber-600 dark:text-amber-400"
                                     )}>
-                                        {usernameStatus === 'available' ? <CheckCircle2 className="w-3.5 h-3.5" /> : <X className="w-3.5 h-3.5" />}
+                                        {usernameStatus === 'valid' ? (
+                                            <CheckCircle2 className="w-3.5 h-3.5" />
+                                        ) : usernameStatus === 'checking' ? (
+                                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                        ) : (
+                                            <X className="w-3.5 h-3.5" />
+                                        )}
                                         {usernameMessage}
                                     </p>
                                 )}
@@ -269,7 +255,7 @@ export function EditProfileTabs({ profile, onChange }: EditProfileTabsProps) {
                                         </div>
                                         <div className="space-y-1">
                                             <p className="font-semibold">Changing your identity</p>
-                                            <p className="leading-relaxed opacity-80 text-xs">This will update your profile URL and break existing mentions/links across the network. Changes to usernames are strictly regulated.</p>
+                                            <p className="leading-relaxed opacity-80 text-xs">This will update your public handle. Existing profile links will keep redirecting, but cached labels and mentions across the app may take time to refresh. Changes to usernames are strictly regulated.</p>
                                         </div>
                                     </div>
                                 )}
