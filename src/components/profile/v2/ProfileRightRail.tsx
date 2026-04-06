@@ -1,28 +1,37 @@
 'use client'
 
-import React from 'react'
+import React, { useId } from 'react'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
 import { Briefcase, Users, FolderKanban, Link2, Sparkles, MessageSquare, Pencil, Github, Linkedin, Globe } from 'lucide-react'
 import type { ProfileStats } from './types'
 import { normalizeProfileVM } from './utils/normalizeProfileVM'
+import { availabilityStatusLabel, countLabel } from '@/lib/profile/display'
+import { normalizeSocialLinks as normalizeSocialLinksShared } from '@/lib/profile/normalization'
 
 function RailCard({
     title,
     icon,
     children,
     className,
+    id,
 }: {
     title: string
     icon?: React.ReactNode
     children: React.ReactNode
     className?: string
+    id?: string
 }) {
+    const headingId = useId()
     return (
-        <section className={cn('rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-sm', className)}>
+        <section
+            aria-labelledby={headingId}
+            id={id}
+            className={cn('rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-sm', className)}
+        >
             <div className="px-5 py-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center gap-2">
                 {icon ? <span className="text-zinc-500 dark:text-zinc-400">{icon}</span> : null}
-                <h3 className="font-semibold text-sm text-zinc-900 dark:text-zinc-100">{title}</h3>
+                <h2 id={headingId} className="font-semibold text-sm text-zinc-900 dark:text-zinc-100">{title}</h2>
             </div>
             <div className="px-5 py-4">{children}</div>
         </section>
@@ -33,58 +42,42 @@ function Stat({
     label,
     value,
     href,
+    onClick,
 }: {
     label: string
     value: number
     href?: string
+    onClick?: () => void
 }) {
+    const ariaLabel = countLabel(value, label.replace(/s$/, ''), label)
     const inner = (
         <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-800 px-4 py-3">
             <div className="text-xl font-bold text-zinc-900 dark:text-zinc-100">{value}</div>
             <div className="text-xs text-zinc-500 dark:text-zinc-400">{label}</div>
         </div>
     )
-    return href ? <Link href={href} className="block hover:opacity-90">{inner}</Link> : inner
+    return href ? (
+        <Link href={href} aria-label={ariaLabel} className="block hover:opacity-90">
+            {inner}
+        </Link>
+    ) : onClick ? (
+        <button
+            type="button"
+            onClick={onClick}
+            aria-label={ariaLabel}
+            className="block w-full text-left hover:opacity-90 transition-opacity"
+        >
+            {inner}
+        </button>
+    ) : (
+        <div role="group" aria-label={ariaLabel}>
+            {inner}
+        </div>
+    )
 }
 
-function normalizeSocialLinks(profile: Record<string, unknown>, list: Array<{ label?: string; url?: string; platform?: string }> | null | undefined): Array<{ label: string; url: string }> {
-    const out: Array<{ label: string; url: string }> = []
-
-    const add = (label: string, url: string) => {
-        const u = String(url || '').trim()
-        if (!u) return
-        const l = String(label || 'Link').trim()
-        // Deduplicate
-        if (!out.some(x => x.url === u)) {
-            // Startup case for label
-            const formattedLabel = l.charAt(0).toUpperCase() + l.slice(1)
-            out.push({ label: formattedLabel, url: u })
-        }
-    }
-
-    // 1. Check profile.socialLinks (or social_links) if it's an object
-    const json = profile?.socialLinks || profile?.social_links
-    if (json && typeof json === 'object' && !Array.isArray(json)) {
-        for (const [k, v] of Object.entries(json)) {
-            add(k, v as string)
-        }
-    }
-
-    // 2. Check the 'list' argument.
-    if (Array.isArray(list)) {
-        // Legacy table concept
-        for (const row of list) {
-            add(row?.platform || row?.label || '', row?.url || '')
-        }
-    } else if (list && typeof list === 'object') {
-        // If list is passed as the object itself
-        for (const [k, v] of Object.entries(list)) {
-            add(k, v as string)
-        }
-    }
-
-    return out
-}
+// C6: normalizeSocialLinks is now imported from @/lib/profile/normalization
+const normalizeSocialLinks = normalizeSocialLinksShared;
 
 export const ProfileRightRail = React.memo(function ProfileRightRail({
     profile,
@@ -93,6 +86,8 @@ export const ProfileRightRail = React.memo(function ProfileRightRail({
     socialLinks,
     onInvite,
     onConnectionsClick,
+    onEditSection,
+    publicProfileHref,
 }: {
     profile: any
     stats: ProfileStats
@@ -100,10 +95,13 @@ export const ProfileRightRail = React.memo(function ProfileRightRail({
     socialLinks: any
     onInvite: () => void
     onConnectionsClick: () => void
+    onEditSection?: (section: "general" | "experience" | "education" | "skills" | "social") => void
+    publicProfileHref?: string | null
 }) {
     const vm = normalizeProfileVM(profile)
     const openTo = vm.openTo
     const availability = vm.availabilityStatus
+    // H7: URL validation is built into normalizeSocialLinks (rejects non-http(s))
     const links = normalizeSocialLinks({ ...profile, socialLinks: vm.socialLinks }, socialLinks)
 
     const availabilityTone =
@@ -125,12 +123,12 @@ export const ProfileRightRail = React.memo(function ProfileRightRail({
 
     return (
         <>
-            <RailCard title="Collaboration" icon={<Sparkles className="w-4 h-4" />}>
+            <RailCard id="profile-collaboration" title="Collaboration" icon={<Sparkles className="w-4 h-4" />}>
                 <div className="space-y-3">
                     <div className="flex items-center justify-between">
                         <div className="text-sm text-zinc-700 dark:text-zinc-300">Availability</div>
                         <span className={cn("text-xs font-medium px-2.5 py-1 rounded-full border", availabilityTone)}>
-                            {String(availability).replace(/_/g, ' ')}
+                            {availabilityStatusLabel(availability)}
                         </span>
                     </div>
 
@@ -167,9 +165,7 @@ export const ProfileRightRail = React.memo(function ProfileRightRail({
 
             <RailCard title="Stats" icon={<Users className="w-4 h-4" />}>
                 <div className="grid grid-cols-2 gap-3">
-                    <button onClick={onConnectionsClick} className="text-left w-full hover:opacity-90 transition-opacity">
-                        <Stat label="Connections" value={stats.connectionsCount || 0} />
-                    </button>
+                    <Stat label="Connections" value={stats.connectionsCount || 0} onClick={onConnectionsClick} />
                     <Stat label="Projects" value={stats.projectsCount || 0} href="/projects" />
                 </div>
                 <div className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">
@@ -197,7 +193,19 @@ export const ProfileRightRail = React.memo(function ProfileRightRail({
                         ))}
                     </div>
                 ) : (
-                    <div className="text-sm text-zinc-500 dark:text-zinc-400">No links added yet.</div>
+                    <div className="text-sm text-zinc-500 dark:text-zinc-400">
+                        {isOwner && onEditSection ? (
+                            <button
+                                type="button"
+                                onClick={() => onEditSection('social')}
+                                className="font-medium text-indigo-600 hover:text-indigo-500"
+                            >
+                                Add your first link
+                            </button>
+                        ) : (
+                            'No links added yet.'
+                        )}
+                    </div>
                 )}
             </RailCard>
 
@@ -210,7 +218,14 @@ export const ProfileRightRail = React.memo(function ProfileRightRail({
                                 {completionScore}%
                             </span>
                         </div>
-                        <div className="h-2 rounded-full bg-zinc-100 dark:bg-zinc-800 overflow-hidden">
+                        <div
+                            role="progressbar"
+                            aria-valuenow={Math.max(0, Math.min(100, completionScore))}
+                            aria-valuemin={0}
+                            aria-valuemax={100}
+                            aria-label={`Profile completeness: ${completionScore}%`}
+                            className="h-2 rounded-full bg-zinc-100 dark:bg-zinc-800 overflow-hidden"
+                        >
                             <div
                                 className="h-full bg-indigo-600 dark:bg-indigo-400 transition-all"
                                 style={{ width: `${Math.max(0, Math.min(100, completionScore))}%` }}
@@ -248,6 +263,14 @@ export const ProfileRightRail = React.memo(function ProfileRightRail({
                             >
                                 My projects
                             </Link>
+                            {publicProfileHref ? (
+                                <Link
+                                    href={publicProfileHref}
+                                    className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-800 px-3 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700"
+                                >
+                                    Public profile
+                                </Link>
+                            ) : null}
                         </>
                     ) : (
                         <>

@@ -3,9 +3,20 @@ import { getProfileDetails, getPublicProfileMeta } from '@/lib/data/profile';
 import { ProfileV2Client } from '@/components/profile/v2/ProfileV2Client';
 import { Metadata } from 'next';
 import { resolvePublicUsernameRoute } from '@/lib/usernames/service';
+import { buildRouteMetadata, DEFAULT_ROUTE_OG_IMAGE } from '@/lib/metadata/route-metadata';
+import { getViewerAuthContext } from '@/lib/server/viewer-context';
+import { buildProfileMetadataDescription, buildPublicProfileTitle } from '@/lib/profile/display';
 
 export const revalidate = 60; // ISR: Revalidate every minute
 export const dynamicParams = true; // Allow new profiles to be generated on demand
+
+function decodeUsernameParam(username: string): string | null {
+    try {
+        return decodeURIComponent(username);
+    } catch {
+        return null;
+    }
+}
 
 export async function generateStaticParams() {
     // Intentionally disabled for scalability: we don't prebuild profiles at build time.
@@ -15,28 +26,49 @@ export async function generateStaticParams() {
 
 export async function generateMetadata({ params }: { params: Promise<{ username: string }> }): Promise<Metadata> {
     const { username } = await params;
-    const route = await resolvePublicUsernameRoute({ username });
+    const decodedUsername = decodeUsernameParam(username);
+    if (!decodedUsername) {
+        return buildRouteMetadata({
+            title: 'Profile Not Found | Edge',
+            description: 'The requested profile could not be found.',
+            path: `/u/${encodeURIComponent(username)}`,
+        });
+    }
+
+    const route = await resolvePublicUsernameRoute({ username: decodedUsername });
     if (route.status === 'not_found') {
-        return {
-            title: 'Profile Not Found',
-        };
+        return buildRouteMetadata({
+            title: 'Profile Not Found | Edge',
+            description: 'The requested profile could not be found.',
+            path: `/u/${encodeURIComponent(decodedUsername)}`,
+        });
     }
 
     const data = await getPublicProfileMeta(route.currentUsername);
 
     if (!data) {
-        return {
-            title: 'Profile Not Found',
-        };
+        return buildRouteMetadata({
+            title: 'Profile Not Found | Edge',
+            description: 'The requested profile could not be found.',
+            path: `/u/${encodeURIComponent(route.currentUsername)}`,
+        });
     }
 
-    return {
-        title: `${data.fullName || data.username} (@${data.username}) | Edge`,
-        description: data.bio || `Check out ${data.username}'s profile on Edge.`,
-        openGraph: {
-            images: data.avatarUrl ? [data.avatarUrl] : [],
-        },
-    };
+    return buildRouteMetadata({
+        title: buildPublicProfileTitle({
+            username: data.username,
+            fullName: data.fullName,
+        }),
+        description: buildProfileMetadataDescription({
+            username: data.username,
+            fullName: data.fullName,
+            headline: data.headline,
+            location: data.location,
+            bio: data.bio,
+        }),
+        path: `/u/${encodeURIComponent(data.username ?? route.currentUsername)}`,
+        image: data.avatarUrl || DEFAULT_ROUTE_OG_IMAGE,
+    });
 }
 
 export default async function PublicProfilePage({
@@ -51,19 +83,22 @@ export default async function PublicProfilePage({
     const viewerPreviewMode =
         typeof resolvedSearchParams.viewer === 'string' && resolvedSearchParams.viewer === 'visitor';
 
-    const route = await resolvePublicUsernameRoute({ username: decodeURIComponent(username) });
+    const decodedUsername = decodeUsernameParam(username);
+    if (!decodedUsername) {
+        notFound();
+    }
+
+    const route = await resolvePublicUsernameRoute({ username: decodedUsername });
     if (route.status === 'not_found') {
         notFound();
     }
     if (route.status === 'redirect') {
-        permanentRedirect(`/u/${route.currentUsername}`);
+        permanentRedirect(`/u/${encodeURIComponent(route.currentUsername)}`);
     }
 
-    // Always render the ISR page with a visitor-safe snapshot.
-    // Viewer-specific relationship state is resolved client-side after hydration.
+    const viewerAuth = viewerPreviewMode ? null : await getViewerAuthContext();
     const data = await getProfileDetails(route.currentUsername, {
-        skipHeavyData: true,
-        viewerUser: null,
+        viewerUser: viewerAuth?.user ?? null,
     });
 
     if (data.privacyStatus === 'not_found' || !data.profile) {
