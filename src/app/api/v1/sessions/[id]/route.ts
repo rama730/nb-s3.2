@@ -8,6 +8,7 @@ import {
   logApiRoute,
   requireAuthenticatedUser,
 } from "@/app/api/v1/_shared";
+import { logger } from "@/lib/logger";
 import { resolveCurrentSessionRowId } from "@/lib/security/session-current";
 import { listActiveSessions } from "@/lib/security/session-activity";
 
@@ -119,7 +120,7 @@ export async function DELETE(
     });
     return jsonSuccess(undefined, "Session revoked");
   } catch (error) {
-    console.error("[api/v1/sessions/:id] failed", error);
+    logger.error("[api/v1/sessions/:id] failed", { module: 'api', error: error instanceof Error ? error.message : String(error) });
     logApiRoute(request, {
       requestId,
       action: "sessions.delete",

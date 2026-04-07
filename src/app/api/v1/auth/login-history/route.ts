@@ -6,6 +6,7 @@ import {
   logApiRoute,
   requireAuthenticatedUser,
 } from "@/app/api/v1/_shared";
+import { logger } from "@/lib/logger";
 import { listLoginHistory } from "@/lib/security/session-activity";
 
 type LoginHistoryEntry = {
@@ -58,7 +59,9 @@ export async function GET(request: Request) {
   }
 
   try {
-    const history: LoginHistoryEntry[] = await listLoginHistory(auth.user.id, 20);
+    const { searchParams } = new URL(request.url);
+    const limit = Math.min(50, Math.max(1, Number(searchParams.get("limit")) || 20));
+    const history: LoginHistoryEntry[] = await listLoginHistory(auth.user.id, limit);
 
     logApiRoute(request, {
       requestId,
@@ -68,9 +71,9 @@ export async function GET(request: Request) {
       success: true,
       status: 200,
     });
-    return jsonSuccess({ history });
+    return jsonSuccess({ history, limit });
   } catch (error) {
-    console.error("[api/v1/auth/login-history] failed", error);
+    logger.error("[api/v1/auth/login-history] failed", { module: 'api', error: error instanceof Error ? error.message : String(error) });
     logApiRoute(request, {
       requestId,
       action: "auth.loginHistory.get",

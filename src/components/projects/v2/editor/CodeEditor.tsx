@@ -16,6 +16,7 @@ export interface CodeEditorProps {
   value: string;
   onChange: (value: string) => void;
   theme: ThemeMode;
+  isActive?: boolean;
   readOnly?: boolean;
   lineNumbers?: boolean;
   wordWrap?: boolean;
@@ -72,6 +73,7 @@ export default function CodeEditor({
   value,
   onChange,
   theme,
+  isActive = true,
   readOnly = false,
   lineNumbers = true,
   wordWrap = true,
@@ -172,8 +174,20 @@ export default function CodeEditor({
     dispatchCursorMoved(view, tabId);
   }, [tabId, isEditorReady, dispatchCursorMoved]);
 
+  useEffect(() => {
+    if (!isActive || !isEditorReady || !editorRef.current?.view) return;
+    const view = editorRef.current.view;
+    let frameId = 0;
+    frameId = window.requestAnimationFrame(() => {
+      view.requestMeasure({
+        read: () => view.dom.getBoundingClientRect(),
+      });
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [filename, isActive, isEditorReady, langExtension]);
+
   return (
-    <div className="relative h-full w-full flex flex-row overflow-hidden">
+    <div className="relative h-full min-h-0 w-full flex flex-row overflow-hidden">
       {gitStatus && (
         <div 
           className={cn(
@@ -195,7 +209,7 @@ export default function CodeEditor({
         theme={theme === "dark" ? oneDark : undefined}
         height="100%"
         width="100%"
-        className="h-full flex-1 text-base overflow-hidden"
+        className="h-full min-h-0 flex-1 text-base overflow-hidden"
         extensions={extensions}
         basicSetup={{
           lineNumbers,

@@ -128,7 +128,7 @@ export function BottomPanel({
       style={{ height: collapsed ? COLLAPSED_HEIGHT : height }}
       className={cn(
         "border-t border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 flex flex-col shrink-0",
-        isDragging ? "select-none" : "transition-[height] duration-150 ease-out"
+        isDragging ? "select-none" : ""
       )}
     >
       {/* Drag handle */}

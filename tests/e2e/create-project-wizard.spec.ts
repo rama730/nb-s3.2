@@ -9,9 +9,7 @@ test.describe("Create project wizard", () => {
     const page = await context.newPage();
 
     await login(page);
-    await page.goto("/hub", { waitUntil: "domcontentloaded" });
-
-    await page.getByRole("button", { name: /new project/i }).click();
+    await page.goto("/hub?createProject=1", { waitUntil: "domcontentloaded" });
 
     await expect(page.getByRole("dialog")).toBeVisible();
     await page.mouse.click(8, 8);
@@ -24,12 +22,15 @@ test.describe("Create project wizard", () => {
     await expect(page.getByTestId("create-project-source-view-github")).toBeVisible();
     await expect(page.getByTestId("create-project-github-manual-url")).toBeVisible();
     await expect(page.getByTestId("create-project-connect-github")).toBeVisible();
+    await page.getByTestId("create-project-github-manual-url").fill("edge/tools");
+    await expect(page.getByTestId("create-project-github-manual-url")).toHaveValue("https://github.com/edge/tools");
     await page.waitForTimeout(1000);
     await expect(page.getByRole("dialog")).toBeVisible();
     await expect(page.getByTestId("create-project-source-view-github")).toBeVisible();
 
     await page.getByTestId("create-project-back-to-source-grid").click();
     await expect(page.getByTestId("create-project-phase1-source-grid")).toBeVisible();
+    await expect(page.getByTestId("create-project-source-view-github")).toHaveCount(0);
 
     await page.getByTestId("create-project-source-card-upload").click();
     await expect(page.getByTestId("create-project-source-view-upload")).toBeVisible();

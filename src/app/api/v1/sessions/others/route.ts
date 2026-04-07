@@ -9,6 +9,7 @@ import {
   logApiRoute,
   requireAuthenticatedUser,
 } from "@/app/api/v1/_shared";
+import { logger } from "@/lib/logger";
 import { getProtectedRecoveryCodes } from "@/lib/services/profile-service";
 import { getLatestPasswordChangeAt, recordSecurityEvent } from "@/lib/security/audit";
 import { getVerifiedTotpFactors, listSecurityMfaFactors } from "@/lib/security/mfa";
@@ -137,7 +138,7 @@ export async function DELETE(request: Request) {
     });
     return jsonSuccess(undefined, "Other sessions revoked");
   } catch (error) {
-    console.error("[api/v1/sessions/others] failed", error);
+    logger.error("[api/v1/sessions/others] failed", { module: 'api', error: error instanceof Error ? error.message : String(error) });
     logApiRoute(request, {
       requestId,
       action: "sessions.deleteOthers",

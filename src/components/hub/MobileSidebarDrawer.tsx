@@ -45,7 +45,9 @@ export default function MobileSidebarDrawer({
                                 Filters & Collections
                             </h2>
                             <button
+                                type="button"
                                 onClick={onClose}
+                                aria-label="Close filters drawer"
                                 className="p-2 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800"
                             >
                                 <X className="w-5 h-5" />

@@ -13,6 +13,7 @@ export type ExplorerProps = {
   projectId: string;
   projectName?: string;
   canEdit: boolean;
+  isActive?: boolean;
   viewMode?: import("@/stores/filesWorkspaceStore").FilesViewMode;
   onOpenFile: (node: ProjectNode) => void;
   onNodeDeleted?: (nodeId: string) => void;

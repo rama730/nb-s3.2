@@ -7,6 +7,7 @@ import Image from "next/image";
 import { InboxData } from "@/types/people";
 import { usePendingRequests, useConnectionMutations } from "@/hooks/useConnections";
 import { toast } from "sonner";
+import { EmptyState } from "@/components/ui/EmptyState";
 
 interface PeopleInboxTabProps {
     inboxPromise?: Promise<InboxData>;
@@ -60,7 +61,7 @@ export default function PeopleInboxTab({ inboxPromise }: PeopleInboxTabProps) {
 
     const handleReject = async (id: string) => {
         try {
-            await rejectRequest.mutateAsync(id);
+            await rejectRequest.mutateAsync({ id });
             // Toast handled by mutation
         } catch (e) { console.error(e); }
     };
@@ -80,13 +81,16 @@ export default function PeopleInboxTab({ inboxPromise }: PeopleInboxTabProps) {
 
     if (!hasItems) {
         return (
-            <div className="text-center py-12 bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-200 dark:border-zinc-800">
-                <Users className="w-12 h-12 text-zinc-400 mx-auto mb-4" />
-                <p className="text-zinc-600 dark:text-zinc-400">Your inbox is empty.</p>
-                <Link href="/people?tab=discover" className="text-indigo-600 hover:underline mt-2 inline-block">
-                    Discover people to connect with
-                </Link>
-            </div>
+            <EmptyState
+                icon={Users}
+                title="Your inbox is empty."
+                action={
+                    <Link href="/people?tab=discover" className="text-indigo-600 hover:underline text-sm">
+                        Discover people to connect with
+                    </Link>
+                }
+                compact
+            />
         );
     }
 

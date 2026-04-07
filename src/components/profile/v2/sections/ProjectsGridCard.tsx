@@ -1,7 +1,10 @@
 'use client'
 
-import { FolderKanban, Star } from 'lucide-react'
+import { FolderKanban } from 'lucide-react'
 import Image from 'next/image'
+import Link from 'next/link'
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
+import { initialsForName, normalizeProjectDescription, normalizeProjectTitle } from '@/lib/profile/display'
 
 interface ProjectsGridCardProps {
     projects: any[]
@@ -21,8 +24,10 @@ export function ProjectsGridCard({ projects, title = 'Projects', description }: 
 
             {projects && projects.length > 0 ? (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                    {projects.map((project, idx) => (
-                        <div
+                    {projects.map((project, idx) => {
+                        const projectHref = project.href || project.url
+                        return (
+                        <article
                             key={idx}
                             className="group flex flex-col rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 overflow-hidden hover:shadow-lg transition-all duration-300"
                         >
@@ -30,7 +35,7 @@ export function ProjectsGridCard({ projects, title = 'Projects', description }: 
                                 {project.image ? (
                                     <Image
                                         src={project.image}
-                                        alt={project.title}
+                                        alt={normalizeProjectTitle(project.title)}
                                         fill
                                         className="object-cover group-hover:scale-105 transition-transform duration-500"
                                     />
@@ -42,27 +47,47 @@ export function ProjectsGridCard({ projects, title = 'Projects', description }: 
                             </div>
                             <div className="flex-1 p-5 flex flex-col">
                                 <h3 className="font-semibold text-lg text-zinc-900 dark:text-zinc-100 mb-2">
-                                    {project.title}
+                                    {normalizeProjectTitle(project.title)}
                                 </h3>
                                 <p className="text-sm text-zinc-500 dark:text-zinc-400 line-clamp-2 mb-4 flex-1">
-                                    {project.description || 'No description'}
+                                    {normalizeProjectDescription(project.shortDescription, project.description)}
                                 </p>
                                 <div className="pt-4 border-t border-zinc-100 dark:border-zinc-800 flex items-center justify-between">
                                     <div className="flex -space-x-2">
-                                        {/* Contributors stub */}
-                                        <div className="w-6 h-6 rounded-full bg-zinc-200 dark:bg-zinc-700 border-2 border-white dark:border-zinc-900" />
-                                        <div className="w-6 h-6 rounded-full bg-zinc-300 dark:bg-zinc-600 border-2 border-white dark:border-zinc-900" />
+                                        {(project.members || []).slice(0, 3).map((member: any) => (
+                                            <Avatar
+                                                key={member.id}
+                                                className="h-6 w-6 border-2 border-white dark:border-zinc-900"
+                                                title={member.displayName || member.username || 'Collaborator'}
+                                            >
+                                                <AvatarImage src={member.avatarUrl || undefined} alt={member.displayName || member.username || 'Collaborator'} />
+                                                <AvatarFallback className="text-[10px] font-semibold">
+                                                    {initialsForName(member.displayName, member.username)}
+                                                </AvatarFallback>
+                                            </Avatar>
+                                        ))}
                                     </div>
-                                    <a
-                                        href={project.url || '#'}
-                                        className="text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:underline"
-                                    >
-                                        View Details
-                                    </a>
+                                    {projectHref ? (
+                                        <Link
+                                            href={projectHref}
+                                            className="text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:underline"
+                                        >
+                                            View Details
+                                        </Link>
+                                    ) : (
+                                        <span
+                                            role="link"
+                                            aria-disabled="true"
+                                            className="text-sm font-medium text-zinc-400 dark:text-zinc-500 cursor-not-allowed"
+                                        >
+                                            View Details
+                                        </span>
+                                    )}
                                 </div>
                             </div>
-                        </div>
-                    ))}
+                        </article>
+                        )
+                    })}
                 </div>
             ) : (
                 <div className="text-center py-12 rounded-2xl border border-dashed border-zinc-200 dark:border-zinc-800">

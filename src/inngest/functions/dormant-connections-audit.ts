@@ -33,7 +33,7 @@ export const dormantConnectionsAudit = inngest.createFunction(
                 .from(connections)
                 .where(and(
                     eq(connections.status, 'accepted'),
-                    lt(connections.updatedAt, thresholdIso)
+                    lt(connections.updatedAt, thresholdDate)
                 ))
                 .limit(1000); 
         });

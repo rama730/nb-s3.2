@@ -37,11 +37,11 @@ describe('public projects feed cursor helpers', () => {
 
         assert.equal(
             buildPublicProjectsCacheKey(24, cursor),
-            'projects:public:v2:limit:24:cursor:2026-03-12T10:00:00.000Z:project-123',
+            'projects:public:v3:limit:24:cursor:2026-03-12T10:00:00.000Z:project-123',
         )
         assert.equal(
             buildPublicProjectsCacheKey(24, null),
-            'projects:public:v2:limit:24:cursor:origin',
+            'projects:public:v3:limit:24:cursor:origin',
         )
     })
 })

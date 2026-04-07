@@ -22,6 +22,7 @@ import { getFileContent } from "@/stores/filesWorkspaceStore";
 
 interface EditorPaneProps {
   projectId: string;
+  isActive: boolean;
   paneId: PaneId;
   canEdit: boolean;
   width: string;
@@ -65,6 +66,7 @@ interface EditorPaneProps {
 
 export default function EditorPane({
   projectId,
+  isActive,
   paneId,
   canEdit,
   width,
@@ -149,15 +151,16 @@ export default function EditorPane({
   const [tabsViewportWidth, setTabsViewportWidth] = React.useState(0);
 
   React.useEffect(() => {
+    if (!isActive) return;
     const el = tabsViewportRef.current;
     if (!el) return;
     const observer = new ResizeObserver((entries) => {
       const nextWidth = Math.floor(entries[0]?.contentRect?.width ?? 0);
-      setTabsViewportWidth(nextWidth);
+      setTabsViewportWidth((prev) => (prev === nextWidth ? prev : nextWidth));
     });
     observer.observe(el);
     return () => observer.disconnect();
-  }, []);
+  }, [isActive]);
 
   const {
     visibleTabIds,
@@ -445,6 +448,7 @@ export default function EditorPane({
           ) : (
             <FileEditor
               file={activeTab.node}
+              isActive={isActive}
               content={contentForEditor}
               savedSnapshot={savedSnapshotForEditor}
               isDirty={activeTab.isDirty}

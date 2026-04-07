@@ -2,7 +2,7 @@ import { useCallback, useRef, useState } from "react";
 import type React from "react";
 import type { ProjectNode } from "@/lib/db/schema";
 import { createClient } from "@/lib/supabase/client";
-import type { FilesViewMode } from "@/stores/filesWorkspaceStore";
+import { type FilesViewMode, useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 import type { FilesWorkspaceTabState, PaneId } from "../../state/filesTabTypes";
 import { filesFeatureFlags } from "@/lib/features/files";
 import { createFilesCorrelationId, recordFilesMetric } from "@/lib/files/observability";
@@ -26,6 +26,7 @@ import {
   getFileContent,
   setFileContent as setDetachedContent,
 } from "@/stores/filesWorkspaceStore";
+import { clearDirtyContent, persistDirtyContent } from "@/stores/files/contentMap";
 
 const UTF8_ENCODER = new TextEncoder();
 const SAVE_ALL_CONCURRENCY = FILES_RUNTIME_BUDGETS.saveAllConcurrency;
@@ -295,6 +296,11 @@ export function useTabSavePipeline({
               },
             };
           });
+          storeActions.setLastNodeEventSummary(projectId, nodeId, {
+            type: "save",
+            at: savedAt,
+            by: tabByIdRef.current[nodeId]?.lockInfo?.lockedByName ?? null,
+          });
           clearOfflineChange(projectId, nodeId);
           try {
             await recordProjectNodeEvent(
@@ -428,6 +434,11 @@ export function useTabSavePipeline({
             },
           };
         });
+        storeActions.setLastNodeEventSummary(projectId, node.id, {
+          type: "save",
+          at: savedAt,
+          by: tabByIdRef.current[node.id]?.lockInfo?.lockedByName ?? null,
+        });
 
         try {
           await recordProjectNodeEvent(
@@ -446,6 +457,7 @@ export function useTabSavePipeline({
           value: Math.round(performance.now() - startedAt),
         });
         if (!opts?.silent) showToast("File saved", "success");
+        void clearDirtyContent(projectId, node.id);
         return true;
       } catch (e: unknown) {
         recordFilesMetric("files.save.latency_ms", {
@@ -456,16 +468,29 @@ export function useTabSavePipeline({
           extra: { failed: true, reason: opts?.reason || "direct" },
         });
         if (!opts?.silent) showToast(`Failed to save: ${getErrorMessage(e, "Unknown error")}`, "error");
+        // FW4: Persist dirty content to IndexedDB as crash insurance
+        void persistDirtyContent(projectId, node.id, getFileContent(projectId, node.id));
         return false;
       }
     },
-    [canEdit, ensureSaveGuards, enqueueIndexUpdate, getSupabase, projectId, setTabById, showToast, storeActions]
+    [canEdit, ensureSaveGuards, enqueueIndexUpdate, getSupabase, projectId, setTabById, showToast, storeActions, tabByIdRef]
   );
 
   const openFileInPane = useCallback(
     async (node: ProjectNode, paneId?: PaneId) => {
       if (!node || node.type !== "file") return;
-      const targetPane = paneId ?? activePane;
+      let targetPane = paneId ?? activePane;
+
+      // FW3: If the file is already open in the other pane, focus that pane instead
+      // to prevent concurrent edits of the same file causing data loss.
+      const ws = useFilesWorkspaceStore.getState().byProjectId[projectId];
+      if (ws?.splitEnabled) {
+        const otherPane: PaneId = targetPane === "left" ? "right" : "left";
+        const otherPaneTabIds = ws.panes[otherPane]?.openTabIds ?? [];
+        if (otherPaneTabIds.includes(node.id)) {
+          targetPane = otherPane;
+        }
+      }
 
       setActivePane(targetPane);
       openTab(projectId, targetPane, node.id);
@@ -634,7 +659,8 @@ export function useTabSavePipeline({
       showToast("No unsaved files", "info");
       return;
     }
-    await runWithConcurrency(dirtyTabIds, SAVE_ALL_CONCURRENCY, async (nodeId) => {
+    const uniqueDirtyIds = [...new Set(dirtyTabIds)];
+    await runWithConcurrency(uniqueDirtyIds, SAVE_ALL_CONCURRENCY, async (nodeId) => {
       await saveTab(nodeId, { silent: true, reason: "save-all" });
     });
     const remainingDirty = Object.values(tabByIdRef.current).filter((tab) => tab.isDirty).length;

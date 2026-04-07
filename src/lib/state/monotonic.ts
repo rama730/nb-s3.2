@@ -21,6 +21,8 @@ export function runMonotonicUpdate<T>(
   if (typeof current === "number" && version < current) {
     return null;
   }
+  // Delete and re-set to maintain LRU order (Map preserves insertion order)
+  monotonicVersionByKey.delete(entityKey);
   monotonicVersionByKey.set(entityKey, version);
   evictOldestIfNeeded();
   return applyFn();

@@ -22,6 +22,16 @@ describe("public project owner masking", () => {
             cover_image: null,
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
+            open_roles: [{
+                id: "role-1",
+                project_id: "project-1",
+                role: "Frontend Engineer",
+                title: "Frontend Engineer",
+                description: null,
+                count: 2,
+                filled: 1,
+                skills: ["React"],
+            }],
             profiles: {
                 id: "owner-1",
                 username: "owner",
@@ -35,5 +45,8 @@ describe("public project owner masking", () => {
         assert.equal(project.owner?.isMasked, true);
         assert.equal(project.owner?.canOpenProfile, false);
         assert.equal(project.owner?.username, null);
+        assert.equal(project.openRoles?.length, 1);
+        assert.equal(project.openRoles?.[0]?.role, "Frontend Engineer");
+        assert.equal(project.openRoles?.[0]?.filled, 1);
     });
 });

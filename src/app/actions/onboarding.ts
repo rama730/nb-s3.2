@@ -666,8 +666,23 @@ export async function completeOnboarding(
                 },
             })
             if (existingAlias) {
-                if (existingAlias.userId !== user.id || !existingAlias.isPrimary) {
+                if (existingAlias.userId !== user.id) {
                     throw new UsernamePersistenceError('USERNAME_TAKEN', 'Username is already taken')
+                }
+
+                if (!existingAlias.isPrimary) {
+                    await tx
+                        .update(usernameAliases)
+                        .set({
+                            isPrimary: true,
+                            replacedAt: null,
+                        })
+                        .where(
+                            and(
+                                eq(usernameAliases.username, payload.username),
+                                eq(usernameAliases.userId, user.id),
+                            ),
+                        )
                 }
             } else {
                 await tx.insert(usernameAliases).values({

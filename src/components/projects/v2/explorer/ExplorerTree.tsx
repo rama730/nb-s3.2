@@ -551,7 +551,7 @@ export function ExplorerTree({
       data={rowsToRender}
       context={contextValue}
       itemContent={(_, row, context) => (
-        <div className="px-2">
+        <div className="px-2" role="none">
           <FileTreeItem row={row} context={context} />
         </div>
       )}

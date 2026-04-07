@@ -113,7 +113,10 @@ const HubHeader = memo(function HubHeader({
                 {/* View Mode Toggle */}
                 <div className="flex items-center bg-zinc-100 dark:bg-zinc-800 rounded-lg p-1">
                     <button
+                        type="button"
                         onClick={() => onViewModeChange(VIEW_MODES.GRID)}
+                        aria-label="Grid view"
+                        aria-pressed={viewMode === VIEW_MODES.GRID}
                         className={`p-2 rounded-md transition-colors ${viewMode === VIEW_MODES.GRID
                                 ? 'bg-white dark:bg-zinc-700 shadow-sm text-primary'
                                 : 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'
@@ -122,7 +125,10 @@ const HubHeader = memo(function HubHeader({
                         <Grid3X3 className="w-4 h-4" />
                     </button>
                     <button
+                        type="button"
                         onClick={() => onViewModeChange(VIEW_MODES.LIST)}
+                        aria-label="List view"
+                        aria-pressed={viewMode === VIEW_MODES.LIST}
                         className={`p-2 rounded-md transition-colors ${viewMode === VIEW_MODES.LIST
                                 ? 'bg-white dark:bg-zinc-700 shadow-sm text-primary'
                                 : 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'
@@ -137,7 +143,11 @@ const HubHeader = memo(function HubHeader({
                 {/* Main Filter Dropdown Toggle */}
                 <div className="relative" ref={filterDropdownRef}>
                     <button
+                        type="button"
                         onClick={() => setIsFilterDropdownOpen((prev) => !prev)}
+                        aria-label={isFilterDropdownOpen ? "Close filters" : "Open filters"}
+                        aria-expanded={isFilterDropdownOpen}
+                        aria-haspopup="menu"
                         className={`p-2 rounded-lg transition-colors ${isFilterDropdownOpen
                                 ? 'app-selected-surface'
                                 : 'text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800'
@@ -169,6 +179,7 @@ const HubHeader = memo(function HubHeader({
                                             </span>
                                         </div>
                                         <button
+                                            type="button"
                                             role="switch"
                                             aria-checked={filters.hideOpened ?? false}
                                             onClick={() => {
@@ -196,6 +207,7 @@ const HubHeader = memo(function HubHeader({
                                     <div className="h-px bg-zinc-200 dark:bg-zinc-800" />
                                     
                                     <button
+                                        type="button"
                                         onClick={handleResetOpen}
                                         disabled={isResetting || isDoneResetting}
                                         className={`w-full py-2.5 px-3 rounded-xl text-sm font-medium flex items-center justify-center transition-all ${
@@ -225,6 +237,7 @@ const HubHeader = memo(function HubHeader({
 
                 {/* Create Project Button */}
                 <button
+                    type="button"
                     onClick={onCreateProject}
                     onMouseEnter={onPreloadModal}
                     className="flex items-center gap-2 px-4 py-2 app-accent-solid hover:bg-primary/90 rounded-xl font-medium transition-colors"

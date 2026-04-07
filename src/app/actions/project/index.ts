@@ -25,6 +25,8 @@ export {
 
     // Queries
     incrementProjectViewAction,
+    readProjectDetailMetadata,
+    readProjectDetailShell,
     getProjectDetailShellAction,
     getProjectUserStateAction,
     fetchProjectTasksAction,

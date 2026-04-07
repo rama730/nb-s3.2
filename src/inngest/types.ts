@@ -51,6 +51,7 @@ type ConnectionsBulkEvent = {
         userId: string;
         action: 'accept' | 'reject';
         limit: number;
+        jobId?: string;
     };
 };
 

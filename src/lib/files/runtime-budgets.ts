@@ -15,6 +15,7 @@ export const FILES_RUNTIME_BUDGETS = {
   backgroundAutosaveDefaultConcurrency: 2,
   backgroundAutosaveMaxConcurrency: 4,
   saveAllConcurrency: 3,
+  maxEditableFileSizeBytes: 10 * 1024 * 1024, // 10MB
 } as const;
 
 export function clampNumber(value: number, min: number, max: number) {

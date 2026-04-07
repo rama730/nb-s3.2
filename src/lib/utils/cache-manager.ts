@@ -141,16 +141,17 @@ export class CacheManager {
         let workspaceSize = 0;
         let hasPendingWork = false;
         if (typeof localStorage !== "undefined") {
-            for (let i = 0; i < localStorage.length; i++) {
-                const key = localStorage.key(i);
-                if (key) {
-                    const value = localStorage.getItem(key) || "";
-                    const size = key.length + value.length;
-                    if (USER_DATA_PREFIXES.some(p => key.startsWith(p))) {
-                        workspaceSize += size;
+            try {
+                for (let i = 0; i < localStorage.length; i++) {
+                    const key = localStorage.key(i);
+                    if (key && USER_DATA_PREFIXES.some(p => key.startsWith(p))) {
+                        const value = localStorage.getItem(key) || "";
+                        workspaceSize += key.length + value.length;
                         if (key.includes("queue")) hasPendingWork = true;
                     }
                 }
+            } catch {
+                // Gracefully handle quota exceeded or access errors
             }
         }
         breakdown.push({
@@ -178,7 +179,10 @@ export class CacheManager {
             for (let i = 0; i < localStorage.length; i++) {
                 const key = localStorage.key(i);
                 if (key && USER_DATA_PREFIXES.some(p => key.startsWith(p))) {
-                    userEntries.push([key, localStorage.getItem(key)!]);
+                    const value = localStorage.getItem(key);
+                    if (value !== null) {
+                        userEntries.push([key, value]);
+                    }
                 }
             }
 
@@ -194,7 +198,10 @@ export class CacheManager {
         for (let i = 0; i < localStorage.length; i++) {
             const key = localStorage.key(i);
             if (key && USER_DATA_PREFIXES.some(p => key.startsWith(p))) {
-                backup[key] = localStorage.getItem(key)!;
+                const value = localStorage.getItem(key);
+                if (value !== null) {
+                    backup[key] = value;
+                }
             }
         }
 
@@ -206,6 +213,8 @@ export class CacheManager {
         const preserved = this.readPreservedLocalStorageEntries();
         const initialLocalStorageCount = typeof localStorage !== "undefined" ? localStorage.length : 0;
         const initialSessionStorageCount = typeof sessionStorage !== "undefined" ? sessionStorage.length : 0;
+        const dbNames = await this.listIndexedDbNames();
+        const cacheNames = typeof caches !== "undefined" ? await caches.keys() : [];
 
         // Perform clearing
         await Promise.all([
@@ -215,14 +224,11 @@ export class CacheManager {
             this.clearCacheAPI(),
         ]);
 
-        const dbNames = await this.listIndexedDbNames();
-        const cacheNames = typeof caches !== "undefined" ? await caches.keys() : [];
-
         return {
             clearedLocalStorageKeys: Math.max(0, initialLocalStorageCount - preserved.length),
             clearedSessionStorageKeys: initialSessionStorageCount,
-            clearedIndexedDbDatabases: dbNames.length, // approximation as we just cleared them
-            clearedCacheBuckets: cacheNames.length, // approximation
+            clearedIndexedDbDatabases: dbNames.length,
+            clearedCacheBuckets: cacheNames.length,
             preservedLocalStorageKeys: preserved.map(([k]) => k),
         };
     }

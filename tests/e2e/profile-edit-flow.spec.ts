@@ -25,14 +25,39 @@ test.describe("Profile edit flow", () => {
     test("profile page loads and headline edit persists", async ({ browser }) => {
         const context = await browser.newContext();
         const page = await context.newPage();
-        const monitor = attachPageMonitoring(page);
+        const monitor = attachPageMonitoring(page, {
+            monitorConsoleTypes: ["error", "warning"],
+            allowedConsolePatterns: [/was preloaded using link preload but not used/i],
+        });
 
         await login(page);
         await page.goto("/profile");
         await expect(page).toHaveURL(/\/profile$/);
 
+        const pageHeading = page.getByRole("heading", { level: 1 }).first();
+        await expect(pageHeading).toBeVisible();
+        const headingText = ((await pageHeading.textContent()) || "").trim();
+        await expect(page).toHaveTitle(new RegExp(headingText, "i"));
+
+        await page.getByRole("tab", { name: /Portfolio/i }).click();
+        await expect(page).toHaveURL(/\/profile\?tab=portfolio$/);
+        await expect(page.getByRole("tabpanel", { name: /Portfolio/i })).toBeVisible();
+
+        await page.getByRole("tab", { name: /Overview/i }).click();
+        await expect(page).toHaveURL(/\/profile$/);
+        await expect(page.getByRole("tabpanel", { name: /Overview/i })).toBeVisible();
+
         const editModal = await openEditModal(page);
-        const headlineInput = editModal.getByPlaceholder("e.g. Senior Frontend Engineer");
+        await expect(editModal.locator("form[aria-label='Edit profile form']")).toBeVisible();
+        await expect(editModal.locator("[data-slot='dialog-description']")).toHaveCount(1);
+        await expect(editModal.getByLabel("Full Name")).toBeVisible();
+        await expect(editModal.getByLabel("Username")).toBeVisible();
+        const cancelType = await editModal.getByRole("button", { name: "Cancel" }).getAttribute("type");
+        const saveType = await editModal.getByRole("button", { name: "Save Changes" }).getAttribute("type");
+        expect(cancelType).toBe("button");
+        expect(saveType).toBe("submit");
+
+        const headlineInput = editModal.getByLabel("Headline");
         await expect(headlineInput).toBeVisible();
 
         const originalHeadline = await headlineInput.inputValue();
@@ -67,6 +92,12 @@ test.describe("Profile edit flow", () => {
         await expect(restoreButton).toBeEnabled();
         await restoreButton.click();
         await expect(verifyModal).toBeHidden({ timeout: 15000 });
+
+        const connectionButton = page.getByRole("button", { name: /Connection/i }).first();
+        await connectionButton.click();
+        await expect(page.getByRole("dialog", { name: /Connections/i })).toBeVisible();
+        await page.keyboard.press("Escape");
+        await expect(page.getByRole("dialog", { name: /Connections/i })).toBeHidden({ timeout: 15000 });
 
         await monitor.assertNoViolations();
         monitor.detach();

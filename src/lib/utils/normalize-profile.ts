@@ -1,4 +1,5 @@
 import { calculateProfileCompletion } from '@/lib/validations/profile'
+import { trimOptionalDisplayText } from '@/lib/profile/display'
 
 /**
  * Single point of truth for profile field defaults.
@@ -7,22 +8,27 @@ import { calculateProfileCompletion } from '@/lib/validations/profile'
  */
 export function normalizeProfile(p: any) {
     if (!p) return null;
-    const avatarUrl = p.avatarUrl ?? p.avatar_url ?? null;
-    const fullName = p.fullName ?? p.full_name ?? null;
+    const avatarUrl = trimOptionalDisplayText(p.avatarUrl ?? p.avatar_url);
+    const fullName = trimOptionalDisplayText(p.fullName ?? p.full_name);
     const socialLinks =
         (p.socialLinks && typeof p.socialLinks === 'object' ? p.socialLinks : null) ||
         (p.social_links && typeof p.social_links === 'object' ? p.social_links : null) ||
         {};
     const openTo = Array.isArray(p.openTo) ? p.openTo : (Array.isArray(p.open_to) ? p.open_to : []);
+    const username = trimOptionalDisplayText(p.username);
+    const bio = trimOptionalDisplayText(p.bio);
+    const headline = trimOptionalDisplayText(p.headline);
+    const location = trimOptionalDisplayText(p.location);
+    const website = trimOptionalDisplayText(p.website);
 
     const completion = calculateProfileCompletion({
         avatarUrl,
         fullName,
-        username: p.username || null,
-        headline: p.headline || null,
-        bio: p.bio || null,
-        location: p.location || null,
-        website: p.website || null,
+        username,
+        headline,
+        bio,
+        location,
+        website,
         skills: Array.isArray(p.skills) ? p.skills : [],
         socialLinks,
     })
@@ -30,7 +36,12 @@ export function normalizeProfile(p: any) {
         ...p,
         avatarUrl,
         fullName,
-        bannerUrl: p.bannerUrl ?? p.banner_url ?? null,
+        username,
+        bio,
+        headline,
+        location,
+        website,
+        bannerUrl: trimOptionalDisplayText(p.bannerUrl ?? p.banner_url),
         socialLinks,
         openTo,
         availabilityStatus: p.availabilityStatus ?? p.availability_status ?? 'available',

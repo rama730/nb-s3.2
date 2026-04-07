@@ -54,7 +54,8 @@ interface ExplorerToolbarHostProps {
   onUploadFolder: (parentId: string | null) => void;
 }
 
-export function ExplorerToolbarHost({
+// FW10: Memoize to prevent re-renders when unrelated ExplorerShell state changes
+export const ExplorerToolbarHost = React.memo(function ExplorerToolbarHost({
   canEdit,
   viewMode,
   explorerMode,
@@ -338,4 +339,4 @@ export function ExplorerToolbarHost({
       </div>
     </>
   );
-}
+});

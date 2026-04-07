@@ -1,8 +1,7 @@
-import { NextResponse } from 'next/server'
 import { pingDb } from '@/lib/db'
 import { consumeRateLimitForRoute } from '@/lib/security/rate-limit'
-import { getEnv } from '@/lib/env'
-import { getRequestId, logApiRequest } from '@/app/api/_shared'
+import { getRequestId, jsonSuccess, jsonError, logApiRoute } from '@/app/api/v1/_shared'
+import { getRedisClient } from '@/lib/redis'
 
 export const dynamic = 'force-dynamic'
 
@@ -12,7 +11,7 @@ export async function GET(request: Request) {
     const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown'
     const { allowed } = await consumeRateLimitForRoute('health', `health:${ip}`, 60, 60)
     if (!allowed) {
-        logApiRequest(request, {
+        logApiRoute(request, {
             requestId,
             action: 'health.get',
             startedAt,
@@ -20,7 +19,7 @@ export async function GET(request: Request) {
             success: false,
             errorCode: 'RATE_LIMITED',
         })
-        return NextResponse.json({ error: 'Rate limit exceeded' }, { status: 429 })
+        return jsonError('Rate limit exceeded', 429, 'RATE_LIMITED')
     }
 
     const { searchParams } = new URL(request.url)
@@ -28,12 +27,8 @@ export async function GET(request: Request) {
     const dbOk = await pingDb()
     if (probe !== 'readiness') {
         const status = dbOk ? 200 : 503
-        const response = NextResponse.json(
-            { status: dbOk ? 'ok' : 'degraded', probe: 'liveness', db: dbOk },
-            { status },
-        )
         if (!dbOk) {
-            logApiRequest(request, {
+            logApiRoute(request, {
                 requestId,
                 action: 'health.get',
                 startedAt,
@@ -41,43 +36,36 @@ export async function GET(request: Request) {
                 success: false,
                 errorCode: 'DB_UNAVAILABLE',
             })
+            return jsonError('Database unavailable', status, 'DB_UNAVAILABLE')
         }
-        return response
+        return jsonSuccess({ status: 'ok', probe: 'liveness', db: dbOk })
     }
 
     let redisOk = false
-    const env = getEnv()
-    if (env.UPSTASH_REDIS_REST_URL && env.UPSTASH_REDIS_REST_TOKEN) {
+    const redis = getRedisClient()
+    if (redis) {
         try {
-            const { Redis } = await import('@upstash/redis')
-            const redis = new Redis({
-                url: env.UPSTASH_REDIS_REST_URL,
-                token: env.UPSTASH_REDIS_REST_TOKEN,
-            })
             const pong = await redis.ping()
             redisOk = pong === 'PONG'
         } catch {
             redisOk = false
         }
     } else {
-        redisOk = true
+        redisOk = true // Redis not configured — not a failure
     }
 
+    // TODO: Add an explicit Inngest health check when one is available.
     const healthy = dbOk && redisOk
-    const status = healthy ? 200 : 503
-    const response = NextResponse.json(
-        { status: healthy ? 'ok' : 'degraded', probe: 'readiness', db: dbOk, redis: redisOk },
-        { status },
-    )
     if (!healthy) {
-        logApiRequest(request, {
+        logApiRoute(request, {
             requestId,
             action: 'health.get',
             startedAt,
-            status,
+            status: 503,
             success: false,
             errorCode: 'READINESS_DEGRADED',
         })
+        return jsonError('Service degraded', 503, 'READINESS_DEGRADED')
     }
-    return response
+    return jsonSuccess({ status: 'ok', probe: 'readiness', db: dbOk, redis: redisOk })
 }

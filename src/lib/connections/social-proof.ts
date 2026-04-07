@@ -79,8 +79,8 @@ export async function getMutualConnectionProof(
         } else if (mutualCount === 2) {
             summary = `Friend of ${mutualNames[0]} and ${mutualNames[1]}`;
         } else if (mutualCount <= limit) {
-            const last = mutualNames.pop()!;
-            summary = `Friend of ${mutualNames.join(', ')}, and ${last}`;
+            const last = mutualNames[mutualNames.length - 1]!;
+            summary = `Friend of ${mutualNames.slice(0, -1).join(', ')}, and ${last}`;
         } else {
             const displayNames = mutualNames.slice(0, limit);
             const remaining = mutualCount - limit;
@@ -167,9 +167,11 @@ export async function getBatchMutualConnectionProof(
             let summary = '';
             if (mutualCount === 1) {
                 summary = `Friend of ${names[0]}`;
+            } else if (mutualCount === 2) {
+                summary = `Friend of ${names[0]} and ${names[1]}`;
             } else if (mutualCount <= limit) {
-                const last = names.pop()!;
-                summary = `Friend of ${names.join(', ')}, and ${last}`;
+                const last = names[names.length - 1]!;
+                summary = `Friend of ${names.slice(0, -1).join(', ')}, and ${last}`;
             } else {
                 const remaining = mutualCount - limit;
                 summary = `Friend of ${names.join(', ')}, and ${remaining} other${remaining === 1 ? '' : 's'}`;

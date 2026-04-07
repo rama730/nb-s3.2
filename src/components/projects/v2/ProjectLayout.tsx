@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { motion } from "framer-motion";
 import Link from "next/link";
 import {
@@ -133,9 +133,11 @@ export default function ProjectLayout({
                             {/* Edit (Owner) */}
                             {isOwner && onEdit && (
                                 <button
+                                    type="button"
                                     onClick={onEdit}
                                     className="hidden sm:flex items-center gap-1.5 px-3 py-2 rounded-md app-accent-solid hover:bg-primary/90 transition-[background-color,box-shadow] text-sm font-medium shadow-sm"
                                     title="Edit Project"
+                                    aria-label="Edit project"
                                 >
                                     <Edit className="w-4 h-4" />
                                     Edit
@@ -144,6 +146,7 @@ export default function ProjectLayout({
 
                             {/* Follow */}
                             <button
+                                type="button"
                                 onClick={onFollow}
                                 className={cn(
                                     "p-2 rounded-md transition-all flex items-center gap-1.5 text-sm font-medium disabled:opacity-60 disabled:cursor-not-allowed",
@@ -155,6 +158,8 @@ export default function ProjectLayout({
                                 data-testid="project-follow-toggle"
                                 disabled={followLoading}
                                 aria-busy={followLoading}
+                                aria-pressed={!!isFollowing}
+                                aria-label={isFollowing ? "Unfollow project" : "Follow project"}
                             >
                                 {followLoading ? (
                                     <Loader2 className="w-4 h-4 animate-spin" />
@@ -168,9 +173,11 @@ export default function ProjectLayout({
 
                             {/* Share */}
                             <button
+                                type="button"
                                 onClick={onShare}
                                 className="p-2 text-zinc-400 hover:text-zinc-900 dark:text-zinc-50 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:bg-zinc-900 dark:hover:bg-zinc-800 rounded-md transition-colors"
                                 title="Share Project"
+                                aria-label="Share project"
                             >
                                 <Share2 className="w-4 h-4" />
                             </button>
@@ -185,15 +192,18 @@ export default function ProjectLayout({
                 isScrolled && "shadow-sm"
             )}>
                 <div className="max-w-7xl mx-auto">
-                    <div className="flex items-center px-4 overflow-x-auto scrollbar-hide -mb-px">
+                    <div className="flex items-center px-4 overflow-x-auto scrollbar-hide -mb-px" role="tablist" aria-label="Project sections">
                         {TABS.map((tab) => {
                             if (tab.ownerOnly && !isOwner) return null;
                             const isActive = activeTab === tab.id;
                             return (
                                 <button
                                     key={tab.id}
+                                    type="button"
                                     onClick={() => onTabChange(tab.id)}
                                     onMouseEnter={() => onTabHover?.(tab.id)}
+                                    role="tab"
+                                    aria-selected={isActive}
                                     className={cn(
                                         "relative flex items-center gap-2 px-4 py-3 text-sm font-medium transition-all whitespace-nowrap",
                                         isActive
@@ -218,9 +228,11 @@ export default function ProjectLayout({
             </div>
 
             {/* Main Content Area */}
-            <main className="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8">
-                {children}
-            </main>
+            <section aria-label="Project detail content" className="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8">
+                <Suspense fallback={<div className="animate-pulse p-4" />}>
+                    {children}
+                </Suspense>
+            </section>
         </div>
     );
 }

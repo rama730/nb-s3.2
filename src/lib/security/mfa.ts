@@ -15,11 +15,17 @@ export type SecurityMfaFactor = {
 };
 
 function requireSecurityMfaFactorId(factor: AuthMfaFactor) {
-  if (factor.id === undefined || factor.id === null) {
+  const normalizedId = typeof factor.id === "string"
+    ? factor.id.trim()
+    : factor.id === undefined || factor.id === null
+      ? ""
+      : String(factor.id).trim();
+
+  if (!normalizedId) {
     throw new Error(`MFA factor is missing an id for factor_type "${factor.factor_type}"`);
   }
 
-  return String(factor.id);
+  return normalizedId;
 }
 
 export async function listSecurityMfaFactors(

@@ -7,6 +7,7 @@ import {
   logApiRoute,
   requireAuthenticatedUser,
 } from "@/app/api/v1/_shared";
+import { logger } from "@/lib/logger";
 import { listActiveSessions } from "@/lib/security/session-activity";
 
 type SessionPayload = {
@@ -77,7 +78,7 @@ export async function GET(request: Request) {
     });
     return jsonSuccess({ sessions });
   } catch (error) {
-    console.error("[api/v1/sessions] failed", error);
+    logger.error("[api/v1/sessions] failed", { module: 'api', error: error instanceof Error ? error.message : String(error) });
     logApiRoute(request, {
       requestId,
       action: "sessions.get",

@@ -41,11 +41,6 @@ export default function AccountDeletionWizard({ onClose, onDeleted, showToast }:
     const [deleting, setDeleting] = useState(false);
     const [transferring, setTransferring] = useState(false);
 
-    // Load data summary on mount
-    useEffect(() => {
-        loadDataSummary();
-    }, []);
-
     const loadDataSummary = useCallback(async () => {
         setLoading(true);
         try {
@@ -65,6 +60,11 @@ export default function AccountDeletionWizard({ onClose, onDeleted, showToast }:
             setLoading(false);
         }
     }, [showToast]);
+
+    // Load data summary on mount
+    useEffect(() => {
+        loadDataSummary();
+    }, [loadDataSummary]);
 
     const handleExport = async () => {
         setExporting(true);
@@ -88,13 +88,24 @@ export default function AccountDeletionWizard({ onClose, onDeleted, showToast }:
 
         setTransferring(true);
         try {
+            let failedCount = 0;
             for (const [projectId, newOwnerId] of transfers) {
                 const result = await transferProjectOwnership(projectId, newOwnerId);
                 if (!result.success) {
+                    failedCount++;
                     showToast(result.error || `Failed to transfer project`, "error");
                 }
             }
-            showToast("Project ownership transferred successfully", "success");
+            if (failedCount === 0) {
+                showToast("Project ownership transferred successfully", "success");
+            } else {
+                showToast(
+                    failedCount === transfers.length
+                        ? "Project ownership transfer failed"
+                        : `${failedCount} project transfer${failedCount === 1 ? "" : "s"} failed`,
+                    "error",
+                );
+            }
             // Reload data
             await loadDataSummary();
         } catch {

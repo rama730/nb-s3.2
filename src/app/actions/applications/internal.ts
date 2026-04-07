@@ -1931,7 +1931,7 @@ export async function getIncomingApplicationsAction(
                     columns: { role: true, title: true }
                 },
                 applicant: {
-                    columns: { id: true, username: true, fullName: true, avatarUrl: true }
+                    columns: { id: true, username: true, fullName: true, avatarUrl: true, skills: true, headline: true }
                 }
             },
             columns: { id: true, projectId: true, status: true, createdAt: true, conversationId: true },
@@ -1961,7 +1961,9 @@ export async function getIncomingApplicationsAction(
                     id: app.applicant?.id,
                     username: app.applicant?.username,
                     fullName: app.applicant?.fullName,
-                    avatarUrl: app.applicant?.avatarUrl
+                    avatarUrl: app.applicant?.avatarUrl,
+                    skills: app.applicant?.skills ?? [],
+                    headline: app.applicant?.headline ?? null,
                 },
                 status: app.status,
                 createdAt: app.createdAt,

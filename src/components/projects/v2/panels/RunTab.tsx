@@ -15,6 +15,8 @@ interface RunTabProps {
   activeFileContent?: string;
 }
 
+const EMPTY_COMMAND_HISTORY: string[] = [];
+
 function getSuggestedCommand(activeFilePath?: string): string {
   if (!activeFilePath) return "";
   const dotIndex = activeFilePath.lastIndexOf(".");
@@ -63,7 +65,7 @@ export function RunTab({ projectId, canEdit, activeFilePath, activeFileContent }
   const isRunningRef = useRef(false);
 
   const stdinInputText = useFilesWorkspaceStore((s) => s._get(projectId).ui.stdinInputText);
-  const commandHistory = useFilesWorkspaceStore((s) => s._get(projectId).ui.commandHistory ?? []);
+  const commandHistory = useFilesWorkspaceStore((s) => s._get(projectId).ui.commandHistory ?? EMPTY_COMMAND_HISTORY);
   const setLastExecutionOutput = useFilesWorkspaceStore((s) => s.setLastExecutionOutput);
   const setLastExecutionSettingsHref = useFilesWorkspaceStore((s) => s.setLastExecutionSettingsHref);
   const setStdinInputText = useFilesWorkspaceStore((s) => s.setStdinInputText);

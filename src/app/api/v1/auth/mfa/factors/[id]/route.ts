@@ -14,6 +14,7 @@ import { recordSecurityEvent } from "@/lib/security/audit";
 import { getVerifiedTotpFactors, listSecurityMfaFactors } from "@/lib/security/mfa";
 import { countRemainingRecoveryCodes, parseStoredRecoveryCodes } from "@/lib/security/recovery-codes";
 import { resolveSecurityStepUp } from "@/lib/security/step-up";
+import { checkIdempotencyKey, saveIdempotencyResult } from "@/lib/security/idempotency";
 import { logger } from "@/lib/logger";
 
 export async function DELETE(
@@ -33,6 +34,18 @@ export async function DELETE(
       errorCode: "FORBIDDEN",
     });
     return csrfError;
+  }
+
+  // Idempotency — prevent duplicate MFA factor deletions
+  const idempotencyCheck = await checkIdempotencyKey(request, 'auth.mfa.deleteFactor');
+  if (idempotencyCheck.isDuplicate) {
+    if (idempotencyCheck.cachedResponse) {
+      return new Response(idempotencyCheck.cachedResponse, {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    return jsonError('Request is already being processed', 409, 'CONFLICT');
   }
 
   const limitResponse = await enforceRouteLimit(request, "api:v1:auth:mfa:factors:delete", 40, 60);
@@ -232,9 +245,11 @@ export async function DELETE(
       success: true,
       status: 200,
     });
+    const successBody = JSON.stringify({ ok: true, message: "MFA factor removed" });
+    await saveIdempotencyResult(request, 'auth.mfa.deleteFactor', successBody, idempotencyCheck.lockToken);
     return jsonSuccess(undefined, "MFA factor removed");
   } catch (error) {
-    console.error("[api/v1/auth/mfa/factors/:id] failed", error);
+    logger.error("[api/v1/auth/mfa/factors/:id] failed", { module: 'api', error: error instanceof Error ? error.message : String(error) });
     logApiRoute(request, {
       requestId,
       action: "auth.mfaFactor.delete",

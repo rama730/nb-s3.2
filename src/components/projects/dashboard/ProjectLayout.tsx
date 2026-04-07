@@ -245,13 +245,16 @@ export default function ProjectLayout({
             </div>
 
             {/* Main Content Area */}
-            <main className={cn(
+            <section
+                aria-label="Project detail content"
+                className={cn(
                 isFilesTab 
                     ? "flex-1 w-full h-full overflow-hidden flex flex-col" 
                     : "max-w-7xl mx-auto p-4 sm:p-6 lg:p-8"
-            )}>
+            )}
+            >
                 {children}
-            </main>
+            </section>
         </div>
     );
 }

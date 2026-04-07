@@ -12,6 +12,7 @@ interface WorkspaceSyncOverlayProps {
   initialSyncStatus: "pending" | "cloning" | "indexing" | "ready" | "failed";
   importSourceType?: "github" | "upload" | "scratch" | null;
   canEdit: boolean;
+  isActive?: boolean;
   onSyncStateChange?: (state: "pending" | "cloning" | "indexing" | "ready" | "failed") => void;
 }
 
@@ -35,6 +36,7 @@ export default function WorkspaceSyncOverlay({
   initialSyncStatus,
   importSourceType,
   canEdit,
+  isActive = true,
   onSyncStateChange,
 }: WorkspaceSyncOverlayProps) {
   const { showToast } = useToast();
@@ -108,12 +110,12 @@ export default function WorkspaceSyncOverlay({
       }, delayMs);
     };
 
-    if (syncState === "ready" || syncState === "failed") {
+    if (!isActive || syncState === "ready" || syncState === "failed") {
       overlayStartedAtRef.current = null;
       pollDelayRef.current = 3000;
       clearTimer();
       setSyncPollError(null);
-      if (syncState === "failed" && !syncErrorReason) {
+      if (isActive && syncState === "failed" && !syncErrorReason) {
         getProjectSyncStatus(projectId).then((res) => {
           if (res.success && res.lastError) setSyncErrorReason(res.lastError);
         });
@@ -144,7 +146,7 @@ export default function WorkspaceSyncOverlay({
         document.removeEventListener("visibilitychange", onVisibility);
       }
     };
-  }, [projectId, syncState, router, syncErrorReason]);
+  }, [isActive, projectId, syncState, router, syncErrorReason]);
 
   const handleManualRefresh = useCallback(async () => {
     setRetryLoading(true);

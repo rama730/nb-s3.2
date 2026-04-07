@@ -41,6 +41,10 @@ export function useTreeContext(options: {
   onDesktopFileDrop?: (files: File[], targetFolderId: string) => void;
   // Folder sizes
   folderSizes: Record<string, number>;
+  treeItemMetaByNodeId: Record<
+    string,
+    { ariaLevel: number; ariaPosInSet: number; ariaSetSize: number }
+  >;
   handleSelect: (node: ProjectNode, e?: React.MouseEvent) => void;
   handleToggleFolder: (node: ProjectNode) => Promise<void>;
   handleDropOnFolder: (targetId: string, draggedId: string) => Promise<void>;
@@ -105,6 +109,7 @@ export function useTreeContext(options: {
     onRenameCancel,
     onDesktopFileDrop,
     folderSizes,
+    treeItemMetaByNodeId,
   } = options;
 
   const handleOpenNodeFromMenu = useCallback(
@@ -180,6 +185,7 @@ export function useTreeContext(options: {
 
       // Folder sizes
       folderSizes,
+      treeItemMetaByNodeId,
 
       onToggle: (node: ProjectNode) => void handleToggleFolder(node),
       onSelect: (node: ProjectNode, e?: React.MouseEvent) => handleSelect(node, e),
@@ -223,6 +229,7 @@ export function useTreeContext(options: {
       onRenameCancel,
       onDesktopFileDrop,
       folderSizes,
+      treeItemMetaByNodeId,
       handleSelect,
       handleToggleFolder,
       handleDropOnFolder,

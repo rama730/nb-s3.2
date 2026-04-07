@@ -28,6 +28,8 @@ export function ProfileTabs({
         >
             <div className="transition-all duration-200 py-0">
                 <div
+                    role="tablist"
+                    aria-label="Profile sections"
                     className={cn(
                         'border border-zinc-200 dark:border-zinc-800 p-1 flex gap-1 shadow-sm overflow-hidden transition-all duration-300',
                         'bg-white/95 dark:bg-zinc-950/95 backdrop-blur supports-[backdrop-filter]:bg-white/80 supports-[backdrop-filter]:dark:bg-zinc-950/80',
@@ -41,6 +43,10 @@ export function ProfileTabs({
                                 key={t.key}
                                 type="button"
                                 onClick={() => onChange(t.key)}
+                                role="tab"
+                                id={`profile-tab-${t.key}`}
+                                aria-selected={active}
+                                aria-controls={`profile-panel-${t.key}`}
                                 className={cn(
                                     'flex-1 rounded-xl px-4 py-2.5 text-sm font-medium transition-all duration-200 text-left group',
                                     active

@@ -32,6 +32,26 @@ export function useTabContentLoader({
   const loadFileContent = useCallback(
     async (node: ProjectNode) => {
       if (!node?.id || !node.s3Key) return;
+
+      // FW6: Warn and block editor for very large files to prevent browser freeze
+      const nodeSizeBytes = (node as { sizeBytes?: number | null }).sizeBytes;
+      if (typeof nodeSizeBytes === 'number' && nodeSizeBytes > FILES_RUNTIME_BUDGETS.maxEditableFileSizeBytes) {
+        setTabById((prev) => ({
+          ...prev,
+          [node.id]: {
+            ...(prev[node.id] ?? {
+              id: node.id, node, content: "", contentVersion: 0,
+              savedSnapshot: "", savedSnapshotVersion: 0, isDirty: false,
+              isSaving: false, isDeleting: false, hasLock: false,
+              lockInfo: null, offlineQueued: false,
+            }),
+            isLoading: false,
+            error: `File is too large to edit (${Math.round(nodeSizeBytes / 1_048_576)}MB). Maximum editable size is ${Math.round(FILES_RUNTIME_BUDGETS.maxEditableFileSizeBytes / 1_048_576)}MB.`,
+          },
+        }));
+        return;
+      }
+
       const existingLoad = inFlightByNodeRef.current.get(node.id);
       if (existingLoad) return existingLoad;
       if (opsInProgressRef.current.has(node.id)) return;
@@ -40,10 +60,11 @@ export function useTabContentLoader({
       ) {
         return;
       }
+      // Increment synchronously before async boundary to prevent race
+      contentLoadInFlightRef.current += 1;
 
       const runLoad: Promise<void> = Promise.resolve().then(async () => {
         opsInProgressRef.current.add(node.id);
-        contentLoadInFlightRef.current += 1;
 
         const nextToken = (loadTokenRef.current.get(node.id) || 0) + 1;
         loadTokenRef.current.set(node.id, nextToken);

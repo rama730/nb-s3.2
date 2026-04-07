@@ -22,6 +22,8 @@ export interface ExplorerSlice {
   saveCurrentView: (projectId: string, name: string) => void;
   applySavedView: (projectId: string, viewId: string) => void;
   deleteSavedView: (projectId: string, viewId: string) => void;
+  /** FW9: Remove expandedFolderIds entries whose node no longer exists */
+  pruneDeadExpanded: (projectId: string) => void;
 }
 
 export const createExplorerSlice: StateCreator<FilesWorkspaceState, [], [], ExplorerSlice> = (set) => ({
@@ -263,6 +265,26 @@ export const createExplorerSlice: StateCreator<FilesWorkspaceState, [], [], Expl
             ...ws,
             savedViews: ws.savedViews.filter((view) => view.id !== viewId),
           },
+        },
+      };
+    }),
+
+  // FW9: Prune expandedFolderIds entries for deleted nodes
+  pruneDeadExpanded: (projectId) =>
+    set((state) => {
+      const ws = state.byProjectId[projectId];
+      if (!ws) return state;
+      const knownIds = ws.nodesById;
+      const current = ws.expandedFolderIds;
+      const keys = Object.keys(current);
+      const dead = keys.filter((id) => !(id in knownIds));
+      if (dead.length === 0) return state;
+      const next = { ...current };
+      for (const id of dead) delete next[id];
+      return {
+        byProjectId: {
+          ...state.byProjectId,
+          [projectId]: { ...ws, expandedFolderIds: next },
         },
       };
     }),

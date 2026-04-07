@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
 import { describe, it } from "node:test";
 
 /**
@@ -201,15 +202,12 @@ describe("transfer ownership validation", () => {
 
 describe("confirmation token generation", () => {
     it("tokens should be 64 hex characters (32 bytes)", () => {
-        // Simulate token generation
-        const { randomBytes } = require("crypto");
         const token = randomBytes(32).toString("hex");
         assert.equal(token.length, 64);
         assert.ok(/^[0-9a-f]{64}$/.test(token), "Token should be hex-encoded");
     });
 
     it("tokens should be unique", () => {
-        const { randomBytes } = require("crypto");
         const tokens = new Set<string>();
         for (let i = 0; i < 100; i++) {
             tokens.add(randomBytes(32).toString("hex"));

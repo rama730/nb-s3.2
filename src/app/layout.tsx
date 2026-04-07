@@ -11,6 +11,7 @@ import "@/lib/env";
 import "./globals.css";
 import { buildThemePrehydrateScript } from "@/lib/theme/appearance";
 import { RoutePerformanceObserver } from "@/components/observability/RoutePerformanceObserver";
+import { resolveAuthBaseUrl } from "@/lib/auth/redirects";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -23,21 +24,12 @@ const geistMono = Geist_Mono({
 });
 
 const THEME_PREHYDRATE_SCRIPT = buildThemePrehydrateScript();
+const APP_METADATA_BASE = new URL(
+  resolveAuthBaseUrl({ requireConfiguredBaseInProduction: false }),
+);
 
 export const metadata: Metadata = {
-  title: "Edge - Professional Social Network",
-  description: "Connect, collaborate, and build amazing projects with professionals worldwide",
-  keywords: ["professional network", "collaboration", "projects", "social media"],
-  authors: [{ name: "Edge Team" }],
-  themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
-    { media: "(prefers-color-scheme: dark)", color: "#0a0a0a" },
-  ],
-  openGraph: {
-    title: "Edge - Professional Social Network",
-    description: "Connect, collaborate, and build amazing projects with professionals worldwide",
-    type: "website",
-  },
+  metadataBase: APP_METADATA_BASE,
 };
 
 export default async function RootLayout({
@@ -48,8 +40,9 @@ export default async function RootLayout({
   const messages = await getMessages();
 
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="en" data-scroll-behavior="smooth" suppressHydrationWarning>
       <head>
+        <meta content="#ffffff" data-app-theme-color="true" name="theme-color" />
         <Script id="theme-prehydrate" strategy="beforeInteractive">
           {THEME_PREHYDRATE_SCRIPT}
         </Script>
@@ -61,7 +54,7 @@ export default async function RootLayout({
               <RoutePerformanceObserver />
               {children}
               <Toaster position="bottom-right" />
-              <Analytics />
+              {process.env.NODE_ENV === "production" ? <Analytics /> : null}
             </QueryProvider>
           </ThemeProvider>
         </NextIntlClientProvider>

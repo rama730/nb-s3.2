@@ -14,7 +14,8 @@ import {
 } from '@/lib/db/schema';
 import { createClient } from '@/lib/supabase/server';
 import { eq, and, ne, or, inArray, sql, lt, desc, lte, isNull } from 'drizzle-orm';
-import { getConversations, type ConversationWithDetails } from './messaging/conversations';
+import { getConversations } from './messaging/_all';
+import type { ConversationWithDetails } from './messaging/_all';
 import { getPendingRequests } from './connections';
 import { getInboxApplicationsAction, getIncomingApplicationsAction } from './applications';
 import { workspaceLayoutSchema } from '@/components/workspace/dashboard/validation';

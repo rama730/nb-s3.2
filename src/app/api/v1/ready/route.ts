@@ -1,5 +1,4 @@
-import { NextResponse } from "next/server";
-import { getRequestId, logApiRequest } from "@/app/api/_shared";
+import { getRequestId, jsonSuccess, logApiRoute } from "@/app/api/v1/_shared";
 
 export const dynamic = "force-dynamic";
 
@@ -7,12 +6,12 @@ export const dynamic = "force-dynamic";
 export async function GET(request: Request) {
   const startedAt = Date.now();
   const requestId = getRequestId(request);
-  logApiRequest(request, {
+  logApiRoute(request, {
     requestId,
     action: "ready.get",
     startedAt,
     status: 200,
     success: true,
   });
-  return NextResponse.json({ ok: true }, { status: 200 });
+  return jsonSuccess({ ok: true });
 }

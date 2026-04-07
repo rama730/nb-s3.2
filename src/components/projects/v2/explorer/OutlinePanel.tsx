@@ -11,6 +11,8 @@ interface OutlinePanelProps {
   className?: string;
 }
 
+const EMPTY_SYMBOLS: EditorSymbol[] = [];
+
 const SymbolIcon = ({ kind }: { kind: SymbolKind }) => {
   if (kind === SymbolKind.Class || kind === SymbolKind.Interface)
     return <Box className="w-3.5 h-3.5 text-orange-500" />;
@@ -25,7 +27,7 @@ const SymbolIcon = ({ kind }: { kind: SymbolKind }) => {
 };
 
 export default function OutlinePanel({ projectId, className }: OutlinePanelProps) {
-  const activeFileSymbols = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.activeFileSymbols || []);
+  const activeFileSymbols = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.activeFileSymbols ?? EMPTY_SYMBOLS);
   const activeTabId = useFilesWorkspaceStore((s) => {
      // Try to get active tab from active pane
      const ws = s.byProjectId[projectId];

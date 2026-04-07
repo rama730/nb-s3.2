@@ -7,6 +7,7 @@ import {
   logApiRoute,
   requireAuthenticatedUser,
 } from "@/app/api/v1/_shared";
+import { logger } from "@/lib/logger";
 
 export async function DELETE(request: Request) {
   const startedAt = Date.now();
@@ -74,7 +75,7 @@ export async function DELETE(request: Request) {
     });
     return jsonSuccess(undefined, "All sessions revoked");
   } catch (error) {
-    console.error("[api/v1/sessions/all] failed", error);
+    logger.error("[api/v1/sessions/all] failed", { module: 'api', error: error instanceof Error ? error.message : String(error) });
     logApiRoute(request, {
       requestId,
       action: "sessions.deleteAll",

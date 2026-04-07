@@ -31,6 +31,7 @@ export type {
   WorkspaceTab,
   WorkspacePane,
   SoftLock,
+  NodeEventSummary,
   FileState,
   EditorSymbol,
   ProjectWorkspaceState,

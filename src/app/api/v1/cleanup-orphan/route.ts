@@ -1,7 +1,6 @@
-import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { isAdminUser } from '@/lib/security/admin'
-import { getRequestId, logApiRequest } from '@/app/api/_shared'
+import { getRequestId, jsonSuccess, jsonError, logApiRoute } from '@/app/api/v1/_shared'
 
 export async function GET(request: Request) {
     const startedAt = Date.now()
@@ -10,7 +9,7 @@ export async function GET(request: Request) {
     const { data: { user } } = await supabase.auth.getUser()
 
     if (!isAdminUser(user)) {
-        logApiRequest(request, {
+        logApiRoute(request, {
             requestId,
             action: 'cleanupOrphan.get',
             startedAt,
@@ -19,10 +18,10 @@ export async function GET(request: Request) {
             userId: user?.id ?? null,
             errorCode: 'FORBIDDEN',
         })
-        return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+        return jsonError('Forbidden', 403, 'FORBIDDEN')
     }
 
-    logApiRequest(request, {
+    logApiRoute(request, {
         requestId,
         action: 'cleanupOrphan.get',
         startedAt,
@@ -30,5 +29,5 @@ export async function GET(request: Request) {
         success: true,
         userId: user?.id ?? null,
     })
-    return NextResponse.json({ message: 'Cleanup endpoint' })
+    return jsonSuccess({ message: 'Cleanup endpoint' })
 }

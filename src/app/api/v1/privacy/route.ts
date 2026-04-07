@@ -6,6 +6,7 @@ import {
   logApiRoute,
   requireAuthenticatedUser,
 } from "@/app/api/v1/_shared";
+import { logger } from "@/lib/logger";
 import { db } from "@/lib/db";
 import { profiles } from "@/lib/db/schema";
 import { listPrivacyActivity } from "@/lib/privacy/audit";
@@ -159,7 +160,7 @@ export async function GET(request: Request) {
       },
     });
   } catch (error) {
-    console.error("[api/v1/privacy] failed", error);
+    logger.error("[api/v1/privacy] failed", { module: 'api', error: error instanceof Error ? error.message : String(error) });
     logApiRoute(request, {
       requestId,
       action: "privacy.get",

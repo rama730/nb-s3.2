@@ -33,6 +33,10 @@ export interface FileTreeItemContext {
 
     // Folder sizes
     folderSizes: Record<string, number>;
+    treeItemMetaByNodeId: Record<
+      string,
+      { ariaLevel: number; ariaPosInSet: number; ariaSetSize: number }
+    >;
     
     // Handlers
     onToggle: (node: ProjectNode) => void;
@@ -140,6 +144,7 @@ export function FileTreeItem({
     const isRenaming = context.renameNodeId === node.id;
     const isFolder = node.type === "folder";
     const folderSize = isFolder ? context.folderSizes[node.id] : undefined;
+    const treeItemMeta = context.treeItemMetaByNodeId[node.id];
 
     // Removed inline Context Menu memory hog - now delegates globally to O(1) Portal
 
@@ -159,6 +164,9 @@ export function FileTreeItem({
             onRenameChange={isRenaming ? context.onRenameChange : undefined}
             onRenameConfirm={isRenaming ? context.onRenameConfirm : undefined}
             onRenameCancel={isRenaming ? context.onRenameCancel : undefined}
+            ariaLevel={treeItemMeta?.ariaLevel ?? row.level + 1}
+            ariaPosInSet={treeItemMeta?.ariaPosInSet ?? 1}
+            ariaSetSize={treeItemMeta?.ariaSetSize ?? 1}
 
             // Desktop drop upload
             onDesktopDrop={context.onDesktopFileDrop}
@@ -191,7 +199,7 @@ export function FileTreeItem({
                   {lock ? (
                     <span
                       className="text-[9px] px-1 rounded-sm bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300 flex-shrink-0 font-mono"
-                      title={`Locked by ${lock.lockedByName || lock.lockedBy}`}
+                      title={`Locked by ${lock.lockedByName?.trim() || "collaborator"}`}
                     >
                       lock
                     </span>

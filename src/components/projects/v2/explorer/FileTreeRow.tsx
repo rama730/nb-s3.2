@@ -71,6 +71,9 @@ function InlineRenameInput({
 interface FileTreeRowProps {
     node: ProjectNode;
     indentationGuides: boolean[];
+    ariaLevel?: number;
+    ariaPosInSet?: number;
+    ariaSetSize?: number;
     isSelected?: boolean;
     isExpanded?: boolean;
     isInSelectionMode?: boolean;
@@ -102,6 +105,9 @@ interface FileTreeRowProps {
 function arePropsEqual(prev: FileTreeRowProps, next: FileTreeRowProps) {
     if (
         prev.node !== next.node || 
+        prev.ariaLevel !== next.ariaLevel ||
+        prev.ariaPosInSet !== next.ariaPosInSet ||
+        prev.ariaSetSize !== next.ariaSetSize ||
         prev.isSelected !== next.isSelected ||
         prev.isExpanded !== next.isExpanded ||
         prev.isInSelectionMode !== next.isInSelectionMode ||
@@ -131,6 +137,9 @@ function arePropsEqual(prev: FileTreeRowProps, next: FileTreeRowProps) {
 export const FileTreeRow = React.memo(function FileTreeRow({
     node,
     indentationGuides,
+    ariaLevel,
+    ariaPosInSet,
+    ariaSetSize,
     isSelected,
     isExpanded,
     isInSelectionMode,
@@ -175,6 +184,13 @@ export const FileTreeRow = React.memo(function FileTreeRow({
         <div
             data-workspace-file-item="true"
             data-node-id={node.id}
+            role="treeitem"
+            aria-level={ariaLevel}
+            aria-posinset={ariaPosInSet}
+            aria-setsize={ariaSetSize}
+            aria-selected={isSelected ? "true" : "false"}
+            aria-expanded={isFolder ? (isExpanded ? "true" : "false") : undefined}
+            tabIndex={isSelected ? 0 : -1}
             className={cn(
                 "group relative flex items-center h-[22px] min-w-0 cursor-pointer select-none transition-colors pr-2",
                 isSelected

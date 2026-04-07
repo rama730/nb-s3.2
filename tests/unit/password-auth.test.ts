@@ -61,6 +61,33 @@ describe("password auth helpers", () => {
     });
   });
 
+  it("surfaces email confirmation errors distinctly from invalid credentials", async () => {
+    const result = await __testOnly.verifyPasswordCredentialWithVerifier(
+      {
+        auth: {
+          async signInWithPassword() {
+            return {
+              error: {
+                message: "Email not confirmed",
+                code: "email_not_confirmed",
+                status: 400,
+              },
+            };
+          },
+          async signOut() {},
+        },
+      },
+      "user@example.com",
+      "correct-password",
+    );
+
+    assert.deepEqual(result, {
+      ok: false,
+      reason: "email_not_confirmed",
+      message: "Email not confirmed",
+    });
+  });
+
   it("preserves backend error messages for non-credential verification failures", async () => {
     const result = await __testOnly.verifyPasswordCredentialWithVerifier(
       {

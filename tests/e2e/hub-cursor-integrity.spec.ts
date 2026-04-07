@@ -5,6 +5,33 @@ import { attachPageMonitoring } from './_helpers/monitoring';
 test.describe('Hub cursor integrity', () => {
     test.skip(!hasE2ECredentials, 'E2E_USER_EMAIL and E2E_USER_PASSWORD are required.');
 
+    test('does not fetch onboarding and exposes named Hub controls for onboarded users', async ({ page }) => {
+        const monitor = attachPageMonitoring(page);
+        await login(page);
+
+        const onboardingRequests: string[] = [];
+        page.on('request', (request) => {
+            const url = new URL(request.url());
+            if (url.pathname === '/onboarding') {
+                onboardingRequests.push(request.url());
+            }
+        });
+
+        await page.goto('/hub');
+        await expect(page).toHaveURL(/\/hub(?:\?|$)/);
+        await expect(page.getByRole('button', { name: 'Search projects' })).toBeVisible();
+        await expect(page.getByRole('button', { name: 'Grid view' })).toBeVisible();
+        await expect(page.getByRole('button', { name: 'List view' })).toBeVisible();
+        await expect(page.getByRole('button', { name: 'Open filters' })).toBeVisible();
+        await expect(page.getByRole('button', { name: /open notifications/i })).toBeVisible();
+
+        await page.waitForTimeout(1500);
+        expect(onboardingRequests).toEqual([]);
+
+        await monitor.assertNoViolations();
+        monitor.detach();
+    });
+
     test('does not render duplicate cards across first two loads', async ({ page }) => {
         const monitor = attachPageMonitoring(page);
         await login(page);
@@ -44,6 +71,24 @@ test.describe('Hub cursor integrity', () => {
         expect(allIds.size).toBeGreaterThanOrEqual(initialIds.size);
         const duplicateIds = rawAfterScroll.filter((id, idx) => rawAfterScroll.indexOf(id) !== idx);
         expect(duplicateIds).toEqual([]);
+
+        await monitor.assertNoViolations();
+        monitor.detach();
+    });
+
+    test('shows open roles on the default all-projects hub feed', async ({ page }) => {
+        const monitor = attachPageMonitoring(page);
+        await login(page);
+        await page.goto('/hub');
+
+        const fixtureCard = page
+            .locator("[data-testid^='project-card-']")
+            .filter({ hasText: 'E2E Applications Fixture Project' })
+            .first();
+
+        await expect(fixtureCard).toBeVisible();
+        await expect(fixtureCard).toContainText(/Open Roles|roles/i);
+        await expect(fixtureCard).toContainText(/QA Engineer|1 Open Roles|1 roles/i);
 
         await monitor.assertNoViolations();
         monitor.detach();

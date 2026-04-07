@@ -322,6 +322,11 @@ export const createFilesSlice: StateCreator<FilesWorkspaceState, [], [], FilesSl
       delete nextPinned[nodeId];
       const nextFileStates = { ...ws.fileStates };
       delete nextFileStates[nodeId];
+      const nextSelectedNodeIds = ws.selectedNodeIds.filter((id) => id !== nodeId);
+      const selectionChanged =
+        ws.selectedNodeId === nodeId
+        || ws.selectedNodeIds.includes(nodeId)
+        || nextSelectedNodeIds.length !== ws.selectedNodeIds.length;
 
       // Phase 5: Clean up detached Map entries
       deleteFileContent(projectId, nodeId);
@@ -346,8 +351,11 @@ export const createFilesSlice: StateCreator<FilesWorkspaceState, [], [], FilesSl
             favorites: nextFav,
             pinnedByTabId: nextPinned,
             fileStates: nextFileStates,
+            selectedNodeId: ws.selectedNodeId === nodeId ? null : ws.selectedNodeId,
+            selectedNodeIds: nextSelectedNodeIds,
             treeVersion: ws.treeVersion + 1,
             tabsVersion: ws.tabsVersion + 1,
+            selectionVersion: selectionChanged ? ws.selectionVersion + 1 : ws.selectionVersion,
             panes: {
               left: closeFromPane(ws.panes.left),
               right: closeFromPane(ws.panes.right),

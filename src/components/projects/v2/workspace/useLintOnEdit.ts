@@ -34,12 +34,16 @@ export function useLintOnEdit({
   useEffect(() => {
     if (!canEdit) return;
 
-    const runLint = async (nodeId: string, content: string, filePath: string) => {
+    const runLint = async (nodeId: string, content: string, filePath: string, versionAtLint: number) => {
       const ext = filePath.includes(".") ? "." + filePath.split(".").pop()!.toLowerCase() : "";
       if (!LINT_EXTS.has(ext)) return;
 
       const res = await lintFileAction(projectId, nodeId, content, filePath);
       if (!res.ok) return;
+
+      // Discard stale lint results if content has changed since we started
+      const currentVersion = tabByIdRef.current[nodeId]?.contentVersion ?? 0;
+      if (currentVersion !== versionAtLint) return;
 
       const existing = useFilesWorkspaceStore.getState()._get(projectId).ui.problems ?? [];
       const merged = [
@@ -61,14 +65,20 @@ export function useLintOnEdit({
       if (!LINT_EXTS.has(ext)) continue;
 
       const nodeIdForLint = tabId;
+      const versionAtSchedule = tab.contentVersion ?? 0;
       timerRef.current[paneId] = setTimeout(() => {
         const currentTab = tabByIdRef.current[nodeIdForLint];
         if (!currentTab?.node) return;
+        if ((currentTab.contentVersion ?? 0) !== versionAtSchedule) {
+          timerRef.current[paneId] = null;
+          return;
+        }
         void (async () => {
           const filePath = await getNodeDisplayPath(projectId, nodeIdForLint);
           if (filePath) {
+            const versionAtLint = tabByIdRef.current[nodeIdForLint]?.contentVersion ?? 0;
             const lintContent = getFileContent(projectId, nodeIdForLint);
-            void runLint(nodeIdForLint, lintContent, filePath);
+            void runLint(nodeIdForLint, lintContent, filePath, versionAtLint);
           }
         })();
         timerRef.current[paneId] = null;

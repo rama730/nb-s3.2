@@ -6,6 +6,7 @@ import {
   logApiRoute,
   requireAuthenticatedUser,
 } from "@/app/api/v1/_shared";
+import { logger } from "@/lib/logger";
 import { listSecurityMfaFactors } from "@/lib/security/mfa";
 
 type MfaFactorPayload = {
@@ -71,7 +72,7 @@ export async function GET(request: Request) {
     });
     return jsonSuccess({ factors });
   } catch (error) {
-    console.error("[api/v1/auth/mfa/factors] failed", error);
+    logger.error("[api/v1/auth/mfa/factors] failed", { module: 'api', error: error instanceof Error ? error.message : String(error) });
     logApiRoute(request, {
       requestId,
       action: "auth.mfaFactors.get",

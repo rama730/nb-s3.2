@@ -15,6 +15,7 @@ export function ExperienceCard({ experiences, isOwner, onAdd }: ExperienceCardPr
             title="Experience"
             icon={<Briefcase className="w-5 h-5" />}
             onAdd={onAdd}
+            addLabel="Add work experience"
         >
             <div className="px-5 py-4 space-y-6">
                 {experiences && experiences.length > 0 ? (
@@ -39,9 +40,17 @@ export function ExperienceCard({ experiences, isOwner, onAdd }: ExperienceCardPr
                     ))
                 ) : (
                     <div className="text-center py-6">
-                        <p className="text-sm text-zinc-500 dark:text-zinc-400">
-                            {isOwner ? 'Add your work experience' : 'No experience listed'}
-                        </p>
+                        {isOwner && onAdd ? (
+                            <button
+                                type="button"
+                                onClick={onAdd}
+                                className="text-sm font-medium text-indigo-600 hover:text-indigo-500"
+                            >
+                                Add your work experience
+                            </button>
+                        ) : (
+                            <p className="text-sm text-zinc-500 dark:text-zinc-400">No experience listed</p>
+                        )}
                     </div>
                 )}
             </div>

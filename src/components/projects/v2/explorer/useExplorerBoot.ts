@@ -19,10 +19,11 @@ const EMPTY_OBJ = {};
 export function useExplorerBoot(options: {
   projectId: string;
   canEdit: boolean;
+  isActive: boolean;
   syncStatus?: string;
   showToast: (msg: string, type: "success" | "error" | "info") => void;
 }) {
-  const { projectId, syncStatus, showToast } = options;
+  const { projectId, isActive, syncStatus, showToast } = options;
 
   const [isBooting, setIsBooting] = useState(true);
   const [accessError, setAccessError] = useState<string | null>(null);
@@ -46,9 +47,15 @@ export function useExplorerBoot(options: {
   const batchLoadedRef = useRef(false);
   const folderLoadInFlightRef = useRef<Map<string, Promise<void>>>(new Map());
   const prefetchedFolderKeysRef = useRef<Set<string>>(new Set());
+  const isActiveRef = useRef(isActive);
+
+  useEffect(() => {
+    isActiveRef.current = isActive;
+  }, [isActive]);
 
   const loadFolderContent = useCallback(
     async (parentId: string | null, mode: "refresh" | "append" = "append") => {
+      if (!isActiveRef.current) return;
       const requestKey = `${filesParentKey(parentId)}::${mode}`;
       const inFlight = folderLoadInFlightRef.current.get(requestKey);
       if (inFlight) {
@@ -118,6 +125,8 @@ export function useExplorerBoot(options: {
             }
           }
 
+          if (!isActiveRef.current) return;
+
           const latestWs = useFilesWorkspaceStore.getState().byProjectId[projectId];
           const currentChildrenIds = latestWs?.childrenByParentId?.[parentKey] || [];
           const mergedChildIds =
@@ -136,6 +145,7 @@ export function useExplorerBoot(options: {
             if (!prefetchedFolderKeysRef.current.has(prefetchKey)) {
               prefetchedFolderKeysRef.current.add(prefetchKey);
               queueMicrotask(() => {
+                if (!isActiveRef.current) return;
                 void loadFolderContent(parentId, "append");
               });
             }
@@ -188,6 +198,10 @@ export function useExplorerBoot(options: {
 
   // 1. Root Boot (Initial Load)
   const boot = useCallback(async () => {
+    if (!isActiveRef.current) {
+      setIsBooting(false);
+      return;
+    }
     const key = filesParentKey(null);
     const currentWs = useFilesWorkspaceStore.getState().byProjectId[projectId];
     const alreadyLoaded = currentWs?.loadedChildren?.[key];
@@ -198,6 +212,7 @@ export function useExplorerBoot(options: {
       try {
         // Materialized Path Flat Tree Load
         const { nodes: allNodes, isComplete } = await getProjectTreeFlat(projectId);
+        if (!isActiveRef.current) return;
 
         if (isComplete && allNodes && allNodes.length > 0) {
           upsertNodes(projectId, allNodes);
@@ -226,8 +241,11 @@ export function useExplorerBoot(options: {
         }
       } catch (e) {
         console.error("Flat tree load failed, falling back to paginated loader", e);
+        if (!isActiveRef.current) return;
         await loadFolderContent(null, "refresh");
       }
+
+      if (!isActiveRef.current) return;
 
       const updatedWs = useFilesWorkspaceStore.getState().byProjectId[projectId];
       const rootChildren = updatedWs.childrenByParentId[filesParentKey(null)] || [];
@@ -252,21 +270,24 @@ export function useExplorerBoot(options: {
   }, [projectId, loadFolderContent, toggleExpanded]);
 
   useEffect(() => {
+    if (!isActive) return;
     void boot();
-  }, [boot]);
+  }, [boot, isActive]);
 
   // Auto-refresh when sync finishes (GitHub import)
   const prevSyncStatus = useRef(syncStatus);
   useEffect(() => {
+    if (!isActive) return;
     if (prevSyncStatus.current !== "ready" && syncStatus === "ready") {
       console.log("Sync finished, refreshing file explorer...");
       void loadFolderContent(null, "refresh");
     }
     prevSyncStatus.current = syncStatus;
-  }, [syncStatus, loadFolderContent]);
+  }, [isActive, syncStatus, loadFolderContent]);
 
   // 2. Batch Hydration (Session Restore)
   useEffect(() => {
+    if (!isActive) return;
     if (batchLoadedRef.current) return;
     const currentExpanded =
       useFilesWorkspaceStore.getState().byProjectId[projectId]?.expandedFolderIds || {};
@@ -284,6 +305,7 @@ export function useExplorerBoot(options: {
         const parents = foldersToLoad.map((id) => (id === "root" ? null : id));
 
         const allNodes = (await getProjectBatchNodes(projectId, parents)) as ProjectNode[];
+        if (!isActiveRef.current) return;
 
         const grouped: Record<string, ProjectNode[]> = {};
         parents.forEach((p) => (grouped[filesParentKey(p)] = []));
@@ -310,7 +332,7 @@ export function useExplorerBoot(options: {
         console.error("Batch hydration failed", e);
       }
     })();
-  }, [projectId, upsertNodes, setChildren, markChildrenLoaded, setFolderMeta]);
+  }, [isActive, projectId, upsertNodes, setChildren, markChildrenLoaded, setFolderMeta]);
 
   // 3. User Interaction Expansion (Lazy Load)
   const handleToggleFolder = useCallback(

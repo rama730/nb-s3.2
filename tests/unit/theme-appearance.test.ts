@@ -17,6 +17,7 @@ import {
   getAccentSwatchBackground,
   resolveReducedMotionPreference,
 } from "../../src/lib/theme/appearance-runtime";
+import { readAppearanceSettings } from "../../src/lib/theme/appearance-client";
 
 test("parseAppearanceSnapshot accepts valid snapshot payload", () => {
   const parsed = parseAppearanceSnapshot({
@@ -201,4 +202,42 @@ test("resolveReducedMotionPreference honors app and system reduced-motion inputs
     }),
     true,
   );
+});
+
+test("readAppearanceSettings dedupes concurrent bootstrap fetches", async () => {
+  const originalFetch = globalThis.fetch;
+  let fetchCount = 0;
+
+  globalThis.fetch = async () => {
+    fetchCount += 1;
+    return new Response(
+      JSON.stringify({
+        success: true,
+        data: {
+          userId: "user-1",
+          snapshot: createAppearanceSnapshot({
+            ...DEFAULT_APPEARANCE_SNAPSHOT,
+            updatedAt: "2026-03-10T00:00:00.000Z",
+          }),
+        },
+      }),
+      {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      },
+    );
+  };
+
+  try {
+    const [first, second] = await Promise.all([
+      readAppearanceSettings(),
+      readAppearanceSettings(),
+    ]);
+
+    assert.equal(fetchCount, 1);
+    assert.deepEqual(first, second);
+    assert.equal(first.userId, "user-1");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

@@ -1,8 +1,7 @@
-import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { checkUsernameAvailabilityWithClient } from '@/lib/onboarding/username-check'
 import { validateCsrf } from '@/lib/security/csrf'
-import { getRequestId, logApiRequest } from '@/app/api/_shared'
+import { getRequestId, jsonSuccess, jsonError, logApiRoute } from '@/app/api/v1/_shared'
 
 async function runUsernameCheck(username: string, request: Request) {
     const supabase = await createClient()
@@ -37,7 +36,7 @@ export async function GET(request: Request) {
     const username = url.searchParams.get('username') || ''
     const result = await runUsernameCheck(username, request)
     const status = resolveStatus(result)
-    logApiRequest(request, {
+    logApiRoute(request, {
         requestId,
         action: 'onboarding.usernameCheck.get',
         startedAt,
@@ -52,7 +51,11 @@ export async function GET(request: Request) {
                         ? 'DB_ERROR'
                         : undefined,
     })
-    return NextResponse.json(result, { status })
+    if (status >= 400) {
+        const errorCode = status === 429 ? 'RATE_LIMITED' : status === 400 ? 'BAD_REQUEST' : 'DB_ERROR'
+        return jsonError(result.message || errorCode, status, errorCode)
+    }
+    return jsonSuccess(result)
 }
 
 export async function POST(request: Request) {
@@ -60,7 +63,7 @@ export async function POST(request: Request) {
     const requestId = getRequestId(request)
     const csrfError = validateCsrf(request)
     if (csrfError) {
-        logApiRequest(request, {
+        logApiRoute(request, {
             requestId,
             action: 'onboarding.usernameCheck.post',
             startedAt,
@@ -80,7 +83,7 @@ export async function POST(request: Request) {
 
     const result = await runUsernameCheck(body.username || '', request)
     const status = resolveStatus(result)
-    logApiRequest(request, {
+    logApiRoute(request, {
         requestId,
         action: 'onboarding.usernameCheck.post',
         startedAt,
@@ -95,5 +98,9 @@ export async function POST(request: Request) {
                         ? 'DB_ERROR'
                         : undefined,
     })
-    return NextResponse.json(result, { status })
+    if (status >= 400) {
+        const errorCode = status === 429 ? 'RATE_LIMITED' : status === 400 ? 'BAD_REQUEST' : 'DB_ERROR'
+        return jsonError(result.message || errorCode, status, errorCode)
+    }
+    return jsonSuccess(result)
 }

@@ -11,9 +11,9 @@ test.describe("Connections smoke matrix", () => {
         await login(page);
 
         await page.goto("/people?tab=discover");
-        await expect(page.getByRole("button", { name: "Discover" })).toBeVisible();
-        await expect(page.getByRole("button", { name: "Network" })).toBeVisible();
-        await expect(page.getByRole("button", { name: "Requests" })).toBeVisible();
+        await expect(page.getByRole("tab", { name: "Discover" })).toBeVisible();
+        await expect(page.getByRole("tab", { name: "Network" })).toBeVisible();
+        await expect(page.getByRole("tab", { name: "Requests" })).toBeVisible();
 
         const connectButton = page.getByRole("button", { name: /^Connect$/i }).first();
         if (await connectButton.isVisible().catch(() => false)) {
@@ -32,13 +32,24 @@ test.describe("Connections smoke matrix", () => {
             await expect(page.getByText(/Suggestion hidden/i)).toBeVisible();
         }
 
-        await page.getByRole("button", { name: /Network/ }).click();
+        await page.getByRole("tab", { name: /Network/ }).click();
         await expect(page.getByPlaceholder("Search your connections...")).toBeVisible();
+        const connectedMenuTrigger = page.getByRole("button", { name: /Open connection actions for/i }).first();
+        if (await connectedMenuTrigger.isVisible().catch(() => false)) {
+            await connectedMenuTrigger.click();
+            await expect(page.getByRole("menuitem", { name: /View profile/i }).first()).toBeVisible();
+            await expect(page.getByRole("menuitem", { name: /Disconnect/i }).first()).toBeVisible();
+        }
 
-        await page.getByRole("button", { name: /Requests/ }).click();
+        await page.getByRole("tab", { name: /Requests/ }).click();
         await expect(
-            page.getByText(/No pending connection requests|Incoming Requests|Sent Requests/i).first(),
+            page.getByText(/No pending requests|Incoming|Sent|Project Applications|Activity/i).first(),
         ).toBeVisible();
+        const moreActionsButton = page.getByRole("button", { name: /More actions for/i }).first();
+        if (await moreActionsButton.isVisible().catch(() => false)) {
+            await moreActionsButton.click();
+            await expect(page.getByRole("menuitem", { name: /View profile/i }).first()).toBeVisible();
+        }
 
         const acceptAllButton = page.getByRole("button", { name: /Accept all/i }).first();
         const rejectAllButton = page.getByRole("button", { name: /Reject all/i }).first();

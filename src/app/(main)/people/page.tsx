@@ -2,6 +2,15 @@ import PeopleHubClient from '@/components/people/PeopleHubClient'
 import { getMyApplicationsAction, getIncomingApplicationsAction } from '@/app/actions/applications'
 import { isHardeningDomainEnabled } from '@/lib/features/hardening'
 import { getViewerAuthContext } from '@/lib/server/viewer-context'
+import { buildRouteMetadata } from '@/lib/metadata/route-metadata'
+
+export function generateMetadata() {
+    return buildRouteMetadata({
+        title: 'Connections | Edge',
+        description: 'Discover collaborators, manage your network, and respond to incoming requests on Edge.',
+        path: '/people',
+    });
+}
 
 interface PeoplePageProps {
     searchParams?: Promise<Record<string, string | string[] | undefined>>;

@@ -203,6 +203,8 @@ export const createUiSlice: StateCreator<FilesWorkspaceState, [], [], UiSlice> =
         }
         const content = getFileContent(projectId, problem.nodeId);
         if (target) {
+          // Save undo checkpoint before applying fix
+          setFileContent(projectId, `${problem.nodeId}::pre-fix`, content);
           const newContent = content.replaceAll(target, replacement);
           if (newContent !== content) {
             setFileContent(projectId, problem.nodeId, newContent);

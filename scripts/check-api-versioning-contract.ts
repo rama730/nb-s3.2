@@ -22,13 +22,8 @@ function listRouteFiles(baseDir: string): string[] {
 }
 
 const NON_V1_ALLOWLIST = new Set<string>([
-  "src/app/api/cleanup-orphan/route.ts",
   "src/app/api/e2e/auth/route.ts",
-  "src/app/api/health/route.ts",
-  "src/app/api/inngest/route.ts",
-  "src/app/api/live/route.ts",
-  "src/app/api/onboarding/username-check/route.ts",
-  "src/app/api/ready/route.ts",
+  "src/app/api/realtime/presence-token/route.ts",
 ]);
 
 function main() {

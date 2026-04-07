@@ -179,11 +179,7 @@ export function useUsernameAvailability(params: {
                 }
 
                 setStatus('invalid')
-                setMessage(
-                    responseStatus === 429 || payload.code === 'RATE_LIMITED'
-                        ? 'Too many checks. Please wait and try again.'
-                        : (payload.message || responseText || 'Username is unavailable')
-                )
+                setMessage(payload.message || responseText || 'Username is unavailable')
             } catch {
                 if (requestId !== requestIdRef.current) return
                 setStatus('error')

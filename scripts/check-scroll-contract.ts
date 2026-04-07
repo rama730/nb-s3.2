@@ -97,6 +97,24 @@ function checkGlobalsCss(globalsPath: string): string[] {
   return errors;
 }
 
+function checkSmoothScrollHtmlContract(repoRoot: string, globalsPath: string): string[] {
+  const errors: string[] = [];
+  const css = readFileIfExists(globalsPath);
+  if (!/html\s*\{[^}]*scroll-behavior\s*:\s*smooth/i.test(css)) {
+    return errors;
+  }
+
+  const rootLayoutPath = path.join(repoRoot, "src", "app", "layout.tsx");
+  const rootLayout = readFileIfExists(rootLayoutPath);
+  if (!rootLayout.includes('data-scroll-behavior="smooth"')) {
+    errors.push(
+      "src/app/layout.tsx must set data-scroll-behavior=\"smooth\" when global smooth scroll is enabled.",
+    );
+  }
+
+  return errors;
+}
+
 function checkLegacyScrollClasses(srcDir: string, repoRoot: string): string[] {
   const errors: string[] = [];
   const walk = (dir: string) => {
@@ -145,6 +163,7 @@ export function validateScrollContract(repoRoot: string = process.cwd()): CheckR
   }
 
   errors.push(...checkGlobalsCss(globalsPath));
+  errors.push(...checkSmoothScrollHtmlContract(repoRoot, globalsPath));
   errors.push(...checkLegacyScrollClasses(srcDir, repoRoot));
 
   return { errors };

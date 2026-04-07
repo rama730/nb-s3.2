@@ -1,3 +1,5 @@
+// TODO(perf): Split into ExplorerToolbar, ExplorerTreeView, ExplorerContextMenu, ExplorerDialogs sub-components
+// Currently 1100+ lines — needs decomposition for render performance at scale
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -58,6 +60,7 @@ export default function ExplorerShell({
   projectId,
   projectName,
   canEdit,
+  isActive = true,
   viewMode = "code",
   onOpenFile,
   onNodeDeleted,
@@ -212,7 +215,7 @@ export default function ExplorerShell({
 
   // --- Boot / data fetching ---
   const { isBooting, accessError, loadFolderContent, handleToggleFolder, handleLoadMore } =
-    useExplorerBoot({ projectId, canEdit, syncStatus, showToast });
+    useExplorerBoot({ projectId, canEdit, isActive, syncStatus, showToast });
 
   // --- Visible rows ---
   const { visibleRows, includeFileByMode } = useVisibleRows({
@@ -255,6 +258,31 @@ export default function ExplorerShell({
     nodesById: nodesById as Record<string, ProjectNode>,
     includeFileByMode,
   });
+
+  const treeItemMetaByNodeId = useMemo(() => {
+    const siblingsByParentId = new Map<string, string[]>();
+    for (const row of rowsToRender) {
+      if (row.kind !== "node") continue;
+      const parentKey = row.parentId ?? "__root__";
+      const siblings = siblingsByParentId.get(parentKey) ?? [];
+      siblings.push(row.nodeId);
+      siblingsByParentId.set(parentKey, siblings);
+    }
+
+    const meta: Record<string, { ariaLevel: number; ariaPosInSet: number; ariaSetSize: number }> = {};
+    for (const row of rowsToRender) {
+      if (row.kind !== "node") continue;
+      const siblings = siblingsByParentId.get(row.parentId ?? "__root__") ?? [];
+      const position = siblings.indexOf(row.nodeId);
+      meta[row.nodeId] = {
+        ariaLevel: row.level + 1,
+        ariaPosInSet: position >= 0 ? position + 1 : 1,
+        ariaSetSize: siblings.length || 1,
+      };
+    }
+
+    return meta;
+  }, [rowsToRender]);
 
   const selectedNode = selectedNodeId
     ? (nodesById as Record<string, ProjectNode>)[selectedNodeId] ?? null
@@ -581,6 +609,7 @@ export default function ExplorerShell({
     onDesktopFileDrop: handleDesktopFileDrop,
     // Folder sizes
     folderSizes,
+    treeItemMetaByNodeId,
     handleSelect,
     handleToggleFolder,
     handleDropOnFolder,

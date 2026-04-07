@@ -45,7 +45,8 @@ interface ExplorerDialogsHostProps {
   mode: "default" | "select";
 }
 
-export function ExplorerDialogsHost({
+// FW10: Memoize to prevent re-renders from unrelated ExplorerShell state changes
+export const ExplorerDialogsHost = React.memo(function ExplorerDialogsHost({
   canEdit,
   projectId,
   createDialog,
@@ -150,4 +151,4 @@ export function ExplorerDialogsHost({
       />
     </>
   );
-}
+});

@@ -15,7 +15,7 @@ function readIntEnv(name: string, fallback: number, min: number, max: number) {
     return Math.min(max, Math.max(min, Math.trunc(parsed)))
 }
 
-const dbPoolMax = readIntEnv('DB_POOL_MAX', isDevelopment ? 5 : 50, 1, 100)
+const dbPoolMax = readIntEnv('DB_POOL_MAX', isDevelopment ? 5 : 200, 1, 500)
 const dbIdleTimeoutSeconds = readIntEnv('DB_IDLE_TIMEOUT_SECONDS', isDevelopment ? 10 : 60, 5, 600)
 const dbConnectTimeoutSeconds = readIntEnv('DB_CONNECT_TIMEOUT_SECONDS', 10, 2, 60)
 const dbPreparedStatementsEnabled = process.env.DB_PREPARE_STATEMENTS !== 'false'

@@ -9,6 +9,14 @@ test.describe("Module smoke matrix", () => {
         const context = await browser.newContext();
         const page = await context.newPage();
         const monitor = attachPageMonitoring(page);
+        const onboardingRequests: string[] = [];
+
+        page.on("request", (request) => {
+            const url = new URL(request.url());
+            if (url.pathname === "/onboarding") {
+                onboardingRequests.push(request.url());
+            }
+        });
 
         await login(page);
 
@@ -37,6 +45,8 @@ test.describe("Module smoke matrix", () => {
             expect(status, `Expected a response for route: ${route}`).toBeGreaterThan(0);
             expect(status, `Route ${route} returned HTTP ${status}`).toBeLessThan(400);
         }
+
+        expect(onboardingRequests).toEqual([]);
 
         await monitor.assertNoViolations();
         monitor.detach();

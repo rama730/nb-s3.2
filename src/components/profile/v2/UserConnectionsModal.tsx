@@ -1,11 +1,19 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { X, Search, Loader2 } from 'lucide-react';
+import { Search, Loader2 } from 'lucide-react';
 import { getAcceptedConnections } from '@/app/actions/connections';
 import Image from 'next/image';
 import Link from 'next/link';
 import { profileHref } from '@/lib/routing/identifiers';
+import { logger } from '@/lib/logger';
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogHeader,
+    DialogTitle,
+} from '@/components/ui/dialog';
 
 interface UserConnectionsModalProps {
     isOpen: boolean;
@@ -36,6 +44,7 @@ export function UserConnectionsModal({ isOpen, onClose, userId, userName }: User
     const [cursor, setCursor] = useState<string | null>(null);
     const [hasMore, setHasMore] = useState(false);
     const requestTokenRef = useRef(0);
+    const ownerDisplayName = userName.trim() ? userName : 'User';
 
     useEffect(() => {
         const timeout = setTimeout(() => {
@@ -82,7 +91,12 @@ export function UserConnectionsModal({ isOpen, onClose, userId, userName }: User
 
             setConnections(nextRows);
         } catch (error) {
-            console.error(error);
+            logger.error('[profile.connections-modal] failed to load connections', {
+                module: 'profile',
+                userId,
+                error: error instanceof Error ? error.message : String(error),
+                stack: error instanceof Error ? error.stack : undefined,
+            });
             if (!append) {
                 setConnections([]);
                 setHasMore(false);
@@ -119,39 +133,31 @@ export function UserConnectionsModal({ isOpen, onClose, userId, userName }: User
         await loadConnections({ append: true, search: debouncedSearch });
     }, [debouncedSearch, hasMore, loadConnections, loading, loadingMore]);
 
-    if (!isOpen) return null;
-
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
-            <div className="relative w-full max-w-md bg-white dark:bg-zinc-900 rounded-2xl shadow-xl flex flex-col max-h-[80vh] animate-in fade-in zoom-in-95 duration-200">
+        <Dialog open={isOpen} onOpenChange={(open) => { if (!open) onClose(); }}>
+            <DialogContent className="max-w-md p-0 overflow-hidden gap-0">
+                <DialogHeader className="border-b border-zinc-200 dark:border-zinc-800 px-4 py-4">
+                    <DialogTitle>{`${ownerDisplayName}'s Connections`}</DialogTitle>
+                    <DialogDescription className="sr-only">
+                        Browse accepted connections and open a public profile for each person.
+                    </DialogDescription>
+                </DialogHeader>
 
-                {/* Header */}
-                <div className="flex items-center justify-between p-4 border-b border-zinc-200 dark:border-zinc-800">
-                    <h3 className="font-semibold text-lg text-zinc-900 dark:text-zinc-100">
-                        {`${userName}'s Connections`}
-                    </h3>
-                    <button onClick={onClose} className="p-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-full transition-colors">
-                        <X className="w-5 h-5 text-zinc-500" />
-                    </button>
-                </div>
-
-                {/* Search */}
                 <div className="p-4 border-b border-zinc-200 dark:border-zinc-800">
                     <div className="relative">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
                         <input
                             type="text"
+                            aria-label="Search connections"
                             placeholder="Search connections..."
                             value={searchQuery}
                             onChange={(e) => setSearchQuery(e.target.value)}
-                            className="w-full pl-9 pr-4 py-2 rounded-xl bg-zinc-50 dark:bg-zinc-800 border-none focus:ring-2 focus:ring-blue-500/20 text-sm"
+                            className="w-full pl-9 pr-4 py-2 rounded-xl bg-zinc-50 dark:bg-zinc-800 border border-transparent focus:border-blue-500/40 focus:ring-2 focus:ring-blue-500/20 text-sm outline-none"
                         />
                     </div>
                 </div>
 
-                {/* List */}
-                <div className="flex-1 overflow-y-auto p-2">
+                <div className="max-h-[60vh] overflow-y-auto p-2">
                     {loading ? (
                         <div className="flex justify-center py-8">
                             <Loader2 className="w-6 h-6 animate-spin text-zinc-400" />
@@ -162,35 +168,37 @@ export function UserConnectionsModal({ isOpen, onClose, userId, userName }: User
                         </div>
                     ) : (
                         <div className="space-y-1">
-                            {connections.map(conn => {
-                                const u = conn.otherUser;
-                                if (!u) return null;
+                            {connections.map((conn) => {
+                                const user = conn.otherUser;
+                                if (!user) return null;
+                                const displayName = user.fullName || user.username || 'User';
+
                                 return (
                                     <Link
                                         key={conn.id}
-                                        href={profileHref(u)}
+                                        href={profileHref(user)}
                                         onClick={onClose}
                                         className="flex items-center gap-3 p-2 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 rounded-xl transition-colors group"
                                     >
-                                        {u.avatarUrl ? (
+                                        {user.avatarUrl ? (
                                             <Image
-                                                src={u.avatarUrl}
-                                                alt={u.username || 'User'}
+                                                src={user.avatarUrl}
+                                                alt={displayName}
                                                 width={40}
                                                 height={40}
                                                 className="rounded-full object-cover w-10 h-10 border border-zinc-100 dark:border-zinc-800"
                                             />
                                         ) : (
                                             <div className="w-10 h-10 rounded-full app-accent-gradient flex items-center justify-center text-white text-xs font-bold">
-                                                {(u.fullName || u.username || 'U')[0]?.toUpperCase()}
+                                                {displayName[0]?.toUpperCase()}
                                             </div>
                                         )}
                                         <div className="flex-1 min-w-0">
                                             <div className="font-medium text-zinc-900 dark:text-zinc-100 truncate">
-                                                {u.fullName || u.username}
+                                                {displayName}
                                             </div>
-                                            {u.headline && (
-                                                <div className="text-xs text-zinc-500 truncate">{u.headline}</div>
+                                            {user.headline && (
+                                                <div className="text-xs text-zinc-500 truncate">{user.headline}</div>
                                             )}
                                         </div>
                                     </Link>
@@ -211,7 +219,7 @@ export function UserConnectionsModal({ isOpen, onClose, userId, userName }: User
                         </div>
                     )}
                 </div>
-            </div>
-        </div>
+            </DialogContent>
+        </Dialog>
     );
 }

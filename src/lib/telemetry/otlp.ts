@@ -31,7 +31,11 @@ function enqueueMetrics(metrics: QueuedMetric[], mode: 'append' | 'prepend') {
 
     let droppedCount = 0
     while (queue.length > MAX_QUEUE_SIZE) {
-        queue.shift()
+        if (mode === 'prepend') {
+            queue.pop()
+        } else {
+            queue.shift()
+        }
         droppedCount += 1
     }
 

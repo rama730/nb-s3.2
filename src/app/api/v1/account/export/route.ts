@@ -1,5 +1,6 @@
 import { exportAccountData } from '@/app/actions/account';
 import { getRequestId, jsonError, jsonSuccess, logApiRoute } from '@/app/api/v1/_shared';
+import { logger } from '@/lib/logger';
 import { consumeRateLimit } from '@/lib/security/rate-limit';
 import { createClient } from '@/lib/supabase/server';
 
@@ -81,7 +82,7 @@ export async function GET(request: Request) {
             },
         });
     } catch (error) {
-        console.error('Account export route error:', error);
+        logger.error('Account export route error:', { module: 'api', error: error instanceof Error ? error.message : String(error) });
         logApiRoute(request, {
             requestId,
             action: 'account.export',

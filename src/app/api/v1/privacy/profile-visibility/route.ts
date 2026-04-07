@@ -6,6 +6,7 @@ import {
   logApiRoute,
   requireAuthenticatedUser,
 } from "@/app/api/v1/_shared";
+import { logger } from "@/lib/logger";
 import {
   isProfileNotFoundError,
   updateProfileVisibilitySetting,
@@ -47,7 +48,12 @@ export async function PATCH(request: Request) {
     });
     return jsonSuccess({ visibility: result.nextValue });
   } catch (error) {
-    console.error("[api/v1/privacy/profile-visibility] failed", error);
+    logger.error("[api/v1/privacy/profile-visibility] failed", {
+      module: "api",
+      requestId,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
     if (isProfileNotFoundError(error)) {
       return jsonError("Profile not found", 404, "NOT_FOUND");
     }

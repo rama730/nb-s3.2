@@ -14,6 +14,11 @@ export interface UseTabManagerStoreActions {
   upsertNodes: (projectId: string, nodes: ProjectNode[]) => void;
   clearLock: (projectId: string, nodeId: string) => void;
   removeNodeFromCaches: (projectId: string, nodeId: string) => void;
+  setLastNodeEventSummary: (
+    projectId: string,
+    nodeId: string,
+    summary: { type: string; at: number; by: string | null }
+  ) => void;
 }
 
 export interface TabManagerSharedOptions {

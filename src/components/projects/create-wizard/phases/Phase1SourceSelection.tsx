@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useFormContext } from 'react-hook-form';
-import { ArrowLeft, Check, ChevronDown, Code2, FolderUp, Github, Loader2, RefreshCcw, Sparkles } from 'lucide-react';
+import { ArrowLeft, Check, ChevronDown, CircleHelp, Code2, FolderUp, Github, Loader2, RefreshCcw, Sparkles } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { toast } from 'sonner';
 
@@ -171,6 +171,7 @@ export default function Phase1SourceSelection({
         }
         return null;
     });
+    const [suppressImportSourceRehydration, setSuppressImportSourceRehydration] = useState(false);
 
     const [isAnalyzing, setIsAnalyzing] = useState(false);
     const [analysisResult, setAnalysisResult] = useState<{
@@ -286,10 +287,12 @@ export default function Phase1SourceSelection({
             },
             { shouldDirty: false, shouldValidate: true }
         );
+        setSuppressImportSourceRehydration(false);
         setActiveSourceView(initialSource);
     }, [getValues, initialSource, setValue]);
 
     useEffect(() => {
+        if (suppressImportSourceRehydration) return;
         if (activeSourceView !== null) return;
 
         const currentImportSource = getValues('import_source');
@@ -313,7 +316,7 @@ export default function Phase1SourceSelection({
         ) {
             setValue('import_source', { type: 'scratch' }, { shouldDirty: false });
         }
-    }, [activeSourceView, getValues, setValue, uploadFiles]);
+    }, [activeSourceView, getValues, setValue, suppressImportSourceRehydration, uploadFiles]);
 
     useEffect(() => {
         if (activeSourceView !== 'github') {
@@ -444,6 +447,7 @@ export default function Phase1SourceSelection({
             },
             { shouldValidate: true, shouldDirty: true }
         );
+        setSuppressImportSourceRehydration(false);
         setActiveSourceView(type);
         if (type !== 'github') {
             setRepoPickerOpen(false);
@@ -930,7 +934,11 @@ export default function Phase1SourceSelection({
     const renderBackToStart = () => (
         <button
             type="button"
-            onClick={() => setActiveSourceView(null)}
+            onClick={() => {
+                setRepoPickerOpen(false);
+                setSuppressImportSourceRehydration(true);
+                setActiveSourceView(null);
+            }}
             data-testid="create-project-back-to-source-grid"
             className="inline-flex items-center gap-2 rounded-full border border-zinc-200 dark:border-zinc-700 px-4 py-2 text-sm font-medium text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800"
         >
@@ -1003,6 +1011,10 @@ export default function Phase1SourceSelection({
             && !hasGithubIdentity
             && !showManualGithubEntry
             && !showResolvedSummary;
+        const shouldShowConnectGithubCta =
+            !isLoadingAuth
+            && !hasGithubIdentity
+            && !hasGithubRepoAccess;
         const showMethodTabs = hasGithubRepoAccess && !showResolvedSummary;
         const showBrowsePanel = !showResolvedSummary && hasGithubRepoAccess && githubEntryMode === 'browse';
         const showPastePanel =
@@ -1038,6 +1050,11 @@ export default function Phase1SourceSelection({
                                         <span className="inline-flex items-center gap-1.5 rounded-full bg-zinc-100 dark:bg-zinc-800 px-2.5 py-1 text-[11px] font-medium text-zinc-500 dark:text-zinc-400">
                                             <Loader2 className="h-3.5 w-3.5 animate-spin" />
                                             Checking access
+                                        </span>
+                                    ) : repoRefreshRequired && hasGithubIdentity ? (
+                                        <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 dark:bg-amber-950/30 px-2.5 py-1 text-[11px] font-semibold text-amber-700 dark:text-amber-300">
+                                            <CircleHelp className="h-3.5 w-3.5" />
+                                            Resume{ghUsername ? ` as @${ghUsername}` : ''}
                                         </span>
                                     ) : hasGithubIdentity ? (
                                         <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 dark:bg-emerald-950/30 px-2.5 py-1 text-[11px] font-semibold text-emerald-700 dark:text-emerald-300">
@@ -1410,7 +1427,7 @@ export default function Phase1SourceSelection({
                                                     </>
                                                 )}
                                             </button>
-                                            {!hasGithubRepoAccess && !hasGithubIdentity && (
+                                            {shouldShowConnectGithubCta && (
                                                 <button
                                                     type="button"
                                                     onClick={handleConnectGithub}

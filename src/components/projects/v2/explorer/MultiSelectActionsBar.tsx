@@ -12,7 +12,7 @@ interface MultiSelectActionsBarProps {
     onClear: () => void;
 }
 
-export function MultiSelectActionsBar({
+export const MultiSelectActionsBar = React.memo(function MultiSelectActionsBar({
     count,
     canEdit,
     onMove,
@@ -72,4 +72,4 @@ export function MultiSelectActionsBar({
             </div>
         </div>
     );
-}
+});

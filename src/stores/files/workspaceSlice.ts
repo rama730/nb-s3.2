@@ -26,6 +26,8 @@ export interface WorkspaceSlice {
   setActiveTab: (projectId: string, paneId: WorkspacePane["id"], nodeId: string | null) => void;
   reorderTabs: (projectId: string, paneId: WorkspacePane["id"], order: string[]) => void;
   moveTabToPane: (projectId: string, fromPaneId: WorkspacePane["id"], toPaneId: WorkspacePane["id"], nodeId: string, index?: number) => void;
+  /** FW8: Remove tabs whose nodeId no longer exists in nodesById */
+  pruneGhostTabs: (projectId: string) => void;
 }
 
 export const createWorkspaceSlice: StateCreator<FilesWorkspaceState, [], [], WorkspaceSlice> = (set) => ({
@@ -248,6 +250,45 @@ export const createWorkspaceSlice: StateCreator<FilesWorkspaceState, [], [], Wor
               [fromPaneId]: { ...fromPane, openTabIds: nextFromIds, activeTabId: nextFromActive },
               [toPaneId]: { ...toPane, openTabIds: uniqueToIds, activeTabId: nodeId },
             },
+          },
+        },
+      };
+    }),
+
+  // FW8: Prune tabs whose node IDs no longer exist in nodesById
+  pruneGhostTabs: (projectId) =>
+    set((state) => {
+      const ws = state.byProjectId[projectId];
+      if (!ws) return state;
+
+      const knownIds = ws.nodesById;
+      let changed = false;
+
+      const prunePane = (pane: WorkspacePane): WorkspacePane => {
+        const valid = pane.openTabIds.filter((id) => id in knownIds);
+        if (valid.length === pane.openTabIds.length) return pane;
+        changed = true;
+        const ghostIds = pane.openTabIds.filter((id) => !(id in knownIds));
+        gcClosedTabs(ws, projectId, ghostIds);
+        return {
+          ...pane,
+          openTabIds: valid,
+          activeTabId: pane.activeTabId && valid.includes(pane.activeTabId)
+            ? pane.activeTabId
+            : valid[valid.length - 1] ?? null,
+        };
+      };
+
+      const left = prunePane(ws.panes.left);
+      const right = prunePane(ws.panes.right);
+
+      if (!changed) return state;
+      return {
+        byProjectId: {
+          ...state.byProjectId,
+          [projectId]: {
+            ...ws,
+            panes: { ...ws.panes, left, right },
           },
         },
       };

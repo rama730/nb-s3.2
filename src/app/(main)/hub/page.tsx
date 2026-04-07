@@ -20,6 +20,18 @@ export async function generateMetadata() {
     return {
         title: 'Hub | Edge',
         description: 'Discover and collaborate on the best side-projects and indie apps.',
+        openGraph: {
+            title: 'Hub | Edge',
+            description: 'Discover and collaborate on the best side-projects and indie apps.',
+            type: 'website',
+            images: ['/og/hub-card.png'],
+        },
+        twitter: {
+            card: 'summary_large_image',
+            title: 'Hub | Edge',
+            description: 'Discover and collaborate on the best side-projects and indie apps.',
+            images: ['/og/hub-card.png'],
+        },
     };
 }
 

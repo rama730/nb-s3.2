@@ -521,3 +521,56 @@ html[data-reduce-motion="true"] :is(
   width: 0;
   height: 0;
 }
+
+/* ── Messaging animations ── */
+
+@keyframes typing-dot {
+  0%, 60%, 100% {
+    transform: translateY(0);
+    opacity: 0.4;
+  }
+  30% {
+    transform: translateY(-4px);
+    opacity: 1;
+  }
+}
+
+@keyframes send-fly {
+  0% {
+    transform: translateX(0) translateY(0) scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(8px) translateY(-8px) scale(0.6);
+    opacity: 0;
+  }
+}
+
+@keyframes message-appear {
+  0% {
+    transform: translateY(8px);
+    opacity: 0;
+  }
+  100% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes delivery-pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+
+/* Reduced motion support */
+@media (prefers-reduced-motion: reduce) {
+    .typing-dot,
+    .animate-pulse,
+    .animate-spin {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+    }
+    * {
+        transition-duration: 0.01ms !important;
+    }
+}

@@ -60,10 +60,22 @@ test('getUsernameAvailability allows current primary username for the same viewe
     assert.equal(result.available, true)
 })
 
-test('getUsernameAvailability rejects retired aliases even for the same viewer', async () => {
+test('getUsernameAvailability allows a user to reclaim their retired alias', async () => {
     const result = await getUsernameAvailability({
         username: 'old_builder',
         viewerId: 'user-1',
+        repo: createRepo({
+            claims: [{ username: 'old_builder', userId: 'user-1', isPrimary: false }],
+        }),
+    })
+
+    assert.equal(result.available, true)
+})
+
+test('getUsernameAvailability still rejects retired aliases claimed by another user', async () => {
+    const result = await getUsernameAvailability({
+        username: 'old_builder',
+        viewerId: 'user-2',
         repo: createRepo({
             claims: [{ username: 'old_builder', userId: 'user-1', isPrimary: false }],
         }),
@@ -109,8 +121,8 @@ test('resolvePublicUsernameRoute redirects case variants to the canonical curren
 })
 
 test('generateDeterministicUsernameCandidates is stable across calls', () => {
-    const first = generateDeterministicUsernameCandidates('Ada Lovelace')
-    const second = generateDeterministicUsernameCandidates('Ada Lovelace')
+    const first = generateDeterministicUsernameCandidates('Ada Lovelace', { year: 2026 })
+    const second = generateDeterministicUsernameCandidates('Ada Lovelace', { year: 2026 })
 
     assert.deepEqual(first, second)
     assert.equal(first.length > 0, true)

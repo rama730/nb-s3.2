@@ -2,7 +2,7 @@ import type { Session, SupabaseClient, User } from '@supabase/supabase-js'
 import { isEmailVerified } from '@/lib/auth/email-verification'
 import { resolveSupabasePublicEnv } from '@/lib/supabase/env'
 
-const JWKS_CACHE_TTL_MS = 5 * 60 * 1000
+const JWKS_CACHE_TTL_MS = 30 * 60 * 1000
 const JWT_SECRET_ENV = process.env.SUPABASE_JWT_SECRET?.trim() || null
 const AUTH_SNAPSHOT_NETWORK_TIMEOUT_MS = readTimeoutMsFromEnv(
     'AUTH_MIDDLEWARE_LOOKUP_TIMEOUT_MS',

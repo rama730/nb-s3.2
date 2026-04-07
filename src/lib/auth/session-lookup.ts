@@ -37,9 +37,22 @@ function getStatusCode(error: unknown): number | null {
     return null;
 }
 
+function getErrorCode(error: unknown): string | null {
+    if (!error || typeof error !== 'object') return null;
+    if (!('code' in error)) return null;
+    const code = (error as { code: unknown }).code;
+    return typeof code === 'string' ? code : null;
+}
+
 export function classifyAuthLookupError(error: unknown): AuthLookupFailureKind {
     const message = toAuthErrorMessage(error).toLowerCase();
     if (message.includes('timed out')) return 'timeout';
+
+    // Check error code first (structured, reliable)
+    const code = getErrorCode(error);
+    if (code === 'invalid_jwt' || code === 'jwt_expired' || code === 'session_not_found' || code === 'refresh_token_not_found') {
+        return 'invalid_token';
+    }
 
     const status = getStatusCode(error);
     if (status === 401 || status === 403) return 'invalid_token';

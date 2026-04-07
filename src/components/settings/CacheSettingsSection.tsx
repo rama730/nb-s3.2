@@ -60,10 +60,12 @@ export default function CacheSettingsSection() {
         try {
             await cacheManager.clearAll();
             toast.success("All local data cleared. Refreshing...");
+            setShowConfirm(null);
             window.setTimeout(() => window.location.reload(), 500);
         } catch {
             toast.error("Failed to clear local data");
         } finally {
+            setShowConfirm(null);
             setIsClearing(false);
         }
     };

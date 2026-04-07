@@ -15,6 +15,7 @@ export function SkillsCard({ skills, isOwner, onAdd }: SkillsCardProps) {
             title="Skills"
             icon={<Wrench className="w-5 h-5" />}
             onAdd={onAdd}
+            addLabel="Add skills"
         >
             <div className="px-5 py-4">
                 {skills && skills.length > 0 ? (
@@ -30,9 +31,17 @@ export function SkillsCard({ skills, isOwner, onAdd }: SkillsCardProps) {
                     </div>
                 ) : (
                     <div className="text-center py-6">
-                        <p className="text-sm text-zinc-500 dark:text-zinc-400">
-                            {isOwner ? 'Add skills to your profile' : 'No skills listed'}
-                        </p>
+                        {isOwner && onAdd ? (
+                            <button
+                                type="button"
+                                onClick={onAdd}
+                                className="text-sm font-medium text-indigo-600 hover:text-indigo-500"
+                            >
+                                Add skills to your profile
+                            </button>
+                        ) : (
+                            <p className="text-sm text-zinc-500 dark:text-zinc-400">No skills listed</p>
+                        )}
                     </div>
                 )}
             </div>

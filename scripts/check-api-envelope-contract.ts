@@ -12,6 +12,11 @@ const SHARED_IMPORT_RE = /from\s+["'][^"']*\/api\/v1\/(_shared|_envelope)["']/;
 const DIRECT_NEXT_RESPONSE_RE = /NextResponse\.json\s*\(/;
 const HELPER_CALL_RE = /\b(jsonSuccess|jsonError)\s*\(/;
 
+// Routes that use third-party SDK response handlers (e.g. Inngest serve())
+const ENVELOPE_EXEMPT_ROUTES = new Set<string>([
+  path.join("src", "app", "api", "v1", "inngest", "route.ts"),
+]);
+
 function collectRouteFiles(dir: string, into: string[]) {
   if (!fs.existsSync(dir)) return;
   const entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -35,6 +40,8 @@ export function validateApiEnvelopeContract(rootDir: string = process.cwd()): Va
   for (const file of routeFiles) {
     const source = fs.readFileSync(file, "utf8");
     const rel = path.relative(rootDir, file);
+
+    if (ENVELOPE_EXEMPT_ROUTES.has(rel)) continue;
 
     if (DIRECT_NEXT_RESPONSE_RE.test(source)) {
       errors.push(

@@ -77,6 +77,12 @@ export type SoftLock = {
   expiresAt: number;
 };
 
+export type NodeEventSummary = {
+  type: string;
+  at: number;
+  by: string | null;
+};
+
 // ─── File cache ──────────────────────────────────────────────────────
 export type FileState = {
   content: string;
@@ -170,6 +176,7 @@ export type ProjectWorkspaceState = {
   folderMeta: Record<string, { nextCursor: string | null; hasMore: boolean }>;
   taskLinkCounts: Record<string, number>;
   activeFileSymbols: EditorSymbol[];
+  lastNodeEventsByNodeId: Record<string, NodeEventSummary | null>;
 
   // Workspace (tabs / split)
   splitEnabled: boolean;
@@ -260,6 +267,12 @@ export type FilesWorkspaceState = {
   setActiveTab: (projectId: string, paneId: WorkspacePane["id"], nodeId: string | null) => void;
   reorderTabs: (projectId: string, paneId: WorkspacePane["id"], order: string[]) => void;
   moveTabToPane: (projectId: string, fromPaneId: WorkspacePane["id"], toPaneId: WorkspacePane["id"], nodeId: string, index?: number) => void;
+  /** FW8: Remove tabs whose nodeId no longer exists in nodesById */
+  pruneGhostTabs: (projectId: string) => void;
+
+  // explorer cleanup
+  /** FW9: Remove expandedFolderIds entries whose node no longer exists */
+  pruneDeadExpanded: (projectId: string) => void;
 
   // editor prefs
   setPrefs: (projectId: string, prefs: Partial<EditorPreferences>) => void;
@@ -270,6 +283,8 @@ export type FilesWorkspaceState = {
   // locks
   setLock: (projectId: string, lock: SoftLock) => void;
   clearLock: (projectId: string, nodeId: string) => void;
+  setLastNodeEventSummary: (projectId: string, nodeId: string, summary: NodeEventSummary) => void;
+  clearLastNodeEventSummary: (projectId: string, nodeId: string) => void;
 
   // git actions
   setGitRepo: (projectId: string, repoUrl: string, branch: string) => void;
@@ -371,6 +386,7 @@ export function defaultWorkspace(): ProjectWorkspaceState {
     loadedChildren: {},
     folderMeta: {},
     taskLinkCounts: {},
+    lastNodeEventsByNodeId: {},
 
     splitEnabled: false,
     splitRatio: 0.5,

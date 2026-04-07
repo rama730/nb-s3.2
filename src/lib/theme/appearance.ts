@@ -260,10 +260,11 @@ export function buildThemePrehydrateScript(): string {
     else root.removeAttribute("data-reduce-motion");
 
     const desired = isDark ? "#0a0a0a" : "#ffffff";
-    let meta = document.querySelector('meta[name="theme-color"]');
+    let meta = document.querySelector('meta[data-app-theme-color="true"]');
     if (!meta) {
       meta = document.createElement("meta");
       meta.name = "theme-color";
+      meta.setAttribute("data-app-theme-color", "true");
       document.head.appendChild(meta);
     }
     if (meta.content !== desired) meta.content = desired;

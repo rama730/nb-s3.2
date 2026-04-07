@@ -2,6 +2,7 @@ import { consumeRateLimit } from '@/lib/security/rate-limit'
 import { onboardingError, type OnboardingError } from '@/lib/onboarding/errors'
 import { logger } from '@/lib/logger'
 import { getUsernameAvailability } from '@/lib/usernames/service'
+import { normalizeUsername } from '@/lib/validations/username'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
 export type UsernameAvailabilityResult = {
@@ -50,6 +51,7 @@ export async function checkUsernameAvailabilityWithClient(params: {
     ipAddress?: string | null
     userAgent?: string | null
 }): Promise<UsernameAvailabilityResult> {
+    const normalizedUsername = normalizeUsername(params.username)
     const rateConfig = getUsernameCheckRateLimitConfig()
     const keys = buildOnboardingRateLimitKeys({
         viewerKey: params.viewerKey,
@@ -108,10 +110,13 @@ export async function checkUsernameAvailabilityWithClient(params: {
             error: result.error,
         }
     } catch (queryError) {
-        console.error('Error checking username availability:', queryError)
+        console.error('Error checking username availability:', {
+            username: params.username,
+            error: queryError,
+        })
         const error = onboardingError('DB_ERROR', 'Error checking availability', true)
         logger.metric('username.availability.result', {
-            normalizedUsername: params.username,
+            username: params.username,
             available: false,
             reason: error.code,
         })

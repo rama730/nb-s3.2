@@ -11,6 +11,8 @@ import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 import type { ProjectNode } from "@/lib/db/schema";
 import type { SearchWorkerResponse } from "./workerContracts";
 
+const EMPTY_NODES_BY_ID: Record<string, ProjectNode> = {};
+
 export function useExplorerSearch(options: {
   projectId: string;
   searchQuery: string;
@@ -20,7 +22,7 @@ export function useExplorerSearch(options: {
 
   const upsertNodes = useFilesWorkspaceStore((s) => s.upsertNodes);
   const setTaskLinkCounts = useFilesWorkspaceStore((s) => s.setTaskLinkCounts);
-  const nodesById = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.nodesById || {});
+  const nodesById = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.nodesById ?? EMPTY_NODES_BY_ID);
 
   const [searchResults, setSearchResults] = useState<ProjectNode[]>([]);
   const [isSearching, setIsSearching] = useState(false);

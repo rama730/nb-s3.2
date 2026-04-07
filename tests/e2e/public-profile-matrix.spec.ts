@@ -8,7 +8,7 @@ test.describe("Public profile matrix @critical", () => {
   test("public profile route renders for current user handle", async ({ browser }) => {
     const context = await browser.newContext();
     const page = await context.newPage();
-    const monitor = attachPageMonitoring(page);
+    const monitor = attachPageMonitoring(page, { monitorConsoleTypes: ["error", "warning"] });
 
     await login(page);
     await page.goto("/profile");
@@ -24,6 +24,11 @@ test.describe("Public profile matrix @critical", () => {
     await expect(page).toHaveURL(new RegExp(`/u/${username}$`));
     await expect(page.getByText(new RegExp(`@${username}`, "i")).first()).toBeVisible();
     await expect(page.getByText(/Overview|Portfolio/i).first()).toBeVisible();
+    await expect(page).not.toHaveTitle(/Profile \| Edge/i);
+
+    await page.getByRole("tab", { name: /Portfolio/i }).click();
+    await expect(page).toHaveURL(new RegExp(`/u/${username}\\?tab=portfolio$`));
+    await expect(page.getByRole("tabpanel", { name: /Portfolio/i })).toBeVisible();
 
     await monitor.assertNoViolations();
     monitor.detach();

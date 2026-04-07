@@ -6,6 +6,7 @@ import {
     logApiRoute,
     requireAuthenticatedUser,
 } from "@/app/api/v1/_shared";
+import { logger } from "@/lib/logger";
 import {
     createAppearanceSnapshot,
     DEFAULT_APPEARANCE_SNAPSHOT,
@@ -18,6 +19,10 @@ const APPEARANCE_SYNC_TIMEOUT_MS = Math.max(
     1_000,
     Number.isFinite(parsedAppearanceSyncTimeoutMs) ? parsedAppearanceSyncTimeoutMs : 4_000,
 );
+const APPEARANCE_CACHE_HEADERS = {
+    "Cache-Control": "private, max-age=3600, stale-while-revalidate=86400",
+    Vary: "Cookie",
+} as const;
 
 function readUserMetadata(user: { user_metadata?: unknown }) {
     return user.user_metadata && typeof user.user_metadata === "object"
@@ -70,12 +75,16 @@ export async function GET(request: Request) {
             success: true,
             status: 200,
         });
-        return jsonSuccess({
-            userId: auth.user.id,
-            snapshot,
-        });
+        return jsonSuccess(
+            {
+                userId: auth.user.id,
+                snapshot,
+            },
+            undefined,
+            { headers: APPEARANCE_CACHE_HEADERS },
+        );
     } catch (error) {
-        console.error("[api/v1/appearance] failed to load settings", error);
+        logger.error("[api/v1/appearance] failed to load settings", { module: 'api', error: error instanceof Error ? error.message : String(error) });
         logApiRoute(request, {
             requestId,
             action: "appearance.get",
@@ -121,7 +130,7 @@ export async function PUT(request: Request) {
         );
 
         if (updateResult.error) {
-            console.error("[api/v1/appearance] update failed", updateResult.error);
+            logger.error("[api/v1/appearance] update failed", { module: 'api', error: updateResult.error instanceof Error ? updateResult.error.message : String(updateResult.error) });
             logApiRoute(request, {
                 requestId,
                 action: "appearance.put",
@@ -151,7 +160,7 @@ export async function PUT(request: Request) {
             snapshot: savedSnapshot,
         });
     } catch (error) {
-        console.error("[api/v1/appearance] failed to update settings", error);
+        logger.error("[api/v1/appearance] failed to update settings", { module: 'api', error: error instanceof Error ? error.message : String(error) });
         logApiRoute(request, {
             requestId,
             action: "appearance.put",
@@ -196,7 +205,7 @@ export async function DELETE(request: Request) {
         );
 
         if (updateResult.error) {
-            console.error("[api/v1/appearance] reset failed", updateResult.error);
+            logger.error("[api/v1/appearance] reset failed", { module: 'api', error: updateResult.error instanceof Error ? updateResult.error.message : String(updateResult.error) });
             logApiRoute(request, {
                 requestId,
                 action: "appearance.delete",
@@ -222,7 +231,7 @@ export async function DELETE(request: Request) {
             snapshot,
         });
     } catch (error) {
-        console.error("[api/v1/appearance] failed to reset settings", error);
+        logger.error("[api/v1/appearance] failed to reset settings", { module: 'api', error: error instanceof Error ? error.message : String(error) });
         logApiRoute(request, {
             requestId,
             action: "appearance.delete",

@@ -15,6 +15,40 @@ import {
 
 type ConnectionRow = PrivacyConnectionRow;
 
+// Circuit breaker for Redis fast-path (versioned to prevent concurrent reset races)
+const CIRCUIT_THRESHOLD = 5;
+const CIRCUIT_RESET_MS = 30_000;
+
+const circuitState = {
+  failureCount: 0,
+  openUntil: 0,
+  version: 0,
+};
+
+function isRedisCircuitOpen(): boolean {
+  if (circuitState.openUntil === 0) return false;
+  if (Date.now() >= circuitState.openUntil) {
+    // Atomic reset: bump version so only the first caller resets
+    circuitState.version++;
+    circuitState.openUntil = 0;
+    circuitState.failureCount = 0;
+    return false;
+  }
+  return true;
+}
+
+function recordRedisFailure(): void {
+  circuitState.failureCount++;
+  if (circuitState.failureCount >= CIRCUIT_THRESHOLD) {
+    circuitState.openUntil = Date.now() + CIRCUIT_RESET_MS;
+  }
+}
+
+function recordRedisSuccess(): void {
+  circuitState.failureCount = 0;
+  circuitState.openUntil = 0;
+}
+
 const DEFAULT_VISIBILITY: ProfileVisibilitySetting = "public";
 const DEFAULT_MESSAGE_PRIVACY: MessagePrivacySetting = "connections";
 const DEFAULT_CONNECTION_PRIVACY: ConnectionPrivacySetting = "everyone";
@@ -141,7 +175,7 @@ export async function resolvePrivacyRelationship(
     }
 
     // Step 2: Redis SISMEMBER fast path for connection status
-    if (redis && !mightBeBlocked) {
+    if (redis && !mightBeBlocked && !isRedisCircuitOpen()) {
       try {
         const key = `user:${viewerId}:connections`;
         const exists = await redis.exists(key);
@@ -159,7 +193,9 @@ export async function resolvePrivacyRelationship(
             usedFastPath = true;
           }
         }
+        recordRedisSuccess();
       } catch {
+        recordRedisFailure();
         // Redis failure — fall through to DB
       }
     }

@@ -40,7 +40,7 @@ function getRequestIp(request: Request) {
     const userAgent = request.headers.get('user-agent')?.trim() || 'ua:missing'
     const acceptLanguage = request.headers.get('accept-language')?.trim() || 'lang:missing'
     const fingerprint = createHash('sha1')
-        .update(`${userAgent}|${acceptLanguage}|${request.url}`)
+        .update(`${userAgent}|${acceptLanguage}|${requestPath}`)
         .digest('hex')
         .slice(0, 16)
 

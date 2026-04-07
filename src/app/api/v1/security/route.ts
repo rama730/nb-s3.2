@@ -7,6 +7,7 @@ import {
   logApiRoute,
   requireAuthenticatedUser,
 } from "@/app/api/v1/_shared";
+import { logger } from "@/lib/logger";
 import { resolvePasswordCredentialState } from "@/lib/auth/account-identity";
 import { isSecurityHardeningEnabled } from "@/lib/features/security";
 import { getProtectedRecoveryCodes } from "@/lib/services/profile-service";
@@ -132,12 +133,27 @@ export async function GET(request: Request) {
       },
     };
 
-    payload.mfaFactors = await listSecurityMfaFactors(auth.supabase);
-    const verifiedTotpFactors = getVerifiedTotpFactors(payload.mfaFactors);
+    // H12: Parallelize independent security queries for performance
+    const [
+      mfaFactors,
+      sessionResult,
+      loginHistory,
+      securityActivity,
+      recoveryCodesState,
+      assuranceResult,
+    ] = await Promise.all([
+      listSecurityMfaFactors(auth.supabase),
+      auth.supabase.auth.getSession(),
+      listLoginHistory(auth.user.id, securityHardeningEnabled ? 20 : 10),
+      listSecurityActivity(auth.user.id, securityHardeningEnabled ? 20 : 12),
+      getProtectedRecoveryCodes(auth.user.id, { authorized: true }),
+      ((auth.supabase.auth as any)?.mfa?.getAuthenticatorAssuranceLevel?.() ?? Promise.resolve(null)),
+    ]);
 
-    const {
-      data: { session },
-    } = await auth.supabase.auth.getSession();
+    payload.mfaFactors = mfaFactors;
+    const verifiedTotpFactors = getVerifiedTotpFactors(mfaFactors);
+
+    const session = sessionResult.data?.session;
     const currentSessionId =
       session ? getSessionIdentifier(session) ?? null : null;
     payload.sessions = await listActiveSessions(
@@ -145,11 +161,10 @@ export async function GET(request: Request) {
       currentSessionId,
       securityHardeningEnabled ? 12 : 8,
     );
-    payload.loginHistory = await listLoginHistory(auth.user.id, securityHardeningEnabled ? 20 : 10);
+    payload.loginHistory = loginHistory;
     payload.password.lastChangedAt = passwordLastChangedAt ?? undefined;
-    payload.securityActivity = await listSecurityActivity(auth.user.id, securityHardeningEnabled ? 20 : 12);
+    payload.securityActivity = securityActivity;
 
-    const recoveryCodesState = await getProtectedRecoveryCodes(auth.user.id, { authorized: true });
     const storedRecoveryCodes = recoveryCodesState?.securityRecoveryCodes ?? [];
     payload.recoveryCodes = {
       configured: recoveryCodesState?.hasRecoveryCodes ?? false,
@@ -159,17 +174,13 @@ export async function GET(request: Request) {
         : {}),
     };
 
-    const mfaApi = (auth.supabase.auth as any)?.mfa;
-    if (mfaApi?.getAuthenticatorAssuranceLevel) {
-      const assuranceResult = await mfaApi.getAuthenticatorAssuranceLevel();
-      if (assuranceResult?.data) {
-        payload.assurance = {
-          currentLevel:
-            assuranceResult.data.currentLevel === "aal2" ? "aal2" : assuranceResult.data.currentLevel === "aal1" ? "aal1" : null,
-          nextLevel:
-            assuranceResult.data.nextLevel === "aal2" ? "aal2" : assuranceResult.data.nextLevel === "aal1" ? "aal1" : null,
-        };
-      }
+    if (assuranceResult?.data) {
+      payload.assurance = {
+        currentLevel:
+          assuranceResult.data.currentLevel === "aal2" ? "aal2" : assuranceResult.data.currentLevel === "aal1" ? "aal1" : null,
+        nextLevel:
+          assuranceResult.data.nextLevel === "aal2" ? "aal2" : assuranceResult.data.nextLevel === "aal1" ? "aal1" : null,
+      };
     }
 
     if (verifiedTotpFactors.length === 0 && payload.recoveryCodes.configured) {
@@ -189,7 +200,11 @@ export async function GET(request: Request) {
     });
     return jsonSuccess(payload);
   } catch (error) {
-    console.error("[api/v1/security] failed", error);
+    logger.error("[api/v1/security] failed", {
+      module: 'api',
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
     logApiRoute(request, {
       requestId,
       action: "security.get",

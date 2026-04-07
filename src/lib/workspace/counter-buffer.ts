@@ -1,5 +1,6 @@
 import { inngest } from '@/inngest/client';
 import { getRedisClient } from '@/lib/redis';
+import { logger } from '@/lib/logger';
 
 /**
  * Queues a counter refresh for a specific user.
@@ -30,7 +31,11 @@ export async function queueCounterRefresh(userId: string) {
             });
         }
     } catch (err) {
-        console.warn(`[counter-buffer] Inngest trigger failed for ${userId}:`, err instanceof Error ? err.message : String(err));
+        logger.error('counter-buffer.inngest.trigger.failed', {
+            module: 'workspace',
+            userId,
+            error: err instanceof Error ? err.message : String(err),
+        });
         // We don't re-throw here because we want the calling action to succeed.
         // The reconciliation cron will eventually fix any drifted counters.
     }
@@ -49,6 +54,9 @@ export async function queueCounterRefreshBestEffort(userIds: (string | null)[]) 
             await queueCounterRefresh(userId);
         }
     } catch (err) {
-        console.warn(`[counter-buffer] Best-effort refresh failed:`, err instanceof Error ? err.message : String(err));
+        logger.warn('counter-buffer.best-effort.failed', {
+            module: 'workspace',
+            error: err instanceof Error ? err.message : String(err),
+        });
     }
 }

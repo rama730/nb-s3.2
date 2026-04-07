@@ -10,6 +10,7 @@ import { useReducedMotionPreference } from "@/components/providers/theme-provide
 import PeopleClient from "@/components/people/PeopleClient";
 import ConnectionsClient from "@/components/people/ConnectionsClient";
 import RequestsTab from "@/components/people/RequestsTab";
+import { ComponentErrorBoundary } from "@/components/ui/ComponentErrorBoundary";
 import { useConnectionStats, useConnectionsRealtimeInvalidation } from "@/hooks/useConnections";
 import type { IncomingApplication, MyApplication } from "@/components/people/ProjectApplicationsSection";
 
@@ -88,7 +89,7 @@ export default function PeopleHubClient({
             {/* Sticky Tabs Header — single card with buttons */}
             <div className="sticky top-0 z-30 pt-2 pb-3">
                 <div className="flex justify-center">
-                    <div className="inline-flex items-center p-1 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-sm">
+                    <div className="inline-flex items-center p-1 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-sm" role="tablist" aria-label="People sections">
                         {visibleTabs.map((t) => {
                             const Icon = t.icon;
                             const selected = activeTab === t.key;
@@ -97,7 +98,10 @@ export default function PeopleHubClient({
                             return (
                                 <button
                                     key={t.key}
+                                    type="button"
                                     onClick={() => navigateTab(t.key)}
+                                    role="tab"
+                                    aria-selected={selected}
                                     className={cn(
                                         "relative flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 whitespace-nowrap",
                                         selected
@@ -135,18 +139,24 @@ export default function PeopleHubClient({
             {/* Main Content */}
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
                 {activeTab === "discover" && (
-                    <PeopleClient embedded initialUser={initialUser} />
+                    <ComponentErrorBoundary fallbackMessage="Failed to load discover tab.">
+                        <PeopleClient initialUser={initialUser} />
+                    </ComponentErrorBoundary>
                 )}
 
                 {activeTab === "network" && (
-                     <ConnectionsClient embedded initialUser={initialUser} />
+                    <ComponentErrorBoundary fallbackMessage="Failed to load network tab.">
+                        <ConnectionsClient initialUser={initialUser} />
+                    </ComponentErrorBoundary>
                 )}
 
                 {activeTab === "requests" && (
-                    <RequestsTab 
-                        initialUser={initialUser} 
-                        initialApplications={initialApplications}
-                    />
+                    <ComponentErrorBoundary fallbackMessage="Failed to load requests tab.">
+                        <RequestsTab
+                            initialUser={initialUser}
+                            initialApplications={initialApplications}
+                        />
+                    </ComponentErrorBoundary>
                 )}
             </div>
         </div>

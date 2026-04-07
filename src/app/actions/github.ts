@@ -74,14 +74,21 @@ const REQUEST_TIMEOUT_MS = (() => {
 })();
 const RETRYABLE_STATUS = new Set([403, 429, 500, 502, 503, 504]);
 
+function readCacheTtlEnv(envName: string, fallbackMs: number): number {
+  const raw = process.env[envName];
+  if (!raw) return fallbackMs;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 1000 ? Math.floor(parsed) : fallbackMs;
+}
+
 const CACHE_TTL_MS = {
-  repositories: 15_000,
-  branches: 20_000,
-  preflight: 10_000,
-  previewRoot: 10_000,
-  previewFolder: 10_000,
-  analyze: 20_000,
-} as const;
+  repositories: readCacheTtlEnv('GITHUB_CACHE_TTL_REPOS_MS', 15_000),
+  branches: readCacheTtlEnv('GITHUB_CACHE_TTL_BRANCHES_MS', 20_000),
+  preflight: readCacheTtlEnv('GITHUB_CACHE_TTL_PREFLIGHT_MS', 10_000),
+  previewRoot: readCacheTtlEnv('GITHUB_CACHE_TTL_PREVIEW_ROOT_MS', 10_000),
+  previewFolder: readCacheTtlEnv('GITHUB_CACHE_TTL_PREVIEW_FOLDER_MS', 10_000),
+  analyze: readCacheTtlEnv('GITHUB_CACHE_TTL_ANALYZE_MS', 20_000),
+};
 
 const actionCache = new Map<string, { expiresAtMs: number; value: unknown }>();
 

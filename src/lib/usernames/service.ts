@@ -113,7 +113,7 @@ function classifyUsernameAvailability(params: {
     }
 
     if (params.claim) {
-        if (params.claim.userId === params.viewerId && params.claim.isPrimary) {
+        if (params.claim.userId === params.viewerId) {
             return {
                 available: true,
                 message: 'Username is available!',
@@ -289,7 +289,10 @@ function deterministicSuffix(seed: string) {
     return `${100 + (hash % 900)}`
 }
 
-export function generateDeterministicUsernameCandidates(fullName: string): string[] {
+export function generateDeterministicUsernameCandidates(
+    fullName: string,
+    options?: { year?: number | string },
+): string[] {
     const normalizedName = fullName.trim().toLowerCase()
     const parts = normalizedName
         .split(/\s+/)
@@ -300,7 +303,7 @@ export function generateDeterministicUsernameCandidates(fullName: string): strin
 
     const first = parts[0] || ''
     const last = parts[parts.length - 1] || ''
-    const currentYear = String(new Date().getFullYear())
+    const currentYear = String(options?.year ?? new Date().getFullYear())
     const currentYearShort = currentYear.slice(-2)
     const stableSuffix = deterministicSuffix(parts.join('_'))
 

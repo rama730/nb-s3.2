@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -169,6 +170,11 @@ export function CreateDialog({
             <DialogTitle>
               {createDialog.kind === "folder" ? "Create folder" : "Create file"}
             </DialogTitle>
+            <DialogDescription>
+              {createDialog.kind === "folder"
+                ? "Create a new folder in the current location."
+                : "Create a new file in the current location."}
+            </DialogDescription>
           </DialogHeader>
           <div className="py-2">
             <Input

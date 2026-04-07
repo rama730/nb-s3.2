@@ -333,7 +333,7 @@ export default function IntegrationsSettings() {
                 showToast(error.message || `Failed to link ${providerId}`, "error");
                 setLinkingProviderId(null);
             }
-        } catch (err) {
+        } catch {
             showToast(`Failed to link ${providerId}`, "error");
             setLinkingProviderId(null);
         }

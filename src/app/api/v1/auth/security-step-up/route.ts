@@ -107,7 +107,7 @@ export async function GET(request: Request) {
     });
     return jsonSuccess(payload);
   } catch (error) {
-    console.error("[api/v1/auth/security-step-up] capability lookup failed", error);
+    logger.error("[api/v1/auth/security-step-up] capability lookup failed", { module: 'api', error: error instanceof Error ? error.message : String(error) });
     logApiRoute(request, {
       requestId,
       action: "auth.securityStepUp.get",
@@ -208,7 +208,7 @@ export async function POST(request: Request) {
     const logAndJsonError = (
       message: string,
       status: number,
-      errorCode: "BAD_REQUEST" | "STEP_UP_INVALID" | "RECOVERY_CODE_INVALID" | "INTERNAL_ERROR",
+      errorCode: "BAD_REQUEST" | "STEP_UP_INVALID" | "RECOVERY_CODE_INVALID" | "INTERNAL_ERROR" | "EMAIL_NOT_CONFIRMED",
       failureReason: string,
     ) => {
       logApiRoute(request, {
@@ -234,7 +234,8 @@ export async function POST(request: Request) {
     if (method === "totp") {
       const factorId = typeof body.factorId === "string" ? body.factorId.trim() : "";
       const code = typeof body.code === "string" ? body.code.trim() : "";
-      if (!factorId || !/^[0-9]{6}$/.test(code)) {
+      // M13: Validate factor ID format (UUID)
+      if (!factorId || !/^[a-f0-9-]{36}$/.test(factorId) || !/^[0-9]{6}$/.test(code)) {
         return jsonError("Enter the current 6-digit code from your authenticator app", 400, "BAD_REQUEST");
       }
 
@@ -295,14 +296,24 @@ export async function POST(request: Request) {
         );
       }
 
-      await recordSecurityEvent({
-        userId: user.id,
-        eventType: "recovery_code_used",
-        request,
-        metadata: {
-          remainingCount: recoveryResult.remainingCount,
-        },
-      });
+      // M16: Non-blocking audit — failure should not abort the step-up operation
+      try {
+        await recordSecurityEvent({
+          userId: user.id,
+          eventType: "recovery_code_used",
+          request,
+          metadata: {
+            remainingCount: recoveryResult.remainingCount,
+          },
+        });
+      } catch (auditError) {
+        logger.error("auth.step_up.audit_failed", {
+          requestId,
+          userId: user.id,
+          eventType: "recovery_code_used",
+          error: auditError instanceof Error ? auditError.message : String(auditError),
+        });
+      }
     }
 
     if (method === "password") {
@@ -318,11 +329,18 @@ export async function POST(request: Request) {
       const verification = await verifyPasswordCredential(user.email, password);
       if (!verification.ok) {
         const invalidCredentials = verification.reason === "invalid_credentials";
+        const emailNotConfirmed = verification.reason === "email_not_confirmed";
         return logAndJsonError(
-          verification.message || (invalidCredentials ? "Current password is incorrect" : "Unable to verify password"),
-          invalidCredentials ? 400 : 500,
-          invalidCredentials ? "STEP_UP_INVALID" : "INTERNAL_ERROR",
-          invalidCredentials ? "PASSWORD_INCORRECT" : "PASSWORD_VERIFICATION_FAILED",
+          verification.message || (
+            invalidCredentials
+              ? "Current password is incorrect"
+              : emailNotConfirmed
+                ? "Confirm your email address before verifying your password"
+                : "Unable to verify password"
+          ),
+          invalidCredentials ? 400 : emailNotConfirmed ? 403 : 500,
+          invalidCredentials ? "STEP_UP_INVALID" : emailNotConfirmed ? "EMAIL_NOT_CONFIRMED" : "INTERNAL_ERROR",
+          invalidCredentials ? "PASSWORD_INCORRECT" : emailNotConfirmed ? "PASSWORD_EMAIL_NOT_CONFIRMED" : "PASSWORD_VERIFICATION_FAILED",
         );
       }
     }
@@ -350,7 +368,7 @@ export async function POST(request: Request) {
     });
     return response;
   } catch (error) {
-    console.error("[api/v1/auth/security-step-up] failed", error);
+    logger.error("[api/v1/auth/security-step-up] failed", { module: 'api', error: error instanceof Error ? error.message : String(error) });
     logApiRoute(request, {
       requestId,
       action: "auth.securityStepUp.post",

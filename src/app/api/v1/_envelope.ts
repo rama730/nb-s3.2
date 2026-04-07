@@ -14,7 +14,11 @@ export type ApiErrorCode =
   | "SESSION_REVOKE_FAILED"
   | "STEP_UP_REQUIRED"
   | "STEP_UP_INVALID"
-  | "RECOVERY_CODE_INVALID";
+  | "RECOVERY_CODE_INVALID"
+  | "EMAIL_NOT_CONFIRMED"
+  | "DB_ERROR"
+  | "DB_UNAVAILABLE"
+  | "READINESS_DEGRADED";
 
 export function jsonSuccess<T>(
   data?: T,

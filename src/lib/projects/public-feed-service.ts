@@ -1,8 +1,10 @@
-import { and, desc, eq, isNull, lt, or, sql } from 'drizzle-orm'
+import { and, desc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm'
 
 import { db } from '@/lib/db'
-import { profiles, projects } from '@/lib/db/schema'
-import { getCacheEnvelope, cacheStaleableData } from '@/lib/redis'
+import { isMissingRelationError } from '@/lib/db/errors'
+import { profiles, projectOpenRoles, projects } from '@/lib/db/schema'
+import { logger } from '@/lib/logger'
+import { getCacheEnvelope, cacheStaleableData, isCacheStale } from '@/lib/redis'
 import {
     buildPublicProjectsCacheKey,
     encodePublicProjectsCursor,
@@ -42,6 +44,17 @@ type PublicProjectRow = {
     }
 }
 
+type PublicProjectRoleRow = {
+    id: string
+    projectId: string
+    role: string
+    title: string | null
+    description: string | null
+    count: number
+    filled: number
+    skills: string[] | null
+}
+
 export type PublicProjectsFeedPage = {
     projects: PublicProjectsFeedItem[]
     nextCursor: string | null
@@ -49,7 +62,7 @@ export type PublicProjectsFeedPage = {
     cacheState: 'fresh' | 'stale' | 'miss'
 }
 
-function mapProjectRow(row: PublicProjectRow): PublicProjectsFeedItem {
+function mapProjectRow(row: PublicProjectRow, openRoles: PublicProjectRoleRow[]): PublicProjectsFeedItem {
     return {
         id: row.id,
         slug: row.slug,
@@ -68,6 +81,16 @@ function mapProjectRow(row: PublicProjectRow): PublicProjectsFeedItem {
         cover_image: row.coverImage,
         created_at: row.createdAt.toISOString(),
         updated_at: row.updatedAt.toISOString(),
+        open_roles: openRoles.map((role) => ({
+            id: role.id,
+            project_id: role.projectId,
+            role: role.role,
+            title: role.title,
+            description: role.description,
+            count: role.count,
+            filled: role.filled,
+            skills: role.skills ?? [],
+        })),
         profiles: row.profiles,
     }
 }
@@ -81,7 +104,7 @@ export async function readPublicProjectsFeedCache(limit: number, cursor: PublicP
 
     return {
         cacheKey,
-        fresh: cached && (!cached.staleAt || cached.staleAt > Date.now()) ? cached : null,
+        fresh: cached && !isCacheStale(cached) ? cached : null,
         stale: cached && (!cached.expiresAt || cached.expiresAt > Date.now()) ? cached : null,
     }
 }
@@ -136,6 +159,41 @@ export async function queryAndCachePublicProjectsFeed(limit: number, cursor: Pub
 
     const hasMore = rows.length > limit
     const pageRows = rows.slice(0, limit) as PublicProjectRow[]
+    const projectIds = pageRows.map((row) => row.id)
+    const roleRows = projectIds.length === 0
+        ? []
+        : await db
+            .select({
+                id: projectOpenRoles.id,
+                projectId: projectOpenRoles.projectId,
+                role: projectOpenRoles.role,
+                title: projectOpenRoles.title,
+                description: projectOpenRoles.description,
+                count: projectOpenRoles.count,
+                filled: projectOpenRoles.filled,
+                skills: projectOpenRoles.skills,
+            })
+            .from(projectOpenRoles)
+            .where(inArray(projectOpenRoles.projectId, projectIds))
+            .catch((error) => {
+                if (isMissingRelationError(error, 'project_open_roles')) {
+                    logger.warn('public-feed.project_open_roles_missing', {
+                        module: 'public-feed-service',
+                        relation: 'project_open_roles',
+                    })
+                    return []
+                }
+                throw error
+            })
+    const rolesByProjectId = new Map<string, PublicProjectRoleRow[]>()
+    for (const role of roleRows as PublicProjectRoleRow[]) {
+        const existing = rolesByProjectId.get(role.projectId)
+        if (existing) {
+            existing.push(role)
+        } else {
+            rolesByProjectId.set(role.projectId, [role])
+        }
+    }
     const lastRow = pageRows.at(-1) ?? null
     const nextCursor = hasMore && lastRow
         ? encodePublicProjectsCursor({
@@ -144,7 +202,7 @@ export async function queryAndCachePublicProjectsFeed(limit: number, cursor: Pub
         })
         : null
     const payload = {
-        projects: pageRows.map(mapProjectRow),
+        projects: pageRows.map((row) => mapProjectRow(row, rolesByProjectId.get(row.id) ?? [])),
         nextCursor,
     }
 

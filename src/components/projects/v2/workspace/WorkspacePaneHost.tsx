@@ -12,6 +12,7 @@ import AssetGallery from "../preview/AssetGallery";
 
 interface WorkspacePaneHostProps {
   projectId: string;
+  isActive: boolean;
   canEdit: boolean;
   splitEnabled: boolean;
   splitRatio: number;
@@ -71,6 +72,7 @@ interface WorkspacePaneHostProps {
 
 export function WorkspacePaneHost({
   projectId,
+  isActive,
   canEdit,
   splitEnabled,
   splitRatio,
@@ -128,6 +130,7 @@ export function WorkspacePaneHost({
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
           <EditorPane
             projectId={projectId}
+            isActive={isActive}
             paneId="left"
             canEdit={canEdit}
             width={splitEnabled ? `${splitRatio * 100}%` : "100%"}
@@ -180,6 +183,7 @@ export function WorkspacePaneHost({
           {splitEnabled ? (
             <EditorPane
               projectId={projectId}
+              isActive={isActive}
               paneId="right"
               canEdit={canEdit}
               width={`${(1 - splitRatio) * 100}%`}

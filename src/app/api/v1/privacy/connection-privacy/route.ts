@@ -6,6 +6,7 @@ import {
   logApiRoute,
   requireAuthenticatedUser,
 } from "@/app/api/v1/_shared";
+import { logger } from "@/lib/logger";
 import {
   isProfileNotFoundError,
   updateConnectionPrivacySetting,
@@ -47,7 +48,7 @@ export async function PATCH(request: Request) {
     });
     return jsonSuccess({ connectionPrivacy: nextValue });
   } catch (error) {
-    console.error("[api/v1/privacy/connection-privacy] failed", error);
+    logger.error("[api/v1/privacy/connection-privacy] failed", { module: 'api', error: error instanceof Error ? error.message : String(error) });
     if (isProfileNotFoundError(error)) {
       return jsonError("Profile not found", 404, "NOT_FOUND");
     }

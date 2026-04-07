@@ -12,6 +12,7 @@ test.describe("Files tab smoke", () => {
         const context = await browser.newContext();
         const page = await context.newPage();
         const monitor = attachPageMonitoring(page, {
+            monitorConsoleTypes: ["error", "warning"],
             allowedHttpUrlPatterns: [/\/projects\/e2e-files-workspace-controls\?tab=files$/i],
             allowedConsolePatterns: [
                 /The result of getSnapshot should be cached to avoid an infinite loop/i,
@@ -49,6 +50,7 @@ test.describe("Files tab smoke", () => {
         await expect
             .poll(() => new URL(page.url()).searchParams.get("tab"), { timeout: 15000 })
             .toBe("files");
+        await expect(page.locator('[role="tree"] [role="treeitem"]').first()).toBeVisible({ timeout: 15000 });
         await expect(actionsButton).toBeVisible({ timeout: 15000 });
         await actionsButton.click();
         const newFolderMenuItem = page.getByRole("menuitem", { name: "New folder" });
@@ -96,6 +98,7 @@ test.describe("Files tab smoke", () => {
         const context = await browser.newContext();
         const page = await context.newPage();
         const monitor = attachPageMonitoring(page, {
+            monitorConsoleTypes: ["error", "warning"],
             allowedHttpUrlPatterns: [/\/projects\/e2e-files-workspace-controls\?tab=files$/i],
             allowedConsolePatterns: [
                 /The result of getSnapshot should be cached to avoid an infinite loop/i,

@@ -4,6 +4,7 @@ import type { WorkspacePane, ProjectWorkspaceState } from "./types";
 import { ROOT_KEY } from "./types";
 
 const EMPTY_IDS: string[] = [];
+const EMPTY_EXPANDED_FOLDERS: Record<string, boolean> = {};
 
 export const useActiveTab = (projectId: string, paneId: WorkspacePane["id"]) =>
   useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.panes[paneId]?.activeTabId ?? null);
@@ -21,7 +22,7 @@ export const useDirtyFiles = (projectId: string) =>
   );
 
 export const useExpandedFolders = (projectId: string) =>
-  useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.expandedFolderIds ?? {});
+  useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.expandedFolderIds ?? EMPTY_EXPANDED_FOLDERS);
 
 export const useGitState = (projectId: string) =>
   useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.git);

@@ -1,6 +1,8 @@
 import { db } from '@/lib/db'
 import { reservedUsernames } from '@/lib/db/schema'
 import { getRequestId, jsonError, jsonSuccess, logApiRoute } from '@/app/api/v1/_shared'
+import { logger } from '@/lib/logger'
+import { consumeRateLimit } from '@/lib/security/rate-limit'
 import { isAdminUser } from '@/lib/security/admin'
 import { validateCsrf } from '@/lib/security/csrf'
 import { createClient } from '@/lib/supabase/server'
@@ -33,6 +35,12 @@ export async function GET(request: Request) {
             errorCode: admin.errorCode,
         })
         return jsonError(admin.message, admin.status, admin.errorCode)
+    }
+
+    // H10: Rate limit admin endpoints to prevent abuse from compromised admin accounts
+    const rate = await consumeRateLimit(`admin-reserved-usernames:${admin.user.id}`, 30, 60)
+    if (!rate.allowed) {
+        return jsonError('Rate limit exceeded', 429, 'RATE_LIMITED')
     }
 
     const rows = await db
@@ -222,7 +230,8 @@ export async function DELETE(request: Request) {
         })
         return jsonSuccess()
     } catch (error) {
-        console.error('[account.reservedUsernames.delete] delete failed', {
+        logger.error('[account.reservedUsernames.delete] delete failed', {
+            module: 'api',
             requestId,
             userId: admin.user.id,
             username,

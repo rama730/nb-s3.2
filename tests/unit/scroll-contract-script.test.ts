@@ -34,4 +34,18 @@ describe("check-scroll-contract script", () => {
     assert.ok(result.errors.some((line) => line.includes("Forbidden global scrollbar selector")));
     assert.ok(result.errors.some((line) => line.includes("Legacy scrollbar utility")));
   });
+
+  it("fails when global smooth scroll is enabled without the html data attribute", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "scroll-contract-smooth-"));
+    write(path.join(tmp, "src/app/globals.css"), `html { scroll-behavior: smooth; }`);
+    write(path.join(tmp, "src/app/layout.tsx"), `export default function RootLayout({children}:{children:React.ReactNode}){return <html lang="en"><body>{children}</body></html>}`);
+    write(path.join(tmp, "src/app/(main)/foo/page.tsx"), `<div data-scroll-root="route" />`);
+    write(path.join(tmp, "src/app/(main)/layout.tsx"), `export default function L({children}:{children:React.ReactNode}){return children}`);
+
+    const result = validateScrollContract(tmp);
+    assert.ok(
+      result.errors.some((line) => line.includes("data-scroll-behavior=\"smooth\"")),
+      `Expected smooth-scroll html contract violation, got: ${result.errors.join("\n")}`,
+    );
+  });
 });

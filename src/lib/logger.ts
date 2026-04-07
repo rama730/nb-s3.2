@@ -12,11 +12,14 @@ interface LogContext {
 
 const LEVEL_ORDER: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2, error: 3 }
 
-const MIN_LEVEL: LogLevel = process.env.NODE_ENV === 'production' ? 'info' : 'debug'
-const IS_PRODUCTION = process.env.NODE_ENV === 'production'
+function isVerboseConsoleLoggingEnabled() {
+    return process.env.NODE_ENV !== 'production'
+        && (process.env.NEXT_PUBLIC_VERBOSE_APP_LOGS === '1' || process.env.VERBOSE_APP_LOGS === '1')
+}
 
 function shouldLog(level: LogLevel): boolean {
-    return LEVEL_ORDER[level] >= LEVEL_ORDER[MIN_LEVEL]
+    const minLevel: LogLevel = isVerboseConsoleLoggingEnabled() ? 'debug' : 'warn'
+    return LEVEL_ORDER[level] >= LEVEL_ORDER[minLevel]
 }
 
 function shouldSample(level: LogLevel, message: string, context?: LogContext): boolean {
@@ -28,12 +31,17 @@ function shouldSample(level: LogLevel, message: string, context?: LogContext): b
     if (sampleRate >= 1) return true
     if (sampleRate <= 0) return false
 
-    const seed = String(context?.requestId ?? context?.module ?? message ?? Math.random())
-    let hash = 0
-    for (let index = 0; index < seed.length; index += 1) {
-        hash = (hash * 31 + seed.charCodeAt(index)) >>> 0
+    // Use deterministic sampling only when requestId is present (consistent per-request)
+    if (context?.requestId) {
+        const seed = String(context.requestId)
+        let hash = 0
+        for (let index = 0; index < seed.length; index += 1) {
+            hash = (hash * 31 + seed.charCodeAt(index)) >>> 0
+        }
+        return (hash % 10_000) / 10_000 < sampleRate
     }
-    return (hash % 10_000) / 10_000 < sampleRate
+    // Non-deterministic sampling for general logs
+    return Math.random() < sampleRate
 }
 
 function emit(level: LogLevel, message: string, context?: LogContext) {
@@ -42,20 +50,25 @@ function emit(level: LogLevel, message: string, context?: LogContext) {
 
     const { sampleRate: _sampleRate, ...safeContext } = context || {}
     const entry = { level, msg: message, ts: Date.now(), ...safeContext }
+    const verboseConsoleLogs = isVerboseConsoleLoggingEnabled()
 
-    if (IS_PRODUCTION) {
-        switch (level) {
-            case 'error': console.error("[logger]", entry); break
-            case 'warn':  console.warn("[logger]", entry); break
-            default:      console.info("[logger]", entry); break
-        }
-    } else {
-        switch (level) {
-            case 'error': console.error("[logger]", entry); break
-            case 'warn':  console.warn("[logger]", entry); break
-            case 'debug': console.debug("[logger]", entry); break
-            default:      console.info("[logger]", entry); break
-        }
+    switch (level) {
+        case 'error':
+            console.error("[logger]", entry)
+            break
+        case 'warn':
+            console.warn("[logger]", entry)
+            break
+        case 'debug':
+            if (verboseConsoleLogs) {
+                console.debug("[logger]", entry)
+            }
+            break
+        default:
+            if (verboseConsoleLogs) {
+                console.info("[logger]", entry)
+            }
+            break
     }
 }
 

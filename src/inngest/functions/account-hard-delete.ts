@@ -1,7 +1,7 @@
 import { inngest } from "../client";
 import { db } from "@/lib/db";
 import { accountDeletions } from "@/lib/db/schema";
-import { eq, and, lte, isNull, sql } from "drizzle-orm";
+import { and, lte, isNull } from "drizzle-orm";
 import { executeHardDelete } from "@/app/actions/account";
 
 /**
@@ -13,22 +13,14 @@ export const accountHardDelete = inngest.createFunction(
         id: "account-hard-delete",
         name: "Account Hard Delete (Grace Period Expiry)",
         retries: 2,
+        concurrency: {
+            limit: 1,
+            key: "account-hard-delete-global",
+        },
     },
     { cron: "0 2 * * *" }, // Every day at 02:00 UTC
     async ({ step }) => {
         const now = new Date();
-        const LOCK_ID = 422026; // Unique ID for account hard-delete lock
-
-        // Step 0: Acquire distributed lock to ensure only one cron instance runs
-        const locked = await step.run("acquire-lock", async () => {
-            const result = await db.execute(sql`SELECT pg_try_advisory_xact_lock(${LOCK_ID}) as locked`);
-            return result[0]?.locked === true;
-        });
-
-        if (!locked) {
-            console.log("Account hard-delete cron already running on another instance. Skipping.");
-            return { status: "skipped", reason: "lock_not_acquired" };
-        }
 
         // Find all eligible deletions
         const eligibleDeletions = await step.run("find-eligible", async () => {

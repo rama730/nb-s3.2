@@ -5,6 +5,7 @@ type MonitoringOptions = {
   allowedHttpUrlPatterns?: RegExp[];
   allowedConsolePatterns?: RegExp[];
   allowedPageErrorPatterns?: RegExp[];
+  monitorConsoleTypes?: string[];
 };
 
 type MonitoringIssue = {
@@ -34,6 +35,7 @@ export function attachPageMonitoring(page: Page, options?: MonitoringOptions) {
     ...DEFAULT_ALLOWED_CONSOLE_PATTERNS,
     ...(options?.allowedConsolePatterns ?? []),
   ];
+  const monitoredConsoleTypes = new Set(options?.monitorConsoleTypes ?? ["error"]);
   const allowedPageErrorPatterns = [
     ...DEFAULT_ALLOWED_PAGE_ERROR_PATTERNS,
     ...(options?.allowedPageErrorPatterns ?? []),
@@ -46,7 +48,7 @@ export function attachPageMonitoring(page: Page, options?: MonitoringOptions) {
   };
 
   const onConsole = (message: ConsoleMessage) => {
-    if (message.type() !== "error") return;
+    if (!monitoredConsoleTypes.has(message.type())) return;
     const text = message.text();
     if (allowedConsolePatterns.some((pattern) => pattern.test(text))) return;
     issues.push({ kind: "console", message: text });

@@ -14,6 +14,7 @@ interface UseAutoSaveOptions {
   activeTabIdByPane: Record<PaneId, string | null>;
   tabByIdRef: React.RefObject<Record<string, FilesWorkspaceTabState>>;
   saveTab: (nodeId: string, opts?: { silent?: boolean; reason?: string }) => Promise<boolean>;
+  showToast?: (msg: string, type?: "success" | "error" | "info" | "warning") => void;
   autosaveDelayMs?: number;
   backgroundConcurrency?: number;
   leftActiveTab: FilesWorkspaceTabState | null;
@@ -35,6 +36,7 @@ export function useAutoSave({
   rightActiveTab,
   leftActiveTabId,
   rightActiveTabId,
+  showToast,
 }: UseAutoSaveOptions) {
   const effectiveAutosaveDelayMs = clampNumber(
     autosaveDelayMs ?? FILES_RUNTIME_BUDGETS.autosaveDelayDefaultMs,
@@ -52,6 +54,8 @@ export function useAutoSave({
     right: null,
   });
   const prevActiveRef = useRef<Record<PaneId, string | null>>({ left: null, right: null });
+  const consecutiveFailuresRef = useRef(0);
+  const lastFailureToastRef = useRef(0);
 
   // Save previous active tab on switch (best-effort)
   useEffect(() => {
@@ -138,13 +142,27 @@ export function useAutoSave({
             value: 1,
             extra: { reason: "background" },
           });
+          if (ok) {
+            consecutiveFailuresRef.current = 0;
+          } else {
+            consecutiveFailuresRef.current += 1;
+          }
         } catch {
+          consecutiveFailuresRef.current += 1;
           recordFilesMetric("files.autosave.failure_count", {
             projectId,
             nodeId,
             value: 1,
             extra: { reason: "background" },
           });
+        }
+        // Notify user after persistent failures (>2 consecutive, throttled to 1 per 60s)
+        if (consecutiveFailuresRef.current > 2 && showToast) {
+          const now = Date.now();
+          if (now - lastFailureToastRef.current > 60_000) {
+            lastFailureToastRef.current = now;
+            showToast("Some files failed to save automatically", "warning");
+          }
         }
       });
     }, BACKGROUND_AUTOSAVE_INTERVAL_MS);

@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { validateCsrf } from "@/lib/security/csrf";
 import { resolvePasswordCredentialState } from "@/lib/auth/account-identity";
 import {
@@ -13,17 +14,13 @@ import { isEmailVerified } from "@/lib/auth/email-verification";
 import { getVerifiedTotpFactors, listSecurityMfaFactors } from "@/lib/security/mfa";
 import { verifyPasswordCredential } from "@/lib/security/password-auth";
 import { resolveSecurityStepUp } from "@/lib/security/step-up";
+import { checkIdempotencyKey, saveIdempotencyResult } from "@/lib/security/idempotency";
 import { logger } from "@/lib/logger";
 
-type ChangePasswordBody = {
-  currentPassword?: string;
-  newPassword?: string;
-};
-
-function parseBody(payload: unknown): ChangePasswordBody {
-  if (!payload || typeof payload !== "object") return {};
-  return payload as ChangePasswordBody;
-}
+const changePasswordSchema = z.object({
+  currentPassword: z.string().optional(),
+  newPassword: z.string().min(1),
+});
 
 export async function POST(request: Request) {
   const startedAt = Date.now();
@@ -41,7 +38,20 @@ export async function POST(request: Request) {
     return csrfError;
   }
 
-  const limitResponse = await enforceRouteLimit(request, "api:v1:auth:change-password", 30, 60);
+  // Idempotency — prevent duplicate password changes
+  const idempotencyCheck = await checkIdempotencyKey(request, 'auth.changePassword');
+  if (idempotencyCheck.isDuplicate) {
+    if (idempotencyCheck.cachedResponse) {
+      return new Response(idempotencyCheck.cachedResponse, {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    return jsonError('Request is already being processed', 409, 'CONFLICT');
+  }
+
+  // H9: Tightened from 30/min to 10/hour for security-critical password changes
+  const limitResponse = await enforceRouteLimit(request, "api:v1:auth:change-password", 10, 3600);
   if (limitResponse) {
     logApiRoute(request, {
       requestId,
@@ -78,9 +88,9 @@ export async function POST(request: Request) {
     return jsonError("Not authenticated", 401, "UNAUTHORIZED");
   }
 
-  let body: ChangePasswordBody = {};
+  let rawBody: unknown;
   try {
-    body = parseBody(await request.json());
+    rawBody = await request.json();
   } catch {
     logApiRoute(request, {
       requestId,
@@ -94,8 +104,22 @@ export async function POST(request: Request) {
     return jsonError("Malformed JSON body", 400, "BAD_REQUEST");
   }
 
-  const currentPassword = (body.currentPassword || "").trim();
-  const newPassword = (body.newPassword || "").trim();
+  const parsed = changePasswordSchema.safeParse(rawBody);
+  if (!parsed.success) {
+    logApiRoute(request, {
+      requestId,
+      action: "auth.changePassword.post",
+      userId: auth.user.id,
+      startedAt,
+      success: false,
+      status: 400,
+      errorCode: "BAD_REQUEST",
+    });
+    return jsonError("Invalid request body", 400, "BAD_REQUEST");
+  }
+
+  const currentPassword = (parsed.data.currentPassword || "").trim();
+  const newPassword = parsed.data.newPassword.trim();
   if (!newPassword) {
     logApiRoute(request, {
       requestId,
@@ -189,19 +213,30 @@ export async function POST(request: Request) {
       const verifyResult = await verifyPasswordCredential(auth.user.email, currentPassword);
       if (!verifyResult.ok) {
         const invalidCredentials = verifyResult.reason === "invalid_credentials";
+        const emailNotConfirmed = verifyResult.reason === "email_not_confirmed";
         logApiRoute(request, {
           requestId,
           action: "auth.changePassword.post",
           userId: auth.user.id,
           startedAt,
           success: false,
-          status: invalidCredentials ? 400 : 500,
-          errorCode: invalidCredentials ? "CURRENT_PASSWORD_INVALID" : "INTERNAL_ERROR",
+          status: invalidCredentials ? 400 : emailNotConfirmed ? 403 : 500,
+          errorCode: invalidCredentials
+            ? "CURRENT_PASSWORD_INVALID"
+            : emailNotConfirmed
+              ? "EMAIL_NOT_CONFIRMED"
+              : "INTERNAL_ERROR",
         });
         return jsonError(
-          verifyResult.message || (invalidCredentials ? "Current password is incorrect" : "Unable to verify password"),
-          invalidCredentials ? 400 : 500,
-          invalidCredentials ? "CURRENT_PASSWORD_INVALID" : "INTERNAL_ERROR",
+          verifyResult.message || (
+            invalidCredentials
+              ? "Current password is incorrect"
+              : emailNotConfirmed
+                ? "Confirm your email address before changing your password"
+                : "Unable to verify password"
+          ),
+          invalidCredentials ? 400 : emailNotConfirmed ? 403 : 500,
+          invalidCredentials ? "CURRENT_PASSWORD_INVALID" : emailNotConfirmed ? "EMAIL_NOT_CONFIRMED" : "INTERNAL_ERROR",
         );
       }
     }
@@ -248,9 +283,11 @@ export async function POST(request: Request) {
       success: true,
       status: 200,
     });
+    const successBody = JSON.stringify({ ok: true, message: "Password updated successfully" });
+    await saveIdempotencyResult(request, 'auth.changePassword', successBody, idempotencyCheck.lockToken);
     return jsonSuccess(undefined, "Password updated successfully");
   } catch (error) {
-    console.error("[api/v1/auth/change-password] failed", error);
+    logger.error("[api/v1/auth/change-password] failed", { module: 'api', error: error instanceof Error ? error.message : String(error) });
     logApiRoute(request, {
       requestId,
       action: "auth.changePassword.post",

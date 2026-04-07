@@ -1,3 +1,9 @@
+// TODO(perf): Consolidate 7 slices into 4 logical domains:
+// - explorerSlice + filesSlice → explorerSlice
+// - workspaceSlice + uiSlice → workspaceSlice
+// - editorSlice + locksSlice → editorSlice
+// - gitSlice (keep standalone)
+// This reduces cross-slice coordination complexity and onboarding time.
 "use client";
 
 import { create } from "zustand";
@@ -129,6 +135,7 @@ export type {
   WorkspaceTab,
   WorkspacePane,
   SoftLock,
+  NodeEventSummary,
   FileState,
   EditorSymbol,
   ProjectWorkspaceState,

@@ -14,6 +14,7 @@ export type AppearanceSettingsPayload = {
 };
 
 const APPEARANCE_REQUEST_TIMEOUT_MS = 4_000;
+let appearanceReadInFlight: Promise<AppearanceSettingsPayload> | null = null;
 
 function isAppearanceSnapshot(snapshot: unknown): snapshot is AppearanceSnapshot {
     if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) {
@@ -77,13 +78,25 @@ async function readAppearanceJson(response: Response): Promise<AppearanceSetting
 }
 
 export async function readAppearanceSettings(): Promise<AppearanceSettingsPayload> {
-    const response = await fetchAppearanceWithTimeout("/api/v1/appearance", {
-        method: "GET",
-        headers: {
-            Accept: "application/json",
-        },
-    });
-    return readAppearanceJson(response);
+    if (appearanceReadInFlight) {
+        return appearanceReadInFlight;
+    }
+
+    appearanceReadInFlight = (async () => {
+        const response = await fetchAppearanceWithTimeout("/api/v1/appearance", {
+            method: "GET",
+            headers: {
+                Accept: "application/json",
+            },
+        });
+        return readAppearanceJson(response);
+    })();
+
+    try {
+        return await appearanceReadInFlight;
+    } finally {
+        appearanceReadInFlight = null;
+    }
 }
 
 export async function writeAppearanceSettings(

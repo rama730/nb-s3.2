@@ -39,10 +39,22 @@ test.describe("Project tabs matrix @critical", () => {
     const context = await browser.newContext();
     const page = await context.newPage();
     const monitor = attachPageMonitoring(page, {
+      monitorConsoleTypes: ["error", "warning"],
       allowedConsolePatterns: [
         /The result of getSnapshot should be cached to avoid an infinite loop/i,
       ],
     });
+    const backgroundWorkspaceRequests = { presenceToken: 0, pageActions: 0 };
+    const onRequest = (request: import("@playwright/test").Request) => {
+      const url = request.url();
+      if (url.includes("/api/realtime/presence-token")) {
+        backgroundWorkspaceRequests.presenceToken += 1;
+      }
+      if (request.method() === "POST" && url.includes(`/projects/${fixtureProjectSlug}`)) {
+        backgroundWorkspaceRequests.pageActions += 1;
+      }
+    };
+    page.on("request", onRequest);
     const perf = new PerfTracker();
 
     await login(page);
@@ -52,6 +64,19 @@ test.describe("Project tabs matrix @critical", () => {
     await markNavigationMetrics(perf, page, `/projects/${fixtureProjectSlug}`);
     perf.mark("route.interactive.core", projectShellMs, `/projects/${fixtureProjectSlug}`);
     perf.mark("project.detail.shell.interactive", projectShellMs, `/projects/${fixtureProjectSlug}`);
+
+    const headContract = await page.evaluate(() => ({
+      titleCount: document.head.querySelectorAll("title").length,
+      canonicalCount: document.head.querySelectorAll('link[rel="canonical"]').length,
+      descriptionCount: document.head.querySelectorAll('meta[name="description"]').length,
+      themeColorOwnerCount: document.head.querySelectorAll('meta[data-app-theme-color="true"]').length,
+      mainCount: document.querySelectorAll("main").length,
+    }));
+    expect(headContract.titleCount).toBe(1);
+    expect(headContract.canonicalCount).toBe(1);
+    expect(headContract.descriptionCount).toBe(1);
+    expect(headContract.themeColorOwnerCount).toBe(1);
+    expect(headContract.mainCount).toBe(1);
 
     await expect(page.getByTestId("project-tab-dashboard")).toBeVisible();
     await expect(page.getByTestId("project-tab-sprints")).toBeVisible();
@@ -96,9 +121,18 @@ test.describe("Project tabs matrix @critical", () => {
       .poll(() => new URL(page.url()).searchParams.get("tab"), { timeout: 15000 })
       .toBe("files");
     await expect(page.getByTestId("files-explorer-actions-trigger").first()).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('[role="tree"] [role="treeitem"]').first()).toBeVisible({ timeout: 15000 });
+
+    backgroundWorkspaceRequests.presenceToken = 0;
+    backgroundWorkspaceRequests.pageActions = 0;
+    await switchTab("project-tab-dashboard", "dashboard", "dashboard");
+    await page.waitForTimeout(3000);
+    expect(backgroundWorkspaceRequests.presenceToken, "Hidden Files tab should not keep polling presence tokens").toBe(0);
+    expect(backgroundWorkspaceRequests.pageActions, "Hidden Files tab should not keep firing server actions").toBe(0);
 
     await monitor.assertNoViolations();
     monitor.detach();
+    page.off("request", onRequest);
     await context.close();
   });
 });

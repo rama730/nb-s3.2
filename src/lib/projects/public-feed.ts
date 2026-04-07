@@ -23,6 +23,16 @@ export type PublicProjectsFeedItem = {
     cover_image: string | null
     created_at: string
     updated_at: string
+    open_roles: Array<{
+        id: string
+        project_id: string
+        role: string
+        title: string | null
+        description: string | null
+        count: number
+        filled: number
+        skills: string[]
+    }>
     profiles: {
         id: string
         username: string | null
@@ -58,7 +68,7 @@ export function decodePublicProjectsCursor(cursor: string | null | undefined): P
 
 export function buildPublicProjectsCacheKey(limit: number, cursor: PublicProjectsCursor | null) {
     const suffix = cursor ? `${cursor.createdAt}:${cursor.id}` : 'origin'
-    return `projects:public:v2:limit:${limit}:cursor:${suffix}`
+    return `projects:public:v3:limit:${limit}:cursor:${suffix}`
 }
 
 function normalizeProjectStatus(status: string | null): Project['status'] {
@@ -100,7 +110,18 @@ export function mapPublicProjectToHubProject(project: PublicProjectsFeedItem): P
         createdAt: project.created_at,
         updatedAt: project.updated_at,
         collaborators: [],
-        openRoles: [],
+        openRoles: Array.isArray(project.open_roles)
+            ? project.open_roles.map((role) => ({
+                id: role.id,
+                projectId: role.project_id,
+                role: role.role,
+                title: role.title,
+                description: role.description,
+                count: Number(role.count || 0),
+                filled: Number(role.filled || 0),
+                skills: Array.isArray(role.skills) ? role.skills : [],
+            }))
+            : [],
         followers: [],
     }
 }

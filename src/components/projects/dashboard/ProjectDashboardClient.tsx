@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
-import { useRouter, useParams, useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
@@ -57,8 +57,8 @@ export default function ProjectDashboardClient({
     isMember,
 }: ProjectDashboardClientProps) {
     const router = useRouter();
+    const pathname = usePathname();
     const queryClient = useQueryClient();
-    const params = useParams();
     const searchParams = useSearchParams();
 
     const invalidateProjectDetailSlices = useCallback((options?: {
@@ -304,10 +304,20 @@ export default function ProjectDashboardClient({
         if (tabId === activeTab) return;
         setActiveTab(tabId);
         // Update URL without reload
-        const params = new URLSearchParams(window.location.search);
-        params.set("tab", tabId);
-        router.replace(`?${params.toString()}`, { scroll: false });
-    }, [activeTab, router]);
+        const nextParams = new URLSearchParams(window.location.search);
+        nextParams.set("tab", tabId);
+        const nextQuery = nextParams.toString();
+        const nextUrl = nextQuery ? `${pathname}?${nextQuery}` : pathname;
+        window.history.replaceState(window.history.state, "", nextUrl);
+    }, [activeTab, pathname]);
+
+    useEffect(() => {
+        const nextTab = searchParams?.get("tab") || "dashboard";
+        setActiveTab((prev) => (prev === nextTab ? prev : nextTab));
+        if (nextTab === "files") {
+            setHasMountedFilesTab(true);
+        }
+    }, [searchParams]);
 
     const filesPrefetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const filesPrefetchQueryKey = useMemo(
@@ -637,11 +647,30 @@ export default function ProjectDashboardClient({
     const initialOpenLine = Number.isFinite(initialOpenLineRaw) ? initialOpenLineRaw : null;
     const initialOpenColumn = Number.isFinite(initialOpenColumnRaw) ? initialOpenColumnRaw : null;
 
+    // PD1: Mount files tab on first visit; unmount after 5 minutes of inactivity
+    const filesUnmountTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
     useEffect(() => {
         if (activeTab === "files") {
             setHasMountedFilesTab(true);
+            // Cancel any pending unmount timer
+            if (filesUnmountTimerRef.current) {
+                clearTimeout(filesUnmountTimerRef.current);
+                filesUnmountTimerRef.current = null;
+            }
+        } else if (hasMountedFilesTab) {
+            // Start 5-minute unmount timer when leaving files tab
+            filesUnmountTimerRef.current = setTimeout(() => {
+                setHasMountedFilesTab(false);
+                filesUnmountTimerRef.current = null;
+            }, 5 * 60 * 1000);
         }
-    }, [activeTab]);
+        return () => {
+            if (filesUnmountTimerRef.current) {
+                clearTimeout(filesUnmountTimerRef.current);
+            }
+        };
+    }, [activeTab, hasMountedFilesTab]);
 
     // Memoize the Files tab to prevent unmounting/remounting on parent re-renders (e.g. scroll)
     const filesTabContent = useMemo(() => (
@@ -651,6 +680,7 @@ export default function ProjectDashboardClient({
                 projectName={project.title}
                 currentUserId={currentUserId || undefined}
                 isOwnerOrMember={isOwnerOrMember}
+                isActive={activeTab === "files"}
                 initialFileNodes={initialFileNodes}
                 syncStatus={filesSyncStatus}
                 importSourceType={filesImportSourceType}
@@ -664,6 +694,7 @@ export default function ProjectDashboardClient({
         project.title,
         currentUserId,
         isOwnerOrMember,
+        activeTab,
         initialFileNodes,
         filesSyncStatus,
         filesImportSourceType,

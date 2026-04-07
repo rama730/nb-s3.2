@@ -4,6 +4,7 @@ import { Star, ExternalLink } from 'lucide-react'
 import { Card } from './Card'
 import Image from 'next/image'
 import Link from 'next/link'
+import { normalizeProjectDescription, normalizeProjectTitle } from '@/lib/profile/display'
 
 interface FeaturedProjectsCardProps {
     projects: any[]
@@ -20,12 +21,14 @@ export function FeaturedProjectsCard({ projects, isOwner }: FeaturedProjectsCard
         <Card
             title="Featured Projects"
             icon={<Star className="w-5 h-5 text-amber-500" />}
-            onAdd={isOwner ? () => { } : undefined}
         >
             <div className="px-5 py-4">
                 {featured.length > 0 ? (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        {featured.map((project, idx) => (
+                        {featured.map((project, idx) => {
+                            const title = normalizeProjectTitle(project?.title)
+                            const description = normalizeProjectDescription(project?.shortDescription, project?.description)
+                            return (
                             <Link
                                 key={project?.id ?? idx}
                                 href={project?.slug ? `/projects/${project.slug}` : `/projects/${project?.id ?? ''}`}
@@ -35,7 +38,7 @@ export function FeaturedProjectsCard({ projects, isOwner }: FeaturedProjectsCard
                                     <div className="relative h-32 w-full">
                                         <Image
                                             src={project.coverImage}
-                                            alt={project.title}
+                                            alt={title}
                                             fill
                                             className="object-cover"
                                             sizes="(max-width: 768px) 100vw, 420px"
@@ -47,9 +50,9 @@ export function FeaturedProjectsCard({ projects, isOwner }: FeaturedProjectsCard
                                     </div>
                                 )}
                                 <div className="p-4">
-                                    <h4 className="font-semibold text-zinc-900 dark:text-zinc-100 mb-1 line-clamp-1">{project?.title}</h4>
+                                    <h3 className="font-semibold text-zinc-900 dark:text-zinc-100 mb-1 line-clamp-1">{title}</h3>
                                     <p className="text-sm text-zinc-500 dark:text-zinc-400 line-clamp-2 mb-3">
-                                        {project?.shortDescription || project?.description || 'No description provided'}
+                                        {description}
                                     </p>
                                     <div className="flex items-center gap-2">
                                         <span className="text-xs font-medium text-primary hover:underline flex items-center gap-1">
@@ -58,13 +61,13 @@ export function FeaturedProjectsCard({ projects, isOwner }: FeaturedProjectsCard
                                     </div>
                                 </div>
                             </Link>
-                        ))}
+                        )})}
                     </div>
                 ) : (
                     <div className="text-center py-8 border-2 border-dashed border-zinc-200 dark:border-zinc-800 rounded-xl">
-                        <p className="text-sm text-zinc-500 dark:text-zinc-400">
-                            Feature your best work here
-                        </p>
+                        <Link href="/projects/new" className="text-sm font-medium text-indigo-600 hover:text-indigo-500">
+                            Add a project to your portfolio
+                        </Link>
                     </div>
                 )}
             </div>

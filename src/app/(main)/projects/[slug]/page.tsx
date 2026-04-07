@@ -1,29 +1,25 @@
 import { notFound } from 'next/navigation';
+import type { Metadata } from 'next';
 import ProjectDashboardClient from '@/components/projects/dashboard/ProjectDashboardClient';
-import { getProjectDetailShellAction } from '@/app/actions/project';
+import { readProjectDetailMetadata, readProjectDetailShell } from '@/app/actions/project';
 import { isHardeningDomainEnabled } from '@/lib/features/hardening';
 import { getViewerAuthContext } from '@/lib/server/viewer-context';
+import { buildRouteMetadata } from '@/lib/metadata/route-metadata';
+import { buildProjectDetailMetadataInput, getProjectTitleFromSlug } from '@/lib/projects/project-detail-metadata';
 
-const isUuid = (value: string) =>
-    /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(value);
-
-function getProjectTitleFromSlug(slug: string) {
-    const decoded = decodeURIComponent(slug || '').trim();
-    if (!decoded || isUuid(decoded)) return 'Project';
-    const normalized = decoded
-        .replace(/[-_]+/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-    return normalized ? normalized.slice(0, 80) : 'Project';
-}
-
-export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }) {
+export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
     const { slug } = await params;
-    const title = getProjectTitleFromSlug(slug);
-
-    return {
-        title: `${title} | Edge`,
-    };
+    const fallbackTitle = getProjectTitleFromSlug(slug);
+    const result = await readProjectDetailMetadata({ slugOrId: slug, actorUserId: null });
+    if (!result.success) {
+        return buildRouteMetadata({
+            title: `${fallbackTitle} | Edge`,
+            description: `Explore ${fallbackTitle} on Edge.`,
+            path: `/projects/${encodeURIComponent(slug)}`,
+        });
+    }
+    const project = result.data;
+    return buildRouteMetadata(buildProjectDetailMetadataInput(slug, project));
 }
 
 export default async function ProjectDetailPage({
@@ -37,8 +33,9 @@ export default async function ProjectDetailPage({
 
     const { user } = await getViewerAuthContext();
 
-    const result = await getProjectDetailShellAction({
+    const result = await readProjectDetailShell({
         slugOrId: slug,
+        actorUserId: user?.id ?? null,
     });
 
     if (!result.success) {

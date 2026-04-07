@@ -132,6 +132,7 @@ export async function getProfile(userId: string): Promise<StandardProfile | null
             workspace_in_progress_count,
             security_recovery_codes,
             recovery_codes_generated_at,
+            last_active_at,
             deleted_at,
             created_at,
             updated_at
@@ -193,6 +194,7 @@ export async function getProfile(userId: string): Promise<StandardProfile | null
         workspaceOverdueCount: data.workspace_overdue_count ?? 0,
         workspaceInProgressCount: data.workspace_in_progress_count ?? 0,
         hasRecoveryCodes,
+        lastActiveAt: data.last_active_at ? new Date(data.last_active_at) : null,
         deletedAt: data.deleted_at ?? null,
         createdAt: new Date(data.created_at),
         updatedAt: new Date(data.updated_at),
