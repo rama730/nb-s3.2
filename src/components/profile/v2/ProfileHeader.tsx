@@ -2,8 +2,10 @@
 
 import React from 'react'
 import Image from 'next/image'
+import Link from 'next/link'
 import { cn } from '@/lib/utils'
-import { Ban, Lock, MapPin, Link2, Pencil, MessageSquare, UserPlus, UserCheck, UserMinus, Clock, Shield, Users } from 'lucide-react'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { Ban, ChevronDown, Ellipsis, Lock, MapPin, Link2, Pencil, MessageSquare, UserPlus, UserCheck, UserMinus, Clock, Shield, Users } from 'lucide-react'
 import { buildPrivacyPresentation } from '@/lib/privacy/presentation'
 import type { ConnectionState, ProfilePrivacyRelationship } from './types'
 import { normalizeProfileVM } from './utils/normalizeProfileVM'
@@ -21,29 +23,43 @@ function Chip({ children, className }: { children: React.ReactNode; className?: 
     )
 }
 
-function PrimaryButton({
-    children,
-    onClick,
-    disabled,
-    variant = 'solid',
-}: {
-    children: React.ReactNode
-    onClick?: () => void
-    disabled?: boolean
-    variant?: 'solid' | 'outline'
-}) {
+const PrimaryButton = React.forwardRef<
+    HTMLButtonElement,
+    React.ButtonHTMLAttributes<HTMLButtonElement> & {
+        variant?: 'solid' | 'outline'
+    }
+>(function PrimaryButton({ children, className, variant = 'solid', type = 'button', ...props }, ref) {
     return (
         <button
-            type="button"
-            onClick={onClick}
-            disabled={disabled}
-            aria-disabled={disabled}
+            ref={ref}
+            type={type}
             className={cn(
                 'inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
                 variant === 'solid'
                     ? 'app-accent-solid hover:bg-primary/90 transition-[background-color,box-shadow]'
-                    : 'border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 hover:bg-zinc-50 dark:hover:bg-zinc-700'
+                    : 'border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 hover:bg-zinc-50 dark:hover:bg-zinc-700',
+                className,
             )}
+            {...props}
+        >
+            {children}
+        </button>
+    )
+})
+
+function IconButton({
+    children,
+    className,
+    ...props
+}: React.ButtonHTMLAttributes<HTMLButtonElement>) {
+    return (
+        <button
+            type="button"
+            className={cn(
+                'inline-flex h-10 w-10 items-center justify-center rounded-xl border border-zinc-200 bg-white text-zinc-900 transition-colors hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-800 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700',
+                className,
+            )}
+            {...props}
         >
             {children}
         </button>
@@ -60,7 +76,6 @@ export const ProfileHeader = React.memo(function ProfileHeader({
     onConnectPrimary,
     onConnectSecondary,
     onMessage,
-    onInvite,
     onToggleBlock,
     isAdaptive = false,
     isLoadingConnection = false,
@@ -68,6 +83,7 @@ export const ProfileHeader = React.memo(function ProfileHeader({
     mutualCount = 0,
     privacyRelationship,
     lockedShell = false,
+    publicProfileHref = null,
 }: {
     profile: any
     viewerId?: string | null
@@ -78,7 +94,6 @@ export const ProfileHeader = React.memo(function ProfileHeader({
     onConnectPrimary: () => void
     onConnectSecondary?: () => void
     onMessage: () => void
-    onInvite: () => void
     onToggleBlock?: () => void
     isAdaptive?: boolean
     isLoadingConnection?: boolean
@@ -86,6 +101,7 @@ export const ProfileHeader = React.memo(function ProfileHeader({
     mutualCount?: number
     privacyRelationship: ProfilePrivacyRelationship
     lockedShell?: boolean
+    publicProfileHref?: string | null
 }) {
     // CamelCase accessors
     const vm = normalizeProfileVM(profile)
@@ -155,6 +171,19 @@ export const ProfileHeader = React.memo(function ProfileHeader({
     const showConnectAction = !privacyRelationship.blockedByViewer && !privacyRelationship.blockedByTarget
     const canMessage = privacyPresentation.canSendMessage && !privacyRelationship.blockedByViewer && !privacyRelationship.blockedByTarget
     const lockLabel = privacyPresentation.relationshipBadgeText
+    const canManageBlock = Boolean(isAuthenticated && onToggleBlock && !privacyRelationship.blockedByTarget)
+    const showsRelationshipMenuTrigger = connectionState === 'accepted' || connectionState === 'pending_outgoing'
+    const relationshipButtonClassName =
+        connectionState === 'accepted'
+            ? 'border-sky-200 bg-sky-50 text-sky-800 hover:bg-sky-100 dark:border-sky-900/60 dark:bg-sky-950/30 dark:text-sky-200'
+            : connectionState === 'pending_outgoing'
+                ? 'border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100 dark:border-amber-900/60 dark:bg-amber-950/20 dark:text-amber-200'
+                : undefined
+    const messageButtonClassName =
+        connectionState === 'accepted'
+            ? 'border-sky-200 bg-sky-50 text-sky-800 hover:bg-sky-100 dark:border-sky-900/60 dark:bg-sky-950/30 dark:text-sky-200'
+            : undefined
+    const hasOverflowActions = Boolean((secondaryConnectLabel && onConnectSecondary) || canManageBlock)
 
     return (
         <div className="rounded-3xl overflow-hidden border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-sm">
@@ -230,10 +259,20 @@ export const ProfileHeader = React.memo(function ProfileHeader({
 
                     <div className="flex flex-col sm:flex-row gap-2 pb-1">
                         {isOwner ? (
-                            <PrimaryButton onClick={onEdit} variant="outline">
-                                <Pencil className="w-4 h-4" />
-                                Edit Profile
-                            </PrimaryButton>
+                            <>
+                                {publicProfileHref ? (
+                                    <Link
+                                        href={publicProfileHref}
+                                        className="inline-flex items-center justify-center rounded-xl border border-zinc-200 bg-white px-4 py-2.5 text-sm font-semibold text-zinc-900 transition-colors hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700"
+                                    >
+                                        View Public Profile
+                                    </Link>
+                                ) : null}
+                                <PrimaryButton onClick={onEdit} variant="outline">
+                                    <Pencil className="w-4 h-4" />
+                                    Edit Profile
+                                </PrimaryButton>
+                            </>
                         ) : isLoadingConnection ? (
                             <div className="flex gap-2">
                                 <div className="h-10 w-28 bg-zinc-200 dark:bg-zinc-800 rounded-xl animate-pulse" />
@@ -243,27 +282,81 @@ export const ProfileHeader = React.memo(function ProfileHeader({
                             <>
                                 {showConnectAction ? (
                                     <>
+                                        {showsRelationshipMenuTrigger ? (
+                                            <DropdownMenu>
+                                                <DropdownMenuTrigger asChild>
+                                                    <PrimaryButton
+                                                        variant="outline"
+                                                        disabled={!isAuthenticated}
+                                                        className={relationshipButtonClassName}
+                                                        aria-label={`${connectLabel} options`}
+                                                    >
+                                                        {connectIcon}
+                                                        {connectLabel}
+                                                        <ChevronDown className="w-4 h-4 opacity-70" />
+                                                    </PrimaryButton>
+                                                </DropdownMenuTrigger>
+                                                <DropdownMenuContent align="end" className="w-48">
+                                                    {secondaryConnectLabel && onConnectSecondary ? (
+                                                        <DropdownMenuItem onClick={onConnectSecondary} disabled={isLoadingConnection}>
+                                                            {secondaryConnectIcon}
+                                                            {secondaryConnectLabel}
+                                                        </DropdownMenuItem>
+                                                    ) : null}
+                                                    {secondaryConnectLabel && onConnectSecondary && canManageBlock ? (
+                                                        <DropdownMenuSeparator />
+                                                    ) : null}
+                                                    {canManageBlock ? (
+                                                        <DropdownMenuItem onClick={onToggleBlock} disabled={isBlocking} variant="destructive">
+                                                            <Ban className="w-4 h-4" />
+                                                            {blockActionLabel}
+                                                        </DropdownMenuItem>
+                                                    ) : null}
+                                                </DropdownMenuContent>
+                                            </DropdownMenu>
+                                        ) : (
+                                            <PrimaryButton
+                                                onClick={onConnectPrimary}
+                                                disabled={!isAuthenticated || (!privacyRelationship.canSendConnectionRequest && connectionState === 'none')}
+                                            >
+                                                {connectIcon}
+                                                {connectLabel}
+                                            </PrimaryButton>
+                                        )}
                                         <PrimaryButton
-                                            onClick={onConnectPrimary}
-                                            disabled={!isAuthenticated || (!privacyRelationship.canSendConnectionRequest && connectionState === 'none')}
+                                            onClick={onMessage}
+                                            variant="outline"
+                                            disabled={!isAuthenticated || !canMessage}
+                                            className={messageButtonClassName}
                                         >
-                                            {connectIcon}
-                                            {connectLabel}
-                                        </PrimaryButton>
-                                        <PrimaryButton onClick={onMessage} variant="outline" disabled={!isAuthenticated || !canMessage}>
                                             <MessageSquare className="w-4 h-4" />
                                             Message
                                         </PrimaryButton>
-                                        {!lockedShell ? (
-                                            <PrimaryButton onClick={onInvite} variant="outline" disabled={!isAuthenticated}>
-                                                Invite
-                                            </PrimaryButton>
-                                        ) : null}
-                                        {secondaryConnectLabel && onConnectSecondary ? (
-                                            <PrimaryButton onClick={onConnectSecondary} variant="outline">
-                                                {secondaryConnectIcon}
-                                                {secondaryConnectLabel}
-                                            </PrimaryButton>
+                                        {!showsRelationshipMenuTrigger && hasOverflowActions ? (
+                                            <DropdownMenu>
+                                                <DropdownMenuTrigger asChild>
+                                                    <IconButton aria-label="Open relationship actions" disabled={!isAuthenticated}>
+                                                        <Ellipsis className="w-4 h-4" />
+                                                    </IconButton>
+                                                </DropdownMenuTrigger>
+                                                <DropdownMenuContent align="end" className="w-48">
+                                                    {secondaryConnectLabel && onConnectSecondary ? (
+                                                        <DropdownMenuItem onClick={onConnectSecondary} disabled={isLoadingConnection}>
+                                                            {secondaryConnectIcon}
+                                                            {secondaryConnectLabel}
+                                                        </DropdownMenuItem>
+                                                    ) : null}
+                                                    {secondaryConnectLabel && onConnectSecondary && canManageBlock ? (
+                                                        <DropdownMenuSeparator />
+                                                    ) : null}
+                                                    {canManageBlock ? (
+                                                        <DropdownMenuItem onClick={onToggleBlock} disabled={isBlocking} variant="destructive">
+                                                            <Ban className="w-4 h-4" />
+                                                            {blockActionLabel}
+                                                        </DropdownMenuItem>
+                                                    ) : null}
+                                                </DropdownMenuContent>
+                                            </DropdownMenu>
                                         ) : null}
                                     </>
                                 ) : (
@@ -272,12 +365,6 @@ export const ProfileHeader = React.memo(function ProfileHeader({
                                         {privacyPresentation.blockedBannerText || 'You cannot interact with this account'}
                                     </Chip>
                                 )}
-                                {isAuthenticated && onToggleBlock && !privacyRelationship.blockedByTarget ? (
-                                    <PrimaryButton onClick={onToggleBlock} variant="outline" disabled={isBlocking}>
-                                        <Ban className="w-4 h-4" />
-                                        {blockActionLabel}
-                                    </PrimaryButton>
-                                ) : null}
                             </>
                         )}
                     </div>

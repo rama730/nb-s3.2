@@ -1,14 +1,18 @@
 import { and, eq, sql, or, inArray } from "drizzle-orm";
 import { inngest } from "../client";
 import { db } from "@/lib/db";
-import { 
-    connections, 
-    connectionSuggestions, 
+import { isMissingRelationError } from "@/lib/db/errors";
+import { redis } from "@/lib/redis";
+import {
+    connections,
+    connectionSuggestions,
     connectionSuggestionDismissals,
     profiles,
     projects,
     projectOpenRoles
 } from "@/lib/db/schema";
+
+let hasConnectionSuggestionsTable: boolean | null = null;
 
 export const computeSocialGraphSuggestions = inngest.createFunction(
     { id: "social-graph-suggestions", retries: 1 },
@@ -104,10 +108,24 @@ export const computeSocialGraphSuggestions = inngest.createFunction(
         // 3. Score and provide reasons (Skill overlap & Role alignment)
         const scoredSuggestions = await step.run("score-suggestions", async () => {
             const mySkillsSet = new Set((myProfile?.skills || []).map(s => s.toLowerCase()));
-            
+
+            // 6B: Read configurable scoring weights from Redis (same key as real-time scoring)
+            let wMutual = 10, wOverlap = 5, wRoleFit = 50;
+            if (redis) {
+                try {
+                    const weights = await redis.hgetall('discover:scoring_weights');
+                    if (weights) {
+                        if (weights.mutual) wMutual = Number(weights.mutual) * (10 / 3) || 10; // Scale from real-time's 3 → pre-computed's 10
+                        if (weights.overlap) wOverlap = Number(weights.overlap) || 5;
+                        if (weights.role_fit) wRoleFit = Number(weights.role_fit) || 50;
+                    }
+                } catch { /* fallback to defaults */ }
+            }
+
             return suggestions.map((s: any) => {
-                let score = s.mutual_count * 10;
+                let score = s.mutual_count * wMutual;
                 let reason = `${s.mutual_count} mutual connections`;
+                let roleMatched = false;
                 const candidateSkills = (s.candidate_skills || []) as string[];
                 const candidateSkillsLower = candidateSkills.map(sk => sk.toLowerCase());
 
@@ -116,17 +134,20 @@ export const computeSocialGraphSuggestions = inngest.createFunction(
                     const roleSkills = (role.requiredSkills || []).map(sk => sk.toLowerCase());
                     const matches = candidateSkillsLower.filter(sk => roleSkills.includes(sk));
                     if (matches.length > 0) {
-                        score += 50; // High bonus for role fit
+                        score += wRoleFit;
                         reason = `Matches your open role: ${role.roleTitle}`;
+                        roleMatched = true;
                         break;
                     }
                 }
 
                 // Generic Skill Overlap
                 const overlap = candidateSkillsLower.filter(sk => mySkillsSet.has(sk)).length;
-                if (overlap > 0 && score < 40) { // Only set if not already matched by role
-                    score += overlap * 5;
-                    reason = `Skills overlap: ${candidateSkills.slice(0, 2).join(", ")}`;
+                if (overlap > 0) {
+                    score += overlap * wOverlap;
+                    if (!roleMatched) {
+                        reason = `Skills overlap: ${candidateSkills.slice(0, 2).join(", ")}`;
+                    }
                 }
 
                 return {
@@ -142,6 +163,8 @@ export const computeSocialGraphSuggestions = inngest.createFunction(
 
         // 4. Batch insert/update suggestions
         await step.run("upsert-suggestions", async () => {
+            if (hasConnectionSuggestionsTable === false) return;
+
             // Take top 50 by score
             const topSuggestions = scoredSuggestions
                 .sort((a, b) => b.score - a.score)
@@ -153,18 +176,28 @@ export const computeSocialGraphSuggestions = inngest.createFunction(
 
             if (topSuggestions.length === 0) return;
 
-            await db
-                .insert(connectionSuggestions)
-                .values(topSuggestions)
-                .onConflictDoUpdate({
-                    target: [connectionSuggestions.userId, connectionSuggestions.suggestedUserId],
-                    set: {
-                        mutualConnectionsCount: sql`excluded.mutual_connections_count`,
-                        score: sql`excluded.score`,
-                        reason: sql`excluded.reason`,
-                        updatedAt: new Date(),
-                    }
-                });
+            try {
+                await db
+                    .insert(connectionSuggestions)
+                    .values(topSuggestions)
+                    .onConflictDoUpdate({
+                        target: [connectionSuggestions.userId, connectionSuggestions.suggestedUserId],
+                        set: {
+                            mutualConnectionsCount: sql`excluded.mutual_connections_count`,
+                            score: sql`excluded.score`,
+                            reason: sql`excluded.reason`,
+                            updatedAt: new Date(),
+                        }
+                    });
+                hasConnectionSuggestionsTable = true;
+            } catch (error) {
+                if (isMissingRelationError(error, "connection_suggestions")) {
+                    hasConnectionSuggestionsTable = false;
+                    console.warn("[social-graph-suggestions] connection_suggestions table is unavailable; skipping suggestion upsert.");
+                    return;
+                }
+                throw error;
+            }
         });
 
         return { suggestionsCount: scoredSuggestions.length };

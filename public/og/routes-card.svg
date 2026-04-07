@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="96" y1="72" x2="1104" y2="558" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0F172A"/>
+      <stop offset="0.45" stop-color="#1D4ED8"/>
+      <stop offset="1" stop-color="#14B8A6"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="248" y1="168" x2="952" y2="498" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0.08"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="630" rx="36" fill="url(#bg)"/>
+  <rect x="78" y="72" width="1044" height="486" rx="32" fill="url(#accent)" stroke="rgba(255,255,255,0.24)"/>
+  <circle cx="188" cy="170" r="18" fill="#FFFFFF" fill-opacity="0.9"/>
+  <circle cx="248" cy="170" r="18" fill="#FFFFFF" fill-opacity="0.72"/>
+  <circle cx="308" cy="170" r="18" fill="#FFFFFF" fill-opacity="0.54"/>
+  <text x="120" y="292" fill="#FFFFFF" font-size="72" font-family="Arial, Helvetica, sans-serif" font-weight="700">
+    Edge
+  </text>
+  <text x="120" y="364" fill="#E2E8F0" font-size="34" font-family="Arial, Helvetica, sans-serif">
+    Professional network, projects, messages, and collaboration.
+  </text>
+  <text x="120" y="432" fill="#CBD5E1" font-size="26" font-family="Arial, Helvetica, sans-serif">
+    Stable route metadata and social previews across the product.
+  </text>
+</svg>

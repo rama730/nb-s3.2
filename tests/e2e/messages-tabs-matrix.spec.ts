@@ -11,7 +11,8 @@ test.describe("Messages tabs matrix @critical", () => {
     const monitor = attachPageMonitoring(page);
 
     await login(page);
-    await page.goto("/messages");
+    await page.goto("/messages", { waitUntil: "domcontentloaded" });
+    await expect(page.getByRole("button", { name: /open messages/i })).toHaveCount(0);
 
     await page.getByTestId("messages-tab-chats").click();
     await expect(page.getByText(/No messages yet|Search messages|Connect to start messaging/i).first()).toBeVisible({ timeout: 15000 });

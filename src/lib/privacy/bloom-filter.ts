@@ -1,15 +1,24 @@
 /**
- * Redis-based Bloom Filter for O(1) blocked-pair lookups.
- * Uses Upstash Redis BF.* commands to avoid false negatives entirely.
- * False positives are acceptable (we just fall back to DB for those).
+ * Redis SET for O(1) blocked-pair lookups.
+ * Uses Redis SET commands (SADD, SREM, SISMEMBER) for exact membership checks.
+ * No false positives or false negatives.
  *
  * PURE OPTIMIZATION: Eliminates DB queries for the common case
  * where users are NOT blocked (99%+ of all privacy checks).
  */
 
 import { getRedisClient } from '@/lib/redis';
+import { logger } from '@/lib/logger';
+import { randomUUID } from 'node:crypto';
 
-const BLOCKED_PAIRS_BF_KEY = 'bf:blocked_pairs';
+const BLOCKED_PAIRS_KEY = 'blocked_pairs';
+const BLOCKED_PAIRS_REBUILD_SENTINEL = '__blocked_pairs_rebuild__';
+const REBUILD_BATCH_SIZE = 1000;
+const SWAP_BLOCKED_PAIRS_SCRIPT = `
+redis.call('RENAME', KEYS[1], KEYS[2])
+redis.call('SREM', KEYS[2], ARGV[1])
+return 1
+`;
 
 /**
  * Normalizes a pair to a canonical key so A:B == B:A.
@@ -19,24 +28,7 @@ function canonicalPairKey(userA: string, userB: string): string {
 }
 
 /**
- * Initializes the Bloom Filter if it doesn't exist.
- * Called lazily on first write, or explicitly by the rebuild cron.
- */
-async function ensureBloomFilter(redis: NonNullable<ReturnType<typeof getRedisClient>>) {
-    try {
-        // BF.RESERVE creates the filter. If it already exists, Upstash returns an error we swallow.
-        await (redis as any).eval(
-            `return redis.call('BF.RESERVE', KEYS[1], ARGV[1], ARGV[2])`,
-            [BLOCKED_PAIRS_BF_KEY],
-            ['0.001', '1000000'] // 0.1% false positive rate, 1M capacity
-        );
-    } catch {
-        // Filter already exists — this is expected and fine.
-    }
-}
-
-/**
- * Adds a blocked pair to the Bloom Filter.
+ * Adds a blocked pair to the Redis SET.
  * Call this whenever a user blocks another.
  */
 export async function addBlockedPair(userA: string, userB: string): Promise<void> {
@@ -44,22 +36,16 @@ export async function addBlockedPair(userA: string, userB: string): Promise<void
     if (!redis) return;
 
     try {
-        await ensureBloomFilter(redis);
         const key = canonicalPairKey(userA, userB);
-        await (redis as any).eval(
-            `return redis.call('BF.ADD', KEYS[1], ARGV[1])`,
-            [BLOCKED_PAIRS_BF_KEY],
-            [key]
-        );
+        await redis.sadd(BLOCKED_PAIRS_KEY, key);
     } catch (error) {
-        console.warn('[bloom-filter] addBlockedPair failed:', error instanceof Error ? error.message : String(error));
+        logger.warn('[blocked-pairs] addBlockedPair failed:', { error: error instanceof Error ? error.message : String(error) });
     }
 }
 
 /**
- * Checks if a blocked pair MIGHT exist.
- * Returns `false` = DEFINITELY not blocked (skip DB).
- * Returns `true` = MIGHT be blocked (verify with DB).
+ * Checks if a blocked pair exists in the Redis SET.
+ * Returns `true` if blocked, `false` if not.
  */
 export async function isBlockedPair(userA: string, userB: string): Promise<boolean> {
     const redis = getRedisClient();
@@ -67,11 +53,7 @@ export async function isBlockedPair(userA: string, userB: string): Promise<boole
 
     try {
         const key = canonicalPairKey(userA, userB);
-        const result = await (redis as any).eval(
-            `return redis.call('BF.EXISTS', KEYS[1], ARGV[1])`,
-            [BLOCKED_PAIRS_BF_KEY],
-            [key]
-        );
+        const result = await redis.sismember(BLOCKED_PAIRS_KEY, key);
         return result === 1;
     } catch {
         return true; // On error, force DB check (safe fallback)
@@ -79,22 +61,26 @@ export async function isBlockedPair(userA: string, userB: string): Promise<boole
 }
 
 /**
- * Removes a blocked pair from the filter.
- * Since standard Bloom Filters don't support deletion, we rebuild.
- * For individual removals, this is a no-op — the cron rebuild handles it.
+ * Removes a blocked pair from the Redis SET.
+ * Call this whenever a user unblocks another.
  */
-export async function removeBlockedPair(_userA: string, _userB: string): Promise<void> {
-    // Bloom Filters are append-only. The weekly rebuild cron will clean stale entries.
-    // This is intentionally a no-op.
-    void _userA;
-    void _userB;
+export async function removeBlockedPair(userA: string, userB: string): Promise<void> {
+    const redis = getRedisClient();
+    if (!redis) return;
+
+    try {
+        const key = canonicalPairKey(userA, userB);
+        await redis.srem(BLOCKED_PAIRS_KEY, key);
+    } catch (error) {
+        logger.warn('[blocked-pairs] removeBlockedPair failed:', { error: error instanceof Error ? error.message : String(error) });
+    }
 }
 
 /**
- * Rebuilds the entire Bloom Filter from the database.
+ * Rebuilds the entire blocked pairs SET from the database.
  * Should be called by a cron job (e.g., daily).
  */
-export async function rebuildBlockedPairsBloomFilter(): Promise<number> {
+export async function rebuildBlockedPairsSet(): Promise<number> {
     const redis = getRedisClient();
     if (!redis) return 0;
 
@@ -110,18 +96,39 @@ export async function rebuildBlockedPairsBloomFilter(): Promise<number> {
         .from(connections)
         .where(eq(connections.status, 'blocked'));
 
-    // Delete and recreate the filter
+    const tempKey = `${BLOCKED_PAIRS_KEY}:rebuild:${randomUUID()}`;
+
     try {
-        await redis.del(BLOCKED_PAIRS_BF_KEY);
-    } catch { /* ignore */ }
+        // Keep the temporary key alive as a set even when there are no blocked rows.
+        await redis.sadd(tempKey, BLOCKED_PAIRS_REBUILD_SENTINEL);
 
-    await ensureBloomFilter(redis);
+        let count = 0;
+        const pairKeys = blockedRows.map((row) => canonicalPairKey(row.requesterId, row.addresseeId));
 
-    let count = 0;
-    for (const row of blockedRows) {
-        await addBlockedPair(row.requesterId, row.addresseeId);
-        count++;
+        for (let index = 0; index < pairKeys.length; index += REBUILD_BATCH_SIZE) {
+            const batch = pairKeys.slice(index, index + REBUILD_BATCH_SIZE);
+            if (batch.length > 0) {
+                await (redis as any).sadd(tempKey, ...batch);
+                count += batch.length;
+            }
+        }
+
+        await (redis as unknown as {
+            eval: (script: string, keys: string[], args: string[]) => Promise<number | string | null>
+        }).eval(
+            SWAP_BLOCKED_PAIRS_SCRIPT,
+            [tempKey, BLOCKED_PAIRS_KEY],
+            [BLOCKED_PAIRS_REBUILD_SENTINEL],
+        );
+
+        return count;
+    } catch (error) {
+        try {
+            await redis.del(tempKey);
+        } catch {
+            // Best-effort cleanup.
+        }
+
+        throw error;
     }
-
-    return count;
 }

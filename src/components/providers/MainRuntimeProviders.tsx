@@ -3,9 +3,10 @@
 import dynamic from 'next/dynamic';
 import { useEffect, useState } from 'react';
 import type { User } from '@supabase/supabase-js';
-import type { Profile } from '@/lib/db/schema';
 import { AuthProvider } from '@/components/providers/AuthProvider';
+import { PeopleNotificationsProvider } from '@/components/providers/PeopleNotificationsProvider';
 import { RealtimeProvider } from '@/components/providers/RealtimeProvider';
+import { startPresenceHeartbeat, stopPresenceHeartbeat } from '@/hooks/usePresenceStatus';
 
 const LazyChatProvider = dynamic(
   () => import('@/components/chat/ChatProvider').then((mod) => mod.ChatProvider),
@@ -15,7 +16,7 @@ const LazyChatProvider = dynamic(
 interface MainRuntimeProvidersProps {
   children: React.ReactNode;
   initialUser: User | null;
-  initialProfile: Profile | null;
+  initialProfile: unknown | null;
 }
 
 export function MainRuntimeProviders({
@@ -24,6 +25,13 @@ export function MainRuntimeProviders({
   initialProfile,
 }: MainRuntimeProvidersProps) {
   const [enableChatRuntime, setEnableChatRuntime] = useState(false);
+
+  // Start presence heartbeat when user is authenticated
+  useEffect(() => {
+    if (!initialUser) return;
+    startPresenceHeartbeat();
+    return () => stopPresenceHeartbeat();
+  }, [initialUser]);
 
   useEffect(() => {
     let cancelled = false;
@@ -52,8 +60,10 @@ export function MainRuntimeProviders({
   return (
     <AuthProvider initialUser={initialUser} initialProfile={initialProfile}>
       <RealtimeProvider>
-        {children}
-        {enableChatRuntime ? <LazyChatProvider /> : null}
+        <PeopleNotificationsProvider>
+          {children}
+          {enableChatRuntime ? <LazyChatProvider /> : null}
+        </PeopleNotificationsProvider>
       </RealtimeProvider>
     </AuthProvider>
   );

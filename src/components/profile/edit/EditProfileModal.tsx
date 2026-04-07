@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { EditProfileTabs } from "./EditProfileTabs";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { EditProfileTabs, type EditProfileSection } from "./EditProfileTabs";
 import Button from "@/components/ui-custom/Button";
 import { updateProfileAction } from "@/app/actions/profile";
 import { useToast } from "@/components/ui-custom/Toast";
@@ -17,14 +17,13 @@ interface EditProfileModalProps {
     open: boolean;
     onOpenChange: (open: boolean) => void;
     profile: any;
-    // Optimistic update callback
     onOptimisticUpdate?: (updates: any) => void;
+    initialSection?: EditProfileSection;
 }
 
-type EditSection = "general" | "experience" | "education" | "skills" | "social";
 type SaveState = "idle" | "saving" | "success" | "error";
 
-const DRAFT_KEY_PREFIX = "profile:edit:draft:v1:";
+import { toFormState, toServerPayload, applyPayloadToFormBase } from "@/lib/profile/normalization";
 
 function toIsoTimestamp(value: unknown): string {
     if (typeof value === "string" && value.trim()) return value;
@@ -32,123 +31,7 @@ function toIsoTimestamp(value: unknown): string {
     return new Date().toISOString();
 }
 
-function toFormState(profile: any) {
-    const source = profile || {};
-    return {
-        full_name: source.fullName || source.full_name || "",
-        username: source.username || "",
-        headline: source.headline || "",
-        bio: source.bio || "",
-        location: source.location || "",
-        website: source.website || "",
-        avatar_url: source.avatarUrl || source.avatar_url || "",
-        banner_url: source.bannerUrl || source.banner_url || "",
-        availabilityStatus: source.availabilityStatus || source.availability_status || "available",
-        openTo: source.openTo || source.open_to || [],
-        skills: source.skills || [],
-        socialLinks: source.socialLinks || source.social_links || {},
-        experience: source.experience || [],
-        education: source.education || [],
-    };
-}
-
-function sectionKeys(section: EditSection): string[] {
-    switch (section) {
-        case "general":
-            return ["full_name", "username", "headline", "bio", "location", "website", "avatar_url", "banner_url", "availabilityStatus", "openTo"];
-        case "experience":
-            return ["experience"];
-        case "education":
-            return ["education"];
-        case "skills":
-            return ["skills"];
-        case "social":
-            return ["socialLinks"];
-    }
-}
-
-function buildActionPayload(formState: any, expectedUpdatedAt?: string) {
-    const normalizedExpectedUpdatedAt = (() => {
-        if (!expectedUpdatedAt || typeof expectedUpdatedAt !== "string") return undefined;
-        const parsed = new Date(expectedUpdatedAt);
-        if (!Number.isFinite(parsed.getTime())) return undefined;
-        return parsed.toISOString();
-    })();
-
-    return {
-        fullName: formState.full_name,
-        username: formState.username,
-        headline: formState.headline,
-        bio: formState.bio,
-        location: formState.location,
-        website: formState.website,
-        avatarUrl: formState.avatar_url,
-        bannerUrl: formState.banner_url,
-        skills: formState.skills,
-        socialLinks: formState.socialLinks,
-        availabilityStatus: formState.availabilityStatus,
-        openTo: formState.openTo,
-        experience: formState.experience,
-        education: formState.education,
-        ...(normalizedExpectedUpdatedAt ? { expectedUpdatedAt: normalizedExpectedUpdatedAt } : {}),
-    };
-}
-
-function buildPartialPayload(formState: any, section: EditSection, expectedUpdatedAt?: string) {
-    const keys = sectionKeys(section);
-    const payload = buildActionPayload(formState, expectedUpdatedAt) as Record<string, unknown>;
-    const partial: Record<string, unknown> = {};
-    if (typeof payload.expectedUpdatedAt === "string") {
-        partial.expectedUpdatedAt = payload.expectedUpdatedAt;
-    }
-    for (const key of keys) {
-        if (key === "full_name") partial.fullName = payload.fullName;
-        if (key === "username") partial.username = payload.username;
-        if (key === "headline") partial.headline = payload.headline;
-        if (key === "bio") partial.bio = payload.bio;
-        if (key === "location") partial.location = payload.location;
-        if (key === "website") partial.website = payload.website;
-        if (key === "avatar_url") partial.avatarUrl = payload.avatarUrl;
-        if (key === "banner_url") partial.bannerUrl = payload.bannerUrl;
-        if (key === "availabilityStatus") partial.availabilityStatus = payload.availabilityStatus;
-        if (key === "openTo") partial.openTo = payload.openTo;
-        if (key === "skills") partial.skills = payload.skills;
-        if (key === "socialLinks") partial.socialLinks = payload.socialLinks;
-        if (key === "experience") partial.experience = payload.experience;
-        if (key === "education") partial.education = payload.education;
-    }
-    return partial;
-}
-
-function applyPayloadToBaseState(base: any, payload: Record<string, unknown>) {
-    const next = { ...base }
-    if (payload.fullName !== undefined) next.full_name = payload.fullName
-    if (payload.username !== undefined) next.username = payload.username
-    if (payload.headline !== undefined) next.headline = payload.headline
-    if (payload.bio !== undefined) next.bio = payload.bio
-    if (payload.location !== undefined) next.location = payload.location
-    if (payload.website !== undefined) next.website = payload.website
-    if (payload.avatarUrl !== undefined) next.avatar_url = payload.avatarUrl
-    if (payload.bannerUrl !== undefined) next.banner_url = payload.bannerUrl
-    if (payload.availabilityStatus !== undefined) next.availabilityStatus = payload.availabilityStatus
-    if (payload.openTo !== undefined) next.openTo = payload.openTo
-    if (payload.skills !== undefined) next.skills = payload.skills
-    if (payload.socialLinks !== undefined) next.socialLinks = payload.socialLinks
-    if (payload.experience !== undefined) next.experience = payload.experience
-    if (payload.education !== undefined) next.education = payload.education
-    return next
-}
-
-function hasFormChanges(next: Record<string, unknown>, base: Record<string, unknown>): boolean {
-    for (const key of Object.keys(base)) {
-        if (JSON.stringify(next[key]) !== JSON.stringify(base[key])) {
-            return true;
-        }
-    }
-    return false;
-}
-
-export function EditProfileModal({ open, onOpenChange, profile, onOptimisticUpdate }: EditProfileModalProps) {
+export function EditProfileModal({ open, onOpenChange, profile, onOptimisticUpdate, initialSection = "general" }: EditProfileModalProps) {
     const { showToast } = useToast();
     const queryClient = useQueryClient();
     const { refreshProfile } = useAuth();
@@ -157,12 +40,14 @@ export function EditProfileModal({ open, onOpenChange, profile, onOptimisticUpda
     const [saveErrorMessage, setSaveErrorMessage] = useState<string | null>(null);
     const [hasChanges, setHasChanges] = useState(false);
     const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
+    const [activeSection, setActiveSection] = useState<EditProfileSection>(initialSection);
     const inFlightRef = useRef(false);
     const wasOpenRef = useRef(false);
     const lastKnownUpdatedAtRef = useRef<string>(
         toIsoTimestamp(profile?.updatedAt || profile?.updated_at)
     );
     const baseProfileRef = useRef<any>(toFormState(profile));
+    const originalUsernameRef = useRef<string>(toFormState(profile).username || "");
 
     const completion = useMemo(
         () =>
@@ -193,38 +78,16 @@ export function EditProfileModal({ open, onOpenChange, profile, onOptimisticUpda
         if (isOpening) {
             const normalized = toFormState(profile);
             baseProfileRef.current = normalized;
-            const draftKey = `${DRAFT_KEY_PREFIX}${profile.id}`;
-            if (typeof window !== "undefined") {
-                const raw = window.localStorage.getItem(draftKey);
-                if (raw) {
-                    try {
-                        const parsed = JSON.parse(raw);
-                        setFormState({ ...normalized, ...parsed });
-                    } catch {
-                        setFormState(normalized);
-                    }
-                } else {
-                    setFormState(normalized);
-                }
-            } else {
-                setFormState(normalized);
-            }
+            originalUsernameRef.current = normalized.username || "";
+            setFormState(normalized);
             lastKnownUpdatedAtRef.current = toIsoTimestamp(profile?.updatedAt || profile?.updated_at);
             setHasChanges(false);
             setSaveState("idle");
             setSaveErrorMessage(null);
             setShowDiscardConfirm(false);
+            setActiveSection(initialSection);
         }
-    }, [open, profile?.id, profile?.updatedAt, profile?.updated_at]);
-
-    useEffect(() => {
-        if (!open || !formState || !profile?.id || typeof window === "undefined") return;
-        const draftKey = `${DRAFT_KEY_PREFIX}${profile.id}`;
-        const timer = window.setTimeout(() => {
-            window.localStorage.setItem(draftKey, JSON.stringify(formState));
-        }, 500);
-        return () => window.clearTimeout(timer);
-    }, [formState, open, profile?.id]);
+    }, [initialSection, open, profile?.id, profile?.updatedAt, profile?.updated_at]);
 
     const applyOptimisticPatch = (payload: Record<string, unknown>) => {
         if (!onOptimisticUpdate) return;
@@ -354,11 +217,7 @@ export function EditProfileModal({ open, onOpenChange, profile, onOptimisticUpda
                     baseProfileRef.current = retryBaseState;
                 }
                 lastKnownUpdatedAtRef.current = (updateResult.response as any).updatedAt || lastKnownUpdatedAtRef.current;
-                baseProfileRef.current = applyPayloadToBaseState(baseProfileRef.current, updateResult.payload);
-                const draftKey = `${DRAFT_KEY_PREFIX}${profile.id}`;
-                if (typeof window !== "undefined") {
-                    window.localStorage.removeItem(draftKey);
-                }
+                baseProfileRef.current = applyPayloadToFormBase(baseProfileRef.current, updateResult.payload);
                 setHasChanges(false);
                 setSaveState("success");
                 showToast("Profile updated successfully", "success");
@@ -393,8 +252,13 @@ export function EditProfileModal({ open, onOpenChange, profile, onOptimisticUpda
 
     const handleSave = async () => {
         if (!formState) return;
-        const payload = buildActionPayload(formState, lastKnownUpdatedAtRef.current);
+        const payload = toServerPayload(formState, lastKnownUpdatedAtRef.current);
         await persistChanges(payload, true);
+    };
+
+    const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+        event.preventDefault();
+        await handleSave();
     };
 
     // Section saves removed in favor of global save
@@ -426,6 +290,9 @@ export function EditProfileModal({ open, onOpenChange, profile, onOptimisticUpda
                         <span>Edit Profile</span>
                         <span className="text-xs font-normal text-zinc-500">{completion.score}% complete</span>
                     </DialogTitle>
+                    <DialogDescription className="sr-only">
+                        Edit your profile information, work experience, education, skills, and social presence.
+                    </DialogDescription>
                     <div className="h-1.5 rounded-full bg-zinc-100 dark:bg-zinc-800 overflow-hidden mt-3">
                         <div
                             className="h-full bg-indigo-600 transition-all"
@@ -439,48 +306,53 @@ export function EditProfileModal({ open, onOpenChange, profile, onOptimisticUpda
                     ) : null}
                 </DialogHeader>
 
-                <div className="flex-1 min-h-0 flex flex-col md:flex-row w-full overflow-hidden">
-                    <EditProfileTabs
-                        profile={formState || profile}
-                        onChange={(updates) => {
-                            setFormState(updates);
-                            setHasChanges(true);
-                            if (saveState !== "saving") {
-                                setSaveState("idle");
-                                setSaveErrorMessage(null);
-                            }
-                        }}
-                    />
-                </div>
+                <form className="flex-1 min-h-0 flex flex-col" onSubmit={handleSubmit} aria-label="Edit profile form">
+                    <div className="flex-1 min-h-0 flex flex-col md:flex-row w-full overflow-hidden">
+                        <EditProfileTabs
+                            profile={formState || profile}
+                            originalUsername={originalUsernameRef.current}
+                            section={activeSection}
+                            onSectionChange={setActiveSection}
+                            onChange={(updates) => {
+                                setFormState(updates);
+                                setHasChanges(true);
+                                if (saveState !== "saving") {
+                                    setSaveState("idle");
+                                    setSaveErrorMessage(null);
+                                }
+                            }}
+                        />
+                    </div>
 
-                <DialogFooter className="px-6 py-4 border-t border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 z-10">
-                    {showDiscardConfirm ? (
-                        <>
-                            <p className="mr-auto text-sm font-medium text-zinc-900 dark:text-zinc-100 flex items-center">
-                                Discard unsaved changes?
-                            </p>
-                            <Button variant="ghost" onClick={() => setShowDiscardConfirm(false)}>
-                                Keep Editing
-                            </Button>
-                            <Button variant="danger" onClick={() => handleOpenChange(false)}>
-                                Discard
-                            </Button>
-                        </>
-                    ) : (
-                        <>
-                            {saveErrorMessage ? (
-                                <p className="mr-auto text-xs text-red-500">{saveErrorMessage}</p>
-                            ) : null}
-                            <Button variant="outline" onClick={() => handleOpenChange(false)} disabled={saveState === "saving"}>
-                                Cancel
-                            </Button>
-                            <Button onClick={handleSave} disabled={saveState === "saving" || !hasChanges}>
-                                {saveState === "saving" && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                                Save Changes
-                            </Button>
-                        </>
-                    )}
-                </DialogFooter>
+                    <DialogFooter className="px-6 py-4 border-t border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 z-10">
+                        {showDiscardConfirm ? (
+                            <>
+                                <p className="mr-auto text-sm font-medium text-zinc-900 dark:text-zinc-100 flex items-center">
+                                    Discard unsaved changes?
+                                </p>
+                                <Button type="button" variant="ghost" onClick={() => setShowDiscardConfirm(false)}>
+                                    Keep Editing
+                                </Button>
+                                <Button type="button" variant="danger" onClick={() => handleOpenChange(false)}>
+                                    Discard
+                                </Button>
+                            </>
+                        ) : (
+                            <>
+                                {saveErrorMessage ? (
+                                    <p className="mr-auto text-xs text-red-500">{saveErrorMessage}</p>
+                                ) : null}
+                                <Button type="button" variant="outline" onClick={() => handleOpenChange(false)} disabled={saveState === "saving"}>
+                                    Cancel
+                                </Button>
+                                <Button type="submit" disabled={saveState === "saving" || !hasChanges}>
+                                    {saveState === "saving" && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                                    Save Changes
+                                </Button>
+                            </>
+                        )}
+                    </DialogFooter>
+                </form>
             </DialogContent>
         </Dialog>
     );

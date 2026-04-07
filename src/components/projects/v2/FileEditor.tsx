@@ -22,7 +22,7 @@ import {
 import { useToast } from "@/components/ui-custom/Toast";
 import MarkdownPreview from "./preview/MarkdownPreview";
 
-const CodeEditor = dynamic(() => import("./editor/CodeEditor"), {
+const CodeEditorInner = dynamic(() => import("./editor/CodeEditor"), {
   ssr: false,
   loading: () => (
     <div className="flex items-center justify-center h-full text-zinc-500 bg-white dark:bg-[#1e1e1e]">
@@ -31,6 +31,43 @@ const CodeEditor = dynamic(() => import("./editor/CodeEditor"), {
     </div>
   ),
 });
+
+class EditorErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean }
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="flex flex-col items-center justify-center h-full text-zinc-500 bg-white dark:bg-[#1e1e1e] gap-3">
+          <p className="text-sm">Editor failed to load</p>
+          <button
+            className="px-3 py-1.5 text-xs rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+            onClick={() => this.setState({ hasError: false })}
+          >
+            Retry
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+function CodeEditor(props: React.ComponentProps<typeof CodeEditorInner>) {
+  return (
+    <EditorErrorBoundary>
+      <CodeEditorInner {...props} />
+    </EditorErrorBoundary>
+  );
+}
 import Link from "next/link";
 import type { Change } from "diff";
 import { RunnerStatusStrip } from "./panels/RunnerStatusStrip";
@@ -38,9 +75,11 @@ import { formatProjectFileContent, getLastNodeEvent } from "@/app/actions/files"
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 import type { EditorSymbol } from "@/stores/files/types";
 import type { CursorPresenceMap } from "./workspace/cursorProtocol";
+import { getLockDisplayName, getOperationLabel } from "./file-editor-display";
 
 interface FileEditorProps {
   file: ProjectNode;
+  isActive?: boolean;
   content: string;
   savedSnapshot?: string;
   isDirty: boolean;
@@ -119,6 +158,7 @@ function SymbolItem({
 
 export default function FileEditor({
   file,
+  isActive = true,
   content,
   savedSnapshot = "",
   isDirty,
@@ -197,10 +237,11 @@ export default function FileEditor({
     setIsDiffOpen(true);
   }, [openDiffSignal]);
 
-  const [lastEvent, setLastEvent] = useState<{ type: string; at: number; by: string | null } | null>(null);
-  
-  
   const setActiveFileSymbols = useFilesWorkspaceStore((s) => s.setActiveFileSymbols);
+  const lastEvent = useFilesWorkspaceStore(
+    (s) => s.byProjectId[file.projectId]?.lastNodeEventsByNodeId[file.id] ?? null
+  );
+  const setLastNodeEventSummary = useFilesWorkspaceStore((s) => s.setLastNodeEventSummary);
   const requestedScrollPosition = useFilesWorkspaceStore((s) => s.byProjectId[file.projectId]?.requestedScrollPosition);
   const clearScrollRequest = useFilesWorkspaceStore((s) => s.clearScrollRequest);
 
@@ -250,19 +291,23 @@ export default function FileEditor({
   }, [deferredDiffContent, isDiffOpen, savedSnapshot]);
 
   useEffect(() => {
+    if (lastEvent) return;
+    if (!isActive) return;
     let cancelled = false;
     void (async () => {
       try {
         const evt = await getLastNodeEvent(file.projectId, file.id);
-        if (!cancelled) setLastEvent(evt);
+        if (!cancelled && evt) {
+          setLastNodeEventSummary(file.projectId, file.id, evt);
+        }
       } catch {
-        if (!cancelled) setLastEvent(null);
+        // Keep the UI quiet on transient metadata failures.
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [file.id, file.projectId]);
+  }, [file.id, file.projectId, isActive, lastEvent, setLastNodeEventSummary]);
 
   const rootRef = React.useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -335,7 +380,7 @@ export default function FileEditor({
           )}
           {!canEdit && lockInfo ? (
             <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300 flex-shrink-0 truncate max-w-[160px]">
-              {lockInfo.lockedByName || lockInfo.lockedBy}
+              {getLockDisplayName(lockInfo)}
             </span>
           ) : null}
           {offlineQueued ? (
@@ -350,7 +395,7 @@ export default function FileEditor({
           ) : null}
           {lastEvent ? (
             <span className="text-[11px] text-zinc-400 flex-shrink-0 truncate max-w-[220px]">
-              {lastEvent.type} {lastEvent.by ? `· ${lastEvent.by}` : ""}
+              {getOperationLabel(lastEvent.type)} {lastEvent.by ? `· ${lastEvent.by}` : ""}
             </span>
           ) : null}
         </div>
@@ -555,6 +600,7 @@ export default function FileEditor({
             <div className="mt-6 w-full flex-1 min-h-[200px] border rounded-lg overflow-hidden border-zinc-200 dark:border-zinc-800">
               <CodeEditor
                 filename={file.name}
+                isActive={isActive}
                 modelPath={modelPath}
                 value={content}
                 onChange={onChange}
@@ -581,6 +627,7 @@ export default function FileEditor({
                     <div className="w-1/2 h-full border-r border-zinc-200 dark:border-zinc-800">
                          <CodeEditor
                             filename={file.name}
+                            isActive={isActive}
                             modelPath={modelPath}
                             value={content}
                             onChange={onChange}
@@ -607,6 +654,7 @@ export default function FileEditor({
             ) : (
               <CodeEditor
                 filename={file.name}
+                isActive={isActive}
                 modelPath={modelPath}
                 value={content}
                 onChange={onChange}

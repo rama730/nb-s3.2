@@ -48,6 +48,17 @@ export const queryKeys = {
   messages: {
     conversations: () => ["chat", "conversations"] as const,
     targetUser: (userId: string) => ["chat", "targetUser", userId] as const,
+    v2: {
+      root: () => ["chat-v2"] as const,
+      inbox: (limit: number) => ["chat-v2", "inbox", limit] as const,
+      thread: (conversationId: string | null) => ["chat-v2", "thread", asNullable(conversationId)] as const,
+      capabilities: (conversationId: string | null, userId?: string | null) =>
+        ["chat-v2", "capabilities", asNullable(conversationId), asNullable(userId)] as const,
+      unread: () => ["chat-v2", "unread"] as const,
+      search: (query: string) => ["chat-v2", "search", query] as const,
+      applications: (limit: number, offset: number) => ["chat-v2", "applications", limit, offset] as const,
+      projectGroups: (limit: number, offset: number) => ["chat-v2", "project-groups", limit, offset] as const,
+    },
   },
   profile: {
     root: () => ["profile"] as const,

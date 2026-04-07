@@ -1,5 +1,8 @@
 import { scheduleAccountDeletion } from '@/app/actions/account';
 import { getRequestId, jsonError, jsonSuccess, logApiRoute } from '@/app/api/v1/_shared';
+import { logger } from '@/lib/logger';
+import { validateCsrf } from '@/lib/security/csrf';
+import { checkIdempotencyKey, saveIdempotencyResult } from '@/lib/security/idempotency';
 import { consumeRateLimit } from '@/lib/security/rate-limit';
 import { createClient } from '@/lib/supabase/server';
 
@@ -23,25 +26,13 @@ function toErrorCode(status: number) {
     }
 }
 
-function getCsrfError(request: Request): string | null {
-    const origin = request.headers.get('origin');
-    const host = request.headers.get('host');
-    if (!origin || !host) return 'Missing origin or host header';
-    try {
-        const originHost = new URL(origin).host;
-        if (originHost !== host) return 'Origin mismatch';
-    } catch {
-        return 'Invalid origin';
-    }
-    return null;
-}
-
 export async function DELETE(request: Request) {
     const startedAt = Date.now();
     const requestId = getRequestId(request);
+    const idempotencyKey = request.headers.get('idempotency-key') || undefined;
 
-    // CSRF check
-    const csrfError = getCsrfError(request);
+    // CSRF check — uses shared validation utility
+    const csrfError = validateCsrf(request);
     if (csrfError) {
         logApiRoute(request, {
             requestId,
@@ -51,7 +42,48 @@ export async function DELETE(request: Request) {
             status: 403,
             errorCode: 'FORBIDDEN',
         });
-        return jsonError(csrfError, 403, 'FORBIDDEN');
+        return csrfError;
+    }
+
+    // Idempotency — prevent duplicate deletion schedules
+    const idempotencyCheck = await checkIdempotencyKey(request, 'account.delete');
+    if (idempotencyCheck.isDuplicate) {
+        if (idempotencyCheck.cachedResponse) {
+            logger.info('Account deletion duplicate request returned cached response', {
+                module: 'api',
+                route: 'account.delete',
+                requestId,
+                idempotencyKey,
+                status: 200,
+            });
+            logApiRoute(request, {
+                requestId,
+                action: 'account.delete',
+                startedAt,
+                success: true,
+                status: 200,
+            });
+            return new Response(idempotencyCheck.cachedResponse, {
+                status: 200,
+                headers: { 'content-type': 'application/json' },
+            });
+        }
+        logger.info('Account deletion duplicate request is already in flight', {
+            module: 'api',
+            route: 'account.delete',
+            requestId,
+            idempotencyKey,
+            status: 409,
+        });
+        logApiRoute(request, {
+            requestId,
+            action: 'account.delete',
+            startedAt,
+            success: false,
+            status: 409,
+            errorCode: 'CONFLICT',
+        });
+        return jsonError('Request is already being processed', 409, 'CONFLICT');
     }
 
     // Rate limiting: 3 attempts per hour
@@ -82,7 +114,7 @@ export async function DELETE(request: Request) {
         }
     } catch (rlErr) {
         // Rate limit check failure is non-blocking
-        console.error('Rate limit check error (non-fatal):', rlErr);
+        logger.warn('Rate limit check error (non-fatal):', { module: 'api', error: rlErr instanceof Error ? rlErr.message : String(rlErr) });
     }
 
     try {
@@ -126,12 +158,26 @@ export async function DELETE(request: Request) {
             success: true,
             status: 200,
         });
+        const successBody = JSON.stringify({
+            ok: true,
+            data: { deletionId: result.deletionId, hardDeleteAt: result.hardDeleteAt },
+        });
+        try {
+            await saveIdempotencyResult(request, 'account.delete', successBody, idempotencyCheck.lockToken);
+        } catch (idempotencyError) {
+            logger.warn('Failed to save account deletion idempotency result', {
+                module: 'api',
+                deletionId: result.deletionId,
+                hardDeleteAt: result.hardDeleteAt,
+                error: idempotencyError instanceof Error ? idempotencyError.message : String(idempotencyError),
+            });
+        }
         return jsonSuccess({
             deletionId: result.deletionId,
             hardDeleteAt: result.hardDeleteAt,
         });
     } catch (error) {
-        console.error('Account delete route error:', error);
+        logger.error('Account delete route error:', { module: 'api', error: error instanceof Error ? error.message : String(error) });
         logApiRoute(request, {
             requestId,
             action: 'account.delete',

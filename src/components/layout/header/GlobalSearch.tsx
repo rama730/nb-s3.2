@@ -55,6 +55,31 @@ export default function GlobalSearch({ onOpenCommandPalette, condensed = false }
         return { context: "default", placeholder: "Search..." };
     }, [pathname]);
 
+    const triggerLabel = useMemo(() => {
+        const contextLabel = (() => {
+            switch (context) {
+                case "hub":
+                    return "Search projects";
+                case "explorer":
+                    return "Search inspiration";
+                case "people":
+                    return "Search builders and collaborators";
+                case "messages":
+                    return "Search messages";
+                case "project":
+                    return "Search this project";
+                default:
+                    return "Open search";
+            }
+        })();
+
+        if (!query.trim()) {
+            return contextLabel;
+        }
+
+        return `${contextLabel}. Current query: ${query.trim()}`;
+    }, [context, query]);
+
     const handleClear = (e: React.MouseEvent) => {
         e.stopPropagation();
         const targetPath = pathname || "/";
@@ -110,12 +135,10 @@ export default function GlobalSearch({ onOpenCommandPalette, condensed = false }
 
     return (
         <div
-            onClick={() => onOpenCommandPalette(query, context)}
-            onKeyDown={handleKeyDown}
             className={`
                 hidden md:flex items-center rounded-full md:rounded-lg 
                 border bg-zinc-50 dark:bg-zinc-900/50 
-                transition-all duration-300 ease-in-out cursor-pointer group relative overflow-hidden
+                transition-all duration-300 ease-in-out group relative overflow-hidden
                 ${condensed
                     ? 'w-9 h-9 border-transparent bg-transparent hover:bg-zinc-100 dark:bg-zinc-900 dark:hover:bg-zinc-800 justify-center px-0 py-0 shrink-0 gap-0'
                     : `px-3 py-1.5 gap-2 ${query
@@ -125,22 +148,33 @@ export default function GlobalSearch({ onOpenCommandPalette, condensed = false }
                 }
             `}
         >
-            <Search className={`w-4 h-4 shrink-0 transition-colors duration-300
-                ${condensed
-                    ? 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
-                    : (query ? "text-zinc-900 dark:text-zinc-100" : "text-zinc-400 group-hover:text-zinc-500")
+            <button
+                type="button"
+                onClick={() => onOpenCommandPalette(query, context)}
+                onKeyDown={handleKeyDown}
+                aria-label={triggerLabel}
+                className={`flex min-w-0 items-center rounded-lg transition-all duration-300 ease-in-out focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 focus-visible:ring-offset-1 focus-visible:ring-offset-white dark:focus-visible:ring-zinc-500 dark:focus-visible:ring-offset-zinc-950 ${
+                    condensed ? 'justify-center' : 'flex-1 gap-2'
                 }`}
-            />
+            >
+                <Search className={`w-4 h-4 shrink-0 transition-colors duration-300
+                    ${condensed
+                        ? 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
+                        : (query ? "text-zinc-900 dark:text-zinc-100" : "text-zinc-400 group-hover:text-zinc-500")
+                    }`}
+                />
 
-            <div className={`items-center flex-1 overflow-hidden transition-all duration-300 ease-in-out ${condensed ? 'hidden' : 'flex w-auto opacity-100'}`}>
-                <span className={`text-sm whitespace-nowrap truncate transition-colors ${query ? "text-zinc-900 dark:text-zinc-100" : "text-zinc-500 group-hover:text-zinc-600 dark:text-zinc-500 dark:group-hover:text-zinc-400"}`}>
-                    {query || placeholder}
-                </span>
-            </div>
+                <div className={`items-center flex-1 overflow-hidden transition-all duration-300 ease-in-out ${condensed ? 'hidden' : 'flex w-auto opacity-100'}`}>
+                    <span className={`text-sm whitespace-nowrap truncate transition-colors ${query ? "text-zinc-900 dark:text-zinc-100" : "text-zinc-500 group-hover:text-zinc-600 dark:text-zinc-500 dark:group-hover:text-zinc-400"}`}>
+                        {query || placeholder}
+                    </span>
+                </div>
+            </button>
 
             <div className={`items-center shrink-0 transition-all duration-300 ease-in-out ${condensed ? 'hidden' : 'flex w-auto opacity-100 ml-auto'}`}>
                 {query ? (
                     <button
+                        type="button"
                         onClick={handleClear}
                         className="p-0.5 rounded-full hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-400 hover:text-zinc-600 dark:text-zinc-400 dark:hover:text-zinc-300 transition-colors"
                         aria-label="Clear search"

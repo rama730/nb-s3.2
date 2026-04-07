@@ -3,10 +3,14 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 
 import { useAuth } from '@/lib/hooks/use-auth';
+import {
+    applyTypingDelta,
+    deriveTypingUsersFromPresenceState,
+} from '@/lib/chat/typing-state';
 import { subscribePresenceRoom } from '@/lib/realtime/presence-client';
-import type { PresenceMemberState, PresenceMemberProfile } from '@/lib/realtime/presence-types';
+import type { PresenceMemberProfile } from '@/lib/realtime/presence-types';
 
-interface TypingUser {
+export interface TypingUser {
     id: string;
     username: string | null;
     fullName: string | null;
@@ -20,20 +24,15 @@ interface UseTypingChannelReturn {
 
 const TYPING_VISIBLE_TTL_MS = 3_500;
 
-function toTypingUser(member: PresenceMemberState): TypingUser {
-    return {
-        id: member.userId,
-        username: member.profile?.username ?? null,
-        fullName: member.profile?.fullName ?? member.userName ?? null,
-        avatarUrl: member.profile?.avatarUrl ?? null,
-    };
-}
-
-export function useTypingChannel(conversationId: string | null, options: { listen?: boolean } = { listen: true }): UseTypingChannelReturn {
-    const { listen } = options;
+export function useTypingChannel(
+    conversationId: string | null,
+    options: { listen?: boolean; enabled?: boolean } = { listen: true, enabled: true },
+): UseTypingChannelReturn {
+    const { listen, enabled = true } = options;
     const [typingUsers, setTypingUsers] = useState<TypingUser[]>([]);
     const [isVisible, setIsVisible] = useState(() => typeof document === 'undefined' ? true : !document.hidden);
     const requestedTypingStateRef = useRef<boolean | null>(null);
+    const lastBroadcastRef = useRef(0);
     const connectionStatusRef = useRef<'connecting' | 'connected' | 'disconnected' | 'error'>('connecting');
     const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
     const subscriptionRef = useRef<ReturnType<typeof subscribePresenceRoom> | null>(null);
@@ -67,6 +66,17 @@ export function useTypingChannel(conversationId: string | null, options: { liste
         timersRef.current.set(member.id, timer);
     }, [clearUserTimer]);
 
+    const emitTypingState = useCallback((isTyping: boolean) => {
+        requestedTypingStateRef.current = isTyping;
+        if (!currentUserProfile) return;
+
+        subscriptionRef.current?.send({
+            type: 'typing',
+            isTyping,
+            profile: currentUserProfile,
+        });
+    }, [currentUserProfile]);
+
     useEffect(() => {
         if (typeof document === 'undefined') return;
 
@@ -81,7 +91,18 @@ export function useTypingChannel(conversationId: string | null, options: { liste
     }, []);
 
     useEffect(() => {
-        if (!conversationId || conversationId === 'new' || !isVisible) {
+        if (isVisible) return;
+        if (requestedTypingStateRef.current) {
+            emitTypingState(false);
+        }
+        setTypingUsers([]);
+    }, [emitTypingState, isVisible]);
+
+    useEffect(() => {
+        if (!enabled || !conversationId || conversationId === 'new') {
+            if (requestedTypingStateRef.current) {
+                emitTypingState(false);
+            }
             setTypingUsers([]);
             requestedTypingStateRef.current = null;
             connectionStatusRef.current = 'disconnected';
@@ -114,9 +135,7 @@ export function useTypingChannel(conversationId: string | null, options: { liste
                 if (event.type === 'presence.state') {
                     timersRef.current.forEach(clearTimeout);
                     timersRef.current.clear();
-                    const nextUsers = event.members
-                        .filter((member) => member.typing && member.userId !== currentUserId)
-                        .map((member) => toTypingUser(member));
+                    const nextUsers = deriveTypingUsersFromPresenceState(event.members, currentUserId);
                     for (const member of nextUsers) {
                         scheduleRemoval(member);
                     }
@@ -128,34 +147,47 @@ export function useTypingChannel(conversationId: string | null, options: { liste
                     return;
                 }
 
-                const member = toTypingUser(event.member);
+                const leavingUserId = event.member.userId;
                 if (event.action === 'leave' || !event.member.typing) {
-                    clearUserTimer(member.id);
-                    setTypingUsers((prev) => prev.filter((item) => item.id !== member.id));
+                    clearUserTimer(leavingUserId);
+                    setTypingUsers((prev) => applyTypingDelta({
+                        currentUsers: prev,
+                        member: event.member,
+                        action: event.action,
+                        currentUserId,
+                    }));
                     return;
                 }
 
-                scheduleRemoval(member);
                 setTypingUsers((prev) => {
-                    const existing = prev.some((item) => item.id === member.id);
-                    if (existing) {
-                        return prev.map((item) => item.id === member.id ? member : item);
+                    const nextUsers = applyTypingDelta({
+                        currentUsers: prev,
+                        member: event.member,
+                        action: event.action,
+                        currentUserId,
+                    });
+                    const member = nextUsers.find((item) => item.id === event.member.userId);
+                    if (member) {
+                        scheduleRemoval(member);
                     }
-                    return [...prev, member];
+                    return nextUsers;
                 });
             },
         });
         subscriptionRef.current = subscription;
-        const activeTimers = timersRef.current;
 
         return () => {
+            if (requestedTypingStateRef.current) {
+                emitTypingState(false);
+            }
             subscription.unsubscribe();
             subscriptionRef.current = null;
             connectionStatusRef.current = 'disconnected';
+            const activeTimers = timersRef.current;
             activeTimers.forEach(clearTimeout);
-            activeTimers.clear();
+            timersRef.current = new Map();
         };
-    }, [clearUserTimer, conversationId, currentUserId, currentUserProfile, isVisible, listen, scheduleRemoval]);
+    }, [clearUserTimer, conversationId, currentUserId, currentUserProfile, emitTypingState, enabled, listen, scheduleRemoval]);
 
     useEffect(() => {
         if (
@@ -175,16 +207,18 @@ export function useTypingChannel(conversationId: string | null, options: { liste
     }, [currentUserProfile]);
 
     const sendTyping = useCallback(async (isTyping: boolean) => {
-        if (!conversationId || conversationId === 'new' || !isVisible) return;
+        if (!enabled || !conversationId || conversationId === 'new' || !isVisible) return;
+        // throttle: skip rapid isTyping=true events
+        if (isTyping) {
+            const now = Date.now();
+            if (now - lastBroadcastRef.current < 500) return;
+            lastBroadcastRef.current = now;
+        }
         requestedTypingStateRef.current = isTyping;
         if (!currentUserProfile) return;
 
-        subscriptionRef.current?.send({
-            type: 'typing',
-            isTyping,
-            profile: currentUserProfile,
-        });
-    }, [conversationId, currentUserProfile, isVisible]);
+        emitTypingState(isTyping);
+    }, [conversationId, currentUserProfile, emitTypingState, enabled, isVisible]);
 
     return { typingUsers: listen ? typingUsers : [], sendTyping };
 }

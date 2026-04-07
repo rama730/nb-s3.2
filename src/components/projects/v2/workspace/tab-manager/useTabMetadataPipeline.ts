@@ -3,6 +3,7 @@ import type { ProjectNode } from "@/lib/db/schema";
 import { getNodeMetadataBatch, getNodesByIds, getProjectFileSignedUrl } from "@/app/actions/files";
 import { filesFeatureFlags } from "@/lib/features/files";
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
+import { logger } from "@/lib/logger";
 
 interface UseTabMetadataPipelineOptions {
   projectId: string;
@@ -10,6 +11,8 @@ interface UseTabMetadataPipelineOptions {
 }
 
 const LOOKUP_FAILURE_TTL_MS = 60_000;
+const METADATA_BATCH_CHUNK_SIZE = 50;
+const MAX_FAILED_LOOKUPS = 200;
 
 export function useTabMetadataPipeline({
   projectId,
@@ -47,52 +50,64 @@ export function useTabMetadataPipeline({
       }
 
       if (missing.length > 0) {
-        const batchPromise = (async () => {
-          missing.forEach((id) => opsInProgressRef.current.add(`meta:${id}`));
-          try {
-            let nodes: ProjectNode[] = [];
-            if (filesFeatureFlags.storeBatching || filesFeatureFlags.wave2StoreBatching) {
-              const batch = await getNodeMetadataBatch(projectId, missing, {
-                includeBreadcrumbs: false,
-              });
-              if (batch.success) {
-                nodes = batch.data.nodes;
+        // Chunk into groups to prevent OOM on large metadata requests
+        for (let i = 0; i < missing.length; i += METADATA_BATCH_CHUNK_SIZE) {
+          const chunk = missing.slice(i, i + METADATA_BATCH_CHUNK_SIZE);
+          const batchPromise = (async () => {
+            chunk.forEach((id) => opsInProgressRef.current.add(`meta:${id}`));
+            try {
+              let nodes: ProjectNode[] = [];
+              if (filesFeatureFlags.storeBatching || filesFeatureFlags.wave2StoreBatching) {
+                const batch = await getNodeMetadataBatch(projectId, chunk, {
+                  includeBreadcrumbs: false,
+                });
+                if (batch.success) {
+                  nodes = batch.data.nodes;
+                } else {
+                  nodes = (await getNodesByIds(projectId, chunk)) as ProjectNode[];
+                }
               } else {
-                nodes = (await getNodesByIds(projectId, missing)) as ProjectNode[];
+                nodes = (await getNodesByIds(projectId, chunk)) as ProjectNode[];
               }
-            } else {
-              nodes = (await getNodesByIds(projectId, missing)) as ProjectNode[];
+              const foundIds = new Set(nodes.map((n) => n.id));
+              chunk.forEach((id) => {
+                if (!foundIds.has(id)) {
+                  failedLookupsRef.current.set(id, Date.now() + LOOKUP_FAILURE_TTL_MS);
+                  return;
+                }
+                failedLookupsRef.current.delete(id);
+              });
+              if (nodes.length > 0) upsertNodes(projectId, nodes);
+            } catch (error) {
+              const failureExpiry = Date.now() + LOOKUP_FAILURE_TTL_MS;
+              chunk.forEach((id) => failedLookupsRef.current.set(id, failureExpiry));
+              logger.warn("Failed to fetch node metadata batch", {
+                module: "workspace",
+                projectId,
+                count: chunk.length,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            } finally {
+              chunk.forEach((id) => {
+                opsInProgressRef.current.delete(`meta:${id}`);
+                metadataInFlightRef.current.delete(id);
+              });
             }
-            const foundIds = new Set(nodes.map((n) => n.id));
-            missing.forEach((id) => {
-              if (!foundIds.has(id)) {
-                failedLookupsRef.current.set(id, Date.now() + LOOKUP_FAILURE_TTL_MS);
-                return;
-              }
-              failedLookupsRef.current.delete(id);
-            });
-            if (nodes.length > 0) upsertNodes(projectId, nodes);
-          } catch (error) {
-            const failureExpiry = Date.now() + LOOKUP_FAILURE_TTL_MS;
-            missing.forEach((id) => failedLookupsRef.current.set(id, failureExpiry));
-            console.warn("Failed to fetch node metadata batch", {
-              projectId,
-              count: missing.length,
-              error: error instanceof Error ? error.message : String(error),
-            });
-          } finally {
-            missing.forEach((id) => {
-              opsInProgressRef.current.delete(`meta:${id}`);
-              metadataInFlightRef.current.delete(id);
-            });
-          }
-        })();
-        missing.forEach((id) => metadataInFlightRef.current.set(id, batchPromise));
-        pending.push(batchPromise);
+          })();
+          chunk.forEach((id) => metadataInFlightRef.current.set(id, batchPromise));
+          pending.push(batchPromise);
+        }
       }
 
       if (pending.length > 0) {
         await Promise.all(pending);
+
+        // Cap failedLookups to prevent unbounded growth
+        if (failedLookupsRef.current.size > MAX_FAILED_LOOKUPS) {
+          const entries = [...failedLookupsRef.current.entries()]
+            .sort((a, b) => a[1] - b[1]);
+          failedLookupsRef.current = new Map(entries.slice(-MAX_FAILED_LOOKUPS));
+        }
       }
     },
     [projectId, upsertNodes]

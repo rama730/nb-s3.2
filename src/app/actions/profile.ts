@@ -373,8 +373,23 @@ export async function updateProfileAction(data: UpdateProfileInput): Promise<Upd
                     })
 
                     if (existingAlias) {
-                        if (existingAlias.userId !== user.id || !existingAlias.isPrimary) {
+                        if (existingAlias.userId !== user.id) {
                             throw new UsernamePersistenceError('USERNAME_TAKEN', 'Username is already taken')
+                        }
+
+                        if (!existingAlias.isPrimary) {
+                            await tx
+                                .update(usernameAliases)
+                                .set({
+                                    isPrimary: true,
+                                    replacedAt: null,
+                                })
+                                .where(
+                                    and(
+                                        eq(usernameAliases.username, nextUsername),
+                                        eq(usernameAliases.userId, user.id),
+                                    ),
+                                )
                         }
                     } else {
                         await tx.insert(usernameAliases).values({
@@ -388,11 +403,7 @@ export async function updateProfileAction(data: UpdateProfileInput): Promise<Upd
                 }
 
                 if (auditRows.length > 0) {
-                    try {
-                        await tx.insert(profileAuditEvents).values(auditRows)
-                    } catch (auditInsertError) {
-                        console.warn('Profile audit logging unavailable, skipping insert', auditInsertError)
-                    }
+                    await tx.insert(profileAuditEvents).values(auditRows)
                 }
 
                 return rows
@@ -514,84 +525,6 @@ export async function getProfileBasic(userId: string) {
     } catch (error) {
         console.error('Error fetching profile basic:', error);
         return null;
-    }
-}
-
-export async function getProfileProjectsAction(userId: string) {
-    if (!userId) return [];
-    try {
-        const supabase = await createClient()
-        const { data: { user } } = await supabase.auth.getUser()
-        const isOwner = user?.id === userId
-        const dedupeKey = `profile:projects:${user?.id ?? 'anon'}:${userId}`;
-
-        return await runInFlightDeduped(dedupeKey, async () => {
-            const visibilityFilter = isOwner
-                ? eq(projects.ownerId, userId)
-                : and(
-                    eq(projects.ownerId, userId),
-                    eq(projects.visibility, 'public'),
-                    ne(projects.status, 'draft')
-                )
-
-            const userProjects = await db
-                .select({
-                    id: projects.id,
-                    slug: projects.slug,
-                    title: projects.title,
-                    description: projects.description,
-                    shortDescription: projects.shortDescription,
-                    coverImage: projects.coverImage,
-                    updatedAt: projects.updatedAt,
-                })
-                .from(projects)
-                .where(visibilityFilter)
-                .orderBy(desc(projects.updatedAt), desc(projects.createdAt))
-                .limit(12);
-
-            return userProjects.map((project) => ({
-                ...project,
-                image: project.coverImage || null,
-                url: project.slug ? `/projects/${project.slug}` : `/projects/${project.id}`,
-            }));
-        });
-    } catch (error) {
-        console.error('Error fetching profile projects:', error);
-        return [];
-    }
-}
-
-export async function getProfileStatsAction(userId: string) {
-    if (!userId) return { connectionsCount: 0, projectsCount: 0, followersCount: 0 };
-    try {
-        return await runInFlightDeduped(`profile:stats:${userId}`, async () => {
-            const [profileStats] = await db
-                .select({
-                    connectionsCount: profiles.connectionsCount,
-                    projectsCount: profiles.projectsCount,
-                    followersCount: profiles.followersCount,
-                })
-                .from(profiles)
-                .where(eq(profiles.id, userId))
-                .limit(1);
-
-            if (profileStats) {
-                return {
-                    connectionsCount: profileStats.connectionsCount || 0,
-                    projectsCount: profileStats.projectsCount || 0,
-                    followersCount: profileStats.followersCount || 0,
-                };
-            }
-
-            return {
-                connectionsCount: 0,
-                projectsCount: 0,
-                followersCount: 0
-            };
-        });
-    } catch (error) {
-        console.error('Error fetching profile stats:', error);
-        return { connectionsCount: 0, projectsCount: 0, followersCount: 0 };
     }
 }
 

@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useCallback, useMemo, useRef } from 'react';
+import { useState, useCallback, useMemo, useRef, Suspense } from 'react';
+import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { LayoutGrid } from 'lucide-react';
@@ -40,10 +41,67 @@ const TAB_INITIAL = { opacity: 0, y: 4 };
 const TAB_ANIMATE = { opacity: 1, y: 0 };
 const TAB_EXIT = { opacity: 0, y: -4 };
 
+function WorkspaceTabSkeleton() {
+    return (
+        <div className="flex-1 min-h-0" role="status" aria-live="polite" aria-busy="true">
+            <span className="sr-only">Loading workspace content</span>
+            <div className="max-w-7xl mx-auto min-h-[560px] px-4 py-6 sm:px-6 lg:px-8">
+                <div aria-hidden="true" className="space-y-6 animate-pulse">
+                    <div className="grid gap-4 lg:grid-cols-[minmax(0,2.2fr)_minmax(280px,1fr)]">
+                        <div className="rounded-3xl border border-zinc-200/70 bg-white p-6 shadow-sm dark:border-zinc-800/70 dark:bg-zinc-950">
+                            <div className="space-y-4">
+                                <div className="h-4 w-32 rounded-full bg-zinc-200 dark:bg-zinc-800" />
+                                <div className="h-9 w-2/3 rounded-2xl bg-zinc-200 dark:bg-zinc-800" />
+                                <div className="grid gap-3 sm:grid-cols-2">
+                                    <div className="h-24 rounded-2xl bg-zinc-100 dark:bg-zinc-900" />
+                                    <div className="h-24 rounded-2xl bg-zinc-100 dark:bg-zinc-900" />
+                                </div>
+                            </div>
+                        </div>
+                        <div className="rounded-3xl border border-zinc-200/70 bg-white p-6 shadow-sm dark:border-zinc-800/70 dark:bg-zinc-950">
+                            <div className="space-y-4">
+                                <div className="h-4 w-24 rounded-full bg-zinc-200 dark:bg-zinc-800" />
+                                <div className="space-y-3">
+                                    <div className="h-12 rounded-2xl bg-zinc-100 dark:bg-zinc-900" />
+                                    <div className="h-12 rounded-2xl bg-zinc-100 dark:bg-zinc-900" />
+                                    <div className="h-12 rounded-2xl bg-zinc-100 dark:bg-zinc-900" />
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="grid gap-4 xl:grid-cols-3">
+                        <div className="rounded-3xl border border-zinc-200/70 bg-white p-6 shadow-sm dark:border-zinc-800/70 dark:bg-zinc-950 xl:col-span-2">
+                            <div className="space-y-4">
+                                <div className="h-4 w-36 rounded-full bg-zinc-200 dark:bg-zinc-800" />
+                                <div className="space-y-3">
+                                    <div className="h-16 rounded-2xl bg-zinc-100 dark:bg-zinc-900" />
+                                    <div className="h-16 rounded-2xl bg-zinc-100 dark:bg-zinc-900" />
+                                    <div className="h-16 rounded-2xl bg-zinc-100 dark:bg-zinc-900" />
+                                </div>
+                            </div>
+                        </div>
+                        <div className="rounded-3xl border border-zinc-200/70 bg-white p-6 shadow-sm dark:border-zinc-800/70 dark:bg-zinc-950">
+                            <div className="space-y-4">
+                                <div className="h-4 w-28 rounded-full bg-zinc-200 dark:bg-zinc-800" />
+                                <div className="h-28 rounded-2xl bg-zinc-100 dark:bg-zinc-900" />
+                                <div className="h-10 w-full rounded-2xl bg-zinc-100 dark:bg-zinc-900" />
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}
+
 export default function WorkspaceClient({ initialData, initialTab }: WorkspaceClientProps) {
     const { user } = useAuth();
     const queryClient = useQueryClient();
     const reduceMotion = useReducedMotionPreference();
+    const router = useRouter();
+    const pathname = usePathname();
+    const searchParams = useSearchParams();
 
     const { data: baseData } = useQuery({
         queryKey: queryKeys.workspace.overviewBase(),
@@ -65,20 +123,25 @@ export default function WorkspaceClient({ initialData, initialTab }: WorkspaceCl
         staleTime: 30_000,
     });
 
-    // Remember last tab — URL param > localStorage > 'overview'
+    // H11: Standardized on URL searchParams for shareable/bookmarkable tabs
     const [activeTab, setActiveTab] = useState<WorkspaceTab>(() => {
+        const fromUrl = searchParams.get('tab');
+        if (fromUrl && VALID_TABS.includes(fromUrl as WorkspaceTab)) return fromUrl as WorkspaceTab;
         if (VALID_TABS.includes(initialTab as WorkspaceTab)) return initialTab as WorkspaceTab;
-        if (typeof window !== 'undefined') {
-            const saved = localStorage.getItem(TAB_STORAGE_KEY);
-            if (saved && VALID_TABS.includes(saved as WorkspaceTab)) return saved as WorkspaceTab;
-        }
         return 'overview';
     });
 
     const handleTabChange = useCallback((tab: WorkspaceTab) => {
         setActiveTab(tab);
-        try { localStorage.setItem(TAB_STORAGE_KEY, tab); } catch { /* noop */ }
-    }, []);
+        const params = new URLSearchParams(searchParams.toString());
+        if (tab === 'overview') {
+            params.delete('tab');
+        } else {
+            params.set('tab', tab);
+        }
+        const query = params.toString();
+        router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+    }, [router, pathname, searchParams]);
 
     // Inline task detail panel
     const [selectedTask, setSelectedTask] = useState<WorkspaceTask | null>(null);
@@ -106,10 +169,7 @@ export default function WorkspaceClient({ initialData, initialTab }: WorkspaceCl
 
     const handleCloseTaskPanel = useCallback(() => {
         setSelectedTask(null);
-        queryClient.invalidateQueries({ queryKey: queryKeys.workspace.overviewBase() });
-        queryClient.invalidateQueries({ queryKey: queryKeys.workspace.overviewSection.tasks() });
-        queryClient.invalidateQueries({ queryKey: queryKeys.workspace.tasksRoot() });
-        queryClient.invalidateQueries({ queryKey: queryKeys.workspace.activity() });
+        queryClient.invalidateQueries({ queryKey: queryKeys.workspace.root() });
     }, [queryClient]);
 
     // Phase 1D: Lazy fetch sprints/members for task panel
@@ -182,6 +242,7 @@ export default function WorkspaceClient({ initialData, initialTab }: WorkspaceCl
             </div>
 
             {/* Tab Content with animation */}
+            <Suspense fallback={<WorkspaceTabSkeleton />}>
             <AnimatePresence mode="wait" initial={!reduceMotion}>
                 {activeTab === 'overview' ? (
                     <motion.div
@@ -244,6 +305,7 @@ export default function WorkspaceClient({ initialData, initialTab }: WorkspaceCl
                     </motion.div>
                 )}
             </AnimatePresence>
+            </Suspense>
 
             {/* Inline Task Detail Panel */}
             <AnimatePresence initial={!reduceMotion}>

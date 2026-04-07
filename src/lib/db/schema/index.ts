@@ -75,6 +75,8 @@ export const profiles = pgTable('profiles', {
         usedAt: string | null;
     }>>().default([]).notNull(),
     recoveryCodesGeneratedAt: timestamp('recovery_codes_generated_at', { withTimezone: true }),
+    // Last activity timestamp (debounced, updated at most every 5 minutes via Redis guard)
+    lastActiveAt: timestamp('last_active_at', { withTimezone: true }),
 }, (t) => ({
     // Optimize lookups by email (auth)
     emailIdx: index('profiles_email_idx').on(t.email),
@@ -94,6 +96,8 @@ export const profiles = pgTable('profiles', {
     workspaceDueTodayCountIdx: index('profiles_workspace_due_today_count_idx').on(t.workspaceDueTodayCount),
     workspaceOverdueCountIdx: index('profiles_workspace_overdue_count_idx').on(t.workspaceOverdueCount),
     workspaceInProgressCountIdx: index('profiles_workspace_in_progress_count_idx').on(t.workspaceInProgressCount),
+    // Index for "Active today/this week" filtering in discover
+    lastActiveAtIdx: index('profiles_last_active_at_idx').on(t.lastActiveAt),
 }))
 
 export const reservedUsernames = pgTable('reserved_usernames', {
@@ -111,6 +115,9 @@ export const usernameAliases = pgTable('username_aliases', {
 }, (t) => ({
     userPrimaryIdx: index('username_aliases_user_primary_idx').on(t.userId, t.isPrimary),
     userClaimedAtIdx: index('username_aliases_user_claimed_at_idx').on(t.userId, t.claimedAt),
+    uniquePrimaryIdx: uniqueIndex('username_aliases_user_primary_unique_idx')
+        .on(t.userId)
+        .where(sql`${t.isPrimary} = true`),
 }))
 
 export const profileAuditEvents = pgTable('profile_audit_events', {
@@ -192,6 +199,12 @@ export const connections = pgTable('connections', {
     status: text('status', { enum: ['pending', 'accepted', 'rejected', 'cancelled', 'disconnected', 'blocked'] }).default('pending').notNull(),
     blockedBy: uuid('blocked_by').references(() => profiles.id, { onDelete: 'cascade' }),
     blockedAt: timestamp('blocked_at', { withTimezone: true }),
+    // Optional message sent with the connection request
+    message: text('message'),
+    // Optional user-provided tag categories (e.g., "Collaborator", "Classmate")
+    tags: jsonb('tags').$type<string[]>().default([]),
+    // Optional reason selected when declining a request
+    rejectionReason: text('rejection_reason'),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
@@ -225,6 +238,7 @@ export const connectionSuggestionDismissals = pgTable('connection_suggestion_dis
     id: uuid('id').primaryKey().defaultRandom(),
     userId: uuid('user_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
     dismissedProfileId: uuid('dismissed_profile_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
+    reason: text('reason'),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
     userDismissedUniqueIdx: uniqueIndex('connection_suggestion_dismissals_user_profile_uidx').on(t.userId, t.dismissedProfileId),
@@ -331,6 +345,10 @@ export const projects = pgTable('projects', {
 
     // 3. "My Projects": Filter by Owner -> Sort by CreatedAt
     myProjectsIdx: index('projects_my_projects_idx').on(t.ownerId, t.createdAt),
+
+    // Pure Optimization: Partial index for active (non-deleted) projects
+    // Eliminates full table scans on hub queries filtering WHERE deleted_at IS NULL
+    activeProjectsIdx: index('projects_active_idx').on(t.id).where(sql`${t.deletedAt} IS NULL`),
 }))
 
 // ============================================================================
@@ -966,6 +984,7 @@ export const conversationParticipants = pgTable('conversation_participants', {
     // Pure Optimization: Denormalized counts for O(1) badges (1M+ Users)
     unreadCount: integer('unread_count').default(0).notNull(),
     lastMessageAt: timestamp('last_message_at', { withTimezone: true }),
+    pinnedAt: timestamp('pinned_at', { withTimezone: true }),
 }, (t) => ({
     conversationUserUnique: uniqueIndex('conversation_participants_unique').on(t.conversationId, t.userId),
     userIdx: index('conversation_participants_user_idx').on(t.userId),
@@ -1138,6 +1157,8 @@ export const messagesRelations = relations(messages, ({ one, many }) => ({
         relationName: 'message_reply_reference',
     }),
     attachments: many(messageAttachments),
+    reactions: many(messageReactions),
+    readReceipts: many(messageReadReceipts),
 }))
 
 export const messageAttachmentsRelations = relations(messageAttachments, ({ one }) => ({
@@ -1354,3 +1375,102 @@ export const projectTags = pgTable('project_tags', {
     uniqueProjectTag: uniqueIndex('project_tags_unique_idx').on(t.projectId, t.tagId),
     tagIdx: index('project_tags_tag_idx').on(t.tagId),
 }))
+
+// ============================================================================
+// MESSAGE REACTIONS TABLE
+// ============================================================================
+export const messageReactions = pgTable('message_reactions', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    messageId: uuid('message_id').notNull().references(() => messages.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
+    emoji: text('emoji').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+    messageUserEmojiUnique: uniqueIndex('message_reactions_message_user_emoji_unique').on(t.messageId, t.userId, t.emoji),
+    messageIdx: index('message_reactions_message_idx').on(t.messageId),
+    userIdx: index('message_reactions_user_idx').on(t.userId),
+}))
+
+// ============================================================================
+// MESSAGE REPORTS TABLE
+// ============================================================================
+export const messageReports = pgTable('message_reports', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    messageId: uuid('message_id').notNull().references(() => messages.id, { onDelete: 'cascade' }),
+    reporterId: uuid('reporter_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
+    reason: text('reason', { enum: ['spam', 'harassment', 'hate_speech', 'inappropriate', 'other'] }).notNull(),
+    details: text('details'),
+    status: text('status', { enum: ['pending', 'reviewed', 'actioned', 'dismissed'] }).default('pending').notNull(),
+    reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+    reviewedBy: uuid('reviewed_by'),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+    messageIdx: index('message_reports_message_idx').on(t.messageId),
+    reporterIdx: index('message_reports_reporter_idx').on(t.reporterId),
+    statusIdx: index('message_reports_status_idx').on(t.status, t.createdAt),
+    messageReporterUnique: uniqueIndex('message_reports_message_reporter_unique').on(t.messageId, t.reporterId),
+}))
+
+// ============================================================================
+// MESSAGE READ RECEIPTS TABLE
+// ============================================================================
+export const messageReadReceipts = pgTable('message_read_receipts', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    messageId: uuid('message_id').notNull().references(() => messages.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
+    readAt: timestamp('read_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+    messageUserUnique: uniqueIndex('message_read_receipts_message_user_unique').on(t.messageId, t.userId),
+    messageIdx: index('message_read_receipts_message_idx').on(t.messageId),
+    userIdx: index('message_read_receipts_user_idx').on(t.userId, t.readAt),
+}))
+
+// ============================================================================
+// MESSAGE REACTIONS RELATIONS
+// ============================================================================
+export const messageReactionsRelations = relations(messageReactions, ({ one }) => ({
+    message: one(messages, {
+        fields: [messageReactions.messageId],
+        references: [messages.id],
+    }),
+    user: one(profiles, {
+        fields: [messageReactions.userId],
+        references: [profiles.id],
+    }),
+}))
+
+// ============================================================================
+// MESSAGE REPORTS RELATIONS
+// ============================================================================
+export const messageReportsRelations = relations(messageReports, ({ one }) => ({
+    message: one(messages, {
+        fields: [messageReports.messageId],
+        references: [messages.id],
+    }),
+    reporter: one(profiles, {
+        fields: [messageReports.reporterId],
+        references: [profiles.id],
+    }),
+}))
+
+// ============================================================================
+// MESSAGE READ RECEIPTS RELATIONS
+// ============================================================================
+export const messageReadReceiptsRelations = relations(messageReadReceipts, ({ one }) => ({
+    message: one(messages, {
+        fields: [messageReadReceipts.messageId],
+        references: [messages.id],
+    }),
+    user: one(profiles, {
+        fields: [messageReadReceipts.userId],
+        references: [profiles.id],
+    }),
+}))
+
+// Type Exports for new tables
+export type MessageReaction = typeof messageReactions.$inferSelect
+export type NewMessageReaction = typeof messageReactions.$inferInsert
+export type MessageReport = typeof messageReports.$inferSelect
+export type NewMessageReport = typeof messageReports.$inferInsert
+export type MessageReadReceipt = typeof messageReadReceipts.$inferSelect
+export type NewMessageReadReceipt = typeof messageReadReceipts.$inferInsert

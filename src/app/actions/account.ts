@@ -21,6 +21,7 @@ import { isAdminUser } from '@/lib/security/admin';
 import { eq, or, and, inArray, isNull, sql, desc, ne } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { queueCounterRefreshBestEffort } from '@/lib/workspace/counter-buffer';
+import { logger } from '@/lib/logger';
 import { randomBytes } from 'crypto';
 
 const UUID_RE =
@@ -28,6 +29,38 @@ const UUID_RE =
 const ACCOUNT_DELETE_CONFIRM_TEXT = 'DELETE';
 const GRACE_PERIOD_DAYS = 30;
 const CONFIRMATION_TOKEN_EXPIRY_HOURS = 1;
+const ACCOUNT_EXPORT_MESSAGE_LIMIT = 10_000;
+
+type AccountExportMessageRow = {
+    id: string;
+    conversationId: string;
+    content: string | null;
+    type: string | null;
+    createdAt: Date;
+    senderId: string | null;
+};
+
+function sanitizeExportedMessages(rows: AccountExportMessageRow[], userId: string) {
+    return rows.map((row) => {
+        const direction =
+            row.senderId === userId
+                ? 'sent'
+                : row.senderId === null
+                    ? 'system'
+                    : 'received';
+
+        return {
+            id: row.id,
+            conversationId: row.conversationId,
+            content: direction === 'sent' || direction === 'system' ? row.content : null,
+            type: row.type,
+            createdAt: row.createdAt,
+            direction,
+            sender: direction === 'sent' ? 'self' : direction === 'system' ? 'system' : 'other-redacted',
+            redacted: direction === 'received',
+        };
+    });
+}
 
 // ============================================================================
 // SCHEDULE ACCOUNT DELETION (Soft-Delete with Grace Period)
@@ -148,20 +181,7 @@ export async function scheduleAccountDeletion(
                 })
                 .returning({ id: accountDeletions.id });
 
-            // 3. Remove user from conversations (so other users see "Deleted User")
-            await tx.delete(conversationParticipants).where(
-                eq(conversationParticipants.userId, userId)
-            );
-
-            // 4. Remove DM pair entries
-            await tx.delete(dmPairs).where(
-                or(
-                    eq(dmPairs.userLow, userId),
-                    eq(dmPairs.userHigh, userId),
-                )
-            );
-
-            // 5. Delete connections (both sent and received)
+            // 3. Delete connections (both sent and received)
             await tx.delete(connections).where(
                 or(
                     eq(connections.requesterId, userId),
@@ -169,7 +189,7 @@ export async function scheduleAccountDeletion(
                 )
             );
 
-            // 6. Decrement followersCount on projects the user follows
+            // 4. Decrement followersCount on projects the user follows
             if (followedProjectRows.length > 0) {
                 const followedProjectIds = followedProjectRows.map(r => r.projectId);
                 const CHUNK = 100;
@@ -184,13 +204,13 @@ export async function scheduleAccountDeletion(
                 }
             }
 
-            // 7. Delete project follows by user
+            // 5. Delete project follows by user
             await tx.delete(projectFollows).where(eq(projectFollows.userId, userId));
 
-            // 8. Delete user's collections
+            // 6. Delete user's collections
             await tx.delete(collections).where(eq(collections.ownerId, userId));
 
-            // 9. Delete user's profile audit events
+            // 7. Delete user's profile audit events
             await tx.delete(profileAuditEvents).where(eq(profileAuditEvents.userId, userId));
 
             return deletion.id;
@@ -202,7 +222,7 @@ export async function scheduleAccountDeletion(
                 await queueCounterRefreshBestEffort(affectedUserIds);
             }
         } catch (counterErr) {
-            console.error('Counter refresh error (non-fatal):', counterErr);
+            logger.warn('account.counter-refresh.failed', { module: 'account', error: counterErr instanceof Error ? counterErr.message : String(counterErr) });
         }
 
         // Dispatch async S3 cleanup via Inngest
@@ -213,7 +233,7 @@ export async function scheduleAccountDeletion(
                 data: { userId, deletionId },
             });
         } catch (inngestErr) {
-            console.error('Inngest dispatch error (non-fatal):', inngestErr);
+            logger.warn('account.inngest-dispatch.failed', { module: 'account', error: inngestErr instanceof Error ? inngestErr.message : String(inngestErr) });
         }
 
         // Sign out the user
@@ -226,7 +246,7 @@ export async function scheduleAccountDeletion(
             hardDeleteAt: hardDeleteAt.toISOString(),
         };
     } catch (error) {
-        console.error('Account deletion scheduling error:', error);
+        logger.error('account.deletion.scheduling.failed', { module: 'account', error: error instanceof Error ? error.message : String(error) });
         return { success: false, error: 'Failed to schedule account deletion' };
     }
 }
@@ -288,7 +308,7 @@ export async function cancelAccountDeletion(): Promise<{ success: boolean; error
         revalidatePath('/');
         return { success: true };
     } catch (error) {
-        console.error('Cancel deletion error:', error);
+        logger.error('account.cancel-deletion.failed', { module: 'account', error: error instanceof Error ? error.message : String(error) });
         return { success: false, error: 'Failed to cancel account deletion' };
     }
 }
@@ -329,22 +349,8 @@ export async function executeHardDelete(
             return { success: false, error: 'Deletion record not found or already processed' };
         }
 
-        // Run destructive deletes in a transaction
-        await db.transaction(async (tx) => {
-            // 1. Delete projects owned by the user (cascade handles members, tasks, nodes, etc.)
-            await tx.delete(projects).where(eq(projects.ownerId, userId));
-
-            // 2. Delete the profile (cascade handles remaining FKs)
-            await tx.delete(profiles).where(eq(profiles.id, userId));
-
-            // 3. Mark deletion as completed
-            await tx
-                .update(accountDeletions)
-                .set({ completedAt: new Date(), cleanupStatus: 'completed' })
-                .where(eq(accountDeletions.id, deletionId));
-        });
-
-        // Delete the auth user
+        // C9: Delete auth user FIRST to avoid orphaned auth records.
+        // If auth deletion fails, DB data is preserved and can be retried.
         const supabase = await createClient();
         let authError: { message: string } | null = null;
         try {
@@ -363,12 +369,43 @@ export async function executeHardDelete(
         }
 
         if (authError) {
-            console.error('Auth deletion error (hard delete):', authError);
+            logger.error('account.hard-delete.auth-deletion.failed', { module: 'account', error: authError.message });
+            // Auth deletion failed — abort to prevent orphaned auth record.
+            // The Inngest job will retry on next scheduled attempt.
+            return { success: false, error: `Auth deletion failed: ${authError.message}` };
         }
+
+        // Run destructive DB deletes in a transaction (auth user already removed)
+        await db.transaction(async (tx) => {
+            // 1. Remove the user from conversations during the irreversible finalizer path.
+            await tx.delete(conversationParticipants).where(
+                eq(conversationParticipants.userId, userId)
+            );
+
+            // 2. Remove DM pair entries during hard delete so soft delete remains reversible.
+            await tx.delete(dmPairs).where(
+                or(
+                    eq(dmPairs.userLow, userId),
+                    eq(dmPairs.userHigh, userId),
+                )
+            );
+
+            // 3. Delete projects owned by the user (cascade handles members, tasks, nodes, etc.)
+            await tx.delete(projects).where(eq(projects.ownerId, userId));
+
+            // 4. Delete the profile (cascade handles remaining FKs)
+            await tx.delete(profiles).where(eq(profiles.id, userId));
+
+            // 5. Mark deletion as completed
+            await tx
+                .update(accountDeletions)
+                .set({ completedAt: new Date(), cleanupStatus: 'completed' })
+                .where(eq(accountDeletions.id, deletionId));
+        });
 
         return { success: true };
     } catch (error) {
-        console.error('Hard delete error:', error);
+        logger.error('account.hard-delete.failed', { module: 'account', error: error instanceof Error ? error.message : String(error) });
 
         // Mark the deletion as failed
         try {
@@ -413,8 +450,6 @@ export async function transferProjectOwnership(
         if (!UUID_RE.test(projectId) || !UUID_RE.test(newOwnerId)) {
             return { success: false, error: 'Invalid IDs' };
         }
-
-        const { projectMembers } = await import('@/lib/db/schema');
 
         await db.transaction(async (tx) => {
             // Verify current user owns the project
@@ -467,7 +502,7 @@ export async function transferProjectOwnership(
 
         return { success: true };
     } catch (error) {
-        console.error('Transfer ownership error:', error);
+        logger.error('account.transfer-ownership.failed', { module: 'account', error: error instanceof Error ? error.message : String(error) });
         return {
             success: false,
             error: error instanceof Error ? error.message : 'Failed to transfer ownership',
@@ -504,6 +539,7 @@ export async function exportAccountData(): Promise<{
             userProjects,
             userConnections,
             userMessages,
+            [{ count: userMessageCount }],
             userCollections
         ] = await Promise.all([
             readDb
@@ -542,7 +578,8 @@ export async function exportAccountData(): Promise<{
                     createdAt: projects.createdAt,
                 })
                 .from(projects)
-                .where(eq(projects.ownerId, userId)),
+                .where(eq(projects.ownerId, userId))
+                .limit(5_000),
             readDb
                 .select({
                     requesterId: connections.requesterId,
@@ -556,7 +593,8 @@ export async function exportAccountData(): Promise<{
                         eq(connections.requesterId, userId),
                         eq(connections.addresseeId, userId),
                     )
-                ),
+                )
+                .limit(50_000),
             readDb
                 .select({
                     id: messages.id,
@@ -564,9 +602,30 @@ export async function exportAccountData(): Promise<{
                     content: messages.content,
                     type: messages.type,
                     createdAt: messages.createdAt,
+                    senderId: messages.senderId,
                 })
                 .from(messages)
-                .where(eq(messages.senderId, userId)),
+                .innerJoin(
+                    conversationParticipants,
+                    and(
+                        eq(conversationParticipants.conversationId, messages.conversationId),
+                        eq(conversationParticipants.userId, userId),
+                    ),
+                )
+                .orderBy(desc(messages.createdAt))
+                .limit(ACCOUNT_EXPORT_MESSAGE_LIMIT),
+            readDb
+                .select({
+                    count: sql<number>`count(distinct ${messages.id})::int`,
+                })
+                .from(messages)
+                .innerJoin(
+                    conversationParticipants,
+                    and(
+                        eq(conversationParticipants.conversationId, messages.conversationId),
+                        eq(conversationParticipants.userId, userId),
+                    ),
+                ),
             readDb
                 .select({
                     id: collections.id,
@@ -575,7 +634,21 @@ export async function exportAccountData(): Promise<{
                 })
                 .from(collections)
                 .where(eq(collections.ownerId, userId))
+                .limit(10_000)
         ]);
+
+        const sanitizedMessages = sanitizeExportedMessages(userMessages, userId);
+        const messageNotes: string[] = [];
+        if (userMessageCount > sanitizedMessages.length) {
+            messageNotes.push(
+                `Message export limited to ${ACCOUNT_EXPORT_MESSAGE_LIMIT.toLocaleString()} most recent messages. Contact support for a complete export.`,
+            );
+        }
+        if (sanitizedMessages.some((message) => message.redacted)) {
+            messageNotes.push(
+                'Received message content and sender identity are redacted to protect the rights and freedoms of other participants under GDPR Article 20(4).',
+            );
+        }
 
         const exportData = {
             exportedAt: new Date().toISOString(),
@@ -586,8 +659,11 @@ export async function exportAccountData(): Promise<{
                 direction: c.requesterId === userId ? 'sent' : 'received',
             })),
             messages: {
-                count: userMessages.length,
-                items: userMessages,
+                count: userMessageCount,
+                exportedCount: sanitizedMessages.length,
+                truncated: userMessageCount > sanitizedMessages.length,
+                note: messageNotes.length > 0 ? messageNotes.join(' ') : undefined,
+                items: sanitizedMessages,
             },
             collections: userCollections,
         };
@@ -603,13 +679,13 @@ export async function exportAccountData(): Promise<{
             });
 
         if (uploadError) {
-            console.error('S3 upload error during data export:', uploadError);
+            logger.error('account.export.upload.failed', { module: 'account', error: uploadError.message });
             return { success: false, error: 'Failed to upload exported data' };
         }
 
         return { success: true, data: exportData };
     } catch (error) {
-        console.error('Data export error:', error);
+        logger.error('account.export.failed', { module: 'account', error: error instanceof Error ? error.message : String(error) });
         return { success: false, error: 'Failed to export account data' };
     }
 }
@@ -701,7 +777,16 @@ export async function getAccountDataSummary(): Promise<{
             .select({
                 projects: sql<number>`(SELECT count(*)::int FROM ${projects} WHERE ${projects.ownerId} = ${userId})`,
                 connections: sql<number>`(SELECT count(*)::int FROM ${connections} WHERE (${connections.requesterId} = ${userId} OR ${connections.addresseeId} = ${userId}) AND ${connections.status} = 'accepted')`,
-                messages: sql<number>`(SELECT count(*)::int FROM ${messages} WHERE ${messages.senderId} = ${userId})`,
+                messages: sql<number>`(
+                    SELECT count(*)::int
+                    FROM ${messages}
+                    WHERE EXISTS (
+                        SELECT 1
+                        FROM ${conversationParticipants}
+                        WHERE ${conversationParticipants.conversationId} = ${messages.conversationId}
+                          AND ${conversationParticipants.userId} = ${userId}
+                    )
+                )`,
                 collections: sql<number>`(SELECT count(*)::int FROM ${collections} WHERE ${collections.ownerId} = ${userId})`,
                 files: sql<number>`(
                     SELECT count(*)::int 
@@ -725,7 +810,7 @@ export async function getAccountDataSummary(): Promise<{
             },
         };
     } catch (error) {
-        console.error('Data summary error:', error);
+        logger.error('account.data-summary.failed', { module: 'account', error: error instanceof Error ? error.message : String(error) });
         return { success: false, error: 'Failed to get account data summary' };
     }
 }
@@ -789,7 +874,7 @@ export async function getTransferableProjects(): Promise<{
 
         return { success: true, projects: Array.from(projectMap.values()) };
     } catch (error) {
-        console.error('Transferable projects error:', error);
+        logger.error('account.transferable-projects.failed', { module: 'account', error: error instanceof Error ? error.message : String(error) });
         return { success: false, error: 'Failed to get transferable projects' };
     }
 }
@@ -866,8 +951,7 @@ export async function cleanupOrphanedProfile(profileId: string): Promise<{ succe
         revalidatePath('/people');
         return { success: true };
     } catch (error) {
-        console.error('Cleanup error:', error);
+        logger.error('account.cleanup.failed', { module: 'account', error: error instanceof Error ? error.message : String(error) });
         return { success: false, error: 'Failed to cleanup profile' };
     }
 }
-

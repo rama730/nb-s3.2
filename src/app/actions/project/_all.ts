@@ -307,6 +307,16 @@ export type ProjectDetailShellResult =
         message: string;
     };
 
+export type ProjectDetailMetadataRead = {
+    projectId: string;
+    ownerId: string;
+    slug: string | null;
+    title: string;
+    shortDescription: string | null;
+    description: string | null;
+    coverImage: string | null;
+};
+
 const projectDetailUuidRegex =
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -359,6 +369,84 @@ async function resolveProjectDetailTarget(slugOrId: string) {
         .limit(1);
 
     return project ?? null;
+}
+
+async function resolveProjectDetailMetadataTarget(slugOrId: string) {
+    const trimmed = slugOrId.trim();
+    const isUuid = projectDetailUuidRegex.test(trimmed);
+    const where = isUuid
+        ? and(
+            isNull(projects.deletedAt),
+            or(eq(projects.slug, trimmed), eq(projects.id, trimmed))
+        )
+        : and(
+            isNull(projects.deletedAt),
+            eq(projects.slug, trimmed)
+        );
+
+    const [project] = await db
+        .select({
+            projectId: projects.id,
+            ownerId: projects.ownerId,
+            slug: projects.slug,
+            title: projects.title,
+            shortDescription: projects.shortDescription,
+            description: projects.description,
+            coverImage: projects.coverImage,
+            visibility: projects.visibility,
+            status: projects.status,
+        })
+        .from(projects)
+        .where(where)
+        .limit(1);
+
+    return project ?? null;
+}
+
+async function resolveProjectDetailViewerState(input: {
+    projectId: string;
+    ownerId: string;
+    visibility: string | null;
+    status: string | null;
+    actorUserId: string | null;
+    includeFollowState?: boolean;
+}) {
+    const { projectId, ownerId, visibility, status, actorUserId, includeFollowState = true } = input;
+    const [memberRow, followRow] = actorUserId
+        ? await Promise.all([
+            db
+                .select({ role: projectMembers.role })
+                .from(projectMembers)
+                .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, actorUserId)))
+                .limit(1),
+            includeFollowState
+                ? db
+                    .select({ id: projectFollows.id })
+                    .from(projectFollows)
+                    .where(and(eq(projectFollows.projectId, projectId), eq(projectFollows.userId, actorUserId)))
+                    .limit(1)
+                : Promise.resolve([]),
+        ])
+        : [[], []] as const;
+
+    const isOwner = !!actorUserId && actorUserId === ownerId;
+    const memberRoleRaw = memberRow[0]?.role;
+    const memberRole = isProjectDetailMemberRole(memberRoleRaw)
+        ? memberRoleRaw
+        : null;
+    const isMember = !isOwner && !!memberRole;
+    const canRead = computeProjectReadAccess(visibility, status, isOwner, isMember);
+    const canWrite = computeProjectWriteAccess(isOwner, memberRole);
+    const isFollowed = includeFollowState ? !!followRow[0] : false;
+
+    return {
+        canRead,
+        canWrite,
+        isOwner,
+        isMember,
+        memberRole,
+        isFollowed,
+    };
 }
 
 async function fetchProjectDetailShellData(projectId: string, ownerId: string, includeFollowersCount: boolean, viewerId: string | null) {
@@ -513,7 +601,117 @@ const getPublicProjectDetailShellData = unstable_cache(
     { revalidate: 60 }
 );
 
-export async function getProjectDetailShellAction(input: {
+const getPublicProjectDetailMetadata = unstable_cache(
+    async (slugOrId: string): Promise<ProjectDetailMetadataRead | null> => {
+        const project = await resolveProjectDetailMetadataTarget(slugOrId);
+        if (!project) return null;
+
+        const canRead = computeProjectReadAccess(project.visibility, project.status, false, false);
+        if (!canRead) return null;
+
+        return {
+            projectId: project.projectId,
+            ownerId: project.ownerId,
+            slug: project.slug || null,
+            title: project.title,
+            shortDescription: project.shortDescription || null,
+            description: project.description || null,
+            coverImage: project.coverImage || null,
+        };
+    },
+    ['public-project-detail-metadata'],
+    { revalidate: 60 }
+);
+
+export async function readProjectDetailMetadata(input: {
+    slugOrId: string;
+    actorUserId?: string | null;
+}): Promise<
+    | { success: true; data: ProjectDetailMetadataRead }
+    | { success: false; errorCode: 'INVALID_INPUT' | 'NOT_FOUND' | 'FORBIDDEN' | 'INTERNAL_ERROR'; message: string }
+> {
+    const parsedInput = projectDetailInputSchema.safeParse(input);
+    if (!parsedInput.success) {
+        return {
+            success: false,
+            errorCode: 'INVALID_INPUT',
+            message: 'Invalid project detail request.',
+        };
+    }
+
+    const { slugOrId, actorUserId = null } = parsedInput.data;
+    const trimmed = slugOrId.trim();
+
+    try {
+        if (!actorUserId) {
+            const cached = await getPublicProjectDetailMetadata(trimmed);
+            if (cached) {
+                return {
+                    success: true,
+                    data: cached,
+                };
+            }
+        }
+
+        const project = await resolveProjectDetailMetadataTarget(trimmed);
+        if (!project) {
+            return {
+                success: false,
+                errorCode: 'NOT_FOUND',
+                message: 'Project not found.',
+            };
+        }
+
+        const viewerState = await resolveProjectDetailViewerState({
+            projectId: project.projectId,
+            ownerId: project.ownerId,
+            visibility: project.visibility,
+            status: project.status,
+            actorUserId,
+            includeFollowState: false,
+        });
+
+        if (!viewerState.canRead) {
+            return {
+                success: false,
+                errorCode: 'FORBIDDEN',
+                message: 'Forbidden',
+            };
+        }
+
+        return {
+            success: true,
+            data: {
+                projectId: project.projectId,
+                ownerId: project.ownerId,
+                slug: project.slug || null,
+                title: project.title,
+                shortDescription: project.shortDescription || null,
+                description: project.description || null,
+                coverImage: project.coverImage || null,
+            },
+        };
+    } catch (error) {
+        console.error('[readProjectDetailMetadata] failed', error);
+        const message = error instanceof Error ? error.message : String(error);
+        const normalizedMessage = message.trim().toLowerCase();
+        const isAuthorizationError =
+            normalizedMessage === 'forbidden'
+            || normalizedMessage.includes('not authorized')
+            || normalizedMessage.includes('not authorised')
+            || normalizedMessage.includes('unauthorized')
+            || normalizedMessage.includes('unauthorised')
+            || normalizedMessage.includes('permission');
+
+        return {
+            success: false,
+            errorCode: isAuthorizationError ? 'FORBIDDEN' : 'INTERNAL_ERROR',
+            message: isAuthorizationError ? 'Forbidden' : 'Internal error',
+        };
+    }
+}
+
+export async function readProjectDetailShell(input: {
     slugOrId: string;
     actorUserId?: string | null;
 }): Promise<ProjectDetailShellResult> {
@@ -529,12 +727,7 @@ export async function getProjectDetailShellAction(input: {
     const { slugOrId, actorUserId: requestedActorUserId = null } = parsedInput.data;
 
     try {
-        const supabase = await createClient();
-        const { data: { user } } = await supabase.auth.getUser();
-        const actorUserId = user?.id ?? null;
-        if (requestedActorUserId && requestedActorUserId !== actorUserId) {
-            console.warn('[getProjectDetailShellAction] Ignoring mismatched client actorUserId.');
-        }
+        const actorUserId = requestedActorUserId ?? null;
 
         const project = await resolveProjectDetailTarget(slugOrId);
         if (!project) {
@@ -548,28 +741,15 @@ export async function getProjectDetailShellAction(input: {
         return await runInFlightDeduped(
             `project:detail-shell:${project.id}:${actorUserId ?? 'anon'}`,
             async () => {
-                const [memberRow, followRow] = actorUserId
-                    ? await Promise.all([
-                        db
-                            .select({ role: projectMembers.role })
-                            .from(projectMembers)
-                            .where(and(eq(projectMembers.projectId, project.id), eq(projectMembers.userId, actorUserId)))
-                            .limit(1),
-                        db
-                            .select({ id: projectFollows.id })
-                            .from(projectFollows)
-                            .where(and(eq(projectFollows.projectId, project.id), eq(projectFollows.userId, actorUserId)))
-                            .limit(1),
-                    ])
-                    : [[], []] as const;
+                const viewerState = await resolveProjectDetailViewerState({
+                    projectId: project.id,
+                    ownerId: project.ownerId,
+                    visibility: project.visibility,
+                    status: project.status,
+                    actorUserId,
+                });
 
-                const isOwner = !!actorUserId && actorUserId === project.ownerId;
-                const memberRoleRaw = memberRow[0]?.role;
-                const memberRole = isProjectDetailMemberRole(memberRoleRaw)
-                    ? memberRoleRaw
-                    : null;
-                const isMember = !isOwner && !!memberRole;
-                const canRead = computeProjectReadAccess(project.visibility, project.status, isOwner, isMember);
+                const { canRead, canWrite, isOwner, isMember, memberRole, isFollowed } = viewerState;
                 if (!canRead) {
                     return {
                         success: false,
@@ -577,8 +757,6 @@ export async function getProjectDetailShellAction(input: {
                         message: 'Forbidden',
                     };
                 }
-                const canWrite = computeProjectWriteAccess(isOwner, memberRole);
-                const isFollowed = !!followRow[0];
 
                 const shouldUseCachedShell =
                     !actorUserId &&
@@ -693,13 +871,31 @@ export async function getProjectDetailShellAction(input: {
             }
         );
     } catch (error) {
-        console.error('[getProjectDetailShellAction] failed', error);
+        console.error('[readProjectDetailShell] failed', error);
         return {
             success: false,
             errorCode: 'INTERNAL_ERROR',
             message: 'Failed to load project detail.',
         };
     }
+}
+
+export async function getProjectDetailShellAction(input: {
+    slugOrId: string;
+    actorUserId?: string | null;
+}): Promise<ProjectDetailShellResult> {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    const actorUserId = user?.id ?? null;
+
+    if (input.actorUserId && input.actorUserId !== actorUserId) {
+        console.warn('[getProjectDetailShellAction] Ignoring mismatched client actorUserId.');
+    }
+
+    return readProjectDetailShell({
+        slugOrId: input.slugOrId,
+        actorUserId,
+    });
 }
 
 // ============================================================================

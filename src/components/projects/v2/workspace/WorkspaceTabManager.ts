@@ -16,6 +16,7 @@ const DEFAULT_NODES: Record<string, ProjectNode> = {};
 export interface UseTabManagerOptions {
   projectId: string;
   currentUserId?: string;
+  isActive: boolean;
   canEdit: boolean;
   viewMode: FilesViewMode;
   activePane: PaneId;
@@ -35,6 +36,7 @@ export interface UseTabManagerOptions {
 
 export function useTabManager({
   projectId,
+  isActive,
   canEdit,
   viewMode,
   activePane,
@@ -58,6 +60,7 @@ export function useTabManager({
   const upsertNodes = useFilesWorkspaceStore((s) => s.upsertNodes);
   const clearLock = useFilesWorkspaceStore((s) => s.clearLock);
   const removeNodeFromCaches = useFilesWorkspaceStore((s) => s.removeNodeFromCaches);
+  const setLastNodeEventSummary = useFilesWorkspaceStore((s) => s.setLastNodeEventSummary);
   const reorderTabs = useFilesWorkspaceStore((s) => s.reorderTabs);
   const moveTabToPane = useFilesWorkspaceStore((s) => s.moveTabToPane);
   const nodesById = useFilesWorkspaceStore(
@@ -145,6 +148,7 @@ export function useTabManager({
       upsertNodes,
       clearLock,
       removeNodeFromCaches,
+      setLastNodeEventSummary,
     },
     viewMode,
     activePane,
@@ -162,81 +166,101 @@ export function useTabManager({
     setRecentFileIds,
   });
 
-  // Tab restoration: ensure metadata + content for persisted tabs
+  // Tab restoration: ensure metadata + content for persisted tabs (chunked to prevent OOM)
   useEffect(() => {
+    if (!isActive) return;
     const allOpenIds = Array.from(new Set([...leftOpenTabIds, ...rightOpenTabIds]));
     if (allOpenIds.length === 0) return;
 
-    void (async () => {
-      await ensureNodeMetadata(allOpenIds);
+    const controller = new AbortController();
+    const RESTORE_CHUNK_SIZE = 10;
+    const restoreTimer = setTimeout(() => {
+      void (async () => {
+        // Chunk metadata fetching to avoid burst of requests
+        for (let i = 0; i < allOpenIds.length; i += RESTORE_CHUNK_SIZE) {
+          if (controller.signal.aborted) return;
+          const chunk = allOpenIds.slice(i, i + RESTORE_CHUNK_SIZE);
+          await ensureNodeMetadata(chunk);
+        }
 
-      const currentWs = useFilesWorkspaceStore.getState().byProjectId[projectId];
-      if (!currentWs) return;
+        if (controller.signal.aborted) return;
+        const currentWs = useFilesWorkspaceStore.getState().byProjectId[projectId];
+        if (!currentWs) return;
 
-      for (const id of allOpenIds) {
-        const node = currentWs.nodesById[id];
-        if (!node) continue;
+        for (const id of allOpenIds) {
+          if (controller.signal.aborted) return;
+          const node = currentWs.nodesById[id];
+          if (!node) continue;
 
-        if (!tabByIdRef.current[id]) {
-          setTabById((prev) => ({
-            ...prev,
-            [id]: {
-              id,
-              node,
-              content: "",
-              contentVersion: 0,
-              savedSnapshot: "",
-              savedSnapshotVersion: 0,
-              isDirty: false,
-              isLoading: true,
-              isSaving: false,
-              isDeleting: false,
-              hasLock: false,
-              lockInfo: null,
-              offlineQueued: false,
-              error: null,
-              assetUrl: null,
-              assetUrlExpiresAt: null,
-            },
-          }));
-          const wantsPreview =
-            isAssetLike(node) &&
-            (viewMode === "assets" ||
-              viewMode === "all" ||
-              (viewMode === "code" && !isTextLike(node)));
-          if (wantsPreview) {
-            try {
-              const url = await ensureSignedUrlForNode(node);
-              const exp = signedUrlCacheRef.current.get(node.id)?.expiresAt ?? null;
-              setTabById((prev) => ({
-                ...prev,
-                [id]: {
-                  ...prev[id],
-                  isLoading: false,
-                  assetUrl: url,
-                  assetUrlExpiresAt: exp,
-                },
-              }));
-            } catch (e: unknown) {
-              const message = e instanceof Error ? e.message : "Failed to load preview";
-              setTabById((prev) => ({
-                ...prev,
-                [id]: {
-                  ...prev[id],
-                  isLoading: false,
-                  error: message,
-                },
-              }));
+          if (!tabByIdRef.current[id]) {
+            setTabById((prev) => ({
+              ...prev,
+              [id]: {
+                id,
+                node,
+                content: "",
+                contentVersion: 0,
+                savedSnapshot: "",
+                savedSnapshotVersion: 0,
+                isDirty: false,
+                isLoading: true,
+                isSaving: false,
+                isDeleting: false,
+                hasLock: false,
+                lockInfo: null,
+                offlineQueued: false,
+                error: null,
+                assetUrl: null,
+                assetUrlExpiresAt: null,
+              },
+            }));
+            const wantsPreview =
+              isAssetLike(node) &&
+              (viewMode === "assets" ||
+                viewMode === "all" ||
+                (viewMode === "code" && !isTextLike(node)));
+            if (wantsPreview) {
+              try {
+                const url = await ensureSignedUrlForNode(node);
+                if (controller.signal.aborted) return;
+                const exp = signedUrlCacheRef.current.get(node.id)?.expiresAt ?? null;
+                setTabById((prev) => ({
+                  ...prev,
+                  [id]: {
+                    ...prev[id],
+                    isLoading: false,
+                    assetUrl: url,
+                    assetUrlExpiresAt: exp,
+                  },
+                }));
+              } catch (e: unknown) {
+                const message = e instanceof Error ? e.message : "Failed to load preview";
+                if (controller.signal.aborted) return;
+                setTabById((prev) => ({
+                  ...prev,
+                  [id]: {
+                    ...prev[id],
+                    isLoading: false,
+                    error: message,
+                  },
+                }));
+              }
+            } else {
+              await loadFileContent(node);
             }
-          } else {
-            await loadFileContent(node);
           }
         }
-      }
-    })();
+      })();
+    }, 400);
+
+    return () => {
+      controller.abort();
+      clearTimeout(restoreTimer);
+    };
   }, [
     ensureNodeMetadata,
     ensureSignedUrlForNode,
+    isActive,
     leftOpenTabIds,
     leftOpenTabIdsKey,
     loadFileContent,

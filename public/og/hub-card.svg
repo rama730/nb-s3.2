@@ -1,0 +1,38 @@
+<svg width="1200" height="630" viewBox="0 0 1200 630" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="630" fill="#F6F7FB"/>
+  <rect x="48" y="48" width="1104" height="534" rx="36" fill="#FFFFFF"/>
+  <rect x="88" y="88" width="1024" height="454" rx="28" fill="url(#panel)"/>
+  <rect x="128" y="128" width="304" height="342" rx="28" fill="#FFFFFF" fill-opacity="0.88"/>
+  <rect x="464" y="128" width="304" height="342" rx="28" fill="#FFFFFF" fill-opacity="0.88"/>
+  <rect x="800" y="128" width="272" height="156" rx="28" fill="#FFFFFF" fill-opacity="0.92"/>
+  <rect x="800" y="314" width="272" height="156" rx="28" fill="#FFFFFF" fill-opacity="0.92"/>
+  <rect x="128" y="510" width="188" height="16" rx="8" fill="#CDD5E7"/>
+  <rect x="464" y="510" width="188" height="16" rx="8" fill="#CDD5E7"/>
+  <rect x="800" y="510" width="160" height="16" rx="8" fill="#CDD5E7"/>
+  <circle cx="180" cy="183" r="26" fill="#5B3DF5"/>
+  <circle cx="516" cy="183" r="26" fill="#1B9788"/>
+  <circle cx="852" cy="183" r="26" fill="#F97316"/>
+  <path d="M141 368C172.798 330.399 227.562 325.98 265.245 358.125L280.785 371.378C317.34 402.566 370.967 399.198 403.356 363.69L432 332.297V434H128L141 368Z" fill="url(#accentLeft)"/>
+  <path d="M480 387C514.988 338.673 584.483 327.299 633.532 361.413L653.054 374.992C688.988 399.995 737.565 396.659 769.798 366.809L768 434H464L480 387Z" fill="url(#accentCenter)"/>
+  <rect x="887" y="198" width="110" height="14" rx="7" fill="#131927" fill-opacity="0.14"/>
+  <rect x="887" y="228" width="152" height="14" rx="7" fill="#131927" fill-opacity="0.1"/>
+  <rect x="887" y="384" width="98" height="14" rx="7" fill="#131927" fill-opacity="0.14"/>
+  <rect x="887" y="414" width="138" height="14" rx="7" fill="#131927" fill-opacity="0.1"/>
+  <text x="128" y="564" fill="#121826" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="48" font-weight="700">Hub</text>
+  <text x="274" y="564" fill="#5C6475" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="28" font-weight="500">Discover projects, collaborators, and momentum</text>
+  <defs>
+    <linearGradient id="panel" x1="88" y1="88" x2="1112" y2="542" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#EEF2FF"/>
+      <stop offset="0.52" stop-color="#F8FAFC"/>
+      <stop offset="1" stop-color="#ECFDF5"/>
+    </linearGradient>
+    <linearGradient id="accentLeft" x1="128" y1="332" x2="432" y2="434" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#5B3DF5"/>
+      <stop offset="1" stop-color="#8B5CF6"/>
+    </linearGradient>
+    <linearGradient id="accentCenter" x1="464" y1="346" x2="768" y2="434" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0F766E"/>
+      <stop offset="1" stop-color="#14B8A6"/>
+    </linearGradient>
+  </defs>
+</svg>

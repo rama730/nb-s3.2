@@ -414,6 +414,20 @@
       "when": 1774627200000,
       "tag": "0057_username_index_dedup_cleanup",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1774809600000,
+      "tag": "0058_connection_suggestions",
+      "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1775001600000,
+      "tag": "0059_messaging_reactions_reports_receipts",
+      "breakpoints": true
     }
   ]
 }

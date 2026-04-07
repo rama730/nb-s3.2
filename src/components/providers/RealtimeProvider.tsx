@@ -4,7 +4,11 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { REALTIME_SUBSCRIBE_STATES } from '@supabase/supabase-js';
 import { createClient } from '@/lib/supabase/client';
 import { useAuthContext } from '@/components/providers/AuthProvider';
-import { subscribeUserNotifications, type UserNotificationEvent } from '@/lib/realtime/subscriptions';
+import {
+    isRealtimeTerminalStatus,
+    subscribeUserNotifications,
+    type UserNotificationEvent,
+} from '@/lib/realtime/subscriptions';
 
 interface RealtimeContextType {
     isConnected: boolean;
@@ -20,6 +24,7 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
     const { user, refreshProfile } = useAuthContext();
     const [isConnected, setIsConnected] = useState(false);
     const listenersRef = useRef(new Set<(event: UserNotificationEvent) => void>());
+    const connectionTokenRef = useRef(0);
 
     const handleUserNotification = useCallback((event: UserNotificationEvent) => {
         if (event.kind === 'profile') {
@@ -48,23 +53,38 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
 
     useEffect(() => {
         if (!user) {
+            connectionTokenRef.current += 1;
             setIsConnected(false);
             return;
         }
 
         const supabase = createClient();
         const userId = user.id;
+        const connectionToken = connectionTokenRef.current + 1;
+        connectionTokenRef.current = connectionToken;
 
         const channel = subscribeUserNotifications({
             supabase,
             userId,
             onEvent: handleUserNotification,
             onStatus: (status: REALTIME_SUBSCRIBE_STATES) => {
-                setIsConnected(status === REALTIME_SUBSCRIBE_STATES.SUBSCRIBED);
+                if (connectionTokenRef.current !== connectionToken) {
+                    return;
+                }
+
+                if (status === REALTIME_SUBSCRIBE_STATES.SUBSCRIBED) {
+                    setIsConnected(true);
+                    return;
+                }
+
+                if (isRealtimeTerminalStatus(status)) {
+                    setIsConnected(false);
+                }
             },
         });
 
         return () => {
+            connectionTokenRef.current += 1;
             setIsConnected(false);
             supabase.removeChannel(channel);
         };

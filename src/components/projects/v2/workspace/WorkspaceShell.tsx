@@ -11,7 +11,7 @@ const FileExplorer = dynamic(() => import("../explorer/FileExplorer"), { ssr: fa
 import { getGitStatus } from "@/app/actions/git";
 import { findNodeByPathAny } from "@/app/actions/files";
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
-import type { FilesViewMode } from "@/stores/filesWorkspaceStore";
+import { useWorkspaceShellState } from "@/hooks/useWorkspaceShellState";
 import { filesFeatureFlags, isFilesHardeningEnabled } from "@/lib/features/files";
 import type { FilesWorkspaceTabState, PaneId } from "../state/filesTabTypes";
 import WorkspaceSyncOverlay from "./WorkspaceSyncOverlay";
@@ -36,27 +36,18 @@ import { useCursorPresence } from "./useCursorPresence";
 import { useWorkspacePane } from "./useWorkspacePane";
 import { StatusBar } from "./StatusBar";
 import { KeyboardShortcuts } from "./KeyboardShortcuts";
+import { useAuth } from "@/lib/hooks/use-auth";
+import type { Problem } from "@/stores/files/types";
 
 const EMPTY_ARRAY: string[] = [];
-const DEFAULT_PANES = {
-  left: { openTabIds: [], activeTabId: null },
-  right: { openTabIds: [], activeTabId: null },
-};
-const DEFAULT_PREFS = {
-  lineNumbers: true,
-  wordWrap: false,
-  fontSize: 14,
-  minimap: true,
-  autosaveDelayMs: 2500,
-  inactiveAutosaveConcurrency: 2,
-};
-const DEFAULT_PINNED: Record<string, boolean> = {};
+const EMPTY_PROBLEMS: Problem[] = [];
 
 interface ProjectFilesWorkspaceProps {
   projectId: string;
   projectName?: string;
   currentUserId?: string;
   isOwnerOrMember: boolean;
+  isActive?: boolean;
   syncStatus?: "pending" | "cloning" | "indexing" | "ready" | "failed";
   importSourceType?: "github" | "upload" | "scratch" | null;
   initialOpenPath?: string | null;
@@ -69,6 +60,7 @@ export default function WorkspaceShell({
   projectName,
   currentUserId,
   isOwnerOrMember,
+  isActive = true,
   initialFileNodes,
   syncStatus: initialSyncStatus = "ready",
   importSourceType,
@@ -79,7 +71,14 @@ export default function WorkspaceShell({
   const canEdit = isOwnerOrMember;
   const filesHardeningEnabled = isFilesHardeningEnabled(currentUserId ?? null);
   const { showToast } = useToast();
+  const { profile } = useAuth();
   const searchParams = useSearchParams();
+  const currentUserDisplayName = useMemo(() => {
+    const fullName = profile?.fullName?.trim();
+    if (fullName) return fullName;
+    const username = profile?.username?.trim();
+    return username || null;
+  }, [profile?.fullName, profile?.username]);
 
   // Sync state (received from WorkspaceSyncOverlay via callback)
   const [syncState, setSyncState] = useState(initialSyncStatus);
@@ -109,37 +108,45 @@ export default function WorkspaceShell({
     };
   }, [filesHardeningEnabled, projectId]);
 
-  // Store selectors
-  const leftOpenTabIds = useFilesWorkspaceStore(
-    (s) => s.byProjectId[projectId]?.panes.left.openTabIds || EMPTY_ARRAY
-  );
-  const rightOpenTabIds = useFilesWorkspaceStore(
-    (s) => s.byProjectId[projectId]?.panes.right.openTabIds || EMPTY_ARRAY
-  );
-  const leftActiveTabId = useFilesWorkspaceStore(
-    (s) => s.byProjectId[projectId]?.panes.left.activeTabId
-  );
-  const rightActiveTabId = useFilesWorkspaceStore(
-    (s) => s.byProjectId[projectId]?.panes.right.activeTabId
-  );
-  const splitEnabled = useFilesWorkspaceStore(
-    (s) => s.byProjectId[projectId]?.splitEnabled
-  );
-  const splitRatio = useFilesWorkspaceStore(
-    (s) => s.byProjectId[projectId]?.splitRatio ?? 0.5
-  );
-  const viewMode = useFilesWorkspaceStore(
-    (s) => (s.byProjectId[projectId]?.viewMode as FilesViewMode) || "code"
-  );
-  const panes = useFilesWorkspaceStore(
-    (s) => s.byProjectId[projectId]?.panes || DEFAULT_PANES
-  );
-  const prefs = useFilesWorkspaceStore(
-    (s) => s.byProjectId[projectId]?.prefs || DEFAULT_PREFS
-  );
-  const pinnedByTabId = useFilesWorkspaceStore(
-    (s) => s.byProjectId[projectId]?.pinnedByTabId || DEFAULT_PINNED
-  );
+  // Store selectors — bundled into a single useShallow subscription
+  const {
+    leftOpenTabIds,
+    rightOpenTabIds,
+    leftActiveTabId,
+    rightActiveTabId,
+    splitEnabled,
+    splitRatio,
+    viewMode,
+    panes,
+    prefs,
+    pinnedByTabId,
+    bottomPanelCollapsed,
+    sidebarWidth,
+    sidebarCollapsed,
+    zenMode,
+    gitChangedFiles,
+    selectedNodeId,
+    galleryChildIds,
+    pinTab,
+    closeOtherTabs,
+    closeTabsToRight,
+    setSplitEnabled,
+    setSplitRatio,
+    setPrefs,
+    setViewMode,
+    setSelectedNode,
+    requestScrollTo,
+    toggleExpanded,
+    removeNodeFromCaches,
+    setFileState,
+    toggleBottomPanel,
+    setBottomPanelTab,
+    setLastExecutionOutput,
+    setLastExecutionSettingsHref,
+    setSidebarWidth,
+    toggleSidebar,
+    toggleZenMode,
+  } = useWorkspaceShellState(projectId);
 
   const activeTabIdByPane = useMemo<Record<PaneId, string | null>>(
     () => ({
@@ -148,52 +155,6 @@ export default function WorkspaceShell({
     }),
     [leftActiveTabId, rightActiveTabId]
   );
-
-  const pinTab = useFilesWorkspaceStore((s) => s.pinTab);
-  const closeOtherTabs = useFilesWorkspaceStore((s) => s.closeOtherTabs);
-  const closeTabsToRight = useFilesWorkspaceStore((s) => s.closeTabsToRight);
-  const setSplitEnabled = useFilesWorkspaceStore((s) => s.setSplitEnabled);
-  const setSplitRatio = useFilesWorkspaceStore((s) => s.setSplitRatio);
-  const setPrefs = useFilesWorkspaceStore((s) => s.setPrefs);
-  const setViewMode = useFilesWorkspaceStore((s) => s.setViewMode);
-  const setSelectedNode = useFilesWorkspaceStore((s) => s.setSelectedNode);
-  const requestScrollTo = useFilesWorkspaceStore((s) => s.requestScrollTo);
-  const toggleExpanded = useFilesWorkspaceStore((s) => s.toggleExpanded);
-  const removeNodeFromCaches = useFilesWorkspaceStore((s) => s.removeNodeFromCaches);
-  const setFileState = useFilesWorkspaceStore((s) => s.setFileState);
-  const bottomPanelCollapsed = useFilesWorkspaceStore(
-    (s) => s.byProjectId[projectId]?.ui?.bottomPanelCollapsed ?? true
-  );
-  const sidebarWidth = useFilesWorkspaceStore(
-    (s) => s.byProjectId[projectId]?.ui?.sidebarWidth ?? 290
-  );
-  const sidebarCollapsed = useFilesWorkspaceStore(
-    (s) => s.byProjectId[projectId]?.ui?.sidebarCollapsed ?? false
-  );
-  const zenMode = useFilesWorkspaceStore(
-    (s) => s.byProjectId[projectId]?.ui?.zenMode ?? false
-  );
-  const gitChangedFiles = useFilesWorkspaceStore(
-    (s) => s.byProjectId[projectId]?.git?.changedFiles || EMPTY_ARRAY
-  );
-  const toggleBottomPanel = useFilesWorkspaceStore((s) => s.toggleBottomPanel);
-  const setBottomPanelTab = useFilesWorkspaceStore((s) => s.setBottomPanelTab);
-  const setLastExecutionOutput = useFilesWorkspaceStore((s) => s.setLastExecutionOutput);
-  const setLastExecutionSettingsHref = useFilesWorkspaceStore((s) => s.setLastExecutionSettingsHref);
-  const setSidebarWidth = useFilesWorkspaceStore((s) => s.setSidebarWidth);
-  const toggleSidebar = useFilesWorkspaceStore((s) => s.toggleSidebar);
-  const toggleZenMode = useFilesWorkspaceStore((s) => s.toggleZenMode);
-  const selectedNodeId = useFilesWorkspaceStore(
-    (s) => s.byProjectId[projectId]?.selectedNodeId ?? null
-  );
-  const galleryChildIds = useFilesWorkspaceStore((s) => {
-    const ws = s.byProjectId[projectId];
-    if (!ws) return EMPTY_ARRAY;
-    const pk = selectedNodeId && ws.nodesById[selectedNodeId]?.type === "folder"
-      ? selectedNodeId
-      : "__root__";
-    return ws.childrenByParentId[pk] ?? EMPTY_ARRAY;
-  });
 
   // Pane layout
   const {
@@ -236,7 +197,7 @@ export default function WorkspaceShell({
   const { remoteCursors, broadcastCursor } = useCursorPresence({
     projectId,
     currentUserId: currentUserId ?? "",
-    enabled: !!currentUserId,
+    enabled: !!currentUserId && isActive,
     canBroadcast: canEdit,
   });
 
@@ -244,6 +205,8 @@ export default function WorkspaceShell({
   const { acquireLockForNode, nextLockAttemptAtRef } = useLockManager({
     projectId,
     currentUserId,
+    currentUserDisplayName,
+    isActive,
     canEdit,
     panesToRender,
     activeTabIdByPane,
@@ -294,6 +257,7 @@ export default function WorkspaceShell({
   } = useTabManager({
     projectId,
     currentUserId,
+    isActive,
     canEdit,
     viewMode,
     activePane,
@@ -329,7 +293,7 @@ export default function WorkspaceShell({
     return undefined;
   }, [activeTabIdByPane, activePane, nodePathById]);
 
-  const problems = useFilesWorkspaceStore((s) => s._get(projectId).ui.problems ?? []);
+  const problems = useFilesWorkspaceStore((s) => s._get(projectId).ui.problems ?? EMPTY_PROBLEMS);
   const setProblems = useFilesWorkspaceStore((s) => s.setProblems);
   const setStdinInputText = useFilesWorkspaceStore((s) => s.setStdinInputText);
 
@@ -388,6 +352,7 @@ export default function WorkspaceShell({
   useWorkspaceLifecycle({
     projectId,
     canEdit,
+    isActive,
     initialFileNodes,
     showToast,
     ensureNodeMetadata,
@@ -397,6 +362,7 @@ export default function WorkspaceShell({
   const deepLinkHandledRef = useRef<string | null>(null);
   const deepLinkRequestIdRef = useRef(0);
   useEffect(() => {
+    if (!isActive) return;
     const pathFromQuery = initialOpenPath ?? searchParams?.get("path") ?? null;
     if (!pathFromQuery) return;
 
@@ -448,6 +414,7 @@ export default function WorkspaceShell({
     initialOpenPath,
     initialOpenLine,
     initialOpenColumn,
+    isActive,
     openFileInPane,
     projectId,
     requestScrollTo,
@@ -459,11 +426,12 @@ export default function WorkspaceShell({
   // Autosave
   useAutoSave({
     projectId,
-    canEdit: canEdit && shouldMountEditor,
+    canEdit: canEdit && shouldMountEditor && isActive,
     panesToRender,
     activeTabIdByPane,
     tabByIdRef,
     saveTab,
+    showToast,
     autosaveDelayMs: prefs.autosaveDelayMs,
     backgroundConcurrency: prefs.inactiveAutosaveConcurrency,
     leftActiveTab,
@@ -475,7 +443,7 @@ export default function WorkspaceShell({
   // Lint on edit (debounced 500ms)
   useLintOnEdit({
     projectId,
-    canEdit: canEdit && shouldMountDiagnostics,
+    canEdit: canEdit && shouldMountDiagnostics && isActive,
     panesToRender,
     activeTabIdByPane,
     tabByIdRef,
@@ -610,6 +578,7 @@ export default function WorkspaceShell({
 
   useEffect(() => {
     if (
+      !isActive ||
       !shouldMountDiagnostics ||
       !filesFeatureFlags.wave4GitIntegration ||
       gitBootstrapRef.current.has(projectId)
@@ -648,6 +617,7 @@ export default function WorkspaceShell({
     };
   }, [
     shouldMountDiagnostics,
+    isActive,
     projectId,
     setGitRepo,
     setGitChangedFiles,
@@ -768,7 +738,7 @@ export default function WorkspaceShell({
       {/* Explorer — resizable + collapsible */}
       <div
         className={cn(
-          "flex-shrink-0 border-r border-zinc-200 dark:border-zinc-800 flex flex-col h-full bg-zinc-50/50 dark:bg-zinc-900/50 relative z-10 transition-all duration-300 ease-in-out overflow-hidden",
+          "flex-shrink-0 border-r border-zinc-200 dark:border-zinc-800 flex flex-col h-full bg-zinc-50/50 dark:bg-zinc-900/50 relative z-10 overflow-hidden",
           (sidebarCollapsed || zenMode) ? "w-0 opacity-0 border-none" : "opacity-100"
         )}
         style={{ width: (sidebarCollapsed || zenMode) ? 0 : sidebarWidth }}
@@ -777,6 +747,7 @@ export default function WorkspaceShell({
           projectId={projectId}
           projectName={projectName}
           canEdit={canEdit}
+          isActive={isActive}
           viewMode={viewMode}
           onOpenFile={(node) => void openFileInPane(node)}
           onNodeDeleted={(nodeId) => removeNodeFromCaches(projectId, nodeId)}
@@ -824,13 +795,14 @@ export default function WorkspaceShell({
         )}
 
         <div className={cn(
-          "flex-1 flex flex-col min-h-0 bg-white dark:bg-zinc-950 transition-all duration-500 ease-in-out relative z-10",
+          "flex-1 flex flex-col min-h-0 bg-white dark:bg-zinc-950 relative z-10",
           zenMode ? "m-0 rounded-none shadow-none" : ""
         )}>
 
         {shouldMountEditor ? (
           <WorkspacePaneHost
             projectId={projectId}
+            isActive={isActive}
             canEdit={canEdit}
             splitEnabled={splitEnabled}
             splitRatio={splitRatio}
@@ -985,6 +957,7 @@ export default function WorkspaceShell({
         initialSyncStatus={initialSyncStatus}
         importSourceType={importSourceType}
         canEdit={canEdit}
+        isActive={isActive}
         onSyncStateChange={setSyncState}
       />
     </div>

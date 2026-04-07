@@ -69,6 +69,14 @@ npm run check:stability-release -- --target=staging
 Dedicated runtime commands:
 
 ```bash
+npm run dev
+```
+
+`npm run dev` now starts both the Next.js app and the dedicated local presence service so typing indicators and cursor presence work in local development.
+
+Dedicated runtime commands:
+
+```bash
 npm run presence:dev
 npm run run:load-suite -- --base-url=http://127.0.0.1:3000 --auth-cookie="sb-access-token=...; sb-refresh-token=..."
 ```

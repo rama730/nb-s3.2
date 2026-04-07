@@ -5,7 +5,6 @@ import { WebSocketServer, WebSocket } from "ws";
 import { z } from "zod";
 
 import { recordOtlpMetric } from "../../../src/lib/telemetry/otlp";
-import { getRedisClient } from "../../../src/lib/redis";
 import { verifyPresenceToken, type PresenceTokenClaims } from "../../../src/lib/realtime/presence-token";
 import type {
   PresenceClientEvent,
@@ -14,6 +13,7 @@ import type {
   PresenceRoomType,
   PresenceServerEvent,
 } from "../../../src/lib/realtime/presence-types";
+import { createPresenceStore, type PresenceStore, type PresenceSubscriber } from "./store";
 
 const PRESENCE_SERVICE_PORT = Number(process.env.PRESENCE_SERVICE_PORT || 4010);
 const PRESENCE_TTL_SECONDS = 45;
@@ -33,11 +33,6 @@ const typingEventSchema = z.object({
   profile: presenceMemberProfileSchema.nullable().optional(),
 });
 
-type Subscriber<TMessage = unknown> = {
-  on: (type: "message" | "error", listener: (event: any) => void) => void;
-  unsubscribe: (channels?: string[]) => Promise<void>;
-};
-
 type RoomKeys = {
   roomKey: string;
   memberHashKey: string;
@@ -54,15 +49,17 @@ type RoomConnectionContext = {
 type LocalRoom = {
   roomKeys: RoomKeys;
   sockets: Set<WebSocket>;
-  subscriber: Subscriber<PresenceServerEvent> | null;
+  subscriber: PresenceSubscriber<PresenceServerEvent> | null;
   lastShatterCheck: number;
 };
 
-const redisClient = getRedisClient();
-if (!redisClient) {
-  throw new Error("Upstash Redis is required for the dedicated presence service");
-}
-const redis = redisClient;
+type PublishedPresenceServerEvent = PresenceServerEvent & {
+  originServerId?: string;
+};
+
+const presenceStore = createPresenceStore();
+const redis: PresenceStore = presenceStore.store;
+const presenceServerInstanceId = randomUUID();
 
 const rooms = new Map<string, LocalRoom>();
 const socketContexts = new WeakMap<WebSocket, RoomConnectionContext>();
@@ -145,8 +142,18 @@ function broadcastRoom(room: LocalRoom, event: PresenceServerEvent) {
   }
 }
 
+function broadcastRoomLocally(roomKeys: RoomKeys, event: PresenceServerEvent) {
+  const room = rooms.get(roomKeys.roomKey);
+  if (!room) return;
+  broadcastRoom(room, event);
+}
+
 async function publishPresenceEvent(roomKeys: RoomKeys, event: PresenceServerEvent) {
-  await redis.publish(roomKeys.channelKey, JSON.stringify(event));
+  const publishedEvent: PublishedPresenceServerEvent = {
+    ...event,
+    originServerId: presenceServerInstanceId,
+  };
+  await redis.publish(roomKeys.channelKey, JSON.stringify(publishedEvent));
 }
 
 async function ensureRoom(roomKeys: RoomKeys) {
@@ -161,16 +168,17 @@ async function ensureRoom(roomKeys: RoomKeys) {
   };
   rooms.set(roomKeys.roomKey, room);
 
-  const subscriber = (redis as unknown as {
-    subscribe: <TMessage>(channel: string | string[]) => Subscriber<TMessage>;
-  }).subscribe<PresenceServerEvent>(roomKeys.channelKey);
+  const subscriber = redis.subscribe<PresenceServerEvent>(roomKeys.channelKey);
   room.subscriber = subscriber;
-  subscriber.on("message", (event: { message?: PresenceServerEvent | string }) => {
+  subscriber.on("message", (event: { message?: PublishedPresenceServerEvent | string }) => {
     try {
       const payload = typeof event.message === "string"
-        ? JSON.parse(event.message) as PresenceServerEvent
+        ? JSON.parse(event.message) as PublishedPresenceServerEvent
         : event.message;
       if (!payload) return;
+      if (payload.originServerId === presenceServerInstanceId) {
+        return;
+      }
       broadcastRoom(room, payload);
     } catch (error) {
       console.warn("[presence] room subscriber message parse failed", {
@@ -288,6 +296,7 @@ async function handlePresenceEvent(socket: WebSocket, event: PresenceClientEvent
         roomId: context.claims.roomId,
         member: context.state,
       };
+      broadcastRoomLocally(context.roomKeys, delta);
       await publishPresenceEvent(context.roomKeys, delta);
       sendJson(socket, buildAck(context, "cursor"));
       emitMetric("presence.room.cursor", {
@@ -317,6 +326,7 @@ async function handlePresenceEvent(socket: WebSocket, event: PresenceClientEvent
         roomId: context.claims.roomId,
         member: context.state,
       };
+      broadcastRoomLocally(context.roomKeys, delta);
       await publishPresenceEvent(context.roomKeys, delta);
       sendJson(socket, buildAck(context, "typing"));
       emitMetric("presence.room.typing", {
@@ -365,13 +375,15 @@ async function initializePresenceConnection(websocket: WebSocket, claims: Presen
       members: snapshotMembers,
     });
 
-    await publishPresenceEvent(roomKeys, {
+    const joinDelta: PresenceServerEvent = {
       type: "presence.delta",
       action: "upsert",
       roomType: claims.roomType,
       roomId: claims.roomId,
       member: state,
-    });
+    };
+    broadcastRoomLocally(roomKeys, joinDelta);
+    await publishPresenceEvent(roomKeys, joinDelta);
 
     emitMetric("presence.room.join", {
       roomType: claims.roomType,
@@ -421,13 +433,15 @@ async function initializePresenceConnection(websocket: WebSocket, claims: Presen
         }
 
         await removeMemberState(closedContext);
-        await publishPresenceEvent(roomKeys, {
+        const leaveDelta: PresenceServerEvent = {
           type: "presence.delta",
           action: "leave",
           roomType: closedContext.claims.roomType,
           roomId: closedContext.claims.roomId,
           member: closedContext.state,
-        }).catch(() => null);
+        };
+        broadcastRoomLocally(roomKeys, leaveDelta);
+        await publishPresenceEvent(roomKeys, leaveDelta).catch(() => null);
 
         emitMetric("presence.room.leave", {
           roomType: closedContext.claims.roomType,
@@ -522,5 +536,5 @@ server.on("upgrade", async (request, socket, head) => {
 });
 
 server.listen(PRESENCE_SERVICE_PORT, () => {
-  console.info(`[presence] listening on :${PRESENCE_SERVICE_PORT}`);
+  console.info(`[presence] listening on :${PRESENCE_SERVICE_PORT} (${presenceStore.mode})`);
 });

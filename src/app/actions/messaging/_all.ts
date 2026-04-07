@@ -16,7 +16,6 @@ import {
 } from '@/lib/db/schema';
 import { createClient, createAdminClient } from '@/lib/supabase/server';
 import { eq, and, desc, lt, gt, ne, isNull, inArray, sql, or } from 'drizzle-orm';
-import { revalidatePath } from 'next/cache';
 import { consumeRateLimit } from '@/lib/security/rate-limit';
 import { runInFlightDeduped } from '@/lib/async/inflight-dedupe';
 import { resolvePrivacyRelationship } from '@/lib/privacy/resolver';
@@ -146,7 +145,6 @@ async function isDirectMessagingAllowed(viewerId: string, otherUserId: string): 
     return { allowed: false, error: 'You can only message your connections' };
 }
 
-const MAX_MESSAGES_PER_MINUTE = 120;
 const ATTACHMENTS_BUCKET = 'chat-attachments';
 const ATTACHMENT_SIGNED_URL_TTL_SECONDS = 60 * 15;
 const MESSAGE_EDIT_WINDOW_MINUTES = 15;
@@ -240,25 +238,6 @@ function withDeliveryMetadata(
         ...(metadata || {}),
         deliveryState: state,
     };
-}
-
-async function validateSendRateLimit(senderId: string): Promise<{ allowed: boolean; error?: string }> {
-    const oneMinuteAgo = new Date(Date.now() - 60_000);
-    const sentRecently = await db
-        .select({ count: sql<number>`count(*)` })
-        .from(messages)
-        .where(
-            and(
-                eq(messages.senderId, senderId),
-                gt(messages.createdAt, oneMinuteAgo)
-            )
-        );
-
-    const count = Number(sentRecently[0]?.count || 0);
-    if (count >= MAX_MESSAGES_PER_MINUTE) {
-        return { allowed: false, error: 'Rate limit exceeded. Please slow down and try again.' };
-    }
-    return { allowed: true };
 }
 
 async function findExistingMessageByClientKey(
@@ -550,22 +529,29 @@ async function normalizeUploadedAttachmentsForCommit(
         return { error: 'One or more attachments are missing storage references. Please re-upload and try again.' };
     }
 
-    const paths = normalizedWithPath.map((item) => item.storagePath!) as string[];
-    const signedByPath = await resolveSignedAttachmentUrls(paths);
+    const missingSignedPaths = normalizedWithPath
+        .filter((item) => !item.attachment.url)
+        .map((item) => item.storagePath!) as string[];
+    const signedByPath = missingSignedPaths.length > 0
+        ? await resolveSignedAttachmentUrls(missingSignedPaths)
+        : new Map<string, string>();
 
-    if (signedByPath.size !== paths.length) {
+    if (signedByPath.size !== missingSignedPaths.length) {
         return { error: 'Some attachments are not ready yet. Please retry in a moment.' };
     }
 
     return {
         attachments: normalizedWithPath.map(({ attachment, storagePath }) => {
-            const signedUrl = signedByPath.get(storagePath!)!;
+            const signedUrl = attachment.url || signedByPath.get(storagePath!) || null;
+            if (!signedUrl) {
+                throw new Error('Attachment URL missing during commit normalization');
+            }
             return {
                 ...attachment,
                 storagePath: storagePath!,
                 signedUrl,
                 thumbnailUrl: attachment.type === 'image'
-                    ? buildImageThumbnailUrl(signedUrl)
+                    ? (attachment.thumbnailUrl || buildImageThumbnailUrl(signedUrl))
                     : (attachment.thumbnailUrl || null),
             };
         }),
@@ -623,7 +609,7 @@ async function validateAttachmentOwnershipForConversation(
         if (row.status !== 'uploaded' && row.status !== 'committed') {
             return { ok: false, error: 'Some attachments are not ready yet. Please retry in a moment.' };
         }
-        if (row.conversationId && row.conversationId !== conversationId) {
+        if (row.conversationId !== null && row.conversationId !== conversationId) {
             return { ok: false, error: 'Attachment conversation mismatch detected.' };
         }
     }
@@ -1493,11 +1479,6 @@ export async function sendMessage(
             replyToMessageId
         );
 
-        const rateLimit = await validateSendRateLimit(user.id);
-        if (!rateLimit.allowed) {
-            return { success: false, error: rateLimit.error };
-        }
-
         const existing = await findExistingMessageByClientKey(conversationId, user.id, clientMessageId);
         if (existing) {
             const [senderProfile] = await db
@@ -1573,8 +1554,6 @@ export async function sendMessage(
 
             return { newMessage: msg, senderProfile: profile };
         });
-
-        revalidatePath('/messages');
 
         return {
             success: true,
@@ -1771,7 +1750,6 @@ export async function setConversationArchived(
             return { success: false, error: 'Conversation not found' };
         }
 
-        revalidatePath('/messages');
         return { success: true };
     } catch (error) {
         console.error('Error updating archive state:', error);
@@ -1802,7 +1780,6 @@ export async function setConversationMuted(
             return { success: false, error: 'Conversation not found' };
         }
 
-        revalidatePath('/messages');
         return { success: true };
     } catch (error) {
         console.error('Error updating mute state:', error);
@@ -2150,8 +2127,7 @@ export async function editMessage(
                 .where(eq(messages.id, messageRow.id));
         });
 
-        revalidatePath('/messages');
-        return { success: true };
+            return { success: true };
     } catch (error) {
         console.error('Error editing message:', error);
         return { success: false, error: 'Failed to edit message' };
@@ -2208,7 +2184,6 @@ export async function deleteMessage(
                     target: [messageHiddenForUsers.messageId, messageHiddenForUsers.userId],
                 });
 
-            revalidatePath('/messages');
             return { success: true };
         }
 
@@ -2233,7 +2208,6 @@ export async function deleteMessage(
             })
             .where(eq(messages.id, messageRow.id));
 
-        revalidatePath('/messages');
         return { success: true };
     } catch (error) {
         console.error('Error deleting message:', error);
@@ -2430,7 +2404,6 @@ export async function setMessagePinned(
             .set({ metadata: nextMetadata })
             .where(eq(messages.id, messageRow.id));
 
-        revalidatePath('/messages');
         return { success: true };
     } catch (error) {
         console.error('Error setting message pin state:', error);
@@ -2827,11 +2800,6 @@ export async function sendMessageWithAttachments(
             replyToMessageId
         );
 
-        const rateLimit = await validateSendRateLimit(user.id);
-        if (!rateLimit.allowed) {
-            return { success: false, error: rateLimit.error };
-        }
-
         const existing = await findExistingMessageByClientKey(conversationId, user.id, clientMessageId);
         if (existing) {
             const [senderProfile] = await db
@@ -2964,10 +2932,26 @@ export async function sendMessageWithAttachments(
             return { newMessage: msg, senderProfile: profile, persistedAttachments: insertedAttachments };
         });
 
-        revalidatePath('/messages');
-        const hydratedAttachments = await hydrateAttachmentUrls(
-            persistedAttachments as AttachmentRowForResolution[]
+        const committedAttachmentsByPath = new Map(
+            committedAttachments.map((attachment) => [attachment.storagePath, attachment] as const),
         );
+        const responseAttachments = persistedAttachments.map((attachment) => {
+            const committed = attachment.storagePath
+                ? committedAttachmentsByPath.get(attachment.storagePath)
+                : null;
+
+            return {
+                id: attachment.id,
+                type: attachment.type as 'image' | 'video' | 'file',
+                url: committed?.signedUrl || attachment.url,
+                filename: attachment.filename,
+                sizeBytes: attachment.sizeBytes,
+                mimeType: attachment.mimeType,
+                thumbnailUrl: committed?.thumbnailUrl || attachment.thumbnailUrl,
+                width: attachment.width,
+                height: attachment.height,
+            };
+        });
 
         return {
             success: true,
@@ -2984,7 +2968,7 @@ export async function sendMessageWithAttachments(
                 editedAt: newMessage.editedAt,
                 deletedAt: newMessage.deletedAt,
                 sender: senderProfile || null,
-                attachments: hydratedAttachments,
+                attachments: responseAttachments,
             },
         };
     } catch (error) {

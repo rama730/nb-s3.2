@@ -3,10 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --webpack",
+    "dev": "tsx scripts/dev.ts",
+    "dev:web": "next dev --webpack",
     "dev:lan": "next dev -H 0.0.0.0 --webpack",
     "presence:dev": "tsx services/presence/src/server.ts",
     "build": "next build",
+    "analyze:bundle": "ANALYZE=true next build --webpack",
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
@@ -24,6 +26,7 @@
     "db:push": "drizzle-kit push",
     "check:onboarding:slo": "tsx scripts/check-onboarding-slo.ts",
     "check:scroll-contract": "tsx scripts/check-scroll-contract.ts",
+    "check:head-contract": "tsx scripts/check-head-contract.ts",
     "check:query-key-contract": "tsx scripts/check-query-key-contract.ts",
     "check:theme-contract": "tsx scripts/check-theme-contract.ts",
     "check:appearance-contract": "tsx scripts/check-appearance-contract.ts",
@@ -86,7 +89,6 @@
     "@uiw/react-codemirror": "^4.25.4",
     "@upstash/redis": "^1.36.1",
     "@vercel/analytics": "^1.6.1",
-    "buffer": "^6.0.3",
     "canvas-confetti": "^1.9.4",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -120,6 +122,7 @@
     "zustand": "^5.0.10"
   },
   "devDependencies": {
+    "@next/bundle-analyzer": "^16.2.1",
     "@playwright/test": "^1.58.2",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",

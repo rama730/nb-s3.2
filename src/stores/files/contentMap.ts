@@ -60,3 +60,104 @@ export function clearProjectContent(projectId: string): void {
 export function contentMapSize(): number {
     return _contentMap.size;
 }
+
+// ---------------------------------------------------------------------------
+// FW4: Dirty content crash insurance via IndexedDB
+// Persists unsaved content so it survives browser crashes / tab kills.
+// ---------------------------------------------------------------------------
+
+const DIRTY_IDB_PREFIX = 'nb-s3-dirty-';
+
+async function openDirtyDb(): Promise<IDBDatabase> {
+    return new Promise((resolve, reject) => {
+        const request = indexedDB.open('nb-s3-dirty-content', 1);
+        request.onupgradeneeded = () => {
+            const db = request.result;
+            if (!db.objectStoreNames.contains('dirty')) {
+                db.createObjectStore('dirty');
+            }
+        };
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+    });
+}
+
+/** Persist dirty content to IndexedDB for crash recovery. */
+export async function persistDirtyContent(
+    projectId: string,
+    nodeId: string,
+    content: string,
+): Promise<void> {
+    try {
+        const db = await openDirtyDb();
+        const tx = db.transaction('dirty', 'readwrite');
+        tx.objectStore('dirty').put(
+            { content, savedAt: Date.now() },
+            `${DIRTY_IDB_PREFIX}${projectId}::${nodeId}`,
+        );
+        await new Promise<void>((resolve, reject) => {
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+        });
+        db.close();
+    } catch {
+        // Best-effort — don't block main flow
+    }
+}
+
+/** Remove dirty content from IDB after successful save. */
+export async function clearDirtyContent(
+    projectId: string,
+    nodeId: string,
+): Promise<void> {
+    try {
+        const db = await openDirtyDb();
+        const tx = db.transaction('dirty', 'readwrite');
+        tx.objectStore('dirty').delete(`${DIRTY_IDB_PREFIX}${projectId}::${nodeId}`);
+        await new Promise<void>((resolve, reject) => {
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+        });
+        db.close();
+    } catch {
+        // Best-effort
+    }
+}
+
+/** Recover all dirty content entries for a project. */
+export async function recoverDirtyContent(
+    projectId: string,
+): Promise<Array<{ nodeId: string; content: string; savedAt: number }>> {
+    try {
+        const db = await openDirtyDb();
+        const tx = db.transaction('dirty', 'readonly');
+        const store = tx.objectStore('dirty');
+        const prefix = `${DIRTY_IDB_PREFIX}${projectId}::`;
+
+        return new Promise((resolve, reject) => {
+            const results: Array<{ nodeId: string; content: string; savedAt: number }> = [];
+            const request = store.openCursor();
+            request.onsuccess = () => {
+                const cursor = request.result;
+                if (!cursor) {
+                    db.close();
+                    resolve(results);
+                    return;
+                }
+                const key = cursor.key as string;
+                if (key.startsWith(prefix)) {
+                    const nodeId = key.slice(prefix.length);
+                    const value = cursor.value as { content: string; savedAt: number };
+                    results.push({ nodeId, content: value.content, savedAt: value.savedAt });
+                }
+                cursor.continue();
+            };
+            request.onerror = () => {
+                db.close();
+                reject(request.error);
+            };
+        });
+    } catch {
+        return [];
+    }
+}

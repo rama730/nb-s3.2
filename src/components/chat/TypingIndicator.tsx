@@ -1,8 +1,12 @@
 'use client';
 
+import { getTypingStatusText } from '@/lib/chat/typing-display';
+import { cn } from '@/lib/utils';
+
 // ============================================================================
 // TYPING INDICATOR
-// Shows animated dots when someone is typing
+// WhatsApp-style animated dots with name label
+// Supports two variants: 'chat' (thread footer) and 'inline' (conversation list)
 // ============================================================================
 
 interface TypingUser {
@@ -12,32 +16,61 @@ interface TypingUser {
 }
 
 interface TypingIndicatorProps {
-    users: TypingUser[];
+    users: ReadonlyArray<TypingUser>;
+    variant?: 'chat' | 'inline';
+    className?: string;
 }
 
-export function TypingIndicator({ users }: TypingIndicatorProps) {
+const DOT_STYLE_BASE = 'inline-block rounded-full';
+
+function TypingDots({ size = 'md' }: { size?: 'sm' | 'md' }) {
+    const dotSize = size === 'sm' ? 'w-[5px] h-[5px]' : 'w-1.5 h-1.5';
+    const gap = size === 'sm' ? 'gap-[3px]' : 'gap-1.5';
+    return (
+        <span className={cn('inline-flex items-center', gap)} aria-hidden="true">
+            <span
+                className={cn(DOT_STYLE_BASE, dotSize, 'bg-zinc-400 dark:bg-zinc-500')}
+                style={{ animation: 'typing-dot 1.4s ease-in-out infinite', animationDelay: '0ms' }}
+            />
+            <span
+                className={cn(DOT_STYLE_BASE, dotSize, 'bg-zinc-400 dark:bg-zinc-500')}
+                style={{ animation: 'typing-dot 1.4s ease-in-out infinite', animationDelay: '200ms' }}
+            />
+            <span
+                className={cn(DOT_STYLE_BASE, dotSize, 'bg-zinc-400 dark:bg-zinc-500')}
+                style={{ animation: 'typing-dot 1.4s ease-in-out infinite', animationDelay: '400ms' }}
+            />
+        </span>
+    );
+}
+
+export function TypingIndicator({ users, variant = 'chat', className }: TypingIndicatorProps) {
     if (users.length === 0) return null;
 
-    const displayName = users[0].fullName || users[0].username || 'Someone';
-    const text = users.length === 1
-        ? `${displayName} is typing`
-        : users.length === 2
-            ? `${displayName} and ${users[1].fullName || users[1].username} are typing`
-            : `${displayName} and ${users.length - 1} others are typing`;
+    const text = getTypingStatusText(users);
+
+    if (variant === 'inline') {
+        return (
+            <span className={cn('inline-flex items-center gap-1.5 text-primary/70', className)}>
+                <TypingDots size="sm" />
+                <span className="truncate text-[12px] font-medium italic leading-5">
+                    {text}
+                </span>
+            </span>
+        );
+    }
 
     return (
-        <div className="flex items-end gap-2 mb-2 animate-in fade-in slide-in-from-bottom-1 duration-200 pl-4">
-            {/* Avatar Placeholder for alignment with messages */}
-            {/* <div className="w-8 shrink-0" /> */}
-            
+        <div className={cn(
+            'mb-2 flex items-end gap-2 pl-4 animate-in fade-in slide-in-from-bottom-1 duration-200',
+            className,
+        )}>
             <div className="flex flex-col gap-1">
-                <div className="flex items-center gap-1.5 px-3 py-2 bg-zinc-100 dark:bg-zinc-800/80 rounded-2xl rounded-bl-sm w-fit border border-zinc-200 dark:border-zinc-700/50">
-                    <span className="w-1.5 h-1.5 bg-zinc-400 dark:bg-zinc-500 rounded-full animate-bounce [animation-duration:600ms]" style={{ animationDelay: '0ms' }} />
-                    <span className="w-1.5 h-1.5 bg-zinc-400 dark:bg-zinc-500 rounded-full animate-bounce [animation-duration:600ms]" style={{ animationDelay: '150ms' }} />
-                    <span className="w-1.5 h-1.5 bg-zinc-400 dark:bg-zinc-500 rounded-full animate-bounce [animation-duration:600ms]" style={{ animationDelay: '300ms' }} />
+                <div className="flex items-center gap-1.5 rounded-2xl rounded-bl-sm border border-zinc-200 bg-zinc-100 px-3 py-2 dark:border-zinc-700/50 dark:bg-zinc-800/80">
+                    <TypingDots size="md" />
                 </div>
-                {users.length > 1 && (
-                     <span className="text-[10px] font-medium text-zinc-400 ml-1">
+                {text && (
+                    <span className="ml-1 text-[10px] font-medium text-zinc-400">
                         {text}
                     </span>
                 )}

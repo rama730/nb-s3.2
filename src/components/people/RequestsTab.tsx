@@ -1,5 +1,9 @@
-import { useEffect, useMemo, useState, useCallback } from "react";
-import { Loader2, UserPlus, X, Clock, CheckCheck, Briefcase, ChevronDown, ChevronRight } from "lucide-react";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import {
+    Loader2, UserPlus, X, Clock, CheckCheck, Briefcase,
+    ChevronDown, ChevronRight, Inbox, History, UserMinus,
+    ArrowDownLeft, ArrowUpRight, Ban, CheckCircle2, Users, MessageSquare, ExternalLink,
+} from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { formatDistanceToNow, isToday, isYesterday, subDays, isAfter } from "date-fns";
@@ -15,6 +19,14 @@ import {
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { cn } from "@/lib/utils";
+import { getAvatarGradient } from "@/lib/ui/avatar";
+import { Badge } from "@/components/ui/badge";
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import PersonCard from "@/components/people/PersonCard";
 import ProjectApplicationsSection from "./ProjectApplicationsSection";
 import type { IncomingApplication, MyApplication } from "./ProjectApplicationsSection";
@@ -22,6 +34,7 @@ import type {
     ApplicationLifecycleStatus,
     ConnectionRequestHistoryStatus,
 } from "@/lib/applications/status";
+import { resolveRelationshipActionModel } from "@/components/people/person-card-model";
 
 interface RequestsTabProps {
     initialUser: { id?: string | null } | null;
@@ -31,93 +44,81 @@ interface RequestsTabProps {
 
 type HistoryStatus = ApplicationLifecycleStatus | ConnectionRequestHistoryStatus;
 
-const HISTORY_STATUS_STYLES: Record<HistoryStatus, string> = {
-    pending: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300',
-    accepted: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300',
-    rejected: 'bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300',
-    cancelled: 'bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300',
-    disconnected: 'bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300',
-    withdrawn: 'bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300',
-    role_filled: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300',
-};
+// ── Status configuration ────────────────────────────────────────────
 
-const HISTORY_STATUS_LABELS: Record<HistoryStatus, string> = {
-    pending: 'Pending',
-    accepted: 'Accepted',
-    rejected: 'Rejected',
-    cancelled: 'Cancelled',
-    disconnected: 'Disconnected',
-    withdrawn: 'Withdrawn',
-    role_filled: 'Role Filled',
-};
+import { getLifecycleStatusStyle } from "@/lib/ui/status-config";
 
-const TIMELINE_DOT_COLORS: Record<string, string> = {
-    accepted: 'bg-emerald-500',
-    rejected: 'bg-zinc-400 dark:bg-zinc-600',
-    cancelled: 'bg-zinc-400 dark:bg-zinc-600',
-    pending: 'bg-amber-500',
-    disconnected: 'bg-zinc-400 dark:bg-zinc-600',
-    withdrawn: 'bg-zinc-400 dark:bg-zinc-600',
-    role_filled: 'bg-blue-500',
+const STATUS_ICONS: Record<string, typeof CheckCircle2> = {
+    pending: Clock,
+    accepted: CheckCircle2,
+    rejected: X,
+    cancelled: Ban,
+    disconnected: UserMinus,
+    withdrawn: X,
+    role_filled: CheckCircle2,
 };
 
 const REQUESTS_INITIAL_BATCH = 24;
 const REQUESTS_BATCH_STEP = 24;
-const HISTORY_INITIAL_BATCH = 60;
-const HISTORY_BATCH_STEP = 60;
+const HISTORY_INITIAL_BATCH = 20;
+const HISTORY_BATCH_STEP = 20;
+
+// ── History summary ─────────────────────────────────────────────────
 
 function getHistorySummary(item: RequestHistoryItem) {
-    if (item.source === 'connection') {
+    if (item.source === "connection") {
         switch (item.status) {
-            case 'pending':
-                return item.direction === 'incoming'
-                    ? 'Sent you a connection request'
-                    : 'You sent a connection request';
-            case 'accepted':
-                return item.direction === 'incoming'
-                    ? 'Connection request accepted'
-                    : 'You connected';
-            case 'rejected':
-                return item.direction === 'incoming'
-                    ? 'You declined the request'
-                    : 'Your request was declined';
-            case 'cancelled':
-                return item.direction === 'outgoing'
-                    ? 'You cancelled the request'
-                    : 'Request was cancelled';
-            case 'disconnected':
-                return 'Connection was removed';
+            case "pending":
+                return item.direction === "incoming"
+                    ? "Sent you a connection request"
+                    : "You sent a connection request";
+            case "accepted":
+                return item.direction === "incoming"
+                    ? "Connection request accepted"
+                    : "You connected";
+            case "rejected":
+                return item.direction === "incoming"
+                    ? "You declined the request"
+                    : "Your request was declined";
+            case "cancelled":
+                return item.direction === "outgoing"
+                    ? "You cancelled the request"
+                    : "Request was cancelled";
+            case "disconnected":
+                return "Connection was removed";
             default:
-                return 'Connection update';
+                return "Connection update";
         }
     }
 
-    const safeRoleTitle = item.roleTitle || 'a role';
-    if ((item.status as string) === 'cancelled') {
-        return 'Application was cancelled';
+    const safeRoleTitle = item.roleTitle || "a role";
+    if ((item.status as string) === "cancelled") {
+        return "Application was cancelled";
     }
 
     switch (item.status) {
-        case 'pending':
-            return item.direction === 'incoming'
+        case "pending":
+            return item.direction === "incoming"
                 ? `Applied for ${safeRoleTitle}`
                 : `You applied for ${safeRoleTitle}`;
-        case 'accepted':
-            return item.direction === 'incoming'
-                ? `You accepted this application`
+        case "accepted":
+            return item.direction === "incoming"
+                ? "You accepted this application"
                 : `Accepted for ${safeRoleTitle}`;
-        case 'rejected':
-            return item.direction === 'incoming'
-                ? `You rejected this application`
-                : `Application was rejected`;
-        case 'withdrawn':
-            return 'Application was withdrawn';
-        case 'role_filled':
-            return 'Role was filled';
+        case "rejected":
+            return item.direction === "incoming"
+                ? "You rejected this application"
+                : "Application was rejected";
+        case "withdrawn":
+            return "Application was withdrawn";
+        case "role_filled":
+            return "Role was filled";
         default:
-            return 'Application update';
+            return "Application update";
     }
 }
+
+// ── Time grouping ───────────────────────────────────────────────────
 
 function groupHistoryByTime(items: RequestHistoryItem[]): { label: string; items: RequestHistoryItem[] }[] {
     const groups: { label: string; items: RequestHistoryItem[] }[] = [];
@@ -130,29 +131,244 @@ function groupHistoryByTime(items: RequestHistoryItem[]): { label: string; items
 
     for (const item of items) {
         const date = new Date(item.eventAt);
-        if (isToday(date)) {
-            today.push(item);
-        } else if (isYesterday(date)) {
-            yesterday.push(item);
-        } else if (isAfter(date, weekAgo)) {
-            lastWeek.push(item);
-        } else {
-            older.push(item);
-        }
+        if (isToday(date)) today.push(item);
+        else if (isYesterday(date)) yesterday.push(item);
+        else if (isAfter(date, weekAgo)) lastWeek.push(item);
+        else older.push(item);
     }
 
-    if (today.length > 0) groups.push({ label: 'Today', items: today });
-    if (yesterday.length > 0) groups.push({ label: 'Yesterday', items: yesterday });
-    if (lastWeek.length > 0) groups.push({ label: 'This Week', items: lastWeek });
-    if (older.length > 0) groups.push({ label: 'Earlier', items: older });
+    if (today.length > 0) groups.push({ label: "Today", items: today });
+    if (yesterday.length > 0) groups.push({ label: "Yesterday", items: yesterday });
+    if (lastWeek.length > 0) groups.push({ label: "This Week", items: lastWeek });
+    if (older.length > 0) groups.push({ label: "Earlier", items: older });
 
     return groups;
 }
 
+// ── Timeline avatar ─────────────────────────────────────────────────
+
+function TimelineAvatar({
+    user,
+    source,
+    size = 36,
+}: {
+    user: { avatarUrl?: string | null; fullName?: string | null; username?: string | null } | null;
+    source: "connection" | "application";
+    size?: number;
+}) {
+    const sizeClass = size <= 32 ? "w-8 h-8" : "w-9 h-9";
+    const textSize = size <= 32 ? "text-xs" : "text-sm";
+
+    if (user?.avatarUrl) {
+        return (
+            <Image
+                src={user.avatarUrl}
+                alt={user.fullName || user.username || "User"}
+                width={size}
+                height={size}
+                className={cn(sizeClass, "rounded-full object-cover flex-shrink-0")}
+            />
+        );
+    }
+
+    const initial = (user?.fullName || user?.username || (source === "application" ? "P" : "U"))[0]?.toUpperCase();
+    const gradient = getAvatarGradient(user?.fullName || user?.username || "");
+
+    return (
+        <div className={cn(
+            sizeClass,
+            "rounded-full flex-shrink-0 flex items-center justify-center bg-gradient-to-br text-white font-semibold",
+            textSize,
+            gradient,
+        )}>
+            {source === "application" && !user ? (
+                <Briefcase className="w-3.5 h-3.5" />
+            ) : (
+                initial
+            )}
+        </div>
+    );
+}
+
+// ── Timeline item ───────────────────────────────────────────────────
+
+function TimelineItem({ item, isLast }: { item: RequestHistoryItem; isLast: boolean }) {
+    const config = getLifecycleStatusStyle(item.status);
+    const StatusIcon = STATUS_ICONS[item.status] || Clock;
+    const user = item.user;
+    const isApplication = item.source === "application";
+    const directionIcon = item.direction === "incoming" ? ArrowDownLeft : ArrowUpRight;
+    const DirectionIcon = directionIcon;
+
+    const primaryName = isApplication
+        ? item.project?.title || "Unknown project"
+        : user?.fullName || user?.username || "User";
+
+    const secondaryName = isApplication
+        ? (user?.fullName || user?.username || null)
+        : null;
+
+    return (
+        <div className="relative flex gap-3 pb-6 last:pb-0">
+            {/* Vertical connector */}
+            {!isLast && (
+                <div className="absolute left-[17px] top-[44px] bottom-0 w-px bg-zinc-200 dark:bg-zinc-800" />
+            )}
+
+            {/* Avatar column */}
+            <div className="relative flex-shrink-0">
+                <TimelineAvatar user={user} source={item.source} size={36} />
+                {/* Status dot overlaid on avatar */}
+                <div className={cn(
+                    "absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full border-2 border-white dark:border-zinc-900",
+                    config.dotColor,
+                )} />
+            </div>
+
+            {/* Content */}
+            <div className="flex-1 min-w-0 pt-0.5">
+                <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                        {/* Primary line: name + direction + status */}
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                            {user ? (
+                                <Link
+                                    href={profileHref(user)}
+                                    className="text-sm font-semibold text-zinc-900 dark:text-zinc-100 hover:text-primary dark:hover:text-primary transition-colors truncate"
+                                >
+                                    {primaryName}
+                                </Link>
+                            ) : (
+                                <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-100 truncate">
+                                    {primaryName}
+                                </span>
+                            )}
+                            <DirectionIcon className="w-3 h-3 text-zinc-400 flex-shrink-0" />
+                            <span className={cn("inline-flex items-center gap-1 text-xs font-medium flex-shrink-0", config.textColor)}>
+                                <StatusIcon className="w-3 h-3" />
+                                {config.label}
+                            </span>
+                        </div>
+
+                        {/* Summary */}
+                        <p className="text-[13px] text-zinc-500 dark:text-zinc-400 mt-0.5 leading-snug">
+                            {getHistorySummary(item)}
+                        </p>
+
+                        {/* Secondary info line */}
+                        <div className="flex items-center gap-3 mt-1.5 text-xs text-zinc-400 dark:text-zinc-500">
+                            <span>{formatDistanceToNow(new Date(item.eventAt), { addSuffix: true })}</span>
+                            {secondaryName && (
+                                <>
+                                    <span className="w-px h-3 bg-zinc-200 dark:bg-zinc-700" />
+                                    <span>{secondaryName}</span>
+                                </>
+                            )}
+                            {isApplication && item.project?.slug && (
+                                <>
+                                    <span className="w-px h-3 bg-zinc-200 dark:bg-zinc-700" />
+                                    <Link
+                                        href={`/projects/${item.project.slug}`}
+                                        className="hover:text-primary transition-colors"
+                                    >
+                                        View project
+                                    </Link>
+                                </>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+// ── Request message preview (7A) ─────────────────────────────────────
+
+function RequestMessagePreview({ message }: { message?: string | null }) {
+    const [expanded, setExpanded] = useState(false);
+
+    if (!message) return null;
+
+    const truncated = message.length > 100;
+    const displayText = expanded ? message : message.slice(0, 100);
+
+    return (
+        <div className="pl-14 pr-4 pb-3 -mt-2">
+            <p className="text-xs text-zinc-400 italic">
+                &ldquo;{displayText}{truncated && !expanded ? "..." : ""}&rdquo;
+            </p>
+            {truncated && (
+                <button
+                    type="button"
+                    onClick={() => setExpanded(!expanded)}
+                    className="text-[11px] text-primary hover:text-primary/80 font-medium mt-0.5 transition-colors"
+                >
+                    {expanded ? "Show less" : "Show more"}
+                </button>
+            )}
+        </div>
+    );
+}
+
+// ── Collapsible section ─────────────────────────────────────────────
+
+function CollapsibleSection({
+    title,
+    icon,
+    open,
+    onToggle,
+    count,
+    children,
+    panelId,
+}: {
+    title: string;
+    icon: React.ReactNode;
+    open: boolean;
+    onToggle: () => void;
+    count?: number;
+    children: React.ReactNode;
+    panelId: string;
+}) {
+    return (
+        <section>
+            <button
+                type="button"
+                onClick={onToggle}
+                aria-expanded={open}
+                aria-controls={panelId}
+                className="w-full flex items-center gap-2 mb-4 group"
+            >
+                <div className="flex items-center gap-2">
+                    {icon}
+                    <h2 className="text-sm font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider group-hover:text-zinc-700 dark:group-hover:text-zinc-200 transition-colors">
+                        {title}
+                    </h2>
+                    {count != null && count > 0 && (
+                        <span className="text-[11px] font-medium bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 px-2 py-0.5 rounded-full">
+                            {count}
+                        </span>
+                    )}
+                </div>
+                <div className="flex-1 h-px bg-zinc-200/60 dark:bg-zinc-800 ml-2" />
+                {open ? (
+                    <ChevronDown className="w-4 h-4 text-zinc-400 flex-shrink-0" />
+                ) : (
+                    <ChevronRight className="w-4 h-4 text-zinc-400 flex-shrink-0" />
+                )}
+            </button>
+            {open && <div id={panelId} role="region">{children}</div>}
+        </section>
+    );
+}
+
+// ── Main component ──────────────────────────────────────────────────
+
 export default function RequestsTab({ initialUser, initialRequests, initialApplications }: RequestsTabProps) {
     const { data: requestData, isLoading: requestsLoading } = usePendingRequests();
-    const { data: requestHistoryData, isLoading: historyLoading } = useRequestHistory(80);
-    const { acceptRequest, rejectRequest, undoRejectRequest, cancelRequest, acceptAllIncoming, rejectAllIncoming } = useConnectionMutations();
+    // 5I: Align limit with HISTORY_INITIAL_BATCH (20)
+    const { data: requestHistoryData, isLoading: historyLoading, fetchNextPage: fetchMoreHistory, hasNextPage: hasMoreHistory, isFetchingNextPage: isFetchingMoreHistory } = useRequestHistory(HISTORY_INITIAL_BATCH);
+    const { acceptRequest, rejectRequest, undoRejectRequest, cancelRequest, acceptAllIncoming, rejectAllIncoming, blockProfile } = useConnectionMutations();
 
     const [timelineOpen, setTimelineOpen] = useState(true);
     const [appsOpen, setAppsOpen] = useState(true);
@@ -162,10 +378,14 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
     const appsPanelId = "project-apps-panel";
     const timelinePanelId = "activity-timeline-panel";
 
-    const incomingRequests = useMemo(
-        () => requestData?.incoming || initialRequests?.incoming || [],
-        [requestData?.incoming, initialRequests?.incoming],
-    );
+    const incomingRequests = useMemo(() => {
+        const raw = requestData?.incoming || initialRequests?.incoming || [];
+        return [...raw].sort((a, b) => {
+            const mutualDiff = (b.mutualCount ?? 0) - (a.mutualCount ?? 0);
+            if (mutualDiff !== 0) return mutualDiff;
+            return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+        });
+    }, [requestData?.incoming, initialRequests?.incoming]);
     const sentRequests = useMemo(
         () => requestData?.sent || initialRequests?.sent || [],
         [requestData?.sent, initialRequests?.sent],
@@ -173,522 +393,671 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
 
     const isLoading = requestsLoading && !initialRequests && incomingRequests.length === 0 && sentRequests.length === 0;
     const historyItems = useMemo(
-        () => requestHistoryData?.items ?? [],
-        [requestHistoryData?.items],
+        () => requestHistoryData?.pages?.flatMap(page => page.items) ?? [],
+        [requestHistoryData?.pages],
     );
-    const visibleIncomingRequests = useMemo(
-        () => incomingRequests.slice(0, incomingLimit),
-        [incomingLimit, incomingRequests],
+    const visibleIncomingRequests = useMemo(() => incomingRequests.slice(0, incomingLimit), [incomingLimit, incomingRequests]);
+    const visibleSentRequests = useMemo(() => sentRequests.slice(0, sentLimit), [sentLimit, sentRequests]);
+    const visibleHistoryItems = useMemo(() => historyItems.slice(0, historyLimit), [historyItems, historyLimit]);
+    // 7D: Partition history items by source type
+    const connectionHistoryItems = useMemo(
+        () => visibleHistoryItems.filter((item) => item.source === "connection"),
+        [visibleHistoryItems],
     );
-    const visibleSentRequests = useMemo(
-        () => sentRequests.slice(0, sentLimit),
-        [sentLimit, sentRequests],
+    const applicationHistoryItems = useMemo(
+        () => visibleHistoryItems.filter((item) => item.source === "application"),
+        [visibleHistoryItems],
     );
-    const visibleHistoryItems = useMemo(
-        () => historyItems.slice(0, historyLimit),
-        [historyItems, historyLimit],
-    );
-    const groupedHistory = useMemo(() => groupHistoryByTime(visibleHistoryItems), [visibleHistoryItems]);
+    const groupedConnectionHistory = useMemo(() => groupHistoryByTime(connectionHistoryItems), [connectionHistoryItems]);
+    const groupedApplicationHistory = useMemo(() => groupHistoryByTime(applicationHistoryItems), [applicationHistoryItems]);
+
+    const [connectionActivityOpen, setConnectionActivityOpen] = useState(true);
+    const [applicationActivityOpen, setApplicationActivityOpen] = useState(true);
     const hasMoreIncoming = incomingRequests.length > visibleIncomingRequests.length;
     const hasMoreSent = sentRequests.length > visibleSentRequests.length;
-    const hasMoreHistory = historyItems.length > visibleHistoryItems.length;
+    const hasMoreHistoryLocal = historyItems.length > visibleHistoryItems.length;
     const viewerId = initialUser?.id ?? null;
-    const incomingFirstId = incomingRequests[0]?.id ?? null;
-    const sentFirstId = sentRequests[0]?.id ?? null;
-    const historyFirstId = historyItems[0]?.id ?? null;
+    const historyPageCount = requestHistoryData?.pages.length ?? 0;
+    const previousHistoryPageCountRef = useRef(historyPageCount);
+    const previousHistoryViewerIdRef = useRef(viewerId);
+    const [requestRenderNowMs, setRequestRenderNowMs] = useState(() => Date.now());
 
+    useEffect(() => { setIncomingLimit(REQUESTS_INITIAL_BATCH); }, [incomingRequests.length, viewerId]);
+    useEffect(() => { setSentLimit(REQUESTS_INITIAL_BATCH); }, [sentRequests.length, viewerId]);
     useEffect(() => {
-        setIncomingLimit(REQUESTS_INITIAL_BATCH);
-    }, [incomingFirstId, viewerId]);
+        const previousViewerId = previousHistoryViewerIdRef.current;
+        const previousPageCount = previousHistoryPageCountRef.current;
 
-    useEffect(() => {
-        setSentLimit(REQUESTS_INITIAL_BATCH);
-    }, [sentFirstId, viewerId]);
+        if (viewerId !== previousViewerId || historyPageCount < previousPageCount) {
+            setHistoryLimit(HISTORY_INITIAL_BATCH);
+        }
 
-    useEffect(() => {
-        setHistoryLimit(HISTORY_INITIAL_BATCH);
-    }, [historyFirstId, viewerId]);
+        previousHistoryViewerIdRef.current = viewerId;
+        previousHistoryPageCountRef.current = historyPageCount;
+    }, [historyPageCount, viewerId]);
+    useEffect(() => { setRequestRenderNowMs(Date.now()); }, [incomingRequests.length, sentRequests.length, viewerId]);
 
     const handleAccept = async (id: string) => {
         toast.promise(acceptRequest.mutateAsync(id), {
-            loading: 'Accepting...',
-            success: 'Connection accepted!',
-            error: 'Failed to accept'
+            loading: "Accepting...",
+            success: "Connection accepted!",
+            error: "Failed to accept",
         });
     };
 
-    const handleReject = async (id: string) => {
-        const pendingToast = toast.loading('Rejecting...');
+    const handleReject = async (id: string, reason?: string) => {
+        const pendingToast = toast.loading("Rejecting...");
         try {
-            const result = await rejectRequest.mutateAsync(id);
+            const result = await rejectRequest.mutateAsync({ id, reason });
             toast.dismiss(pendingToast);
-            toast.success('Request declined');
             if (result?.undoUntil) {
-                toast('Request declined', {
-                    description: 'Undo available for 15 seconds.',
+                // 5K: Compute undo duration from server clock
+                const serverOffset = result.serverNow ? Date.now() - new Date(result.serverNow).getTime() : 0;
+                const remainingMs = new Date(result.undoUntil).getTime() - (Date.now() - serverOffset);
+                const toastDuration = Math.max(3000, Math.min(remainingMs, 20000));
+                toast("Request declined", {
+                    description: `Undo available for ${Math.ceil(toastDuration / 1000)} seconds.`,
+                    duration: toastDuration,
                     action: {
-                        label: 'Undo',
+                        label: "Undo",
                         onClick: () => {
                             void toast.promise(undoRejectRequest.mutateAsync(id), {
-                                loading: 'Restoring...',
-                                success: 'Request restored',
-                                error: 'Failed to restore request',
+                                loading: "Restoring...",
+                                success: "Request restored",
+                                error: "Failed to restore request",
                             });
                         },
                     },
                 });
+            } else {
+                toast.success("Request declined");
             }
         } catch {
             toast.dismiss(pendingToast);
-            toast.error('Failed to decline');
+            toast.error("Failed to decline");
         }
     };
 
     const handleCancel = async (id: string) => {
         toast.promise(cancelRequest.mutateAsync(id), {
-            loading: 'Cancelling...',
-            success: 'Request cancelled',
-            error: 'Failed to cancel'
+            loading: "Cancelling...",
+            success: "Request cancelled",
+            error: "Failed to cancel",
         });
     };
 
-    const [bulkAction, setBulkAction] = useState<{ type: 'accept' | 'reject' } | null>(null);
+    const handleBlock = async (targetUserId: string, displayName: string) => {
+        toast.promise(blockProfile.mutateAsync(targetUserId), {
+            loading: `Blocking ${displayName}...`,
+            success: `${displayName} blocked`,
+            error: "Failed to block account",
+        });
+    };
+
+    const [bulkAction, setBulkAction] = useState<{ type: "accept" | "reject" } | null>(null);
+    const bulkPollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    // Clean up bulk polling on unmount
+    useEffect(() => {
+        return () => {
+            if (bulkPollRef.current) clearTimeout(bulkPollRef.current);
+        };
+    }, []);
+
+    // 5L: Exponential backoff polling for bulk actions
+    const startBulkJobPolling = useCallback((jobId: string, count: number, action: "accept" | "reject") => {
+        const toastId = toast.loading(`Processing ${count} requests...`);
+        let elapsed = 0;
+        let backoff = 1_000; // Start at 1s, double each time, cap at 15s
+        const maxPollMs = 30_000;
+
+        if (bulkPollRef.current) clearTimeout(bulkPollRef.current);
+
+        const poll = async () => {
+            elapsed += backoff;
+
+            try {
+                const res = await fetch(`/api/v1/connections/bulk-job-status?jobId=${encodeURIComponent(jobId)}`);
+                const data = await res.json().catch(() => null);
+
+                if (res.ok) {
+                    if (data?.status === "completed") {
+                        if (bulkPollRef.current) clearTimeout(bulkPollRef.current);
+                        bulkPollRef.current = null;
+                        toast.dismiss(toastId);
+                        toast.success(`All ${count} requests ${action === "accept" ? "accepted" : "rejected"} successfully.`);
+                        return;
+                    }
+                    if (data?.status === "failed") {
+                        if (bulkPollRef.current) clearTimeout(bulkPollRef.current);
+                        bulkPollRef.current = null;
+                        toast.dismiss(toastId);
+                        toast.error(`Bulk ${action} failed. Some requests may not have been processed.`);
+                        return;
+                    }
+                }
+            } catch {
+                // Silently retry on network errors
+            }
+
+            if (elapsed >= maxPollMs) {
+                if (bulkPollRef.current) clearTimeout(bulkPollRef.current);
+                bulkPollRef.current = null;
+                toast.dismiss(toastId);
+                toast.info(`Bulk ${action} is still processing. Requests will update shortly.`);
+                return;
+            }
+
+            backoff = Math.min(backoff * 2, 15_000);
+            bulkPollRef.current = setTimeout(() => {
+                void poll();
+            }, backoff);
+        };
+
+        bulkPollRef.current = setTimeout(() => {
+            void poll();
+        }, backoff);
+    }, []);
 
     const confirmAcceptAll = useCallback(async () => {
-        const pendingToast = toast.loading('Accepting all requests...');
+        const count = incomingRequests.length;
+        const pendingToast = toast.loading("Accepting all requests...");
         try {
-            const result = await acceptAllIncoming.mutateAsync(incomingRequests.length);
+            const result = await acceptAllIncoming.mutateAsync(count);
             toast.dismiss(pendingToast);
-            toast.success(`Accepted ${result.acceptedCount || 0} request${result.acceptedCount === 1 ? '' : 's'}.`);
+            if (result.jobId) {
+                startBulkJobPolling(result.jobId, count, "accept");
+            } else {
+                toast.success(result.queued ? "Accept all queued. Requests will update shortly." : "Accept all started.");
+            }
         } catch {
             toast.dismiss(pendingToast);
-            toast.error('Failed to accept all requests');
+            toast.error("Failed to accept all requests");
         }
-    }, [acceptAllIncoming, incomingRequests.length]);
+    }, [acceptAllIncoming, incomingRequests.length, startBulkJobPolling]);
 
     const confirmRejectAll = useCallback(async () => {
-        const pendingToast = toast.loading('Rejecting all requests...');
+        const count = incomingRequests.length;
+        const pendingToast = toast.loading("Rejecting all requests...");
         try {
-            const result = await rejectAllIncoming.mutateAsync(incomingRequests.length);
+            const result = await rejectAllIncoming.mutateAsync(count);
             toast.dismiss(pendingToast);
-            toast.success(`Rejected ${result.rejectedCount || 0} request${result.rejectedCount === 1 ? '' : 's'}.`);
+            if (result.jobId) {
+                startBulkJobPolling(result.jobId, count, "reject");
+            } else {
+                toast.success(result.queued ? "Reject all queued. Requests will update shortly." : "Reject all started.");
+            }
         } catch {
             toast.dismiss(pendingToast);
-            toast.error('Failed to reject all requests');
+            toast.error("Failed to reject all requests");
         }
-    }, [rejectAllIncoming, incomingRequests.length]);
+    }, [rejectAllIncoming, incomingRequests.length, startBulkJobPolling]);
 
-    const handleAcceptAll = () => {
-        if (incomingRequests.length === 0) return;
-        setBulkAction({ type: 'accept' });
-    };
-
-    const handleRejectAll = () => {
-        if (incomingRequests.length === 0) return;
-        setBulkAction({ type: 'reject' });
-    };
-
+    // ── Loading skeleton ───────────────────────────────────────────
     if (isLoading) {
         return (
             <div className="space-y-4 animate-pulse">
-                <div className="flex gap-4">
-                    <div className="flex-1 h-24 bg-zinc-200/50 dark:bg-zinc-800/50 rounded-2xl" />
-                    <div className="flex-1 h-24 bg-zinc-200/50 dark:bg-zinc-800/50 rounded-2xl" />
+                <div className="h-14 bg-zinc-200/50 dark:bg-zinc-800/50 rounded-2xl" />
+                <div className="space-y-3">
+                    {[1, 2, 3].map((i) => <div key={i} className="h-[80px] bg-zinc-200/50 dark:bg-zinc-800/50 rounded-2xl" />)}
                 </div>
-                <div className="flex gap-6">
-                    <div className="flex-1 space-y-3">
-                        {[1, 2, 3].map(i => <div key={i} className="h-20 bg-zinc-200/50 dark:bg-zinc-800/50 rounded-2xl" />)}
-                    </div>
-                    <div className="flex-1 space-y-3">
-                        {[1, 2].map(i => <div key={i} className="h-20 bg-zinc-200/50 dark:bg-zinc-800/50 rounded-2xl" />)}
-                    </div>
+                <div className="space-y-3">
+                    {[1, 2].map((i) => <div key={i} className="h-[80px] bg-zinc-200/50 dark:bg-zinc-800/50 rounded-2xl" />)}
                 </div>
             </div>
         );
     }
 
     return (
-        <div className="space-y-6">
-            {/* ── SUMMARY CARDS ── */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {/* Incoming summary */}
-                <div className="rounded-2xl border border-zinc-200/60 dark:border-white/5 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl p-5">
-                    <div className="flex items-center justify-between mb-3">
-                        <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 rounded-full bg-indigo-100 dark:bg-indigo-500/20 flex items-center justify-center">
-                                <UserPlus className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
-                            </div>
-                            <div>
-                                <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Incoming</h3>
-                                <p className="text-xs text-zinc-500 dark:text-zinc-400">connection requests</p>
-                            </div>
-                        </div>
-                        <span className="text-2xl font-bold text-zinc-900 dark:text-zinc-100">
+        <div className="space-y-8">
+            {/* ── Summary Bar ── */}
+            <div className="flex items-center justify-between p-4 rounded-2xl bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl border border-zinc-200/60 dark:border-white/5">
+                <div className="flex items-center gap-6">
+                    <div className="flex items-center gap-2">
+                        <span className="w-2.5 h-2.5 rounded-full bg-primary" />
+                        <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
                             {incomingRequests.length}
                         </span>
+                        <span className="text-sm text-zinc-500">incoming</span>
                     </div>
-                    {incomingRequests.length > 1 && (
-                        <div className="flex gap-2 pt-3 border-t border-zinc-100 dark:border-zinc-800">
-                            <button
-                                type="button"
-                                onClick={handleAcceptAll}
-                                disabled={acceptAllIncoming.isPending || rejectAllIncoming.isPending}
-                                className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-xl border border-emerald-300/60 bg-emerald-500/10 px-3 py-2 text-xs font-medium text-emerald-600 hover:bg-emerald-500/20 dark:text-emerald-300 transition-colors disabled:opacity-50"
-                            >
-                                <CheckCheck className="w-3.5 h-3.5" />
-                                Accept all
-                            </button>
-                            <button
-                                type="button"
-                                onClick={handleRejectAll}
-                                disabled={acceptAllIncoming.isPending || rejectAllIncoming.isPending}
-                                className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-xl border border-red-300/60 bg-red-500/10 px-3 py-2 text-xs font-medium text-red-600 hover:bg-red-500/20 dark:text-red-300 transition-colors disabled:opacity-50"
-                            >
-                                <X className="w-3.5 h-3.5" />
-                                Reject all
-                            </button>
-                        </div>
-                    )}
-                </div>
-
-                {/* Sent summary */}
-                <div className="rounded-2xl border border-zinc-200/60 dark:border-white/5 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl p-5">
-                    <div className="flex items-center justify-between mb-3">
-                        <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 rounded-full bg-amber-100 dark:bg-amber-500/20 flex items-center justify-center">
-                                <Clock className="w-5 h-5 text-amber-600 dark:text-amber-400" />
-                            </div>
-                            <div>
-                                <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Sent</h3>
-                                <p className="text-xs text-zinc-500 dark:text-zinc-400">pending requests</p>
-                            </div>
-                        </div>
-                        <span className="text-2xl font-bold text-zinc-900 dark:text-zinc-100">
+                    <div className="flex items-center gap-2">
+                        <span className="w-2.5 h-2.5 rounded-full bg-amber-400" />
+                        <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
                             {sentRequests.length}
                         </span>
+                        <span className="text-sm text-zinc-500">sent</span>
                     </div>
                 </div>
+                {incomingRequests.length > 1 && (
+                    <div className="flex items-center gap-2">
+                        <button
+                            type="button"
+                            onClick={() => setBulkAction({ type: "accept" })}
+                            disabled={acceptAllIncoming.isPending || rejectAllIncoming.isPending}
+                            className="inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-medium text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800 hover:bg-emerald-50 dark:hover:bg-emerald-900/30 transition-colors disabled:opacity-50"
+                        >
+                            <CheckCheck className="w-3.5 h-3.5" />
+                            Accept all
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setBulkAction({ type: "reject" })}
+                            disabled={acceptAllIncoming.isPending || rejectAllIncoming.isPending}
+                            className="inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-medium text-red-600 dark:text-red-400 border border-red-200 dark:border-red-800 hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors disabled:opacity-50"
+                        >
+                            <X className="w-3.5 h-3.5" />
+                            Reject all
+                        </button>
+                    </div>
+                )}
             </div>
 
-            {/* ── DUAL-COLUMN REQUESTS ── */}
-            {(incomingRequests.length > 0 || sentRequests.length > 0) && (
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                    {/* LEFT: Incoming */}
-                    <div>
-                        {incomingRequests.length > 0 && (
-                            <>
-                                <h2 className="text-sm font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider mb-3 flex items-center gap-2">
-                                    <UserPlus className="w-4 h-4 text-indigo-500" />
-                                    Incoming Requests
-                                </h2>
-                                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
-                                    {visibleIncomingRequests.map((req) => {
-                                        const profile = {
-                                            id: req.requesterId,
-                                            username: req.requesterUsername,
-                                            fullName: req.requesterFullName,
-                                            avatarUrl: req.requesterAvatarUrl,
-                                            headline: req.requesterHeadline,
-                                            location: null,
-                                            connectionStatus: 'pending_received' as const,
-                                            canConnect: true
-                                        };
-                                        const isProcessing =
-                                            (acceptRequest.isPending && acceptRequest.variables === req.id) ||
-                                            (rejectRequest.isPending && rejectRequest.variables === req.id);
-
-                                        return (
-                                            <div key={req.id} className="relative h-[200px] group">
-                                                <PersonCard
-                                                    profile={profile}
-                                                    onConnect={async () => handleAccept(req.id)}
-                                                    isConnecting={isProcessing}
-                                                    variant="compact"
-                                                />
-                                                {/* Reject overlay */}
-                                                <div className="absolute top-2 right-2 flex items-center opacity-100 lg:opacity-0 group-hover:opacity-100 transition-opacity z-20">
-                                                    <button
-                                                        onClick={(e) => {
-                                                            e.preventDefault();
-                                                            e.stopPropagation();
-                                                            handleReject(req.id);
-                                                        }}
-                                                        disabled={isProcessing}
-                                                        className="p-1.5 rounded-full bg-white/90 dark:bg-zinc-800/90 shadow-sm border border-zinc-200 dark:border-zinc-700 text-zinc-400 hover:text-red-500 transition-all disabled:opacity-50"
-                                                        title="Decline"
-                                                    >
-                                                        {rejectRequest.isPending && rejectRequest.variables === req.id ? (
-                                                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                                        ) : (
-                                                            <X className="w-3.5 h-3.5" />
-                                                        )}
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                                {hasMoreIncoming && (
-                                    <div className="mt-3">
-                                        <button
-                                            type="button"
-                                            onClick={() => setIncomingLimit((prev) => prev + REQUESTS_BATCH_STEP)}
-                                            className="w-full rounded-xl border border-zinc-200 dark:border-zinc-800 px-3 py-2 text-xs font-medium text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-900 transition-colors"
-                                        >
-                                            Load more incoming requests
-                                        </button>
-                                    </div>
-                                )}
-                            </>
-                        )}
-                        {incomingRequests.length === 0 && (
-                            <div className="text-center py-12 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl rounded-2xl border border-zinc-200/60 dark:border-white/5">
-                                <UserPlus className="w-10 h-10 text-zinc-300 dark:text-zinc-600 mx-auto mb-3" />
-                                <p className="text-sm text-zinc-500 dark:text-zinc-400">No incoming requests</p>
-                            </div>
-                        )}
-                    </div>
-
-                    {/* RIGHT: Sent */}
-                    <div>
-                        {sentRequests.length > 0 && (
-                            <>
-                                <h2 className="text-sm font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider mb-3 flex items-center gap-2">
-                                    <Clock className="w-4 h-4 text-amber-500" />
-                                    Sent Requests
-                                </h2>
-                                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
-                                    {visibleSentRequests.map((req) => {
-                                        const profile = {
-                                            id: req.addresseeId,
-                                            username: req.addresseeUsername,
-                                            fullName: req.addresseeFullName,
-                                            avatarUrl: req.addresseeAvatarUrl,
-                                            headline: req.addresseeHeadline,
-                                            location: null,
-                                            connectionStatus: 'pending_sent' as const,
-                                            canConnect: false
-                                        };
-                                        const isProcessing = cancelRequest.isPending && cancelRequest.variables === req.id;
-
-                                        return (
-                                            <div key={req.id} className="relative h-[200px] group">
-                                                <PersonCard
-                                                    profile={profile}
-                                                    onConnect={async () => {}}
-                                                    isConnecting={isProcessing}
-                                                    variant="compact"
-                                                />
-                                                {/* Cancel overlay */}
-                                                <div className="absolute top-2 right-2 flex items-center opacity-100 lg:opacity-0 group-hover:opacity-100 transition-opacity z-20">
-                                                    <button
-                                                        onClick={(e) => {
-                                                            e.preventDefault();
-                                                            e.stopPropagation();
-                                                            handleCancel(req.id);
-                                                        }}
-                                                        disabled={isProcessing}
-                                                        className="p-1.5 rounded-full bg-white/90 dark:bg-zinc-800/90 shadow-sm border border-zinc-200 dark:border-zinc-700 text-zinc-400 hover:text-red-500 transition-all disabled:opacity-50"
-                                                        title="Cancel Request"
-                                                    >
-                                                        {isProcessing ? (
-                                                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                                        ) : (
-                                                            <X className="w-3.5 h-3.5" />
-                                                        )}
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                                {hasMoreSent && (
-                                    <div className="mt-3">
-                                        <button
-                                            type="button"
-                                            onClick={() => setSentLimit((prev) => prev + REQUESTS_BATCH_STEP)}
-                                            className="w-full rounded-xl border border-zinc-200 dark:border-zinc-800 px-3 py-2 text-xs font-medium text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-900 transition-colors"
-                                        >
-                                            Load more sent requests
-                                        </button>
-                                    </div>
-                                )}
-                            </>
-                        )}
-                        {sentRequests.length === 0 && (
-                            <div className="text-center py-12 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl rounded-2xl border border-zinc-200/60 dark:border-white/5">
-                                <Clock className="w-10 h-10 text-zinc-300 dark:text-zinc-600 mx-auto mb-3" />
-                                <p className="text-sm text-zinc-500 dark:text-zinc-400">No sent requests</p>
-                            </div>
-                        )}
-                    </div>
-                </div>
-            )}
-
-            {/* Empty state when no requests at all */}
+            {/* ── Combined empty state ── */}
             {incomingRequests.length === 0 && sentRequests.length === 0 && (
                 <div className="text-center py-16 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl rounded-2xl border border-zinc-200/60 dark:border-white/5">
-                    <UserPlus className="w-14 h-14 text-zinc-300 dark:text-zinc-600 mx-auto mb-4" />
-                    <p className="text-zinc-600 dark:text-zinc-400 text-lg font-medium">No pending connection requests</p>
-                    <Link href="/people?tab=discover" className="text-indigo-600 dark:text-indigo-400 hover:underline mt-2 inline-block text-sm">
+                    <Inbox className="w-14 h-14 text-zinc-300 dark:text-zinc-600 mx-auto mb-4" />
+                    <p className="text-zinc-600 dark:text-zinc-400 text-lg font-medium">No pending requests</p>
+                    <Link href="/people?tab=discover" className="text-primary hover:underline mt-2 inline-block text-sm">
                         Discover people to connect with
                     </Link>
                 </div>
             )}
 
-            {/* ── PROJECT APPLICATIONS (Collapsible) ── */}
-            <div>
-                <button
-                    type="button"
-                    onClick={() => setAppsOpen(!appsOpen)}
-                    aria-expanded={appsOpen}
-                    aria-controls={appsPanelId}
-                    className="flex items-center gap-2 mb-3 text-sm font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider hover:text-zinc-700 dark:hover:text-zinc-200 transition-colors"
-                >
-                    {appsOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-                    <Briefcase className="w-4 h-4" />
-                    Project Applications
-                </button>
-                {appsOpen && (
-                    <div
-                        id={appsPanelId}
-                        role="region"
-                    >
-                        <ProjectApplicationsSection initialUser={initialUser} initialApplications={initialApplications} />
+            {/* ── Incoming Requests Section ── */}
+            {incomingRequests.length > 0 && (
+                <section>
+                    <h2 className="text-sm font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+                        <UserPlus className="w-4 h-4 text-primary" />
+                        Incoming
+                    </h2>
+                    <div className="space-y-3">
+                        {visibleIncomingRequests.map((req) => {
+                            const profile = {
+                                id: req.requesterId,
+                                username: req.requesterUsername,
+                                fullName: req.requesterFullName,
+                                avatarUrl: req.requesterAvatarUrl,
+                                headline: req.requesterHeadline,
+                                location: req.requesterLocation ?? null,
+                                connectionStatus: "pending_received" as const,
+                                canConnect: true,
+                                mutualConnections: req.mutualCount ?? 0,
+                                skills: req.requesterSkills ?? [],
+                                openTo: req.requesterOpenTo ?? [],
+                                messagePrivacy: req.requesterMessagePrivacy ?? "connections",
+                                canSendMessage: req.requesterCanSendMessage ?? false,
+                                lastActiveAt: req.requesterLastActiveAt ?? null,
+                            };
+                            const actionModel = resolveRelationshipActionModel({
+                                state: "pending_received",
+                                canSendMessage: Boolean(req.requesterCanSendMessage),
+                                profileHref: profileHref(profile),
+                                messageHref: `/messages?userId=${req.requesterId}`,
+                                inviteHref: null,
+                            });
+                            const isAccepting = acceptRequest.isPending && acceptRequest.variables === req.id;
+                            const isRejecting = rejectRequest.isPending && rejectRequest.variables?.id === req.id;
+                            const isProcessing = isAccepting || isRejecting;
+
+                            return (
+                                <div key={req.id} className="space-y-0">
+                                    <PersonCard
+                                        profile={profile}
+                                        onConnect={async () => handleAccept(req.id)}
+                                        isConnecting={isProcessing}
+                                        variant="request"
+                                        requestedAt={req.createdAt}
+                                        actions={
+                                            <div className="flex items-center gap-2">
+                                                {/* 7C: Mutual count badge */}
+                                                {(req.mutualCount ?? 0) > 0 && (
+                                                    <Badge variant="secondary" className="text-[11px] px-2 py-0.5 gap-1">
+                                                        <Users className="w-3 h-3" />
+                                                        {req.mutualCount} mutual{req.mutualCount === 1 ? "" : "s"}
+                                                    </Badge>
+                                                )}
+                                                <button
+                                                    type="button"
+                                                    onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleAccept(req.id); }}
+                                                    disabled={isProcessing}
+                                                    className="px-4 py-1.5 rounded-xl text-sm font-semibold bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
+                                                    aria-label={`Accept request from ${req.requesterFullName || req.requesterUsername || "user"}`}
+                                                >
+                                                    {isAccepting ? <Loader2 className="w-4 h-4 animate-spin" /> : "Accept"}
+                                                </button>
+                                                {/* 7B: Rejection reason dropdown */}
+                                                <DropdownMenu>
+                                                    <DropdownMenuTrigger asChild>
+                                                        <button
+                                                            type="button"
+                                                            disabled={isProcessing}
+                                                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                                                            className="px-4 py-1.5 rounded-xl text-sm font-medium text-zinc-600 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors disabled:opacity-50 inline-flex items-center gap-1"
+                                                            aria-label={`Decline request from ${req.requesterFullName || req.requesterUsername || "user"}`}
+                                                        >
+                                                            {isRejecting ? <Loader2 className="w-4 h-4 animate-spin" /> : (
+                                                                <>
+                                                                    Decline
+                                                                    <ChevronDown className="w-3 h-3" />
+                                                                </>
+                                                            )}
+                                                        </button>
+                                                    </DropdownMenuTrigger>
+                                                    <DropdownMenuContent align="end" className="w-48">
+                                                        <DropdownMenuItem onClick={() => handleReject(req.id)}>
+                                                            Decline
+                                                        </DropdownMenuItem>
+                                                        <DropdownMenuItem onClick={() => handleReject(req.id, "not_now")}>
+                                                            Not now
+                                                        </DropdownMenuItem>
+                                                        <DropdownMenuItem onClick={() => handleReject(req.id, "dont_know")}>
+                                                            Don&apos;t know this person
+                                                        </DropdownMenuItem>
+                                                    </DropdownMenuContent>
+                                                </DropdownMenu>
+                                                <DropdownMenu>
+                                                    <DropdownMenuTrigger asChild>
+                                                        <button
+                                                            type="button"
+                                                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                                                            className="px-3 py-1.5 rounded-xl text-sm font-medium text-zinc-500 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors inline-flex items-center gap-1"
+                                                            aria-label={`More actions for ${req.requesterFullName || req.requesterUsername || "user"}`}
+                                                        >
+                                                            More
+                                                            <ChevronDown className="w-3 h-3" />
+                                                        </button>
+                                                    </DropdownMenuTrigger>
+                                                    <DropdownMenuContent align="end" className="w-52">
+                                                        {actionModel.secondaryMenu.map((action) => {
+                                                            if (!action.href) return null;
+                                                            return (
+                                                                <DropdownMenuItem key={action.key} asChild>
+                                                                    <Link href={action.href}>
+                                                                        {action.key === "message" ? (
+                                                                            <MessageSquare className="w-4 h-4" />
+                                                                        ) : (
+                                                                            <ExternalLink className="w-4 h-4" />
+                                                                        )}
+                                                                        {action.label}
+                                                                    </Link>
+                                                                </DropdownMenuItem>
+                                                            );
+                                                        })}
+                                                        <DropdownMenuItem
+                                                            variant="destructive"
+                                                            onClick={() => handleBlock(req.requesterId, req.requesterFullName || req.requesterUsername || "User")}
+                                                        >
+                                                            <Ban className="w-4 h-4" />
+                                                            Block
+                                                        </DropdownMenuItem>
+                                                    </DropdownMenuContent>
+                                                </DropdownMenu>
+                                            </div>
+                                        }
+                                    />
+                                    {/* 7A: Request message preview */}
+                                    <RequestMessagePreview message={req.message} />
+                                </div>
+                            );
+                        })}
                     </div>
-                )}
-            </div>
+                    {hasMoreIncoming && (
+                        <button
+                            type="button"
+                            onClick={() => setIncomingLimit((prev) => prev + REQUESTS_BATCH_STEP)}
+                            className="w-full mt-3 rounded-xl border border-zinc-200 dark:border-zinc-800 px-3 py-2 text-xs font-medium text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-900 transition-colors"
+                        >
+                            Show {Math.min(REQUESTS_BATCH_STEP, incomingRequests.length - visibleIncomingRequests.length)} more incoming requests
+                        </button>
+                    )}
+                </section>
+            )}
 
-            {/* ── ACTIVITY TIMELINE (Collapsible) ── */}
-            <div>
-                <button
-                    type="button"
-                    onClick={() => setTimelineOpen(!timelineOpen)}
-                    aria-expanded={timelineOpen}
-                    aria-controls={timelinePanelId}
-                    className="flex items-center gap-2 mb-3 text-sm font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider hover:text-zinc-700 dark:hover:text-zinc-200 transition-colors"
-                >
-                    {timelineOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-                    <Clock className="w-4 h-4" />
-                    Activity Timeline
-                </button>
-                {timelineOpen && (
-                    <div
-                        id={timelinePanelId}
-                        role="region"
-                    >
-                        {historyLoading && historyItems.length === 0 ? (
-                            <div className="flex items-center justify-center rounded-2xl border border-zinc-200/60 dark:border-white/5 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl py-8">
-                                <Loader2 className="h-6 w-6 animate-spin text-zinc-400" />
-                            </div>
-                        ) : groupedHistory.length === 0 ? (
-                            <div className="rounded-2xl border border-zinc-200/60 dark:border-white/5 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl px-4 py-8 text-center text-sm text-zinc-500 dark:text-zinc-400">
-                                No activity yet.
-                            </div>
-                        ) : (
-                            <div className="space-y-6">
-                                {groupedHistory.map((group) => (
-                                    <div key={group.label}>
-                                        {/* Time period header */}
-                                        <div className="flex items-center gap-2 mb-3">
-                                            <span className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">{group.label}</span>
-                                            <div className="flex-1 h-px bg-zinc-200/60 dark:bg-zinc-800" />
+            {/* ── Sent Requests Section ── */}
+            {sentRequests.length > 0 && (
+                <section>
+                    <h2 className="text-sm font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+                        <Clock className="w-4 h-4 text-amber-500" />
+                        Sent
+                    </h2>
+                    <div className="space-y-3">
+                        {visibleSentRequests.map((req) => {
+                            const profile = {
+                                id: req.addresseeId,
+                                username: req.addresseeUsername,
+                                fullName: req.addresseeFullName,
+                                avatarUrl: req.addresseeAvatarUrl,
+                                headline: req.addresseeHeadline,
+                                location: req.addresseeLocation ?? null,
+                                connectionStatus: "pending_sent" as const,
+                                canConnect: false,
+                                skills: req.addresseeSkills ?? [],
+                                openTo: req.addresseeOpenTo ?? [],
+                                messagePrivacy: req.addresseeMessagePrivacy ?? "connections",
+                                canSendMessage: req.addresseeCanSendMessage ?? false,
+                                lastActiveAt: req.addresseeLastActiveAt ?? null,
+                            };
+                            const profileLink = profileHref(profile);
+                            const actionModel = resolveRelationshipActionModel({
+                                state: "pending_sent",
+                                canSendMessage: Boolean(req.addresseeCanSendMessage),
+                                profileHref: profileLink,
+                                messageHref: `/messages?userId=${req.addresseeId}`,
+                                inviteHref: null,
+                            });
+                            const isProcessing = cancelRequest.isPending && cancelRequest.variables === req.id;
+                            // 5B: Pending days calculation
+                            const pendingDays = Math.floor((requestRenderNowMs - new Date(req.createdAt).getTime()) / (1000 * 60 * 60 * 24));
+
+                            return (
+                                <PersonCard
+                                    key={req.id}
+                                    profile={profile}
+                                    onConnect={async () => {}}
+                                    isConnecting={isProcessing}
+                                    variant="request"
+                                    requestedAt={req.createdAt}
+                                    actions={
+                                        <div className="flex items-center gap-2">
+                                            {/* 5B: Pending duration badge */}
+                                            {pendingDays > 0 && (
+                                                <span className="text-xs bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 px-2 py-0.5 rounded-full whitespace-nowrap">
+                                                    Pending {pendingDays}d
+                                                </span>
+                                            )}
+                                            <button
+                                                type="button"
+                                                onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleCancel(req.id); }}
+                                                disabled={isProcessing}
+                                                className="px-4 py-1.5 rounded-xl text-sm font-medium text-zinc-600 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700 hover:text-red-500 hover:border-red-200 dark:hover:border-red-800 transition-colors disabled:opacity-50"
+                                                aria-label={`Cancel request to ${req.addresseeFullName || req.addresseeUsername || "user"}`}
+                                            >
+                                                {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : "Cancel"}
+                                            </button>
+                                            <Link
+                                                href={profileLink}
+                                                className="px-4 py-1.5 rounded-xl text-sm font-medium text-zinc-600 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
+                                            >
+                                                View profile
+                                            </Link>
+                                            {actionModel.canSendMessage ? (
+                                                <Link
+                                                    href={`/messages?userId=${req.addresseeId}`}
+                                                    className="px-4 py-1.5 rounded-xl text-sm font-medium text-sky-700 dark:text-sky-300 border border-sky-200 bg-sky-50 dark:border-sky-900/60 dark:bg-sky-950/20 hover:bg-sky-100 dark:hover:bg-sky-950/40 transition-colors inline-flex items-center gap-1.5"
+                                                >
+                                                    <MessageSquare className="w-4 h-4" />
+                                                    Message
+                                                </Link>
+                                            ) : null}
                                         </div>
-                                        {/* Timeline items */}
-                                        <div className="relative pl-6">
-                                            {/* Vertical timeline line */}
-                                            <div className="absolute left-[9px] top-2 bottom-2 w-px bg-gradient-to-b from-zinc-300 via-zinc-200 to-transparent dark:from-zinc-600 dark:via-zinc-700 dark:to-transparent" />
+                                    }
+                                />
+                            );
+                        })}
+                    </div>
+                    {hasMoreSent && (
+                        <button
+                            type="button"
+                            onClick={() => setSentLimit((prev) => prev + REQUESTS_BATCH_STEP)}
+                            className="w-full mt-3 rounded-xl border border-zinc-200 dark:border-zinc-800 px-3 py-2 text-xs font-medium text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-900 transition-colors"
+                        >
+                            Show {Math.min(REQUESTS_BATCH_STEP, sentRequests.length - visibleSentRequests.length)} more sent requests
+                        </button>
+                    )}
+                </section>
+            )}
 
-                                            <div className="space-y-3">
-                                                {group.items.map((item) => {
-                                                    const timelineKey = `${item.source}-${item.id}-${item.status}-${item.eventAt}`;
-                                                    const dotColor = TIMELINE_DOT_COLORS[item.status] || 'bg-zinc-400';
-                                                    const user = item.user;
+            {/* ── Project Applications ── */}
+            <CollapsibleSection
+                title="Project Applications"
+                icon={<Briefcase className="w-4 h-4 text-violet-500" />}
+                open={appsOpen}
+                onToggle={() => setAppsOpen(!appsOpen)}
+                panelId={appsPanelId}
+            >
+                <ProjectApplicationsSection initialUser={initialUser} initialApplications={initialApplications} />
+            </CollapsibleSection>
 
-                                                    return (
-                                                        <div key={timelineKey} className="relative flex items-start gap-3">
-                                                            {/* Timeline dot */}
-                                                            <div className={cn("absolute -left-6 top-2 w-[10px] h-[10px] rounded-full ring-2 ring-zinc-50 dark:ring-zinc-900", dotColor)} />
-
-                                                            <div className="flex-1 rounded-2xl border border-zinc-200/60 dark:border-white/5 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl p-3">
-                                                                <div className="flex items-start gap-3">
-                                                                    {user?.avatarUrl ? (
-                                                                        <Image
-                                                                            src={user.avatarUrl}
-                                                                            alt={user.fullName || user.username || 'User'}
-                                                                            width={32}
-                                                                            height={32}
-                                                                            className="h-8 w-8 rounded-full object-cover flex-shrink-0"
-                                                                        />
-                                                                    ) : (
-                                                                        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300 flex-shrink-0">
-                                                                            {item.source === 'application' ? (
-                                                                                <Briefcase className="h-3.5 w-3.5" />
-                                                                            ) : (
-                                                                                <UserPlus className="h-3.5 w-3.5" />
-                                                                            )}
-                                                                        </div>
-                                                                    )}
-
-                                                                    <div className="min-w-0 flex-1">
-                                                                        <div className="flex items-center justify-between gap-2">
-                                                                            <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100 truncate">
-                                                                                {item.source === 'application'
-                                                                                    ? item.project?.title || 'Unknown project'
-                                                                                    : user?.fullName || user?.username || 'User'}
-                                                                            </p>
-                                                                            <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide flex-shrink-0", HISTORY_STATUS_STYLES[item.status as HistoryStatus] || HISTORY_STATUS_STYLES.rejected)}>
-                                                                                {HISTORY_STATUS_LABELS[item.status as HistoryStatus] || item.status}
-                                                                            </span>
-                                                                        </div>
-                                                                        <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-0.5">{getHistorySummary(item)}</p>
-                                                                        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 text-[11px] text-zinc-400 dark:text-zinc-500">
-                                                                            {user && (
-                                                                                <Link href={profileHref(user)} className="hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors">
-                                                                                    View profile
-                                                                                </Link>
-                                                                            )}
-                                                                            {item.source === 'application' && item.project?.slug && (
-                                                                                <Link href={`/projects/${item.project.slug}`} className="hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors">
-                                                                                    View project
-                                                                                </Link>
-                                                                            )}
-                                                                            <span>{formatDistanceToNow(new Date(item.eventAt), { addSuffix: true })}</span>
-                                                                        </div>
-                                                                    </div>
-                                                                </div>
-                                                            </div>
-                                                        </div>
-                                                    );
-                                                })}
+            {/* ── Activity Timeline ── */}
+            <CollapsibleSection
+                title="Activity"
+                icon={<History className="w-4 h-4 text-blue-500" />}
+                open={timelineOpen}
+                onToggle={() => setTimelineOpen(!timelineOpen)}
+                count={historyItems.length}
+                panelId={timelinePanelId}
+            >
+                {historyLoading && historyItems.length === 0 ? (
+                    <div className="rounded-2xl border border-zinc-200/60 dark:border-white/5 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl p-8">
+                        <div className="space-y-4 animate-pulse">
+                            {[1, 2, 3, 4].map((i) => (
+                                <div key={i} className="flex gap-3">
+                                    <div className="w-9 h-9 rounded-full bg-zinc-200/60 dark:bg-zinc-800 flex-shrink-0" />
+                                    <div className="flex-1 space-y-2 pt-1">
+                                        <div className="h-3.5 w-48 bg-zinc-200/60 dark:bg-zinc-800 rounded" />
+                                        <div className="h-3 w-64 bg-zinc-200/60 dark:bg-zinc-800 rounded" />
+                                        <div className="h-2.5 w-24 bg-zinc-200/60 dark:bg-zinc-800 rounded" />
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                ) : visibleHistoryItems.length === 0 ? (
+                    <div className="rounded-2xl border border-zinc-200/60 dark:border-white/5 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl px-6 py-12 text-center">
+                        <History className="w-10 h-10 text-zinc-300 dark:text-zinc-600 mx-auto mb-3" />
+                        <p className="text-sm font-medium text-zinc-500 dark:text-zinc-400">No activity yet</p>
+                        <p className="text-xs text-zinc-400 dark:text-zinc-500 mt-1">
+                            Your connection and application history will appear here
+                        </p>
+                    </div>
+                ) : (
+                    <div className="space-y-4">
+                        {/* 7D: Connection Activity sub-section */}
+                        {connectionHistoryItems.length > 0 && (
+                            <CollapsibleSection
+                                title="Connection Activity"
+                                icon={<UserPlus className="w-4 h-4 text-emerald-500" />}
+                                open={connectionActivityOpen}
+                                onToggle={() => setConnectionActivityOpen(!connectionActivityOpen)}
+                                count={connectionHistoryItems.length}
+                                panelId="connection-activity-panel"
+                            >
+                                <div className="rounded-2xl border border-zinc-200/60 dark:border-white/5 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl">
+                                    {groupedConnectionHistory.map((group, groupIdx) => (
+                                        <div key={group.label}>
+                                            <div className={cn(
+                                                "sticky top-0 z-10 px-5 py-2.5 bg-zinc-50/90 dark:bg-zinc-900/90 backdrop-blur-sm",
+                                                groupIdx === 0 ? "rounded-t-2xl" : "border-t border-zinc-200/60 dark:border-white/5",
+                                            )}>
+                                                <span className="text-[11px] font-semibold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider">
+                                                    {group.label}
+                                                </span>
+                                            </div>
+                                            <div className="px-5 py-4">
+                                                {group.items.map((item, itemIdx) => (
+                                                    <TimelineItem
+                                                        key={`${item.source}-${item.id}-${item.status}-${item.eventAt}`}
+                                                        item={item}
+                                                        isLast={itemIdx === group.items.length - 1}
+                                                    />
+                                                ))}
                                             </div>
                                         </div>
-                                    </div>
-                                ))}
-                                {hasMoreHistory && (
-                                    <button
-                                        type="button"
-                                        onClick={() => setHistoryLimit((prev) => prev + HISTORY_BATCH_STEP)}
-                                        className="w-full rounded-xl border border-zinc-200 dark:border-zinc-800 px-3 py-2 text-xs font-medium text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-900 transition-colors"
-                                    >
-                                        Load more activity
-                                    </button>
-                                )}
+                                    ))}
+                                </div>
+                            </CollapsibleSection>
+                        )}
+
+                        {/* 7D: Application Activity sub-section */}
+                        {applicationHistoryItems.length > 0 && (
+                            <CollapsibleSection
+                                title="Application Activity"
+                                icon={<Briefcase className="w-4 h-4 text-violet-500" />}
+                                open={applicationActivityOpen}
+                                onToggle={() => setApplicationActivityOpen(!applicationActivityOpen)}
+                                count={applicationHistoryItems.length}
+                                panelId="application-activity-panel"
+                            >
+                                <div className="rounded-2xl border border-zinc-200/60 dark:border-white/5 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl">
+                                    {groupedApplicationHistory.map((group, groupIdx) => (
+                                        <div key={group.label}>
+                                            <div className={cn(
+                                                "sticky top-0 z-10 px-5 py-2.5 bg-zinc-50/90 dark:bg-zinc-900/90 backdrop-blur-sm",
+                                                groupIdx === 0 ? "rounded-t-2xl" : "border-t border-zinc-200/60 dark:border-white/5",
+                                            )}>
+                                                <span className="text-[11px] font-semibold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider">
+                                                    {group.label}
+                                                </span>
+                                            </div>
+                                            <div className="px-5 py-4">
+                                                {group.items.map((item, itemIdx) => (
+                                                    <TimelineItem
+                                                        key={`${item.source}-${item.id}-${item.status}-${item.eventAt}`}
+                                                        item={item}
+                                                        isLast={itemIdx === group.items.length - 1}
+                                                    />
+                                                ))}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </CollapsibleSection>
+                        )}
+
+                        {/* Load more */}
+                        {(hasMoreHistory || hasMoreHistoryLocal) && (
+                            <div className="px-5 py-3">
+                                <button
+                                    type="button"
+                                    disabled={isFetchingMoreHistory}
+                                    onClick={() => {
+                                        if (hasMoreHistoryLocal) {
+                                            setHistoryLimit((prev) => prev + HISTORY_BATCH_STEP);
+                                        } else if (hasMoreHistory) {
+                                            setHistoryLimit((prev) => prev + HISTORY_BATCH_STEP);
+                                            fetchMoreHistory();
+                                        }
+                                    }}
+                                    className="w-full rounded-xl px-3 py-2 text-xs font-medium text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors disabled:opacity-50"
+                                >
+                                    {isFetchingMoreHistory ? "Loading..." : "Load more activity"}
+                                </button>
                             </div>
                         )}
                     </div>
                 )}
-            </div>
+            </CollapsibleSection>
+
             <ConfirmDialog
                 open={!!bulkAction}
                 onOpenChange={(open) => { if (!open) setBulkAction(null); }}
-                title={bulkAction?.type === 'accept' ? 'Accept All Requests' : 'Reject All Requests'}
-                description={bulkAction?.type === 'accept'
+                title={bulkAction?.type === "accept" ? "Accept All Requests" : "Reject All Requests"}
+                description={bulkAction?.type === "accept"
                     ? `Accept all ${incomingRequests.length} incoming requests?`
                     : `Reject all ${incomingRequests.length} incoming requests? This cannot be undone in bulk.`}
-                confirmLabel={bulkAction?.type === 'accept' ? 'Accept All' : 'Reject All'}
-                variant={bulkAction?.type === 'reject' ? 'destructive' : 'default'}
-                onConfirm={() => bulkAction?.type === 'accept' ? confirmAcceptAll() : confirmRejectAll()}
+                confirmLabel={bulkAction?.type === "accept" ? "Accept All" : "Reject All"}
+                variant={bulkAction?.type === "reject" ? "destructive" : "default"}
+                onConfirm={() => bulkAction?.type === "accept" ? confirmAcceptAll() : confirmRejectAll()}
             />
         </div>
     );

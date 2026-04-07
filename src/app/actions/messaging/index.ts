@@ -8,15 +8,12 @@ export {
     // Conversations
     getConversations,
     getConversationById,
+    getOrCreateDMConversation,
     markConversationAsRead,
     setConversationArchived,
     setConversationMuted,
     getProjectGroups,
     getUnreadCount,
-} from './conversations'
-
-export {
-    getOrCreateDMConversation,
 
     // Messages
     getMessages,
@@ -39,10 +36,19 @@ export {
 export type {
     ConversationWithDetails,
     ProjectGroupConversation,
-} from './conversations'
-
-export type {
     MessageWithSender,
     SendMessageResult,
     UploadedAttachment,
 } from './_all'
+
+// Features: Reactions, Reports, Read Receipts, Pinning
+export {
+    toggleReaction,
+    getMessageReactions,
+    reportMessage,
+    recordReadReceipts,
+    getMessageReadReceipts,
+    setConversationPinned,
+} from './features'
+
+export type { ReactionSummary } from './features'

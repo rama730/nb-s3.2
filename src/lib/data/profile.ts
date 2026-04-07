@@ -1,14 +1,22 @@
 import { db } from '@/lib/db'
-import { profiles, projects, connections, type Profile } from '@/lib/db/schema'
-import { eq, or, and, desc, ne } from 'drizzle-orm'
+import { profiles, projects, connections, projectMembers } from '@/lib/db/schema'
+import { eq, or, and, desc, ne, inArray, asc, sql } from 'drizzle-orm'
 import { cache } from 'react'
 import type { User } from '@supabase/supabase-js'
 import type { ConnectionState } from '@/components/profile/v2/types'
 import { createClient } from '@/lib/supabase/server'
-import { getProfile, type StandardProfile } from '@/lib/services/profile-service'
+import { type StandardProfile } from '@/lib/services/profile-service'
 import { resolvePrivacyRelationship } from '@/lib/privacy/resolver'
 import { logger } from '@/lib/logger'
 import { normalizeUsername, validateUsername } from '@/lib/validations/username'
+import {
+    buildProfileMetadataDescription,
+    buildPublicProfileTitle,
+    normalizeProjectDescription,
+    normalizeProjectTitle,
+    trimDisplayText,
+    trimOptionalDisplayText,
+} from '@/lib/profile/display'
 export { normalizeProfile } from '@/lib/utils/normalize-profile'
 import { normalizeProfile } from '@/lib/utils/normalize-profile'
 
@@ -62,7 +70,33 @@ function toBootstrapProfile(
         pronouns: null,
         connectionPrivacy: profile.connectionPrivacy ?? 'everyone',
         workspaceLayout: null,
+        lastActiveAt: null,
         hasRecoveryCodes: false,
+    }
+}
+
+function toLockedShellProfile(profile: ReturnType<typeof normalizeProfile>) {
+    if (!profile) return null
+    return {
+        id: profile.id,
+        username: profile.username,
+        fullName: profile.fullName,
+        avatarUrl: profile.avatarUrl,
+        headline: profile.headline,
+        location: profile.location,
+        visibility: profile.visibility,
+        messagePrivacy: profile.messagePrivacy,
+        connectionPrivacy: profile.connectionPrivacy,
+        availabilityStatus: profile.availabilityStatus,
+        bio: null,
+        website: null,
+        bannerUrl: null,
+        socialLinks: {},
+        openTo: [],
+        skills: [],
+        experience: [],
+        education: [],
+        profileStrength: profile.profileStrength,
     }
 }
 
@@ -110,7 +144,12 @@ export const getUserProfile = cache(async (userId: string) => {
         if (!data) return null;
         return toBootstrapProfile(data);
     } catch (error) {
-        console.error('Error fetching user profile:', error);
+        logger.error('[profile.data] failed to fetch bootstrap profile', {
+            module: 'profile',
+            userId,
+            error: error instanceof Error ? error.message : String(error),
+            stack: error instanceof Error ? error.stack : undefined,
+        });
         return null;
     }
 });
@@ -120,13 +159,49 @@ interface ProfileDetailsOptions {
     viewerUser?: User | null;
 }
 
+export interface ProfileProjectMemberPreview {
+    id: string;
+    displayName: string;
+    username: string | null;
+    avatarUrl: string | null;
+}
+
+export interface ProfileProjectPreview {
+    id: string;
+    ownerId: string;
+    title: string;
+    slug: string | null;
+    description: string;
+    shortDescription: string | null;
+    coverImage: string | null;
+    category: string | null;
+    viewCount: number | null;
+    followersCount: number | null;
+    tags: string[];
+    skills: string[];
+    visibility: string | null;
+    status: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+    href: string;
+    image: string | null;
+    url: string;
+    members: ProfileProjectMemberPreview[];
+}
+
+export interface ProfileMetadataRead {
+    title: string;
+    description: string;
+    image: string | null;
+}
+
 export type ProfilePrivacyStatus = 'not_found' | 'private' | 'public';
 
 export interface ProfileDetailsResult {
     privacyStatus: ProfilePrivacyStatus;
     visibilityReason?: string;
     profile: ReturnType<typeof normalizeProfile> | null;
-    projects: any[];
+    projects: ProfileProjectPreview[];
     posts: any[];
     stats: {
         connectionsCount: number;
@@ -134,6 +209,7 @@ export interface ProfileDetailsResult {
         followersCount: number;
         mutualCount?: number;
     };
+    metadata: ProfileMetadataRead | null;
     connectionStatus: ConnectionState;
     privacyRelationship: {
         canViewProfile: boolean;
@@ -147,6 +223,128 @@ export interface ProfileDetailsResult {
     lockedShell: boolean;
     isOwner: boolean;
     currentUser: User | null;
+}
+
+function buildProjectHref(project: { id: string; slug: string | null }) {
+    return project.slug ? `/projects/${project.slug}` : `/projects/${project.id}`;
+}
+
+async function fetchProjectMembers(projectRows: Array<{ id: string; ownerId: string }>) {
+    const projectIds = projectRows.map((project) => project.id);
+    if (projectIds.length === 0) {
+        return new Map<string, ProfileProjectMemberPreview[]>();
+    }
+
+    const [membershipRows, ownerRows] = await Promise.all([
+        db
+            .select({
+                projectId: projectMembers.projectId,
+                userId: profiles.id,
+                fullName: profiles.fullName,
+                username: profiles.username,
+                avatarUrl: profiles.avatarUrl,
+            })
+            .from(projectMembers)
+            .innerJoin(profiles, eq(projectMembers.userId, profiles.id))
+            .where(inArray(projectMembers.projectId, projectIds))
+            .orderBy(asc(projectMembers.joinedAt)),
+        db
+            .select({
+                id: profiles.id,
+                fullName: profiles.fullName,
+                username: profiles.username,
+                avatarUrl: profiles.avatarUrl,
+            })
+            .from(profiles)
+            .where(inArray(profiles.id, Array.from(new Set(projectRows.map((project) => project.ownerId))))),
+    ]);
+
+    const ownerById = new Map(
+        ownerRows.map((owner) => [
+            owner.id,
+            {
+                id: owner.id,
+                displayName: trimDisplayText(owner.fullName) || trimDisplayText(owner.username) || "Project owner",
+                username: trimOptionalDisplayText(owner.username),
+                avatarUrl: trimOptionalDisplayText(owner.avatarUrl),
+            } satisfies ProfileProjectMemberPreview,
+        ]),
+    );
+
+    const byProject = new Map<string, ProfileProjectMemberPreview[]>();
+    for (const project of projectRows) {
+        byProject.set(project.id, []);
+        const owner = ownerById.get(project.ownerId);
+        if (owner) {
+            byProject.get(project.id)!.push(owner);
+        }
+    }
+
+    for (const row of membershipRows) {
+        const current = byProject.get(row.projectId) ?? [];
+        if (current.some((member) => member.id === row.userId) || current.length >= 3) {
+            byProject.set(row.projectId, current);
+            continue;
+        }
+        current.push({
+            id: row.userId,
+            displayName: trimDisplayText(row.fullName) || trimDisplayText(row.username) || "Collaborator",
+            username: trimOptionalDisplayText(row.username),
+            avatarUrl: trimOptionalDisplayText(row.avatarUrl),
+        });
+        byProject.set(row.projectId, current);
+    }
+
+    return byProject;
+}
+
+function toProjectPreview(
+    project: {
+        id: string;
+        ownerId: string;
+        title: string;
+        slug: string | null;
+        description: string | null;
+        shortDescription: string | null;
+        coverImage: string | null;
+        category: string | null;
+        viewCount: number | null;
+        followersCount: number | null;
+        tags: string[] | null;
+        skills: string[] | null;
+        visibility: string | null;
+        status: string | null;
+        createdAt: Date;
+        updatedAt: Date;
+    },
+    members: ProfileProjectMemberPreview[],
+): ProfileProjectPreview {
+    const title = normalizeProjectTitle(project.title);
+    const description = normalizeProjectDescription(project.shortDescription, project.description);
+    const href = buildProjectHref(project);
+
+    return {
+        id: project.id,
+        ownerId: project.ownerId,
+        title,
+        slug: project.slug,
+        description,
+        shortDescription: trimOptionalDisplayText(project.shortDescription),
+        coverImage: trimOptionalDisplayText(project.coverImage),
+        category: trimOptionalDisplayText(project.category),
+        viewCount: project.viewCount,
+        followersCount: project.followersCount,
+        tags: Array.isArray(project.tags) ? project.tags : [],
+        skills: Array.isArray(project.skills) ? project.skills : [],
+        visibility: project.visibility,
+        status: project.status,
+        createdAt: project.createdAt,
+        updatedAt: project.updatedAt,
+        href,
+        image: trimOptionalDisplayText(project.coverImage),
+        url: href,
+        members,
+    };
 }
 
 export async function getProfileDetails(username?: string, options: ProfileDetailsOptions = {}) {
@@ -169,7 +367,9 @@ export async function getProfileDetails(username?: string, options: ProfileDetai
             });
         }
     } else if (viewerUser) {
-        profileData = await getProfile(viewerUser.id);
+        profileData = await db.query.profiles.findFirst({
+            where: eq(profiles.id, viewerUser.id),
+        });
     }
 
     if (!profileData) {
@@ -184,6 +384,7 @@ export async function getProfileDetails(username?: string, options: ProfileDetai
                 followersCount: 0,
                 mutualCount: 0,
             },
+            metadata: null,
             connectionStatus: 'none',
             privacyRelationship: null,
             lockedShell: false,
@@ -207,6 +408,7 @@ export async function getProfileDetails(username?: string, options: ProfileDetai
                 followersCount: 0,
                 mutualCount: 0,
             },
+            metadata: null,
             connectionStatus: 'none',
             privacyRelationship: null,
             lockedShell: false,
@@ -227,7 +429,7 @@ export async function getProfileDetails(username?: string, options: ProfileDetai
     }
 
     const shouldLoadProjects = !options.skipHeavyData && canViewProfile;
-    const shouldLoadMutualCount = shouldResolveViewerState && !options.skipHeavyData && canViewProfile;
+    const shouldLoadMutualCount = shouldResolveViewerState && canViewProfile;
     const canViewAllProjects = !!isOwner;
 
     const projectVisibilityFilter = canViewAllProjects
@@ -239,7 +441,7 @@ export async function getProfileDetails(username?: string, options: ProfileDetai
         );
 
     // 3. PURE OPTIMIZATION: Lightweight shell first, heavy data only on-demand.
-    const [userProjects, conn, mutualCount] = await Promise.all([
+    const [projectRows, projectCountResult, conn, mutualCount] = await Promise.all([
         shouldLoadProjects
             ? db.query.projects.findMany({
                 where: projectVisibilityFilter,
@@ -265,6 +467,13 @@ export async function getProfileDetails(username?: string, options: ProfileDetai
                 }
             })
             : Promise.resolve([]),
+        canViewProfile
+            ? db
+                .select({ count: sql<number>`count(*)::int` })
+                .from(projects)
+                .where(projectVisibilityFilter)
+                .then((rows) => rows[0]?.count ?? 0)
+            : Promise.resolve(0),
         shouldResolveViewerState
             ? db.query.connections.findFirst({
                 where: or(
@@ -291,6 +500,17 @@ export async function getProfileDetails(username?: string, options: ProfileDetai
             : Promise.resolve(0),
     ]);
 
+    const projectMembersByProject = shouldLoadProjects
+        ? await fetchProjectMembers(projectRows.map((project) => ({
+            id: project.id,
+            ownerId: project.ownerId,
+        })))
+        : new Map<string, ProfileProjectMemberPreview[]>();
+
+    const userProjects = shouldLoadProjects
+        ? projectRows.map((project) => toProjectPreview(project, projectMembersByProject.get(project.id) ?? []))
+        : [];
+
     // Map Connection Status
     let connectionStatus: ConnectionState = 'none';
     if (conn) {
@@ -300,18 +520,40 @@ export async function getProfileDetails(username?: string, options: ProfileDetai
         } else connectionStatus = 'rejected';
     }
 
+    const normalizedProfile = normalizeProfile(profileData)
+    const metadata = normalizedProfile
+        ? {
+            title: buildPublicProfileTitle({
+                username: normalizedProfile.username,
+                fullName: normalizedProfile.fullName,
+            }),
+            description: buildProfileMetadataDescription({
+                username: normalizedProfile.username,
+                fullName: normalizedProfile.fullName,
+                headline: normalizedProfile.headline,
+                location: normalizedProfile.location,
+                bio: normalizedProfile.bio,
+            }),
+            image: normalizedProfile.avatarUrl,
+        }
+        : null
+    const visibleProfile = canViewProfile && !lockedShell
+        ? normalizedProfile
+        : toLockedShellProfile(normalizedProfile)
+
     return {
         privacyStatus: lockedShell ? 'private' : 'public',
         visibilityReason: privacyRelationship.visibilityReason,
-        profile: normalizeProfile(profileData),
+        profile: visibleProfile,
         projects: canViewProfile ? userProjects : [],
         posts: [],
         stats: {
             connectionsCount: profileData.connectionsCount || 0,
-            projectsCount: profileData.projectsCount || 0,
+            projectsCount: projectCountResult || 0,
             followersCount: profileData.followersCount || 0,
             mutualCount,
         },
+        metadata: canViewProfile && !lockedShell ? metadata : null,
         connectionStatus,
         privacyRelationship: {
             canViewProfile: privacyRelationship.canViewProfile,
@@ -355,6 +597,8 @@ export const getPublicProfileMeta = cache(async (username: string) => {
                 username: profiles.username,
                 fullName: profiles.fullName,
                 bio: profiles.bio,
+                headline: profiles.headline,
+                location: profiles.location,
                 avatarUrl: profiles.avatarUrl,
             })
             .from(profiles)
@@ -368,7 +612,12 @@ export const getPublicProfileMeta = cache(async (username: string) => {
 
         return profile || null;
     } catch (error) {
-        console.error('Error fetching public profile meta:', error);
+        logger.error('[profile.data] failed to fetch public profile metadata', {
+            module: 'profile',
+            username: normalizedUsername,
+            error: error instanceof Error ? error.message : String(error),
+            stack: error instanceof Error ? error.stack : undefined,
+        });
         return null;
     }
 });

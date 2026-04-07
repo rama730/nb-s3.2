@@ -11,7 +11,11 @@ import { createVisibilityAwareInterval } from "@/lib/utils/visibility";
 
 const LOCK_RETRY_FALLBACK_MS = 5_000;
 const LOCK_RETRY_MIN_DELAY_MS = 1_000;
-const LOCK_RETRY_EXPIRY_BUFFER_MS = 250;
+const LOCK_RETRY_EXPIRY_BUFFER_MS = 5_000;
+const EMPTY_LOCKS = {} as Record<
+  string,
+  { lockedBy: string; lockedByName?: string | null; expiresAt: number }
+>;
 
 type NodeLockResult = {
   ok: boolean;
@@ -25,6 +29,8 @@ type NodeLockResult = {
 interface UseLockManagerOptions {
   projectId: string;
   currentUserId?: string;
+  currentUserDisplayName?: string | null;
+  isActive: boolean;
   canEdit: boolean;
   panesToRender: PaneId[];
   activeTabIdByPane: Record<PaneId, string | null>;
@@ -41,6 +47,8 @@ interface UseLockManagerOptions {
 export function useLockManager({
   projectId,
   currentUserId,
+  currentUserDisplayName,
+  isActive,
   canEdit,
   panesToRender,
   activeTabIdByPane,
@@ -53,8 +61,10 @@ export function useLockManager({
   leftOpenTabIdsKey,
   rightOpenTabIdsKey,
 }: UseLockManagerOptions) {
+  const mountedRef = useRef(true);
   const setLock = useFilesWorkspaceStore((s) => s.setLock);
   const clearLock = useFilesWorkspaceStore((s) => s.clearLock);
+  const setLastNodeEventSummary = useFilesWorkspaceStore((s) => s.setLastNodeEventSummary);
   const nextLockAttemptAtRef = useRef<Map<string, number>>(new Map());
   const acquiringNodesRef = useRef<Set<string>>(new Set());
 
@@ -76,17 +86,29 @@ export function useLockManager({
 
   const acquireLockForNode = useCallback(
     async (node: ProjectNode) => {
-      if (!currentUserId || acquiringNodesRef.current.has(node.id)) return;
+      if (!currentUserId || !isActive || acquiringNodesRef.current.has(node.id)) return;
       const startedAt = performance.now();
 
       try {
         // Pure Optimization: O(1) Optimistic Local Locking
         // Bypass the Supabase REST API latency for instant UI feedback.
         clearLockAttemptSchedule(node.id);
-        setTabById((prev) => ({
-          ...prev,
-          [node.id]: { ...prev[node.id], hasLock: true, lockInfo: null },
-        }));
+        setTabById((prev) => {
+          const current = prev[node.id];
+          if (!current) return prev;
+          return {
+            ...prev,
+            [node.id]: {
+              ...current,
+              hasLock: true,
+              lockInfo: {
+                lockedBy: currentUserId,
+                lockedByName: currentUserDisplayName ?? null,
+                expiresAt: Date.now() + 120_000,
+              },
+            },
+          };
+        });
         clearLock(projectId, node.id);
 
         // Phase 5 Trace: Follow-up with background server-side acquisition
@@ -96,21 +118,34 @@ export function useLockManager({
           try {
             const res = await acquireProjectNodeLock(projectId, node.id, 120) as NodeLockResult;
             if (res.ok && res.lock) {
+              const confirmedLock = res.lock;
               // Background confirm - update TTL and info
+              if (!mountedRef.current) return;
               setTabById((prev) => {
                 const current = prev[node.id];
                 if (!current || !current.hasLock) return prev; // already lost or changed
                 return {
                   ...prev,
-                  [node.id]: { ...current, lockInfo: res.lock ?? null },
+                  [node.id]: {
+                    ...current,
+                    lockInfo: {
+                      ...confirmedLock,
+                      lockedByName: currentUserDisplayName ?? confirmedLock.lockedByName ?? null,
+                    },
+                  },
                 };
               });
               setLock(projectId, {
                 nodeId: node.id,
                 projectId,
-                lockedBy: res.lock.lockedBy,
-                lockedByName: res.lock.lockedByName,
-                expiresAt: res.lock.expiresAt,
+                lockedBy: confirmedLock.lockedBy,
+                lockedByName: currentUserDisplayName ?? confirmedLock.lockedByName ?? null,
+                expiresAt: confirmedLock.expiresAt,
+              });
+              setLastNodeEventSummary(projectId, node.id, {
+                type: "lock_acquire",
+                at: Date.now(),
+                by: currentUserDisplayName ?? confirmedLock.lockedByName ?? null,
               });
               recordFilesMetric("files.lock.acquire_ms", {
                 projectId,
@@ -121,10 +156,15 @@ export function useLockManager({
               // Conflict detected after optimistic update - revert to server state
               // Pure Optimization: Backoff retry logic to prevent infinite render loops
               scheduleNextLockAttempt(node.id, res.lock.expiresAt);
-              setTabById((prev) => ({
-                ...prev,
-                [node.id]: { ...prev[node.id], hasLock: false, lockInfo: res.lock ?? null },
-              }));
+              if (!mountedRef.current) return;
+              setTabById((prev) => {
+                const current = prev[node.id];
+                if (!current) return prev;
+                return {
+                  ...prev,
+                  [node.id]: { ...current, hasLock: false, lockInfo: res.lock ?? null },
+                };
+              });
               setLock(projectId, {
                 nodeId: node.id,
                 projectId,
@@ -135,10 +175,15 @@ export function useLockManager({
             } else {
               // Unknown failure (e.g. network/auth) - revert optimistic lock slowly
               scheduleNextLockAttempt(node.id);
-              setTabById((prev) => ({
-                ...prev,
-                [node.id]: { ...prev[node.id], hasLock: false, lockInfo: null },
-              }));
+              if (!mountedRef.current) return;
+              setTabById((prev) => {
+                const current = prev[node.id];
+                if (!current) return prev;
+                return {
+                  ...prev,
+                  [node.id]: { ...current, hasLock: false, lockInfo: null },
+                };
+              });
             }
           } catch (e) {
             console.error("Delayed lock acquisition failed", e);
@@ -149,10 +194,14 @@ export function useLockManager({
         })();
       } catch {
         scheduleNextLockAttempt(node.id);
-        setTabById((prev) => ({
-          ...prev,
-          [node.id]: { ...prev[node.id], hasLock: false },
-        }));
+        setTabById((prev) => {
+          const current = prev[node.id];
+          if (!current) return prev;
+          return {
+            ...prev,
+            [node.id]: { ...current, hasLock: false, lockInfo: null },
+          };
+        });
         recordFilesMetric("files.lock.conflict_count", {
           projectId,
           nodeId: node.id,
@@ -161,11 +210,22 @@ export function useLockManager({
         });
       }
     },
-    [clearLock, clearLockAttemptSchedule, currentUserId, projectId, scheduleNextLockAttempt, setLock, setTabById]
+    [
+      clearLock,
+      clearLockAttemptSchedule,
+      currentUserDisplayName,
+      currentUserId,
+      isActive,
+      projectId,
+      scheduleNextLockAttempt,
+      setLastNodeEventSummary,
+      setLock,
+      setTabById,
+    ]
   );
 
   const tryAcquireActivePaneLocks = useCallback(() => {
-    if (!currentUserId || !canEdit) return;
+    if (!currentUserId || !canEdit || !isActive) return;
     const now = Date.now();
     for (const paneId of panesToRender) {
       const id = activeTabIdByPane[paneId];
@@ -176,12 +236,12 @@ export function useLockManager({
       if (nextAttemptAt > now) continue;
       void acquireLockForNode(tab.node);
     }
-  }, [acquireLockForNode, activeTabIdByPane, canEdit, currentUserId, panesToRender, tabByIdRef]);
+  }, [acquireLockForNode, activeTabIdByPane, canEdit, currentUserId, isActive, panesToRender, tabByIdRef]);
 
   // Phase 5: Global Lock Sync (React 19 Pure Sync Pattern)
   // Listen to the store's locks and synchronize with the tab state in real-time.
   const locksForSync = useFilesWorkspaceStore(
-    (s) => s.byProjectId[projectId]?.locksByNodeId || {}
+    (s) => s.byProjectId[projectId]?.locksByNodeId ?? EMPTY_LOCKS
   );
   useEffect(() => {
     const tabIds = Object.keys(tabByIdRef.current);
@@ -218,19 +278,28 @@ export function useLockManager({
     });
   }, [locksForSync, currentUserId, setTabById, tabByIdRef]);
 
+  // Track mount state for async callback guards
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   // Attempt lock acquisition immediately when active tabs change
   useEffect(() => {
+    if (!isActive) return;
     tryAcquireActivePaneLocks();
-  }, [tryAcquireActivePaneLocks]);
+  }, [isActive, tryAcquireActivePaneLocks]);
 
   // Polling for lock retry
   useEffect(() => {
-    if (!currentUserId || !canEdit) return;
+    if (!currentUserId || !canEdit || !isActive) return;
     const cleanup = createVisibilityAwareInterval(() => {
       tryAcquireActivePaneLocks();
-    }, 3_000);
+    }, 3_000 + Math.floor(Math.random() * 1000));
     return cleanup;
-  }, [canEdit, currentUserId, tryAcquireActivePaneLocks]);
+  }, [canEdit, currentUserId, isActive, tryAcquireActivePaneLocks]);
 
   // Clean up stale lock attempt schedules for closed tabs
   useEffect(() => {
@@ -244,7 +313,7 @@ export function useLockManager({
 
   // Refresh lock TTL for active tabs
   useEffect(() => {
-    if (!currentUserId) return;
+    if (!currentUserId || !isActive) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
 
@@ -280,17 +349,22 @@ export function useLockManager({
           const res = await refreshProjectNodeLock(projectId, id, 120);
           if (!res.ok) {
             // Lock lost on server (evicted or expired)
-            setTabById((prev) => ({
-              ...prev,
-              [id]: { ...prev[id], hasLock: false },
-            }));
+            if (!mountedRef.current) return;
+            setTabById((prev) => {
+              const current = prev[id];
+              if (!current) return prev;
+              return {
+                ...prev,
+                [id]: { ...current, hasLock: false },
+              };
+            });
             clearLock(projectId, id);
           }
         } catch {
           // Network failure - don't drop lock yet, retry next tick
         }
       }
-      const nextDelay = document.hidden ? 180_000 : 60_000;
+      const nextDelay = document.hidden ? 170_000 : 50_000;
       schedule(nextDelay);
     };
 
@@ -310,7 +384,32 @@ export function useLockManager({
       clearTimer();
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [activeTabIdByPane, currentUserId, panesToRender, projectId, leftActiveTabId, rightActiveTabId, clearLock, setTabById, tabByIdRef]);
+  }, [activeTabIdByPane, currentUserId, isActive, panesToRender, projectId, leftActiveTabId, rightActiveTabId, clearLock, setTabById, tabByIdRef]);
+
+  // FW2: Release locks on tab/window close via sendBeacon to prevent orphan locks
+  useEffect(() => {
+    if (!currentUserId || !isActive) return;
+
+    const handleBeforeUnload = () => {
+      const lockedNodeIds: string[] = [];
+      const tabs = tabByIdRef.current;
+      for (const id of Object.keys(tabs)) {
+        const tab = tabs[id];
+        if (tab?.hasLock && tab.lockInfo?.lockedBy === currentUserId) {
+          lockedNodeIds.push(id);
+        }
+      }
+      if (lockedNodeIds.length === 0) return;
+
+      const payload = JSON.stringify({ projectId, nodeIds: lockedNodeIds });
+      navigator.sendBeacon('/api/v1/files/locks/release', new Blob([payload], { type: 'application/json' }));
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [currentUserId, isActive, projectId, tabByIdRef]);
 
   return {
     acquireLockForNode,

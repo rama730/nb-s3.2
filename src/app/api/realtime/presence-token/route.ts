@@ -6,6 +6,7 @@ import { getRequestId, getRequestIp } from "@/app/api/v1/_shared";
 import { db } from "@/lib/db";
 import { conversationParticipants, projectMembers } from "@/lib/db/schema";
 import { logger } from "@/lib/logger";
+import { resolvePresenceWebSocketUrl } from "@/lib/realtime/presence-config";
 import { createPresenceTokenClaims, signPresenceToken } from "@/lib/realtime/presence-token";
 import type { PresenceRoomRole, PresenceRoomType } from "@/lib/realtime/presence-types";
 import { consumeRateLimitPolicy } from "@/lib/security/rate-limit";
@@ -13,25 +14,12 @@ import { getViewerAuthContext } from "@/lib/server/viewer-context";
 
 const requestSchema = z.object({
   roomType: z.enum(["conversation", "workspace"]),
-  roomId: z.string().trim().min(1).max(128),
+  roomId: z.string().trim().min(1).max(128).regex(/^[a-zA-Z0-9_:-]+$/, 'Invalid room ID format'),
   role: z.enum(["viewer", "editor"]).optional(),
 });
 
 function resolvePresenceWsUrl() {
-  const configured = (
-    process.env.NEXT_PUBLIC_PRESENCE_WS_URL?.trim()
-    || process.env.PRESENCE_WS_URL?.trim()
-  );
-
-  if (configured) {
-    return configured;
-  }
-
-  if (process.env.NODE_ENV !== "production") {
-    return "ws://127.0.0.1:4010/ws";
-  }
-
-  return "";
+  return resolvePresenceWebSocketUrl();
 }
 
 async function assertPresenceRoomAccess(input: {

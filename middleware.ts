@@ -25,18 +25,26 @@ export async function middleware(request: NextRequest) {
         if (viewerId && username && redis) {
             try {
                 // Resolution: Get target userId from username (cached in Redis)
-                const targetId = await redis.get(`username:${username}:id`);
-                
-                if (targetId && typeof targetId === 'string') {
-                    // Check connection status in O(1) Redis set
-                    const isConnected = await redis.sismember(`user:${viewerId}:connections`, targetId);
-                    
+                // Wrap in 50ms timeout — this is a pure optimization, never block the request
+                const status = await Promise.race([
+                    (async () => {
+                        const targetId = await redis.get(`username:${username}:id`);
+                        if (targetId && typeof targetId === 'string') {
+                            const isConnected = await redis.sismember(`user:${viewerId}:connections`, targetId);
+                            return isConnected ? 'connected' : 'none';
+                        }
+                        return null;
+                    })(),
+                    new Promise<null>((resolve) => setTimeout(() => resolve(null), 50)),
+                ]);
+
+                if (status) {
                     const response = NextResponse.next();
-                    response.headers.set('x-connection-status', isConnected ? 'connected' : 'none');
+                    response.headers.set('x-connection-status', status);
                     return response;
                 }
-            } catch (err) {
-                console.warn('[middleware] Redis hydration failed:', err);
+            } catch {
+                // Silent fail — middleware is a pure optimization, never block the request
             }
         }
     }

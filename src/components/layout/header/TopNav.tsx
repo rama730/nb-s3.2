@@ -12,20 +12,21 @@ import ThemeToggle from "./ThemeToggle";
 import dynamic from "next/dynamic";
 const MobileMenu = dynamic(() => import("./MobileMenu"), { ssr: false });
 const CommandPalette = dynamic(() => import("./CommandPalette"), { ssr: false });
+const NotificationPreview = dynamic(() => import("./NotificationPreview"), { ssr: false });
 
 import GlobalSearch from "./GlobalSearch";
 import WorkspaceIndicator from "./WorkspaceIndicator";
-import NotificationPreview from "./NotificationPreview";
 import { ProfileAvatar } from "./ProfileMenu";
 import { useScrollShadow } from "@/hooks/useScrollShadow";
 
 import { useAuth } from "@/lib/hooks/use-auth";
 import { useNotifications } from "@/hooks/useNotifications";
-import { useMessageNotifications } from "@/hooks/useMessageNotifications";
+import { useUnreadSummary } from "@/hooks/useMessagesV2";
 import { usePeopleNotifications } from "@/hooks/usePeopleNotifications";
 
 import { ROUTES } from "@/constants/routes";
 import MessageIndicator from "./MessageIndicator";
+import { logger } from "@/lib/logger";
 
 export default function TopNav() {
     const pathname = usePathname();
@@ -34,7 +35,8 @@ export default function TopNav() {
     const { isAuthenticated: isSignedIn, isLoading: authLoading, profile } = useAuth();
 
     const { unreadCount: unreadNotifications } = useNotifications();
-    const { hasUnread: hasUnreadMessages } = useMessageNotifications();
+    const { data: unreadMessagesCount } = useUnreadSummary();
+    const hasUnreadMessages = (unreadMessagesCount ?? 0) > 0;
     const { totalPending } = usePeopleNotifications();
 
     // Hydration fix: ensures we only render auth-dependent UI after mount
@@ -102,7 +104,11 @@ export default function TopNav() {
             router.push(ROUTES.LOGIN);
             router.refresh();
         } catch (error) {
-            console.error("Error signing out", { error });
+            logger.error("[topnav] sign out failed", {
+                module: "navigation",
+                error: error instanceof Error ? error.message : String(error),
+                stack: error instanceof Error ? error.stack : undefined,
+            });
         }
     }, [supabase, router]);
 

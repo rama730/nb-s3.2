@@ -7,19 +7,28 @@ import {
   verifyPresenceToken,
 } from "@/lib/realtime/presence-token";
 
+const mutableEnv = process.env as Record<string, string | undefined>;
 const originalSecret = process.env.PRESENCE_TOKEN_SECRET;
+const originalNodeEnv = process.env.NODE_ENV;
 
 afterEach(() => {
   if (originalSecret === undefined) {
-    delete process.env.PRESENCE_TOKEN_SECRET;
+    delete mutableEnv.PRESENCE_TOKEN_SECRET;
+  } else {
+    mutableEnv.PRESENCE_TOKEN_SECRET = originalSecret;
+  }
+
+  if (originalNodeEnv === undefined) {
+    delete mutableEnv.NODE_ENV;
     return;
   }
-  process.env.PRESENCE_TOKEN_SECRET = originalSecret;
+  mutableEnv.NODE_ENV = originalNodeEnv;
 });
 
 describe("presence token", () => {
-  it("requires a dedicated presence token secret", () => {
-    delete process.env.PRESENCE_TOKEN_SECRET;
+  it("uses a deterministic fallback secret outside production", () => {
+    delete mutableEnv.PRESENCE_TOKEN_SECRET;
+    mutableEnv.NODE_ENV = "development";
 
     const claims = createPresenceTokenClaims({
       userId: "user-1",
@@ -30,14 +39,31 @@ describe("presence token", () => {
       ttlSeconds: 60,
     });
 
-    assert.throws(
-      () => signPresenceToken(claims),
-      /PRESENCE_TOKEN_SECRET is required to issue presence room tokens/i,
-    );
+    const token = signPresenceToken(claims);
+    const verified = verifyPresenceToken(token);
+
+    assert.equal(verified.userId, "user-1");
+    assert.equal(verified.roomId, "project-1");
+  });
+
+  it("requires an explicit secret in production", () => {
+    delete mutableEnv.PRESENCE_TOKEN_SECRET;
+    mutableEnv.NODE_ENV = "production";
+
+    const claims = createPresenceTokenClaims({
+      userId: "user-1",
+      sessionId: "session-1",
+      roomType: "workspace",
+      roomId: "project-1",
+      role: "editor",
+      ttlSeconds: 60,
+    });
+
+    assert.throws(() => signPresenceToken(claims), /PRESENCE_TOKEN_SECRET is required/i);
   });
 
   it("signs and verifies room-scoped claims", () => {
-    process.env.PRESENCE_TOKEN_SECRET = "presence-test-secret";
+    mutableEnv.PRESENCE_TOKEN_SECRET = "presence-test-secret";
 
     const claims = createPresenceTokenClaims({
       userId: "user-1",
@@ -58,7 +84,7 @@ describe("presence token", () => {
   });
 
   it("rejects expired tokens", () => {
-    process.env.PRESENCE_TOKEN_SECRET = "presence-test-secret";
+    mutableEnv.PRESENCE_TOKEN_SECRET = "presence-test-secret";
 
     const token = signPresenceToken({
       userId: "user-1",

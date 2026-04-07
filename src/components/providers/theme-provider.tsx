@@ -63,11 +63,17 @@ interface ThemeProviderProps {
     children: ReactNode
 }
 
+type IdleWindow = Window & typeof globalThis & {
+    requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number
+    cancelIdleCallback?: (handle: number) => void
+}
+
 function ensureThemeColorMeta(content: string) {
-    let meta = document.querySelector('meta[name="theme-color"]') as HTMLMetaElement | null
+    let meta = document.querySelector('meta[data-app-theme-color="true"]') as HTMLMetaElement | null
     if (!meta) {
         meta = document.createElement('meta')
         meta.name = 'theme-color'
+        meta.setAttribute('data-app-theme-color', 'true')
         document.head.appendChild(meta)
     }
     if (meta.content !== content) meta.content = content
@@ -367,6 +373,8 @@ function ThemeRuntimeProvider({ children }: ThemeProviderProps) {
 
     useEffect(() => {
         let cancelled = false
+        let idleHandle: number | null = null
+        const idleWindow = window as IdleWindow
         const startedAt = performance.now()
         const nowIso = new Date().toISOString()
         const localSnapshot = readLocalAppearanceSnapshot((key) => localStorage.getItem(key), nowIso)
@@ -396,59 +404,81 @@ function ThemeRuntimeProvider({ children }: ThemeProviderProps) {
         bootstrappedRef.current = true
         setSyncState('idle')
 
-        void readAppearanceSettings().then((result) => {
-            if (cancelled) return
-            const nextUserId = result.userId ?? null
+        const runRemoteBootstrap = () => {
+            void readAppearanceSettings().then((result) => {
+                if (cancelled) return
+                const nextUserId = result.userId ?? null
 
-            setViewerId(nextUserId)
-            const nextShellEnabled = isHardeningDomainEnabled('shellV1', nextUserId)
-            const nextProfileEnabled = isHardeningDomainEnabled('profileV1', nextUserId)
-            setShellHardeningEnabled(nextShellEnabled)
-            setProfileHardeningEnabled(nextProfileEnabled)
-            lastSyncedSnapshotRef.current = result.snapshot
+                setViewerId(nextUserId)
+                const nextShellEnabled = isHardeningDomainEnabled('shellV1', nextUserId)
+                const nextProfileEnabled = isHardeningDomainEnabled('profileV1', nextUserId)
+                setShellHardeningEnabled(nextShellEnabled)
+                setProfileHardeningEnabled(nextProfileEnabled)
+                lastSyncedSnapshotRef.current = result.snapshot
 
-            if (!nextUserId || !nextProfileEnabled) {
-                return
-            }
+                if (!nextUserId || !nextProfileEnabled) {
+                    return
+                }
 
-            const remoteSnapshot = result.snapshot
-            if (!remoteSnapshot) {
+                const remoteSnapshot = result.snapshot
+                if (!remoteSnapshot) {
+                    logger.metric('theme.snapshot.fallback', {
+                        source: 'remote',
+                        reason: 'missing-or-invalid',
+                    })
+                    pendingSyncRef.current = localSnapshot
+                    setSyncState('saving')
+                    return
+                }
+
+                const preferredSnapshot = choosePreferredSnapshot(localSnapshot, remoteSnapshot)
+                if (isSnapshotNewer(remoteSnapshot, localSnapshot)) {
+                    applySnapshotLocally(preferredSnapshot, 'bootstrap-remote-preferred')
+                    setLastSyncedAt(remoteSnapshot.updatedAt)
+                    setSyncState('saved')
+                    logger.metric('theme.snapshot.remote_preferred', { userId: nextUserId })
+                } else {
+                    pendingSyncRef.current = localSnapshot
+                    setSyncState('saving')
+                    logger.metric('theme.snapshot.local_preferred', { userId: nextUserId })
+                }
+            }).catch((error: unknown) => {
+                if (cancelled) return
                 logger.metric('theme.snapshot.fallback', {
                     source: 'remote',
-                    reason: 'missing-or-invalid',
+                    reason: 'request-failed',
+                    error: error instanceof Error ? error.message : 'unknown',
                 })
-                pendingSyncRef.current = localSnapshot
-                setSyncState('saving')
-                return
-            }
+                setSyncState('idle')
+            }).finally(() => {
+                logger.metric('theme.bootstrap.ms', {
+                    durationMs: Math.round(performance.now() - startedAt),
+                })
+            })
+        }
 
-            const preferredSnapshot = choosePreferredSnapshot(localSnapshot, remoteSnapshot)
-            if (isSnapshotNewer(remoteSnapshot, localSnapshot)) {
-                applySnapshotLocally(preferredSnapshot, 'bootstrap-remote-preferred')
-                setLastSyncedAt(remoteSnapshot.updatedAt)
-                setSyncState('saved')
-                logger.metric('theme.snapshot.remote_preferred', { userId: nextUserId })
-            } else {
-                pendingSyncRef.current = localSnapshot
-                setSyncState('saving')
-                logger.metric('theme.snapshot.local_preferred', { userId: nextUserId })
-            }
-        }).catch((error: unknown) => {
-            if (cancelled) return
-            logger.metric('theme.snapshot.fallback', {
-                source: 'remote',
-                reason: 'request-failed',
-                error: error instanceof Error ? error.message : 'unknown',
-            })
-            setSyncState('idle')
-        }).finally(() => {
-            logger.metric('theme.bootstrap.ms', {
-                durationMs: Math.round(performance.now() - startedAt),
-            })
-        })
+        if (typeof idleWindow.requestIdleCallback === 'function') {
+            idleHandle = idleWindow.requestIdleCallback(() => {
+                idleHandle = null
+                runRemoteBootstrap()
+            }, { timeout: 1200 })
+        } else {
+            idleHandle = window.setTimeout(() => {
+                idleHandle = null
+                runRemoteBootstrap()
+            }, 250)
+        }
 
         return () => {
             cancelled = true
+            if (idleHandle !== null) {
+                if (typeof idleWindow.cancelIdleCallback === 'function') {
+                    idleWindow.cancelIdleCallback(idleHandle)
+                } else {
+                    window.clearTimeout(idleHandle)
+                }
+                idleHandle = null
+            }
             if (syncTimerRef.current !== null) {
                 window.clearTimeout(syncTimerRef.current)
                 syncTimerRef.current = null

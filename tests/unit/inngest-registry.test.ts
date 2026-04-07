@@ -1,61 +1,84 @@
 import assert from "node:assert/strict";
-import { afterEach, beforeEach, describe, it } from "node:test";
+import { afterEach, test } from "node:test";
 
-const mutableEnv = process.env as Record<string, string | undefined>;
-const originalEnv = {
-  DATABASE_URL: process.env.DATABASE_URL,
-  NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
-  NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
-  SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,
-  INNGEST_EXECUTION_ROLE: process.env.INNGEST_EXECUTION_ROLE,
-  NODE_ENV: process.env.NODE_ENV,
-};
+import {
+  WORKER_ONLY_FUNCTION_IDS,
+  getRegisteredInngestFunctions,
+} from "../../src/inngest/registry";
 
-async function loadRegistry() {
-  return import("@/inngest/registry");
+const env = process.env as Record<string, string | undefined>;
+const originalExecutionRole = env.INNGEST_EXECUTION_ROLE;
+const originalNodeEnv = env.NODE_ENV;
+const originalDatabaseUrl = env.DATABASE_URL;
+const originalSupabaseUrl = env.NEXT_PUBLIC_SUPABASE_URL;
+const originalSupabaseAnonKey = env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+const originalSupabaseServiceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY;
+
+function restoreEnv(key: string, value: string | undefined) {
+  if (value === undefined) {
+    delete env[key];
+  } else {
+    env[key] = value;
+  }
 }
 
-beforeEach(() => {
-  mutableEnv.DATABASE_URL = originalEnv.DATABASE_URL || "postgres://postgres:postgres@127.0.0.1:5432/postgres";
-  mutableEnv.NEXT_PUBLIC_SUPABASE_URL = originalEnv.NEXT_PUBLIC_SUPABASE_URL || "https://example.supabase.co";
-  mutableEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY = originalEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY || "anon-key";
-  mutableEnv.SUPABASE_SERVICE_ROLE_KEY = originalEnv.SUPABASE_SERVICE_ROLE_KEY || "service-role-key";
-});
+function seedWorkerRegistryEnv() {
+  env.DATABASE_URL = env.DATABASE_URL ?? "postgres://user:password@127.0.0.1:5432/edge_test";
+  env.NEXT_PUBLIC_SUPABASE_URL = env.NEXT_PUBLIC_SUPABASE_URL ?? "https://example.supabase.co";
+  env.NEXT_PUBLIC_SUPABASE_ANON_KEY = env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "anon-key";
+  env.SUPABASE_SERVICE_ROLE_KEY = env.SUPABASE_SERVICE_ROLE_KEY ?? "service-role-key";
+}
 
 afterEach(() => {
-  for (const [key, value] of Object.entries(originalEnv)) {
-    if (value === undefined) {
-      delete mutableEnv[key];
-    } else {
-      mutableEnv[key] = value;
-    }
-  }
+  restoreEnv("INNGEST_EXECUTION_ROLE", originalExecutionRole);
+  restoreEnv("NODE_ENV", originalNodeEnv);
+  restoreEnv("DATABASE_URL", originalDatabaseUrl);
+  restoreEnv("NEXT_PUBLIC_SUPABASE_URL", originalSupabaseUrl);
+  restoreEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY", originalSupabaseAnonKey);
+  restoreEnv("SUPABASE_SERVICE_ROLE_KEY", originalSupabaseServiceRoleKey);
 });
 
-describe("inngest registry", () => {
-  it("registers no functions in web execution mode", async () => {
-    mutableEnv.INNGEST_EXECUTION_ROLE = "web";
-    const { getInngestExecutionRole, getRegisteredInngestFunctions } = await loadRegistry();
+test("getRegisteredInngestFunctions returns no worker functions for web role", () => {
+  const functions = getRegisteredInngestFunctions("web");
+  assert.deepEqual(functions, []);
+});
 
-    assert.equal(getInngestExecutionRole(), "web");
-    assert.equal(getRegisteredInngestFunctions().length, 0);
-  });
+test("getRegisteredInngestFunctions returns the expected worker function entries for worker role", () => {
+  seedWorkerRegistryEnv();
+  const functions = getRegisteredInngestFunctions("worker");
+  const functionIds = functions
+    .map((fn) => typeof fn.id === "function" ? fn.id() : fn.id)
+    .sort();
 
-  it("registers worker functions in worker mode", async () => {
-    mutableEnv.INNGEST_EXECUTION_ROLE = "worker";
-    const { getRegisteredInngestFunctions, WORKER_ONLY_FUNCTION_IDS } = await loadRegistry();
+  assert.equal(functions.length, WORKER_ONLY_FUNCTION_IDS.length);
+  assert.deepEqual(functionIds, [...WORKER_ONLY_FUNCTION_IDS].sort());
+});
 
-    assert.equal(getRegisteredInngestFunctions().length, WORKER_ONLY_FUNCTION_IDS.length);
-  });
+test("getRegisteredInngestFunctions defaults to worker registration when INNGEST_EXECUTION_ROLE is unset outside production", () => {
+  seedWorkerRegistryEnv();
+  delete env.INNGEST_EXECUTION_ROLE;
+  env.NODE_ENV = "test";
 
-  it("requires an explicit production execution role", async () => {
-    delete mutableEnv.INNGEST_EXECUTION_ROLE;
-    mutableEnv.NODE_ENV = "production";
-    const { getInngestExecutionRole } = await loadRegistry();
+  const functions = getRegisteredInngestFunctions();
 
-    assert.throws(
-      () => getInngestExecutionRole(),
-      /INNGEST_EXECUTION_ROLE must be explicitly set in production/,
-    );
-  });
+  assert.equal(functions.length, WORKER_ONLY_FUNCTION_IDS.length);
+});
+
+test("getRegisteredInngestFunctions respects INNGEST_EXECUTION_ROLE when it is set to web", () => {
+  env.INNGEST_EXECUTION_ROLE = "web";
+  env.NODE_ENV = "production";
+
+  const functions = getRegisteredInngestFunctions();
+
+  assert.deepEqual(functions, []);
+});
+
+test("getRegisteredInngestFunctions throws in production when INNGEST_EXECUTION_ROLE is not set", () => {
+  delete env.INNGEST_EXECUTION_ROLE;
+  env.NODE_ENV = "production";
+
+  assert.throws(
+    () => getRegisteredInngestFunctions(),
+    /INNGEST_EXECUTION_ROLE must be explicitly set in production\./,
+  );
 });

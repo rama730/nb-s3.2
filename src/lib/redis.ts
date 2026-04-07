@@ -1,4 +1,5 @@
 import { Redis } from '@upstash/redis'
+import { logger } from '@/lib/logger'
 
 export type CacheEnvelope<T> = {
     value: T
@@ -27,7 +28,7 @@ export function getRedisClient() {
         redisClient = createRedisClient()
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
-        console.warn(`[redis] initialization failed: ${message}`)
+        logger.warn('redis.initialization.failed', { module: 'redis', error: message })
         redisClient = null
     }
 
@@ -72,7 +73,7 @@ async function getJsonValue<T>(key: string): Promise<T | null> {
         return JSON.parse(raw) as T
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
-        console.warn(`[redis] failed to parse cached value for ${key}: ${message}`)
+        logger.warn('redis.parse.failed', { module: 'redis', key, error: message })
         return null
     }
 }
@@ -117,6 +118,14 @@ export async function getCacheEnvelope<T>(key: string): Promise<CacheEnvelope<T>
         staleAt: null,
         expiresAt: null,
     }
+}
+
+/**
+ * Check if a cache envelope is stale (past freshTtl but not yet expired).
+ * Consumers can use this to trigger background revalidation.
+ */
+export function isCacheStale<T>(envelope: CacheEnvelope<T>): boolean {
+    return envelope.staleAt !== null && Date.now() > envelope.staleAt
 }
 
 export async function getCachedData<T>(key: string): Promise<T | null> {
