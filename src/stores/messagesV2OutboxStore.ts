@@ -3,16 +3,38 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { UploadedAttachment } from '@/app/actions/messaging';
+import type { MessageContextChip } from '@/lib/messages/structured';
 
 export type MessagesV2DeliveryState = 'queued' | 'sending' | 'sent' | 'failed';
+export type MessagesV2OutboxMode = 'plain' | 'structured';
+
+export interface MessagesV2OutboxStructuredAction {
+    kind: 'project_invite' | 'feedback_request' | 'availability_request' | 'task_approval' | 'rate_share' | 'handoff_summary';
+    title?: string | null;
+    summary: string;
+    note?: string | null;
+    projectId?: string | null;
+    taskId?: string | null;
+    fileId?: string | null;
+    profileId?: string | null;
+    amount?: string | null;
+    unit?: string | null;
+    dueAt?: string | null;
+    completed?: string | null;
+    blocked?: string | null;
+    next?: string | null;
+}
 
 export interface MessagesV2OutboxItem {
     clientMessageId: string;
     conversationId: string;
     targetUserId?: string | null;
+    mode?: MessagesV2OutboxMode;
     content: string;
     attachments: UploadedAttachment[];
     replyToMessageId?: string | null;
+    contextChips?: MessageContextChip[];
+    structuredAction?: MessagesV2OutboxStructuredAction | null;
     createdAt: number;
     attempts: number;
     nextRetryAt: number;
@@ -27,7 +49,7 @@ interface MessagesV2OutboxState {
     requeueSendingItems: (nextRetryAt: number) => void;
     markItem: (
         clientMessageId: string,
-        patch: Partial<Pick<MessagesV2OutboxItem, 'attempts' | 'nextRetryAt' | 'state' | 'error' | 'conversationId'>>,
+        patch: Partial<Pick<MessagesV2OutboxItem, 'attempts' | 'nextRetryAt' | 'state' | 'error' | 'conversationId' | 'contextChips' | 'structuredAction'>>,
     ) => void;
 }
 
@@ -70,12 +92,23 @@ export const useMessagesV2OutboxStore = create<MessagesV2OutboxState>()(
         }),
         {
             name: 'messages-v2-outbox',
-            version: 1,
+            version: 2,
             migrate: (persisted: unknown, version: number) => {
-                if (version === 0 || !persisted || typeof persisted !== 'object') {
+                if (!persisted || typeof persisted !== 'object') {
                     return { items: [] };
                 }
-                return persisted as MessagesV2OutboxState;
+                const next = persisted as MessagesV2OutboxState;
+                return {
+                    ...next,
+                    items: Array.isArray(next.items)
+                        ? next.items.map((item) => ({
+                            mode: item.mode ?? (item.structuredAction ? 'structured' : 'plain'),
+                            contextChips: item.contextChips ?? [],
+                            structuredAction: item.structuredAction ?? null,
+                            ...item,
+                        }))
+                        : [],
+                } satisfies MessagesV2OutboxState;
             },
         },
     ),

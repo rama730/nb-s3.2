@@ -52,3 +52,13 @@ export {
 } from './features'
 
 export type { ReactionSummary } from './features'
+
+export {
+    convertMessageToFollowUpActionV2,
+    convertMessageToTaskActionV2,
+    getMessagingStructuredCatalogV2,
+    resolveMessageWorkflowActionV2,
+    sendStructuredMessageActionV2,
+} from './collaboration'
+
+export type { MessagingStructuredCatalogV2 } from './collaboration'

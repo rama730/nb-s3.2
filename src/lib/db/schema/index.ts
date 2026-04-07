@@ -1,5 +1,6 @@
 import { pgTable, uuid, text, timestamp, boolean, jsonb, index, uniqueIndex, integer, bigint, foreignKey, primaryKey, check } from 'drizzle-orm/pg-core'
 import { relations, sql } from 'drizzle-orm'
+import { buildMessageSearchDocumentSql } from '@/lib/messages/search-document'
 
 type ProfileExperienceEntry = Record<string, unknown>;
 type ProfileEducationEntry = Record<string, unknown>;
@@ -984,6 +985,10 @@ export const conversationParticipants = pgTable('conversation_participants', {
     // Pure Optimization: Denormalized counts for O(1) badges (1M+ Users)
     unreadCount: integer('unread_count').default(0).notNull(),
     lastMessageAt: timestamp('last_message_at', { withTimezone: true }),
+    lastMessageId: uuid('last_message_id'),
+    lastMessagePreview: text('last_message_preview'),
+    lastMessageType: text('last_message_type'),
+    lastMessageSenderId: uuid('last_message_sender_id'),
     pinnedAt: timestamp('pinned_at', { withTimezone: true }),
 }, (t) => ({
     conversationUserUnique: uniqueIndex('conversation_participants_unique').on(t.conversationId, t.userId),
@@ -1012,7 +1017,10 @@ export const messages = pgTable('messages', {
 }, (t) => ({
     conversationCreatedIdx: index('messages_conversation_created_idx').on(t.conversationId, t.createdAt),
     // Optimization: GIN Index for fast full-text search (Messages Search Optimization)
-    contentSearchIdx: index('messages_content_search_idx').using('gin', sql`to_tsvector('english', coalesce(${t.content}, ''))`),
+    contentSearchIdx: index('messages_content_search_idx').using('gin', sql`to_tsvector('english', ${buildMessageSearchDocumentSql({
+        content: t.content,
+        metadata: t.metadata,
+    })})`),
     contentTrgmSearchIdx: index('messages_content_trgm_idx').using('gin', sql`${t.content} gin_trgm_ops`),
     // Optimization: Sender Index for lookups
     senderIdx: index('messages_sender_idx').on(t.senderId),
@@ -1025,6 +1033,34 @@ export const messages = pgTable('messages', {
         foreignColumns: [t.id],
         name: 'messages_reply_to_message_id_fkey',
     }).onDelete('set null'),
+}))
+
+export const messageWorkflowItems = pgTable('message_workflow_items', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    messageId: uuid('message_id').references(() => messages.id, { onDelete: 'cascade' }),
+    conversationId: uuid('conversation_id').notNull().references(() => conversations.id, { onDelete: 'cascade' }),
+    kind: text('kind', {
+        enum: ['project_invite', 'feedback_request', 'availability_request', 'task_approval', 'follow_up'],
+    }).notNull(),
+    scope: text('scope', { enum: ['conversation', 'private'] }).default('conversation').notNull(),
+    creatorId: uuid('creator_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
+    assigneeUserId: uuid('assignee_user_id').references(() => profiles.id, { onDelete: 'set null' }),
+    projectId: uuid('project_id').references(() => projects.id, { onDelete: 'set null' }),
+    taskId: uuid('task_id').references(() => tasks.id, { onDelete: 'set null' }),
+    status: text('status', {
+        enum: ['pending', 'accepted', 'declined', 'completed', 'needs_changes', 'canceled', 'expired'],
+    }).default('pending').notNull(),
+    payload: jsonb('payload').$type<Record<string, unknown>>().default({}).notNull(),
+    dueAt: timestamp('due_at', { withTimezone: true }),
+    resolvedAt: timestamp('resolved_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+    conversationIdx: index('message_workflow_items_conversation_idx').on(t.conversationId, t.updatedAt),
+    messageIdx: index('message_workflow_items_message_idx').on(t.messageId),
+    assigneeIdx: index('message_workflow_items_assignee_idx').on(t.assigneeUserId, t.status, t.updatedAt),
+    creatorScopeIdx: index('message_workflow_items_creator_scope_idx').on(t.creatorId, t.scope, t.status, t.updatedAt),
+    kindStatusIdx: index('message_workflow_items_kind_status_idx').on(t.kind, t.status, t.updatedAt),
 }))
 
 // ============================================================================
@@ -1159,12 +1195,42 @@ export const messagesRelations = relations(messages, ({ one, many }) => ({
     attachments: many(messageAttachments),
     reactions: many(messageReactions),
     readReceipts: many(messageReadReceipts),
+    workflowItems: many(messageWorkflowItems),
 }))
 
 export const messageAttachmentsRelations = relations(messageAttachments, ({ one }) => ({
     message: one(messages, {
         fields: [messageAttachments.messageId],
         references: [messages.id],
+    }),
+}))
+
+export const messageWorkflowItemsRelations = relations(messageWorkflowItems, ({ one }) => ({
+    message: one(messages, {
+        fields: [messageWorkflowItems.messageId],
+        references: [messages.id],
+    }),
+    conversation: one(conversations, {
+        fields: [messageWorkflowItems.conversationId],
+        references: [conversations.id],
+    }),
+    creator: one(profiles, {
+        fields: [messageWorkflowItems.creatorId],
+        references: [profiles.id],
+        relationName: 'message_workflow_item_creator',
+    }),
+    assignee: one(profiles, {
+        fields: [messageWorkflowItems.assigneeUserId],
+        references: [profiles.id],
+        relationName: 'message_workflow_item_assignee',
+    }),
+    project: one(projects, {
+        fields: [messageWorkflowItems.projectId],
+        references: [projects.id],
+    }),
+    task: one(tasks, {
+        fields: [messageWorkflowItems.taskId],
+        references: [tasks.id],
     }),
 }))
 
@@ -1271,6 +1337,8 @@ export type ConversationParticipant = typeof conversationParticipants.$inferSele
 export type NewConversationParticipant = typeof conversationParticipants.$inferInsert
 export type Message = typeof messages.$inferSelect
 export type NewMessage = typeof messages.$inferInsert
+export type MessageWorkflowItem = typeof messageWorkflowItems.$inferSelect
+export type NewMessageWorkflowItem = typeof messageWorkflowItems.$inferInsert
 export type MessageAttachment = typeof messageAttachments.$inferSelect
 export type NewMessageAttachment = typeof messageAttachments.$inferInsert
 export type MessageHiddenForUser = typeof messageHiddenForUsers.$inferSelect

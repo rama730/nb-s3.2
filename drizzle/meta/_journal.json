@@ -428,6 +428,13 @@
       "when": 1775001600000,
       "tag": "0059_messaging_reactions_reports_receipts",
       "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1775529600000,
+      "tag": "0060_messaging_collaboration_foundation",
+      "breakpoints": true
     }
   ]
 }

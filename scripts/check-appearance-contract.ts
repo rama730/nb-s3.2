@@ -24,7 +24,6 @@ const CORE_APPEARANCE_FILES = [
   "src/components/projects/v2/TasksTab.tsx",
   "src/components/profile/ProfileHeader.tsx",
   "src/components/profile/v2/ProfileHeader.tsx",
-  "src/components/workspace/WorkspaceTabBar.tsx",
 ];
 
 function validateAppearanceContract(repoRoot: string = process.cwd()): CheckResult {

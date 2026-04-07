@@ -21,7 +21,7 @@ const RealtimeContext = createContext<RealtimeContextType>({
 });
 
 export function RealtimeProvider({ children }: { children: React.ReactNode }) {
-    const { user, refreshProfile } = useAuthContext();
+    const { user, session, isLoading, refreshProfile } = useAuthContext();
     const [isConnected, setIsConnected] = useState(false);
     const listenersRef = useRef(new Set<(event: UserNotificationEvent) => void>());
     const connectionTokenRef = useRef(0);
@@ -52,7 +52,7 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
     }, []);
 
     useEffect(() => {
-        if (!user) {
+        if (!user || !session?.access_token || isLoading) {
             connectionTokenRef.current += 1;
             setIsConnected(false);
             return;
@@ -62,33 +62,50 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
         const userId = user.id;
         const connectionToken = connectionTokenRef.current + 1;
         connectionTokenRef.current = connectionToken;
+        let cancelled = false;
+        let channel: ReturnType<typeof subscribeUserNotifications> | null = null;
 
-        const channel = subscribeUserNotifications({
-            supabase,
-            userId,
-            onEvent: handleUserNotification,
-            onStatus: (status: REALTIME_SUBSCRIBE_STATES) => {
-                if (connectionTokenRef.current !== connectionToken) {
-                    return;
-                }
+        void (async () => {
+            await supabase.realtime.setAuth(session.access_token);
+            if (cancelled || connectionTokenRef.current !== connectionToken) {
+                return;
+            }
 
-                if (status === REALTIME_SUBSCRIBE_STATES.SUBSCRIBED) {
-                    setIsConnected(true);
-                    return;
-                }
+            channel = subscribeUserNotifications({
+                supabase,
+                userId,
+                onEvent: handleUserNotification,
+                onStatus: (status: REALTIME_SUBSCRIBE_STATES) => {
+                    if (connectionTokenRef.current !== connectionToken) {
+                        return;
+                    }
 
-                if (isRealtimeTerminalStatus(status)) {
-                    setIsConnected(false);
-                }
-            },
+                    if (status === REALTIME_SUBSCRIBE_STATES.SUBSCRIBED) {
+                        setIsConnected(true);
+                        return;
+                    }
+
+                    if (isRealtimeTerminalStatus(status)) {
+                        setIsConnected(false);
+                    }
+                },
+            });
+        })().catch((error) => {
+            console.error('[realtime] failed to initialize authenticated notifications', error);
+            if (connectionTokenRef.current === connectionToken) {
+                setIsConnected(false);
+            }
         });
 
         return () => {
+            cancelled = true;
             connectionTokenRef.current += 1;
             setIsConnected(false);
-            supabase.removeChannel(channel);
+            if (channel) {
+                supabase.removeChannel(channel);
+            }
         };
-    }, [user, handleUserNotification]);
+    }, [handleUserNotification, isLoading, session?.access_token, user]);
 
     const value = useMemo(
         () => ({

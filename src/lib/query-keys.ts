@@ -1,4 +1,3 @@
-import type { WorkspaceTaskFilters } from "@/app/actions/workspace";
 import type { FilterView } from "@/constants/hub";
 import type { HubFilters } from "@/types/hub";
 
@@ -7,29 +6,6 @@ const asNullable = (value?: string | null) => value ?? null;
 type ProjectTaskScope = "all" | "backlog" | "sprint";
 
 export const queryKeys = {
-  workspace: {
-    root: () => ["workspace"] as const,
-    overview: () => ["workspace", "overview"] as const,
-    overviewBase: () => ["workspace", "overview-base"] as const,
-    overviewSectionRoot: () => ["workspace", "overview-section"] as const,
-    overviewSection: {
-      tasks: () => ["workspace", "overview-section", "tasks"] as const,
-      projects: () => ["workspace", "overview-section", "projects"] as const,
-      conversations: () => ["workspace", "overview-section", "conversations"] as const,
-      recentActivity: () => ["workspace", "overview-section", "recent-activity"] as const,
-      files: () => ["workspace", "overview-section", "files"] as const,
-      mentionsRequests: () => ["workspace", "overview-section", "mentions-requests"] as const,
-    },
-    tasksRoot: () => ["workspace", "tasks"] as const,
-    tasksList: (filters: WorkspaceTaskFilters, cursor?: string) =>
-      ["workspace", "tasks", filters, asCursor(cursor)] as const,
-    inboxRoot: () => ["workspace", "inbox"] as const,
-    inboxList: (cursor?: string) => ["workspace", "inbox", asCursor(cursor)] as const,
-    activity: () => ["workspace", "activity"] as const,
-    preferences: () => ["workspace", "preferences"] as const,
-    panelMembers: (projectId: string | null) => ["workspace", "panel-members", asNullable(projectId)] as const,
-    panelSprints: (projectId: string | null) => ["workspace", "panel-sprints", asNullable(projectId)] as const,
-  },
   hub: {
     root: () => ["hub"] as const,
     projectsRoot: () => ["hub", "projects"] as const,
@@ -56,6 +32,8 @@ export const queryKeys = {
         ["chat-v2", "capabilities", asNullable(conversationId), asNullable(userId)] as const,
       unread: () => ["chat-v2", "unread"] as const,
       search: (query: string) => ["chat-v2", "search", query] as const,
+      structuredCatalog: (conversationId: string | null | undefined, userId?: string | null) =>
+        ["chat-v2", "structured-catalog", asNullable(conversationId), asNullable(userId)] as const,
       applications: (limit: number, offset: number) => ["chat-v2", "applications", limit, offset] as const,
       projectGroups: (limit: number, offset: number) => ["chat-v2", "project-groups", limit, offset] as const,
     },

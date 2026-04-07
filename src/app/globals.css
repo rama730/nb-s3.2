@@ -557,6 +557,25 @@ html[data-reduce-motion="true"] :is(
   }
 }
 
+@keyframes message-focus-pulse {
+  0% {
+    transform: translateY(4px) scale(0.992);
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0);
+  }
+  20% {
+    transform: translateY(0) scale(1);
+    box-shadow: 0 0 0 10px rgba(59, 130, 246, 0.08);
+  }
+  55% {
+    transform: translateY(0) scale(1);
+    box-shadow: 0 0 0 16px rgba(59, 130, 246, 0.04);
+  }
+  100% {
+    transform: translateY(0) scale(1);
+    box-shadow: 0 0 0 22px rgba(59, 130, 246, 0);
+  }
+}
+
 @keyframes delivery-pulse {
   0%, 100% { opacity: 0.5; }
   50% { opacity: 1; }

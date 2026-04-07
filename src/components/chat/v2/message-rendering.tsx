@@ -14,6 +14,7 @@ import {
     X,
 } from 'lucide-react';
 import { normalizeSafeExternalUrl, parseSafeLinkToken } from '@/lib/messages/safe-links';
+import { getMessagePreviewText } from '@/lib/messages/structured';
 
 export interface ChatAttachmentV2 {
     id: string;
@@ -164,27 +165,10 @@ export function MessageAttachmentsV2({
 }
 
 export function formatMessagePreview(
-    lastMessage: { content?: string | null; type?: string | null } | null | undefined,
+    lastMessage: { content?: string | null; type?: string | null; metadata?: Record<string, unknown> | null } | null | undefined,
 ): string {
     if (!lastMessage) return 'No messages yet';
-    if (lastMessage.content && lastMessage.content.trim().length > 0) {
-        const normalized = lastMessage.content.replace(/\s+/g, ' ').trim();
-        if (normalized.includes('```')) return 'Code snippet';
-        return normalized;
-    }
-
-    switch (lastMessage.type) {
-        case 'image':
-            return 'Photo';
-        case 'video':
-            return 'Video';
-        case 'file':
-            return 'Attachment';
-        case 'system':
-            return 'System update';
-        default:
-            return 'Message';
-    }
+    return getMessagePreviewText(lastMessage);
 }
 
 function renderTextWithMentions(text: string, isOwn: boolean) {

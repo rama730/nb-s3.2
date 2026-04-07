@@ -22,6 +22,7 @@ import { useMessagesV2UiStore } from '@/stores/messagesV2UiStore';
 import { cn } from '@/lib/utils';
 import { upsertThreadConversation } from '@/lib/messages/v2-cache';
 import { refreshConversationCache } from '@/lib/messages/v2-refresh';
+import { queryKeys } from '@/lib/query-keys';
 import { ConversationHeaderV2 } from './ConversationHeaderV2';
 import { ConversationListV2 } from './ConversationListV2';
 import { DropZoneOverlay } from './DropZoneOverlay';
@@ -39,6 +40,12 @@ interface MessagesWorkspaceV2Props {
     mode: 'page' | 'popup';
     targetUserId?: string | null;
     initialConversationId?: string | null;
+}
+
+interface ReplyContextJumpState {
+    anchorMessageId: string;
+    hasOlderContext: boolean;
+    hasNewerContext: boolean;
 }
 
 const INBOX_TABS = [
@@ -61,6 +68,7 @@ export function MessagesWorkspaceV2({
     const setSelectedConversationId = useMessagesV2UiStore((state) => state.setSelectedConversationId);
     const [focusMessageId, setFocusMessageId] = useState<string | null>(null);
     const [replyTarget, setReplyTarget] = useState<MessageWithSender | null>(null);
+    const [replyContextJumpState, setReplyContextJumpState] = useState<ReplyContextJumpState | null>(null);
     const [globalSearch, setGlobalSearch] = useState('');
     const debouncedSearch = useDebounce(globalSearch.trim(), 250);
     const [visibleConversationIds, setVisibleConversationIds] = useState<string[]>([]);
@@ -80,15 +88,10 @@ export function MessagesWorkspaceV2({
         enabled: true,
         listVisible: true,
     });
-    const trackedConversationIds = useMemo(
-        () => inbox.conversations.map((conversation) => conversation.id),
-        [inbox.conversations],
-    );
     const isOnline = useOnlineStatus();
     const { isDnd, toggleDnd } = useDoNotDisturb();
     const realtime = useMessagesV2Realtime(
         selectedConversationId,
-        trackedConversationIds,
         true,
     );
 
@@ -130,6 +133,16 @@ export function MessagesWorkspaceV2({
     }, [mode, router, selectedConversationId]);
 
     useEffect(() => {
+        if (!replyContextJumpState) return;
+        const timer = window.setTimeout(() => {
+            setReplyContextJumpState((current) =>
+                current?.anchorMessageId === replyContextJumpState.anchorMessageId ? null : current,
+            );
+        }, 4200);
+        return () => window.clearTimeout(timer);
+    }, [replyContextJumpState]);
+
+    useEffect(() => {
         if (!selectedConversationId || !thread.messages.length) return;
         const latestMessageId = thread.messages[thread.messages.length - 1]?.id;
         if (!latestMessageId || !thread.conversation?.unreadCount) return;
@@ -157,6 +170,7 @@ export function MessagesWorkspaceV2({
         setSelectedConversationId(conversationId);
         setReplyTarget(null);
         setFocusMessageId(null);
+        setReplyContextJumpState(null);
         if (mode === 'page') {
             router.replace(`/messages?conversationId=${conversationId}`);
         }
@@ -166,6 +180,7 @@ export function MessagesWorkspaceV2({
         setSelectedConversationId(null);
         setReplyTarget(null);
         setFocusMessageId(null);
+        setReplyContextJumpState(null);
         if (mode === 'page') {
             router.replace('/messages');
         }
@@ -208,10 +223,23 @@ export function MessagesWorkspaceV2({
     }, [pinMessage, selectedConversationId]);
 
     const handlePrefetchConversation = useCallback((conversationId: string) => {
-        // Prefetch only if not already cached
+        const existing = queryClient.getQueryData(queryKeys.messages.v2.thread(conversationId));
+        if (existing) return;
+
         void queryClient.prefetchInfiniteQuery({
-            queryKey: ['messages-v2', 'thread', conversationId],
-            queryFn: () => import('@/app/actions/messaging/v2').then(m => m.getConversationThreadPageV2(conversationId)),
+            queryKey: queryKeys.messages.v2.thread(conversationId),
+            queryFn: async ({ pageParam }) => {
+                const { getConversationThreadPageV2 } = await import('@/app/actions/messaging/v2');
+                const result = await getConversationThreadPageV2(
+                    conversationId,
+                    pageParam as string | undefined,
+                    30,
+                );
+                if (!result.success || !result.page) {
+                    throw new Error(result.error || 'Failed to prefetch conversation');
+                }
+                return result.page;
+            },
             initialPageParam: undefined,
             staleTime: 30_000,
         });
@@ -516,14 +544,26 @@ export function MessagesWorkspaceV2({
                                 hasMore={Boolean(thread.hasNextPage)}
                                 isLoading={thread.isLoading}
                                 isFetchingMore={thread.isFetchingNextPage}
+                                viewerUnreadCount={activeConversation.unreadCount}
                                 focusMessageId={focusMessageId}
+                                contextJumpState={replyContextJumpState}
+                                onDismissContextJumpState={() => setReplyContextJumpState(null)}
                                 onLoadMore={handleThreadLoadMore}
                                 onReply={handleReply}
                                 onTogglePin={handleTogglePin}
                                 onRequestMessageContext={async (messageId) => {
                                     const injected = await injectMessageContext(selectedConversationId!, messageId);
                                     if (injected) {
-                                        setFocusMessageId(messageId);
+                                        setFocusMessageId(injected.anchorMessageId);
+                                        setReplyContextJumpState(
+                                            injected.hasOlderContext || injected.hasNewerContext
+                                                ? {
+                                                    anchorMessageId: injected.anchorMessageId,
+                                                    hasOlderContext: injected.hasOlderContext,
+                                                    hasNewerContext: injected.hasNewerContext,
+                                                }
+                                                : null,
+                                        );
                                         return true;
                                     }
                                     return false;
@@ -534,6 +574,7 @@ export function MessagesWorkspaceV2({
                                 conversationId={selectedConversationId!}
                                 targetUserId={otherParticipant?.id}
                                 capability={thread.capability}
+                                messageCount={thread.messages.length}
                                 surface={mode}
                                 replyTarget={replyTarget}
                                 sendTyping={sendTyping}

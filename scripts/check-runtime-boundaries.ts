@@ -85,16 +85,6 @@ function main() {
     }
   }
 
-  const workspaceActionsPath = path.join(REPO_ROOT, "src", "app", "actions", "workspace.ts");
-  const workspaceActions = fs.readFileSync(workspaceActionsPath, "utf8");
-  if (/export\s+async\s+function\s+getWorkspaceOverview\s*\(/.test(workspaceActions)) {
-    errors.push("Legacy getWorkspaceOverview export is forbidden; workspace bootstrap must use profile counters only.");
-  }
-  const workspaceOverviewBaseBody = extractFunctionBody(workspaceActions, "getWorkspaceOverviewBase");
-  if (workspaceOverviewBaseBody && /count\(\*\)/i.test(workspaceOverviewBaseBody)) {
-    errors.push("getWorkspaceOverviewBase must not perform live aggregate count(*) queries.");
-  }
-
   const profileDataPath = path.join(REPO_ROOT, "src", "lib", "data", "profile.ts");
   const profileData = fs.readFileSync(profileDataPath, "utf8");
   const bootstrapProfileBody = extractConstArrowBody(profileData, "getUserProfile");

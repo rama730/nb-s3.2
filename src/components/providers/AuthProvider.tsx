@@ -76,7 +76,6 @@ function transformProfile(profile: any): Profile | null {
             experienceLevel: profile.experience_level,
             hoursPerWeek: profile.hours_per_week,
             genderIdentity: profile.gender_identity,
-            workspaceLayout: profile.workspace_layout,
             connectionsCount: profile.connections_count ?? 0,
             projectsCount: profile.projects_count ?? 0,
             followersCount: profile.followers_count ?? 0,
@@ -101,12 +100,10 @@ function profileNeedsHydration(profile: any): boolean {
     if (!profile || typeof profile !== 'object') return false;
     const experience = profile.experience ?? profile.experience_data;
     const education = profile.education ?? profile.education_data;
-    const workspaceLayout = profile.workspaceLayout ?? profile.workspace_layout;
 
     return (
         experience === undefined
         || education === undefined
-        || workspaceLayout === undefined
     );
 }
 
@@ -150,7 +147,7 @@ export function AuthProvider({
             async (event: string, session: Session | null) => {
                 const eventVersion = ++authEventVersionRef.current;
                 if (cancelled) return;
-                if (event === 'SIGNED_IN' && session) {
+                if ((event === 'INITIAL_SESSION' || event === 'SIGNED_IN') && session) {
                     if (session.user.id !== activeUserIdRef.current) {
                         const profile = await loadProfile(session.user.id);
                         if (cancelled || eventVersion !== authEventVersionRef.current) return;
@@ -164,7 +161,9 @@ export function AuthProvider({
                             });
                         });
                         if (applied === null) return;
-                        router.refresh();
+                        if (event === 'SIGNED_IN') {
+                            router.refresh();
+                        }
                         return;
                     }
 
@@ -175,6 +174,16 @@ export function AuthProvider({
                             session,
                             isLoading: false
                         }));
+                    });
+                } else if (event === 'INITIAL_SESSION' && !session) {
+                    runMonotonicUpdate(MONOTONIC_AUTH_KEY, eventVersion, () => {
+                        activeUserIdRef.current = null;
+                        setState({
+                            user: null,
+                            session: null,
+                            profile: null,
+                            isLoading: false,
+                        });
                     });
                 } else if (event === 'SIGNED_OUT') {
                     runMonotonicUpdate(MONOTONIC_AUTH_KEY, eventVersion, () => {

@@ -12,7 +12,7 @@ import { parseStoredRecoveryCodes, type StoredRecoveryCode } from '@/lib/securit
 
 // Per-instance in-memory profile cache (shared across requests on one instance).
 // In multi-instance deployments this may serve stale data until TTL expires.
-export type StandardProfile = Omit<Profile, 'securityRecoveryCodes' | 'recoveryCodesGeneratedAt'> & {
+export type StandardProfile = Omit<Profile, 'securityRecoveryCodes' | 'recoveryCodesGeneratedAt' | 'workspaceLayout'> & {
     hasRecoveryCodes: boolean
 }
 
@@ -122,7 +122,6 @@ export async function getProfile(userId: string): Promise<StandardProfile | null
             hours_per_week,
             gender_identity,
             pronouns,
-            workspace_layout,
             connections_count,
             projects_count,
             followers_count,
@@ -185,7 +184,6 @@ export async function getProfile(userId: string): Promise<StandardProfile | null
         hoursPerWeek: data.hours_per_week || null,
         genderIdentity: data.gender_identity || null,
         pronouns: data.pronouns || null,
-        workspaceLayout: data.workspace_layout ?? null,
         connectionsCount: data.connections_count ?? 0,
         projectsCount: data.projects_count ?? 0,
         followersCount: data.followers_count ?? 0,

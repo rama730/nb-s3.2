@@ -6,19 +6,37 @@ import {
     dmPairs,
     conversationParticipants,
     messages,
+    messageWorkflowItems,
     messageAttachments,
+    messageReactions,
     attachmentUploads,
     messageHiddenForUsers,
     messageEditLogs,
     profiles,
     connections,
+    projectMembers,
+    projects,
     roleApplications,
+    tasks,
 } from '@/lib/db/schema';
 import { createClient, createAdminClient } from '@/lib/supabase/server';
-import { eq, and, desc, lt, gt, ne, isNull, inArray, sql, or } from 'drizzle-orm';
+import { eq, and, asc, desc, lt, gt, ne, isNull, inArray, sql, or } from 'drizzle-orm';
 import { consumeRateLimit } from '@/lib/security/rate-limit';
 import { runInFlightDeduped } from '@/lib/async/inflight-dedupe';
 import { resolvePrivacyRelationship } from '@/lib/privacy/resolver';
+import {
+    buildReactionSummaryByMessage,
+    withReactionSummaryMetadata,
+} from '@/lib/messages/reactions';
+import {
+    type MessageContextChip,
+    type PrivateFollowUpSnapshot,
+    withMessageContextChipsMetadata,
+    withPrivateFollowUpMetadata,
+    getStructuredMessageSearchKind,
+} from '@/lib/messages/structured';
+import { buildConversationParticipantPreview } from '@/lib/messages/preview-authority';
+import { buildMessageSearchDocumentSql } from '@/lib/messages/search-document';
 import {
     ATTACHMENT_UPLOAD_MAX_FILE_BYTES,
     normalizeAndValidateFileSize,
@@ -66,6 +84,7 @@ export interface MessageWithSender {
         senderId: string | null;
         senderName: string | null;
         deletedAt: Date | null;
+        metadata?: Record<string, unknown> | null;
     } | null;
     createdAt: Date;
     editedAt: Date | null;
@@ -104,6 +123,24 @@ async function getAuthUser() {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
     return user;
+}
+
+async function getConversationMembershipId(
+    conversationId: string,
+    userId: string,
+): Promise<string | null> {
+    const [membership] = await db
+        .select({ id: conversationParticipants.id })
+        .from(conversationParticipants)
+        .where(
+            and(
+                eq(conversationParticipants.conversationId, conversationId),
+                eq(conversationParticipants.userId, userId),
+            ),
+        )
+        .limit(1);
+
+    return membership?.id ?? null;
 }
 
 async function isDirectMessagingAllowed(viewerId: string, otherUserId: string): Promise<{ allowed: boolean; error?: string }> {
@@ -172,6 +209,8 @@ function parseMessageSearchQuery(query: string) {
     let fromFilter: string | null = null;
     let hasFilter: 'image' | 'video' | 'file' | 'code' | null = null;
     let inFilter: 'project_group' | null = null;
+    let kindFilter: ReturnType<typeof getStructuredMessageSearchKind> = null;
+    let hasChip = false;
     let isPinned = false;
     const textTokens: string[] = [];
 
@@ -186,6 +225,16 @@ function parseMessageSearchQuery(query: string) {
             const kind = lower.slice(4);
             if (kind === 'image' || kind === 'video' || kind === 'file' || kind === 'code') {
                 hasFilter = kind;
+                continue;
+            }
+            if (kind === 'chip' || kind === 'chips') {
+                hasChip = true;
+                continue;
+            }
+        }
+        if (lower.startsWith('kind:') && lower.length > 5) {
+            kindFilter = getStructuredMessageSearchKind(lower.slice(5));
+            if (kindFilter) {
                 continue;
             }
         }
@@ -205,6 +254,8 @@ function parseMessageSearchQuery(query: string) {
         fromFilter,
         hasFilter,
         inFilter,
+        kindFilter,
+        hasChip,
         isPinned,
     };
 }
@@ -238,6 +289,27 @@ function withDeliveryMetadata(
         ...(metadata || {}),
         deliveryState: state,
     };
+}
+
+async function getReactionSummaryMap(
+    messageIds: ReadonlyArray<string>,
+    viewerId: string,
+): Promise<Map<string, ReturnType<typeof buildReactionSummaryByMessage>[string]>> {
+    const uniqueMessageIds = Array.from(new Set(messageIds.filter(Boolean)));
+    if (uniqueMessageIds.length === 0) {
+        return new Map();
+    }
+
+    const rows = await db
+        .select({
+            messageId: messageReactions.messageId,
+            emoji: messageReactions.emoji,
+            userId: messageReactions.userId,
+        })
+        .from(messageReactions)
+        .where(inArray(messageReactions.messageId, uniqueMessageIds));
+
+    return new Map(Object.entries(buildReactionSummaryByMessage(rows, viewerId)));
 }
 
 async function findExistingMessageByClientKey(
@@ -290,6 +362,7 @@ async function validateReplyTarget(
             senderId: messages.senderId,
             content: messages.content,
             type: messages.type,
+            metadata: messages.metadata,
             deletedAt: messages.deletedAt,
             username: profiles.username,
             fullName: profiles.fullName,
@@ -330,6 +403,7 @@ async function validateReplyTarget(
         senderId: reply.senderId,
         senderName: reply.fullName || reply.username || null,
         deletedAt: reply.deletedAt,
+        metadata: (reply.metadata || {}) as Record<string, unknown>,
     };
 }
 
@@ -359,6 +433,7 @@ async function getReplyPreviewMap(
             senderId: messages.senderId,
             content: messages.content,
             type: messages.type,
+            metadata: messages.metadata,
             deletedAt: messages.deletedAt,
             username: profiles.username,
             fullName: profiles.fullName,
@@ -382,6 +457,7 @@ async function getReplyPreviewMap(
             senderId: row.senderId,
             senderName: row.fullName || row.username || null,
             deletedAt: row.deletedAt,
+            metadata: (row.metadata || {}) as Record<string, unknown>,
         });
     }
     return previewMap;
@@ -399,6 +475,215 @@ type AttachmentRowForResolution = {
     width: number | null;
     height: number | null;
 };
+
+type HydratableMessageRow = {
+    id: string;
+    conversationId: string;
+    senderId: string | null;
+    replyToMessageId: string | null;
+    clientMessageId: string | null;
+    content: string | null;
+    type: string | null;
+    metadata: Record<string, unknown> | null;
+    createdAt: Date;
+    editedAt: Date | null;
+    deletedAt: Date | null;
+};
+
+async function hydrateConversationMessages(params: {
+    rows: HydratableMessageRow[];
+    conversationId: string;
+    viewerId: string;
+    conversationType: ConversationWithDetails['type'] | null | undefined;
+    otherParticipantLastReadAt: Date | null;
+}) {
+    const { rows, conversationId, viewerId, conversationType, otherParticipantLastReadAt } = params;
+    if (rows.length === 0) return [] as MessageWithSender[];
+
+    const senderIds = [...new Set(rows.map((message) => message.senderId).filter(Boolean))] as string[];
+    const senderProfiles = senderIds.length > 0
+        ? await db
+            .select({
+                id: profiles.id,
+                username: profiles.username,
+                fullName: profiles.fullName,
+                avatarUrl: profiles.avatarUrl,
+            })
+            .from(profiles)
+            .where(inArray(profiles.id, senderIds))
+        : [];
+
+    const senderMap = new Map(senderProfiles.map((sender) => [sender.id, sender]));
+    const replyPreviewMap = await getReplyPreviewMap(
+        conversationId,
+        viewerId,
+        rows.map((message) => message.replyToMessageId).filter(Boolean) as string[],
+    );
+
+    const messageIds = rows.map((message) => message.id);
+    const attachmentList = await db
+        .select()
+        .from(messageAttachments)
+        .where(inArray(messageAttachments.messageId, messageIds));
+
+    const attachmentMap = new Map<string, typeof attachmentList>();
+    for (const attachment of attachmentList) {
+        if (!attachmentMap.has(attachment.messageId)) {
+            attachmentMap.set(attachment.messageId, []);
+        }
+        attachmentMap.get(attachment.messageId)!.push(attachment);
+    }
+
+    const resolvedAttachmentMap = new Map<
+        string,
+        Awaited<ReturnType<typeof hydrateAttachmentUrls>>
+    >();
+    await Promise.all(
+        Array.from(attachmentMap.entries()).map(async ([messageId, values]) => {
+            resolvedAttachmentMap.set(messageId, await hydrateAttachmentUrls(values as AttachmentRowForResolution[]));
+        }),
+    );
+
+    const reactionSummaryMap = await getReactionSummaryMap(messageIds, viewerId);
+    const privateFollowUpRows = await db
+        .select({
+            id: messageWorkflowItems.id,
+            messageId: messageWorkflowItems.messageId,
+            status: messageWorkflowItems.status,
+            payload: messageWorkflowItems.payload,
+            dueAt: messageWorkflowItems.dueAt,
+            updatedAt: messageWorkflowItems.updatedAt,
+        })
+        .from(messageWorkflowItems)
+        .where(
+            and(
+                inArray(messageWorkflowItems.messageId, messageIds),
+                eq(messageWorkflowItems.creatorId, viewerId),
+                eq(messageWorkflowItems.scope, 'private'),
+                eq(messageWorkflowItems.kind, 'follow_up'),
+            ),
+        )
+        .orderBy(desc(messageWorkflowItems.updatedAt), desc(messageWorkflowItems.createdAt));
+
+    const privateFollowUpByMessageId = new Map<string, PrivateFollowUpSnapshot>();
+    for (const row of privateFollowUpRows) {
+        if (!row.messageId) {
+            continue;
+        }
+        if (privateFollowUpByMessageId.has(row.messageId)) {
+            continue;
+        }
+        const payload = (row.payload || {}) as Record<string, unknown>;
+        privateFollowUpByMessageId.set(row.messageId, {
+            workflowItemId: row.id,
+            status: row.status,
+            note: typeof payload.note === 'string' ? payload.note : null,
+            dueAt: row.dueAt ? row.dueAt.toISOString() : null,
+            preview: typeof payload.preview === 'string' ? payload.preview : null,
+        });
+    }
+
+    return rows.map((messageRow) => {
+        const baseMetadata = withPrivateFollowUpMetadata(
+            withReactionSummaryMetadata(
+                (messageRow.metadata || {}) as Record<string, unknown>,
+                reactionSummaryMap.get(messageRow.id) || [],
+            ),
+            privateFollowUpByMessageId.get(messageRow.id) || null,
+        );
+        let deliveryState = baseMetadata.deliveryState as MessageDeliveryState | undefined;
+
+        if (messageRow.senderId === viewerId && conversationType === 'dm' && !deliveryState) {
+            deliveryState =
+                otherParticipantLastReadAt && messageRow.createdAt <= otherParticipantLastReadAt
+                    ? 'read'
+                    : 'delivered';
+        }
+
+        return {
+            id: messageRow.id,
+            conversationId: messageRow.conversationId,
+            senderId: messageRow.senderId,
+            replyTo: messageRow.replyToMessageId ? replyPreviewMap.get(messageRow.replyToMessageId) || null : null,
+            clientMessageId: messageRow.clientMessageId,
+            content: messageRow.content,
+            type: messageRow.type as MessageWithSender['type'],
+            metadata: deliveryState ? withDeliveryMetadata(baseMetadata, deliveryState) : baseMetadata,
+            createdAt: messageRow.createdAt,
+            editedAt: messageRow.editedAt,
+            deletedAt: messageRow.deletedAt,
+            sender: messageRow.senderId ? senderMap.get(messageRow.senderId) || null : null,
+            attachments: resolvedAttachmentMap.get(messageRow.id) || [],
+        } satisfies MessageWithSender;
+    });
+}
+
+async function conversationNeedsPreviewRefresh(
+    conversationId: string,
+    messageId: string,
+) {
+    const [row] = await db
+        .select({ id: conversationParticipants.id })
+        .from(conversationParticipants)
+        .where(
+            and(
+                eq(conversationParticipants.conversationId, conversationId),
+                eq(conversationParticipants.lastMessageId, messageId),
+            ),
+        )
+        .limit(1);
+
+    return Boolean(row);
+}
+
+async function refreshConversationParticipantPreviews(conversationId: string) {
+    const participants = await db
+        .select({
+            id: conversationParticipants.id,
+            userId: conversationParticipants.userId,
+        })
+        .from(conversationParticipants)
+        .where(eq(conversationParticipants.conversationId, conversationId));
+
+    await Promise.all(participants.map(async (participant) => {
+        const [latestMessage] = await db
+            .select({
+                id: messages.id,
+                content: messages.content,
+                type: messages.type,
+                metadata: messages.metadata,
+                createdAt: messages.createdAt,
+                senderId: messages.senderId,
+            })
+            .from(messages)
+            .where(
+                and(
+                    eq(messages.conversationId, conversationId),
+                    isNull(messages.deletedAt),
+                    sql`NOT EXISTS (
+                        SELECT 1
+                        FROM ${messageHiddenForUsers} h
+                        WHERE h.message_id = ${messages.id}
+                          AND h.user_id = ${participant.userId}
+                    )`,
+                ),
+            )
+            .orderBy(desc(messages.createdAt), desc(messages.id))
+            .limit(1);
+
+        await db
+            .update(conversationParticipants)
+            .set(buildConversationParticipantPreview(
+                latestMessage
+                    ? {
+                        ...latestMessage,
+                        metadata: latestMessage.metadata as Record<string, unknown> | null,
+                    }
+                    : null,
+            ))
+            .where(eq(conversationParticipants.id, participant.id));
+    }));
+}
 
 type NormalizedAttachmentInput = UploadedAttachment & {
     storagePath: string;
@@ -740,8 +1025,13 @@ export async function getConversations(
         return await runInFlightDeduped(dedupeKey, async () => {
             const userConversations = await db.execute<{
                 conversation_id: string;
+                type: 'dm' | 'group' | 'project_group';
                 unread_count: number;
                 last_message_at: Date | null;
+                last_message_id: string | null;
+                last_message_preview: string | null;
+                last_message_sender_id: string | null;
+                last_message_type: string | null;
                 updated_at: Date;
                 sort_at: Date;
                 archived_at: Date | null;
@@ -749,8 +1039,13 @@ export async function getConversations(
             }>(sql`
                 SELECT 
                     cp.conversation_id,
+                    c.type,
                     cp.unread_count,
                     cp.last_message_at,
+                    cp.last_message_id,
+                    cp.last_message_preview,
+                    cp.last_message_sender_id,
+                    cp.last_message_type,
                     c.updated_at,
                     cp.archived_at,
                     cp.muted,
@@ -783,48 +1078,7 @@ export async function getConversations(
 
         const conversationIds = paginatedConvs.map((conversation) => conversation.conversation_id);
 
-        // QUERY 2: Get conversation details + last message using window function
-        const conversationsWithLastMessage = await db.execute<{
-            id: string;
-            type: string;
-            updated_at: Date;
-            last_message_id: string | null;
-            last_message_content: string | null;
-            last_message_sender_id: string | null;
-            last_message_created_at: Date | null;
-            last_message_type: string | null;
-        }>(sql`
-            SELECT 
-                c.id,
-                c.type,
-                c.updated_at,
-                lm.id as last_message_id,
-                lm.content as last_message_content,
-                lm.sender_id as last_message_sender_id,
-                lm.created_at as last_message_created_at,
-                lm.type as last_message_type
-            FROM ${conversations} c
-            LEFT JOIN LATERAL (
-                SELECT m.id, m.content, m.sender_id, m.created_at, m.type
-                FROM ${messages} m
-                WHERE m.conversation_id = c.id
-                AND m.deleted_at IS NULL
-                AND NOT EXISTS (
-                    SELECT 1
-                    FROM ${messageHiddenForUsers} h
-                    WHERE h.message_id = m.id
-                    AND h.user_id = ${user.id}
-                )
-                ORDER BY m.created_at DESC
-                LIMIT 1
-            ) lm ON true
-            WHERE c.id IN ${conversationIds}
-        `);
-
-        // Map for fast lookup of conversation details (type, last message)
-        const detailsMap = new Map(Array.from(conversationsWithLastMessage).map((conversation) => [conversation.id, conversation]));
-
-        // QUERY 3: Get all participants for these conversations
+        // QUERY 2: Get all participants for these conversations
         const allParticipants = await db
             .select({
                 conversationId: conversationParticipants.conversationId,
@@ -850,27 +1104,24 @@ export async function getConversations(
 
         // Build final result
         const result: ConversationWithDetails[] = paginatedConvs.map((userConv) => {
-            const details = detailsMap.get(userConv.conversation_id);
-            if (!details) return null; // Should not happen due to FK
-
             return {
-                id: details.id,
-                type: details.type as 'dm' | 'group' | 'project_group',
+                id: userConv.conversation_id,
+                type: userConv.type,
                 updatedAt: userConv.sort_at || userConv.last_message_at || userConv.updated_at || new Date(),
-                lifecycleState: details.last_message_id ? 'active' : 'draft',
+                lifecycleState: userConv.last_message_id ? 'active' : 'draft',
                 muted: Boolean(userConv.muted),
-                participants: (participantMap.get(details.id) || []).map(p => ({
+                participants: (participantMap.get(userConv.conversation_id) || []).map(p => ({
                     id: p.userId,
                     username: p.username,
                     fullName: p.fullName,
                     avatarUrl: p.avatarUrl,
                 })),
-                lastMessage: details.last_message_id ? {
-                    id: details.last_message_id,
-                    content: details.last_message_content,
-                    senderId: details.last_message_sender_id,
-                    createdAt: details.last_message_created_at!,
-                    type: details.last_message_type,
+                lastMessage: userConv.last_message_id ? {
+                    id: userConv.last_message_id,
+                    content: userConv.last_message_preview,
+                    senderId: userConv.last_message_sender_id,
+                    createdAt: userConv.last_message_at!,
+                    type: userConv.last_message_type,
                 } : null,
                 unreadCount: userConv.unread_count || 0, // O(1) Read from denormalized column
             };
@@ -911,6 +1162,11 @@ export async function getConversationById(
                 unreadCount: conversationParticipants.unreadCount,
                 archivedAt: conversationParticipants.archivedAt,
                 muted: conversationParticipants.muted,
+                lastMessageId: conversationParticipants.lastMessageId,
+                lastMessagePreview: conversationParticipants.lastMessagePreview,
+                lastMessageSenderId: conversationParticipants.lastMessageSenderId,
+                lastMessageType: conversationParticipants.lastMessageType,
+                lastMessageAt: conversationParticipants.lastMessageAt,
             })
             .from(conversationParticipants)
             .where(
@@ -929,36 +1185,12 @@ export async function getConversationById(
             id: string;
             type: string;
             updated_at: Date;
-            last_message_id: string | null;
-            last_message_content: string | null;
-            last_message_sender_id: string | null;
-            last_message_created_at: Date | null;
-            last_message_type: string | null;
         }>(sql`
             SELECT 
                 c.id,
                 c.type,
-                c.updated_at,
-                lm.id as last_message_id,
-                lm.content as last_message_content,
-                lm.sender_id as last_message_sender_id,
-                lm.created_at as last_message_created_at,
-                lm.type as last_message_type
+                c.updated_at
             FROM ${conversations} c
-            LEFT JOIN LATERAL (
-                SELECT m.id, m.content, m.sender_id, m.created_at, m.type
-                FROM ${messages} m
-                WHERE m.conversation_id = c.id
-                AND m.deleted_at IS NULL
-                AND NOT EXISTS (
-                    SELECT 1
-                    FROM ${messageHiddenForUsers} h
-                    WHERE h.message_id = m.id
-                    AND h.user_id = ${user.id}
-                )
-                ORDER BY m.created_at DESC
-                LIMIT 1
-            ) lm ON true
             WHERE c.id = ${conversationId}
             LIMIT 1
         `);
@@ -990,8 +1222,8 @@ export async function getConversationById(
             conversation: {
                 id: details.id,
                 type: details.type as 'dm' | 'group' | 'project_group',
-                updatedAt: details.last_message_created_at || details.updated_at || new Date(),
-                lifecycleState: membership[0].archivedAt ? 'archived' : details.last_message_id ? 'active' : 'draft',
+                updatedAt: membership[0].lastMessageAt || details.updated_at || new Date(),
+                lifecycleState: membership[0].archivedAt ? 'archived' : membership[0].lastMessageId ? 'active' : 'draft',
                 muted: Boolean(membership[0].muted),
                 participants: participants.map((participant) => ({
                     id: participant.id,
@@ -999,13 +1231,13 @@ export async function getConversationById(
                     fullName: participant.fullName,
                     avatarUrl: participant.avatarUrl,
                 })),
-                lastMessage: details.last_message_id
+                lastMessage: membership[0].lastMessageId
                     ? {
-                        id: details.last_message_id,
-                        content: details.last_message_content,
-                        senderId: details.last_message_sender_id,
-                        createdAt: details.last_message_created_at!,
-                        type: details.last_message_type,
+                        id: membership[0].lastMessageId,
+                        content: membership[0].lastMessagePreview,
+                        senderId: membership[0].lastMessageSenderId,
+                        createdAt: membership[0].lastMessageAt!,
+                        type: membership[0].lastMessageType,
                     }
                     : null,
                 unreadCount: membership[0].unreadCount || 0,
@@ -1047,18 +1279,9 @@ export async function getMessages(
             async () => {
 
         // Verify user is participant
-        const participant = await db
-            .select()
-            .from(conversationParticipants)
-            .where(
-                and(
-                    eq(conversationParticipants.conversationId, conversationId),
-                    eq(conversationParticipants.userId, user.id)
-                )
-            )
-            .limit(1);
+        const participantMembershipId = await getConversationMembershipId(conversationId, user.id);
 
-        if (participant.length === 0) {
+        if (!participantMembershipId) {
             return { success: false, error: 'Not a participant of this conversation' };
         }
 
@@ -1138,80 +1361,12 @@ export async function getMessages(
             return { success: true, messages: [], hasMore: false };
         }
 
-        // Get sender profiles
-        const senderIds = [...new Set(paginatedMessages.map(m => m.senderId).filter(Boolean))] as string[];
-        const senderProfiles = senderIds.length > 0
-            ? await db
-                .select({
-                    id: profiles.id,
-                    username: profiles.username,
-                    fullName: profiles.fullName,
-                    avatarUrl: profiles.avatarUrl,
-                })
-                .from(profiles)
-                .where(inArray(profiles.id, senderIds))
-            : [];
-
-        const senderMap = new Map(senderProfiles.map(s => [s.id, s]));
-        const replyPreviewMap = await getReplyPreviewMap(
+        const result = await hydrateConversationMessages({
+            rows: paginatedMessages.reverse() as HydratableMessageRow[],
             conversationId,
-            user.id,
-            paginatedMessages.map((message) => message.replyToMessageId).filter(Boolean) as string[]
-        );
-
-        // Get attachments
-        const messageIds = paginatedMessages.map(m => m.id);
-        const attachmentList = await db
-            .select()
-            .from(messageAttachments)
-            .where(inArray(messageAttachments.messageId, messageIds));
-
-        const attachmentMap = new Map<string, typeof attachmentList>();
-        for (const att of attachmentList) {
-            if (!attachmentMap.has(att.messageId)) {
-                attachmentMap.set(att.messageId, []);
-            }
-            attachmentMap.get(att.messageId)!.push(att);
-        }
-
-        const resolvedAttachmentMap = new Map<
-            string,
-            Awaited<ReturnType<typeof hydrateAttachmentUrls>>
-        >();
-        await Promise.all(
-            Array.from(attachmentMap.entries()).map(async ([messageId, rows]) => {
-                const resolved = await hydrateAttachmentUrls(rows as AttachmentRowForResolution[]);
-                resolvedAttachmentMap.set(messageId, resolved);
-            })
-        );
-
-        // Build result (reverse to show oldest first in UI)
-        const result: MessageWithSender[] = paginatedMessages.reverse().map((m) => {
-            const baseMetadata = (m.metadata || {}) as Record<string, unknown>;
-            let deliveryState = baseMetadata.deliveryState as MessageDeliveryState | undefined;
-
-            if (m.senderId === user.id && conversationMeta?.type === 'dm' && !deliveryState) {
-                deliveryState =
-                    otherParticipantLastReadAt && m.createdAt <= otherParticipantLastReadAt
-                        ? 'read'
-                        : 'delivered';
-            }
-
-            return {
-                id: m.id,
-                conversationId: m.conversationId,
-                senderId: m.senderId,
-                replyTo: m.replyToMessageId ? replyPreviewMap.get(m.replyToMessageId) || null : null,
-                clientMessageId: m.clientMessageId,
-                content: m.content,
-                type: m.type as MessageWithSender['type'],
-                metadata: deliveryState ? withDeliveryMetadata(baseMetadata, deliveryState) : baseMetadata,
-                createdAt: m.createdAt,
-                editedAt: m.editedAt,
-                deletedAt: m.deletedAt,
-                sender: m.senderId ? senderMap.get(m.senderId) || null : null,
-                attachments: resolvedAttachmentMap.get(m.id) || [],
-            };
+            viewerId: user.id,
+            conversationType: conversationMeta?.type as ConversationWithDetails['type'] | undefined,
+            otherParticipantLastReadAt,
         });
 
         return {
@@ -1242,6 +1397,10 @@ export async function getMessageContext(
     error?: string;
     available: boolean;
     message?: MessageWithSender;
+    messages?: MessageWithSender[];
+    anchorMessageId?: string;
+    hasOlderContext?: boolean;
+    hasNewerContext?: boolean;
 }> {
     try {
         const user = await getAuthUser();
@@ -1327,66 +1486,94 @@ export async function getMessageContext(
                     otherParticipantLastReadAt = otherParticipant?.lastReadAt || null;
                 }
 
-                const [senderProfile] = messageRow.senderId
-                    ? await db
-                        .select({
-                            id: profiles.id,
-                            username: profiles.username,
-                            fullName: profiles.fullName,
-                            avatarUrl: profiles.avatarUrl,
-                        })
-                        .from(profiles)
-                        .where(eq(profiles.id, messageRow.senderId))
-                        .limit(1)
-                    : [null];
+                const visibilityPredicate = sql`NOT EXISTS (
+                    SELECT 1
+                    FROM ${messageHiddenForUsers} h
+                    WHERE h.message_id = ${messages.id}
+                    AND h.user_id = ${user.id}
+                )`;
+                const olderRowsDesc = await db
+                    .select({
+                        id: messages.id,
+                        conversationId: messages.conversationId,
+                        senderId: messages.senderId,
+                        replyToMessageId: messages.replyToMessageId,
+                        clientMessageId: messages.clientMessageId,
+                        content: messages.content,
+                        type: messages.type,
+                        metadata: messages.metadata,
+                        createdAt: messages.createdAt,
+                        editedAt: messages.editedAt,
+                        deletedAt: messages.deletedAt,
+                    })
+                    .from(messages)
+                    .where(
+                        and(
+                            eq(messages.conversationId, conversationId),
+                            visibilityPredicate,
+                            or(
+                                lt(messages.createdAt, messageRow.createdAt),
+                                and(eq(messages.createdAt, messageRow.createdAt), lt(messages.id, messageRow.id)),
+                            ),
+                        ),
+                    )
+                    .orderBy(desc(messages.createdAt), desc(messages.id))
+                    .limit(4);
 
-                const attachmentRows = await db
-                    .select()
-                    .from(messageAttachments)
-                    .where(eq(messageAttachments.messageId, messageRow.id));
-                const hydratedAttachments = await hydrateAttachmentUrls(
-                    attachmentRows as AttachmentRowForResolution[]
-                );
+                const newerRowsAsc = await db
+                    .select({
+                        id: messages.id,
+                        conversationId: messages.conversationId,
+                        senderId: messages.senderId,
+                        replyToMessageId: messages.replyToMessageId,
+                        clientMessageId: messages.clientMessageId,
+                        content: messages.content,
+                        type: messages.type,
+                        metadata: messages.metadata,
+                        createdAt: messages.createdAt,
+                        editedAt: messages.editedAt,
+                        deletedAt: messages.deletedAt,
+                    })
+                    .from(messages)
+                    .where(
+                        and(
+                            eq(messages.conversationId, conversationId),
+                            visibilityPredicate,
+                            or(
+                                gt(messages.createdAt, messageRow.createdAt),
+                                and(eq(messages.createdAt, messageRow.createdAt), gt(messages.id, messageRow.id)),
+                            ),
+                        ),
+                    )
+                    .orderBy(asc(messages.createdAt), asc(messages.id))
+                    .limit(4);
 
-                const replyPreviewMap = await getReplyPreviewMap(
+                const contextRows = [
+                    ...olderRowsDesc.reverse(),
+                    messageRow,
+                    ...newerRowsAsc,
+                ] as HydratableMessageRow[];
+                const hydratedContext = await hydrateConversationMessages({
+                    rows: contextRows,
                     conversationId,
-                    user.id,
-                    messageRow.replyToMessageId ? [messageRow.replyToMessageId] : []
-                );
+                    viewerId: user.id,
+                    conversationType: conversationMeta?.type as ConversationWithDetails['type'] | undefined,
+                    otherParticipantLastReadAt,
+                });
+                const hydrated = hydratedContext.find((message) => message.id === messageRow.id);
 
-                const baseMetadata = (messageRow.metadata || {}) as Record<string, unknown>;
-                let deliveryState = baseMetadata.deliveryState as MessageDeliveryState | undefined;
-                if (messageRow.senderId === user.id && conversationMeta?.type === 'dm' && !deliveryState) {
-                    deliveryState =
-                        otherParticipantLastReadAt && messageRow.createdAt <= otherParticipantLastReadAt
-                            ? 'read'
-                            : 'delivered';
+                if (!hydrated) {
+                    return { success: true, available: false };
                 }
-
-                const hydrated: MessageWithSender = {
-                    id: messageRow.id,
-                    conversationId: messageRow.conversationId,
-                    senderId: messageRow.senderId,
-                    replyTo: messageRow.replyToMessageId
-                        ? replyPreviewMap.get(messageRow.replyToMessageId) || null
-                        : null,
-                    clientMessageId: messageRow.clientMessageId,
-                    content: messageRow.content,
-                    type: messageRow.type as MessageWithSender['type'],
-                    metadata: deliveryState
-                        ? withDeliveryMetadata(baseMetadata, deliveryState)
-                        : baseMetadata,
-                    createdAt: messageRow.createdAt,
-                    editedAt: messageRow.editedAt,
-                    deletedAt: messageRow.deletedAt,
-                    sender: senderProfile || null,
-                    attachments: hydratedAttachments,
-                };
 
                 return {
                     success: true,
                     available: true,
                     message: hydrated,
+                    messages: hydratedContext,
+                    anchorMessageId: messageRow.id,
+                    hasOlderContext: olderRowsDesc.length > 0,
+                    hasNewerContext: newerRowsAsc.length > 0,
                 };
             }
         );
@@ -1405,7 +1592,11 @@ export async function sendMessage(
     content: string,
     type: 'text' | 'image' | 'video' | 'file' = 'text',
     attachmentIds?: string[],
-    options?: { clientMessageId?: string; replyToMessageId?: string | null }
+    options?: {
+        clientMessageId?: string;
+        replyToMessageId?: string | null;
+        contextChips?: MessageContextChip[];
+    }
 ): Promise<SendMessageResult> {
     try {
         const user = await getAuthUser();
@@ -1414,20 +1605,12 @@ export async function sendMessage(
         if (!msgRlOk) return { success: false, error: 'Rate limit exceeded' };
         const clientMessageId = options?.clientMessageId?.trim() || undefined;
         const replyToMessageId = options?.replyToMessageId?.trim() || undefined;
+        const contextChips = options?.contextChips ?? [];
 
         // Verify user is participant
-        const participant = await db
-            .select()
-            .from(conversationParticipants)
-            .where(
-                and(
-                    eq(conversationParticipants.conversationId, conversationId),
-                    eq(conversationParticipants.userId, user.id)
-                )
-            )
-            .limit(1);
+        const participantMembershipId = await getConversationMembershipId(conversationId, user.id);
 
-        if (participant.length === 0) {
+        if (!participantMembershipId) {
             return { success: false, error: 'Not a participant of this conversation' };
         }
 
@@ -1526,18 +1709,21 @@ export async function sendMessage(
                     clientMessageId: clientMessageId || null,
                     content: content?.trim() || null,
                     type,
-                    metadata: withDeliveryMetadata({
-                        version: 3,
-                        ...(clientMessageId ? { clientMessageId } : {}),
-                        ...(replyToMessageId ? { replyToMessageId } : {}),
-                        ...(mentions.mentionedUsernames.length > 0
-                            ? { mentionedUsernames: mentions.mentionedUsernames }
-                            : {}),
-                        ...(mentions.mentionRoles.length > 0
-                            ? { mentionRoles: mentions.mentionRoles }
-                            : {}),
-                        ...(normalizedContent.includes('```') ? { hasCode: true } : {}),
-                    }, 'sent'),
+                    metadata: withDeliveryMetadata(
+                        withMessageContextChipsMetadata({
+                            version: 3,
+                            ...(clientMessageId ? { clientMessageId } : {}),
+                            ...(replyToMessageId ? { replyToMessageId } : {}),
+                            ...(mentions.mentionedUsernames.length > 0
+                                ? { mentionedUsernames: mentions.mentionedUsernames }
+                                : {}),
+                            ...(mentions.mentionRoles.length > 0
+                                ? { mentionRoles: mentions.mentionRoles }
+                                : {}),
+                            ...(normalizedContent.includes('```') ? { hasCode: true } : {}),
+                        }, contextChips),
+                        'sent',
+                    ),
                 })
                 .returning();
 
@@ -1811,13 +1997,17 @@ export async function searchMessages(
         if (!query?.trim()) {
             return { success: true, results: [] };
         }
-        const { textQuery, fromFilter, hasFilter, inFilter, isPinned } = parseMessageSearchQuery(query);
-        if (!textQuery && !fromFilter && !hasFilter && !inFilter && !isPinned) {
+        const { textQuery, fromFilter, hasFilter, inFilter, kindFilter, hasChip, isPinned } = parseMessageSearchQuery(query);
+        if (!textQuery && !fromFilter && !hasFilter && !inFilter && !kindFilter && !hasChip && !isPinned) {
             return { success: true, results: [] };
         }
         const normalizedQuery = textQuery;
         const searchPattern = normalizedQuery ? `%${normalizedQuery}%` : null;
         const internalLimit = Math.min(200, Math.max(limit * 6, 40));
+        const searchDocument = buildMessageSearchDocumentSql({
+            content: messages.content,
+            metadata: messages.metadata,
+        });
 
         // Get user's conversations first
         const userConversations = await db
@@ -1845,13 +2035,25 @@ export async function searchMessages(
 
         const textPredicate = normalizedQuery
             ? sql`(
-                to_tsvector('english', coalesce(${messages.content}, '')) @@ websearch_to_tsquery('english', ${normalizedQuery})
+                to_tsvector('english', ${searchDocument}) @@ websearch_to_tsquery('english', ${normalizedQuery})
                 OR ${messages.content} ILIKE ${searchPattern}
+                OR coalesce(${messages.metadata} #>> '{structured,summary}', '') ILIKE ${searchPattern}
+                OR coalesce(${messages.metadata} #>> '{structured,title}', '') ILIKE ${searchPattern}
             )`
             : sql`true`;
         const hasPredicate = hasFilter === 'code'
             ? sql`${messages.content} ILIKE ${'%```%'}`
             : (hasFilter ? eq(messages.type, hasFilter) : sql`true`);
+        const kindPredicate = kindFilter
+            ? sql`coalesce(${messages.metadata} #>> '{structured,kind}', '') = ${kindFilter}`
+            : sql`true`;
+        const chipPredicate = hasChip
+            ? sql`(
+                (jsonb_typeof(${messages.metadata} #> '{structured,contextChips}') = 'array' AND jsonb_array_length(${messages.metadata} #> '{structured,contextChips}') > 0)
+                OR
+                (jsonb_typeof(${messages.metadata} #> '{contextChips}') = 'array' AND jsonb_array_length(${messages.metadata} #> '{contextChips}') > 0)
+            )`
+            : sql`true`;
         const pinnedPredicate = isPinned
             ? sql`coalesce(${messages.metadata}->>'pinned', 'false') = 'true'`
             : sql`true`;
@@ -1869,12 +2071,14 @@ export async function searchMessages(
                 createdAt: messages.createdAt,
                 editedAt: messages.editedAt,
                 deletedAt: messages.deletedAt,
-                rank: sql<number>`
-                    ts_rank_cd(
-                        to_tsvector('english', coalesce(${messages.content}, '')),
-                        websearch_to_tsquery('english', ${normalizedQuery})
-                    )
-                `,
+                rank: normalizedQuery
+                    ? sql<number>`
+                        ts_rank_cd(
+                            to_tsvector('english', ${searchDocument}),
+                            websearch_to_tsquery('english', ${normalizedQuery})
+                        )
+                    `
+                    : sql<number>`0`,
             })
             .from(messages)
             .where(
@@ -1886,9 +2090,11 @@ export async function searchMessages(
                         FROM ${messageHiddenForUsers} h
                             WHERE h.message_id = ${messages.id}
                             AND h.user_id = ${user.id}
-                        )`,
+                    )`,
                     textPredicate,
                     hasPredicate,
+                    kindPredicate,
+                    chipPredicate,
                     pinnedPredicate
                 )
             )
@@ -1896,7 +2102,7 @@ export async function searchMessages(
                 CASE
                     WHEN ${normalizedQuery || ''} = '' THEN 0
                     ELSE ts_rank_cd(
-                        to_tsvector('english', coalesce(${messages.content}, '')),
+                        to_tsvector('english', ${searchDocument}),
                         websearch_to_tsquery('english', ${normalizedQuery || ''})
                     )
                 END
@@ -1928,40 +2134,33 @@ export async function searchMessages(
         const resultConversationIds = [...new Set(searchResults.map(m => m.conversationId))];
 
         // 1. Get conversation details + last message
-        const conversationsWithLastMessage = await db.execute<{
+        const conversationsWithDetails = await db.execute<{
             id: string;
             type: string;
             updated_at: Date;
             last_message_id: string | null;
-            last_message_content: string | null;
+            last_message_preview: string | null;
             last_message_sender_id: string | null;
-            last_message_created_at: Date | null;
+            last_message_at: Date | null;
             last_message_type: string | null;
+            unread_count: number;
+            muted: boolean | null;
         }>(sql`
             SELECT 
                 c.id,
                 c.type,
                 c.updated_at,
-                lm.id as last_message_id,
-                lm.content as last_message_content,
-                lm.sender_id as last_message_sender_id,
-                lm.created_at as last_message_created_at,
-                lm.type as last_message_type
+                cp.last_message_id,
+                cp.last_message_preview,
+                cp.last_message_sender_id,
+                cp.last_message_at,
+                cp.last_message_type,
+                cp.unread_count,
+                cp.muted
             FROM ${conversations} c
-            LEFT JOIN LATERAL (
-                SELECT m.id, m.content, m.sender_id, m.created_at, m.type
-                FROM ${messages} m
-                WHERE m.conversation_id = c.id
-                AND m.deleted_at IS NULL
-                AND NOT EXISTS (
-                    SELECT 1
-                    FROM ${messageHiddenForUsers} h
-                    WHERE h.message_id = m.id
-                    AND h.user_id = ${user.id}
-                )
-                ORDER BY m.created_at DESC
-                LIMIT 1
-            ) lm ON true
+            INNER JOIN ${conversationParticipants} cp
+                ON cp.conversation_id = c.id
+               AND cp.user_id = ${user.id}
             WHERE c.id IN ${resultConversationIds}
         `);
 
@@ -1973,19 +2172,14 @@ export async function searchMessages(
                 username: profiles.username,
                 fullName: profiles.fullName,
                 avatarUrl: profiles.avatarUrl,
-                unreadCount: conversationParticipants.unreadCount, // Get denormalized count
-                muted: conversationParticipants.muted,
             })
             .from(conversationParticipants)
             .innerJoin(profiles, eq(profiles.id, conversationParticipants.userId))
             .where(inArray(conversationParticipants.conversationId, resultConversationIds));
 
         // 3. Build Maps
-        const detailsMap = new Map(Array.from(conversationsWithLastMessage).map((conversation) => [conversation.id, conversation]));
+        const detailsMap = new Map(Array.from(conversationsWithDetails).map((conversation) => [conversation.id, conversation]));
         const participantMap = new Map<string, typeof allParticipants>();
-
-        const selfUnreadMap = new Map<string, number>();
-        const selfMutedMap = new Map<string, boolean>();
 
         for (const p of allParticipants) {
             if (!participantMap.has(p.conversationId)) {
@@ -1993,12 +2187,12 @@ export async function searchMessages(
             }
             if (p.userId !== user.id) {
                 participantMap.get(p.conversationId)!.push(p);
-            } else {
-                // Capture my unread count for this conversation
-                selfUnreadMap.set(p.conversationId, p.unreadCount || 0);
-                selfMutedMap.set(p.conversationId, Boolean(p.muted));
             }
         }
+        const reactionSummaryMap = await getReactionSummaryMap(
+            searchResults.map((message) => message.id),
+            user.id,
+        );
 
         const results = searchResults.map(m => {
             const details = detailsMap.get(m.conversationId);
@@ -2010,7 +2204,7 @@ export async function searchMessages(
                 type: details?.type as 'dm' | 'group' | 'project_group' || 'dm',
                 updatedAt: details?.updated_at || new Date(),
                 lifecycleState: details?.last_message_id ? 'active' : 'draft',
-                muted: selfMutedMap.get(m.conversationId) || false,
+                muted: Boolean(details?.muted),
                 participants: participants.map(p => ({
                     id: p.userId,
                     username: p.username,
@@ -2019,12 +2213,12 @@ export async function searchMessages(
                 })),
                 lastMessage: details?.last_message_id ? {
                     id: details.last_message_id,
-                    content: details.last_message_content,
+                    content: details.last_message_preview,
                     senderId: details.last_message_sender_id,
-                    createdAt: details.last_message_created_at!,
+                    createdAt: details.last_message_at!,
                     type: details.last_message_type,
                 } : null,
-                unreadCount: selfUnreadMap.get(m.conversationId) || 0
+                unreadCount: details?.unread_count || 0
             };
 
             return {
@@ -2037,7 +2231,10 @@ export async function searchMessages(
                     clientMessageId: m.clientMessageId,
                     content: m.content,
                     type: m.type as MessageWithSender['type'],
-                    metadata: m.metadata || {},
+                    metadata: withReactionSummaryMetadata(
+                        (m.metadata || {}) as Record<string, unknown>,
+                        reactionSummaryMap.get(m.id) || [],
+                    ),
                     createdAt: m.createdAt,
                     editedAt: m.editedAt,
                     deletedAt: m.deletedAt,
@@ -2085,6 +2282,7 @@ export async function editMessage(
         const [messageRow] = await db
             .select({
                 id: messages.id,
+                conversationId: messages.conversationId,
                 senderId: messages.senderId,
                 content: messages.content,
                 createdAt: messages.createdAt,
@@ -2126,6 +2324,10 @@ export async function editMessage(
                 })
                 .where(eq(messages.id, messageRow.id));
         });
+
+        if (await conversationNeedsPreviewRefresh(messageRow.conversationId, messageRow.id)) {
+            await refreshConversationParticipantPreviews(messageRow.conversationId);
+        }
 
             return { success: true };
     } catch (error) {
@@ -2184,6 +2386,10 @@ export async function deleteMessage(
                     target: [messageHiddenForUsers.messageId, messageHiddenForUsers.userId],
                 });
 
+            if (await conversationNeedsPreviewRefresh(messageRow.conversationId, messageRow.id)) {
+                await refreshConversationParticipantPreviews(messageRow.conversationId);
+            }
+
             return { success: true };
         }
 
@@ -2207,6 +2413,10 @@ export async function deleteMessage(
                 },
             })
             .where(eq(messages.id, messageRow.id));
+
+        if (await conversationNeedsPreviewRefresh(messageRow.conversationId, messageRow.id)) {
+            await refreshConversationParticipantPreviews(messageRow.conversationId);
+        }
 
         return { success: true };
     } catch (error) {
@@ -2320,6 +2530,7 @@ export async function getPinnedMessages(
                 hydrated.set(messageId, await hydrateAttachmentUrls(values as AttachmentRowForResolution[]));
             })
         );
+        const reactionSummaryMap = await getReactionSummaryMap(messageIds, user.id);
 
         return {
             success: true,
@@ -2331,7 +2542,13 @@ export async function getPinnedMessages(
                 clientMessageId: row.clientMessageId,
                 content: row.content,
                 type: row.type as MessageWithSender['type'],
-                metadata: withDeliveryMetadata(row.metadata as Record<string, unknown>, 'sent'),
+                metadata: withDeliveryMetadata(
+                    withReactionSummaryMetadata(
+                        row.metadata as Record<string, unknown>,
+                        reactionSummaryMap.get(row.id) || [],
+                    ),
+                    'sent',
+                ),
                 createdAt: row.createdAt,
                 editedAt: row.editedAt,
                 deletedAt: row.deletedAt,
@@ -2728,27 +2945,23 @@ export async function sendMessageWithAttachments(
     conversationId: string,
     content: string,
     attachments: UploadedAttachment[],
-    options?: { clientMessageId?: string; replyToMessageId?: string | null }
+    options?: {
+        clientMessageId?: string;
+        replyToMessageId?: string | null;
+        contextChips?: MessageContextChip[];
+    }
 ): Promise<SendMessageResult> {
     try {
         const user = await getAuthUser();
         if (!user) return { success: false, error: 'Not authenticated' };
         const clientMessageId = options?.clientMessageId?.trim() || undefined;
         const replyToMessageId = options?.replyToMessageId?.trim() || undefined;
+        const contextChips = options?.contextChips ?? [];
 
         // Verify user is participant
-        const participant = await db
-            .select()
-            .from(conversationParticipants)
-            .where(
-                and(
-                    eq(conversationParticipants.conversationId, conversationId),
-                    eq(conversationParticipants.userId, user.id)
-                )
-            )
-            .limit(1);
+        const participantMembershipId = await getConversationMembershipId(conversationId, user.id);
 
-        if (participant.length === 0) {
+        if (!participantMembershipId) {
             return { success: false, error: 'Not a participant of this conversation' };
         }
 
@@ -2876,18 +3089,21 @@ export async function sendMessageWithAttachments(
                     clientMessageId: clientMessageId || null,
                     content: content?.trim() || null,
                     type: messageType,
-                    metadata: withDeliveryMetadata({
-                        version: 3,
-                        ...(clientMessageId ? { clientMessageId } : {}),
-                        ...(replyToMessageId ? { replyToMessageId } : {}),
-                        ...(mentions.mentionedUsernames.length > 0
-                            ? { mentionedUsernames: mentions.mentionedUsernames }
-                            : {}),
-                        ...(mentions.mentionRoles.length > 0
-                            ? { mentionRoles: mentions.mentionRoles }
-                            : {}),
-                        ...(normalizedContent.includes('```') ? { hasCode: true } : {}),
-                    }, 'sent'),
+                    metadata: withDeliveryMetadata(
+                        withMessageContextChipsMetadata({
+                            version: 3,
+                            ...(clientMessageId ? { clientMessageId } : {}),
+                            ...(replyToMessageId ? { replyToMessageId } : {}),
+                            ...(mentions.mentionedUsernames.length > 0
+                                ? { mentionedUsernames: mentions.mentionedUsernames }
+                                : {}),
+                            ...(mentions.mentionRoles.length > 0
+                                ? { mentionRoles: mentions.mentionRoles }
+                                : {}),
+                            ...(normalizedContent.includes('```') ? { hasCode: true } : {}),
+                        }, contextChips),
+                        'sent',
+                    ),
                 })
                 .returning();
 
@@ -3030,13 +3246,9 @@ export async function sendMessageWithAttachments(
         return { success: false, error: 'Failed to send message' };
     }
 }
-
-
 // ============================================================================
 // GET PROJECT GROUPS (User's Projects with Chat)
 // ============================================================================
-
-import { projects, projectMembers } from '@/lib/db/schema';
 
 export interface ProjectGroupConversation {
     id: string; // conversationId
@@ -3079,9 +3291,9 @@ export async function getProjectGroups(
             project_cover_image: string | null;
             updated_at: Date;
             last_message_id: string | null;
-            last_message_content: string | null;
+            last_message_preview: string | null;
             last_message_sender_id: string | null;
-            last_message_created_at: Date | null;
+            last_message_at: Date | null;
             last_message_type: string | null;
             member_count: number;
             unread_count: number;
@@ -3094,7 +3306,12 @@ export async function getProjectGroups(
                     p.slug as project_slug,
                     p.cover_image as project_cover_image,
                     c.updated_at,
-                    cp.unread_count -- Get denormalized unread count directly
+                    cp.unread_count,
+                    cp.last_message_id,
+                    cp.last_message_preview,
+                    cp.last_message_sender_id,
+                    cp.last_message_at,
+                    cp.last_message_type
                 FROM ${projects} p
                 INNER JOIN ${projectMembers} pm ON pm.project_id = p.id
                 INNER JOIN ${conversations} c ON c.id = p.conversation_id
@@ -3119,28 +3336,14 @@ export async function getProjectGroups(
                 up.project_slug,
                 up.project_cover_image,
                 up.updated_at,
-                lm.id as last_message_id,
-                lm.content as last_message_content,
-                lm.sender_id as last_message_sender_id,
-                lm.created_at as last_message_created_at,
-                lm.type as last_message_type,
+                up.last_message_id,
+                up.last_message_preview,
+                up.last_message_sender_id,
+                up.last_message_at,
+                up.last_message_type,
                 COALESCE(mc.member_count, 1) as member_count,
                 COALESCE(up.unread_count, 0) as unread_count
             FROM user_projects up
-            LEFT JOIN LATERAL (
-                SELECT m.id, m.content, m.sender_id, m.created_at, m.type
-                FROM ${messages} m
-                WHERE m.conversation_id = up.conversation_id
-                AND m.deleted_at IS NULL
-                AND NOT EXISTS (
-                    SELECT 1
-                    FROM ${messageHiddenForUsers} h
-                    WHERE h.message_id = m.id
-                    AND h.user_id = ${user.id}
-                )
-                ORDER BY m.created_at DESC
-                LIMIT 1
-            ) lm ON true
             LEFT JOIN member_counts mc ON mc.project_id = up.project_id
             ORDER BY up.updated_at DESC
         `);
@@ -3161,9 +3364,9 @@ export async function getProjectGroups(
             updatedAt: proj.updated_at,
             lastMessage: proj.last_message_id ? {
                 id: proj.last_message_id,
-                content: proj.last_message_content,
+                content: proj.last_message_preview,
                 senderId: proj.last_message_sender_id,
-                createdAt: proj.last_message_created_at!,
+                createdAt: proj.last_message_at!,
                 type: proj.last_message_type,
             } : null,
             unreadCount: proj.unread_count || 0,

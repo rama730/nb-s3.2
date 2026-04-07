@@ -10,8 +10,13 @@ import {
     profiles,
 } from '@/lib/db/schema';
 import { createClient } from '@/lib/supabase/server';
-import { eq, and, desc, inArray } from 'drizzle-orm';
+import { eq, and, desc, inArray, sql } from 'drizzle-orm';
 import { consumeRateLimit } from '@/lib/security/rate-limit';
+import {
+    buildReactionSummaryByMessage,
+    type MessageReactionSummary,
+    withReactionSummaryMetadata,
+} from '@/lib/messages/reactions';
 
 // Auth helper — same pattern as _all.ts
 async function getAuthUser() {
@@ -24,11 +29,7 @@ async function getAuthUser() {
 // REACTIONS
 // ============================================================================
 
-export interface ReactionSummary {
-    emoji: string;
-    count: number;
-    reacted: boolean; // whether the viewer has reacted with this emoji
-}
+export type ReactionSummary = MessageReactionSummary;
 
 /**
  * Toggle a reaction on a message. If the user already reacted with this emoji,
@@ -37,7 +38,7 @@ export interface ReactionSummary {
 export async function toggleReaction(
     messageId: string,
     emoji: string
-): Promise<{ success: boolean; error?: string; added?: boolean }> {
+): Promise<{ success: boolean; error?: string; added?: boolean; reactionSummary?: ReactionSummary[] }> {
     try {
         const user = await getAuthUser();
         if (!user) return { success: false, error: 'Not authenticated' };
@@ -51,7 +52,11 @@ export async function toggleReaction(
 
         // Check message exists
         const [messageRow] = await db
-            .select({ id: messages.id, conversationId: messages.conversationId, deletedAt: messages.deletedAt })
+            .select({
+                id: messages.id,
+                conversationId: messages.conversationId,
+                deletedAt: messages.deletedAt,
+            })
             .from(messages)
             .where(eq(messages.id, messageId))
             .limit(1);
@@ -92,7 +97,6 @@ export async function toggleReaction(
         if (existing) {
             // Remove reaction
             await db.delete(messageReactions).where(eq(messageReactions.id, existing.id));
-            return { success: true, added: false };
         } else {
             // Add reaction
             await db.insert(messageReactions).values({
@@ -100,8 +104,29 @@ export async function toggleReaction(
                 userId: user.id,
                 emoji,
             });
-            return { success: true, added: true };
         }
+
+        const rows = await db
+            .select({
+                messageId: messageReactions.messageId,
+                emoji: messageReactions.emoji,
+                userId: messageReactions.userId,
+            })
+            .from(messageReactions)
+            .where(eq(messageReactions.messageId, messageId));
+
+        const reactionSummary = buildReactionSummaryByMessage(rows, user.id)[messageId] || [];
+        await db.update(messages)
+            .set({
+                metadata: reactionSummary.length > 0
+                    ? sql`coalesce(${messages.metadata}, '{}'::jsonb) || ${JSON.stringify({
+                        reactionSummary: withReactionSummaryMetadata({}, reactionSummary).reactionSummary,
+                    })}::jsonb`
+                    : sql`coalesce(${messages.metadata}, '{}'::jsonb) - 'reactionSummary'`,
+            })
+            .where(eq(messages.id, messageId));
+
+        return { success: true, added: !existing, reactionSummary };
     } catch (error) {
         console.error('Error toggling reaction:', error);
         return { success: false, error: 'Failed to toggle reaction' };
@@ -131,30 +156,7 @@ export async function getMessageReactions(
             .from(messageReactions)
             .where(inArray(messageReactions.messageId, messageIds));
 
-        // Group by messageId -> emoji -> { count, reacted }
-        const grouped: Record<string, Record<string, { count: number; reacted: boolean }>> = {};
-        for (const row of rows) {
-            if (!grouped[row.messageId]) grouped[row.messageId] = {};
-            if (!grouped[row.messageId][row.emoji]) {
-                grouped[row.messageId][row.emoji] = { count: 0, reacted: false };
-            }
-            grouped[row.messageId][row.emoji].count++;
-            if (row.userId === user.id) {
-                grouped[row.messageId][row.emoji].reacted = true;
-            }
-        }
-
-        // Convert to ReactionSummary[]
-        const reactions: Record<string, ReactionSummary[]> = {};
-        for (const [msgId, emojis] of Object.entries(grouped)) {
-            reactions[msgId] = Object.entries(emojis).map(([emoji, data]) => ({
-                emoji,
-                count: data.count,
-                reacted: data.reacted,
-            }));
-        }
-
-        return { success: true, reactions };
+        return { success: true, reactions: buildReactionSummaryByMessage(rows, user.id) };
     } catch (error) {
         console.error('Error getting reactions:', error);
         return { success: false, error: 'Failed to get reactions' };

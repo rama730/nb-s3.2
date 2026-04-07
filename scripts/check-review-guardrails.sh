@@ -31,7 +31,6 @@ if rg -n 'console\.(log|info|warn|error|debug)\s*\(\s*`[^`]*\$\{[^`]+\}[^`]*`\s*
   src/components/profile/edit/EditProfileTabs.tsx \
   src/components/projects/TabErrorBoundary.tsx \
   src/components/projects/v2/explorer/utils/download.worker.ts \
-  src/components/workspace/WorkspaceSectionBoundary.tsx \
   src/inngest/functions/flush-views.ts \
   src/inngest/functions/git-sync.ts \
   src/inngest/functions/project-files-key-migration.ts \

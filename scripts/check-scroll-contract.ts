@@ -62,9 +62,6 @@ function collectExtraContractFiles(pageFile: string, repoRoot: string): string[]
   if (rel === "src/app/(main)/hub/page.tsx") {
     extras.push(path.join(repoRoot, "src/components/hub/SimpleHubClient.tsx"));
   }
-  if (rel === "src/app/(main)/workspace/page.tsx") {
-    extras.push(path.join(repoRoot, "src/components/workspace/WorkspaceClient.tsx"));
-  }
   if (rel.startsWith("src/app/(main)/settings/")) {
     extras.push(path.join(repoRoot, "src/components/settings/SettingsLayout.tsx"));
   }

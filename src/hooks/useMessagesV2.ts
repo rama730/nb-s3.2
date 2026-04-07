@@ -3,6 +3,8 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemo } from 'react';
 import {
+    convertMessageToFollowUpV2,
+    convertMessageToTaskV2,
     type InboxConversationV2,
     type MessageThreadPageV2,
     ensureDirectConversationV2,
@@ -11,12 +13,15 @@ import {
     getConversationSummaryV2,
     getConversationThreadPageV2,
     getInboxPageV2,
+    getMessagingStructuredCatalogPageV2,
     getMessageContextV2,
     getProjectGroupsPageV2,
     getUnreadSummaryV2,
     markConversationReadV2,
+    resolveConversationWorkflowV2,
     searchMessagesV2,
     sendConversationMessageV2,
+    sendStructuredConversationMessageV2,
     setConversationArchivedV2,
     setConversationMutedV2,
     setMessagePinnedV2,
@@ -25,6 +30,7 @@ import type { MessageWithSender, UploadedAttachment } from '@/app/actions/messag
 import { queryKeys } from '@/lib/query-keys';
 import {
     patchInboxConversation,
+    patchConversationLastMessageFromMessage,
     patchPinnedMessages,
     patchThreadMessage,
     patchThreadConversation,
@@ -40,8 +46,64 @@ import type { MessagesV2OutboxItem } from '@/stores/messagesV2OutboxStore';
 import { useMessagesV2OutboxStore } from '@/stores/messagesV2OutboxStore';
 import { mergeMessageCollections } from '@/lib/messages/utils';
 import { useAuth } from '@/hooks/useAuth';
+import {
+    createPendingStructuredState,
+    createStructuredMessagePayload,
+    type MessageContextChip,
+    withMessageContextChipsMetadata,
+    withStructuredMessageMetadata,
+} from '@/lib/messages/structured';
 
 const EMPTY_OUTBOX_ITEMS: MessagesV2OutboxItem[] = [];
+
+function buildOptimisticStructuredMessage(item: MessagesV2OutboxItem) {
+    if (!item.structuredAction) {
+        return null;
+    }
+
+    const action = item.structuredAction;
+    return createStructuredMessagePayload({
+        kind: action.kind,
+        title: action.title?.trim() || action.summary.trim(),
+        summary: action.summary.trim(),
+        contextChips: item.contextChips ?? [],
+        stateSnapshot: action.kind === 'rate_share' || action.kind === 'handoff_summary'
+            ? { status: 'shared', label: 'Shared' }
+            : createPendingStructuredState(),
+        entityRefs: {
+            projectId: action.projectId ?? null,
+            taskId: action.taskId ?? null,
+            fileId: action.fileId ?? null,
+            profileId: action.profileId ?? null,
+        },
+        payload: {
+            note: action.note?.trim() || null,
+            amount: action.amount?.trim() || null,
+            unit: action.unit?.trim() || null,
+            dueAt: action.dueAt || null,
+            completed: action.completed?.trim() || null,
+            blocked: action.blocked?.trim() || null,
+            next: action.next?.trim() || null,
+        },
+    });
+}
+
+function unwrapThreadPage(value: unknown): MessageThreadPageV2 | null {
+    const candidate = value && typeof value === 'object' && 'page' in value
+        ? (value as { page?: unknown }).page
+        : value;
+
+    if (!candidate || typeof candidate !== 'object') {
+        return null;
+    }
+
+    const page = candidate as Partial<MessageThreadPageV2>;
+    if (!page.conversation || !Array.isArray(page.messages) || !Array.isArray(page.pinnedMessages)) {
+        return null;
+    }
+
+    return page as MessageThreadPageV2;
+}
 
 export function useInbox(limit: number = 20) {
     const query = useInfiniteQuery({
@@ -94,21 +156,34 @@ export function useConversationThread(conversationId: string | null, limit: numb
         staleTime: 15_000,
     });
 
+    const normalizedPages = useMemo(
+        () => (query.data?.pages ?? [])
+            .map((page) => unwrapThreadPage(page))
+            .filter((page): page is MessageThreadPageV2 => page !== null),
+        [query.data?.pages],
+    );
+
     const messages = useMemo(
         () => mergeMessageCollections(
-            ...(query.data?.pages.map((page) => page.messages) ?? []),
+            ...normalizedPages.map((page) => page.messages),
             outboxItems.map((item) => ({
                 id: `temp-${item.clientMessageId}`,
                 conversationId: item.conversationId,
                 senderId: user?.id ?? null,
                 clientMessageId: item.clientMessageId,
-                content: item.content,
-                type: item.attachments[0]?.type || (item.content ? 'text' : 'file'),
-                metadata: {
-                    deliveryState: item.state,
-                    queued: item.state === 'queued',
-                    lastError: item.error,
-                },
+                content: item.mode === 'structured' ? null : item.content,
+                type: item.attachments[0]?.type || 'text',
+                metadata: item.mode === 'structured'
+                    ? withStructuredMessageMetadata({
+                        deliveryState: item.state,
+                        queued: item.state === 'queued',
+                        lastError: item.error,
+                    }, buildOptimisticStructuredMessage(item))
+                    : withMessageContextChipsMetadata({
+                        deliveryState: item.state,
+                        queued: item.state === 'queued',
+                        lastError: item.error,
+                    }, item.contextChips ?? []),
                 replyTo: null,
                 createdAt: new Date(item.createdAt),
                 editedAt: null,
@@ -132,9 +207,9 @@ export function useConversationThread(conversationId: string | null, limit: numb
                 })),
             })),
         ),
-        [outboxItems, query.data?.pages, user],
+        [normalizedPages, outboxItems, user],
     );
-    const firstPage = query.data?.pages[0] ?? null;
+    const firstPage = normalizedPages[0] ?? null;
 
     return {
         ...query,
@@ -182,6 +257,24 @@ export function useMessageSearch(query: string) {
             return result.results ?? [];
         },
         staleTime: 20_000,
+    });
+}
+
+export function useMessagingStructuredCatalog(conversationId: string | null, targetUserId?: string | null, enabled: boolean = true) {
+    return useQuery({
+        queryKey: queryKeys.messages.v2.structuredCatalog(conversationId, targetUserId ?? null),
+        enabled: enabled && Boolean(conversationId || targetUserId),
+        queryFn: async () => {
+            const result = await getMessagingStructuredCatalogPageV2({
+                conversationId,
+                targetUserId: targetUserId ?? null,
+            });
+            if (!result.success || !result.catalog) {
+                throw new Error(result.error || 'Failed to fetch message commands');
+            }
+            return result.catalog;
+        },
+        staleTime: 30_000,
     });
 }
 
@@ -339,6 +432,7 @@ export function useMessagesActions() {
             attachments?: UploadedAttachment[];
             clientMessageId?: string;
             replyToMessageId?: string | null;
+            contextChips?: MessageContextChip[];
         }) => {
             const result = await sendConversationMessageV2(params);
             if (!result.success || !result.conversationId) {
@@ -371,6 +465,83 @@ export function useMessagesActions() {
                 }
             } else if (result.conversation) {
                 upsertInboxConversation(queryClient, result.conversation);
+            }
+        },
+    });
+
+    const sendStructuredMessage = useMutation({
+        mutationFn: async (params: Parameters<typeof sendStructuredConversationMessageV2>[0]) => {
+            const result = await sendStructuredConversationMessageV2(params);
+            if (!result.success || !result.conversationId) {
+                throw new Error(result.error || 'Failed to send structured message');
+            }
+            return result;
+        },
+        onSuccess: (result, variables) => {
+            if (result.conversation) {
+                upsertThreadConversation(queryClient, result.conversation);
+            }
+
+            if (result.message && result.conversationId) {
+                const clientMessageId = result.message.clientMessageId ?? variables.clientMessageId ?? null;
+                if (clientMessageId) {
+                    replaceOptimisticThreadMessage(
+                        queryClient,
+                        result.conversationId,
+                        clientMessageId,
+                        result.message,
+                        result.conversation ?? null,
+                    );
+                } else {
+                    upsertThreadMessage(
+                        queryClient,
+                        result.conversationId,
+                        result.message,
+                        result.conversation ?? null,
+                    );
+                }
+            } else if (result.conversation) {
+                upsertInboxConversation(queryClient, result.conversation);
+            }
+        },
+    });
+
+    const resolveWorkflow = useMutation({
+        mutationFn: async (params: Parameters<typeof resolveConversationWorkflowV2>[0]) => {
+            const result = await resolveConversationWorkflowV2(params);
+            if (!result.success || !result.conversationId) {
+                throw new Error(result.error || 'Failed to resolve workflow');
+            }
+            return result;
+        },
+        onSuccess: (result) => {
+            if (result.conversation) {
+                upsertThreadConversation(queryClient, result.conversation);
+            }
+            if (result.message && result.conversationId) {
+                upsertThreadMessage(queryClient, result.conversationId, result.message, result.conversation ?? null);
+            }
+            if (result.bridgeMessage && result.conversationId) {
+                upsertThreadMessage(queryClient, result.conversationId, result.bridgeMessage, result.conversation ?? null);
+                patchConversationLastMessageFromMessage(queryClient, result.conversationId, result.bridgeMessage);
+            } else if (result.message && result.conversationId) {
+                patchConversationLastMessageFromMessage(queryClient, result.conversationId, result.message);
+            }
+        },
+    });
+
+    const convertMessageToTask = useMutation({
+        mutationFn: async (params: Parameters<typeof convertMessageToTaskV2>[0]) => {
+            const result = await convertMessageToTaskV2(params);
+            if (!result.success || !result.taskId) {
+                throw new Error(result.error || 'Failed to convert message to task');
+            }
+            return result;
+        },
+        onSuccess: (result) => {
+            if (result.bridgeMessage) {
+                upsertThreadMessage(queryClient, result.bridgeMessage.conversationId, result.bridgeMessage);
+                patchConversationLastMessageFromMessage(queryClient, result.bridgeMessage.conversationId, result.bridgeMessage);
             }
         },
     });
@@ -413,6 +584,10 @@ export function useMessagesActions() {
             return null;
         }
 
+        const contextMessages = Array.isArray(result.messages) && result.messages.length > 0
+            ? result.messages
+            : [result.message];
+
         queryClient.setQueryData(
             queryKeys.messages.v2.thread(conversationId),
             (current: { pages: MessageThreadPageV2[]; pageParams: Array<string | undefined> } | undefined) => {
@@ -423,7 +598,7 @@ export function useMessagesActions() {
                         index === 0
                             ? {
                                 ...page,
-                                messages: mergeMessageCollections(page.messages, [result.message!]),
+                                messages: mergeMessageCollections(page.messages, contextMessages),
                             }
                             : page,
                     ),
@@ -431,14 +606,37 @@ export function useMessagesActions() {
             },
         );
 
-        return result.message;
+        return {
+            anchorMessageId: result.anchorMessageId ?? result.message.id,
+            message: result.message,
+            messages: contextMessages,
+            hasOlderContext: Boolean(result.hasOlderContext),
+            hasNewerContext: Boolean(result.hasNewerContext),
+        };
     };
+
+    const convertMessageToFollowUp = useMutation({
+        mutationFn: async (params: Parameters<typeof convertMessageToFollowUpV2>[0] & { conversationId: string }) => {
+            const result = await convertMessageToFollowUpV2(params);
+            if (!result.success || !result.workflowItemId) {
+                throw new Error(result.error || 'Failed to add follow-up');
+            }
+            return result;
+        },
+        onSuccess: (_result, variables) => {
+            void injectMessageContext(variables.conversationId, variables.messageId);
+        },
+    });
 
     return {
         markRead,
         muteConversation,
         archiveConversation,
         sendConversationMessage,
+        sendStructuredMessage,
+        resolveWorkflow,
+        convertMessageToTask,
+        convertMessageToFollowUp,
         pinMessage,
         injectMessageContext,
     };

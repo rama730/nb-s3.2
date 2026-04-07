@@ -2,8 +2,14 @@
 
 import { useEffect, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { sendConversationMessageV2 } from '@/app/actions/messaging/v2';
-import { replaceOptimisticThreadMessage, upsertInboxConversation, upsertThreadConversation, upsertThreadMessage } from '@/lib/messages/v2-cache';
+import { sendConversationMessageV2, sendStructuredConversationMessageV2 } from '@/app/actions/messaging/v2';
+import {
+    patchConversationLastMessageFromMessage,
+    replaceOptimisticThreadMessage,
+    upsertInboxConversation,
+    upsertThreadConversation,
+    upsertThreadMessage,
+} from '@/lib/messages/v2-cache';
 import { useMessagesV2OutboxStore } from '@/stores/messagesV2OutboxStore';
 
 function getRetryDelay(attempt: number) {
@@ -63,14 +69,36 @@ export function useMessagesV2OutboxSync(enabled: boolean) {
                 inFlightIdsRef.current.add(item.clientMessageId);
                 markItem(item.clientMessageId, { state: 'sending' });
                 try {
-                    const result = await sendConversationMessageV2({
-                        conversationId: item.conversationId,
-                        targetUserId: item.targetUserId ?? null,
-                        content: item.content,
-                        attachments: item.attachments,
-                        clientMessageId: item.clientMessageId,
-                        replyToMessageId: item.replyToMessageId ?? null,
-                    });
+                    const result = item.mode === 'structured' && item.structuredAction
+                        ? await sendStructuredConversationMessageV2({
+                            conversationId: item.conversationId,
+                            targetUserId: item.targetUserId ?? null,
+                            clientMessageId: item.clientMessageId,
+                            kind: item.structuredAction.kind,
+                            title: item.structuredAction.title ?? null,
+                            summary: item.structuredAction.summary,
+                            note: item.structuredAction.note ?? null,
+                            projectId: item.structuredAction.projectId ?? null,
+                            taskId: item.structuredAction.taskId ?? null,
+                            fileId: item.structuredAction.fileId ?? null,
+                            profileId: item.structuredAction.profileId ?? null,
+                            amount: item.structuredAction.amount ?? null,
+                            unit: item.structuredAction.unit ?? null,
+                            dueAt: item.structuredAction.dueAt ?? null,
+                            completed: item.structuredAction.completed ?? null,
+                            blocked: item.structuredAction.blocked ?? null,
+                            next: item.structuredAction.next ?? null,
+                            contextChips: item.contextChips ?? [],
+                        })
+                        : await sendConversationMessageV2({
+                            conversationId: item.conversationId,
+                            targetUserId: item.targetUserId ?? null,
+                            content: item.content,
+                            attachments: item.attachments,
+                            clientMessageId: item.clientMessageId,
+                            replyToMessageId: item.replyToMessageId ?? null,
+                            contextChips: item.contextChips ?? [],
+                        });
 
                     if (result.success && result.conversationId) {
                         removeItem(item.clientMessageId);
@@ -85,6 +113,7 @@ export function useMessagesV2OutboxSync(enabled: boolean) {
                                 result.message,
                                 result.conversation ?? null,
                             );
+                            patchConversationLastMessageFromMessage(queryClient, result.conversationId, result.message);
                         } else if (result.conversation) {
                             upsertInboxConversation(queryClient, result.conversation);
                         }

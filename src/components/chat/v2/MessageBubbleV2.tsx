@@ -15,6 +15,7 @@ import {
     Pencil,
     Pin,
     PinOff,
+    PlusCircle,
     SendHorizonal,
     SmilePlus,
     Trash2,
@@ -24,11 +25,18 @@ import { toast } from 'sonner';
 import { useAuth } from '@/hooks/useAuth';
 import type { MessageWithSender } from '@/app/actions/messaging';
 import { deleteMessageV2, editMessageV2 } from '@/app/actions/messaging/v2';
+import { isMessagingPrivateFollowUpsEnabled } from '@/lib/features/messages';
+import { cn } from '@/lib/utils';
 import {
     hideThreadMessageForViewer,
     patchThreadMessage,
 } from '@/lib/messages/v2-cache';
 import { refreshConversationCache } from '@/lib/messages/v2-refresh';
+import {
+    normalizeMessageReactionSummary,
+    toggleMessageReactionSummary,
+    withReactionSummaryMetadata,
+} from '@/lib/messages/reactions';
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -41,18 +49,42 @@ import {
     MessageTextContentV2,
     type ChatAttachmentV2,
 } from './message-rendering';
+import {
+    getReplyFocusLabel,
+    getReplyPreviewBadge,
+    getReplyPreviewText,
+} from '@/lib/messages/reply-preview';
+import {
+    getMessageContextChipsFromMetadata,
+    getPrivateFollowUpFromMetadata,
+    getStructuredMessageFromMetadata,
+} from '@/lib/messages/structured';
 import { ReactionQuickBar } from './ReactionQuickBar';
 import { ReactionPillRow } from './ReactionPillRow';
 import { LinkPreviewCard } from './LinkPreviewCard';
 import { ReportMessageDialog } from './ReportMessageDialog';
 import { useLinkPreview, extractFirstUrl } from '@/hooks/useLinkPreview';
+import { MessageContextChipRowV2 } from './MessageContextChipRowV2';
+import { StructuredMessageCardV2 } from './StructuredMessageCardV2';
+import { useMessagesActions, useMessagingStructuredCatalog } from '@/hooks/useMessagesV2';
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
 
 interface MessageBubbleV2Props {
     message: MessageWithSender;
     showAvatar?: boolean;
     onReply?: (message: MessageWithSender) => void;
     onTogglePin?: (messageId: string, pinned: boolean) => void;
-    onFocusMessage?: (messageId: string) => void;
+    onFocusMessage?: (messageId: string, source?: 'reply' | 'pin' | 'external') => void;
+    isFocusedReplyTarget?: boolean;
+    focusSource?: 'reply' | 'pin' | 'external' | null;
 }
 
 function getApplicationStatusLabel(status: string | null) {
@@ -62,48 +94,169 @@ function getApplicationStatusLabel(status: string | null) {
     return 'Pending';
 }
 
+function areReactionSummariesEqual(
+    left: ReturnType<typeof normalizeMessageReactionSummary>,
+    right: ReturnType<typeof normalizeMessageReactionSummary>,
+) {
+    if (left.length !== right.length) return false;
+    for (let index = 0; index < left.length; index += 1) {
+        const current = left[index];
+        const next = right[index];
+        if (
+            current.emoji !== next.emoji
+            || current.count !== next.count
+            || current.viewerReacted !== next.viewerReacted
+        ) {
+            return false;
+        }
+    }
+    return true;
+}
+
+function areContextChipsEqual(left: ReturnType<typeof getMessageContextChipsFromMetadata>, right: ReturnType<typeof getMessageContextChipsFromMetadata>) {
+    if (left.length !== right.length) return false;
+    for (let index = 0; index < left.length; index += 1) {
+        const current = left[index];
+        const next = right[index];
+        if (
+            current.kind !== next.kind
+            || current.id !== next.id
+            || current.label !== next.label
+            || (current.subtitle ?? null) !== (next.subtitle ?? null)
+        ) {
+            return false;
+        }
+    }
+    return true;
+}
+
+function areStructuredMessagesEqual(
+    left: ReturnType<typeof getStructuredMessageFromMetadata>,
+    right: ReturnType<typeof getStructuredMessageFromMetadata>,
+) {
+    if (left === right) return true;
+    if (!left || !right) return left === right;
+    const leftState = left.stateSnapshot ?? null;
+    const rightState = right.stateSnapshot ?? null;
+    const leftRefs = left.entityRefs;
+    const rightRefs = right.entityRefs;
+    return (
+        left.kind === right.kind
+        && left.version === right.version
+        && left.layout === right.layout
+        && left.title === right.title
+        && left.summary === right.summary
+        && left.workflowItemId === right.workflowItemId
+        && (leftState === rightState || (
+            Boolean(leftState) === Boolean(rightState)
+            && leftState?.status === rightState?.status
+            && leftState?.label === rightState?.label
+            && (leftState?.note ?? null) === (rightState?.note ?? null)
+            && (leftState?.actorId ?? null) === (rightState?.actorId ?? null)
+            && (leftState?.actorName ?? null) === (rightState?.actorName ?? null)
+            && (leftState?.resolvedAt ?? null) === (rightState?.resolvedAt ?? null)
+        ))
+        && areContextChipsEqual(left.contextChips, right.contextChips)
+        && leftRefs.projectId === rightRefs.projectId
+        && leftRefs.taskId === rightRefs.taskId
+        && leftRefs.fileId === rightRefs.fileId
+        && leftRefs.profileId === rightRefs.profileId
+        && leftRefs.messageId === rightRefs.messageId
+        && leftRefs.applicationId === rightRefs.applicationId
+        && JSON.stringify(left.payload ?? null) === JSON.stringify(right.payload ?? null)
+    );
+}
+
+function arePrivateFollowUpsEqual(
+    left: ReturnType<typeof getPrivateFollowUpFromMetadata>,
+    right: ReturnType<typeof getPrivateFollowUpFromMetadata>,
+) {
+    if (left === right) return true;
+    if (!left || !right) return left === right;
+    return (
+        left.workflowItemId === right.workflowItemId
+        && left.status === right.status
+        && (left.note ?? null) === (right.note ?? null)
+        && (left.dueAt ?? null) === (right.dueAt ?? null)
+        && (left.preview ?? null) === (right.preview ?? null)
+    );
+}
+
+function areAttachmentsEqual(left: ChatAttachmentV2[], right: ChatAttachmentV2[]) {
+    if (left === right) return true;
+    if (left.length !== right.length) return false;
+    for (let index = 0; index < left.length; index += 1) {
+        const current = left[index];
+        const next = right[index];
+        if (
+            current.id !== next.id
+            || current.type !== next.type
+            || current.url !== next.url
+            || current.filename !== next.filename
+            || current.sizeBytes !== next.sizeBytes
+            || current.mimeType !== next.mimeType
+            || current.thumbnailUrl !== next.thumbnailUrl
+            || current.width !== next.width
+            || current.height !== next.height
+        ) {
+            return false;
+        }
+    }
+    return true;
+}
+
 export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
     message,
     showAvatar = true,
     onReply,
     onTogglePin,
     onFocusMessage,
+    isFocusedReplyTarget = false,
+    focusSource = null,
 }: MessageBubbleV2Props) {
     const queryClient = useQueryClient();
     const { user } = useAuth();
+    const { resolveWorkflow, convertMessageToTask, convertMessageToFollowUp } = useMessagesActions();
     const isOwn = message.senderId === user?.id;
+    const privateFollowUpsEnabled = isMessagingPrivateFollowUpsEnabled(user?.id ?? null);
     const isDeleted = Boolean(message.deletedAt);
-    const metadata = (message.metadata || {}) as Record<string, unknown>;
+    const metadata = useMemo(
+        () => (message.metadata || {}) as Record<string, unknown>,
+        [message.metadata],
+    );
     const isPinned = Boolean(metadata.pinned);
     const isApplication = metadata.isApplication === true;
     const applicationStatus = typeof metadata.status === 'string' ? metadata.status : null;
     const deliveryState = typeof metadata.deliveryState === 'string' ? metadata.deliveryState : undefined;
+    const structured = useMemo(() => getStructuredMessageFromMetadata(metadata), [metadata]);
+    const contextChips = useMemo(() => getMessageContextChipsFromMetadata(metadata), [metadata]);
+    const privateFollowUp = useMemo(() => getPrivateFollowUpFromMetadata(metadata), [metadata]);
     const [isEditing, setIsEditing] = useState(false);
     const [draftContent, setDraftContent] = useState(message.content || '');
     const [isActionLoading, setIsActionLoading] = useState(false);
+    const [workflowActionLoading, setWorkflowActionLoading] = useState(false);
     const [hiddenForViewer, setHiddenForViewer] = useState(false);
     const [showReactionBar, setShowReactionBar] = useState(false);
     const [reportOpen, setReportOpen] = useState(false);
-    const [localReactions, setLocalReactions] = useState<Array<{emoji: string; count: number; viewerReacted: boolean}>>([]);
-    const [reactionsLoaded, setReactionsLoaded] = useState(false);
-
-    // Load reactions from DB on mount (once)
-    useEffect(() => {
-        if (isDeleted) return;
-        let cancelled = false;
-        import('@/app/actions/messaging/features').then(({ getMessageReactions }) => {
-            getMessageReactions([message.id]).then((result) => {
-                if (cancelled) return;
-                if (result.success && result.reactions?.[message.id]) {
-                    setLocalReactions(result.reactions[message.id].map((r) => ({ emoji: r.emoji, count: r.count, viewerReacted: r.reacted })));
-                }
-                setReactionsLoaded(true);
-            }).catch(() => {});
-        }).catch(() => {});
-        return () => { cancelled = true; };
-    }, [message.id, isDeleted]);
-
-    const reactionSummary = localReactions;
+    const [isReactionLoading, setIsReactionLoading] = useState(false);
+    const [taskDialogOpen, setTaskDialogOpen] = useState(false);
+    const [followUpDialogOpen, setFollowUpDialogOpen] = useState(false);
+    const [taskTitle, setTaskTitle] = useState('');
+    const [taskDescription, setTaskDescription] = useState('');
+    const [taskProjectId, setTaskProjectId] = useState<string>('');
+    const [taskPriority, setTaskPriority] = useState<'low' | 'medium' | 'high' | 'urgent'>('medium');
+    const [taskDueDate, setTaskDueDate] = useState('');
+    const [followUpNote, setFollowUpNote] = useState('');
+    const [followUpDueAt, setFollowUpDueAt] = useState('');
+    const reactionSummary = useMemo(
+        () => normalizeMessageReactionSummary(metadata.reactionSummary),
+        [metadata.reactionSummary],
+    );
+    const catalogQuery = useMessagingStructuredCatalog(
+        message.conversationId,
+        undefined,
+        taskDialogOpen || followUpDialogOpen,
+    );
 
     const firstUrl = extractFirstUrl(message.content);
     const { data: linkPreview } = useLinkPreview(isDeleted ? null : firstUrl);
@@ -114,6 +267,8 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
     );
     const canEditMessage = isOwn && !isDeleted && Boolean(message.content);
     const canReply = !isDeleted;
+    const replyPreviewBadge = message.replyTo ? getReplyPreviewBadge(message.replyTo) : null;
+    const replyPreviewText = message.replyTo ? getReplyPreviewText(message.replyTo) : null;
 
     useEffect(() => {
         if (!isEditing) {
@@ -124,47 +279,165 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
     useEffect(() => {
         setIsEditing(false);
         setIsActionLoading(false);
+        setWorkflowActionLoading(false);
         setHiddenForViewer(false);
         setDraftContent(message.content || '');
     }, [message.content, message.id]);
+
+    useEffect(() => {
+        if (!taskDialogOpen) return;
+        setTaskTitle(
+            structured?.title
+            || message.content?.trim()
+            || privateFollowUp?.preview
+            || 'Follow-up task',
+        );
+        setTaskDescription(structured?.summary || message.content?.trim() || '');
+        setTaskProjectId(catalogQuery.data?.linkedProjectId || catalogQuery.data?.projects[0]?.id || '');
+        setTaskPriority('medium');
+        setTaskDueDate('');
+    }, [
+        catalogQuery.data?.linkedProjectId,
+        catalogQuery.data?.projects,
+        message.content,
+        privateFollowUp?.preview,
+        structured?.summary,
+        structured?.title,
+        taskDialogOpen,
+    ]);
+
+    useEffect(() => {
+        if (!followUpDialogOpen) return;
+        setFollowUpNote(privateFollowUp?.note || structured?.summary || message.content?.trim() || '');
+        setFollowUpDueAt(privateFollowUp?.dueAt ? privateFollowUp.dueAt.slice(0, 16) : '');
+    }, [followUpDialogOpen, message.content, privateFollowUp?.dueAt, privateFollowUp?.note, structured?.summary]);
 
     const syncAfterMessageAction = useCallback(async () => {
         await refreshConversationCache(queryClient, message.conversationId);
     }, [message.conversationId, queryClient]);
 
-    const handleReaction = useCallback(async (emoji: string) => {
-        setShowReactionBar(false);
+    const handleResolveWorkflow = useCallback(async (
+        action: 'accept' | 'decline' | 'complete' | 'needs_changes' | 'available' | 'busy' | 'offline' | 'focusing',
+    ) => {
+        const workflowItemId = structured?.workflowItemId;
+        if (!workflowItemId || workflowActionLoading) {
+            return;
+        }
 
-        // Optimistic update
-        setLocalReactions((prev) => {
-            const existing = prev.find((r) => r.emoji === emoji);
-            if (existing?.viewerReacted) {
-                // Remove our reaction
-                const newCount = existing.count - 1;
-                if (newCount <= 0) return prev.filter((r) => r.emoji !== emoji);
-                return prev.map((r) => r.emoji === emoji ? { ...r, count: newCount, viewerReacted: false } : r);
-            }
-            if (existing) {
-                return prev.map((r) => r.emoji === emoji ? { ...r, count: r.count + 1, viewerReacted: true } : r);
-            }
-            return [...prev, { emoji, count: 1, viewerReacted: true }];
-        });
+        setWorkflowActionLoading(true);
+        try {
+            await resolveWorkflow.mutateAsync({
+                workflowItemId,
+                action,
+            });
+        } catch (error) {
+            toast.error(error instanceof Error ? error.message : 'Failed to update workflow');
+        } finally {
+            setWorkflowActionLoading(false);
+        }
+    }, [resolveWorkflow, structured?.workflowItemId, workflowActionLoading]);
+
+    const handleConvertToTask = useCallback(async () => {
+        if (!taskProjectId) {
+            toast.error('Select a project first');
+            return;
+        }
 
         try {
-            const { toggleReaction, getMessageReactions } = await import('@/app/actions/messaging/features');
+            await convertMessageToTask.mutateAsync({
+                messageId: message.id,
+                projectId: taskProjectId,
+                title: taskTitle.trim() || null,
+                description: taskDescription.trim() || null,
+                priority: taskPriority,
+                dueDate: taskDueDate ? new Date(taskDueDate).toISOString() : null,
+            });
+            toast.success('Task created from message');
+            setTaskDialogOpen(false);
+        } catch (error) {
+            toast.error(error instanceof Error ? error.message : 'Failed to create task');
+        }
+    }, [convertMessageToTask, message.id, taskDescription, taskDueDate, taskPriority, taskProjectId, taskTitle]);
+
+    const handleAddFollowUp = useCallback(async () => {
+        if (!privateFollowUpsEnabled) {
+            toast.error('Private follow-ups are unavailable');
+            return;
+        }
+        try {
+            await convertMessageToFollowUp.mutateAsync({
+                messageId: message.id,
+                conversationId: message.conversationId,
+                note: followUpNote.trim() || null,
+                dueAt: followUpDueAt ? new Date(followUpDueAt).toISOString() : null,
+            });
+            toast.success('Follow-up saved');
+            setFollowUpDialogOpen(false);
+        } catch (error) {
+            toast.error(error instanceof Error ? error.message : 'Failed to save follow-up');
+        }
+    }, [convertMessageToFollowUp, followUpDueAt, followUpNote, message.conversationId, message.id, privateFollowUpsEnabled]);
+
+    const handleReaction = useCallback(async (emoji: string) => {
+        if (isDeleted || isReactionLoading) {
+            return;
+        }
+
+        setShowReactionBar(false);
+        setIsReactionLoading(true);
+
+        const previousReactionSummary = reactionSummary;
+        const optimisticReactionSummary = toggleMessageReactionSummary(previousReactionSummary, emoji);
+        patchThreadMessage(queryClient, message.conversationId, message.id, (current) => ({
+            ...current,
+            metadata: withReactionSummaryMetadata(
+                (current.metadata || {}) as Record<string, unknown>,
+                optimisticReactionSummary,
+            ),
+        }));
+
+        try {
+            const { toggleReaction } = await import('@/app/actions/messaging/features');
             const result = await toggleReaction(message.id, emoji);
             if (!result.success) {
+                patchThreadMessage(queryClient, message.conversationId, message.id, (current) => ({
+                    ...current,
+                    metadata: withReactionSummaryMetadata(
+                        (current.metadata || {}) as Record<string, unknown>,
+                        previousReactionSummary,
+                    ),
+                }));
                 toast.error(result.error || 'Failed to react');
+                return;
             }
-            // Sync with server truth
-            const fresh = await getMessageReactions([message.id]);
-            if (fresh.success && fresh.reactions?.[message.id]) {
-                setLocalReactions(fresh.reactions[message.id].map((r) => ({ emoji: r.emoji, count: r.count, viewerReacted: r.reacted })));
-            }
+
+            patchThreadMessage(queryClient, message.conversationId, message.id, (current) => ({
+                ...current,
+                metadata: withReactionSummaryMetadata(
+                    (current.metadata || {}) as Record<string, unknown>,
+                    result.reactionSummary || optimisticReactionSummary,
+                ),
+            }));
         } catch {
+            patchThreadMessage(queryClient, message.conversationId, message.id, (current) => ({
+                ...current,
+                metadata: withReactionSummaryMetadata(
+                    (current.metadata || {}) as Record<string, unknown>,
+                    previousReactionSummary,
+                ),
+            }));
             toast.error('Failed to react');
+        } finally {
+            setIsReactionLoading(false);
         }
-    }, [message.id]);
+    }, [
+        isDeleted,
+        isReactionLoading,
+        message.conversationId,
+        message.id,
+        queryClient,
+        reactionSummary,
+    ]);
 
     const handleSaveEdit = useCallback(async () => {
         if (!canEditMessage) return;
@@ -237,7 +510,7 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
         }
     }, [message.conversationId, message.id, queryClient, syncAfterMessageAction]);
 
-    if (message.type === 'system') {
+    if (message.type === 'system' && !structured) {
         return (
             <div className="my-4 flex w-full justify-center">
                 <span className="flex items-center gap-2 rounded-full border border-zinc-200 bg-zinc-100 px-3 py-1 text-xs font-medium text-zinc-500 dark:border-zinc-800 dark:bg-zinc-800/60 dark:text-zinc-400">
@@ -295,28 +568,83 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
                 <div className={`flex min-w-0 max-w-[78%] flex-col ${isOwn ? 'items-end' : 'items-start'}`}>
                     <div className={`flex items-end gap-1 ${isOwn ? 'flex-row-reverse' : 'flex-row'}`}>
                         <div
-                            className={`relative min-w-0 rounded-2xl px-3 py-2 shadow-sm ${
+                            className={cn(
+                                'relative min-w-0 rounded-2xl px-3 py-2 shadow-sm transition-[transform,box-shadow,ring-color,background-color] duration-300 ease-out',
                                 isOwn
                                     ? 'rounded-br-md bg-primary text-primary-foreground'
-                                    : 'rounded-bl-md border border-zinc-200 bg-white text-zinc-900 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-100'
-                            }`}
+                                    : 'rounded-bl-md border border-zinc-200 bg-white text-zinc-900 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-100',
+                                isFocusedReplyTarget && (
+                                    isOwn
+                                        ? 'ring-2 ring-white/45 shadow-[0_16px_40px_-22px_rgba(59,130,246,0.9)]'
+                                        : 'ring-2 ring-primary/45 shadow-[0_16px_40px_-22px_rgba(59,130,246,0.55)]'
+                                ),
+                            )}
+                            style={isFocusedReplyTarget ? { animation: 'message-focus-pulse 1250ms cubic-bezier(0.22,1,0.36,1)' } : undefined}
                         >
+                            {isFocusedReplyTarget ? (
+                                <>
+                                    <div
+                                        className={cn(
+                                            'absolute inset-y-3 w-1 rounded-full',
+                                            isOwn ? '-right-2 bg-white/70' : '-left-2 bg-primary/70',
+                                        )}
+                                    />
+                                    <div className="mb-2 flex items-center gap-2">
+                                        <span
+                                            className={cn(
+                                                'inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide',
+                                                isOwn
+                                                    ? 'border-white/20 bg-white/10 text-white/90'
+                                                    : 'border-primary/20 bg-primary/5 text-primary',
+                                            )}
+                                        >
+                                            {getReplyFocusLabel(focusSource || 'external')}
+                                        </span>
+                                    </div>
+                                </>
+                            ) : null}
                             {message.replyTo ? (
                                 <button
                                     type="button"
-                                    onClick={() => onFocusMessage?.(message.replyTo!.id)}
-                                    className={`mb-2 w-full rounded-xl border px-2 py-1 text-left text-xs ${
+                                    onClick={() => onFocusMessage?.(message.replyTo!.id, 'reply')}
+                                    className={cn(
+                                        'mb-2 w-full rounded-xl border px-2.5 py-2 text-left text-xs transition-colors duration-200',
                                         isOwn
-                                            ? 'border-white/20 bg-white/10 text-primary-foreground/90'
-                                            : 'border-zinc-200 bg-zinc-50 text-zinc-500 dark:border-zinc-700 dark:bg-zinc-800/60 dark:text-zinc-300'
-                                    }`}
+                                            ? 'border-white/15 bg-white/10 text-primary-foreground/90 hover:bg-white/14'
+                                            : 'border-zinc-200 bg-zinc-50/90 text-zinc-500 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800/60 dark:text-zinc-300 dark:hover:bg-zinc-800',
+                                    )}
+                                    title={replyPreviewText || 'Open original message'}
+                                    aria-label="Jump to original replied message"
                                 >
-                                    <div className="font-medium">{message.replyTo.senderName || 'Reply'}</div>
-                                    <div className="truncate">{message.replyTo.content || '[attachment]'}</div>
+                                    <div className="flex items-start gap-2">
+                                        <div className={cn('mt-0.5 w-1 self-stretch rounded-full', isOwn ? 'bg-white/55' : 'bg-primary/55')} />
+                                        <div className="min-w-0 flex-1">
+                                            <div className="flex items-center gap-2">
+                                                <div className="truncate font-semibold">
+                                                    {message.replyTo.senderName || 'Reply'}
+                                                </div>
+                                                {replyPreviewBadge ? (
+                                                    <span
+                                                        className={cn(
+                                                            'shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide',
+                                                            isOwn
+                                                                ? 'bg-white/10 text-white/80'
+                                                                : 'bg-primary/10 text-primary',
+                                                        )}
+                                                    >
+                                                        {replyPreviewBadge}
+                                                    </span>
+                                                ) : null}
+                                            </div>
+                                            <div className="mt-0.5 line-clamp-2 break-words opacity-90">
+                                                {replyPreviewText}
+                                            </div>
+                                        </div>
+                                    </div>
                                 </button>
                             ) : null}
 
-                            {(isPinned || isApplication) ? (
+                            {(isPinned || isApplication || privateFollowUp) ? (
                                 <div className="mb-1 flex items-center gap-2">
                                     {isPinned ? (
                                         <span className={`text-[10px] font-bold uppercase ${isOwn ? 'text-white/80' : 'text-amber-600 dark:text-amber-400'}`}>
@@ -326,6 +654,11 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
                                     {isApplication ? (
                                         <span className={`text-[10px] font-bold uppercase opacity-70 ${isOwn ? 'text-white' : 'text-zinc-500 dark:text-zinc-300'}`}>
                                             Application status: {getApplicationStatusLabel(applicationStatus)}
+                                        </span>
+                                    ) : null}
+                                    {privateFollowUp ? (
+                                        <span className={`text-[10px] font-bold uppercase ${isOwn ? 'text-white/80' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                                            Follow up{privateFollowUp.dueAt ? ` · ${format(new Date(privateFollowUp.dueAt), 'MMM d')}` : ''}
                                         </span>
                                     ) : null}
                                 </div>
@@ -364,6 +697,23 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
                                 </div>
                             ) : (
                                 <>
+                                    {structured ? (
+                                        <StructuredMessageCardV2
+                                            structured={structured}
+                                            isOwn={isOwn}
+                                            currentUserId={user?.id ?? null}
+                                            creatorId={message.senderId ?? null}
+                                            isActionLoading={workflowActionLoading}
+                                            onResolveAction={structured.workflowItemId ? handleResolveWorkflow : undefined}
+                                        />
+                                    ) : null}
+                                    {!structured && contextChips.length > 0 ? (
+                                        <MessageContextChipRowV2
+                                            chips={contextChips}
+                                            tone={isOwn ? 'inverted' : 'default'}
+                                            compact
+                                        />
+                                    ) : null}
                                     {message.content ? (
                                         <MessageTextContentV2
                                             content={message.content}
@@ -437,6 +787,16 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
                                         {isPinned ? 'Unpin' : 'Pin'}
                                     </DropdownMenuItem>
                                 ) : null}
+                                <DropdownMenuItem onClick={() => setTaskDialogOpen(true)} disabled={isActionLoading}>
+                                    <PlusCircle className="mr-2 h-4 w-4" />
+                                    Convert to task
+                                </DropdownMenuItem>
+                                {privateFollowUpsEnabled ? (
+                                    <DropdownMenuItem onClick={() => setFollowUpDialogOpen(true)} disabled={isActionLoading}>
+                                        <Clock3 className="mr-2 h-4 w-4" />
+                                        Add follow-up
+                                    </DropdownMenuItem>
+                                ) : null}
                                 <DropdownMenuItem onClick={() => void handleDeleteForMe()} disabled={isActionLoading}>
                                     <Trash2 className="mr-2 h-4 w-4" />
                                     Delete for me
@@ -482,21 +842,158 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
                 </div>
             </div>
         </div>
+        <Dialog open={taskDialogOpen} onOpenChange={setTaskDialogOpen}>
+            <DialogContent className="sm:max-w-lg">
+                <DialogHeader>
+                    <DialogTitle>Convert message to task</DialogTitle>
+                    <DialogDescription>
+                        Create a task from this message and keep the conversation linked through a lightweight activity bridge.
+                    </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-3">
+                    <div className="space-y-1.5">
+                        <label className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Project</label>
+                        <select
+                            value={taskProjectId}
+                            onChange={(event) => setTaskProjectId(event.target.value)}
+                            className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm outline-none focus:border-primary/30 focus:ring-2 focus:ring-primary/10 dark:border-zinc-800 dark:bg-zinc-950"
+                        >
+                            <option value="">Select project</option>
+                            {(catalogQuery.data?.projects || []).map((project) => (
+                                <option key={project.id} value={project.id}>
+                                    {project.title}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+                    <div className="space-y-1.5">
+                        <label className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Title</label>
+                        <Input value={taskTitle} onChange={(event) => setTaskTitle(event.target.value)} maxLength={120} />
+                    </div>
+                    <div className="space-y-1.5">
+                        <label className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Description</label>
+                        <textarea
+                            value={taskDescription}
+                            onChange={(event) => setTaskDescription(event.target.value)}
+                            rows={4}
+                            className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm outline-none focus:border-primary/30 focus:ring-2 focus:ring-primary/10 dark:border-zinc-800 dark:bg-zinc-950"
+                        />
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="space-y-1.5">
+                            <label className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Priority</label>
+                            <select
+                                value={taskPriority}
+                                onChange={(event) => setTaskPriority(event.target.value as typeof taskPriority)}
+                                className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm outline-none focus:border-primary/30 focus:ring-2 focus:ring-primary/10 dark:border-zinc-800 dark:bg-zinc-950"
+                            >
+                                <option value="low">Low</option>
+                                <option value="medium">Medium</option>
+                                <option value="high">High</option>
+                                <option value="urgent">Urgent</option>
+                            </select>
+                        </div>
+                        <div className="space-y-1.5">
+                            <label className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Due date</label>
+                            <Input type="datetime-local" value={taskDueDate} onChange={(event) => setTaskDueDate(event.target.value)} />
+                        </div>
+                    </div>
+                </div>
+                <DialogFooter>
+                    <button
+                        type="button"
+                        onClick={() => setTaskDialogOpen(false)}
+                        className="rounded-lg border border-zinc-200 px-3 py-2 text-sm hover:bg-zinc-100 dark:border-zinc-800 dark:hover:bg-zinc-900"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => void handleConvertToTask()}
+                        disabled={convertMessageToTask.isPending}
+                        className="rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground disabled:opacity-60"
+                    >
+                        {convertMessageToTask.isPending ? 'Creating…' : 'Create task'}
+                    </button>
+                </DialogFooter>
+            </DialogContent>
+        </Dialog>
+        <Dialog open={privateFollowUpsEnabled && followUpDialogOpen} onOpenChange={setFollowUpDialogOpen}>
+            <DialogContent className="sm:max-w-md">
+                <DialogHeader>
+                    <DialogTitle>Add follow-up</DialogTitle>
+                    <DialogDescription>
+                        Keep a private reminder on this message without posting a visible workflow card in the thread.
+                    </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-3">
+                    <div className="space-y-1.5">
+                        <label className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Note</label>
+                        <textarea
+                            value={followUpNote}
+                            onChange={(event) => setFollowUpNote(event.target.value)}
+                            rows={4}
+                            className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm outline-none focus:border-primary/30 focus:ring-2 focus:ring-primary/10 dark:border-zinc-800 dark:bg-zinc-950"
+                        />
+                    </div>
+                    <div className="space-y-1.5">
+                        <label className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Remind me at</label>
+                        <Input type="datetime-local" value={followUpDueAt} onChange={(event) => setFollowUpDueAt(event.target.value)} />
+                    </div>
+                </div>
+                <DialogFooter>
+                    <button
+                        type="button"
+                        onClick={() => setFollowUpDialogOpen(false)}
+                        className="rounded-lg border border-zinc-200 px-3 py-2 text-sm hover:bg-zinc-100 dark:border-zinc-800 dark:hover:bg-zinc-900"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => void handleAddFollowUp()}
+                        disabled={convertMessageToFollowUp.isPending}
+                        className="rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground disabled:opacity-60"
+                    >
+                        {convertMessageToFollowUp.isPending ? 'Saving…' : 'Save follow-up'}
+                    </button>
+                </DialogFooter>
+            </DialogContent>
+        </Dialog>
         {reportOpen && <ReportMessageDialog messageId={message.id} isOpen={reportOpen} onClose={() => setReportOpen(false)} />}
         </>
     );
 }, (prev, next) => {
+    const prevPinned = Boolean(prev.message.metadata?.pinned);
+    const nextPinned = Boolean(next.message.metadata?.pinned);
+    const prevReactionSummary = normalizeMessageReactionSummary(prev.message.metadata?.reactionSummary);
+    const nextReactionSummary = normalizeMessageReactionSummary(next.message.metadata?.reactionSummary);
+    const prevStructured = getStructuredMessageFromMetadata(prev.message.metadata || {});
+    const nextStructured = getStructuredMessageFromMetadata(next.message.metadata || {});
+    const prevContextChips = getMessageContextChipsFromMetadata(prev.message.metadata || {});
+    const nextContextChips = getMessageContextChipsFromMetadata(next.message.metadata || {});
+    const prevPrivateFollowUp = getPrivateFollowUpFromMetadata(prev.message.metadata || {});
+    const nextPrivateFollowUp = getPrivateFollowUpFromMetadata(next.message.metadata || {});
+    const prevAttachments = (prev.message.attachments || []) as ChatAttachmentV2[];
+    const nextAttachments = (next.message.attachments || []) as ChatAttachmentV2[];
+
     return (
         prev.message.id === next.message.id &&
         prev.message.content === next.message.content &&
         prev.message.editedAt === next.message.editedAt &&
         prev.message.deletedAt === next.message.deletedAt &&
-        (prev.message.metadata as any)?.pinned === (next.message.metadata as any)?.pinned &&
-        JSON.stringify((prev.message.metadata as any)?.reactionSummary) === JSON.stringify((next.message.metadata as any)?.reactionSummary) &&
+        prevPinned === nextPinned &&
+        areReactionSummariesEqual(prevReactionSummary, nextReactionSummary) &&
+        areStructuredMessagesEqual(prevStructured, nextStructured) &&
+        areContextChipsEqual(prevContextChips, nextContextChips) &&
+        arePrivateFollowUpsEqual(prevPrivateFollowUp, nextPrivateFollowUp) &&
+        areAttachmentsEqual(prevAttachments, nextAttachments) &&
         prev.showAvatar === next.showAvatar &&
         prev.onReply === next.onReply &&
         prev.onTogglePin === next.onTogglePin &&
-        prev.onFocusMessage === next.onFocusMessage
+        prev.onFocusMessage === next.onFocusMessage &&
+        prev.isFocusedReplyTarget === next.isFocusedReplyTarget &&
+        prev.focusSource === next.focusSource
     );
 });
 

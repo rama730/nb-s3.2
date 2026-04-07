@@ -69,7 +69,6 @@ function toBootstrapProfile(
         genderIdentity: null,
         pronouns: null,
         connectionPrivacy: profile.connectionPrivacy ?? 'everyone',
-        workspaceLayout: null,
         lastActiveAt: null,
         hasRecoveryCodes: false,
     }

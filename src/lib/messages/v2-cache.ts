@@ -7,6 +7,10 @@ import type {
     MessagesInboxPageV2,
     MessageThreadPageV2,
 } from '@/app/actions/messaging/v2';
+import {
+    buildConversationLastMessageSnapshot,
+    shouldReplaceConversationLastMessage,
+} from '@/lib/messages/preview-authority';
 import { queryKeys } from '@/lib/query-keys';
 import { mergeMessages, toEpochMs } from '@/lib/messages/utils';
 
@@ -141,6 +145,35 @@ export function patchThreadConversation(
     patchInboxConversation(queryClient, conversationId, (existing) =>
         nextConversation ?? patch(existing),
     );
+}
+
+export function patchConversationLastMessageFromMessage(
+    queryClient: QueryClient,
+    conversationId: string,
+    message: Pick<MessageWithSender, 'id' | 'content' | 'senderId' | 'createdAt' | 'type'> & {
+        metadata?: Record<string, unknown> | null;
+    },
+) {
+    const nextLastMessage = buildConversationLastMessageSnapshot(message);
+    if (!nextLastMessage) return;
+
+    patchThreadConversation(queryClient, conversationId, (conversation) => {
+        if (!shouldReplaceConversationLastMessage(conversation.lastMessage, message)) {
+            return conversation;
+        }
+
+        const nextUpdatedAtEpoch = Math.max(
+            toEpochMs(conversation.updatedAt),
+            nextLastMessage.createdAt.getTime(),
+        );
+
+        return {
+            ...conversation,
+            lifecycleState: 'active',
+            updatedAt: nextUpdatedAtEpoch > 0 ? new Date(nextUpdatedAtEpoch) : conversation.updatedAt,
+            lastMessage: nextLastMessage,
+        };
+    });
 }
 
 export function upsertThreadMessage(
@@ -288,6 +321,31 @@ export function hasCachedThreadMessage(
     return (data?.pages ?? []).some((page) =>
         page.messages.some((message) => message.id === messageId),
     );
+}
+
+export function isCachedConversationLastMessage(
+    queryClient: QueryClient,
+    conversationId: string,
+    messageId: string,
+) {
+    const inboxQueries = queryClient.getQueriesData<InfiniteData<MessagesInboxPageV2>>({
+        queryKey: INBOX_QUERY_PREFIX,
+    });
+
+    for (const [, data] of inboxQueries) {
+        for (const page of data?.pages ?? []) {
+            const conversation = page.conversations.find((entry) => entry.id === conversationId);
+            if (conversation?.lastMessage?.id === messageId) {
+                return true;
+            }
+        }
+    }
+
+    const threadData = queryClient.getQueryData<InfiniteData<MessageThreadPageV2>>(
+        queryKeys.messages.v2.thread(conversationId),
+    );
+
+    return threadData?.pages[0]?.conversation.lastMessage?.id === messageId;
 }
 
 export function getCachedInboxConversationIds(queryClient: QueryClient) {

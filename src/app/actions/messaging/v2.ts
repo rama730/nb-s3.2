@@ -16,13 +16,17 @@ import {
 import { and, desc, eq, inArray, or, sql } from 'drizzle-orm';
 import {
     ConversationWithDetails,
+    type MessagingStructuredCatalogV2,
     MessageWithSender,
     ProjectGroupConversation,
     UploadedAttachment,
+    convertMessageToFollowUpActionV2,
+    convertMessageToTaskActionV2,
     deleteMessage,
     editMessage,
     getConversationById,
     getConversations,
+    getMessagingStructuredCatalogV2,
     getMessageContext,
     getMessages,
     getOrCreateDMConversation,
@@ -33,10 +37,13 @@ import {
     searchMessages,
     sendMessage,
     sendMessageWithAttachments,
+    sendStructuredMessageActionV2,
     setConversationArchived,
     setConversationMuted,
     setMessagePinned,
+    resolveMessageWorkflowActionV2,
 } from '@/app/actions/messaging';
+import type { MessageContextChip } from '@/lib/messages/structured';
 import { APPLICATION_BANNER_HIDE_AFTER_MS } from '@/lib/chat/banner-lifecycle';
 
 type ConnectionStatus = 'none' | 'pending_sent' | 'pending_received' | 'connected' | 'blocked' | 'open';
@@ -329,9 +336,9 @@ async function getProjectGroupConversationById(
         project_cover_image: string | null;
         updated_at: Date;
         last_message_id: string | null;
-        last_message_content: string | null;
+        last_message_preview: string | null;
         last_message_sender_id: string | null;
-        last_message_created_at: Date | null;
+        last_message_at: Date | null;
         last_message_type: string | null;
         unread_count: number;
     }>(sql`
@@ -343,29 +350,15 @@ async function getProjectGroupConversationById(
             p.cover_image as project_cover_image,
             c.updated_at,
             cp.unread_count,
-            lm.id as last_message_id,
-            lm.content as last_message_content,
-            lm.sender_id as last_message_sender_id,
-            lm.created_at as last_message_created_at,
-            lm.type as last_message_type
+            cp.last_message_id,
+            cp.last_message_preview,
+            cp.last_message_sender_id,
+            cp.last_message_at,
+            cp.last_message_type
         FROM ${projects} p
         INNER JOIN ${conversations} c ON c.id = p.conversation_id
         INNER JOIN ${projectMembers} pm ON pm.project_id = p.id AND pm.user_id = ${viewerId}
         INNER JOIN ${conversationParticipants} cp ON cp.conversation_id = c.id AND cp.user_id = ${viewerId}
-        LEFT JOIN LATERAL (
-            SELECT m.id, m.content, m.sender_id, m.created_at, m.type
-            FROM ${messages} m
-            WHERE m.conversation_id = c.id
-            AND m.deleted_at IS NULL
-            AND NOT EXISTS (
-                SELECT 1
-                FROM ${messageHiddenForUsers} h
-                WHERE h.message_id = m.id
-                AND h.user_id = ${viewerId}
-            )
-            ORDER BY m.created_at DESC
-            LIMIT 1
-        ) lm ON true
         WHERE p.conversation_id = ${conversationId}
         LIMIT 1
     `);
@@ -376,14 +369,14 @@ async function getProjectGroupConversationById(
     return {
         id: row.conversation_id,
         type: 'project_group',
-        updatedAt: row.last_message_created_at ?? row.updated_at,
+        updatedAt: row.last_message_at ?? row.updated_at,
         participants: [],
         lastMessage: row.last_message_id
             ? {
                 id: row.last_message_id,
-                content: row.last_message_content,
+                content: row.last_message_preview,
                 senderId: row.last_message_sender_id,
-                createdAt: row.last_message_created_at ?? row.updated_at,
+                createdAt: row.last_message_at ?? row.updated_at,
                 type: row.last_message_type,
             }
             : null,
@@ -590,6 +583,7 @@ export async function sendConversationMessageV2(params: {
     attachments?: UploadedAttachment[];
     clientMessageId?: string;
     replyToMessageId?: string | null;
+    contextChips?: MessageContextChip[];
 }): Promise<{
     success: boolean;
     error?: string;
@@ -623,6 +617,7 @@ export async function sendConversationMessageV2(params: {
                 {
                     clientMessageId: params.clientMessageId,
                     replyToMessageId: params.replyToMessageId ?? null,
+                    contextChips: params.contextChips ?? [],
                 },
             )
             : await sendMessage(
@@ -633,6 +628,7 @@ export async function sendConversationMessageV2(params: {
                 {
                     clientMessageId: params.clientMessageId,
                     replyToMessageId: params.replyToMessageId ?? null,
+                    contextChips: params.contextChips ?? [],
                 },
             );
 
@@ -699,4 +695,79 @@ export async function searchMessagesV2(query: string) {
 
 export async function getMessageContextV2(conversationId: string, messageId: string) {
     return getMessageContext(conversationId, messageId);
+}
+
+export async function getMessagingStructuredCatalogPageV2(params: {
+    conversationId?: string | null;
+    targetUserId?: string | null;
+}): Promise<{ success: boolean; error?: string; catalog?: MessagingStructuredCatalogV2 }> {
+    return getMessagingStructuredCatalogV2(params);
+}
+
+export async function sendStructuredConversationMessageV2(params: Parameters<typeof sendStructuredMessageActionV2>[0]): Promise<{
+    success: boolean;
+    error?: string;
+    conversationId?: string;
+    message?: MessageWithSender;
+    conversation?: InboxConversationV2;
+}> {
+    try {
+        const user = await getAuthUser();
+        if (!user) return { success: false, error: 'Not authenticated' };
+
+        const result = await sendStructuredMessageActionV2(params);
+        if (!result.success || !result.conversationId) {
+            return { success: false, error: result.error || 'Failed to send structured message' };
+        }
+
+        const conversation = await getConversationSummaryV2Internal(user.id, result.conversationId);
+        return {
+            success: true,
+            conversationId: result.conversationId,
+            message: result.message,
+            conversation: conversation ?? undefined,
+        };
+    } catch (error) {
+        console.error('Error sending structured conversation message v2:', error);
+        return { success: false, error: 'Failed to send structured message' };
+    }
+}
+
+export async function resolveConversationWorkflowV2(params: Parameters<typeof resolveMessageWorkflowActionV2>[0]): Promise<{
+    success: boolean;
+    error?: string;
+    conversationId?: string;
+    message?: MessageWithSender;
+    bridgeMessage?: MessageWithSender | null;
+    conversation?: InboxConversationV2;
+}> {
+    try {
+        const user = await getAuthUser();
+        if (!user) return { success: false, error: 'Not authenticated' };
+
+        const result = await resolveMessageWorkflowActionV2(params);
+        if (!result.success || !result.conversationId) {
+            return { success: false, error: result.error || 'Failed to resolve workflow' };
+        }
+
+        const conversation = await getConversationSummaryV2Internal(user.id, result.conversationId);
+        return {
+            success: true,
+            conversationId: result.conversationId,
+            message: result.message,
+            bridgeMessage: result.bridgeMessage ?? null,
+            conversation: conversation ?? undefined,
+        };
+    } catch (error) {
+        console.error('Error resolving workflow v2:', error);
+        return { success: false, error: 'Failed to resolve workflow' };
+    }
+}
+
+export async function convertMessageToTaskV2(params: Parameters<typeof convertMessageToTaskActionV2>[0]) {
+    return convertMessageToTaskActionV2(params);
+}
+
+export async function convertMessageToFollowUpV2(params: Parameters<typeof convertMessageToFollowUpActionV2>[0]) {
+    return convertMessageToFollowUpActionV2(params);
 }

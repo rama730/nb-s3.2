@@ -26,6 +26,10 @@ export function getDeliveryRank(message: MessageWithSender): number {
     return 4;
 }
 
+function isTemporaryMessageId(id: string): boolean {
+    return id.startsWith('temp-');
+}
+
 /**
  * Pick the preferred version when two message records represent the same message.
  */
@@ -45,7 +49,17 @@ export function pickPreferredMessage(
     const createdDiff = toEpochMs(candidate.createdAt) - toEpochMs(current.createdAt);
     if (createdDiff !== 0) return createdDiff > 0 ? candidate : current;
 
-    return candidate.id.length >= current.id.length ? candidate : current;
+    const currentIsTemporary = isTemporaryMessageId(current.id);
+    const candidateIsTemporary = isTemporaryMessageId(candidate.id);
+    if (currentIsTemporary !== candidateIsTemporary) {
+        return currentIsTemporary ? candidate : current;
+    }
+
+    if (candidate.id === current.id) {
+        return candidate;
+    }
+
+    return candidate.id.localeCompare(current.id) >= 0 ? candidate : current;
 }
 
 /**
@@ -94,10 +108,12 @@ export function mergeMessages(
 export function mergeMessageCollections(
     ...collections: ReadonlyArray<ReadonlyArray<MessageWithSender>>
 ): MessageWithSender[] {
-    if (collections.length === 0) return [];
-    let result: MessageWithSender[] = [...collections[0]];
-    for (let i = 1; i < collections.length; i++) {
-        result = mergeMessages(result, collections[i]);
+    const normalizedCollections = collections.filter(Array.isArray) as ReadonlyArray<ReadonlyArray<MessageWithSender>>;
+    if (normalizedCollections.length === 0) return [];
+
+    let result: MessageWithSender[] = [...normalizedCollections[0]];
+    for (let i = 1; i < normalizedCollections.length; i++) {
+        result = mergeMessages(result, normalizedCollections[i]);
     }
     return result;
 }
