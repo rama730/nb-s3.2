@@ -7,6 +7,7 @@ import {
     requireAuthenticatedUser,
 } from "@/app/api/v1/_shared";
 import { logger } from "@/lib/logger";
+import { validateCsrf } from "@/lib/security/csrf";
 import {
     createAppearanceSnapshot,
     DEFAULT_APPEARANCE_SNAPSHOT,
@@ -101,6 +102,8 @@ export async function GET(request: Request) {
 export async function PUT(request: Request) {
     const startedAt = Date.now();
     const requestId = getRequestId(request);
+    const csrfError = validateCsrf(request);
+    if (csrfError) return csrfError;
     const limitResponse = await enforceRouteLimit(request, "api:v1:appearance:put", 60, 60);
     if (limitResponse) {
         return limitResponse;
@@ -181,6 +184,8 @@ export async function PUT(request: Request) {
 export async function DELETE(request: Request) {
     const startedAt = Date.now();
     const requestId = getRequestId(request);
+    const csrfError = validateCsrf(request);
+    if (csrfError) return csrfError;
     const limitResponse = await enforceRouteLimit(request, "api:v1:appearance:delete", 20, 60);
     if (limitResponse) {
         return limitResponse;

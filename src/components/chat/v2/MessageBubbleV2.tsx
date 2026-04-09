@@ -1,7 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import Image from 'next/image';
+import React, { useCallback, useEffect, useId, useMemo, useState } from 'react';
 import { format } from 'date-fns';
 import {
     AlertCircle,
@@ -76,6 +75,7 @@ import {
     DialogTitle,
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
+import { UserAvatar } from '@/components/ui/UserAvatar';
 
 interface MessageBubbleV2Props {
     message: MessageWithSender;
@@ -130,6 +130,39 @@ function areContextChipsEqual(left: ReturnType<typeof getMessageContextChipsFrom
     return true;
 }
 
+function areStructuredPayloadValuesEqual(left: unknown, right: unknown): boolean {
+    if (left === right) return true;
+
+    if (Array.isArray(left) || Array.isArray(right)) {
+        if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) {
+            return false;
+        }
+        for (let index = 0; index < left.length; index += 1) {
+            if (!areStructuredPayloadValuesEqual(left[index], right[index])) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    if (left && right && typeof left === 'object' && typeof right === 'object') {
+        const leftEntries = Object.entries(left);
+        const rightEntries = Object.entries(right);
+        if (leftEntries.length !== rightEntries.length) return false;
+        for (const [key, value] of leftEntries) {
+            if (!Object.prototype.hasOwnProperty.call(right, key)) {
+                return false;
+            }
+            if (!areStructuredPayloadValuesEqual(value, (right as Record<string, unknown>)[key])) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    return false;
+}
+
 function areStructuredMessagesEqual(
     left: ReturnType<typeof getStructuredMessageFromMetadata>,
     right: ReturnType<typeof getStructuredMessageFromMetadata>,
@@ -163,7 +196,7 @@ function areStructuredMessagesEqual(
         && leftRefs.profileId === rightRefs.profileId
         && leftRefs.messageId === rightRefs.messageId
         && leftRefs.applicationId === rightRefs.applicationId
-        && JSON.stringify(left.payload ?? null) === JSON.stringify(right.payload ?? null)
+        && areStructuredPayloadValuesEqual(left.payload ?? null, right.payload ?? null)
     );
 }
 
@@ -248,6 +281,14 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
     const [taskDueDate, setTaskDueDate] = useState('');
     const [followUpNote, setFollowUpNote] = useState('');
     const [followUpDueAt, setFollowUpDueAt] = useState('');
+    const fieldIdBase = useId();
+    const taskProjectSelectId = `${fieldIdBase}-task-project`;
+    const taskTitleInputId = `${fieldIdBase}-task-title`;
+    const taskDescriptionInputId = `${fieldIdBase}-task-description`;
+    const taskPrioritySelectId = `${fieldIdBase}-task-priority`;
+    const taskDueDateInputId = `${fieldIdBase}-task-due-date`;
+    const followUpNoteInputId = `${fieldIdBase}-follow-up-note`;
+    const followUpDueAtInputId = `${fieldIdBase}-follow-up-due-at`;
     const reactionSummary = useMemo(
         () => normalizeMessageReactionSummary(metadata.reactionSummary),
         [metadata.reactionSummary],
@@ -293,7 +334,7 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
             || 'Follow-up task',
         );
         setTaskDescription(structured?.summary || message.content?.trim() || '');
-        setTaskProjectId(catalogQuery.data?.linkedProjectId || catalogQuery.data?.projects[0]?.id || '');
+        setTaskProjectId(catalogQuery.data?.linkedProjectId || catalogQuery.data?.projects?.[0]?.id || '');
         setTaskPriority('medium');
         setTaskDueDate('');
     }, [
@@ -545,22 +586,13 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
         >
             <div className={`group flex max-w-full items-end gap-2 ${isOwn ? 'flex-row-reverse' : 'flex-row'}`}>
                 {!isOwn && showAvatar ? (
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full app-accent-gradient">
-                        {message.sender?.avatarUrl ? (
-                            <Image
-                                src={message.sender.avatarUrl}
-                                alt={message.sender.fullName || ''}
-                                width={32}
-                                height={32}
-                                unoptimized
-                                className="h-full w-full object-cover"
-                            />
-                        ) : (
-                            <span className="text-xs font-medium text-white">
-                                {(message.sender?.fullName || message.sender?.username || '?')[0].toUpperCase()}
-                            </span>
-                        )}
-                    </div>
+                    <UserAvatar
+                        identity={message.sender}
+                        size={32}
+                        unoptimized
+                        className="shrink-0"
+                        fallbackClassName="text-xs font-medium text-white"
+                    />
                 ) : !isOwn && !showAvatar ? (
                     <div className="w-8 shrink-0" />
                 ) : null}
@@ -852,8 +884,9 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
                 </DialogHeader>
                 <div className="space-y-3">
                     <div className="space-y-1.5">
-                        <label className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Project</label>
+                        <label htmlFor={taskProjectSelectId} className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Project</label>
                         <select
+                            id={taskProjectSelectId}
                             value={taskProjectId}
                             onChange={(event) => setTaskProjectId(event.target.value)}
                             className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm outline-none focus:border-primary/30 focus:ring-2 focus:ring-primary/10 dark:border-zinc-800 dark:bg-zinc-950"
@@ -867,12 +900,13 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
                         </select>
                     </div>
                     <div className="space-y-1.5">
-                        <label className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Title</label>
-                        <Input value={taskTitle} onChange={(event) => setTaskTitle(event.target.value)} maxLength={120} />
+                        <label htmlFor={taskTitleInputId} className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Title</label>
+                        <Input id={taskTitleInputId} value={taskTitle} onChange={(event) => setTaskTitle(event.target.value)} maxLength={120} />
                     </div>
                     <div className="space-y-1.5">
-                        <label className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Description</label>
+                        <label htmlFor={taskDescriptionInputId} className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Description</label>
                         <textarea
+                            id={taskDescriptionInputId}
                             value={taskDescription}
                             onChange={(event) => setTaskDescription(event.target.value)}
                             rows={4}
@@ -881,8 +915,9 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
                     </div>
                     <div className="grid gap-3 sm:grid-cols-2">
                         <div className="space-y-1.5">
-                            <label className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Priority</label>
+                            <label htmlFor={taskPrioritySelectId} className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Priority</label>
                             <select
+                                id={taskPrioritySelectId}
                                 value={taskPriority}
                                 onChange={(event) => setTaskPriority(event.target.value as typeof taskPriority)}
                                 className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm outline-none focus:border-primary/30 focus:ring-2 focus:ring-primary/10 dark:border-zinc-800 dark:bg-zinc-950"
@@ -894,8 +929,8 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
                             </select>
                         </div>
                         <div className="space-y-1.5">
-                            <label className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Due date</label>
-                            <Input type="datetime-local" value={taskDueDate} onChange={(event) => setTaskDueDate(event.target.value)} />
+                            <label htmlFor={taskDueDateInputId} className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Due date</label>
+                            <Input id={taskDueDateInputId} type="datetime-local" value={taskDueDate} onChange={(event) => setTaskDueDate(event.target.value)} />
                         </div>
                     </div>
                 </div>
@@ -928,8 +963,9 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
                 </DialogHeader>
                 <div className="space-y-3">
                     <div className="space-y-1.5">
-                        <label className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Note</label>
+                        <label htmlFor={followUpNoteInputId} className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Note</label>
                         <textarea
+                            id={followUpNoteInputId}
                             value={followUpNote}
                             onChange={(event) => setFollowUpNote(event.target.value)}
                             rows={4}
@@ -937,8 +973,8 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
                         />
                     </div>
                     <div className="space-y-1.5">
-                        <label className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Remind me at</label>
-                        <Input type="datetime-local" value={followUpDueAt} onChange={(event) => setFollowUpDueAt(event.target.value)} />
+                        <label htmlFor={followUpDueAtInputId} className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Remind me at</label>
+                        <Input id={followUpDueAtInputId} type="datetime-local" value={followUpDueAt} onChange={(event) => setFollowUpDueAt(event.target.value)} />
                     </div>
                 </div>
                 <DialogFooter>

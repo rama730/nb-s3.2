@@ -1,9 +1,9 @@
 'use client';
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Image from 'next/image';
 import { formatDistanceToNow } from 'date-fns';
-import { Archive, Bell, BellOff, MessageSquare, Pin, Search } from 'lucide-react';
+import { Archive, Bell, BellOff, MessageSquare, Search } from 'lucide-react';
 import { Virtuoso } from 'react-virtuoso';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useSwipeAction } from '@/hooks/useSwipeAction';
@@ -33,7 +33,6 @@ interface ConversationListV2Props {
     onVisibleConversationIdsChange?: (conversationIds: string[]) => void;
     onMuteConversation?: (conversationId: string) => void;
     onArchiveConversation?: (conversationId: string) => void;
-    onPinConversation?: (conversationId: string) => void;
     archivedCount?: number;
     onOpenArchive?: () => void;
     onPrefetchConversation?: (conversationId: string) => void;
@@ -64,7 +63,6 @@ export function ConversationListV2({
     onVisibleConversationIdsChange,
     onMuteConversation,
     onArchiveConversation,
-    onPinConversation,
     archivedCount,
     onOpenArchive,
     onPrefetchConversation,
@@ -297,6 +295,18 @@ function capabilityText(conversation: InboxConversationV2) {
     return 'No messages yet';
 }
 
+function getLastMessageDeliveryState(lastMessage: InboxConversationV2['lastMessage']) {
+    if (!lastMessage || typeof lastMessage !== 'object') {
+        return 'sent';
+    }
+
+    const metadata = 'metadata' in lastMessage
+        ? (lastMessage as { metadata?: Record<string, unknown> | null }).metadata
+        : null;
+    const deliveryState = metadata?.deliveryState;
+    return typeof deliveryState === 'string' ? deliveryState : 'sent';
+}
+
 interface ConversationItemV2Props {
     conversation: InboxConversationV2;
     selected: boolean;
@@ -329,6 +339,13 @@ export const ConversationItemV2 = React.memo(function ConversationItemV2({
         : null;
     const { offsetX, isRevealed, handlers, close } = useSwipeAction();
     const prefetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    useEffect(() => () => {
+        if (prefetchTimerRef.current) {
+            clearTimeout(prefetchTimerRef.current);
+            prefetchTimerRef.current = null;
+        }
+    }, []);
 
     return (
         <div className="px-2 py-1">
@@ -410,9 +427,6 @@ export const ConversationItemV2 = React.memo(function ConversationItemV2({
                                         ) : null}
                                     </div>
                                     <div className="ml-2 flex shrink-0 items-center gap-1">
-                                        {(conversation as any).pinnedAt && (
-                                            <Pin className="h-3 w-3 shrink-0 rotate-45 text-zinc-400" />
-                                        )}
                                         {relativeLastMessageTime ? (
                                             <span className="text-[11px] text-zinc-400">
                                                 {relativeLastMessageTime}
@@ -422,11 +436,7 @@ export const ConversationItemV2 = React.memo(function ConversationItemV2({
                                 </div>
                                 <div className="flex items-center gap-1 truncate text-[12px] leading-5 text-zinc-500 dark:text-zinc-400">
                                     {!typingUsers.length && !draft.trim() && conversation.lastMessage && conversation.lastMessage.senderId === viewerUserId && (
-                                        <DeliveryIndicator deliveryState={
-                                            typeof ((conversation.lastMessage as any).metadata as any)?.deliveryState === 'string'
-                                                ? ((conversation.lastMessage as any).metadata as any).deliveryState
-                                                : 'sent'
-                                        } />
+                                        <DeliveryIndicator deliveryState={getLastMessageDeliveryState(conversation.lastMessage)} />
                                     )}
                                     <span className="truncate">
                                         {typingUsers.length > 0

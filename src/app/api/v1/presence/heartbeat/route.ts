@@ -5,6 +5,7 @@ import { db } from '@/lib/db';
 import { profiles } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 import { getRedisClient } from '@/lib/redis';
+import { validateCsrf } from '@/lib/security/csrf';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -13,6 +14,8 @@ const DEBOUNCE_SECONDS = 300; // 5 minutes
 
 export async function POST(request: NextRequest) {
     try {
+        const csrfError = await validateCsrf(request);
+        if (csrfError) return csrfError;
         const rlResponse = await enforceRouteLimit(request, 'api:v1:presence:heartbeat', 30, 60);
         if (rlResponse) return rlResponse;
 

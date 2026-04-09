@@ -287,13 +287,15 @@ export function MessageThreadV2({
                                 >
                                     Back to latest
                                 </button>
-                                <button
-                                    type="button"
-                                    onClick={onDismissContextJumpState}
-                                    className="rounded-full px-2 py-0.5 text-primary/70 hover:bg-primary/10 hover:text-primary"
-                                >
-                                    Dismiss
-                                </button>
+                                {onDismissContextJumpState ? (
+                                    <button
+                                        type="button"
+                                        onClick={onDismissContextJumpState}
+                                        className="rounded-full px-2 py-0.5 text-primary/70 hover:bg-primary/10 hover:text-primary"
+                                    >
+                                        Dismiss
+                                    </button>
+                                ) : null}
                             </div>
                         </div>
                     ) : null}

@@ -10,7 +10,7 @@ import ProjectLayout from "@/components/projects/dashboard/ProjectLayout";
 import { TabErrorBoundary } from "@/components/projects/TabErrorBoundary";
 import { ProjectIntelligenceProvider } from "@/components/projects/intelligence/ProjectIntelligenceProvider";
 import type { Project } from "@/types/hub";
-import { toggleProjectFollowAction, startSprintAction, completeSprintAction, moveTaskToSprintAction, updateProjectStageAction, incrementProjectViewAction } from "@/app/actions/project";
+import { toggleProjectFollowAction, updateProjectStageAction, incrementProjectViewAction } from "@/app/actions/project";
 import { getApplicationStatusAction } from "@/app/actions/applications";
 import ApplicationStatusBanner from "@/components/projects/ApplicationStatusBanner";
 import { useProjectMembers } from "@/hooks/hub/useProjectData";
@@ -18,6 +18,7 @@ import { filesFeatureFlags } from "@/lib/features/files";
 import { getProjectNodes } from "@/app/actions/files";
 import { queryKeys } from "@/lib/query-keys";
 import { logger } from "@/lib/logger";
+import type { SprintDetailPayload } from "@/lib/projects/sprint-detail";
 
 import { 
     DashboardTab, 
@@ -48,6 +49,8 @@ interface ProjectDashboardClientProps {
     currentUserId: string | null;
     isOwner: boolean;
     isMember: boolean;
+    initialSprintData?: SprintDetailPayload | null;
+    forcedActiveTab?: string;
 }
 
 export default function ProjectDashboardClient({
@@ -55,6 +58,8 @@ export default function ProjectDashboardClient({
     currentUserId,
     isOwner,
     isMember,
+    initialSprintData = null,
+    forcedActiveTab,
 }: ProjectDashboardClientProps) {
     const router = useRouter();
     const pathname = usePathname();
@@ -86,6 +91,7 @@ export default function ProjectDashboardClient({
         if (o.sprints) {
             void queryClient.invalidateQueries({ queryKey: queryKeys.project.detail.sprints(project.id) });
             void queryClient.invalidateQueries({ queryKey: queryKeys.project.detail.sprintTasksRoot(project.id) });
+            void queryClient.invalidateQueries({ queryKey: queryKeys.project.detail.sprintDetailRoot(project.id) });
         }
         if (o.analytics) {
             void queryClient.invalidateQueries({ queryKey: queryKeys.project.detail.analytics(project.id) });
@@ -111,11 +117,16 @@ export default function ProjectDashboardClient({
     }, [invalidateProjectDetailSlices]);
 
     // Active tab from URL or default
-    const [activeTab, setActiveTab] = useState(() => {
-        return searchParams?.get("tab") || "dashboard";
-    });
+    const canonicalProjectHref = useMemo(
+        () => `/projects/${project.slug || project.id}`,
+        [project.id, project.slug],
+    );
+    const isSprintRoute = pathname?.includes("/sprints/") ?? false;
+    const resolvedActiveTab = forcedActiveTab || (isSprintRoute ? "sprints" : (searchParams?.get("tab") || "dashboard"));
+
+    const [activeTab, setActiveTab] = useState(() => resolvedActiveTab);
     const [hasMountedFilesTab, setHasMountedFilesTab] = useState(
-        () => (searchParams?.get("tab") || "dashboard") === "files"
+        () => resolvedActiveTab === "files"
     );
 
     // State management
@@ -137,7 +148,6 @@ export default function ProjectDashboardClient({
     const shareRequestRef = useRef(0);
     const viewRequestRef = useRef(0);
     const stageRequestRef = useRef(0);
-    const sprintMutationRequestRef = useRef(0);
 
     const setStageVersionSafe = useCallback((nextVersion: string | null) => {
         stageVersionRef.current = nextVersion;
@@ -215,7 +225,10 @@ export default function ProjectDashboardClient({
     const tasks = useMemo(() => extendedProject?.tasks || [], [extendedProject]);
     const files = useMemo(() => extendedProject?.files || [], [extendedProject]);
     const initialFileNodes = useMemo(() => extendedProject?.initialFileNodes || [], [extendedProject]);
-    const sprints = useMemo(() => extendedProject?.sprints || [], [extendedProject]);
+    const sprints = useMemo(() => {
+        if (initialSprintData?.sprints?.length) return initialSprintData.sprints;
+        return extendedProject?.sprints || [];
+    }, [extendedProject, initialSprintData?.sprints]);
 
     const collaboratorUsers = useMemo(() => {
         const list = (extendedProject?.collaborators || []) as any[];
@@ -303,21 +316,33 @@ export default function ProjectDashboardClient({
     const handleTabChange = useCallback((tabId: string) => {
         if (tabId === activeTab) return;
         setActiveTab(tabId);
-        // Update URL without reload
+        if (tabId === "sprints") {
+            router.push(`${canonicalProjectHref}?tab=sprints`, { scroll: false });
+            return;
+        }
+        if (isSprintRoute || forcedActiveTab) {
+            if (tabId === "dashboard") {
+                router.push(canonicalProjectHref, { scroll: false });
+                return;
+            }
+            router.push(`${canonicalProjectHref}?tab=${encodeURIComponent(tabId)}`, { scroll: false });
+            return;
+        }
+
         const nextParams = new URLSearchParams(window.location.search);
         nextParams.set("tab", tabId);
         const nextQuery = nextParams.toString();
         const nextUrl = nextQuery ? `${pathname}?${nextQuery}` : pathname;
         window.history.replaceState(window.history.state, "", nextUrl);
-    }, [activeTab, pathname]);
+    }, [activeTab, canonicalProjectHref, forcedActiveTab, isSprintRoute, pathname, router]);
 
     useEffect(() => {
-        const nextTab = searchParams?.get("tab") || "dashboard";
+        const nextTab = forcedActiveTab || (isSprintRoute ? "sprints" : (searchParams?.get("tab") || "dashboard"));
         setActiveTab((prev) => (prev === nextTab ? prev : nextTab));
         if (nextTab === "files") {
             setHasMountedFilesTab(true);
         }
-    }, [searchParams]);
+    }, [forcedActiveTab, isSprintRoute, searchParams]);
 
     const filesPrefetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const filesPrefetchQueryKey = useMemo(
@@ -748,77 +773,12 @@ export default function ProjectDashboardClient({
                         <div className="space-y-6">
                             <SprintPlanning
                                 projectId={project.id}
+                                projectSlug={project.slug || project.id}
+                                projectName={project.title}
+                                currentUserId={currentUserId}
+                                isOwner={isOwner}
                                 isOwnerOrMember={isOwnerOrMember}
-                                sprints={sprints}
-                                tasks={tasks}
-                                onCreateSprint={() => {
-                                    toast.success("Sprint created successfully");
-                                    invalidateProjectDetailSlices({
-                                        sprints: true,
-                                        tasks: true,
-                                        analytics: true,
-                                    });
-                                }}
-                                onStartSprint={async (id) => {
-                                    const requestId = ++sprintMutationRequestRef.current;
-                                    try {
-                                        const result = await startSprintAction(id, project.id);
-                                        if (!isMountedRef.current || requestId !== sprintMutationRequestRef.current) return;
-                                        if (result.success) {
-                                            toast.success("Sprint started");
-                                            invalidateProjectDetailSlices({
-                                                sprints: true,
-                                                tasks: true,
-                                                analytics: true,
-                                            });
-                                        } else {
-                                            toast.error(result.error);
-                                        }
-                                    } catch {
-                                        if (!isMountedRef.current || requestId !== sprintMutationRequestRef.current) return;
-                                        toast.error("Failed to start sprint");
-                                    }
-                                }}
-                                onCompleteSprint={async (id) => {
-                                    const requestId = ++sprintMutationRequestRef.current;
-                                    try {
-                                        const result = await completeSprintAction(id, project.id);
-                                        if (!isMountedRef.current || requestId !== sprintMutationRequestRef.current) return;
-                                        if (result.success) {
-                                            toast.success("Sprint completed");
-                                            invalidateProjectDetailSlices({
-                                                sprints: true,
-                                                tasks: true,
-                                                analytics: true,
-                                            });
-                                        } else {
-                                            toast.error(result.error);
-                                        }
-                                    } catch {
-                                        if (!isMountedRef.current || requestId !== sprintMutationRequestRef.current) return;
-                                        toast.error("Failed to complete sprint");
-                                    }
-                                }}
-                                onMoveTask={async (taskId, sprintId) => {
-                                    const requestId = ++sprintMutationRequestRef.current;
-                                    try {
-                                        const result = await moveTaskToSprintAction(taskId, sprintId, project.id);
-                                        if (!isMountedRef.current || requestId !== sprintMutationRequestRef.current) return;
-                                        if (result.success) {
-                                            toast.success("Task moved");
-                                            invalidateProjectDetailSlices({
-                                                sprints: true,
-                                                tasks: true,
-                                                analytics: true,
-                                            });
-                                        } else {
-                                            toast.error(result.error);
-                                        }
-                                    } catch {
-                                        if (!isMountedRef.current || requestId !== sprintMutationRequestRef.current) return;
-                                        toast.error("Failed to move task");
-                                    }
-                                }}
+                                initialSprintData={initialSprintData}
                             />
                         </div>
                     </TabErrorBoundary>

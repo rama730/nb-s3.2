@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
 import { E2E_AUTH_COOKIE, isE2EAuthFallbackEnabled } from "@/lib/e2e/auth-fallback";
+import { resolveSupabaseServerCookieOptions } from "@/lib/supabase/cookie-options";
 import { resolveSupabasePublicEnv } from "@/lib/supabase/env";
 import { getRequestId, logApiRequest } from "@/app/api/_shared";
 
@@ -31,6 +32,7 @@ async function createE2EAuthClient() {
   const cookieStore = await cookies();
   const env = resolveSupabasePublicEnv("api.e2e.auth");
   const client = createServerClient(env.url, env.anonKey, {
+    cookieOptions: resolveSupabaseServerCookieOptions(),
     cookies: {
       getAll() {
         return cookieStore.getAll();

@@ -4,7 +4,9 @@ import React, { memo } from "react";
 import { Calendar, User, CheckCircle2, MoreHorizontal } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { UserAvatar } from "@/components/ui/UserAvatar";
+import { SPRINT_STATUS_PRESENTATION } from "@/lib/projects/sprint-detail";
+import { normalizeTaskSurfaceRecord } from "@/lib/projects/task-presentation";
 
 export interface Task {
     id: string;
@@ -17,10 +19,13 @@ export interface Task {
     sprintId?: string | null;
     creatorId?: string | null;
     assignee?: {
-        full_name?: string;
-        fullName?: string; // Support both for safety
-        avatar_url?: string;
+        fullName?: string;
         avatarUrl?: string;
+    } | null;
+    sprint?: {
+        id?: string;
+        name?: string;
+        status?: "planning" | "active" | "completed" | null;
     } | null;
 }
 
@@ -47,6 +52,8 @@ export const TaskCard = memo(function TaskCard({
     onSelect,
     isBulkMode
 }: TaskCardProps) {
+    const taskRecord = normalizeTaskSurfaceRecord(task);
+
     return (
         <div
             onClick={(e) => {
@@ -68,7 +75,7 @@ export const TaskCard = memo(function TaskCard({
                 {/* Header: Title + Menu */}
                 <div className="flex items-start justify-between gap-2">
                     <h4 className="font-semibold text-sm text-zinc-900 dark:text-zinc-100 line-clamp-2 leading-snug">
-                        {task.title}
+                        {taskRecord.title}
                     </h4>
                     {isBulkMode ? (
                         <div className={cn(
@@ -86,11 +93,23 @@ export const TaskCard = memo(function TaskCard({
 
                 {/* Chips Row */}
                 <div className="flex flex-wrap items-center gap-1.5">
-                    <TaskStatusBadge status={task.status} />
-                    <TaskPriorityBadge priority={task.priority} />
-                    {task.storyPoints && (
+                    <TaskStatusBadge status={taskRecord.status} />
+                    <TaskPriorityBadge priority={taskRecord.priority} />
+                    {taskRecord.sprint ? (
+                        <span
+                            className={cn(
+                                "px-2 py-0.5 rounded-md text-[10px] font-bold border",
+                                taskRecord.sprint.status
+                                    ? SPRINT_STATUS_PRESENTATION[taskRecord.sprint.status].toneClassName
+                                    : "bg-zinc-50 border-zinc-200 text-zinc-500 dark:bg-zinc-800 dark:border-zinc-700",
+                            )}
+                        >
+                            {taskRecord.sprint.name}
+                        </span>
+                    ) : null}
+                    {taskRecord.storyPoints != null && (
                         <span className="px-2 py-0.5 rounded-md text-[10px] font-bold border bg-zinc-50 border-zinc-200 text-zinc-500 dark:bg-zinc-800 dark:border-zinc-700">
-                            {task.storyPoints} pts
+                            {taskRecord.storyPoints} pts
                         </span>
                     )}
                 </div>
@@ -99,28 +118,33 @@ export const TaskCard = memo(function TaskCard({
                 <div className="flex items-center justify-between mt-3 pt-3 border-t border-zinc-100 dark:border-zinc-800">
                     <div className="flex items-center gap-2">
                         <span className="text-[10px] font-mono text-zinc-400 group-hover:text-zinc-500 transition-colors">
-                            {(task as any).taskNumber && (task as any).project?.key 
-                                ? formatTaskId((task as any).project.key, (task as any).taskNumber) 
+                            {taskRecord.taskNumber && taskRecord.projectKey
+                                ? formatTaskId(taskRecord.projectKey, taskRecord.taskNumber)
                                 : `#${task.id.slice(0, 6)}`}
                         </span>
                     </div>
 
                     <div className="flex items-center gap-2">
-                        {task.dueDate && (
+                        {taskRecord.dueDate && (
                             <div className={cn(
                                 "flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-md",
-                                new Date(task.dueDate) < new Date() ? "text-rose-600 bg-rose-50" : "text-zinc-500 bg-zinc-50"
+                                new Date(taskRecord.dueDate) < new Date() ? "text-rose-600 bg-rose-50" : "text-zinc-500 bg-zinc-50"
                             )}>
                                 <Calendar className="w-3 h-3" />
-                                {format(new Date(task.dueDate), "MMM d")}
+                                {format(new Date(taskRecord.dueDate), "MMM d")}
                             </div>
                         )}
                         
-                        {task.assignee ? (
-                            <Avatar className="w-5 h-5" title={task.assignee.full_name}>
-                                <AvatarImage src={task.assignee.avatarUrl || task.assignee.avatar_url} />
-                                <AvatarFallback className="text-[9px]">{(task.assignee.fullName || task.assignee.full_name)?.substring(0, 2).toUpperCase()}</AvatarFallback>
-                            </Avatar>
+                        {taskRecord.assignee ? (
+                            <UserAvatar
+                                identity={{
+                                    fullName: taskRecord.assignee.fullName,
+                                    avatarUrl: taskRecord.assignee.avatarUrl,
+                                }}
+                                size={20}
+                                className="h-5 w-5"
+                                fallbackClassName="text-[9px]"
+                            />
                         ) : (
                             <div className="w-5 h-5 rounded-full bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center border border-dashed border-zinc-300 dark:border-zinc-700" title="Unassigned">
                                 <User className="w-3 h-3 text-zinc-400" />
@@ -130,7 +154,7 @@ export const TaskCard = memo(function TaskCard({
                 </div>
 
                 {/* Claim Action (Optional) */}
-                {onClaim && !task.assigneeId && (
+                {onClaim && !taskRecord.assigneeId && (
                     <div className="pt-2 border-t border-zinc-100 dark:border-zinc-800">
                         <button
                             onClick={(e) => {

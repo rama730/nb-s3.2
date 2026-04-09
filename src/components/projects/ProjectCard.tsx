@@ -1,5 +1,4 @@
 import Link from 'next/link';
-import Image from 'next/image';
 import { memo, useState, useEffect } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import {
@@ -16,6 +15,8 @@ import { Project } from '@/types/hub';
 import { useToggleProjectFollow } from '@/hooks/mutations/useProjectMutations';
 import { ProjectCardViewModel } from '@/lib/view-models/project-card';
 import { useRouteWarmPrefetch } from '@/hooks/useRouteWarmPrefetch';
+import { UserAvatar } from '@/components/ui/UserAvatar';
+import { buildIdentityPresentation } from '@/lib/ui/identity';
 
 
 interface ProjectCardProps {
@@ -280,17 +281,20 @@ export default memo(function ProjectCard({
 
                         {/* Lower row: Avatars */}
                         <div className="flex items-center -space-x-1.5">
-                            {collaborators.slice(0, 3).map((p, i) => (
-                                <div key={i} className="w-6 h-6 rounded-full border-2 border-white dark:border-zinc-900 bg-zinc-100 dark:bg-zinc-800 overflow-hidden" title={p.full_name || undefined}>
-                                    {p.avatar_url ? (
-                                        <Image src={p.avatar_url} alt={p.full_name || 'Collaborator'} width={24} height={24} className="w-full h-full object-cover" sizes="24px" />
-                                    ) : (
-                                        <div className="w-full h-full app-accent-gradient flex items-center justify-center text-[10px] font-bold text-white">
-                                            {p.full_name?.[0] || '?'}
-                                        </div>
-                                    )}
-                                </div>
-                            ))}
+                            {collaborators.slice(0, 3).map((p, i) => {
+                                const identity = buildIdentityPresentation(p, { fallbackDisplayName: 'Collaborator' });
+                                return (
+                                    <UserAvatar
+                                        key={i}
+                                        identity={p}
+                                        size={24}
+                                        sizes="24px"
+                                        title={identity.displayName}
+                                        className="border-2 border-white dark:border-zinc-900"
+                                        fallbackClassName="text-[10px] font-bold text-white"
+                                    />
+                                );
+                            })}
                             {collaborators.length > 3 && (
                                 <div className="w-6 h-6 rounded-full border-2 border-white dark:border-zinc-900 bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center text-[9px] font-bold text-zinc-500">
                                     +{collaborators.length - 3}

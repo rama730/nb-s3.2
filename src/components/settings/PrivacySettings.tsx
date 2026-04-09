@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
 import { useMemo, useState, type ComponentType } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -12,6 +11,7 @@ import type { PrivacyBlockedAccount, PrivacyData } from "@/lib/types/settingsTyp
 import { SettingsPageHeader } from "@/components/settings/ui/SettingsPageHeader";
 import { SettingsSectionCard } from "@/components/settings/ui/SettingsSectionCard";
 import { useToast } from "@/components/ui-custom/Toast";
+import { UserAvatar } from "@/components/ui/UserAvatar";
 
 type ProfileVisibility = PrivacyData["settings"]["profileVisibility"];
 type MessagePrivacy = PrivacyData["settings"]["messagePrivacy"];
@@ -187,11 +187,13 @@ function BlockedAccountRow({
     return (
         <div className="flex items-center justify-between gap-4 rounded-2xl border border-zinc-200 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900">
             <div className="flex min-w-0 items-center gap-3">
-                <div className="h-11 w-11 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
-                    {account.avatarUrl ? (
-                        <Image src={account.avatarUrl} alt={displayName} width={44} height={44} className="h-full w-full object-cover" unoptimized />
-                    ) : null}
-                </div>
+                <UserAvatar
+                    identity={account}
+                    size={44}
+                    unoptimized
+                    fallbackDisplayName={displayName}
+                    fallbackClassName="text-sm font-semibold text-white"
+                />
                 <div className="min-w-0">
                     <Link href={profileHref(account)} className="block truncate text-sm font-semibold text-zinc-900 hover:text-indigo-600 dark:text-zinc-100 dark:hover:text-indigo-300">
                         {displayName}

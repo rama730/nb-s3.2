@@ -1,18 +1,17 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import Image from "next/image";
 import Link from "next/link";
 import { Lock, MapPin, Loader2, Check, ChevronDown, Clock, MessageSquare, UserPlus, X, Users, Briefcase, Circle, ExternalLink, Ban } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { formatLastActive } from "@/lib/ui/date-formatting";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
+import { UserAvatar } from "@/components/ui/UserAvatar";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { buildPrivacyPresentation } from "@/lib/privacy/presentation";
 import { profileHref } from "@/lib/routing/identifiers";
-import { getAvatarGradient } from "@/lib/ui/avatar";
-import { AVAILABILITY_CONFIG, EXPERIENCE_LABELS } from "@/lib/ui/status-config";
+import { buildProfileStatusSummary } from "@/lib/ui/status-config";
 import type { SuggestedProfile } from "@/app/actions/connections";
 import { buildDiscoverMatchBadges, resolveRelationshipActionModel, type RelationshipMenuAction } from "@/components/people/person-card-model";
 
@@ -48,34 +47,16 @@ function Avatar({
     size: number;
     priority: boolean;
 }) {
-    const sizeClass = size <= 40 ? "w-10 h-10" : size <= 44 ? "w-11 h-11" : "w-12 h-12";
     const textSize = size <= 40 ? "text-sm" : "text-base";
-    const initial = (profile.fullName || profile.username || "U")[0]?.toUpperCase();
-
-    if (profile.avatarUrl) {
-        return (
-            <Image
-                src={profile.avatarUrl}
-                alt={profile.fullName || profile.username || "User"}
-                width={size}
-                height={size}
-                className={cn(sizeClass, "rounded-full object-cover flex-shrink-0")}
-                priority={priority}
-            />
-        );
-    }
-
-    const gradient = getAvatarGradient(profile.fullName || profile.username || "");
 
     return (
-        <div className={cn(
-            sizeClass,
-            "rounded-full flex-shrink-0 flex items-center justify-center bg-gradient-to-br text-white font-semibold",
-            textSize,
-            gradient,
-        )}>
-            {initial}
-        </div>
+        <UserAvatar
+            identity={profile}
+            size={size}
+            priority={priority}
+            className="flex-shrink-0"
+            fallbackClassName={cn("font-semibold text-white", textSize)}
+        />
     );
 }
 
@@ -157,29 +138,18 @@ function ConnectButton({
 // ── Status line ──────────────────────────────────────────────────────
 
 function StatusLine({ profile }: { profile: SuggestedProfile }) {
-    const parts: string[] = [];
+    const statusSummary = buildProfileStatusSummary({
+        availabilityStatus: profile.availabilityStatus,
+        experienceLevel: profile.experienceLevel,
+        activeLabel: formatLastActive(profile.lastActiveAt),
+    });
 
-    if (profile.availabilityStatus && AVAILABILITY_CONFIG[profile.availabilityStatus]) {
-        parts.push(AVAILABILITY_CONFIG[profile.availabilityStatus].label);
-    }
-    if (profile.experienceLevel && EXPERIENCE_LABELS[profile.experienceLevel]) {
-        parts.push(EXPERIENCE_LABELS[profile.experienceLevel]);
-    }
-
-    // Last active indicator (idea 7)
-    const activeLabel = formatLastActive(profile.lastActiveAt);
-    if (activeLabel) parts.push(activeLabel);
-
-    if (parts.length === 0) return null;
-
-    const availColor = profile.availabilityStatus && AVAILABILITY_CONFIG[profile.availabilityStatus]
-        ? AVAILABILITY_CONFIG[profile.availabilityStatus].color
-        : null;
+    if (statusSummary.parts.length === 0) return null;
 
     return (
         <div className="flex items-center gap-1.5 text-[11px] text-zinc-400 dark:text-zinc-500 mt-1">
-            {availColor && <Circle aria-hidden="true" className={cn("w-2 h-2 fill-current", availColor)} />}
-            <span>{parts.join(" · ")}</span>
+            {statusSummary.availabilityColor && <Circle aria-hidden="true" className={cn("w-2 h-2 fill-current", statusSummary.availabilityColor)} />}
+            <span>{statusSummary.parts.join(" · ")}</span>
         </div>
     );
 }

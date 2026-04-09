@@ -7,7 +7,6 @@ import { playMessageSound } from '@/lib/messages/notification-sound';
 import {
     getConversationSummaryV2,
     getConversationThreadPageV2,
-    getMessageContextV2,
     getUnreadSummaryV2,
 } from '@/app/actions/messaging/v2';
 import {
@@ -15,13 +14,10 @@ import {
     hasCachedThreadMessage,
     hideThreadMessageForViewer,
     isCachedConversationLastMessage,
-    patchConversationLastMessageFromMessage,
-    removeThreadMessage,
     replaceThreadSnapshot,
     setUnreadSummary,
     upsertInboxConversation,
     upsertThreadConversation,
-    upsertThreadMessage,
 } from '@/lib/messages/v2-cache';
 import {
     isRealtimeTerminalStatus,
@@ -55,6 +51,48 @@ function getPayloadHiddenMessageId(payload: { new?: Record<string, unknown>; old
     return typeof previousId === 'string' && previousId.length > 0 ? previousId : null;
 }
 
+function getPayloadStringField(
+    payload: { new?: Record<string, unknown>; old?: Record<string, unknown> },
+    scope: 'new' | 'old',
+    field: string,
+) {
+    const value = payload[scope]?.[field];
+    return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function getPayloadNumberField(
+    payload: { new?: Record<string, unknown>; old?: Record<string, unknown> },
+    scope: 'new' | 'old',
+    field: string,
+) {
+    const value = payload[scope]?.[field];
+    return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function shouldPlayParticipantUpdateSound(params: {
+    payload: { new?: Record<string, unknown>; old?: Record<string, unknown> };
+    activeConversationId: string | null;
+}) {
+    if (typeof document === 'undefined' || !document.hidden) {
+        return false;
+    }
+
+    const conversationId = getPayloadConversationId(params.payload);
+    if (!conversationId || conversationId === params.activeConversationId) {
+        return false;
+    }
+
+    const nextLastMessageId = getPayloadStringField(params.payload, 'new', 'last_message_id');
+    const previousLastMessageId = getPayloadStringField(params.payload, 'old', 'last_message_id');
+    if (nextLastMessageId && nextLastMessageId !== previousLastMessageId) {
+        return true;
+    }
+
+    const nextUnreadCount = getPayloadNumberField(params.payload, 'new', 'unread_count');
+    const previousUnreadCount = getPayloadNumberField(params.payload, 'old', 'unread_count');
+    return nextUnreadCount !== null && previousUnreadCount !== null && nextUnreadCount > previousUnreadCount;
+}
+
 export function useMessagesV2Realtime(
     activeConversationId: string | null,
     enabled: boolean,
@@ -77,6 +115,8 @@ export function useMessagesV2Realtime(
     const pendingConversationRefreshRef = useRef(new Map<string, boolean>());
     const eventBufferRef = useRef<Array<() => void>>([]);
     const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const pendingThreadMessageEventsRef = useRef(new Map<string, 'INSERT' | 'UPDATE' | 'DELETE' | 'REFRESH'>());
+    const threadMessageSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     useEffect(() => {
         activeConversationIdRef.current = activeConversationId;
@@ -204,26 +244,53 @@ export function useMessagesV2Realtime(
         }, FALLBACK_REFRESH_DEBOUNCE_MS);
     }, [refreshConversationSummary]);
 
-    const syncThreadMessage = useCallback(async (conversationId: string, messageId: string) => {
-        const result = await getMessageContextV2(conversationId, messageId);
-        if (!result.success) {
-            scheduleThreadRefresh(conversationId);
+    const flushPendingThreadMessageEvents = useCallback((conversationId: string) => {
+        const pendingEntries = Array.from(pendingThreadMessageEventsRef.current.entries());
+        pendingThreadMessageEventsRef.current.clear();
+        if (pendingEntries.length === 0) {
             return;
         }
 
-        if (!result.available || !result.message) {
-            removeThreadMessage(queryClient, conversationId, messageId);
-            if (isCachedConversationLastMessage(queryClient, conversationId, messageId)) {
-                scheduleConversationSummaryRefresh(conversationId, {
-                    syncThread: conversationId === activeConversationIdRef.current,
-                });
-            }
+        const shouldRefreshSummary = pendingEntries.some(([messageId]) =>
+            messageId === '__refresh__'
+            || isCachedConversationLastMessage(queryClient, conversationId, messageId),
+        );
+
+        if (shouldRefreshSummary) {
+            scheduleConversationSummaryRefresh(conversationId, {
+                syncThread: conversationId === activeConversationIdRef.current,
+            });
+        }
+
+        void refreshThreadSnapshot(conversationId);
+    }, [queryClient, refreshThreadSnapshot, scheduleConversationSummaryRefresh]);
+
+    const queueThreadMessageSync = useCallback((
+        conversationId: string,
+        payload: { new?: Record<string, unknown>; old?: Record<string, unknown>; eventType?: 'INSERT' | 'UPDATE' | 'DELETE' },
+    ) => {
+        const messageId = getPayloadMessageId(payload);
+        const eventType = payload.eventType ?? 'REFRESH';
+
+        if (!messageId || eventType === 'DELETE') {
+            pendingThreadMessageEventsRef.current.set('__refresh__', eventType);
+        } else {
+            const existingEvent = pendingThreadMessageEventsRef.current.get(messageId);
+            pendingThreadMessageEventsRef.current.set(
+                messageId,
+                existingEvent === 'INSERT' ? 'INSERT' : eventType,
+            );
+        }
+
+        if (threadMessageSyncTimerRef.current) {
             return;
         }
 
-        upsertThreadMessage(queryClient, conversationId, result.message);
-        patchConversationLastMessageFromMessage(queryClient, conversationId, result.message);
-    }, [queryClient, scheduleConversationSummaryRefresh, scheduleThreadRefresh]);
+        threadMessageSyncTimerRef.current = setTimeout(() => {
+            threadMessageSyncTimerRef.current = null;
+            flushPendingThreadMessageEvents(conversationId);
+        }, FALLBACK_REFRESH_DEBOUNCE_MS);
+    }, [flushPendingThreadMessageEvents]);
 
     useEffect(() => {
         if (!realtimeEnabled || !userId || !realtimeToken) {
@@ -255,7 +322,10 @@ export function useMessagesV2Realtime(
                         if (conversationId && denormalizedInboxRealtimeEnabled) {
                             scheduleConversationSummaryRefresh(conversationId, { syncThread: conversationId === currentActiveId });
                             scheduleUnreadRefresh();
-                            if (conversationId !== currentActiveId && typeof document !== 'undefined' && document.hidden) {
+                            if (shouldPlayParticipantUpdateSound({
+                                payload: event.payload,
+                                activeConversationId: currentActiveId,
+                            })) {
                                 playMessageSound();
                             }
                         } else {
@@ -283,9 +353,6 @@ export function useMessagesV2Realtime(
                     }
 
                     if (!currentActiveId || !messageId) {
-                        if (typeof document !== 'undefined' && document.hidden) {
-                            playMessageSound();
-                        }
                         return;
                     }
 
@@ -371,12 +438,7 @@ export function useMessagesV2Realtime(
                         table: 'messages',
                         filter: `conversation_id=eq.${activeConversationId}`,
                         handler: (payload) => {
-                            const messageId = getPayloadMessageId(payload);
-                            if (!messageId) {
-                                scheduleThreadRefresh(activeConversationId);
-                                return;
-                            }
-                            bufferEvent(() => void syncThreadMessage(activeConversationId, messageId));
+                            queueThreadMessageSync(activeConversationId, payload);
                         },
                     },
                     {
@@ -428,14 +490,23 @@ export function useMessagesV2Realtime(
         activeConversationId,
         bufferEvent,
         denormalizedInboxRealtimeEnabled,
+        flushPendingThreadMessageEvents,
+        queueThreadMessageSync,
         realtimeEnabled,
         realtimeToken,
         scheduleInboxRefresh,
         scheduleConversationSummaryRefresh,
         scheduleUnreadRefresh,
         scheduleThreadRefresh,
-        syncThreadMessage,
     ]);
+
+    useEffect(() => {
+        pendingThreadMessageEventsRef.current.clear();
+        if (threadMessageSyncTimerRef.current) {
+            clearTimeout(threadMessageSyncTimerRef.current);
+            threadMessageSyncTimerRef.current = null;
+        }
+    }, [activeConversationId]);
 
     useEffect(() => {
         return () => {
@@ -456,7 +527,12 @@ export function useMessagesV2Realtime(
                 clearTimeout(flushTimerRef.current);
                 flushTimerRef.current = null;
             }
+            if (threadMessageSyncTimerRef.current) {
+                clearTimeout(threadMessageSyncTimerRef.current);
+                threadMessageSyncTimerRef.current = null;
+            }
             pendingConversationRefreshRef.current.clear();
+            pendingThreadMessageEventsRef.current.clear();
         };
     }, []);
 

@@ -102,6 +102,15 @@ async function requireConversationAccess(conversationId: string, userId: string)
     return membership;
 }
 
+function parseValidDate(input?: string | null) {
+    if (!input || input.trim() === '') {
+        return null;
+    }
+
+    const parsed = new Date(input);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
 async function getConversationParticipantProfile(conversationId: string, profileId: string) {
     const [participant] = await db
         .select({
@@ -180,10 +189,14 @@ function buildStructuredPayload(input: {
     entityRefs?: StructuredMessagePayload['entityRefs'];
     payload?: Record<string, unknown> | null;
 }): StructuredMessagePayload {
-    return createStructuredMessagePayload({
+    const payload = createStructuredMessagePayload({
         ...input,
         contextChips: normalizeChips(input.contextChips),
     });
+    if (!payload) {
+        throw new Error('Structured message payload requires a non-empty title and summary');
+    }
+    return payload;
 }
 
 async function hydrateSingleMessage(conversationId: string, messageId: string) {
@@ -521,6 +534,11 @@ export async function sendStructuredMessageActionV2(params: {
             return getConversationParticipantProfile(conversationId, candidateProfileId);
         };
 
+        const dueAt = parseValidDate(params.dueAt);
+        if (params.dueAt && !dueAt) {
+            throw new Error('Invalid due date');
+        }
+
         let workflowKind: MessageWorkflowItemKind | null = null;
         let structured: StructuredMessagePayload;
 
@@ -704,7 +722,7 @@ export async function sendStructuredMessageActionV2(params: {
                         taskId: structured.entityRefs.taskId ?? null,
                         status: 'pending',
                         payload: structured.payload || {},
-                        dueAt: params.dueAt ? new Date(params.dueAt) : null,
+                        dueAt,
                     })
                     .returning({ id: messageWorkflowItems.id });
                 workflowItemId = workflowRow?.id ?? null;
@@ -931,6 +949,11 @@ export async function convertMessageToTaskActionV2(params: {
         if (!messageRow) return { success: false, error: 'Message not found' };
         await requireConversationAccess(messageRow.conversationId, user.id);
 
+        const dueDate = parseValidDate(params.dueDate);
+        if (params.dueDate && !dueDate) {
+            return { success: false, error: 'Invalid due date' };
+        }
+
         const structured = getStructuredMessageFromMetadata(
             messageRow.metadata as Record<string, unknown> | null,
         );
@@ -950,7 +973,7 @@ export async function convertMessageToTaskActionV2(params: {
             description: `${sourceSummary}\n\nSource conversation message: ${messageRow.id}`,
             priority: params.priority || 'medium',
             assigneeId: params.assigneeId || null,
-            dueDate: params.dueDate || null,
+            dueDate: dueDate ? dueDate.toISOString() : null,
         });
 
         if (!taskResult.success || !taskResult.task) {
@@ -1018,6 +1041,10 @@ export async function convertMessageToFollowUpActionV2(params: {
 
         if (!messageRow) return { success: false, error: 'Message not found' };
         await requireConversationAccess(messageRow.conversationId, user.id);
+        const dueAt = parseValidDate(params.dueAt);
+        if (params.dueAt && !dueAt) {
+            return { success: false, error: 'Invalid due date' };
+        }
 
         const structured = getStructuredMessageFromMetadata(
             messageRow.metadata as Record<string, unknown> | null,
@@ -1041,7 +1068,7 @@ export async function convertMessageToFollowUpActionV2(params: {
                         metadata: messageRow.metadata as Record<string, unknown> | null,
                     }),
                 },
-                dueAt: params.dueAt ? new Date(params.dueAt) : null,
+                dueAt,
             })
             .returning({ id: messageWorkflowItems.id });
 

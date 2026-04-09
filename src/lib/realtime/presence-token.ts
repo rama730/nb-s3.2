@@ -18,9 +18,16 @@ export type PresenceTokenClaims = {
 };
 
 const DEFAULT_PRESENCE_TOKEN_TTL_SECONDS = 60;
-const NON_PRODUCTION_PRESENCE_TOKEN_FALLBACK_SECRET =
-  "edge-local-presence-token-secret-v1";
-let hasWarnedAboutPresenceTokenFallback = false;
+export const MISSING_PRESENCE_SECRET_ERROR_CODE = "MISSING_PRESENCE_SECRET";
+
+export class MissingPresenceSecretError extends Error {
+  readonly code = MISSING_PRESENCE_SECRET_ERROR_CODE;
+
+  constructor() {
+    super("Presence service is not configured for this environment.");
+    this.name = "MissingPresenceSecretError";
+  }
+}
 
 function toBase64Url(value: string | Buffer) {
   return Buffer.from(value).toString("base64url");
@@ -32,22 +39,8 @@ function fromBase64Url(value: string) {
 
 function resolvePresenceTokenSecret() {
   const secret = process.env.PRESENCE_TOKEN_SECRET?.trim() || "";
-
-  if (secret) {
-    return secret;
-  }
-
-  if (process.env.NODE_ENV !== "production") {
-    if (!hasWarnedAboutPresenceTokenFallback) {
-      hasWarnedAboutPresenceTokenFallback = true;
-      console.warn(
-        "[presence] PRESENCE_TOKEN_SECRET is unset; using a deterministic non-production fallback secret.",
-      );
-    }
-    return NON_PRODUCTION_PRESENCE_TOKEN_FALLBACK_SECRET;
-  }
-
-  throw new Error("PRESENCE_TOKEN_SECRET is required to issue presence room tokens");
+  if (secret) return secret;
+  throw new MissingPresenceSecretError();
 }
 
 export function createPresenceTokenClaims(input: {

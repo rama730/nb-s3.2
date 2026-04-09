@@ -98,17 +98,28 @@ export const useMessagesV2OutboxStore = create<MessagesV2OutboxState>()(
                     return { items: [] };
                 }
                 const next = persisted as MessagesV2OutboxState;
-                return {
-                    ...next,
-                    items: Array.isArray(next.items)
-                        ? next.items.map((item) => ({
-                            mode: item.mode ?? (item.structuredAction ? 'structured' : 'plain'),
-                            contextChips: item.contextChips ?? [],
-                            structuredAction: item.structuredAction ?? null,
-                            ...item,
-                        }))
-                        : [],
-                } satisfies MessagesV2OutboxState;
+                const normalizedItems = Array.isArray(next.items) ? next.items : [];
+
+                switch (version) {
+                    case 0:
+                    case 1:
+                        return {
+                            ...next,
+                            items: normalizedItems.map((item) => ({
+                                ...item,
+                                mode: item.mode ?? (item.structuredAction ? 'structured' : 'plain'),
+                                contextChips: item.contextChips ?? [],
+                                structuredAction: item.structuredAction ?? null,
+                            })),
+                        } satisfies MessagesV2OutboxState;
+                    case 2:
+                    default:
+                        // Future versions can branch here without reprocessing already-migrated state.
+                        return {
+                            ...next,
+                            items: normalizedItems,
+                        } satisfies MessagesV2OutboxState;
+                }
             },
         },
     ),

@@ -1,7 +1,11 @@
 import { resolveFlagWithRollout } from '@/lib/features/hardening';
 
-const asEnabledDefault = (value: string | undefined) =>
-    value === '0' || value === 'false' ? false : true;
+const asEnabledDefault = (value: string | undefined | null, fallback: boolean = false) => {
+    if (value === undefined || value === null) return fallback;
+    const trimmed = value.trim().toLowerCase();
+    if (trimmed === '') return fallback;
+    return trimmed !== '0' && trimmed !== 'false';
+};
 
 const asRolloutPercent = (value: string | undefined, fallback: number = 100) => {
     if (value === undefined || value === null || value.trim() === '') return fallback;

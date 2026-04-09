@@ -1,9 +1,9 @@
 'use client'
 
 import React from 'react'
-import Image from 'next/image'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
+import { UserAvatar } from '@/components/ui/UserAvatar'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Ban, ChevronDown, Ellipsis, Lock, MapPin, Link2, Pencil, MessageSquare, UserPlus, UserCheck, UserMinus, Clock, Shield, Users } from 'lucide-react'
 import { buildPrivacyPresentation } from '@/lib/privacy/presentation'
@@ -110,7 +110,6 @@ export const ProfileHeader = React.memo(function ProfileHeader({
     const headline = vm.headline || ''
     const location = vm.location || ''
     const openTo = vm.openTo
-    const avatarSrc = vm.avatarUrl || null
 
     const connectLabel =
         connectionState === 'accepted'
@@ -190,25 +189,14 @@ export const ProfileHeader = React.memo(function ProfileHeader({
             <div className="px-5 sm:px-8 py-6">
                 <div className="flex items-start justify-between gap-4">
                     <div className="flex items-start gap-4">
-                        <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl overflow-hidden border border-zinc-200 dark:border-zinc-800 bg-zinc-100 dark:bg-zinc-900 flex-shrink-0 relative">
-                            {avatarSrc && !isAdaptive ? (
-                                <Image
-                                    src={avatarSrc}
-                                    alt={name}
-                                    width={96}
-                                    height={96}
-                                    className="w-full h-full object-cover"
-                                    sizes="(max-width: 640px) 80px, 96px"
-                                    priority={true}
-                                />
-                            ) : avatarSrc && isAdaptive ? (
-                                <Image src={avatarSrc} alt={name} fill className="object-cover" sizes="(max-width: 640px) 80px, 96px" />
-                            ) : (
-                                <div className="w-full h-full app-accent-gradient flex items-center justify-center text-xl font-bold text-white">
-                                    {String(name).slice(0, 1).toUpperCase()}
-                                </div>
-                            )}
-                        </div>
+                        <UserAvatar
+                            identity={vm}
+                            className="w-20 h-20 sm:w-24 sm:h-24 border border-zinc-200 bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-900"
+                            roundedClassName="rounded-2xl"
+                            fallbackClassName="text-xl font-bold text-white"
+                            sizes="(max-width: 640px) 80px, 96px"
+                            priority={!isAdaptive}
+                        />
                         <div className="pb-1">
                             <div className="flex flex-wrap items-center gap-2">
                                 <h1 className="text-2xl sm:text-3xl font-bold text-zinc-900 dark:text-zinc-100">{name}</h1>

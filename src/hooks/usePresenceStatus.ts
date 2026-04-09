@@ -52,6 +52,7 @@ export function markUserOffline(userId: string) {
 
 let _heartbeatInterval: ReturnType<typeof setInterval> | null = null;
 let _heartbeatActive = false;
+let _visibilityChangeHandler: (() => void) | null = null;
 
 function sendHeartbeat() {
     fetch('/api/v1/presence/heartbeat', {
@@ -77,18 +78,22 @@ export function startPresenceHeartbeat() {
     _heartbeatInterval = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
 
     // Handle visibility changes — pause when hidden, resume when visible
-    if (typeof document !== 'undefined') {
-        document.addEventListener('visibilitychange', () => {
+    if (typeof document !== 'undefined' && !_visibilityChangeHandler) {
+        _visibilityChangeHandler = () => {
             if (document.hidden) {
                 if (_heartbeatInterval) {
                     clearInterval(_heartbeatInterval);
                     _heartbeatInterval = null;
                 }
-            } else {
+                return;
+            }
+
+            if (_heartbeatActive && !_heartbeatInterval) {
                 sendHeartbeat();
                 _heartbeatInterval = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
             }
-        });
+        };
+        document.addEventListener('visibilitychange', _visibilityChangeHandler);
     }
 }
 
@@ -100,5 +105,9 @@ export function stopPresenceHeartbeat() {
     if (_heartbeatInterval) {
         clearInterval(_heartbeatInterval);
         _heartbeatInterval = null;
+    }
+    if (typeof document !== 'undefined' && _visibilityChangeHandler) {
+        document.removeEventListener('visibilitychange', _visibilityChangeHandler);
+        _visibilityChangeHandler = null;
     }
 }

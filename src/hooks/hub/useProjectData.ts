@@ -4,12 +4,13 @@ import { useQuery, useInfiniteQuery } from "@tanstack/react-query";
 import {
     fetchProjectTasksAction,
     fetchProjectSprintsAction,
-    fetchSprintTasksAction,
+    fetchProjectSprintDetailAction,
     getProjectAnalyticsAction,
     getProjectMembersAction
 } from "@/app/actions/project";
 import { Task } from "@/components/projects/v2/tasks/TaskCard";
 import { queryKeys } from "@/lib/query-keys";
+import type { SprintDetailPayload } from "@/lib/projects/sprint-detail";
 
 // Types matching the server action return (or inferred)
 export type ProjectTaskScope = 'all' | 'backlog' | 'sprint';
@@ -28,6 +29,8 @@ export const PROJECT_TASKS_QUERY_KEY = (projectId: string, scope: ProjectTaskSco
     queryKeys.project.detail.tasks(projectId, normalizeScope(scope));
 export const SPRINT_TASKS_QUERY_KEY = (projectId: string, sprintId: string) =>
     queryKeys.project.detail.sprintTasks(projectId, sprintId);
+export const SPRINT_DETAIL_QUERY_KEY = (projectId: string, sprintId: string) =>
+    queryKeys.project.detail.sprintDetail(projectId, sprintId);
 export const PROJECT_SPRINTS_QUERY_KEY = (projectId: string) =>
     queryKeys.project.detail.sprints(projectId);
 export const PROJECT_ANALYTICS_QUERY_KEY = (projectId: string) =>
@@ -88,18 +91,42 @@ export function useProjectTasks(projectId: string, initialData?: any[], scope: P
     });
 }
 
-export function useSprintTasks(projectId: string, sprintId: string, pageSize: number = 50) {
+export function useSprintDetail(
+    projectId: string,
+    sprintId: string | null | undefined,
+    initialPage?: SprintDetailPayload,
+    pageSize: number = 24,
+) {
+    const normalizedProjectId = projectId?.trim() || "__project__";
+    const normalizedSprintId = sprintId?.trim() || "__default__";
+    const requestSprintId = sprintId?.trim() || null;
+
     return useInfiniteQuery({
-        queryKey: SPRINT_TASKS_QUERY_KEY(projectId || "__project__", sprintId || "__sprint__"),
+        queryKey: SPRINT_DETAIL_QUERY_KEY(normalizedProjectId, normalizedSprintId),
         queryFn: async ({ pageParam }: { pageParam: string | undefined }) => {
-            const result = await fetchSprintTasksAction(sprintId, pageSize, pageParam);
+            if (normalizedProjectId === "__project__") {
+                throw new Error("Invalid projectId");
+            }
+
+            const result = await fetchProjectSprintDetailAction({
+                projectId: normalizedProjectId,
+                sprintId: requestSprintId,
+                cursor: pageParam,
+                limit: pageSize,
+            });
             if (!result.success) throw new Error(result.error);
-            return result;
+            return result.data;
         },
         initialPageParam: undefined as string | undefined,
         getNextPageParam: (lastPage) => lastPage.nextCursor,
+        initialData: initialPage
+            ? {
+                pages: [initialPage],
+                pageParams: [undefined],
+            }
+            : undefined,
         staleTime: 1000 * 60 * 2, // 2 minutes
-        enabled: !!sprintId,
+        refetchOnWindowFocus: false,
     });
 }
 

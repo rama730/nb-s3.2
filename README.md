@@ -14,6 +14,8 @@ The repo is split into four runtime paths:
 The most important architecture docs live here:
 
 - [System map](/Users/chrama/Downloads/nb-s3/docs/architecture/system-map.md)
+- [Engineering standards charter](/Users/chrama/Downloads/nb-s3/docs/architecture/engineering-standards-charter.md)
+- [Engineering standards enforcement matrix](/Users/chrama/Downloads/nb-s3/docs/architecture/engineering-standards-enforcement-matrix.md)
 - [Stability rollout runbook](/Users/chrama/Downloads/nb-s3/docs/stability-rollout-runbook.md)
 - [Page data contract](/Users/chrama/Downloads/nb-s3/docs/performance/page-data-contract.md)
 - [Security checklist](/Users/chrama/Downloads/nb-s3/docs/security-checklist.md)
@@ -60,6 +62,7 @@ Set `INNGEST_EXECUTION_ROLE=web` for the web app and `INNGEST_EXECUTION_ROLE=wor
 ```bash
 npm run typecheck
 npm run test:unit
+npm run check:engineering-standards
 npm run check:page-contract
 npm run check:force-dynamic-allowlist
 npm run check:runtime-boundaries

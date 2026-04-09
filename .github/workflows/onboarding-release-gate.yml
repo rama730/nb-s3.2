@@ -40,6 +40,9 @@ jobs:
       - name: Install deps
         run: npm ci
 
+      - name: Lint
+        run: npm run lint -- . --ext .ts,.tsx,.js,.jsx
+
       - name: Typecheck
         run: npm run typecheck
 

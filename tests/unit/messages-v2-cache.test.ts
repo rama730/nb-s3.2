@@ -141,6 +141,13 @@ test('patchConversationLastMessageFromMessage derives preview text from structur
     const initialCreatedAt = new Date('2026-04-07T10:00:00.000Z');
     const nextCreatedAt = new Date('2026-04-07T10:05:00.000Z');
     const initialConversation = createConversation('message-1', initialCreatedAt);
+    const structured = createStructuredMessagePayload({
+        kind: 'handoff_summary',
+        title: 'Handoff summary',
+        summary: 'Frontend is complete and ready for review',
+        stateSnapshot: { status: 'shared', label: 'Shared' },
+    });
+    assert.ok(structured);
 
     queryClient.setQueryData(queryKeys.messages.v2.inbox(20), {
         pages: [{ conversations: [initialConversation], hasMore: false, nextCursor: null }],
@@ -154,12 +161,7 @@ test('patchConversationLastMessageFromMessage derives preview text from structur
         createdAt: nextCreatedAt,
         type: 'text',
         metadata: {
-            structured: createStructuredMessagePayload({
-                kind: 'handoff_summary',
-                title: 'Handoff summary',
-                summary: 'Frontend is complete and ready for review',
-                stateSnapshot: { status: 'shared', label: 'Shared' },
-            }),
+            structured,
         },
     });
 

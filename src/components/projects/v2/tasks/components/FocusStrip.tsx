@@ -62,7 +62,7 @@ export default function FocusStrip({
                                 <div>
                                     <div className="font-medium text-sm text-zinc-800 dark:text-zinc-200">{task.title}</div>
                                     <div className="text-xs text-zinc-500 mt-1 capitalize flex items-center gap-2">
-                                        <span className={task.status === 'done' ? 'text-emerald-600' : task.status === 'in_progress' ? 'text-blue-600' : ''}>
+                                        <span className={task.status === 'done' ? 'text-emerald-600' : task.status === 'blocked' ? 'text-rose-600' : task.status === 'in_progress' ? 'text-blue-600' : ''}>
                                             {task.status.replace('_', ' ')}
                                         </span>
                                         <span className="w-1 h-1 rounded-full bg-zinc-300 dark:bg-zinc-600" />

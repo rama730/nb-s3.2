@@ -25,6 +25,7 @@ import TaskAttachmentPicker from "./components/TaskAttachmentPicker";
 import { ProjectNode } from "@/lib/db/schema";
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 import { useReducedMotionPreference } from "@/components/providers/theme-provider";
+import { normalizeSprintOptions, normalizeTaskSurfacePerson } from "@/lib/projects/task-presentation";
 
 
 
@@ -48,6 +49,18 @@ export default function CreateTaskModal({
     projectName
 }: CreateTaskModalProps) {
     const reduceMotion = useReducedMotionPreference();
+    const availableSprints = normalizeSprintOptions(sprints);
+    const availableMembers = members
+        .map((member) => {
+            const identity = normalizeTaskSurfacePerson(member?.user ?? member);
+            const id = member?.id ?? member?.userId ?? member?.user_id;
+            if (!id || !identity?.fullName) return null;
+            return {
+                id: String(id),
+                label: identity.fullName,
+            };
+        })
+        .filter(Boolean) as { id: string; label: string }[];
 
     // Essential Fields
     const [title, setTitle] = useState("");
@@ -105,6 +118,7 @@ export default function CreateTaskModal({
                 assigneeId: assigneeId || null,
                 dueDate: dueDate || null,
                 attachmentIds: attachments.map(a => a.id),
+                attachments,
                 subtasks: subtasks.map(st => ({ title: st.title, completed: false })),
                 projectId
             };
@@ -224,7 +238,7 @@ export default function CreateTaskModal({
                                         className="w-full px-3 py-2 rounded-lg bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-200 dark:border-zinc-700 text-sm focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none appearance-none"
                                     >
                                         <option value="">Backlog (no sprint)</option>
-                                        {sprints
+                                        {availableSprints
                                             .filter(s => {
                                                 if (!s.endDate) return true;
                                                 const endDate = new Date(s.endDate);
@@ -233,7 +247,10 @@ export default function CreateTaskModal({
                                                 return endDate >= today;
                                             })
                                             .map(s => (
-                                                <option key={s.id} value={s.id}>{s.name}</option>
+                                                <option key={s.id} value={s.id}>
+                                                    {s.name}
+                                                    {s.status === "active" ? " · Active" : s.status === "planning" ? " · Planning" : ""}
+                                                </option>
                                             ))
                                         }
                                     </select>
@@ -343,6 +360,7 @@ export default function CreateTaskModal({
                                 >
                                     <option value="todo">To Do</option>
                                     <option value="in_progress">In Progress</option>
+                                    <option value="blocked">Blocked</option>
                                     <option value="done">Done</option>
                                 </select>
                                 <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-zinc-400 pointer-events-none" />
@@ -372,9 +390,9 @@ export default function CreateTaskModal({
                                         className="w-full pl-10 pr-4 py-2.5 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 text-sm focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none appearance-none"
                                     >
                                         <option value="">Unassigned</option>
-                                        {members.map(m => (
+                                        {availableMembers.map(m => (
                                             <option key={m.id} value={m.id}>
-                                                {m.fullName || m.full_name || m.name || m.username || 'Member'}
+                                                {m.label}
                                             </option>
                                         ))}
                                     </select>

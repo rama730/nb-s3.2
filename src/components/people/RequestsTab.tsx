@@ -30,10 +30,6 @@ import {
 import PersonCard from "@/components/people/PersonCard";
 import ProjectApplicationsSection from "./ProjectApplicationsSection";
 import type { IncomingApplication, MyApplication } from "./ProjectApplicationsSection";
-import type {
-    ApplicationLifecycleStatus,
-    ConnectionRequestHistoryStatus,
-} from "@/lib/applications/status";
 import { resolveRelationshipActionModel } from "@/components/people/person-card-model";
 
 interface RequestsTabProps {
@@ -41,8 +37,6 @@ interface RequestsTabProps {
     initialRequests?: { incoming: PendingIncomingRequest[]; sent: PendingSentRequest[] };
     initialApplications?: { my: MyApplication[]; incoming: IncomingApplication[] };
 }
-
-type HistoryStatus = ApplicationLifecycleStatus | ConnectionRequestHistoryStatus;
 
 // ── Status configuration ────────────────────────────────────────────
 

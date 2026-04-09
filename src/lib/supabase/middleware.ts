@@ -12,6 +12,7 @@ import {
     isOnboardingRoute,
     isProtectedAppRoute,
 } from '@/lib/routing/route-class'
+import { resolveSupabaseServerCookieOptions } from '@/lib/supabase/cookie-options'
 import { resolveSupabasePublicEnv } from '@/lib/supabase/env'
 
 const AUTH_DEGRADED_MODE_ENABLED = readBooleanFromEnv('AUTH_DEGRADED_MODE_ENABLED', true)
@@ -150,6 +151,7 @@ export async function updateSession(request: NextRequest) {
         supabaseEnv.url,
         supabaseEnv.anonKey,
         {
+            cookieOptions: resolveSupabaseServerCookieOptions(),
             cookies: {
                 getAll() {
                     return request.cookies.getAll()

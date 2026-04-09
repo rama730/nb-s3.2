@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { resolveSupabasePublicEnv } from "@/lib/supabase/env";
+import { resolveSupabaseServerCookieOptions } from "@/lib/supabase/cookie-options";
 
 type PasswordVerificationResult = {
   ok: boolean;
@@ -104,6 +105,7 @@ export async function verifyPasswordCredential(email: string, password: string):
     env.url,
     env.anonKey,
     {
+      cookieOptions: resolveSupabaseServerCookieOptions(),
       cookies: {
         getAll() {
           return [];

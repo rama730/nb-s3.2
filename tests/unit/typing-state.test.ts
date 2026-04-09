@@ -11,7 +11,6 @@ function createMember(overrides: Partial<PresenceMemberState>): PresenceMemberSt
   return {
     connectionId: overrides.connectionId ?? 'conn-1',
     userId: overrides.userId ?? 'user-1',
-    sessionId: overrides.sessionId ?? 'session-1',
     roomType: overrides.roomType ?? 'conversation',
     roomId: overrides.roomId ?? 'conversation-1',
     role: overrides.role ?? 'viewer',

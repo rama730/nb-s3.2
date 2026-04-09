@@ -235,10 +235,10 @@ export function useMessageComposerCommands({
 
     const openStructuredDraft = useCallback((kind: StructuredComposerKind) => {
         consumeSlashToken();
-        const linkedProjectId = structuredCatalogData?.linkedProjectId || structuredCatalogData?.projects[0]?.id || '';
-        const linkedTaskId = structuredCatalogData?.tasks[0]?.id || '';
-        const linkedFileId = structuredCatalogData?.files[0]?.id || '';
-        const linkedProfileId = structuredCatalogData?.profiles[0]?.id || '';
+        const linkedProjectId = structuredCatalogData?.linkedProjectId || structuredCatalogData?.projects?.[0]?.id || '';
+        const linkedTaskId = structuredCatalogData?.tasks?.[0]?.id || '';
+        const linkedFileId = structuredCatalogData?.files?.[0]?.id || '';
+        const linkedProfileId = structuredCatalogData?.profiles?.[0]?.id || '';
 
         setStructuredDraft({
             kind,
@@ -261,7 +261,14 @@ export function useMessageComposerCommands({
         setSlashMenuOpen(true);
         setSlashQuery('');
         setSlashSelectedIndex(0);
-    }, [consumeSlashToken, structuredCatalogData?.files, structuredCatalogData?.linkedProjectId, structuredCatalogData?.profiles, structuredCatalogData?.projects, structuredCatalogData?.tasks]);
+    }, [
+        consumeSlashToken,
+        structuredCatalogData?.files?.[0]?.id,
+        structuredCatalogData?.linkedProjectId,
+        structuredCatalogData?.profiles?.[0]?.id,
+        structuredCatalogData?.projects?.[0]?.id,
+        structuredCatalogData?.tasks?.[0]?.id,
+    ]);
 
     useEffect(() => {
         setSlashSelectedIndex((current) => {

@@ -1,10 +1,11 @@
 'use client';
 
-import Image from 'next/image';
+import { UserAvatar } from '@/components/ui/UserAvatar';
 
 interface AvatarEntry {
     url: string | null;
     initials: string;
+    name?: string | null;
 }
 
 interface StackedAvatarsProps {
@@ -20,17 +21,21 @@ export function StackedAvatars({ avatars, max = 3, size = 24 }: StackedAvatarsPr
     return (
         <div className="flex items-center">
             {visible.map((avatar, index) => (
-                <div
+                <UserAvatar
                     key={`stacked-avatar-${index}`}
-                    className="flex shrink-0 items-center justify-center overflow-hidden rounded-full border-2 border-white bg-zinc-200 dark:border-zinc-950 dark:bg-zinc-700"
-                    style={{ width: size, height: size, marginLeft: index > 0 ? -(size * 0.35) : 0, zIndex: visible.length - index }}
-                >
-                    {avatar.url ? (
-                        <Image src={avatar.url} alt="" width={size} height={size} unoptimized className="h-full w-full object-cover" />
-                    ) : (
-                        <span className="text-[10px] font-medium text-zinc-500 dark:text-zinc-300">{avatar.initials}</span>
-                    )}
-                </div>
+                    identity={{
+                        avatarUrl: avatar.url,
+                        fullName: avatar.name ?? avatar.initials,
+                        username: avatar.name ?? avatar.initials,
+                    }}
+                    size={size}
+                    unoptimized
+                    className="border-2 border-white dark:border-zinc-950"
+                    fallbackDisplayName={avatar.name ?? avatar.initials}
+                    fallbackInitials={avatar.initials}
+                    fallbackClassName="text-[10px] font-medium text-white"
+                    style={{ marginLeft: index > 0 ? -(size * 0.35) : 0, zIndex: visible.length - index }}
+                />
             ))}
             {overflow > 0 && (
                 <div

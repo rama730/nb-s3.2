@@ -102,7 +102,7 @@ function main() {
     if (target !== 'local' && !presenceTokenSecret) {
         errors.push('PRESENCE_TOKEN_SECRET is required outside local development')
     } else if (!presenceTokenSecret) {
-        warnings.push('PRESENCE_TOKEN_SECRET is unset; presence token issuance will fall back to service role secret if present')
+        warnings.push('PRESENCE_TOKEN_SECRET is unset; realtime presence token issuance will fail until the secret is configured')
     }
 
     const presenceWsUrl =

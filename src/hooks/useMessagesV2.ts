@@ -50,22 +50,23 @@ import {
     createPendingStructuredState,
     createStructuredMessagePayload,
     type MessageContextChip,
+    type StructuredMessagePayload,
     withMessageContextChipsMetadata,
     withStructuredMessageMetadata,
 } from '@/lib/messages/structured';
 
 const EMPTY_OUTBOX_ITEMS: MessagesV2OutboxItem[] = [];
 
-function buildOptimisticStructuredMessage(item: MessagesV2OutboxItem) {
+function buildOptimisticStructuredMessage(item: MessagesV2OutboxItem): StructuredMessagePayload | null {
     if (!item.structuredAction) {
         return null;
     }
 
     const action = item.structuredAction;
-    return createStructuredMessagePayload({
+    const payload = createStructuredMessagePayload({
         kind: action.kind,
-        title: action.title?.trim() || action.summary.trim(),
-        summary: action.summary.trim(),
+        title: action.title?.trim() || action.summary?.trim() || '',
+        summary: action.summary?.trim() || '',
         contextChips: item.contextChips ?? [],
         stateSnapshot: action.kind === 'rate_share' || action.kind === 'handoff_summary'
             ? { status: 'shared', label: 'Shared' }
@@ -86,6 +87,10 @@ function buildOptimisticStructuredMessage(item: MessagesV2OutboxItem) {
             next: action.next?.trim() || null,
         },
     });
+    if (!payload) {
+        return null;
+    }
+    return payload;
 }
 
 function unwrapThreadPage(value: unknown): MessageThreadPageV2 | null {

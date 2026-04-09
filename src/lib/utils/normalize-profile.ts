@@ -1,5 +1,6 @@
 import { calculateProfileCompletion } from '@/lib/validations/profile'
 import { trimOptionalDisplayText } from '@/lib/profile/display'
+import { normalizeIdentityFields } from '@/lib/ui/identity'
 
 /**
  * Single point of truth for profile field defaults.
@@ -8,14 +9,12 @@ import { trimOptionalDisplayText } from '@/lib/profile/display'
  */
 export function normalizeProfile(p: any) {
     if (!p) return null;
-    const avatarUrl = trimOptionalDisplayText(p.avatarUrl ?? p.avatar_url);
-    const fullName = trimOptionalDisplayText(p.fullName ?? p.full_name);
+    const { avatarUrl, fullName, username } = normalizeIdentityFields(p);
     const socialLinks =
         (p.socialLinks && typeof p.socialLinks === 'object' ? p.socialLinks : null) ||
         (p.social_links && typeof p.social_links === 'object' ? p.social_links : null) ||
         {};
     const openTo = Array.isArray(p.openTo) ? p.openTo : (Array.isArray(p.open_to) ? p.open_to : []);
-    const username = trimOptionalDisplayText(p.username);
     const bio = trimOptionalDisplayText(p.bio);
     const headline = trimOptionalDisplayText(p.headline);
     const location = trimOptionalDisplayText(p.location);

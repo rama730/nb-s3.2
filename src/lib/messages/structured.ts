@@ -271,13 +271,15 @@ export function getStructuredWorkflowActorRole(params: {
     assigneeUserId?: string | null;
 }): StructuredWorkflowActorRole {
     const currentUserId = params.currentUserId?.trim() || null;
+    const assigneeUserId = params.assigneeUserId?.trim() || null;
+    const creatorId = params.creatorId?.trim() || null;
     if (!currentUserId) {
         return 'viewer';
     }
-    if (params.assigneeUserId && params.assigneeUserId === currentUserId) {
+    if (assigneeUserId && assigneeUserId === currentUserId) {
         return 'assignee';
     }
-    if (params.creatorId && params.creatorId === currentUserId) {
+    if (creatorId && creatorId === currentUserId) {
         return 'creator';
     }
     return 'viewer';
@@ -385,13 +387,19 @@ export function createStructuredMessagePayload(input: {
     entityRefs?: StructuredMessagePayload['entityRefs'];
     payload?: Record<string, unknown> | null;
     version?: number;
-}): StructuredMessagePayload {
+}): StructuredMessagePayload | null {
+    const title = clampText(input.title, MAX_TITLE_LENGTH);
+    const summary = clampText(input.summary, MAX_SUMMARY_LENGTH);
+    if (!title || !summary) {
+        return null;
+    }
+
     return {
         kind: input.kind,
         version: input.version ?? 1,
         layout: 'minimal_card',
-        title: clampText(input.title, MAX_TITLE_LENGTH),
-        summary: clampText(input.summary, MAX_SUMMARY_LENGTH),
+        title,
+        summary,
         contextChips: normalizeMessageContextChips(input.contextChips),
         workflowItemId: input.workflowItemId ?? null,
         stateSnapshot: normalizeStructuredStateSnapshot(input.stateSnapshot),
@@ -445,7 +453,7 @@ export function getMessagePreviewText(params: {
     if (typeof params.content === 'string' && params.content.trim().length > 0) {
         const normalized = params.content.replace(/\s+/g, ' ').trim();
         if (normalized.includes('```')) return 'Code snippet';
-        return normalized;
+        return clampText(normalized, 160);
     }
 
     switch (params.type) {

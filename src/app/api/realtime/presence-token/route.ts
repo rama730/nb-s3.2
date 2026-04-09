@@ -7,7 +7,12 @@ import { db } from "@/lib/db";
 import { conversationParticipants, projectMembers } from "@/lib/db/schema";
 import { logger } from "@/lib/logger";
 import { resolvePresenceWebSocketUrl } from "@/lib/realtime/presence-config";
-import { createPresenceTokenClaims, signPresenceToken } from "@/lib/realtime/presence-token";
+import {
+  createPresenceTokenClaims,
+  MISSING_PRESENCE_SECRET_ERROR_CODE,
+  MissingPresenceSecretError,
+  signPresenceToken,
+} from "@/lib/realtime/presence-token";
 import type { PresenceRoomRole, PresenceRoomType } from "@/lib/realtime/presence-types";
 import { consumeRateLimitPolicy } from "@/lib/security/rate-limit";
 import { getViewerAuthContext } from "@/lib/server/viewer-context";
@@ -193,11 +198,27 @@ export async function POST(request: Request) {
       },
     });
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
     logger.error("presence.token.issue.failed", {
       requestId,
       durationMs: Date.now() - startedAt,
-      error: error instanceof Error ? error.message : String(error),
+      error: message,
     });
+    if (
+      error instanceof MissingPresenceSecretError
+      || (typeof error === "object"
+        && error !== null
+        && "code" in error
+        && error.code === MISSING_PRESENCE_SECRET_ERROR_CODE)
+    ) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "Presence service is not configured for this environment.",
+        },
+        { status: 503 },
+      );
+    }
     return NextResponse.json(
       {
         ok: false,

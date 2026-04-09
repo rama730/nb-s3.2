@@ -20,7 +20,7 @@ const ALLOWED_FIELDS: ReadonlySet<MutableTaskField> = new Set([
 ]);
 
 type Priority = "low" | "medium" | "high" | "urgent";
-type Status = "todo" | "in_progress" | "done";
+export type TaskStatus = "todo" | "in_progress" | "done" | "blocked";
 
 async function assertTaskWriteAccess(taskId: string, userId: string) {
     const existingTask = await db.query.tasks.findFirst({
@@ -128,7 +128,7 @@ export async function updateTaskFieldAction(
  */
 export async function updateTaskStatusAction(
     taskId: string,
-    status: Status,
+    status: TaskStatus,
     projectId: string
 ) {
     try {
@@ -138,7 +138,7 @@ export async function updateTaskStatusAction(
             return { success: false, error: "Unauthorized" };
         }
 
-        if (!["todo", "in_progress", "done"].includes(status)) {
+        if (!["todo", "in_progress", "done", "blocked"].includes(status)) {
             return { success: false, error: "Invalid status" };
         }
 

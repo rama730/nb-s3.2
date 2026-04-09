@@ -1,0 +1,70 @@
+{
+  "id": "impact-2026-04-08-engineering-standards-program",
+  "title": "Engineering standards program phase-1 rollout",
+  "summary": "Introduces the standards charter, typed rule registry, canonical identity/avatar helper, and phase-based CI enforcement scripts.",
+  "riskLevel": "high",
+  "runtimePlanes": [
+    "request",
+    "public_read",
+    "realtime",
+    "database",
+    "ops"
+  ],
+  "routeClasses": [
+    "public_cached",
+    "user_shell",
+    "active_surface"
+  ],
+  "dataSourcesChanged": [
+    "standards_registry",
+    "docs",
+    "ci_contracts",
+    "ui_identity_contracts"
+  ],
+  "canonicalLogicDomains": [
+    "identity_avatar",
+    "status_lifecycle",
+    "profile_display",
+    "relationship_actions",
+    "import_boundaries"
+  ],
+  "concurrencyRisk": "Low runtime concurrency risk; primary impact is consistency enforcement and release-gate expansion across shared UI surfaces.",
+  "observability": {
+    "metrics": [
+      "release gate step output"
+    ],
+    "logs": [
+      "contract violation output from standards scripts"
+    ],
+    "alerts": []
+  },
+  "rollback": {
+    "strategy": "Revert the standards scripts and shared identity/avatar migration as one change set if a blocking regression appears in release or UI verification.",
+    "validation": [
+      "npm run typecheck",
+      "npm run test:unit"
+    ]
+  },
+  "evidence": {
+    "commands": [
+      "npm run typecheck",
+      "npm run test:unit"
+    ],
+    "reports": [
+      "reports/stability/release/latest.json",
+      "reports/stability/headroom/latest.json"
+    ]
+  },
+  "paths": [
+    "docs/architecture/engineering-standards-charter.md",
+    "docs/architecture/engineering-standards-enforcement-matrix.md",
+    "src/lib/standards",
+    "src/lib/ui/identity.ts",
+    "src/components/ui/UserAvatar.tsx",
+    "scripts/check-canonical-logic-contract.ts",
+    "scripts/check-data-shape-contract.ts",
+    "scripts/check-sql-governance.ts",
+    "scripts/check-impact-review.ts",
+    "standards/impact-reviews"
+  ]
+}

@@ -10,7 +10,6 @@ export type PresenceMemberProfile = {
 export type PresenceMemberState = {
   connectionId: string;
   userId: string;
-  sessionId: string | null;
   roomType: PresenceRoomType;
   roomId: string;
   role: PresenceRoomRole;
@@ -37,7 +36,7 @@ export type PresenceServerEvent =
     }
   | {
       type: "ack";
-      ackType: "heartbeat" | "cursor" | "typing";
+      ackType: "auth" | "heartbeat" | "cursor" | "typing";
       roomType: PresenceRoomType;
       roomId: string;
       serverTime: number;

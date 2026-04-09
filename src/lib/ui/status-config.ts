@@ -13,12 +13,21 @@ export const AVAILABILITY_CONFIG: Record<string, { color: string; label: string 
     offline: { color: 'text-zinc-400', label: 'Offline' },
 };
 
+export type AvailabilityPresentation = {
+    color: string;
+    label: string;
+};
+
+export function getAvailabilityPresentation(status: string | null | undefined): AvailabilityPresentation {
+    return AVAILABILITY_CONFIG[status || ''] ?? AVAILABILITY_CONFIG.available;
+}
+
 export function getAvailabilityLabel(status: string | null | undefined): string {
-    return AVAILABILITY_CONFIG[status || '']?.label ?? 'Available';
+    return getAvailabilityPresentation(status).label;
 }
 
 export function getAvailabilityColor(status: string | null | undefined): string {
-    return AVAILABILITY_CONFIG[status || '']?.color ?? 'text-zinc-400';
+    return getAvailabilityPresentation(status).color;
 }
 
 // ---------------------------------------------------------------------------
@@ -36,6 +45,32 @@ export const EXPERIENCE_LABELS: Record<string, string> = {
 
 export function getExperienceLabel(level: string | null | undefined): string {
     return EXPERIENCE_LABELS[level || ''] ?? '';
+}
+
+export function buildProfileStatusSummary(input: {
+    availabilityStatus?: string | null | undefined;
+    experienceLevel?: string | null | undefined;
+    activeLabel?: string | null | undefined;
+}) {
+    const parts: string[] = [];
+
+    if (input.availabilityStatus) {
+        parts.push(getAvailabilityLabel(input.availabilityStatus));
+    }
+
+    const experienceLabel = getExperienceLabel(input.experienceLevel);
+    if (experienceLabel) {
+        parts.push(experienceLabel);
+    }
+
+    if (input.activeLabel) {
+        parts.push(input.activeLabel);
+    }
+
+    return {
+        parts,
+        availabilityColor: input.availabilityStatus ? getAvailabilityColor(input.availabilityStatus) : null,
+    };
 }
 
 // ---------------------------------------------------------------------------

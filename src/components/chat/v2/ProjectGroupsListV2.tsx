@@ -5,6 +5,7 @@ import Image from 'next/image';
 import { formatDistanceToNow } from 'date-fns';
 import { BellOff, Folder, Search, Users } from 'lucide-react';
 import { Virtuoso } from 'react-virtuoso';
+import type { getProjectGroupsPageV2 } from '@/app/actions/messaging/v2';
 import { cn } from '@/lib/utils';
 import { useProjectGroups } from '@/hooks/useMessagesV2';
 import { StackedAvatars } from '@/components/ui/StackedAvatars';
@@ -15,6 +16,10 @@ interface ProjectGroupsListV2Props {
     surface?: 'page' | 'popup';
     onSelectConversation: (conversationId: string) => void;
 }
+
+type ProjectGroupListItem = NonNullable<
+    Awaited<ReturnType<typeof getProjectGroupsPageV2>>['projectGroups']
+>[number];
 
 export function ProjectGroupsListV2({
     surface = 'page',
@@ -33,17 +38,21 @@ export function ProjectGroupsListV2({
         // Search filter
         const q = searchQuery.trim().toLowerCase();
         if (q) {
-            result = result.filter((g: any) =>
-                g.projectTitle?.toLowerCase().includes(q) ||
-                g.name?.toLowerCase().includes(q) ||
-                g.description?.toLowerCase().includes(q)
+            result = result.filter((group: ProjectGroupListItem) =>
+                group.projectTitle?.toLowerCase().includes(q)
+                || group.projectSlug?.toLowerCase().includes(q),
             );
         }
         // Sort
         if (sortBy === 'alpha') {
-            result = [...result].sort((a: any, b: any) => (a.projectTitle || a.name || '').localeCompare(b.projectTitle || b.name || ''));
+            result = [...result].sort((left: ProjectGroupListItem, right: ProjectGroupListItem) =>
+                (left.projectTitle || '').localeCompare(right.projectTitle || ''),
+            );
         } else if (sortBy === 'unread') {
-            result = [...result].sort((a: any, b: any) => (b.unreadCount || 0) - (a.unreadCount || 0));
+            result = [...result].sort(
+                (left: ProjectGroupListItem, right: ProjectGroupListItem) =>
+                    (right.unreadCount || 0) - (left.unreadCount || 0),
+            );
         }
         return result;
     }, [groups, searchQuery, sortBy]);
@@ -141,9 +150,10 @@ export function ProjectGroupsListV2({
                                 ) : null,
                         }}
                         itemContent={(_, group) => {
-                            const memberAvatars = ((group as any).members ?? []).map((m: any) => ({
-                                url: m.avatarUrl ?? null,
-                                initials: ((m.fullName || m.username || '?')[0] || '?').toUpperCase(),
+                            const memberAvatars = (group.members ?? []).map((member) => ({
+                                url: member.avatarUrl ?? null,
+                                name: member.fullName || member.username || null,
+                                initials: ((member.fullName || member.username || '?')[0] || '?').toUpperCase(),
                             }));
 
                             return (
@@ -188,7 +198,7 @@ export function ProjectGroupsListV2({
                                                         <span className="truncate text-sm font-semibold text-zinc-900 dark:text-zinc-100">
                                                             {group.projectTitle}
                                                         </span>
-                                                        {(group as any).muted ? (
+                                                        {group.muted ? (
                                                             <BellOff className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
                                                         ) : null}
                                                     </div>

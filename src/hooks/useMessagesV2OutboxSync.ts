@@ -8,7 +8,6 @@ import {
     replaceOptimisticThreadMessage,
     upsertInboxConversation,
     upsertThreadConversation,
-    upsertThreadMessage,
 } from '@/lib/messages/v2-cache';
 import { useMessagesV2OutboxStore } from '@/stores/messagesV2OutboxStore';
 
@@ -49,6 +48,7 @@ export function useMessagesV2OutboxSync(enabled: boolean) {
             const eligible = items
                 .filter((item) =>
                     item.state !== 'sending'
+                    && item.attempts < MAX_RETRY_ATTEMPTS
                     && item.nextRetryAt <= now
                     && !inFlightIdsRef.current.has(item.clientMessageId),
                 )
@@ -62,6 +62,7 @@ export function useMessagesV2OutboxSync(enabled: boolean) {
                     markItem(item.clientMessageId, {
                         state: 'failed',
                         error: 'Max retries exceeded. Please resend manually.',
+                        nextRetryAt: Number.MAX_SAFE_INTEGER,
                     });
                     continue;
                 }
@@ -121,19 +122,29 @@ export function useMessagesV2OutboxSync(enabled: boolean) {
                     }
 
                     const nextAttempts = item.attempts + 1;
+                    const exhaustedRetries = nextAttempts >= MAX_RETRY_ATTEMPTS;
                     markItem(item.clientMessageId, {
                         attempts: nextAttempts,
                         state: 'failed',
-                        nextRetryAt: Date.now() + getRetryDelay(nextAttempts),
-                        error: result.error || 'retry_failed',
+                        nextRetryAt: exhaustedRetries
+                            ? Number.MAX_SAFE_INTEGER
+                            : Date.now() + getRetryDelay(nextAttempts),
+                        error: exhaustedRetries
+                            ? 'Max retries exceeded. Please resend manually.'
+                            : result.error || 'retry_failed',
                     });
                 } catch (error) {
                     const nextAttempts = item.attempts + 1;
+                    const exhaustedRetries = nextAttempts >= MAX_RETRY_ATTEMPTS;
                     markItem(item.clientMessageId, {
                         attempts: nextAttempts,
                         state: 'failed',
-                        nextRetryAt: Date.now() + getRetryDelay(nextAttempts),
-                        error: error instanceof Error ? error.message : String(error) || 'exception_failed',
+                        nextRetryAt: exhaustedRetries
+                            ? Number.MAX_SAFE_INTEGER
+                            : Date.now() + getRetryDelay(nextAttempts),
+                        error: exhaustedRetries
+                            ? 'Max retries exceeded. Please resend manually.'
+                            : error instanceof Error ? error.message : String(error) || 'exception_failed',
                     });
                 } finally {
                     inFlightIdsRef.current.delete(item.clientMessageId);

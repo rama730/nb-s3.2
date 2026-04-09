@@ -142,20 +142,8 @@ export function useMessageComposerActions({
                                     : 'Requesting feedback on this work.'
             );
 
-        if (structuredDraft.kind === 'feedback_request' && !summary) {
-            toast.error('Add a short feedback request summary');
-            return;
-        }
-        if (structuredDraft.kind === 'availability_request' && !summary) {
-            toast.error('Add a short availability request');
-            return;
-        }
         if (structuredDraft.kind === 'rate_share' && (!structuredDraft.amount.trim() || !structuredDraft.unit.trim())) {
             toast.error('Enter both a rate amount and unit');
-            return;
-        }
-        if (structuredDraft.kind === 'handoff_summary' && !summary) {
-            toast.error('Add a short handoff summary');
             return;
         }
         if (structuredDraft.kind === 'project_invite' && !structuredDraft.projectId) {

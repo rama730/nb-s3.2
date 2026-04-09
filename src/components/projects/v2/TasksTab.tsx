@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Users, UserPlus, Plus, LayoutGrid, List, CheckSquare } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AnimatePresence } from "framer-motion";
@@ -18,6 +19,10 @@ import { Task } from "@/components/projects/v2/tasks/TaskCard";
 import FocusStrip from "./tasks/components/FocusStrip";
 import { useTaskFilters } from "./tasks/hooks/useTaskFilters";
 import { useProjectInfiniteTasks, type ProjectTaskScope } from "@/hooks/hub/useProjectData";
+import { queryKeys } from "@/lib/query-keys";
+import { patchSprintDetailInfiniteData } from "@/lib/projects/sprint-cache";
+import { normalizeSprintOptions, normalizeTaskSurfaceRecord } from "@/lib/projects/task-presentation";
+import type { ProjectNode } from "@/lib/db/schema";
 
 interface TasksTabProps {
     projectId: string;
@@ -30,6 +35,28 @@ interface TasksTabProps {
     totalCount?: number;
     members?: any[];
     sprints?: any[];
+}
+
+function toLinkedSprintFiles(nodes: ProjectNode[], taskId: string, occurredAt: string | null) {
+    return nodes.map((node, index) => ({
+        id: `linked-file:${taskId}:${node.id}:${index}`,
+        taskId,
+        nodeId: node.id,
+        nodeName: node.name,
+        nodePath: node.path ?? node.name,
+        nodeType: node.type === "folder" ? ("folder" as const) : ("file" as const),
+        annotation: null,
+        linkedAt: occurredAt,
+        lastEventType: null,
+        lastEventAt: node.updatedAt instanceof Date ? node.updatedAt.toISOString() : null,
+        lastEventBy: null,
+    }));
+}
+
+function isProjectNode(value: unknown): value is ProjectNode {
+    if (!value || typeof value !== "object") return false;
+    const candidate = value as Partial<ProjectNode>;
+    return typeof candidate.id === "string" && typeof candidate.name === "string" && typeof candidate.type === "string";
 }
 
 export default function TasksTab({
@@ -45,6 +72,9 @@ export default function TasksTab({
     sprints = [],
 }: TasksTabProps) {
     const reduceMotion = useReducedMotionPreference();
+    const queryClient = useQueryClient();
+    const sprintOptions = useMemo(() => normalizeSprintOptions(sprints), [sprints]);
+    const sprintById = useMemo(() => new Map(sprintOptions.map((sprint) => [sprint.id, sprint])), [sprintOptions]);
     // Local State
     const [viewMode, setViewMode] = useState<'board' | 'list'>('board');
     const [scope, setScope] = useState<'all' | 'backlog' | 'sprint'>('all');
@@ -77,10 +107,42 @@ export default function TasksTab({
     
     // Combine realtime updates with fetched data
     const { tasks: allTasks, setTasks } = useRealtimeTasks(projectId, fetchedTasks.length > 0 ? fetchedTasks : undefined); 
+    const sprintAwareTasks = useMemo(() => {
+        return allTasks.map((task) => {
+            const normalizedTask = normalizeTaskSurfaceRecord(task);
+            if (normalizedTask.sprint || !normalizedTask.sprintId) return task;
+            const sprint = sprintById.get(normalizedTask.sprintId);
+            if (!sprint) return task;
+            return {
+                ...task,
+                sprint: {
+                    id: sprint.id,
+                    name: sprint.name,
+                    status: sprint.status,
+                },
+                sprintName: sprint.name,
+            };
+        });
+    }, [allTasks, sprintById]);
+    const withSprintContext = useCallback((task: Task) => {
+        const normalizedTask = normalizeTaskSurfaceRecord(task);
+        if (normalizedTask.sprint || !normalizedTask.sprintId) return task;
+        const sprint = sprintById.get(normalizedTask.sprintId);
+        if (!sprint) return task;
+        return {
+            ...task,
+            sprint: {
+                id: sprint.id,
+                name: sprint.name,
+                status: sprint.status,
+            },
+            sprintName: sprint.name,
+        } as Task;
+    }, [sprintById]);
 
     // Optimized Filters Hook
     const { filteredTasks, myFocusTasks, needsOwnerTasks } = useTaskFilters({
-        tasks: allTasks,
+        tasks: sprintAwareTasks,
         currentUserId,
         scope
     });
@@ -93,7 +155,7 @@ export default function TasksTab({
         setSelectedTaskIds(newSet);
     };
 
-    const handleCreateTask = async (data: any): Promise<{ success: boolean; error?: string }> => {
+    const handleCreateTask = useCallback(async (data: any): Promise<{ success: boolean; error?: string }> => {
         setCreateTaskError(null);
         try {
             const result = await createTaskAction({
@@ -117,12 +179,50 @@ export default function TasksTab({
             }
 
             const createdTask = result.task as unknown as Task;
+            const normalizedCreatedTask = normalizeTaskSurfaceRecord(createdTask);
+            const sprintAwareTask = withSprintContext(createdTask);
             setTasks((prev) => {
-                if (prev.some((task) => task.id === createdTask.id)) {
-                    return prev.map((task) => (task.id === createdTask.id ? createdTask : task));
+                if (prev.some((task) => task.id === sprintAwareTask.id)) {
+                    return prev.map((task) => (task.id === sprintAwareTask.id ? sprintAwareTask : task));
                 }
-                return [createdTask, ...prev];
+                return [sprintAwareTask, ...prev];
             });
+            if (normalizedCreatedTask.sprintId) {
+                const linkedFiles = Array.isArray(data.attachments)
+                    ? toLinkedSprintFiles(
+                        data.attachments.filter(isProjectNode),
+                        normalizedCreatedTask.id,
+                        normalizedCreatedTask.updatedAt ?? normalizedCreatedTask.createdAt,
+                    )
+                    : [];
+                queryClient.setQueriesData(
+                    { queryKey: queryKeys.project.detail.sprintDetailRoot(projectId) },
+                    (existing: unknown) =>
+                        patchSprintDetailInfiniteData(existing, null, {
+                            id: normalizedCreatedTask.id,
+                            projectId,
+                            projectKey: normalizedCreatedTask.projectKey,
+                            title: normalizedCreatedTask.title,
+                            description: normalizedCreatedTask.description,
+                            status: normalizedCreatedTask.status,
+                            priority: normalizedCreatedTask.priority,
+                            storyPoints: normalizedCreatedTask.storyPoints,
+                            sprintId: normalizedCreatedTask.sprintId,
+                            createdAt: normalizedCreatedTask.createdAt,
+                            updatedAt: normalizedCreatedTask.updatedAt,
+                            taskNumber: normalizedCreatedTask.taskNumber,
+                            assignee: normalizedCreatedTask.assignee,
+                            creator: normalizedCreatedTask.creator,
+                            linkedFileCount: linkedFiles.length,
+                            linkedFiles,
+                        }),
+                );
+            }
+            void Promise.all([
+                queryClient.invalidateQueries({ queryKey: queryKeys.project.detail.tasksRoot(projectId) }),
+                queryClient.invalidateQueries({ queryKey: queryKeys.project.detail.sprints(projectId) }),
+                queryClient.invalidateQueries({ queryKey: queryKeys.project.detail.sprintDetailRoot(projectId) }),
+            ]);
             return { success: true };
         } catch (err) {
             console.error("Exception creating task", err);
@@ -130,7 +230,7 @@ export default function TasksTab({
             setCreateTaskError(error);
             return { success: false, error };
         }
-    };
+    }, [projectId, queryClient, setTasks, withSprintContext]);
 
     // Loading State
     if (isLoading && !initialTasks?.length) {
@@ -277,19 +377,27 @@ export default function TasksTab({
                 projectId={projectId}
                 projectName={projectName}
                 members={members}
-                sprints={sprints}
+                sprints={sprintOptions}
             />
 
             <AnimatePresence initial={!reduceMotion}>
                 {editingTask && (
                     <TaskDetailPanel
                         task={editingTask}
+                        onTaskUpdated={(nextTask) => {
+                            const sprintAwareTask = withSprintContext(nextTask as Task);
+                            setEditingTask(sprintAwareTask);
+                            setTasks((prev) => prev.map((task) => (task.id === sprintAwareTask.id ? {
+                                ...task,
+                                ...sprintAwareTask,
+                            } : task)));
+                        }}
                         onClose={() => setEditingTask(null)}
                         projectId={projectId}
                         isOwnerOrMember={isOwnerOrMember}
                         isOwner={isOwner}
                         members={members}
-                        sprints={sprints}
+                        sprints={sprintOptions}
                         currentUserId={currentUserId}
                     />
                 )}

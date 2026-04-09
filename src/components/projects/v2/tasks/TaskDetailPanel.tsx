@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import { motion } from "framer-motion";
 import { X, ChevronRight, CheckSquare, MessageCircle, Paperclip, Activity, CheckCircle2, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -20,6 +20,7 @@ import { useReducedMotionPreference } from "@/components/providers/theme-provide
 interface TaskDetailPanelProps {
     task: any;
     onClose: () => void;
+    onTaskUpdated?: (task: any) => void;
     isOwnerOrMember: boolean;
     isOwner?: boolean;
     sprints?: any[];
@@ -31,6 +32,7 @@ interface TaskDetailPanelProps {
 export default function TaskDetailPanel({ 
     task, 
     onClose, 
+    onTaskUpdated,
     isOwnerOrMember,
     isOwner = false, 
     sprints = [],
@@ -39,19 +41,24 @@ export default function TaskDetailPanel({
     currentUserId
 }: TaskDetailPanelProps) {
     const reduceMotion = useReducedMotionPreference();
+    const [taskState, setTaskState] = useState(task);
     const [activeTab, setActiveTab] = useState<"details" | "subtasks" | "comments" | "files" | "activity">("details");
     const [isDeleting, setIsDeleting] = useState(false);
     const [deleteError, setDeleteError] = useState<string | null>(null);
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-    const taskId = task?.id ?? "";
+    const taskId = taskState?.id ?? "";
     
     const { counts } = useTaskCounts(taskId);
+
+    useEffect(() => {
+        setTaskState(task);
+    }, [task]);
 
     const confirmDeleteTask = useCallback(async () => {
         setDeleteError(null);
         setIsDeleting(true);
         try {
-            const result = await deleteTaskAction(task?.id ?? "", projectId);
+            const result = await deleteTaskAction(taskState?.id ?? "", projectId);
             if (result.success) {
                 onClose();
             } else {
@@ -63,9 +70,9 @@ export default function TaskDetailPanel({
             setDeleteError("An error occurred while deleting the task");
             setIsDeleting(false);
         }
-    }, [task, projectId, onClose]);
+    }, [taskState, projectId, onClose]);
 
-    if (!task) return null;
+    if (!taskState) return null;
 
     const handleDeleteTask = () => {
         setDeleteError(null);
@@ -106,12 +113,12 @@ export default function TaskDetailPanel({
                             </button>
                             <div className="flex items-center gap-3">
                                 <p className="text-xs text-zinc-500 font-mono">
-                                    {task.taskNumber && task.project?.key 
-                                        ? formatTaskId(task.project.key, task.taskNumber) 
-                                        : `#${task.id.slice(0, 8)}`}
+                                    {taskState.taskNumber && taskState.project?.key 
+                                        ? formatTaskId(taskState.project.key, taskState.taskNumber) 
+                                        : `#${taskState.id.slice(0, 8)}`}
                                 </p>
-                                <TaskStatusBadge status={task.status} />
-                                <TaskPriorityBadge priority={task.priority} />
+                                <TaskStatusBadge status={taskState.status} />
+                                <TaskPriorityBadge priority={taskState.priority} />
                             </div>
                         </div>
                         <div className="flex items-center gap-2">
@@ -170,16 +177,26 @@ export default function TaskDetailPanel({
                 {/* Content */}
                 <div className="flex-1 overflow-y-auto relative bg-white dark:bg-zinc-900">
                     {activeTab === "details" && (
-                        <DetailsTab task={task} isOwnerOrMember={isOwnerOrMember} sprints={sprints} members={members} projectId={projectId} />
+                        <DetailsTab
+                            task={taskState}
+                            onTaskChange={(nextTask) => {
+                                setTaskState(nextTask);
+                                onTaskUpdated?.(nextTask);
+                            }}
+                            isOwnerOrMember={isOwnerOrMember}
+                            sprints={sprints}
+                            members={members}
+                            projectId={projectId}
+                        />
                     )}
                     {activeTab === "subtasks" && (
-                        <SubtasksTab taskId={task.id} isOwnerOrMember={isOwnerOrMember} projectId={projectId} />
+                        <SubtasksTab taskId={taskState.id} isOwnerOrMember={isOwnerOrMember} projectId={projectId} />
                     )}
                     {activeTab === "comments" && (
-                        <CommentsTab taskId={task.id} isOwnerOrMember={isOwnerOrMember} projectId={projectId} currentUserId={currentUserId} />
+                        <CommentsTab taskId={taskState.id} isOwnerOrMember={isOwnerOrMember} projectId={projectId} currentUserId={currentUserId} />
                     )}
                     {activeTab === "files" && (
-                        <FilesTab taskId={task.id} taskTitle={task.title} isOwnerOrMember={isOwnerOrMember} projectId={projectId} />
+                        <FilesTab taskId={taskState.id} taskTitle={taskState.title} isOwnerOrMember={isOwnerOrMember} projectId={projectId} />
                     )}
                     {activeTab === "activity" && (
                         <ActivityTab />

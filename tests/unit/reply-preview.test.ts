@@ -39,16 +39,19 @@ test('getReplyPreviewText returns canonical fallback copy for non-text replies',
 });
 
 test('reply preview uses structured metadata when replying to a structured card', () => {
+    const structured = createStructuredMessagePayload({
+        kind: 'feedback_request',
+        title: 'Feedback request',
+        summary: 'Please review the current draft',
+        stateSnapshot: { status: 'pending', label: 'Pending' },
+    });
+    assert.ok(structured);
+
     const reply = createReplyPreview({
         content: null,
         type: 'text',
         metadata: {
-            structured: createStructuredMessagePayload({
-                kind: 'feedback_request',
-                title: 'Feedback request',
-                summary: 'Please review the current draft',
-                stateSnapshot: { status: 'pending', label: 'Pending' },
-            }),
+            structured,
         },
     });
 

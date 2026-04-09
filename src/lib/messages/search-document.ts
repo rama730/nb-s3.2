@@ -23,10 +23,15 @@ export function buildMessageSearchDocumentSql(params: {
     content: SQLWrapper;
     metadata: SQLWrapper;
 }) {
-    return sql<string>`concat_ws(
+    return sql<string>`trim(regexp_replace(
+        concat_ws(
+            ' ',
+            trim(regexp_replace(coalesce(${params.content}, ''), '\\s+', ' ', 'g')),
+            trim(regexp_replace(coalesce(${params.metadata} #>> '{structured,title}', ''), '\\s+', ' ', 'g')),
+            trim(regexp_replace(coalesce(${params.metadata} #>> '{structured,summary}', ''), '\\s+', ' ', 'g'))
+        ),
+        '\\s+',
         ' ',
-        coalesce(${params.content}, ''),
-        coalesce(${params.metadata} #>> '{structured,title}', ''),
-        coalesce(${params.metadata} #>> '{structured,summary}', '')
-    )`;
+        'g'
+    ))`;
 }

@@ -72,9 +72,16 @@ function readBrowserCookies() {
       const separatorIndex = entry.indexOf("=");
       const rawName = separatorIndex >= 0 ? entry.slice(0, separatorIndex) : entry;
       const rawValue = separatorIndex >= 0 ? entry.slice(separatorIndex + 1) : "";
+      const trimmedValue = rawValue.trim();
+      let decodedValue: string;
+      try {
+        decodedValue = decodeURIComponent(trimmedValue);
+      } catch {
+        decodedValue = trimmedValue;
+      }
       return {
         name: rawName.trim(),
-        value: decodeURIComponent(rawValue.trim()),
+        value: decodedValue,
       };
     })
     .filter((entry) => entry.name.length > 0);

@@ -1,7 +1,7 @@
 import { notFound } from 'next/navigation';
 import type { Metadata } from 'next';
 import ProjectDashboardClient from '@/components/projects/dashboard/ProjectDashboardClient';
-import { readProjectDetailMetadata, readProjectDetailShell } from '@/app/actions/project';
+import { readProjectDetailMetadata, readProjectDetailShell, readProjectSprintDetail } from '@/app/actions/project';
 import { isHardeningDomainEnabled } from '@/lib/features/hardening';
 import { getViewerAuthContext } from '@/lib/server/viewer-context';
 import { buildRouteMetadata } from '@/lib/metadata/route-metadata';
@@ -27,16 +27,27 @@ export default async function ProjectDetailPage({
     searchParams,
 }: {
     params: Promise<{ slug: string }>;
-    searchParams: Promise<{ tab?: string }>;
+    searchParams: Promise<{ tab?: string; filter?: string; drawerType?: string; drawerId?: string }>;
 }) {
     const [{ slug }, _searchParams] = await Promise.all([params, searchParams]);
 
     const { user } = await getViewerAuthContext();
 
-    const result = await readProjectDetailShell({
-        slugOrId: slug,
-        actorUserId: user?.id ?? null,
-    });
+    const selectedTab = _searchParams?.tab || "dashboard";
+
+    const [result, sprintResult] = await Promise.all([
+        readProjectDetailShell({
+            slugOrId: slug,
+            actorUserId: user?.id ?? null,
+        }),
+        selectedTab === "sprints"
+            ? readProjectSprintDetail({
+                slugOrId: slug,
+                actorUserId: user?.id ?? null,
+                limit: 24,
+            })
+            : Promise.resolve(null),
+    ]);
 
     if (!result.success) {
         if (result.errorCode === 'NOT_FOUND' || result.errorCode === 'FORBIDDEN') {
@@ -65,6 +76,7 @@ export default async function ProjectDetailPage({
                 currentUserId={user?.id || null}
                 isOwner={capabilities.isOwner}
                 isMember={capabilities.isMember}
+                initialSprintData={sprintResult && sprintResult.success ? sprintResult.data : null}
             />
         </div>
     );

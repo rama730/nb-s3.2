@@ -56,10 +56,10 @@ export function MessageContextChipRowV2({
                     )}>
                         {getKindLabel(chip.kind)}
                     </span>
-                    <span className="truncate font-medium">{chip.label}</span>
+                    <span className="min-w-0 truncate font-medium">{chip.label}</span>
                     {chip.subtitle ? (
                         <span className={cn(
-                            'truncate text-[10px]',
+                            'min-w-0 truncate text-[10px]',
                             tone === 'inverted' ? 'text-white/60' : 'text-zinc-500 dark:text-zinc-400',
                         )}>
                             {chip.subtitle}

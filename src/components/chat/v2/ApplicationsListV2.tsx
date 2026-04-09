@@ -5,6 +5,7 @@ import Image from 'next/image';
 import { formatDistanceToNow } from 'date-fns';
 import { ArrowLeft, ArrowRight, Briefcase, Search, SortAsc } from 'lucide-react';
 import { Virtuoso } from 'react-virtuoso';
+import type { getApplicationsInboxPageV2 } from '@/app/actions/messaging/v2';
 import { cn } from '@/lib/utils';
 import { useApplicationsInbox } from '@/hooks/useMessagesV2';
 import { InboxListSkeletonV2 } from './MessagesSurfaceSkeletons';
@@ -13,6 +14,10 @@ interface ApplicationsListV2Props {
     surface?: 'page' | 'popup';
     onSelectConversation: (conversationId: string) => void;
 }
+
+type ApplicationsInboxItem = NonNullable<
+    Awaited<ReturnType<typeof getApplicationsInboxPageV2>>['applications']
+>[number];
 
 function StatusBadge({ status }: { status: string | null | undefined }) {
     const config: Record<string, { bg: string; text: string; label: string }> = {
@@ -48,30 +53,33 @@ export function ApplicationsListV2({
         // Search filter
         const q = searchQuery.trim().toLowerCase();
         if (q) {
-            result = result.filter((a: any) =>
-                a.projectTitle?.toLowerCase().includes(q) ||
-                a.roleTitle?.toLowerCase().includes(q) ||
-                a.displayUser?.fullName?.toLowerCase().includes(q) ||
-                a.displayUser?.username?.toLowerCase().includes(q)
+            result = result.filter((application: ApplicationsInboxItem) =>
+                application.projectTitle?.toLowerCase().includes(q)
+                || application.roleTitle?.toLowerCase().includes(q)
+                || application.displayUser?.fullName?.toLowerCase().includes(q)
+                || application.displayUser?.username?.toLowerCase().includes(q),
             );
         }
         // Status filter
         if (statusFilter !== 'all') {
-            result = result.filter((a: any) => {
-                const s = a.lifecycleStatus || a.status;
-                return s === statusFilter;
+            result = result.filter((application: ApplicationsInboxItem) => {
+                const status = application.lifecycleStatus || application.status;
+                return status === statusFilter;
             });
         }
         // Sort
         if (sortBy === 'status') {
             const statusOrder: Record<string, number> = { pending: 0, accepted: 1, rejected: 2, withdrawn: 3, role_filled: 4 };
-            result = [...result].sort((a: any, b: any) => {
-                const sa = statusOrder[a.lifecycleStatus || a.status || 'pending'] ?? 5;
-                const sb = statusOrder[b.lifecycleStatus || b.status || 'pending'] ?? 5;
-                return sa - sb;
+            result = [...result].sort((left: ApplicationsInboxItem, right: ApplicationsInboxItem) => {
+                const leftStatus = statusOrder[left.lifecycleStatus || left.status || 'pending'] ?? 5;
+                const rightStatus = statusOrder[right.lifecycleStatus || right.status || 'pending'] ?? 5;
+                return leftStatus - rightStatus;
             });
         } else if (sortBy === 'unread') {
-            result = [...result].sort((a: any, b: any) => (b.unreadCount || 0) - (a.unreadCount || 0));
+            result = [...result].sort(
+                (left: ApplicationsInboxItem, right: ApplicationsInboxItem) =>
+                    (right.unreadCount ?? 0) - (left.unreadCount ?? 0),
+            );
         }
         return result;
     }, [applications, searchQuery, statusFilter, sortBy]);
@@ -269,9 +277,9 @@ export function ApplicationsListV2({
                                                             : <ArrowRight className="h-2.5 w-2.5 -rotate-45" />}
                                                     </div>
                                                 </div>
-                                                {(application as any).unreadCount > 0 ? (
+                                                {(application.unreadCount ?? 0) > 0 ? (
                                                     <div className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white">
-                                                        {(application as any).unreadCount > 9 ? '9+' : (application as any).unreadCount}
+                                                        {(application.unreadCount ?? 0) > 9 ? '9+' : application.unreadCount}
                                                     </div>
                                                 ) : null}
                                             </div>
@@ -307,9 +315,9 @@ export function ApplicationsListV2({
                                                 <p className="mt-0.5 truncate text-[10px] text-zinc-400">
                                                     {application.projectTitle}
                                                 </p>
-                                                {(application as any).coverLetter ? (
+                                                {application.coverLetter ? (
                                                     <p className="mt-0.5 line-clamp-2 text-[11px] leading-4 text-zinc-400 dark:text-zinc-500">
-                                                        {(application as any).coverLetter}
+                                                        {application.coverLetter}
                                                     </p>
                                                 ) : null}
                                                 {application.decisionReason === 'role_filled' ? (

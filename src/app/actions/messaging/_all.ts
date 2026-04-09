@@ -1120,7 +1120,7 @@ export async function getConversations(
                     id: userConv.last_message_id,
                     content: userConv.last_message_preview,
                     senderId: userConv.last_message_sender_id,
-                    createdAt: userConv.last_message_at!,
+                    createdAt: userConv.last_message_at || userConv.updated_at || new Date(),
                     type: userConv.last_message_type,
                 } : null,
                 unreadCount: userConv.unread_count || 0, // O(1) Read from denormalized column
@@ -1236,7 +1236,7 @@ export async function getConversationById(
                         id: membership[0].lastMessageId,
                         content: membership[0].lastMessagePreview,
                         senderId: membership[0].lastMessageSenderId,
-                        createdAt: membership[0].lastMessageAt!,
+                        createdAt: membership[0].lastMessageAt || details.updated_at || new Date(),
                         type: membership[0].lastMessageType,
                     }
                     : null,
@@ -2215,7 +2215,7 @@ export async function searchMessages(
                     id: details.last_message_id,
                     content: details.last_message_preview,
                     senderId: details.last_message_sender_id,
-                    createdAt: details.last_message_at!,
+                    createdAt: details.last_message_at || details.updated_at || new Date(),
                     type: details.last_message_type,
                 } : null,
                 unreadCount: details?.unread_count || 0
@@ -2326,7 +2326,18 @@ export async function editMessage(
         });
 
         if (await conversationNeedsPreviewRefresh(messageRow.conversationId, messageRow.id)) {
-            await refreshConversationParticipantPreviews(messageRow.conversationId);
+            try {
+                await refreshConversationParticipantPreviews(messageRow.conversationId);
+            } catch (previewRefreshError) {
+                console.error(
+                    'Failed to refresh conversation participant previews after editing message:',
+                    previewRefreshError,
+                    {
+                        conversationId: messageRow.conversationId,
+                        messageId: messageRow.id,
+                    },
+                );
+            }
         }
 
             return { success: true };
@@ -2386,8 +2397,19 @@ export async function deleteMessage(
                     target: [messageHiddenForUsers.messageId, messageHiddenForUsers.userId],
                 });
 
-            if (await conversationNeedsPreviewRefresh(messageRow.conversationId, messageRow.id)) {
-                await refreshConversationParticipantPreviews(messageRow.conversationId);
+            try {
+                if (await conversationNeedsPreviewRefresh(messageRow.conversationId, messageRow.id)) {
+                    await refreshConversationParticipantPreviews(messageRow.conversationId);
+                }
+            } catch (previewRefreshError) {
+                console.error(
+                    'Failed to refresh conversation participant previews after hiding message for viewer:',
+                    previewRefreshError,
+                    {
+                        conversationId: messageRow.conversationId,
+                        messageId: messageRow.id,
+                    },
+                );
             }
 
             return { success: true };
@@ -2414,8 +2436,19 @@ export async function deleteMessage(
             })
             .where(eq(messages.id, messageRow.id));
 
-        if (await conversationNeedsPreviewRefresh(messageRow.conversationId, messageRow.id)) {
-            await refreshConversationParticipantPreviews(messageRow.conversationId);
+        try {
+            if (await conversationNeedsPreviewRefresh(messageRow.conversationId, messageRow.id)) {
+                await refreshConversationParticipantPreviews(messageRow.conversationId);
+            }
+        } catch (previewRefreshError) {
+            console.error(
+                'Failed to refresh conversation participant previews after deleting message:',
+                previewRefreshError,
+                {
+                    conversationId: messageRow.conversationId,
+                    messageId: messageRow.id,
+                },
+            );
         }
 
         return { success: true };
@@ -3256,6 +3289,7 @@ export interface ProjectGroupConversation {
     projectTitle: string;
     projectSlug: string | null;
     projectCoverImage: string | null;
+    muted?: boolean;
     updatedAt: Date;
     lastMessage: {
         id: string;
@@ -3266,6 +3300,12 @@ export interface ProjectGroupConversation {
     } | null;
     unreadCount: number;
     memberCount: number;
+    members?: Array<{
+        id: string;
+        username: string | null;
+        fullName: string | null;
+        avatarUrl: string | null;
+    }>;
 }
 
 export async function getProjectGroups(
@@ -3290,6 +3330,7 @@ export async function getProjectGroups(
             project_slug: string | null;
             project_cover_image: string | null;
             updated_at: Date;
+            muted: boolean;
             last_message_id: string | null;
             last_message_preview: string | null;
             last_message_sender_id: string | null;
@@ -3307,6 +3348,7 @@ export async function getProjectGroups(
                     p.cover_image as project_cover_image,
                     c.updated_at,
                     cp.unread_count,
+                    cp.muted,
                     cp.last_message_id,
                     cp.last_message_preview,
                     cp.last_message_sender_id,
@@ -3336,6 +3378,7 @@ export async function getProjectGroups(
                 up.project_slug,
                 up.project_cover_image,
                 up.updated_at,
+                up.muted,
                 up.last_message_id,
                 up.last_message_preview,
                 up.last_message_sender_id,
@@ -3351,6 +3394,61 @@ export async function getProjectGroups(
         const projectArray = Array.from(projectGroupsResult);
         const hasMore = projectArray.length > limit;
         const paginatedProjects = projectArray.slice(0, limit);
+        const paginatedProjectIds = paginatedProjects.map((project) => project.project_id);
+
+        const memberPreviewRows = paginatedProjects.length > 0
+            ? await db.execute<{
+                project_id: string;
+                id: string;
+                username: string | null;
+                full_name: string | null;
+                avatar_url: string | null;
+            }>(sql`
+                WITH ranked_members AS (
+                    SELECT
+                        ${projectMembers.projectId} AS project_id,
+                        ${profiles.id} AS id,
+                        ${profiles.username} AS username,
+                        ${profiles.fullName} AS full_name,
+                        ${profiles.avatarUrl} AS avatar_url,
+                        row_number() OVER (
+                            PARTITION BY ${projectMembers.projectId}
+                            ORDER BY ${projectMembers.joinedAt} ASC, ${projectMembers.userId} ASC
+                        ) AS member_rank
+                    FROM ${projectMembers}
+                    INNER JOIN ${profiles} ON ${profiles.id} = ${projectMembers.userId}
+                    WHERE ${projectMembers.projectId} IN (${sql.join(
+                        paginatedProjectIds.map((projectId) => sql`${projectId}`),
+                        sql`, `,
+                    )})
+                )
+                SELECT
+                    project_id,
+                    id,
+                    username,
+                    full_name,
+                    avatar_url
+                FROM ranked_members
+                WHERE member_rank <= 3
+                ORDER BY project_id ASC, member_rank ASC
+            `)
+            : [];
+        const membersByProjectId = new Map<string, ProjectGroupConversation['members']>();
+        for (const row of memberPreviewRows) {
+            const existingMembers = membersByProjectId.get(row.project_id) ?? [];
+            if (existingMembers.length >= 3) {
+                continue;
+            }
+            membersByProjectId.set(row.project_id, [
+                ...existingMembers,
+                {
+                    id: row.id,
+                    username: row.username,
+                    fullName: row.full_name,
+                    avatarUrl: row.avatar_url,
+                },
+            ]);
+        }
 
         // No separate unread count query needed anymore!
 
@@ -3361,16 +3459,18 @@ export async function getProjectGroups(
             projectTitle: proj.project_title,
             projectSlug: proj.project_slug,
             projectCoverImage: proj.project_cover_image,
+            muted: proj.muted,
             updatedAt: proj.updated_at,
             lastMessage: proj.last_message_id ? {
                 id: proj.last_message_id,
                 content: proj.last_message_preview,
                 senderId: proj.last_message_sender_id,
-                createdAt: proj.last_message_at!,
+                createdAt: proj.last_message_at ?? proj.updated_at ?? new Date(),
                 type: proj.last_message_type,
             } : null,
             unreadCount: proj.unread_count || 0,
             memberCount: proj.member_count || 1,
+            members: membersByProjectId.get(proj.project_id) ?? [],
         }));
 
         return { success: true, projectGroups: result, hasMore };

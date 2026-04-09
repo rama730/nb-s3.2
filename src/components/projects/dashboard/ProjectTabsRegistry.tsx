@@ -39,7 +39,7 @@ export const AnalyticsTab = dynamic(
 
 export const SprintPlanning = dynamic(
     () => import("@/components/projects/tabs/SprintPlanning"),
-    { loading: () => <SkeletonSprints />, ssr: false }
+    { loading: () => <SkeletonSprints />, ssr: true }
 );
 
 export const ProjectSettingsTab = dynamic(

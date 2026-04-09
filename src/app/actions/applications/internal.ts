@@ -2029,6 +2029,7 @@ export async function getInboxApplicationsAction(
                 projectId: true,
                 creatorId: true,
                 applicantId: true,
+                message: true,
                 status: true,
                 createdAt: true,
                 updatedAt: true,
@@ -2042,6 +2043,27 @@ export async function getInboxApplicationsAction(
         const hasMore = applications.length > safeLimit;
         const slicedApplications = applications.slice(0, safeLimit);
         const decisionMap = await getDecisionMetadataMap(slicedApplications.map((app) => app.id));
+        const conversationIds = slicedApplications
+            .map((app) => app.conversationId)
+            .filter((conversationId): conversationId is string => typeof conversationId === 'string' && conversationId.length > 0);
+
+        const unreadCounts = conversationIds.length > 0
+            ? await db
+                .select({
+                    conversationId: conversationParticipants.conversationId,
+                    unreadCount: conversationParticipants.unreadCount,
+                })
+                .from(conversationParticipants)
+                .where(
+                    and(
+                        eq(conversationParticipants.userId, user.id),
+                        inArray(conversationParticipants.conversationId, conversationIds),
+                    ),
+                )
+            : [];
+        const unreadCountByConversationId = new Map(
+            unreadCounts.map((entry) => [entry.conversationId, entry.unreadCount]),
+        );
 
         // Fetch creator profiles for outgoing applications
         // We need to fetch profiles for creators of projects we applied to
@@ -2115,6 +2137,10 @@ export async function getInboxApplicationsAction(
                     decisionAt: decisionMeta?.decisionAt || toISODate(app.updatedAt),
                     createdAt: app.createdAt,
                     conversationId: app.conversationId,
+                    coverLetter: app.message,
+                    unreadCount: app.conversationId
+                        ? unreadCountByConversationId.get(app.conversationId) ?? 0
+                        : 0,
                 };
             }),
             hasMore,

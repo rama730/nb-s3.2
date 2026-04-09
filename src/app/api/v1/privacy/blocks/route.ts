@@ -12,10 +12,13 @@ import { profiles } from "@/lib/db/schema";
 import { logger } from "@/lib/logger";
 import { recordPrivacyEvent } from "@/lib/privacy/audit";
 import { blockUser } from "@/lib/privacy/blocks";
+import { validateCsrf } from "@/lib/security/csrf";
 
 export async function POST(request: Request) {
   const startedAt = Date.now();
   const requestId = getRequestId(request);
+  const csrfError = validateCsrf(request);
+  if (csrfError) return csrfError;
   const limitResponse = await enforceRouteLimit(request, "api:v1:privacy:blocks:post", 60, 60);
   if (limitResponse) return limitResponse;
 

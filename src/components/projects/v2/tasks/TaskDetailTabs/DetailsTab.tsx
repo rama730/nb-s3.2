@@ -1,8 +1,9 @@
 "use client";
 
 import React, { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { User, Calendar, Flag, Zap, Clock, Paperclip, CheckSquare, Check } from "lucide-react";
-import { updateTaskFieldAction, updateTaskStatusAction, assignTaskAction } from "@/app/actions/task";
+import { updateTaskFieldAction, updateTaskStatusAction, assignTaskAction, type TaskStatus } from "@/app/actions/task";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
@@ -11,40 +12,228 @@ import { useTaskAttachments } from "@/hooks/useTaskAttachments"; // New Hook
 import { toggleSubtaskAction } from "@/app/actions/subtask";
 import type { ProjectNode } from "@/lib/db/schema";
 import { createClient } from "@/lib/supabase/client";
+import { queryKeys } from "@/lib/query-keys";
+import { recordSprintMetric } from "@/lib/projects/sprint-observability";
+import { patchSprintDetailInfiniteData, type SprintTaskMutationRecord } from "@/lib/projects/sprint-cache";
+import {
+    normalizeSprintOptions,
+    normalizeTaskSurfacePerson,
+    normalizeTaskSurfaceRecord,
+    type TaskSurfaceRecord,
+} from "@/lib/projects/task-presentation";
+
+function toLinkedSprintFiles(nodes: ProjectNode[], taskId: string, occurredAt: string | null) {
+    return nodes.map((node, index) => ({
+        id: `linked-file:${taskId}:${node.id}:${index}`,
+        taskId,
+        nodeId: node.id,
+        nodeName: node.name,
+        nodePath: node.path ?? node.name,
+        nodeType: node.type === "folder" ? ("folder" as const) : ("file" as const),
+        annotation: null,
+        linkedAt: occurredAt ?? null,
+        lastEventType: null,
+        lastEventAt: node.updatedAt instanceof Date ? node.updatedAt.toISOString() : null,
+        lastEventBy: null,
+    }));
+}
+
+function isTaskStatus(value: string): value is TaskStatus {
+    return value === "todo" || value === "in_progress" || value === "blocked" || value === "done";
+}
 
 interface DetailsTabProps {
     task: any;
+    onTaskChange: (task: any) => void;
     isOwnerOrMember: boolean;
     sprints?: any[];
     members?: any[];
     projectId: string;
 }
 
-export default function DetailsTab({ task, isOwnerOrMember, sprints = [], members = [], projectId }: DetailsTabProps) {
+function toSprintMutationRecord(
+    task: TaskSurfaceRecord,
+    projectId: string,
+    attachments: ProjectNode[],
+): SprintTaskMutationRecord {
+    return {
+        id: task.id,
+        projectId,
+        projectKey: task.projectKey,
+        title: task.title,
+        description: task.description,
+        status: task.status,
+        priority: task.priority,
+        storyPoints: task.storyPoints,
+        sprintId: task.sprintId,
+        createdAt: task.createdAt,
+        updatedAt: task.updatedAt,
+        taskNumber: task.taskNumber,
+        assignee: task.assignee,
+        creator: task.creator,
+        linkedFileCount: attachments.length,
+        linkedFiles: toLinkedSprintFiles(attachments, task.id, task.updatedAt ?? task.createdAt),
+    };
+}
+
+export default function DetailsTab({
+    task,
+    onTaskChange,
+    isOwnerOrMember,
+    sprints = [],
+    members = [],
+    projectId,
+}: DetailsTabProps) {
     const [isUpdating, setIsUpdating] = useState(false);
+    const queryClient = useQueryClient();
     
     // Unified Data Flow: Hooks subscribe to realtime changes
     const { subtasks } = useTaskSubtasks(task.id);
     const { attachments } = useTaskAttachments(task.id);
+    const taskRecord = normalizeTaskSurfaceRecord(task);
+    const createdAtLabel =
+        taskRecord.createdAt && Number.isFinite(Date.parse(taskRecord.createdAt))
+            ? format(new Date(taskRecord.createdAt), "MMM d, yyyy h:mm a")
+            : "Unknown";
+    const availableSprints = normalizeSprintOptions(sprints);
+    const availableMembers = members
+        .map((member) => {
+            const identity = normalizeTaskSurfacePerson(member?.user ?? member);
+            const id = member?.user_id || member?.id || identity?.id;
+            if (!id) return null;
+            return {
+                id: String(id),
+                identity,
+            };
+        })
+        .filter(Boolean) as { id: string; identity: ReturnType<typeof normalizeTaskSurfacePerson> }[];
+
+    const invalidateProjectTaskSlices = async () => {
+        await Promise.all([
+            queryClient.invalidateQueries({ queryKey: queryKeys.project.detail.tasksRoot(projectId) }),
+            queryClient.invalidateQueries({ queryKey: queryKeys.project.detail.sprints(projectId) }),
+            queryClient.invalidateQueries({ queryKey: queryKeys.project.detail.sprintDetailRoot(projectId) }),
+        ]);
+    };
+
+    const patchSprintCaches = (beforeTask: SprintTaskMutationRecord | null, afterTask: SprintTaskMutationRecord | null) => {
+        queryClient.setQueriesData(
+            { queryKey: queryKeys.project.detail.sprintDetailRoot(projectId) },
+            (existing: unknown) => patchSprintDetailInfiniteData(existing, beforeTask, afterTask),
+        );
+    };
+
+    const buildTaskUpdate = (field: string, value: any) => {
+        const nextTask = { ...task };
+        if (field === "title") {
+            nextTask.title = typeof value === "string" ? value.trim() : "";
+        } else if (field === "description") {
+            nextTask.description = typeof value === "string" && value.trim() ? value : "";
+        } else if (field === "priority") {
+            nextTask.priority = value;
+        } else if (field === "sprintId") {
+            nextTask.sprintId = value || null;
+            const nextSprint = availableSprints.find((sprint) => sprint.id === value) ?? null;
+            nextTask.sprint = nextSprint
+                ? { id: nextSprint.id, name: nextSprint.name, status: nextSprint.status }
+                : null;
+        } else if (field === "dueDate") {
+            nextTask.dueDate = value || null;
+        }
+        nextTask.updatedAt = new Date().toISOString();
+        return nextTask;
+    };
     
     const handleUpdate = async (field: string, value: any) => {
         if (!isOwnerOrMember) return;
         setIsUpdating(true);
+        const previousTask = task;
+        const nextTask = buildTaskUpdate(field, value);
+        const beforeRecord = toSprintMutationRecord(taskRecord, projectId, attachments);
+        const afterRecord = toSprintMutationRecord(
+            normalizeTaskSurfaceRecord(nextTask),
+            projectId,
+            attachments,
+        );
+        const previousSprintStates = queryClient.getQueriesData({
+            queryKey: queryKeys.project.detail.sprintDetailRoot(projectId),
+        });
+
+        onTaskChange(nextTask);
+        patchSprintCaches(beforeRecord, afterRecord);
         try {
-            await updateTaskFieldAction(task.id, field, value, projectId);
+            const result = await updateTaskFieldAction(task.id, field, value, projectId);
+            if (!result.success) {
+                throw new Error(result.error || "Failed to update task");
+            }
+            recordSprintMetric("project.sprint.optimistic_patch", {
+                projectId,
+                taskId: task.id,
+                field,
+                result: "applied",
+            });
+            await invalidateProjectTaskSlices();
         } catch (error) {
+            for (const [queryKey, snapshot] of previousSprintStates) {
+                queryClient.setQueryData(queryKey, snapshot);
+            }
+            onTaskChange(previousTask);
+            recordSprintMetric("project.sprint.optimistic_patch", {
+                projectId,
+                taskId: task.id,
+                field,
+                result: "rolled_back",
+            });
             console.error("Error updating:", error);
         } finally {
             setIsUpdating(false);
         }
     };
 
-    const handleStatusChange = async (status: string) => {
+    const handleStatusChange = async (status: TaskStatus) => {
         if (!isOwnerOrMember) return;
         setIsUpdating(true);
+        const previousTask = task;
+        const nextTask = {
+            ...task,
+            status,
+            updatedAt: new Date().toISOString(),
+        };
+        const beforeRecord = toSprintMutationRecord(taskRecord, projectId, attachments);
+        const afterRecord = toSprintMutationRecord(
+            normalizeTaskSurfaceRecord(nextTask),
+            projectId,
+            attachments,
+        );
+        const previousSprintStates = queryClient.getQueriesData({
+            queryKey: queryKeys.project.detail.sprintDetailRoot(projectId),
+        });
+
+        onTaskChange(nextTask);
+        patchSprintCaches(beforeRecord, afterRecord);
         try {
-            await updateTaskStatusAction(task.id, status as any, projectId);
+            const result = await updateTaskStatusAction(task.id, status, projectId);
+            if (!result.success) {
+                throw new Error(result.error || "Failed to update task status");
+            }
+            recordSprintMetric("project.sprint.optimistic_patch", {
+                projectId,
+                taskId: task.id,
+                field: "status",
+                result: "applied",
+            });
+            await invalidateProjectTaskSlices();
         } catch (error) {
+            for (const [queryKey, snapshot] of previousSprintStates) {
+                queryClient.setQueryData(queryKey, snapshot);
+            }
+            onTaskChange(previousTask);
+            recordSprintMetric("project.sprint.optimistic_patch", {
+                projectId,
+                taskId: task.id,
+                field: "status",
+                result: "rolled_back",
+            });
             console.error("Error updating status:", error);
         } finally {
             setIsUpdating(false);
@@ -54,9 +243,54 @@ export default function DetailsTab({ task, isOwnerOrMember, sprints = [], member
     const handleAssigneeChange = async (assigneeId: string) => {
         if (!isOwnerOrMember) return;
         setIsUpdating(true);
+        const previousTask = task;
+        const nextMember = availableMembers.find((member) => member.id === assigneeId) ?? null;
+        const nextTask = {
+            ...task,
+            assigneeId: assigneeId || null,
+            assignee: assigneeId
+                ? {
+                    fullName: nextMember?.identity?.fullName ?? "Assigned user",
+                    avatarUrl: nextMember?.identity?.avatarUrl ?? null,
+                }
+                : null,
+            updatedAt: new Date().toISOString(),
+        };
+        const beforeRecord = toSprintMutationRecord(taskRecord, projectId, attachments);
+        const afterRecord = toSprintMutationRecord(
+            normalizeTaskSurfaceRecord(nextTask),
+            projectId,
+            attachments,
+        );
+        const previousSprintStates = queryClient.getQueriesData({
+            queryKey: queryKeys.project.detail.sprintDetailRoot(projectId),
+        });
+
+        onTaskChange(nextTask);
+        patchSprintCaches(beforeRecord, afterRecord);
         try {
-            await assignTaskAction(task.id, assigneeId || null, projectId);
+            const result = await assignTaskAction(task.id, assigneeId || null, projectId);
+            if (!result.success) {
+                throw new Error(result.error || "Failed to assign task");
+            }
+            recordSprintMetric("project.sprint.optimistic_patch", {
+                projectId,
+                taskId: task.id,
+                field: "assigneeId",
+                result: "applied",
+            });
+            await invalidateProjectTaskSlices();
         } catch (error) {
+            for (const [queryKey, snapshot] of previousSprintStates) {
+                queryClient.setQueryData(queryKey, snapshot);
+            }
+            onTaskChange(previousTask);
+            recordSprintMetric("project.sprint.optimistic_patch", {
+                projectId,
+                taskId: task.id,
+                field: "assigneeId",
+                result: "rolled_back",
+            });
             console.error("Error assigning:", error);
         } finally {
             setIsUpdating(false);
@@ -72,13 +306,8 @@ export default function DetailsTab({ task, isOwnerOrMember, sprints = [], member
         }
     };
 
-    const availableSprints = sprints;
-    
-    // Debug logging for development
-
-
-    const creatorName = task.creator?.fullName || task.creator?.full_name || "Unknown";
-    const creatorAvatar = task.creator?.avatarUrl || task.creator?.avatar_url;
+    const creatorName = taskRecord.creator?.fullName || "Unknown";
+    const creatorAvatar = taskRecord.creator?.avatarUrl;
 
     const supabase = createClient();
     const handleDownload = async (node: ProjectNode) => {
@@ -99,7 +328,7 @@ export default function DetailsTab({ task, isOwnerOrMember, sprints = [], member
                 <div className="space-y-4">
                     <input 
                         type="text"
-                        defaultValue={task.title}
+                        defaultValue={taskRecord.title}
                         onBlur={(e) => handleUpdate("title", e.target.value)}
                         disabled={!isOwnerOrMember || isUpdating}
                         className="w-full bg-transparent text-2xl font-bold text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 border-none p-0 focus:ring-0 transition-colors"
@@ -112,7 +341,7 @@ export default function DetailsTab({ task, isOwnerOrMember, sprints = [], member
                             <span className="text-zinc-400">Created by</span>
                             <div className="flex items-center gap-1.5">
                                 <Avatar className="w-4 h-4">
-                                    <AvatarImage src={creatorAvatar} />
+                                    <AvatarImage src={creatorAvatar ?? undefined} />
                                     <AvatarFallback>{creatorName.substring(0, 2).toUpperCase()}</AvatarFallback>
                                 </Avatar>
                                 <span className="font-medium text-zinc-900 dark:text-zinc-200 truncate max-w-[120px]">
@@ -120,13 +349,13 @@ export default function DetailsTab({ task, isOwnerOrMember, sprints = [], member
                                 </span>
                             </div>
                         </div>
-                        <span className="text-zinc-300 dark:text-zinc-700">•</span>
-                        <div className="inline-flex items-center gap-1.5">
-                             <Clock className="w-3.5 h-3.5 text-zinc-400" />
-                             <span>{format(new Date(task.createdAt || task.created_at || new Date()), "MMM d, yyyy h:mm a")}</span>
-                        </div>
-                    </div>
-                </div>
+	                        <span className="text-zinc-300 dark:text-zinc-700">•</span>
+	                        <div className="inline-flex items-center gap-1.5">
+	                             <Clock className="w-3.5 h-3.5 text-zinc-400" />
+	                             <span>{createdAtLabel}</span>
+	                        </div>
+	                    </div>
+	                </div>
 
                 {/* Description */}
                 <div className="space-y-3">
@@ -135,7 +364,7 @@ export default function DetailsTab({ task, isOwnerOrMember, sprints = [], member
                     </label>
                     <textarea 
                         rows={8}
-                        defaultValue={task.description || ""}
+                        defaultValue={taskRecord.description || ""}
                         onBlur={(e) => handleUpdate("description", e.target.value)}
                         disabled={!isOwnerOrMember || isUpdating}
                         placeholder="Add a description..."
@@ -231,13 +460,19 @@ export default function DetailsTab({ task, isOwnerOrMember, sprints = [], member
                             <Flag className="w-3 h-3" /> Status
                         </label>
                         <select 
-                            value={task.status}
-                            onChange={(e) => handleStatusChange(e.target.value)}
+                            value={taskRecord.status}
+                            onChange={(e) => {
+                                const nextStatus = e.target.value;
+                                if (isTaskStatus(nextStatus)) {
+                                    void handleStatusChange(nextStatus);
+                                }
+                            }}
                             disabled={!isOwnerOrMember || isUpdating}
                             className="w-full px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 text-sm focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-50 capitalize"
                         >
                             <option value="todo">To Do</option>
                             <option value="in_progress">In Progress</option>
+                            <option value="blocked">Blocked</option>
                             <option value="done">Done</option>
                         </select>
                     </div>
@@ -246,7 +481,7 @@ export default function DetailsTab({ task, isOwnerOrMember, sprints = [], member
                     <div className="space-y-1.5">
                         <label className="text-[10px] font-semibold text-zinc-500 uppercase">Priority</label>
                         <select 
-                            value={task.priority}
+                            value={taskRecord.priority}
                             onChange={(e) => handleUpdate("priority", e.target.value)}
                             disabled={!isOwnerOrMember || isUpdating}
                             className="w-full px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 text-sm focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-50 capitalize"
@@ -264,17 +499,15 @@ export default function DetailsTab({ task, isOwnerOrMember, sprints = [], member
                             <User className="w-3 h-3" /> Assignee
                         </label>
                         <select 
-                            value={task.assigneeId || ""}
+                            value={taskRecord.assigneeId || ""}
                             onChange={(e) => handleAssigneeChange(e.target.value)}
                             disabled={!isOwnerOrMember || isUpdating}
                             className="w-full px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 text-sm focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-50"
                         >
                             <option value="">Unassigned</option>
-                            {members
-                                .filter((member: any) => member && (member.user_id || member.id))
-                                .map((member: any) => (
-                                    <option key={member.user_id || member.id} value={member.user_id || member.id}>
-                                        {member.user?.full_name || member.user?.username || member.full_name || member.username || "Unknown"}
+                            {availableMembers.map((member) => (
+                                    <option key={member.id} value={member.id}>
+                                        {member.identity?.fullName || "Unknown"}
                                     </option>
                                 ))}
                         </select>
@@ -286,7 +519,7 @@ export default function DetailsTab({ task, isOwnerOrMember, sprints = [], member
                             <Zap className="w-3 h-3" /> Sprint
                         </label>
                         <select 
-                            value={task.sprintId || ""}
+                            value={taskRecord.sprintId || ""}
                             onChange={(e) => handleUpdate("sprintId", e.target.value || null)}
                             disabled={!isOwnerOrMember || isUpdating}
                             className="w-full px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 text-sm focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-50"
@@ -305,7 +538,7 @@ export default function DetailsTab({ task, isOwnerOrMember, sprints = [], member
                         </label>
                         <input 
                             type="date"
-                            defaultValue={task.dueDate ? task.dueDate.split('T')[0] : ""}
+                            defaultValue={taskRecord.dueDate ? taskRecord.dueDate.split('T')[0] : ""}
                             onChange={(e) => handleUpdate("dueDate", e.target.value || null)}
                             disabled={!isOwnerOrMember || isUpdating}
                             className="w-full px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 text-sm focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-50"

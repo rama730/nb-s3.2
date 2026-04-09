@@ -1,21 +1,29 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { usePathname } from "next/navigation";
 
 function resolveRouteScrollRoot(): HTMLElement | null {
     return document.querySelector<HTMLElement>('[data-scroll-root="route"]');
 }
 
 export function useScrollShadow() {
+    const pathname = usePathname();
     const [hasShadow, setHasShadow] = useState(false);
 
     useEffect(() => {
         let cleanup: (() => void) | null = null;
-        let currentRoot: HTMLElement | null = null;
+        let frameId: number | null = null;
+        let retryCount = 0;
 
         const attach = () => {
             const routeRoot = resolveRouteScrollRoot();
-            currentRoot = routeRoot;
+            if (!routeRoot && retryCount < 20) {
+                retryCount += 1;
+                frameId = window.requestAnimationFrame(attach);
+                return;
+            }
+
             const target: HTMLElement | Window = routeRoot ?? window;
             const handler = () => {
                 const scrolled = routeRoot ? routeRoot.scrollTop > 0 : window.scrollY > 0;
@@ -32,26 +40,13 @@ export function useScrollShadow() {
 
         attach();
 
-        const observer = new MutationObserver(() => {
-            const nextRoot = resolveRouteScrollRoot();
-            if (nextRoot !== currentRoot) {
-                cleanup?.();
-                attach();
-            }
-        });
-
-        observer.observe(document.body, {
-            childList: true,
-            subtree: true,
-            attributes: true,
-            attributeFilter: ["data-scroll-root"],
-        });
-
         return () => {
-            observer.disconnect();
+            if (frameId !== null) {
+                window.cancelAnimationFrame(frameId);
+            }
             cleanup?.();
         };
-    }, []);
+    }, [pathname]);
 
     return hasShadow;
 }

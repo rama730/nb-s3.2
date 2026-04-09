@@ -1,7 +1,7 @@
 'use server';
 
 import { db } from '@/lib/db';
-import { projects, projectFollows, projectOpenRoles, roleApplications, conversations, conversationParticipants, messages, projectNodes, projectMembers, profiles, tasks, projectSprints, taskNodeLinks, taskSubtasks, tags, projectTags, skills, projectSkills } from '@/lib/db/schema';
+import { projects, projectFollows, projectOpenRoles, roleApplications, conversations, conversationParticipants, messages, projectNodes, projectNodeEvents, projectMembers, profiles, tasks, projectSprints, taskNodeLinks, taskSubtasks, tags, projectTags, skills, projectSkills } from '@/lib/db/schema';
 import { eq, and, or, sql, inArray, isNotNull, isNull, desc } from 'drizzle-orm';
 import { createClient, createAdminClient } from '@/lib/supabase/server';
 import { redis } from '@/lib/redis';
@@ -10,7 +10,7 @@ import { CreateProjectInput } from '@/lib/validations/project';
 import { z } from 'zod';
 import { generateSlug } from '@/lib/utils/slug';
 import { generateProjectKey } from '@/lib/project-key';
-import { computeProjectReadAccess, computeProjectWriteAccess, getProjectAccessById } from '@/lib/data/project-access';
+import { computeProjectReadAccess, computeProjectWriteAccess, getProjectAccessById, type ProjectAccess } from '@/lib/data/project-access';
 import { normalizeGithubBranch, normalizeGithubRepoUrl } from '@/lib/github/repo-validation';
 import { clearSealedGithubTokenFromImportSource, sanitizeGitErrorMessage, sealGithubImportToken } from '@/lib/github/repo-security';
 import { fetchRepoMeta, parseGithubRepo } from '@/lib/github/repo-preview';
@@ -26,6 +26,24 @@ import { logger } from '@/lib/logger';
 import { buildProjectOwnerPresentation } from '@/lib/privacy/presentation';
 import { resolvePrivacyRelationship } from '@/lib/privacy/resolver';
 import { refreshWorkspaceCountersForUsers } from '@/lib/workspace/profile-counters';
+import { createSprintSchema, parseSprintDateInput, type CreateSprintInput } from '@/lib/projects/sprints';
+import {
+    buildSprintFilterCounts,
+    buildSprintHealthSummary,
+    buildSprintPermissionSet,
+    type SprintDetailPayload,
+    type SprintDrawerPreview,
+    type SprintFileTimelineEntity,
+    type SprintListItem,
+    type SprintTaskTimelineEntity,
+} from '@/lib/projects/sprint-detail';
+import {
+    buildSprintCompareSummary,
+    buildSprintDrawerPreviews,
+    findPreviousSprintBaseline,
+} from '@/lib/projects/sprint-presentation';
+import { buildSprintTimeline, type SprintTimelineTaskInput } from '@/lib/projects/sprint-timeline';
+import { recordSprintMetric } from '@/lib/projects/sprint-observability';
 
 const isMissingCounterColumn = (error: unknown, column: string) => {
     const msg = error instanceof Error ? error.message : String(error);
@@ -2027,6 +2045,11 @@ type TaskPaginationCursor = {
     id: string;
 };
 
+type SprintDetailPaginationCursor = {
+    activityAt: Date;
+    taskId: string;
+};
+
 function parseTaskPaginationCursor(cursor?: string): TaskPaginationCursor | null {
     if (!cursor) return null;
 
@@ -2051,6 +2074,31 @@ function encodeTaskPaginationCursor(cursor: TaskPaginationCursor): string {
     return JSON.stringify({
         createdAt: cursor.createdAt.toISOString(),
         id: cursor.id,
+    });
+}
+
+function parseSprintDetailPaginationCursor(cursor?: string): SprintDetailPaginationCursor | null {
+    if (!cursor) return null;
+
+    try {
+        const parsed = JSON.parse(cursor) as { activityAt?: unknown; taskId?: unknown };
+        if (typeof parsed.activityAt === 'string' && typeof parsed.taskId === 'string' && parsed.taskId.length > 0) {
+            const parsedDate = new Date(parsed.activityAt);
+            if (!Number.isNaN(parsedDate.getTime())) {
+                return { activityAt: parsedDate, taskId: parsed.taskId };
+            }
+        }
+    } catch {
+        // ignore invalid cursor payloads
+    }
+
+    return null;
+}
+
+function encodeSprintDetailPaginationCursor(cursor: SprintDetailPaginationCursor): string {
+    return JSON.stringify({
+        activityAt: cursor.activityAt.toISOString(),
+        taskId: cursor.taskId,
     });
 }
 
@@ -2161,28 +2209,573 @@ export async function fetchProjectSprintsAction(projectId: string, limit: number
         return await runInFlightDeduped(`project:sprints:${projectId}:${actorId ?? 'anon'}:${safeLimit}`, async () => {
             await assertProjectReadAccess(projectId, actorId);
 
-            const projectSprintsList = await db
-                .select({
-                    id: projectSprints.id,
-                    projectId: projectSprints.projectId,
-                    name: projectSprints.name,
-                    goal: projectSprints.goal,
-                    startDate: projectSprints.startDate,
-                    endDate: projectSprints.endDate,
-                    status: projectSprints.status,
-                    createdAt: projectSprints.createdAt,
-                    updatedAt: projectSprints.updatedAt,
-                })
-                .from(projectSprints)
-                .where(eq(projectSprints.projectId, projectId))
-                .orderBy(desc(projectSprints.createdAt))
-                .limit(safeLimit);
+            const projectSprintsList = await readProjectSprintsList(projectId, safeLimit);
 
             return { success: true as const, sprints: projectSprintsList };
         });
     } catch (error) {
         console.error("Failed to fetch sprints:", error);
         return { success: false as const, error: "Failed to fetch sprints" };
+    }
+}
+
+type SprintTaskActivityQueryRow = {
+    id: string;
+    project_id: string;
+    sprint_id: string;
+    title: string;
+    description: string | null;
+    status: SprintTaskTimelineEntity["status"];
+    priority: SprintTaskTimelineEntity["priority"];
+    task_number: number | null;
+    story_points: number | null;
+    due_date: Date | null;
+    created_at: Date | null;
+    updated_at: Date | null;
+    activity_at: Date | null;
+    linked_file_count: number;
+    assignee_id: string | null;
+    creator_id: string | null;
+};
+
+type SprintTaskFileQueryRow = {
+    id: string;
+    task_id: string;
+    node_id: string;
+    annotation: string | null;
+    linked_at: Date | null;
+    node_name: string;
+    node_path: string;
+    node_type: SprintFileTimelineEntity["nodeType"];
+};
+
+type SprintNodeEventQueryRow = {
+    nodeId: string | null;
+    type: string;
+    createdAt: Date;
+    actorName: string | null;
+};
+
+type SprintSummaryQueryRow = {
+    total_tasks: number;
+    completed_tasks: number;
+    blocked_tasks: number;
+    linked_file_count: number;
+    total_story_points: number;
+    completed_story_points: number;
+};
+
+function serializeSprintListItem(sprint: {
+    id: string;
+    projectId: string;
+    name: string;
+    goal: string | null;
+    startDate: Date | null;
+    endDate: Date | null;
+    status: SprintListItem["status"];
+    createdAt: Date | null;
+    updatedAt: Date | null;
+}): SprintListItem {
+    return {
+        id: sprint.id,
+        projectId: sprint.projectId,
+        name: sprint.name,
+        goal: sprint.goal ?? null,
+        startDate: sprint.startDate?.toISOString() ?? null,
+        endDate: sprint.endDate?.toISOString() ?? null,
+        status: sprint.status,
+        createdAt: sprint.createdAt?.toISOString() ?? null,
+        updatedAt: sprint.updatedAt?.toISOString() ?? null,
+    };
+}
+
+async function readProjectSprintsList(projectId: string, limit: number) {
+    const rows = await db
+        .select({
+            id: projectSprints.id,
+            projectId: projectSprints.projectId,
+            name: projectSprints.name,
+            goal: projectSprints.goal,
+            startDate: projectSprints.startDate,
+            endDate: projectSprints.endDate,
+            status: projectSprints.status,
+            createdAt: projectSprints.createdAt,
+            updatedAt: projectSprints.updatedAt,
+        })
+        .from(projectSprints)
+        .where(eq(projectSprints.projectId, projectId))
+        .orderBy(
+            sql`CASE WHEN ${projectSprints.status} = 'active' THEN 0 WHEN ${projectSprints.status} = 'planning' THEN 1 ELSE 2 END`,
+            desc(projectSprints.createdAt),
+        )
+        .limit(limit);
+
+    return rows.map(serializeSprintListItem);
+}
+
+async function readSprintSummary(sprintId: string) {
+    const rows = await db.execute<SprintSummaryQueryRow>(sql`
+        SELECT
+            (SELECT COUNT(*)::int FROM ${tasks} t WHERE t.sprint_id = ${sprintId} AND t.deleted_at IS NULL) AS total_tasks,
+            (SELECT COUNT(*)::int FROM ${tasks} t WHERE t.sprint_id = ${sprintId} AND t.deleted_at IS NULL AND t.status = 'done') AS completed_tasks,
+            (SELECT COUNT(*)::int FROM ${tasks} t WHERE t.sprint_id = ${sprintId} AND t.deleted_at IS NULL AND t.status = 'blocked') AS blocked_tasks,
+            (
+                SELECT COUNT(*)::int
+                FROM ${taskNodeLinks} lnk
+                INNER JOIN ${tasks} t ON t.id = lnk.task_id
+                WHERE t.sprint_id = ${sprintId} AND t.deleted_at IS NULL
+            ) AS linked_file_count,
+            (
+                SELECT COALESCE(SUM(COALESCE(t.story_points, 0)), 0)::int
+                FROM ${tasks} t
+                WHERE t.sprint_id = ${sprintId} AND t.deleted_at IS NULL
+            ) AS total_story_points,
+            (
+                SELECT COALESCE(SUM(COALESCE(t.story_points, 0)), 0)::int
+                FROM ${tasks} t
+                WHERE t.sprint_id = ${sprintId} AND t.deleted_at IS NULL AND t.status = 'done'
+            ) AS completed_story_points
+    `);
+
+    const row = Array.from(rows)[0] ?? {
+        total_tasks: 0,
+        completed_tasks: 0,
+        blocked_tasks: 0,
+        linked_file_count: 0,
+        total_story_points: 0,
+        completed_story_points: 0,
+    };
+
+    return buildSprintHealthSummary({
+        totalTasks: Number(row.total_tasks || 0),
+        completedTasks: Number(row.completed_tasks || 0),
+        blockedTasks: Number(row.blocked_tasks || 0),
+        linkedFileCount: Number(row.linked_file_count || 0),
+        totalStoryPoints: Number(row.total_story_points || 0),
+        completedStoryPoints: Number(row.completed_story_points || 0),
+    });
+}
+
+async function readSprintTaskActivityPage(input: {
+    projectId: string;
+    sprintId: string;
+    limit: number;
+    cursor: SprintDetailPaginationCursor | null;
+}) {
+    const { projectId, sprintId, limit, cursor } = input;
+
+    const activityRowsResult = await db.execute<SprintTaskActivityQueryRow>(sql`
+        WITH task_activity AS (
+            SELECT
+                t.id,
+                t.project_id,
+                t.sprint_id,
+                t.title,
+                t.description,
+                t.status,
+                t.priority,
+                t.task_number,
+                t.story_points,
+                t.due_date,
+                t.created_at,
+                t.updated_at,
+                t.assignee_id,
+                t.creator_id,
+                GREATEST(t.updated_at, COALESCE(MAX(lnk.linked_at), t.created_at)) AS activity_at,
+                COUNT(lnk.node_id)::int AS linked_file_count
+            FROM ${tasks} t
+            LEFT JOIN ${taskNodeLinks} lnk ON lnk.task_id = t.id
+            WHERE t.sprint_id = ${sprintId}
+              AND t.deleted_at IS NULL
+            GROUP BY t.id
+        )
+        SELECT *
+        FROM task_activity
+        ${cursor
+            ? sql`WHERE (
+                activity_at > ${cursor.activityAt}
+                OR (activity_at = ${cursor.activityAt} AND id > ${cursor.taskId})
+            )`
+            : sql``}
+        ORDER BY activity_at ASC, id ASC
+        LIMIT ${limit + 1}
+    `);
+
+    const activityRows = Array.from(activityRowsResult);
+    const hasMore = activityRows.length > limit;
+    const pageRows = hasMore ? activityRows.slice(0, limit) : activityRows;
+    const lastRow = pageRows[pageRows.length - 1];
+    const nextCursor = hasMore && lastRow?.activity_at
+        ? encodeSprintDetailPaginationCursor({
+            activityAt: lastRow.activity_at,
+            taskId: lastRow.id,
+        })
+        : null;
+
+    const taskIds = pageRows.map((row) => row.id);
+    const actorIds = Array.from(
+        new Set(
+            pageRows.flatMap((row) => [row.assignee_id, row.creator_id]).filter((value): value is string => !!value),
+        ),
+    );
+
+    const actorRows = actorIds.length > 0
+        ? await db
+            .select({
+                id: profiles.id,
+                fullName: profiles.fullName,
+                avatarUrl: profiles.avatarUrl,
+            })
+            .from(profiles)
+            .where(inArray(profiles.id, actorIds))
+        : [];
+
+    const actorById = new Map(actorRows.map((row) => [row.id, row]));
+
+    const fileRows = taskIds.length > 0
+        ? Array.from(
+            await db.execute<SprintTaskFileQueryRow>(sql`
+                SELECT
+                    lnk.id,
+                    lnk.task_id,
+                    lnk.node_id,
+                    lnk.annotation,
+                    lnk.linked_at,
+                    pn.name AS node_name,
+                    pn.path AS node_path,
+                    pn.type AS node_type
+                FROM ${taskNodeLinks} lnk
+                INNER JOIN ${projectNodes} pn ON pn.id = lnk.node_id
+                WHERE lnk.task_id IN ${sql.join(taskIds.map((taskId) => sql`${taskId}`), sql`, `)}
+                  AND pn.project_id = ${projectId}
+                  AND pn.deleted_at IS NULL
+                ORDER BY lnk.linked_at ASC, lnk.id ASC
+            `),
+        )
+        : [];
+
+    const nodeIds = Array.from(new Set(fileRows.map((row) => row.node_id).filter((value): value is string => !!value)));
+    const nodeEventRows = nodeIds.length > 0
+        ? await db
+            .select({
+                nodeId: projectNodeEvents.nodeId,
+                type: projectNodeEvents.type,
+                createdAt: projectNodeEvents.createdAt,
+                actorName: profiles.fullName,
+            })
+            .from(projectNodeEvents)
+            .leftJoin(profiles, eq(profiles.id, projectNodeEvents.actorId))
+            .where(
+                and(
+                    eq(projectNodeEvents.projectId, projectId),
+                    inArray(projectNodeEvents.nodeId, nodeIds),
+                ),
+            )
+            .orderBy(desc(projectNodeEvents.createdAt))
+        : [];
+
+    const latestNodeEventByNodeId = new Map<string, SprintNodeEventQueryRow>();
+    for (const eventRow of nodeEventRows) {
+        if (!eventRow.nodeId || latestNodeEventByNodeId.has(eventRow.nodeId)) continue;
+        latestNodeEventByNodeId.set(eventRow.nodeId, eventRow);
+    }
+
+    const filesByTaskId = new Map<string, SprintFileTimelineEntity[]>();
+    for (const fileRow of fileRows) {
+        const latestNodeEvent = latestNodeEventByNodeId.get(fileRow.node_id);
+        const current = filesByTaskId.get(fileRow.task_id) ?? [];
+        current.push({
+            id: fileRow.id,
+            taskId: fileRow.task_id,
+            nodeId: fileRow.node_id,
+            nodeName: fileRow.node_name,
+            nodePath: fileRow.node_path,
+            nodeType: fileRow.node_type,
+            annotation: fileRow.annotation ?? null,
+            linkedAt: fileRow.linked_at?.toISOString() ?? null,
+            lastEventType: latestNodeEvent?.type ?? null,
+            lastEventAt: latestNodeEvent?.createdAt?.toISOString() ?? null,
+            lastEventBy: latestNodeEvent?.actorName ?? null,
+        });
+        filesByTaskId.set(fileRow.task_id, current);
+    }
+
+    const tasksPage: SprintTimelineTaskInput[] = pageRows.map((row) => ({
+        id: row.id,
+        projectId: row.project_id,
+        sprintId: row.sprint_id,
+        taskNumber: row.task_number ?? null,
+        title: row.title,
+        description: row.description ?? null,
+        status: row.status,
+        priority: row.priority,
+        storyPoints: row.story_points ?? null,
+        dueDate: row.due_date?.toISOString() ?? null,
+        createdAt: row.created_at?.toISOString() ?? null,
+        updatedAt: row.updated_at?.toISOString() ?? null,
+        activityAt: row.activity_at?.toISOString() ?? row.updated_at?.toISOString() ?? row.created_at?.toISOString() ?? null,
+        linkedFileCount: Number(row.linked_file_count || 0),
+        assignee: row.assignee_id
+            ? actorById.get(row.assignee_id)
+                ? {
+                    id: row.assignee_id,
+                    fullName: actorById.get(row.assignee_id)?.fullName ?? null,
+                    avatarUrl: actorById.get(row.assignee_id)?.avatarUrl ?? null,
+                }
+                : null
+            : null,
+        creator: row.creator_id
+            ? actorById.get(row.creator_id)
+                ? {
+                    id: row.creator_id,
+                    fullName: actorById.get(row.creator_id)?.fullName ?? null,
+                    avatarUrl: actorById.get(row.creator_id)?.avatarUrl ?? null,
+                }
+                : null
+            : null,
+        files: filesByTaskId.get(row.id) ?? [],
+    }));
+
+    return {
+        tasks: tasksPage,
+        hasMore,
+        nextCursor,
+    };
+}
+
+async function buildSprintDetailPayload(input: {
+    projectId: string;
+    access: ProjectAccess;
+    sprintId?: string | null;
+    cursor?: string;
+    limit?: number;
+}): Promise<SprintDetailPayload | null> {
+    const safeLimit = Math.min(Math.max(input.limit ?? 24, 1), 50);
+    const parsedCursor = parseSprintDetailPaginationCursor(input.cursor);
+
+    const access = input.access;
+    if (!access.project) throw new Error("Project not found");
+    if (!access.canRead) throw new Error("Forbidden");
+    const permissions = buildSprintPermissionSet({
+        canRead: access.canRead,
+        canWrite: access.canWrite,
+        isOwner: access.isOwner,
+        isMember: access.isMember,
+        memberRole: access.memberRole,
+    });
+
+    const sprints = await readProjectSprintsList(input.projectId, 120);
+    const selectedSprint =
+        (input.sprintId ? sprints.find((sprint) => sprint.id === input.sprintId) : null)
+        ?? sprints.find((sprint) => sprint.status === 'active')
+        ?? sprints[0]
+        ?? null;
+
+    if (input.sprintId && !selectedSprint) {
+        return null;
+    }
+
+    if (!selectedSprint) {
+        return {
+            projectId: input.projectId,
+            projectSlug: access.project.slug ?? null,
+            sprints,
+            selectedSprintId: null,
+            permissions,
+            timelineMode: 'chronological',
+            summary: null,
+            compareSummary: null,
+            filterCounts: buildSprintFilterCounts({
+                totalTasks: 0,
+                completedTasks: 0,
+                blockedTasks: 0,
+                linkedFileCount: 0,
+            }),
+            rows: [],
+            drawerPreviews: [],
+            nextCursor: null,
+            hasMore: false,
+        };
+    }
+
+    if (input.sprintId && selectedSprint.id !== input.sprintId) {
+        return null;
+    }
+
+    const previousSprint = findPreviousSprintBaseline(sprints, selectedSprint.id);
+
+    const [summary, previousSummary, taskPage] = await Promise.all([
+        readSprintSummary(selectedSprint.id),
+        previousSprint ? readSprintSummary(previousSprint.id) : Promise.resolve(null),
+        readSprintTaskActivityPage({
+            projectId: input.projectId,
+            sprintId: selectedSprint.id,
+            limit: safeLimit,
+            cursor: parsedCursor,
+        }),
+    ]);
+
+    const rows = buildSprintTimeline({
+        sprint: selectedSprint,
+        tasks: taskPage.tasks,
+        summary,
+        includeKickoff: !parsedCursor,
+        includeCloseout: !taskPage.hasMore,
+    });
+
+    const filterCounts = buildSprintFilterCounts({
+        totalTasks: summary.totalTasks,
+        completedTasks: summary.completedTasks,
+        blockedTasks: summary.blockedTasks,
+        linkedFileCount: summary.linkedFileCount,
+    });
+
+    const drawerPreviews = buildSprintDrawerPreviews(rows);
+    const compareSummary = buildSprintCompareSummary({
+        selectedSprint,
+        summary,
+        previousSprint,
+        previousSummary,
+    });
+
+    return {
+        projectId: input.projectId,
+        projectSlug: access.project.slug ?? null,
+        sprints,
+        selectedSprintId: selectedSprint.id,
+        permissions,
+        timelineMode: 'chronological',
+        summary,
+        compareSummary,
+        filterCounts,
+        rows,
+        drawerPreviews,
+        nextCursor: taskPage.nextCursor,
+        hasMore: taskPage.hasMore,
+    };
+}
+
+export async function fetchProjectSprintDetailAction(input: {
+    projectId: string;
+    sprintId?: string | null;
+    cursor?: string;
+    limit?: number;
+}) {
+    try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        const actorId = user?.id ?? null;
+        const cursorKey = input.cursor ?? 'head';
+        const sprintKey = input.sprintId ?? 'default';
+
+        const startedAt = Date.now();
+        const data = await runInFlightDeduped(
+            `project:sprint-detail:${input.projectId}:${sprintKey}:${actorId ?? 'anon'}:${cursorKey}:${input.limit ?? 24}`,
+            async () => {
+                const access = await getProjectAccessById(input.projectId, actorId);
+                if (!access.project) {
+                    throw new Error("Project not found");
+                }
+
+                return buildSprintDetailPayload({
+                    projectId: input.projectId,
+                    access,
+                    sprintId: input.sprintId ?? null,
+                    cursor: input.cursor,
+                    limit: input.limit,
+                });
+            },
+        );
+
+        if (!data) {
+            return { success: false as const, error: "Sprint not found" };
+        }
+
+        recordSprintMetric('project.sprint.detail.load_ms', {
+            projectId: input.projectId,
+            sprintId: data.selectedSprintId,
+            durationMs: Date.now() - startedAt,
+            rowCount: data.rows.length,
+            hasMore: data.hasMore,
+        });
+
+        recordSprintMetric('project.sprint.timeline.rows', {
+            projectId: input.projectId,
+            sprintId: data.selectedSprintId,
+            kickoffRows: data.rows.filter((row) => row.kind === 'kickoff').length,
+            taskRows: data.rows.filter((row) => row.kind === 'task').length,
+            fileRows: data.rows.filter((row) => row.kind === 'file').length,
+            closeoutRows: data.rows.filter((row) => row.kind === 'closeout').length,
+        });
+
+        return { success: true as const, data };
+    } catch (error) {
+        console.error("Failed to fetch sprint detail:", error);
+        return { success: false as const, error: "Failed to fetch sprint detail" };
+    }
+}
+
+export async function readProjectSprintDetail(input: {
+    slugOrId: string;
+    sprintId?: string | null;
+    actorUserId?: string | null;
+    cursor?: string;
+    limit?: number;
+}) {
+    try {
+        const project = await resolveProjectDetailTarget(input.slugOrId);
+        if (!project) {
+            return {
+                success: false as const,
+                errorCode: 'NOT_FOUND' as const,
+                message: 'Project not found.',
+            };
+        }
+
+        const viewerState = await resolveProjectDetailViewerState({
+            projectId: project.id,
+            ownerId: project.ownerId,
+            visibility: project.visibility,
+            status: project.status,
+            actorUserId: input.actorUserId ?? null,
+        });
+
+        if (!viewerState.canRead) {
+            return {
+                success: false as const,
+                errorCode: 'FORBIDDEN' as const,
+                message: 'Forbidden',
+            };
+        }
+
+        const access = await assertProjectReadAccess(project.id, input.actorUserId ?? null);
+        const data = await buildSprintDetailPayload({
+            projectId: project.id,
+            access,
+            sprintId: input.sprintId ?? null,
+            cursor: input.cursor,
+            limit: input.limit,
+        });
+
+        if (!data) {
+            return {
+                success: false as const,
+                errorCode: 'NOT_FOUND' as const,
+                message: 'Sprint not found.',
+            };
+        }
+
+        return {
+            success: true as const,
+            data,
+        };
+    } catch (error) {
+        console.error('[readProjectSprintDetail] failed', error);
+        return {
+            success: false as const,
+            errorCode: 'INTERNAL_ERROR' as const,
+            message: 'Failed to load sprint detail.',
+        };
     }
 }
 
@@ -2281,6 +2874,66 @@ export async function fetchSprintTasksAction(
     } catch (error) {
         console.error("Failed to fetch sprint tasks:", error);
         return { success: false as const, error: "Failed to fetch sprint tasks" };
+    }
+}
+
+export async function getProjectTaskDetailAction(projectId: string, taskId: string) {
+    try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        await assertProjectReadAccess(projectId, user?.id ?? null);
+
+        const task = await db.query.tasks.findFirst({
+            where: and(
+                eq(tasks.id, taskId),
+                eq(tasks.projectId, projectId),
+                isNull(tasks.deletedAt),
+            ),
+            columns: {
+                id: true,
+                projectId: true,
+                sprintId: true,
+                assigneeId: true,
+                creatorId: true,
+                title: true,
+                description: true,
+                status: true,
+                priority: true,
+                taskNumber: true,
+                storyPoints: true,
+                dueDate: true,
+                createdAt: true,
+                updatedAt: true,
+            },
+            with: {
+                project: {
+                    columns: { key: true },
+                },
+                assignee: {
+                    columns: {
+                        id: true,
+                        fullName: true,
+                        avatarUrl: true,
+                    },
+                },
+                creator: {
+                    columns: {
+                        id: true,
+                        fullName: true,
+                        avatarUrl: true,
+                    },
+                },
+            },
+        });
+
+        if (!task) {
+            return { success: false as const, error: "Task not found" };
+        }
+
+        return { success: true as const, task };
+    } catch (error) {
+        console.error("Failed to fetch task detail:", error);
+        return { success: false as const, error: "Failed to fetch task detail" };
     }
 }
 
@@ -2641,73 +3294,78 @@ export async function createTaskAction(data: z.infer<typeof createTaskSchema>) {
     }
 }
 
-const createSprintSchema = z.object({
-    projectId: z.string().uuid(),
-    name: z.string().min(1, "Name is required"),
-    goal: z.string().optional(),
-    startDate: z.string(), // ISO String
-    endDate: z.string(), // ISO String
-    description: z.string().optional(),
-});
-
-export async function createSprintAction(data: z.infer<typeof createSprintSchema>) {
+export async function createSprintAction(data: CreateSprintInput) {
+    let actorIdForMetric: string | null = null;
     try {
         const supabase = await createClient();
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) throw new Error("Unauthorized");
+        actorIdForMetric = user.id;
 
         const validated = createSprintSchema.parse(data);
+        const startDate = parseSprintDateInput(validated.startDate);
+        const endDate = parseSprintDateInput(validated.endDate);
 
-        // 1. Validate Access (Owner or Member)
-        const project = await db.query.projects.findFirst({
-            where: eq(projects.id, validated.projectId),
-            columns: { ownerId: true, slug: true }
-        });
-
-        if (!project) throw new Error("Project not found");
-
-        if (project.ownerId !== user.id) {
-            throw new Error("Only the project owner can create sprints");
+        const access = await getProjectAccessById(validated.projectId, user.id);
+        if (!access.project) throw new Error("Project not found");
+        if (!access.canWrite) {
+            throw new Error("You do not have permission to create sprints in this project");
         }
 
         // 2. Create Sprint
         const [newSprint] = await db.insert(projectSprints).values({
             projectId: validated.projectId,
             name: validated.name,
-            goal: validated.goal,
-            startDate: new Date(validated.startDate),
-            endDate: new Date(validated.endDate),
+            goal: validated.goal ?? null,
+            startDate,
+            endDate,
             status: 'planning', // Default to planning
         }).returning();
 
-        const slugOrId = project.slug || validated.projectId;
+        const slugOrId = access.project.slug || validated.projectId;
         revalidatePath(`/projects/${slugOrId}`);
         revalidatePath(`/projects/${validated.projectId}`);
         revalidatePath('/hub');
 
+        recordSprintMetric('project.sprint.create.result', {
+            projectId: validated.projectId,
+            sprintId: newSprint.id,
+            actorId: actorIdForMetric,
+            success: true,
+        });
+
         return { success: true, sprint: newSprint };
 
     } catch (error) {
+        if (error instanceof z.ZodError) {
+            return {
+                success: false,
+                error: error.issues[0]?.message ?? "Sprint details are invalid",
+            };
+        }
         console.error("Failed to create sprint:", error);
+        recordSprintMetric('project.sprint.create.result', {
+            projectId: data.projectId,
+            actorId: actorIdForMetric ?? 'unknown',
+            success: false,
+            message: error instanceof Error ? error.message : 'Failed to create sprint',
+        });
         return { success: false, error: error instanceof Error ? error.message : "Failed to create sprint" };
     }
 }
 
 export async function startSprintAction(sprintId: string, projectId: string) {
+    let actorIdForMetric: string | null = null;
     try {
         const supabase = await createClient();
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) throw new Error("Unauthorized");
+        actorIdForMetric = user.id;
 
-        // Access Check
-        const project = await db.query.projects.findFirst({
-            where: eq(projects.id, projectId),
-            columns: { ownerId: true, slug: true }
-        });
-        if (!project) throw new Error("Project not found");
-
-        if (project.ownerId !== user.id) {
-            throw new Error("Only the project owner can start sprints");
+        const access = await getProjectAccessById(projectId, user.id);
+        if (!access.project) throw new Error("Project not found");
+        if (!access.canWrite) {
+            throw new Error("You do not have permission to start sprints in this project");
         }
 
         // 1. Check for active sprints
@@ -2727,46 +3385,71 @@ export async function startSprintAction(sprintId: string, projectId: string) {
             .set({ status: 'active', updatedAt: new Date() })
             .where(eq(projectSprints.id, sprintId));
 
-        const slugOrId = project.slug || projectId;
+        const slugOrId = access.project.slug || projectId;
         revalidatePath(`/projects/${slugOrId}`);
         revalidatePath(`/projects/${projectId}`);
+
+        recordSprintMetric('project.sprint.start.result', {
+            projectId,
+            sprintId,
+            actorId: actorIdForMetric,
+            success: true,
+        });
 
         return { success: true };
     } catch (error) {
         console.error("Failed to start sprint:", error);
+        recordSprintMetric('project.sprint.start.result', {
+            projectId,
+            sprintId,
+            actorId: actorIdForMetric ?? 'unknown',
+            success: false,
+            message: error instanceof Error ? error.message : 'Failed to start sprint',
+        });
         return { success: false, error: error instanceof Error ? error.message : "Failed to start sprint" };
     }
 }
 
 export async function completeSprintAction(sprintId: string, projectId: string) {
+    let actorIdForMetric: string | null = null;
     try {
         const supabase = await createClient();
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) throw new Error("Unauthorized");
+        actorIdForMetric = user.id;
 
-        // Access Check
-        const project = await db.query.projects.findFirst({
-            where: eq(projects.id, projectId),
-            columns: { ownerId: true, slug: true }
-        });
-        if (!project) throw new Error("Project not found");
-
-        if (project.ownerId !== user.id) {
-            throw new Error("Only the project owner can complete sprints");
+        const access = await getProjectAccessById(projectId, user.id);
+        if (!access.project) throw new Error("Project not found");
+        if (!access.canWrite) {
+            throw new Error("You do not have permission to complete sprints in this project");
         }
 
         await db.update(projectSprints)
             .set({ status: 'completed', updatedAt: new Date() })
             .where(eq(projectSprints.id, sprintId));
 
-        const slugOrId = project.slug || projectId;
+        const slugOrId = access.project.slug || projectId;
         revalidatePath(`/projects/${slugOrId}`);
         revalidatePath(`/projects/${projectId}`);
+
+        recordSprintMetric('project.sprint.complete.result', {
+            projectId,
+            sprintId,
+            actorId: actorIdForMetric,
+            success: true,
+        });
 
         return { success: true };
     } catch (error) {
         console.error("Failed to complete sprint:", error);
-        return { success: false, error: "Failed to complete sprint" };
+        recordSprintMetric('project.sprint.complete.result', {
+            projectId,
+            sprintId,
+            actorId: actorIdForMetric ?? 'unknown',
+            success: false,
+            message: error instanceof Error ? error.message : 'Failed to complete sprint',
+        });
+        return { success: false, error: error instanceof Error ? error.message : "Failed to complete sprint" };
     }
 }
 

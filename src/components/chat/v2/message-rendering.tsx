@@ -351,7 +351,7 @@ function MediaAttachmentGridV2({
 function MediaAttachmentTileV2({
     attachment,
     isSingle,
-    spanFull: _spanFull,
+    spanFull = false,
     overlayLabel,
     onClick,
 }: {
@@ -371,7 +371,7 @@ function MediaAttachmentTileV2({
             type="button"
             onClick={onClick}
             aria-label={attachment.filename ? `Open media viewer for ${attachment.filename}` : 'Open media viewer'}
-            className={`relative overflow-hidden rounded-lg bg-zinc-100 focus:outline-none focus:ring-2 focus:ring-ring/60 dark:bg-zinc-800 ${isSingle ? 'h-auto' : 'h-36'}`}
+            className={`relative overflow-hidden rounded-lg bg-zinc-100 focus:outline-none focus:ring-2 focus:ring-ring/60 dark:bg-zinc-800 ${isSingle ? 'h-auto' : 'h-36'} ${spanFull ? 'col-span-2' : ''}`}
         >
             {!loaded && <div className="absolute inset-0 animate-pulse bg-zinc-200/80 dark:bg-zinc-700/70" />}
             <Image

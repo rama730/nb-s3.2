@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Download, FileText, Folder, Link2, Loader2, Paperclip, Plus, Search, Trash2, Upload, X } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import type { ProjectNode } from "@/lib/db/schema";
@@ -8,6 +9,7 @@ import { createFileNode, getProjectNodes, getTaskAttachments, linkNodeToTask, un
 import { getUploadPresignedUrl } from "@/app/actions/upload";
 import { TaskFilesExplorer } from "@/components/projects/v2/tasks/components/TaskFilesExplorer";
 import { buildProjectFileKey } from "@/lib/storage/project-file-key";
+import { queryKeys } from "@/lib/query-keys";
 
 interface FilesTabProps {
     taskId: string;
@@ -44,6 +46,7 @@ type UploadStatus = { id: string; filename: string; progress: number; status: 'u
 
 export default function FilesTab({ taskId, isOwnerOrMember, projectId, taskTitle }: FilesTabProps) {
     const canEdit = isOwnerOrMember;
+    const queryClient = useQueryClient();
     const fileInputRef = useRef<HTMLInputElement>(null);
     const pickerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -56,6 +59,14 @@ export default function FilesTab({ taskId, isOwnerOrMember, projectId, taskTitle
     const [picker, setPicker] = useState<PickerState>({ open: false });
 
     const supabase = useMemo(() => createClient(), []);
+
+    const invalidateSprintSlices = useCallback(async () => {
+        await Promise.all([
+            queryClient.invalidateQueries({ queryKey: queryKeys.project.detail.tasksRoot(projectId) }),
+            queryClient.invalidateQueries({ queryKey: queryKeys.project.detail.sprints(projectId) }),
+            queryClient.invalidateQueries({ queryKey: queryKeys.project.detail.sprintDetailRoot(projectId) }),
+        ]);
+    }, [projectId, queryClient]);
 
     const refresh = useCallback(async () => {
         setIsLoading(true);
@@ -171,6 +182,7 @@ export default function FilesTab({ taskId, isOwnerOrMember, projectId, taskTitle
                     await Promise.allSettled(chunk.map(processFile));
                 }
                 await refresh();
+                await invalidateSprintSlices();
             } finally {
                 // Clear successful uploads after a short delay
                 setTimeout(() => {
@@ -179,7 +191,7 @@ export default function FilesTab({ taskId, isOwnerOrMember, projectId, taskTitle
                 if (fileInputRef.current) fileInputRef.current.value = "";
             }
         },
-        [canEdit, projectId, refresh, supabase.storage, taskId]
+        [canEdit, invalidateSprintSlices, projectId, refresh, supabase.storage, taskId]
     );
 
     const handleDownload = useCallback(
@@ -211,11 +223,12 @@ export default function FilesTab({ taskId, isOwnerOrMember, projectId, taskTitle
             try {
                 await unlinkNodeFromTask(taskId, nodeId);
                 setAttachments((prev) => prev.filter((n) => n.id !== nodeId));
+                await invalidateSprintSlices();
             } catch (e: any) {
                 setError(e?.message || "Failed to unlink");
             }
         },
-        [canEdit, taskId]
+        [canEdit, invalidateSprintSlices, taskId]
     );
 
     const openPicker = useCallback(async () => {
@@ -262,12 +275,13 @@ export default function FilesTab({ taskId, isOwnerOrMember, projectId, taskTitle
             try {
                 await linkNodeToTask(taskId, nodeId);
                 await refresh();
+                await invalidateSprintSlices();
                 closePicker();
             } catch (e: any) {
                 setError(e?.message || "Failed to attach");
             }
         },
-        [canEdit, closePicker, refresh, taskId]
+        [canEdit, closePicker, invalidateSprintSlices, refresh, taskId]
     );
 
     useEffect(() => {

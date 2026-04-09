@@ -1,3 +1,5 @@
+import { getAvailabilityLabel } from "@/lib/ui/status-config";
+
 export const MIN_PROFILE_METADATA_BIO_LENGTH = 20;
 
 export type ProfileMetadataInput = {
@@ -32,17 +34,7 @@ export function normalizeProjectDescription(...values: unknown[]): string {
 
 export function availabilityStatusLabel(value: unknown): string {
     const normalized = trimDisplayText(value).toLowerCase();
-    switch (normalized) {
-        case "busy":
-            return "Busy";
-        case "focusing":
-            return "Focusing";
-        case "offline":
-            return "Offline";
-        case "available":
-        default:
-            return "Available";
-    }
+    return getAvailabilityLabel(normalized || null);
 }
 
 export function countLabel(count: number, singular: string, plural = `${singular}s`): string {

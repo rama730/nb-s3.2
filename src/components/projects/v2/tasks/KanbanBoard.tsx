@@ -34,6 +34,7 @@ export default function KanbanBoard({
     const [visibleCounts, setVisibleCounts] = useState({
         todo: DEFAULT_VISIBLE,
         in_progress: DEFAULT_VISIBLE,
+        blocked: DEFAULT_VISIBLE,
         done: DEFAULT_VISIBLE
     });
 
@@ -41,6 +42,7 @@ export default function KanbanBoard({
         setVisibleCounts((prev) => ({
             todo: Math.max(prev.todo, DEFAULT_VISIBLE),
             in_progress: Math.max(prev.in_progress, DEFAULT_VISIBLE),
+            blocked: Math.max(prev.blocked, DEFAULT_VISIBLE),
             done: Math.max(prev.done, DEFAULT_VISIBLE),
         }));
     }, [tasks.length]);
@@ -50,6 +52,7 @@ export default function KanbanBoard({
         const cols = {
             todo: [] as Task[],
             in_progress: [] as Task[],
+            blocked: [] as Task[],
             done: [] as Task[]
         };
         tasks.forEach(t => {
@@ -65,12 +68,13 @@ export default function KanbanBoard({
     const columnConfig = [
         { id: 'todo', title: 'To Do', color: 'bg-zinc-500' },
         { id: 'in_progress', title: 'In Progress', color: 'bg-blue-500' },
+        { id: 'blocked', title: 'Blocked', color: 'bg-rose-500' },
         { id: 'done', title: 'Done', color: 'bg-emerald-500' }
     ];
 
     return (
         <>
-        <div role="region" aria-label="Kanban board" className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+        <div role="region" aria-label="Kanban board" className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-4 gap-6 items-start">
             {columnConfig.map(col => {
                 const colTasks = columns[col.id as keyof typeof columns];
                 const visibleLimit = visibleCounts[col.id as keyof typeof visibleCounts] || DEFAULT_VISIBLE;

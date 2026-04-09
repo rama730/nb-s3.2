@@ -4,6 +4,7 @@ import { db } from '@/lib/db';
 import { projectNodeLocks } from '@/lib/db/schema';
 import { and, eq, inArray } from 'drizzle-orm';
 import { jsonError, jsonSuccess } from '@/app/api/v1/_envelope';
+import { validateCsrf } from '@/lib/security/csrf';
 
 /**
  * POST /api/v1/files/locks/release
@@ -15,6 +16,8 @@ import { jsonError, jsonSuccess } from '@/app/api/v1/_envelope';
  */
 export async function POST(request: NextRequest) {
     try {
+        const csrfError = validateCsrf(request);
+        if (csrfError) return csrfError;
         const supabase = await createClient();
         const {
             data: { user },

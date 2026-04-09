@@ -95,7 +95,15 @@ export function StructuredMessageCardV2({
                         </span>
                     ) : null}
                 </div>
-                {isActionLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin opacity-70" /> : null}
+                {isActionLoading ? (
+                    <span className="inline-flex items-center" role="status" aria-live="polite">
+                        <Loader2
+                            aria-hidden="true"
+                            className="h-3.5 w-3.5 animate-spin opacity-70"
+                        />
+                        <span className="sr-only">Action loading</span>
+                    </span>
+                ) : null}
             </div>
 
             <div className="mt-2 text-sm font-semibold leading-5">

@@ -2,7 +2,6 @@
 
 import React from "react";
 import Link from "next/link";
-import NextImage from "next/image";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,11 +12,12 @@ import {
 import { cn } from "@/lib/utils";
 import { profileHref } from "@/lib/routing/identifiers";
 import { formatLastActive } from "@/lib/ui/date-formatting";
+import { UserAvatar } from "@/components/ui/UserAvatar";
 import type { SuggestedProfile } from "@/app/actions/connections";
 import { toast } from "sonner";
 import { resolveRelationshipActionModel } from "@/components/people/person-card-model";
-import { getAvatarGradient } from "@/lib/ui/avatar";
-import { AVAILABILITY_CONFIG, EXPERIENCE_LABELS } from "@/lib/ui/status-config";
+import { buildIdentityPresentation } from "@/lib/ui/identity";
+import { buildProfileStatusSummary } from "@/lib/ui/status-config";
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -46,21 +46,18 @@ export default function ProfilePreviewDrawer({
 }: ProfilePreviewDrawerProps) {
     if (!profile) return null;
 
-    const displayName = profile.fullName || profile.username || "User";
-    const displayUsername = profile.username ? `@${profile.username}` : null;
-    const initial = (profile.fullName || profile.username || "U")[0]?.toUpperCase() ?? "U";
+    const identity = buildIdentityPresentation(profile);
+    const displayName = identity.displayName;
+    const displayUsername = identity.usernameLabel;
     const href = profileHref(profile);
     const viewerSkillSet = viewerSkills ? new Set(viewerSkills.map(s => s.toLowerCase())) : undefined;
-
-    const availability = profile.availabilityStatus && AVAILABILITY_CONFIG[profile.availabilityStatus]
-        ? AVAILABILITY_CONFIG[profile.availabilityStatus]
-        : null;
-    const experience = profile.experienceLevel && EXPERIENCE_LABELS[profile.experienceLevel]
-        ? EXPERIENCE_LABELS[profile.experienceLevel]
-        : null;
-
-    // Active recency
     const activeLabel = formatLastActive(profile.lastActiveAt);
+
+    const statusSummary = buildProfileStatusSummary({
+        availabilityStatus: profile.availabilityStatus,
+        experienceLevel: profile.experienceLevel,
+        activeLabel,
+    });
 
     const isConnected = profile.connectionStatus === "connected";
     const isPending = profile.connectionStatus === "pending_sent";
@@ -98,23 +95,12 @@ export default function ProfilePreviewDrawer({
                     <div className="px-6 pt-6 pb-4 border-b border-zinc-200 dark:border-zinc-800">
                         <div className="flex items-start gap-4">
                             {/* Avatar */}
-                            {profile.avatarUrl ? (
-                                <NextImage
-                                    src={profile.avatarUrl}
-                                    alt={displayName}
-                                    width={64}
-                                    height={64}
-                                    className="w-16 h-16 rounded-full object-cover flex-shrink-0"
-                                />
-                            ) : (
-                                <div className={cn(
-                                    "w-16 h-16 rounded-full flex items-center justify-center flex-shrink-0",
-                                    "bg-gradient-to-br text-white font-semibold text-xl",
-                                    getAvatarGradient(displayName),
-                                )}>
-                                    {initial}
-                                </div>
-                            )}
+                            <UserAvatar
+                                identity={profile}
+                                size={64}
+                                className="flex-shrink-0"
+                                fallbackClassName="text-xl font-semibold text-white"
+                            />
 
                             <div className="min-w-0 flex-1">
                                 <DialogTitle className="text-lg font-semibold text-zinc-900 dark:text-zinc-100 truncate">
@@ -127,23 +113,22 @@ export default function ProfilePreviewDrawer({
                                 )}
 
                                 {/* Status line */}
-                                <div className="flex items-center gap-2 mt-1 flex-wrap">
-                                    {availability && (
-                                        <span className={cn("flex items-center gap-1 text-xs", availability.color)}>
+                                <div className="mt-1 flex items-center gap-2 flex-wrap">
+                                    {statusSummary.availabilityColor && statusSummary.parts[0] ? (
+                                        <span className={cn("flex items-center gap-1 text-xs", statusSummary.availabilityColor)}>
                                             <Circle aria-hidden="true" className="w-2 h-2 fill-current" />
-                                            {availability.label}
+                                            {statusSummary.parts[0]}
                                         </span>
-                                    )}
-                                    {experience && (
-                                        <span className="text-xs text-zinc-500 dark:text-zinc-400">
-                                            {availability ? "·" : ""} {experience}
+                                    ) : null}
+                                    {(statusSummary.availabilityColor ? statusSummary.parts.slice(1) : statusSummary.parts).map((part, index) => (
+                                        <span
+                                            key={`${part}-${index}`}
+                                            className={part === activeLabel ? "text-xs text-emerald-600 dark:text-emerald-400" : "text-xs text-zinc-500 dark:text-zinc-400"}
+                                        >
+                                            {(statusSummary.availabilityColor || index > 0) ? "· " : ""}
+                                            {part}
                                         </span>
-                                    )}
-                                    {activeLabel && (
-                                        <span className="text-xs text-emerald-600 dark:text-emerald-400">
-                                            · {activeLabel}
-                                        </span>
-                                    )}
+                                    ))}
                                 </div>
                             </div>
                         </div>

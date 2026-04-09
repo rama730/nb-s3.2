@@ -3,11 +3,17 @@
 import React, { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import { X } from "lucide-react";
+import {
+    addDaysToSprintDateInput,
+    createSprintDraftSchema,
+    getDefaultSprintDateRange,
+    type CreateSprintDraftInput,
+} from "@/lib/projects/sprints";
 
 interface CreateSprintModalProps {
     isOpen: boolean;
     onClose: () => void;
-    onCreate: (data: any) => void;
+    onCreate: (data: CreateSprintDraftInput) => Promise<{ success: boolean; error?: string }>;
     sprint?: any; // If editing
     sprintCount?: number; // To auto-generate name "Sprint N"
 }
@@ -26,24 +32,34 @@ export default function CreateSprintModal({
     const [endDate, setEndDate] = useState("");
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [errorMessage, setErrorMessage] = useState("");
-    const [showDates, setShowDates] = useState(false);
 
     // Initialize form
     useEffect(() => {
         if (isOpen) {
+            const defaultDateRange = getDefaultSprintDateRange();
             if (sprint) {
                 setName(sprint.name);
                 setGoal(sprint.goal || "");
                 setDescription(sprint.description || "");
-                setStartDate(sprint.start_date ? sprint.start_date.split('T')[0] : "");
-                setEndDate(sprint.end_date ? sprint.end_date.split('T')[0] : "");
+                const sprintStartDate = typeof sprint.startDate === "string"
+                    ? sprint.startDate
+                    : typeof sprint.start_date === "string"
+                        ? sprint.start_date
+                        : "";
+                const sprintEndDate = typeof sprint.endDate === "string"
+                    ? sprint.endDate
+                    : typeof sprint.end_date === "string"
+                        ? sprint.end_date
+                        : "";
+                setStartDate(sprintStartDate ? sprintStartDate.split('T')[0] : defaultDateRange.startDate);
+                setEndDate(sprintEndDate ? sprintEndDate.split('T')[0] : defaultDateRange.endDate);
             } else {
-                // New sprint - start with everything empty
+                // New sprint - initialize with a valid default sprint window.
                 setName(`Sprint ${sprintCount + 1}`);
                 setGoal("");
                 setDescription("");
-                setStartDate(""); // Empty by default
-                setEndDate("");   // Empty by default
+                setStartDate(defaultDateRange.startDate);
+                setEndDate(defaultDateRange.endDate);
             }
             setErrorMessage("");
         }
@@ -53,40 +69,37 @@ export default function CreateSprintModal({
         e.preventDefault();
         setErrorMessage("");
 
-        if (!name.trim()) {
-            setErrorMessage("Sprint name is required");
-            return;
-        }
-
-        // Only validate dates if both are provided
-        if (startDate && endDate && new Date(endDate) <= new Date(startDate)) {
-            setErrorMessage("End date must be after start date");
-            return;
-        }
-
-        setIsSubmitting(true);
-        // Simulate delay
-        await new Promise(r => setTimeout(r, 500));
-
-        onCreate({
+        const parsed = createSprintDraftSchema.safeParse({
             ...sprint,
             name,
             goal,
             description,
-            startDate: startDate,
-            endDate: endDate
+            startDate,
+            endDate,
         });
+        if (!parsed.success) {
+            setErrorMessage(parsed.error.issues[0]?.message ?? "Sprint details are invalid");
+            return;
+        }
 
-        setIsSubmitting(false);
-        onClose();
+        setIsSubmitting(true);
+        try {
+            const result = await onCreate(parsed.data);
+            if (!result.success) {
+                setErrorMessage(result.error ?? "Failed to save sprint");
+                return;
+            }
+            onClose();
+        } catch (error) {
+            setErrorMessage(error instanceof Error ? error.message : "Failed to save sprint");
+        } finally {
+            setIsSubmitting(false);
+        }
     };
 
     const setDuration = (weeks: number) => {
         if (!startDate) return;
-        const start = new Date(startDate);
-        const end = new Date(start);
-        end.setDate(start.getDate() + (weeks * 7));
-        setEndDate(end.toISOString().split('T')[0]);
+        setEndDate(addDaysToSprintDateInput(startDate, weeks * 7));
     };
 
     if (!isOpen) return null;
@@ -173,89 +186,67 @@ export default function CreateSprintModal({
                             />
                         </div>
 
-                        {/* Toggle for Date Fields */}
-                        {!showDates && (
-                            <button
-                                type="button"
-                                onClick={() => setShowDates(true)}
-                                className="w-full py-2 px-4 rounded-lg border-2 border-dashed border-zinc-200 dark:border-zinc-700 text-sm font-medium text-zinc-600 dark:text-zinc-400 hover:border-zinc-300 dark:hover:border-zinc-600 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 transition-colors"
-                            >
-                                + Add Dates (Optional)
-                            </button>
-                        )}
+                        <div className="space-y-4 p-4 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/30">
+                            <div className="flex items-center justify-between mb-2">
+                                <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">Sprint Duration</span>
+                                <span className="text-xs text-zinc-500 dark:text-zinc-400">Required</span>
+                            </div>
 
-                        {/* Date Fields - Only shown when toggled */}
-                        {showDates && (
-                            <div className="space-y-4 p-4 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/30">
-                                <div className="flex items-center justify-between mb-2">
-                                    <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">Sprint Duration</span>
-                                    <button
-                                        type="button"
-                                        onClick={() => {
-                                            setShowDates(false);
-                                            setStartDate("");
-                                            setEndDate("");
-                                        }}
-                                        className="text-xs text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
-                                    >
-                                        Remove dates
-                                    </button>
+                            {/* Quick Duration Buttons */}
+                            <div className="flex items-center gap-2">
+                                <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400 mr-2">Quick set:</span>
+                                <button
+                                    type="button"
+                                    onClick={() => setDuration(1)}
+                                    className="px-2.5 py-1.5 rounded-lg bg-zinc-100 dark:bg-zinc-700 text-xs font-medium hover:bg-zinc-200 dark:hover:bg-zinc-600 transition-colors text-zinc-700 dark:text-zinc-300"
+                                >
+                                    1 week
+                                </button>
+                                <button 
+                                    type="button"
+                                    onClick={() => setDuration(2)}
+                                    className="px-2.5 py-1.5 rounded-lg bg-zinc-100 dark:bg-zinc-700 text-xs font-medium hover:bg-zinc-200 dark:hover:bg-zinc-600 transition-colors text-zinc-700 dark:text-zinc-300"
+                                >
+                                    2 weeks
+                                </button>
+                                <button 
+                                    type="button"
+                                    onClick={() => setDuration(4)}
+                                    className="px-2.5 py-1.5 rounded-lg bg-zinc-100 dark:bg-zinc-700 text-xs font-medium hover:bg-zinc-200 dark:hover:bg-zinc-600 transition-colors text-zinc-700 dark:text-zinc-300"
+                                >
+                                    4 weeks
+                                </button>
+                            </div>
+
+                            {/* Date Range */}
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">
+                                        Start Date *
+                                    </label>
+                                    <input
+                                        type="date"
+                                        value={startDate}
+                                        required
+                                        onChange={(e) => setStartDate(e.target.value)}
+                                        className="w-full px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none text-zinc-900 dark:text-zinc-100"
+                                    />
                                 </div>
-
-                                {/* Quick Duration Buttons */}
-                                <div className="flex items-center gap-2">
-                                    <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400 mr-2">Quick set:</span>
-                                    <button
-                                        type="button"
-                                        onClick={() => setDuration(1)}
-                                        className="px-2.5 py-1.5 rounded-lg bg-zinc-100 dark:bg-zinc-700 text-xs font-medium hover:bg-zinc-200 dark:hover:bg-zinc-600 transition-colors text-zinc-700 dark:text-zinc-300"
-                                    >
-                                        1 week
-                                    </button>
-                                    <button 
-                                        type="button"
-                                        onClick={() => setDuration(2)}
-                                        className="px-2.5 py-1.5 rounded-lg bg-zinc-100 dark:bg-zinc-700 text-xs font-medium hover:bg-zinc-200 dark:hover:bg-zinc-600 transition-colors text-zinc-700 dark:text-zinc-300"
-                                    >
-                                        2 weeks
-                                    </button>
-                                    <button 
-                                        type="button"
-                                        onClick={() => setDuration(4)}
-                                        className="px-2.5 py-1.5 rounded-lg bg-zinc-100 dark:bg-zinc-700 text-xs font-medium hover:bg-zinc-200 dark:hover:bg-zinc-600 transition-colors text-zinc-700 dark:text-zinc-300"
-                                    >
-                                        4 weeks
-                                    </button>
-                                </div>
-
-                                {/* Date Range */}
-                                <div className="grid grid-cols-2 gap-4">
-                                    <div>
-                                        <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">
-                                            Start Date
-                                        </label>
-                                        <input
-                                            type="date"
-                                            value={startDate}
-                                            onChange={(e) => setStartDate(e.target.value)}
-                                            className="w-full px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none text-zinc-900 dark:text-zinc-100"
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">
-                                            End Date
-                                        </label>
-                                        <input
-                                            type="date"
-                                            value={endDate}
-                                            min={startDate}
-                                            onChange={(e) => setEndDate(e.target.value)}
-                                            className="w-full px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none text-zinc-900 dark:text-zinc-100"
-                                        />
-                                    </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">
+                                        End Date *
+                                    </label>
+                                    <input
+                                        type="date"
+                                        value={endDate}
+                                        required
+                                        min={startDate}
+                                        onChange={(e) => setEndDate(e.target.value)}
+                                        className="w-full px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none text-zinc-900 dark:text-zinc-100"
+                                    />
                                 </div>
                             </div>
-                        )}
+                        </div>
 
                         {/* Action Buttons */}
                         <div className="flex justify-end gap-3 pt-4">

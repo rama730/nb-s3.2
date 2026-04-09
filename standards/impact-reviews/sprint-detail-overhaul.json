@@ -1,0 +1,92 @@
+{
+  "id": "impact-2026-04-09-sprint-detail-overhaul",
+  "title": "Sprint detail overhaul with canonical task and file timeline",
+  "summary": "Extends the canonical sprint detail experience with timeline modes, inline compare, URL-plus-local sprint view state, left-rail prefetch, split sprint detail cache slices, summary-first inline drawers, and cross-surface task normalization with optimistic sprint cache patching.",
+  "riskLevel": "high",
+  "runtimePlanes": [
+    "request",
+    "database",
+    "ops"
+  ],
+  "routeClasses": [
+    "public_cached",
+    "user_shell"
+  ],
+  "dataSourcesChanged": [
+    "project_sprints",
+    "tasks",
+    "task_node_links",
+    "project_nodes",
+    "project_node_events",
+    "project_detail_shell"
+  ],
+  "canonicalLogicDomains": [
+    "status_lifecycle",
+    "profile_display",
+    "import_boundaries"
+  ],
+  "concurrencyRisk": "Moderate client-cache concurrency risk around sprint prefetch, optimistic task patching, and paginated timeline views; mitigated by bounded reads, rollback snapshots, mode-aware route state, and targeted sprint-detail slice invalidation.",
+  "observability": {
+    "metrics": [
+      "project.sprint.detail.load_ms",
+      "project.sprint.timeline.rows",
+      "project.sprint.prefetch.selection",
+      "project.sprint.timeline.filter",
+      "project.sprint.timeline.mode",
+      "project.sprint.timeline.drawer_open",
+      "project.sprint.timeline.drawer_preview_ms",
+      "project.sprint.timeline.pagination_ms",
+      "project.sprint.compare.visibility",
+      "project.sprint.optimistic_patch",
+      "project.sprint.create.result",
+      "project.sprint.start.result",
+      "project.sprint.complete.result"
+    ],
+    "logs": [
+      "project sprint detail load errors",
+      "project sprint lifecycle mutation errors"
+    ],
+    "alerts": []
+  },
+  "rollback": {
+    "strategy": "Revert the sprint route, sprint detail payload action, and sprint tab shell together if route hydration, pagination, or lifecycle regressions appear.",
+    "validation": [
+      "npm run typecheck",
+      "npx tsx --test tests/unit/sprint-route-state.test.ts tests/unit/sprint-permissions.test.ts tests/unit/sprint-timeline.test.ts tests/unit/sprint-presentation.test.ts tests/unit/sprint-cache.test.ts tests/unit/sprint-validation.test.ts"
+    ]
+  },
+  "evidence": {
+    "commands": [
+      "npm run typecheck",
+      "npx eslint src/components/projects/tabs/SprintPlanning.tsx src/components/projects/tabs/sprint/SprintHeader.tsx src/components/projects/tabs/sprint/SprintLeftRail.tsx src/components/projects/tabs/sprint/SprintTimelineToolbar.tsx src/components/projects/tabs/sprint/SprintTimelineContent.tsx src/components/projects/tabs/sprint/SprintDetailDrawer.tsx src/components/projects/dashboard/ProjectDashboardClient.tsx src/components/projects/v2/TasksTab.tsx src/components/projects/v2/tasks/TaskCard.tsx src/components/projects/v2/tasks/TasksTable.tsx src/components/projects/v2/tasks/CreateTaskModal.tsx src/components/projects/v2/tasks/TaskDetailPanel.tsx src/components/projects/v2/tasks/TaskDetailTabs/DetailsTab.tsx src/hooks/hub/useSprintViewPreferences.ts src/lib/projects/sprint-presentation.ts src/lib/projects/sprint-cache.ts src/lib/projects/task-presentation.ts",
+      "npx tsx --test tests/unit/sprint-route-state.test.ts tests/unit/sprint-permissions.test.ts tests/unit/sprint-timeline.test.ts tests/unit/sprint-presentation.test.ts tests/unit/sprint-cache.test.ts tests/unit/sprint-validation.test.ts"
+    ],
+    "reports": []
+  },
+  "paths": [
+    "src/app/(main)/projects/[slug]/page.tsx",
+    "src/app/(main)/projects/[slug]/sprints/[sprintId]/page.tsx",
+    "src/app/actions/project/_all.ts",
+    "src/components/projects/dashboard/ProjectDashboardClient.tsx",
+    "src/components/projects/tabs/SprintPlanning.tsx",
+    "src/components/projects/tabs/sprint/SprintHeader.tsx",
+    "src/components/projects/tabs/sprint/SprintLeftRail.tsx",
+    "src/components/projects/tabs/sprint/SprintTimelineToolbar.tsx",
+    "src/components/projects/tabs/sprint/SprintTimelineContent.tsx",
+    "src/components/projects/tabs/sprint/SprintDetailDrawer.tsx",
+    "src/components/projects/v2/TasksTab.tsx",
+    "src/components/projects/v2/tasks/TaskCard.tsx",
+    "src/components/projects/v2/tasks/TasksTable.tsx",
+    "src/components/projects/v2/tasks/CreateTaskModal.tsx",
+    "src/components/projects/v2/tasks/TaskDetailPanel.tsx",
+    "src/components/projects/v2/tasks/TaskDetailTabs/DetailsTab.tsx",
+    "src/hooks/hub/useProjectData.ts",
+    "src/hooks/hub/useSprintViewPreferences.ts",
+    "src/lib/projects/sprint-presentation.ts",
+    "src/lib/projects/sprint-cache.ts",
+    "src/lib/projects/sprint-detail.ts",
+    "src/lib/projects/sprint-timeline.ts",
+    "src/lib/projects/task-presentation.ts",
+    "src/lib/performance/page-contract.ts"
+  ]
+}

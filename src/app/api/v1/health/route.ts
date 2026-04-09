@@ -41,6 +41,8 @@ export async function GET(request: Request) {
         return jsonSuccess({ status: 'ok', probe: 'liveness', db: dbOk })
     }
 
+    const redisConfigured = Boolean(process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN)
+    const requireRedisForReadiness = process.env.NODE_ENV === 'production' || redisConfigured
     let redisOk = false
     const redis = getRedisClient()
     if (redis) {
@@ -51,7 +53,7 @@ export async function GET(request: Request) {
             redisOk = false
         }
     } else {
-        redisOk = true // Redis not configured — not a failure
+        redisOk = !requireRedisForReadiness
     }
 
     // TODO: Add an explicit Inngest health check when one is available.
@@ -67,5 +69,11 @@ export async function GET(request: Request) {
         })
         return jsonError('Service degraded', 503, 'READINESS_DEGRADED')
     }
-    return jsonSuccess({ status: 'ok', probe: 'readiness', db: dbOk, redis: redisOk })
+    return jsonSuccess({
+        status: 'ok',
+        probe: 'readiness',
+        db: dbOk,
+        redis: redisOk,
+        redisConfigured,
+    })
 }

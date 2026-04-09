@@ -94,6 +94,7 @@ test('subscribePresenceRoom reuses the same room during strict-mode style remoun
     const originalWebSocket = globalThis.WebSocket;
 
     let fetchCount = 0;
+    const sentMessages: string[] = [];
 
     class FakeWebSocket {
         static OPEN = 1;
@@ -105,9 +106,16 @@ test('subscribePresenceRoom reuses the same room during strict-mode style remoun
         onerror: (() => void) | null = null;
         onclose: (() => void) | null = null;
 
-        constructor(_url: string) {}
+        constructor(_url: string) {
+            setTimeout(() => {
+                this.readyState = FakeWebSocket.OPEN;
+                this.onopen?.();
+            }, 0);
+        }
 
-        send() {}
+        send(payload: string) {
+            sentMessages.push(payload);
+        }
 
         close() {
             this.readyState = FakeWebSocket.CLOSED;
@@ -136,10 +144,15 @@ test('subscribePresenceRoom reuses the same room during strict-mode style remoun
             roomType: "workspace",
             roomId: "project-1",
         });
-        await new Promise((resolve) => setTimeout(resolve, 0));
+        await new Promise((resolve) => setTimeout(resolve, 10));
 
         assert.equal(fetchCount, 1);
         assert.equal(getPresenceRoomCountForTests(), 1);
+        assert.equal(sentMessages.length > 0, true);
+        assert.deepEqual(JSON.parse(sentMessages[0]!), {
+            type: 'auth',
+            token: 'presence-token',
+        });
 
         first.unsubscribe();
 
@@ -147,7 +160,7 @@ test('subscribePresenceRoom reuses the same room during strict-mode style remoun
             roomType: "workspace",
             roomId: "project-1",
         });
-        await new Promise((resolve) => setTimeout(resolve, 0));
+        await new Promise((resolve) => setTimeout(resolve, 10));
 
         assert.equal(fetchCount, 1);
         assert.equal(getPresenceRoomCountForTests(), 1);

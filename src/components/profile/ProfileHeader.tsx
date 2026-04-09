@@ -1,7 +1,8 @@
 "use client";
 
-import Image from "next/image";
 import { MapPin, Globe, Edit2, Share2, MessageCircle, Github, Linkedin, Twitter } from "lucide-react";
+import { UserAvatar } from "@/components/ui/UserAvatar";
+import { buildIdentityPresentation } from "@/lib/ui/identity";
 import type { Profile } from "@/lib/db/schema";
 
 interface ProfileHeaderProps {
@@ -9,17 +10,14 @@ interface ProfileHeaderProps {
     isOwner: boolean;
 }
 
-function getInitials(name?: string | null) {
-    if (!name) return "U";
-    const parts = name.trim().split(/\s+/);
-    if (parts.length >= 2) {
-        return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
-    }
-    return name[0].toUpperCase();
-}
-
 export default function ProfileHeader({ profile, isOwner }: ProfileHeaderProps) {
     const socialLinks = (profile?.socialLinks as Record<string, string>) || {};
+    const identity = buildIdentityPresentation(profile);
+    const usernameLabel =
+        identity.usernameLabel ||
+        (typeof profile?.username === "string" && profile.username.trim()
+            ? `@${profile.username.trim().replace(/^@+/, "")}`
+            : null);
 
     return (
         <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 overflow-hidden mb-6 shadow-sm hover:shadow-md transition-shadow duration-300">
@@ -30,28 +28,23 @@ export default function ProfileHeader({ profile, isOwner }: ProfileHeaderProps) 
                     <div className="flex flex-col sm:flex-row items-start gap-5 flex-1 min-w-0">
                         {/* Avatar */}
                         <div className="relative group">
-                            <div className="relative w-24 h-24 sm:w-28 sm:h-28 rounded-full app-accent-gradient flex items-center justify-center text-white text-2xl sm:text-3xl font-bold shadow-xl ring-4 ring-zinc-100 dark:ring-zinc-800 transition-all duration-300 group-hover:scale-105">
-                                {profile?.avatarUrl ? (
-                                    <Image
-                                        src={profile.avatarUrl}
-                                        alt={profile?.fullName || profile?.username || "User"}
-                                        fill
-                                        className="rounded-full object-cover"
-                                    />
-                                ) : (
-                                    <span>{getInitials(profile?.fullName || profile?.username)}</span>
-                                )}
-                            </div>
+                            <UserAvatar
+                                identity={profile}
+                                className="w-24 h-24 sm:w-28 sm:h-28 shadow-xl ring-4 ring-zinc-100 transition-all duration-300 group-hover:scale-105 dark:ring-zinc-800"
+                                fallbackClassName="text-2xl sm:text-3xl font-bold text-white"
+                            />
                         </div>
 
                         {/* Name and Info */}
                         <div className="flex-1 min-w-0">
                             <h1 className="text-2xl sm:text-3xl font-bold text-zinc-900 dark:text-white mb-1 truncate">
-                                {profile?.fullName || profile?.username || "Anonymous"}
+                                {identity.displayName}
                             </h1>
-                            <p className="text-sm text-zinc-500 dark:text-zinc-400 mb-2">
-                                @{profile?.username || "username"}
-                            </p>
+                            {usernameLabel ? (
+                                <p className="text-sm text-zinc-500 dark:text-zinc-400 mb-2">
+                                    {usernameLabel}
+                                </p>
+                            ) : null}
                             {profile?.headline && (
                                 <p className="text-base sm:text-lg text-zinc-600 dark:text-zinc-400 mb-3 line-clamp-2">
                                     {profile.headline}

@@ -18,9 +18,9 @@ export function ComposerFirstContactGuidance({
                 Start with a clear introduction and a short reason for reaching out. You can still send freeform text at any time.
             </div>
             <div className="mt-3 flex flex-wrap gap-2">
-                {templates.map((template) => (
+                {templates.map((template, index) => (
                     <button
-                        key={template}
+                        key={`${template}-${index}`}
                         type="button"
                         onClick={() => onSelectTemplate(template)}
                         className="rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-left text-xs text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"

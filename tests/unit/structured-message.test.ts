@@ -7,6 +7,7 @@ import {
     getMessageContextChipsFromMetadata,
     getMessagePreviewText,
     getStructuredWorkflowActionDescriptors,
+    type MessageContextChip,
     getPrivateFollowUpFromMetadata,
     normalizeStructuredMessagePayload,
     resolveStructuredWorkflowTransition,
@@ -55,20 +56,37 @@ test('normalizeStructuredMessagePayload enforces a canonical minimal-card contra
     });
 });
 
+test('createStructuredMessagePayload rejects empty title or summary after clamping', () => {
+    assert.equal(createStructuredMessagePayload({
+        kind: 'feedback_request',
+        title: '   ',
+        summary: 'Valid summary',
+    }), null);
+
+    assert.equal(createStructuredMessagePayload({
+        kind: 'feedback_request',
+        title: 'Valid title',
+        summary: '   ',
+    }), null);
+});
+
 test('message metadata helpers preserve structured previews, chips, and private follow-ups', () => {
+    const contextChips: MessageContextChip[] = [
+        { kind: 'project', id: 'project-1', label: 'Alpha Project', subtitle: null },
+        { kind: 'file', id: 'file-1', label: 'brief.pdf', subtitle: 'docs/brief.pdf' },
+    ];
+
     const structured = createStructuredMessagePayload({
         kind: 'rate_share',
         title: 'Rate',
         summary: '40 USD / hour',
         stateSnapshot: { status: 'shared', label: 'Shared' },
-        contextChips: [{ kind: 'project', id: 'project-1', label: 'Alpha Project' }],
+        contextChips,
     });
+    assert.ok(structured);
 
     const metadataWithStructured = withStructuredMessageMetadata({}, structured);
-    const metadataWithChips = withMessageContextChipsMetadata(metadataWithStructured, [
-        { kind: 'project', id: 'project-1', label: 'Alpha Project' },
-        { kind: 'file', id: 'file-1', label: 'brief.pdf', subtitle: 'docs/brief.pdf' },
-    ]);
+    const metadataWithChips = withMessageContextChipsMetadata(metadataWithStructured, contextChips);
     const metadataWithFollowUp = withPrivateFollowUpMetadata(metadataWithChips, {
         workflowItemId: 'workflow-1',
         status: 'pending',
@@ -85,7 +103,7 @@ test('message metadata helpers preserve structured previews, chips, and private 
         }),
         '40 USD / hour (Shared)',
     );
-    assert.deepEqual(getMessageContextChipsFromMetadata(metadataWithChips), structured.contextChips);
+    assert.deepEqual(getMessageContextChipsFromMetadata(metadataWithChips), contextChips);
     assert.deepEqual(getPrivateFollowUpFromMetadata(metadataWithFollowUp), {
         workflowItemId: 'workflow-1',
         status: 'pending',

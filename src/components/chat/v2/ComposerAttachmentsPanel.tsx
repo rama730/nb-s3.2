@@ -54,7 +54,9 @@ export function ComposerAttachmentsPanel({
                                             ? 'Uploading...'
                                             : attachment.status === 'uploaded'
                                                 ? 'Ready'
-                                                : attachment.error || 'Waiting'}
+                                                : attachment.status === 'failed'
+                                                    ? attachment.error || 'Upload failed'
+                                                    : 'Waiting'}
                                     </div>
                                 </div>
                                 <button

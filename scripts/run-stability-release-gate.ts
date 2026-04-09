@@ -17,6 +17,7 @@ function main() {
             command: 'npx',
             args: ['tsx', 'scripts/check-stability-env.ts', `--target=${target}`, strictEnv ? '--strict' : '--no-strict'],
         },
+        { label: 'lint', command: npmExecutable(), args: ['run', 'lint', '--', '.', '--ext', '.ts,.tsx,.js,.jsx'] },
         { label: 'typecheck', command: npmExecutable(), args: ['run', 'typecheck'] },
         { label: 'test:unit', command: npmExecutable(), args: ['run', 'test:unit'] },
         { label: 'check:db:migration-journal', command: npmExecutable(), args: ['run', 'check:db:migration-journal'] },

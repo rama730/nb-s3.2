@@ -17,6 +17,29 @@ import { createPresenceStore, type PresenceStore, type PresenceSubscriber } from
 
 const PRESENCE_SERVICE_PORT = Number(process.env.PRESENCE_SERVICE_PORT || 4010);
 const PRESENCE_TTL_SECONDS = 45;
+const AUTH_TIMEOUT_MS = 5_000;
+const MAX_RATE_LIMIT_VIOLATIONS = 8;
+const EVENT_RATE_LIMITS = {
+  heartbeat: {
+    windowMs: 60_000,
+    maxEvents: 6,
+    minIntervalMs: 5_000,
+  },
+  cursor: {
+    windowMs: 5_000,
+    maxEvents: 120,
+    minIntervalMs: 40,
+  },
+  typing: {
+    windowMs: 5_000,
+    maxEvents: 30,
+    minIntervalMs: 250,
+  },
+} as const;
+const authEventSchema = z.object({
+  type: z.literal("auth"),
+  token: z.string().trim().min(1).max(4096),
+}).strict();
 const cursorEventSchema = z.object({
   type: z.literal("cursor"),
   frame: z.string().max(1000).nullable().optional(),
@@ -44,6 +67,11 @@ type RoomConnectionContext = {
   claims: PresenceTokenClaims;
   roomKeys: RoomKeys;
   state: PresenceMemberState;
+  rateState: Record<"heartbeat" | "cursor" | "typing", {
+    timestamps: number[];
+    lastAcceptedAt: number;
+  }>;
+  rateLimitViolations: number;
 };
 
 type LocalRoom = {
@@ -91,7 +119,6 @@ function toPresenceState(input: {
   return {
     connectionId: input.connectionId,
     userId: input.claims.userId,
-    sessionId: input.claims.sessionId,
     roomType: input.claims.roomType,
     roomId: input.claims.roomId,
     role: input.claims.role,
@@ -214,7 +241,10 @@ async function cleanupRoom(roomKeys: RoomKeys) {
   rooms.delete(roomKeys.roomKey);
 }
 
-function buildAck(context: RoomConnectionContext, ackType: "heartbeat" | "cursor" | "typing"): PresenceServerEvent {
+function buildAck(
+  context: Pick<RoomConnectionContext, "claims">,
+  ackType: "auth" | "heartbeat" | "cursor" | "typing",
+): PresenceServerEvent {
   return {
     type: "ack",
     ackType,
@@ -222,6 +252,51 @@ function buildAck(context: RoomConnectionContext, ackType: "heartbeat" | "cursor
     roomId: context.claims.roomId,
     serverTime: Date.now(),
   };
+}
+
+function createInitialRateState() {
+  return {
+    heartbeat: { timestamps: [], lastAcceptedAt: 0 },
+    cursor: { timestamps: [], lastAcceptedAt: 0 },
+    typing: { timestamps: [], lastAcceptedAt: 0 },
+  } satisfies RoomConnectionContext["rateState"];
+}
+
+function consumeEventRateLimit(context: RoomConnectionContext, type: "heartbeat" | "cursor" | "typing") {
+  const limit = EVENT_RATE_LIMITS[type];
+  const state = context.rateState[type];
+  const now = Date.now();
+  state.timestamps = state.timestamps.filter((timestamp) => now - timestamp < limit.windowMs);
+
+  if (state.lastAcceptedAt > 0 && now - state.lastAcceptedAt < limit.minIntervalMs) {
+    return false;
+  }
+  if (state.timestamps.length >= limit.maxEvents) {
+    return false;
+  }
+
+  state.timestamps.push(now);
+  state.lastAcceptedAt = now;
+  return true;
+}
+
+function handleRateLimitedEvent(socket: WebSocket, context: RoomConnectionContext, type: "heartbeat" | "cursor" | "typing") {
+  context.rateLimitViolations += 1;
+  sendJson(socket, {
+    type: "error",
+    code: "RATE_LIMITED",
+    message: `Too many ${type} events. Slow down and retry.`,
+  });
+  emitMetric("presence.room.rate_limited", {
+    roomType: context.claims.roomType,
+    roomId: context.claims.roomId,
+    eventType: type,
+    violations: context.rateLimitViolations,
+    value: 1,
+  });
+  if (context.rateLimitViolations >= MAX_RATE_LIMIT_VIOLATIONS) {
+    closeSocket(socket, 1013, "Presence rate limit exceeded");
+  }
 }
 
 async function handlePresenceEvent(socket: WebSocket, event: PresenceClientEvent) {
@@ -239,6 +314,10 @@ async function handlePresenceEvent(socket: WebSocket, event: PresenceClientEvent
 
   switch (event.type) {
     case "heartbeat": {
+      if (!consumeEventRateLimit(context, "heartbeat")) {
+        handleRateLimitedEvent(socket, context, "heartbeat");
+        return;
+      }
       await persistMemberState(context);
       sendJson(socket, buildAck(context, "heartbeat"));
       return;
@@ -251,6 +330,10 @@ async function handlePresenceEvent(socket: WebSocket, event: PresenceClientEvent
           code: "BAD_PAYLOAD",
           message: "Invalid cursor event.",
         });
+          return;
+      }
+      if (!consumeEventRateLimit(context, "cursor")) {
+        handleRateLimitedEvent(socket, context, "cursor");
         return;
       }
 
@@ -316,6 +399,10 @@ async function handlePresenceEvent(socket: WebSocket, event: PresenceClientEvent
         });
         return;
       }
+      if (!consumeEventRateLimit(context, "typing")) {
+        handleRateLimitedEvent(socket, context, "typing");
+        return;
+      }
       context.state.typing = parsedEvent.data.isTyping;
       context.state.profile = parsedEvent.data.profile ?? context.state.profile;
       await persistMemberState(context);
@@ -360,12 +447,15 @@ async function initializePresenceConnection(websocket: WebSocket, claims: Presen
     claims,
     roomKeys,
     state,
+    rateState: createInitialRateState(),
+    rateLimitViolations: 0,
   };
   socketContexts.set(websocket, context);
   room.sockets.add(websocket);
 
   try {
     await persistMemberState(context);
+    sendJson(websocket, buildAck(context, "auth"));
 
     const snapshotMembers = await readRoomMembers(roomKeys);
     sendJson(websocket, {
@@ -490,7 +580,7 @@ const server = createServer((request, response) => {
   response.end(JSON.stringify({ ok: false, error: "Not found" }));
 });
 
-const websocketServer = new WebSocketServer({ noServer: true });
+const websocketServer = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 });
 
 server.on("upgrade", async (request, socket, head) => {
   try {
@@ -500,34 +590,52 @@ server.on("upgrade", async (request, socket, head) => {
       return;
     }
 
-    const token = requestUrl.searchParams.get("token")?.trim() || "";
-    if (!token) {
+    if (requestUrl.searchParams.get("token")) {
       socket.destroy();
       return;
     }
 
-    let claims: PresenceTokenClaims;
-    try {
-      claims = verifyPresenceToken(token);
-    } catch (error) {
-      socket.destroy(error instanceof Error ? error : undefined);
-      return;
-    }
-
     websocketServer.handleUpgrade(request, socket, head, (websocket) => {
-      void initializePresenceConnection(websocket, claims).catch((error) => {
-        console.error("[presence] connection initialization failed", {
-          roomType: claims.roomType,
-          roomId: claims.roomId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        emitMetric("presence.room.join_failed", {
-          roomType: claims.roomType,
-          roomId: claims.roomId,
-          value: 1,
-        });
-        closeSocket(websocket, 1011, "Presence connection setup failed");
+      const authTimeout = setTimeout(() => {
+        closeSocket(websocket, 1008, "Presence authentication timed out");
+      }, AUTH_TIMEOUT_MS);
+
+      const clearAuthTimeout = () => clearTimeout(authTimeout);
+      websocket.once("message", (message) => {
+        void (async () => {
+          try {
+            const parsedMessage = authEventSchema.safeParse(JSON.parse(message.toString()));
+            if (!parsedMessage.success) {
+              clearAuthTimeout();
+              closeSocket(websocket, 1008, "Presence authentication failed");
+              return;
+            }
+
+            let claims: PresenceTokenClaims;
+            try {
+              claims = verifyPresenceToken(parsedMessage.data.token);
+            } catch (error) {
+              clearAuthTimeout();
+              closeSocket(websocket, 1008, error instanceof Error ? error.message : "Presence authentication failed");
+              return;
+            }
+
+            clearAuthTimeout();
+            await initializePresenceConnection(websocket, claims);
+          } catch (error) {
+            clearAuthTimeout();
+            console.error("[presence] connection initialization failed", {
+              error: error instanceof Error ? error.message : String(error),
+            });
+            emitMetric("presence.room.join_failed", {
+              value: 1,
+            });
+            closeSocket(websocket, 1011, "Presence connection setup failed");
+          }
+        })();
       });
+      websocket.once("close", clearAuthTimeout);
+      websocket.once("error", clearAuthTimeout);
     });
   } catch (error) {
     console.error("[presence] upgrade failed", error);

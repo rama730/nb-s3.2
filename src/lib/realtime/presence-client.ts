@@ -37,6 +37,7 @@ type PresenceRoomEntry = {
   tokenRequestController: AbortController | null;
   pendingEvents: PresenceClientEvent[];
   latestWsUrl: string | null;
+  authenticated: boolean;
 };
 
 class PresenceConnectError extends Error {
@@ -212,7 +213,7 @@ function cleanupEntry(roomKey: string) {
 }
 
 function sendPresenceEvent(entry: PresenceRoomEntry, event: PresenceClientEvent) {
-  if (entry.socket?.readyState === WebSocket.OPEN) {
+  if (entry.socket?.readyState === WebSocket.OPEN && entry.authenticated) {
     entry.socket.send(JSON.stringify(event));
     return;
   }
@@ -289,6 +290,7 @@ async function openPresenceRoom(entry: PresenceRoomEntry) {
       entry.socket.close();
       entry.socket = null;
     }
+    entry.authenticated = false;
 
     if (entry.heartbeatTimer) {
       clearInterval(entry.heartbeatTimer);
@@ -305,34 +307,35 @@ async function openPresenceRoom(entry: PresenceRoomEntry) {
       if (!baseWsUrl) {
         throw new PresenceConnectError("Presence service URL is unavailable.", false);
       }
-      const wsUrl = `${baseWsUrl}?token=${encodeURIComponent(token)}`;
-      const socket = new WebSocket(wsUrl);
+      const socket = new WebSocket(baseWsUrl);
       entry.socket = socket;
 
       socket.onopen = () => {
-        entry.reconnectAttempts = 0;
-        notifyStatus(entry, "connected");
-        sendPresenceEvent(entry, { type: "heartbeat" });
-        flushPendingEvents(entry);
-        // H3: Clear existing heartbeat before creating new one to prevent leaks on reconnect
-        if (entry.heartbeatTimer) {
-          clearInterval(entry.heartbeatTimer);
-        }
-        entry.heartbeatTimer = setInterval(() => {
-          sendPresenceEvent(entry, { type: "heartbeat" });
-        }, HEARTBEAT_INTERVAL_MS);
-
-        logger.metric("presence.room.connected", {
-          roomType: entry.roomType,
-          roomId: entry.roomId,
-          value: 1,
-        });
+        socket.send(JSON.stringify({ type: "auth", token }));
       };
 
       socket.onmessage = async (message) => {
         try {
           const raw = await decodePresenceMessageData(message.data);
           const parsed = JSON.parse(raw) as PresenceServerEvent;
+          if (parsed.type === "ack" && parsed.ackType === "auth" && !entry.authenticated) {
+            entry.authenticated = true;
+            entry.reconnectAttempts = 0;
+            notifyStatus(entry, "connected");
+            sendPresenceEvent(entry, { type: "heartbeat" });
+            flushPendingEvents(entry);
+            if (entry.heartbeatTimer) {
+              clearInterval(entry.heartbeatTimer);
+            }
+            entry.heartbeatTimer = setInterval(() => {
+              sendPresenceEvent(entry, { type: "heartbeat" });
+            }, HEARTBEAT_INTERVAL_MS);
+            logger.metric("presence.room.connected", {
+              roomType: entry.roomType,
+              roomId: entry.roomId,
+              value: 1,
+            });
+          }
           broadcastEvent(entry, parsed);
         } catch (error) {
           logger.warn("presence.room.message_parse_failed", {
@@ -356,6 +359,7 @@ async function openPresenceRoom(entry: PresenceRoomEntry) {
           clearInterval(entry.heartbeatTimer);
           entry.heartbeatTimer = null;
         }
+        entry.authenticated = false;
         entry.socket = null;
         scheduleReconnect(entry, true);
       };
@@ -415,6 +419,7 @@ function ensureEntry(roomType: PresenceRoomType, roomId: string, role: PresenceR
     tokenRequestController: null,
     pendingEvents: [],
     latestWsUrl: null,
+    authenticated: false,
   };
   presenceEntries.set(roomKey, entry);
   void openPresenceRoom(entry);

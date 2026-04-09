@@ -3,6 +3,8 @@ import { afterEach, describe, it } from "node:test";
 
 import {
   createPresenceTokenClaims,
+  MISSING_PRESENCE_SECRET_ERROR_CODE,
+  MissingPresenceSecretError,
   signPresenceToken,
   verifyPresenceToken,
 } from "@/lib/realtime/presence-token";
@@ -26,7 +28,7 @@ afterEach(() => {
 });
 
 describe("presence token", () => {
-  it("uses a deterministic fallback secret outside production", () => {
+  it("requires an explicit secret outside production too", () => {
     delete mutableEnv.PRESENCE_TOKEN_SECRET;
     mutableEnv.NODE_ENV = "development";
 
@@ -39,11 +41,16 @@ describe("presence token", () => {
       ttlSeconds: 60,
     });
 
-    const token = signPresenceToken(claims);
-    const verified = verifyPresenceToken(token);
-
-    assert.equal(verified.userId, "user-1");
-    assert.equal(verified.roomId, "project-1");
+    assert.throws(
+      () => signPresenceToken(claims),
+      (error: unknown) => {
+        assert.ok(error instanceof MissingPresenceSecretError);
+        assert.equal(error.code, MISSING_PRESENCE_SECRET_ERROR_CODE);
+        assert.match(error.message, /not configured/i);
+        assert.doesNotMatch(error.message, /presence_token_secret/i);
+        return true;
+      },
+    );
   });
 
   it("requires an explicit secret in production", () => {
@@ -59,7 +66,16 @@ describe("presence token", () => {
       ttlSeconds: 60,
     });
 
-    assert.throws(() => signPresenceToken(claims), /PRESENCE_TOKEN_SECRET is required/i);
+    assert.throws(
+      () => signPresenceToken(claims),
+      (error: unknown) => {
+        assert.ok(error instanceof MissingPresenceSecretError);
+        assert.equal(error.code, MISSING_PRESENCE_SECRET_ERROR_CODE);
+        assert.match(error.message, /not configured/i);
+        assert.doesNotMatch(error.message, /presence_token_secret/i);
+        return true;
+      },
+    );
   });
 
   it("signs and verifies room-scoped claims", () => {

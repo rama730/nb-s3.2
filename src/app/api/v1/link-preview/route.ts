@@ -1,6 +1,11 @@
 import { NextRequest } from 'next/server';
 import { jsonSuccess, jsonError } from '../_envelope';
 import { enforceRouteLimit, requireAuthenticatedUser } from '../_shared';
+import {
+    fetchPublicUrlWithRedirectValidation,
+    UnsafeOutboundUrlError,
+} from '@/lib/security/outbound-url';
+import { logger } from '@/lib/logger';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -47,7 +52,6 @@ export async function GET(request: NextRequest) {
             return jsonError('Missing url parameter', 400, 'BAD_REQUEST');
         }
 
-        // Validate URL format
         let parsedUrl: URL;
         try {
             parsedUrl = new URL(url);
@@ -55,24 +59,20 @@ export async function GET(request: NextRequest) {
             return jsonError('Invalid URL', 400, 'BAD_REQUEST');
         }
 
-        // Only allow http/https
-        if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
-            return jsonError('Only HTTP/HTTPS URLs are supported', 400, 'BAD_REQUEST');
-        }
-
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-
         let html: string;
         try {
-            const res = await fetch(url, {
-                signal: controller.signal,
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (compatible; LinkPreviewBot/1.0)',
-                    'Accept': 'text/html',
+            const { response: res, resolvedUrl } = await fetchPublicUrlWithRedirectValidation({
+                url,
+                timeoutMs: FETCH_TIMEOUT_MS,
+                maxRedirects: 3,
+                init: {
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (compatible; LinkPreviewBot/1.0)',
+                        'Accept': 'text/html',
+                    },
                 },
-                redirect: 'follow',
             });
+            parsedUrl = resolvedUrl;
 
             if (!res.ok) {
                 return jsonSuccess<LinkPreviewData>({
@@ -118,7 +118,16 @@ export async function GET(request: NextRequest) {
             }
             reader.cancel().catch(() => {});
             html = new TextDecoder().decode(Buffer.concat(chunks).slice(0, MAX_FETCH_SIZE));
-        } catch {
+        } catch (error) {
+            if (error instanceof UnsafeOutboundUrlError) {
+                logger.warn('link-preview.outbound_url_blocked', {
+                    module: 'api',
+                    userId: user?.id ?? undefined,
+                    requestedUrl: url,
+                    error: error.message,
+                });
+                return jsonError('URL is not allowed', 400, 'BAD_REQUEST');
+            }
             // Fetch failed (timeout, network error, etc.)
             return jsonSuccess<LinkPreviewData>({
                 title: null,
@@ -127,8 +136,6 @@ export async function GET(request: NextRequest) {
                 domain: parsedUrl.hostname,
                 url,
             });
-        } finally {
-            clearTimeout(timeout);
         }
 
         // Parse OG tags
@@ -143,7 +150,7 @@ export async function GET(request: NextRequest) {
         let image = ogImage;
         if (image && !image.startsWith('http')) {
             try {
-                image = new URL(image, url).href;
+                image = new URL(image, parsedUrl).href;
             } catch {
                 image = null;
             }

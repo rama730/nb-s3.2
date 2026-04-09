@@ -57,6 +57,15 @@ export const queryKeys = {
       sprintTasksRoot: (projectId: string) => ["project", projectId, "detail", "sprint-tasks"] as const,
       sprintTasks: (projectId: string, sprintId: string) =>
         ["project", projectId, "detail", "sprint-tasks", sprintId] as const,
+      sprintDetailRoot: (projectId: string) => ["project", projectId, "detail", "sprint-detail"] as const,
+      sprintDetail: (projectId: string, sprintId: string) =>
+        ["project", projectId, "detail", "sprint-detail", sprintId] as const,
+      sprintDetailShell: (projectId: string, sprintId: string | null) =>
+        ["project", projectId, "detail", "sprint-detail", asNullable(sprintId), "shell"] as const,
+      sprintDetailSummary: (projectId: string, sprintId: string | null) =>
+        ["project", projectId, "detail", "sprint-detail", asNullable(sprintId), "summary"] as const,
+      sprintTimeline: (projectId: string, sprintId: string | null) =>
+        ["project", projectId, "detail", "sprint-detail", asNullable(sprintId), "timeline"] as const,
       sprints: (projectId: string) => ["project", projectId, "detail", "sprints"] as const,
       analytics: (projectId: string) => ["project", projectId, "detail", "analytics"] as const,
       members: (projectId: string) => ["project", projectId, "detail", "members"] as const,

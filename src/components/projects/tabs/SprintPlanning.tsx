@@ -1,495 +1,660 @@
-import React, { useState, useMemo, useCallback } from "react";
-import { Plus, ChevronRight, CalendarDays, CheckCircle, Paperclip, Flag, MoreHorizontal, User } from "lucide-react";
-import { cn } from "@/lib/utils";
-import { format } from "date-fns";
-import { motion, AnimatePresence } from "framer-motion";
+"use client";
+
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
+import { CalendarDays, Plus } from "lucide-react";
 import { toast } from "sonner";
+
 import CreateSprintModal from "@/components/projects/v2/sprints/CreateSprintModal";
-import { createSprintAction } from "@/app/actions/project";
-import { useProjectSprints, useSprintTasks } from "@/hooks/hub/useProjectData";
-import { Virtuoso } from "react-virtuoso";
-import { useReducedMotionPreference } from "@/components/providers/theme-provider";
-
-export interface Sprint {
-    id: string;
-    projectId: string;
-    name: string;
-    goal?: string | null;
-    startDate: string;
-    endDate: string;
-    status: "planning" | "active" | "completed";
-    createdAt: string;
-}
-
-export interface SprintTask {
-    id: string;
-    sprintId: string | null;
-    title: string;
-    status: "todo" | "in_progress" | "done" | "blocked";
-    priority: "low" | "medium" | "high" | "urgent";
-    storyPoints?: number | null;
-    updatedAt?: string | null;
-    assignee?: { id: string; fullName: string | null; avatarUrl: string | null } | null;
-    creator?: { id: string; fullName: string | null; avatarUrl: string | null } | null;
-    attachments?: any[];
-}
+import { SprintDetailDrawer, prefetchSprintDrawerPayload } from "@/components/projects/tabs/sprint/SprintDetailDrawer";
+import { SprintHeader } from "@/components/projects/tabs/sprint/SprintHeader";
+import { SprintLeftRail } from "@/components/projects/tabs/sprint/SprintLeftRail";
+import { SprintTimelineContent } from "@/components/projects/tabs/sprint/SprintTimelineContent";
+import { SprintTimelineToolbar } from "@/components/projects/tabs/sprint/SprintTimelineToolbar";
+import {
+  completeSprintAction,
+  createSprintAction,
+  fetchProjectSprintDetailAction,
+  startSprintAction,
+} from "@/app/actions/project";
+import { useSprintDetail, SPRINT_DETAIL_QUERY_KEY } from "@/hooks/hub/useProjectData";
+import { useSprintViewPreferences } from "@/hooks/hub/useSprintViewPreferences";
+import { queryKeys } from "@/lib/query-keys";
+import {
+  buildProjectSprintDetailHref,
+  parseSprintRouteState,
+  type SprintDetailPayload,
+  type SprintDrawerPreview,
+  type SprintDrawerState,
+  type SprintListItem,
+  type SprintTaskTimelineEntity,
+  type SprintTimelineFilter,
+  type SprintTimelineMode,
+} from "@/lib/projects/sprint-detail";
+import {
+  buildSprintShellSlice,
+  buildSprintSummarySlice,
+  buildSprintTimelineSlice,
+  buildSprintTimelineViewModel,
+  resolveSprintViewState,
+} from "@/lib/projects/sprint-presentation";
+import { recordSprintMetric } from "@/lib/projects/sprint-observability";
+import type { CreateSprintDraftInput } from "@/lib/projects/sprints";
 
 interface SprintPlanningProps {
-    projectId: string;
-    isOwnerOrMember: boolean;
-    sprints: Sprint[];
-    tasks: SprintTask[]; // Still passed but might be ignored or used as fallback
-    onCreateSprint: () => void;
-    onStartSprint: (sprintId: string) => void;
-    onCompleteSprint: (sprintId: string) => void;
-    onMoveTask: (taskId: string, sprintId: string | null) => void;
+  projectId: string;
+  projectSlug: string;
+  projectName?: string;
+  currentUserId?: string | null;
+  isOwner: boolean;
+  isOwnerOrMember: boolean;
+  initialSprintData?: SprintDetailPayload | null;
+}
+
+export type Sprint = SprintListItem;
+export type SprintTask = SprintTaskTimelineEntity;
+
+const DRAWER_PREFETCH_ROW_LIMIT = 80;
+
+function dedupeDrawerPreviews(previews: SprintDrawerPreview[]) {
+  const seen = new Set<string>();
+  return previews.filter((preview) => {
+    const key = `${preview.type}:${preview.id}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function getTimelineVirtualizationThreshold(mode: SprintTimelineMode) {
+  if (mode === "grouped") return 14;
+  if (mode === "files") return 28;
+  return 36;
 }
 
 export default function SprintPlanning({
-    projectId,
-    isOwnerOrMember,
-    sprints,
-    onCreateSprint,
-    onStartSprint,
-    onCompleteSprint,
+  projectId,
+  projectSlug,
+  projectName,
+  currentUserId = null,
+  isOwner,
+  isOwnerOrMember,
+  initialSprintData = null,
 }: SprintPlanningProps) {
-    const reduceMotion = useReducedMotionPreference();
-    const [selectedSprintId, setSelectedSprintId] = useState<string | null>(null);
-    const [showCreateModal, setShowCreateModal] = useState(false);
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const queryClient = useQueryClient();
+  const timelineScrollRef = useRef<HTMLDivElement | null>(null);
+  const prefetchedSprintIdsRef = useRef<Set<string>>(new Set());
+  const compareMetricKeyRef = useRef<string | null>(null);
+  const drawerPrefetchKeyRef = useRef<string | null>(null);
 
-    // Data Fetching
-    const { data: fetchedSprints, isLoading: loadingSprints } = useProjectSprints(projectId, sprints);
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [isMutatingLifecycle, setIsMutatingLifecycle] = useState(false);
 
-    const activeSprints = fetchedSprints || [];
+  const routeState = useMemo(() => parseSprintRouteState(searchParams), [searchParams]);
+  const routeSprintId = useMemo(() => {
+    const match = pathname?.match(/\/projects\/[^/]+\/sprints\/([^/?#]+)/);
+    return match?.[1] ?? null;
+  }, [pathname]);
+  const requestedSprintId = routeSprintId || initialSprintData?.selectedSprintId || null;
 
-    // Sort sprints: Active first, then by creation date
-    const sortedSprints = useMemo(() => {
-        return [...activeSprints].sort((a, b) => {
-            if (a.status === 'active' && b.status !== 'active') return -1;
-            if (a.status !== 'active' && b.status === 'active') return 1;
-            return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+  const { persistedPreference, savePreference } = useSprintViewPreferences(currentUserId, projectId);
+  const resolvedViewState = useMemo(
+    () => resolveSprintViewState({ routeState, preference: persistedPreference }),
+    [persistedPreference, routeState],
+  );
+
+  const {
+    data: sprintDetailData,
+    isLoading,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useSprintDetail(projectId, requestedSprintId, initialSprintData ?? undefined, 24);
+
+  const detail = sprintDetailData?.pages[0] ?? initialSprintData;
+  const rows = useMemo(
+    () => sprintDetailData?.pages.flatMap((page) => page.rows) ?? detail?.rows ?? [],
+    [detail?.rows, sprintDetailData?.pages],
+  );
+  const drawerPreviews = useMemo(
+    () => dedupeDrawerPreviews(sprintDetailData?.pages.flatMap((page) => page.drawerPreviews) ?? detail?.drawerPreviews ?? []),
+    [detail?.drawerPreviews, sprintDetailData?.pages],
+  );
+  const drawerPreviewMap = useMemo(
+    () => new Map(drawerPreviews.map((preview) => [`${preview.type}:${preview.id}`, preview])),
+    [drawerPreviews],
+  );
+
+  const selectedSprintId = detail?.selectedSprintId ?? null;
+  const selectedSprint = detail?.sprints.find((sprint) => sprint.id === selectedSprintId) ?? null;
+  const permissions = detail?.permissions ?? {
+    canRead: true,
+    canWrite: isOwnerOrMember,
+    canCreate: isOwnerOrMember,
+    canStart: isOwnerOrMember,
+    canComplete: isOwnerOrMember,
+    isOwner,
+    isMember: isOwnerOrMember && !isOwner,
+    memberRole: isOwner ? "owner" : isOwnerOrMember ? "member" : "viewer",
+  };
+
+  const timelineView = useMemo(
+    () =>
+      buildSprintTimelineViewModel({
+        rows,
+        mode: resolvedViewState.mode,
+        filter: resolvedViewState.filter,
+      }),
+    [resolvedViewState.filter, resolvedViewState.mode, rows],
+  );
+  const shouldVirtualize =
+    (timelineView.mode === "grouped" ? timelineView.groups.length : timelineView.rows.length) >=
+    getTimelineVirtualizationThreshold(timelineView.mode);
+  const drawer = routeState.drawer;
+  const activeDrawerPreview =
+    drawer.type === "none" ? null : drawerPreviewMap.get(`${drawer.type}:${drawer.id}`) ?? null;
+
+  const syncSliceCaches = useCallback(
+    (payload: SprintDetailPayload, combinedRows: typeof rows, combinedDrawerPreviews: SprintDrawerPreview[]) => {
+      queryClient.setQueryData(
+        queryKeys.project.detail.sprintDetailShell(projectId, payload.selectedSprintId),
+        buildSprintShellSlice(payload),
+      );
+      queryClient.setQueryData(
+        queryKeys.project.detail.sprintDetailSummary(projectId, payload.selectedSprintId),
+        buildSprintSummarySlice(payload),
+      );
+      queryClient.setQueryData(queryKeys.project.detail.sprintTimeline(projectId, payload.selectedSprintId), {
+        ...buildSprintTimelineSlice(payload),
+        rows: combinedRows,
+        drawerPreviews: combinedDrawerPreviews,
+      });
+    },
+    [projectId, queryClient, rows],
+  );
+
+  useEffect(() => {
+    if (!detail) return;
+    syncSliceCaches(detail, rows, drawerPreviews);
+  }, [detail, drawerPreviews, rows, syncSliceCaches]);
+
+  const replaceRouteState = useCallback(
+    (next: {
+      filter?: SprintTimelineFilter;
+      mode?: SprintTimelineMode;
+      drawer?: SprintDrawerState;
+    }) => {
+      const params = new URLSearchParams(searchParams?.toString() ?? "");
+      if (pathname?.includes("/sprints/")) {
+        params.delete("tab");
+      } else {
+        params.set("tab", "sprints");
+      }
+
+      const filter = next.filter ?? resolvedViewState.filter;
+      const mode = next.mode ?? resolvedViewState.mode;
+      const drawerState = next.drawer ?? routeState.drawer;
+
+      if (filter === "all") params.delete("filter");
+      else params.set("filter", filter);
+
+      if (mode === "chronological") params.delete("mode");
+      else params.set("mode", mode);
+
+      if (drawerState.type === "none") {
+        params.delete("drawerType");
+        params.delete("drawerId");
+      } else {
+        params.set("drawerType", drawerState.type);
+        params.set("drawerId", drawerState.id);
+      }
+
+      const query = params.toString();
+      const nextUrl = query ? `${pathname}?${query}` : pathname;
+      router.replace(nextUrl, { scroll: false });
+    },
+    [pathname, resolvedViewState.filter, resolvedViewState.mode, routeState.drawer, router, searchParams],
+  );
+
+  const patchSprintDetailCache = useCallback(
+    (updater: (page: SprintDetailPayload) => SprintDetailPayload) => {
+      queryClient.setQueriesData(
+        { queryKey: queryKeys.project.detail.sprintDetailRoot(projectId) },
+        (existing: unknown) => {
+          if (!existing || typeof existing !== "object" || !("pages" in existing)) return existing;
+          const infiniteData = existing as { pages: SprintDetailPayload[]; pageParams: unknown[] };
+          const nextPages = infiniteData.pages.map(updater);
+          const head = nextPages[0];
+          if (head) {
+            syncSliceCaches(
+              head,
+              nextPages.flatMap((page) => page.rows),
+              dedupeDrawerPreviews(nextPages.flatMap((page) => page.drawerPreviews)),
+            );
+          }
+          return {
+            ...infiniteData,
+            pages: nextPages,
+          };
+        },
+      );
+    },
+    [projectId, queryClient, syncSliceCaches],
+  );
+
+  const patchSprintList = useCallback(
+    (updater: (sprints: SprintListItem[]) => SprintListItem[]) => {
+      patchSprintDetailCache((page) => ({
+        ...page,
+        sprints: updater(page.sprints),
+      }));
+    },
+    [patchSprintDetailCache],
+  );
+
+  const patchSelectedSprintStatus = useCallback(
+    (sprintId: string, status: SprintListItem["status"]) => {
+      patchSprintDetailCache((page) => {
+        const nextSprints = page.sprints.map((sprint) => (sprint.id === sprintId ? { ...sprint, status } : sprint));
+        const nextRows = page.rows.map((row) => {
+          if ((row.kind === "kickoff" || row.kind === "closeout") && row.sprint.id === sprintId) {
+            return { ...row, sprint: { ...row.sprint, status } };
+          }
+          return row;
         });
-    }, [activeSprints]);
+        return {
+          ...page,
+          sprints: nextSprints,
+          rows: nextRows,
+        };
+      });
+    },
+    [patchSprintDetailCache],
+  );
 
-    // Auto-select first sprint
-    const activeSprint = activeSprints.find(s => s.status === 'active');
-    const displaySprintId = selectedSprintId || activeSprint?.id || sortedSprints[0]?.id;
-    const currentSprint = activeSprints.find(s => s.id === displaySprintId);
+  const prefetchSprintDetail = useCallback(
+    async (sprintId: string) => {
+      if (!sprintId || prefetchedSprintIdsRef.current.has(sprintId)) return;
+      prefetchedSprintIdsRef.current.add(sprintId);
 
-    // Filtered tasks for selected sprint (Fetched from server now!)
-    const {
-        data: sprintTasksData,
-        isLoading: loadingTasks,
-        fetchNextPage: fetchNextSprintTasks,
-        hasNextPage: hasNextSprintTasks,
-        isFetchingNextPage: isFetchingNextSprintTasks,
-    } = useSprintTasks(projectId, displaySprintId || "");
+      const queryKey = SPRINT_DETAIL_QUERY_KEY(projectId, sprintId);
+      const existing = queryClient.getQueryData(queryKey);
+      if (existing) return;
 
-    const safeSprintTasks = useMemo(() => {
-        return (sprintTasksData?.pages.flatMap((p: any) => p.tasks) || []) as SprintTask[];
-    }, [sprintTasksData]);
+      await queryClient.prefetchInfiniteQuery({
+        queryKey,
+        queryFn: async ({ pageParam }: { pageParam: string | undefined }) => {
+          const result = await fetchProjectSprintDetailAction({
+            projectId,
+            sprintId,
+            cursor: pageParam,
+            limit: 24,
+          });
+          if (!result.success) throw new Error(result.error);
+          return result.data;
+        },
+        initialPageParam: undefined as string | undefined,
+        getNextPageParam: (lastPage: SprintDetailPayload) => lastPage.nextCursor,
+        staleTime: 1000 * 60 * 2,
+      });
 
-    const goalText = currentSprint?.goal || "Focus on delivering value.";
-
-    // Calculate Progress
-    const progress = useMemo(() => {
-        if (safeSprintTasks.length === 0) return 0;
-        const done = safeSprintTasks.filter(t => t.status === 'done').length;
-        return Math.round((done / safeSprintTasks.length) * 100);
-    }, [safeSprintTasks]);
-
-    const renderSprintTaskRow = useCallback((task: SprintTask) => (
-        <div className="group flex items-center gap-4 p-4 hover:bg-white dark:hover:bg-zinc-900 transition-all border-l-2 border-transparent hover:border-primary">
-            {/* 1. Status & Identity */}
-            <div className="w-[40px] shrink-0 flex justify-center">
-                <div className={cn(
-                    "w-2.5 h-2.5 rounded-full ring-2 ring-offset-2 ring-offset-zinc-50 dark:ring-offset-zinc-900",
-                    task.status === 'done' ? "bg-emerald-500 ring-emerald-200 dark:ring-emerald-900" :
-                    task.status === 'in_progress' ? "bg-primary ring-primary/20" :
-                    task.status === 'blocked' ? "bg-red-500 ring-red-200 dark:ring-red-900" :
-                    "bg-zinc-300 ring-zinc-200 dark:ring-zinc-700"
-                )} />
-            </div>
-
-            {/* 2. Title & ID */}
-            <div className="flex-1 min-w-0 grid gap-0.5">
-                <div className="flex items-center gap-2">
-                    <h4 className={cn(
-                        "font-medium text-[15px] truncate transition-colors",
-                        task.status === 'done' ? "text-zinc-400 line-through" : "text-zinc-900 dark:text-zinc-100 group-hover:text-primary"
-                    )}>
-                        {task.title}
-                    </h4>
-                </div>
-                <div className="flex items-center gap-2 text-xs text-zinc-400">
-                    <span className="font-mono">TASK</span>
-                    <span>•</span>
-                    <span className="capitalize">{task.status.replace('_', ' ')}</span>
-                </div>
-            </div>
-
-            {/* 3. People (Assignee + Reporter) */}
-            <div className="hidden sm:flex items-center gap-3 shrink-0 px-2 min-w-[140px]">
-                {/* Creator/Reporter */}
-                <div className="flex flex-col items-end">
-                    <span className="text-[10px] text-zinc-400 uppercase tracking-wider font-medium">Rep</span>
-                    {task.creator ? (
-                        <div className="flex items-center gap-1.5" title={`Reporter: ${task.creator.fullName}`}>
-                            <span className="text-xs text-zinc-600 dark:text-zinc-400 max-w-[80px] truncate">
-                                {task.creator.fullName?.split(' ')[0]}
-                            </span>
-                            <div className="w-5 h-5 rounded-full bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center overflow-hidden border border-zinc-200 dark:border-zinc-700">
-                                {task.creator.avatarUrl ? (
-                                    <img src={task.creator.avatarUrl} alt="" className="w-full h-full object-cover" />
-                                ) : (
-                                    <User className="w-3 h-3 text-zinc-400" />
-                                )}
-                            </div>
-                        </div>
-                    ) : <span className="text-xs text-zinc-300">-</span>}
-                </div>
-
-                <div className="w-px h-6 bg-zinc-200 dark:bg-zinc-800" />
-
-                {/* Assignee */}
-                <div className="flex flex-col items-start">
-                    <span className="text-[10px] text-zinc-400 uppercase tracking-wider font-medium">Asg</span>
-                    {task.assignee ? (
-                            <div className="flex items-center gap-1.5" title={`Assignee: ${task.assignee.fullName}`}>
-                            <div className="w-6 h-6 rounded-full bg-primary/10 dark:bg-primary/15 flex items-center justify-center overflow-hidden border border-primary/15 text-primary text-xs font-semibold">
-                                {task.assignee.avatarUrl ? (
-                                    <img src={task.assignee.avatarUrl} alt="" className="w-full h-full object-cover" />
-                                ) : (
-                                    task.assignee.fullName?.[0] || <User className="w-3 h-3" />
-                                )}
-                            </div>
-                            <span className="text-xs font-medium text-zinc-900 dark:text-zinc-100 max-w-[80px] truncate">
-                                {task.assignee.fullName?.split(' ')[0]}
-                            </span>
-                        </div>
-                    ) : (
-                        <span className="text-xs italic text-zinc-400">Unassigned</span>
-                    )}
-                </div>
-            </div>
-
-            {/* 4. Context Metadata (Files, Pts, Priority) */}
-            <div className="hidden md:flex items-center gap-4 shrink-0 px-2 min-w-[120px] justify-end">
-                {/* Attachments */}
-                {task.attachments && task.attachments.length > 0 && (
-                    <div className="flex items-center gap-1 text-zinc-400" title={`${task.attachments.length} attachments`}>
-                        <Paperclip className="w-3.5 h-3.5" />
-                        <span className="text-xs font-medium">{task.attachments.length}</span>
-                    </div>
-                )}
-
-                {/* Priority */}
-                <div title={`Priority: ${task.priority}`}>
-                    <Flag className={cn(
-                        "w-4 h-4",
-                        task.priority === 'urgent' ? 'text-red-500 fill-red-500' :
-                        task.priority === 'high' ? 'text-orange-500 fill-orange-500' :
-                        task.priority === 'medium' ? 'text-yellow-500' : 'text-zinc-300'
-                    )} />
-                </div>
-
-                {/* Story Points */}
-                {task.storyPoints != null && (
-                    <span className="text-xs font-mono font-medium text-zinc-500 bg-zinc-100 dark:bg-zinc-800 px-1.5 py-0.5 rounded border border-zinc-200 dark:border-zinc-700">
-                        {task.storyPoints}
-                    </span>
-                )}
-            </div>
-
-            {/* 5. Actions */}
-            <div className="shrink-0 pl-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                <button className="p-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100">
-                    <MoreHorizontal className="w-4 h-4" />
-                </button>
-            </div>
-        </div>
-    ), []);
-
-    // Loading State
-    if (loadingSprints && !activeSprints.length) {
-        return (
-            <div className="flex gap-6 h-full min-h-0 overflow-hidden">
-                <div className="w-[320px] flex-shrink-0 flex flex-col gap-4">
-                     <div className="h-4 w-24 bg-zinc-100 dark:bg-zinc-800 rounded animate-pulse" />
-                     <div className="h-10 w-full bg-zinc-100 dark:bg-zinc-800 rounded animate-pulse" />
-                     <div className="space-y-3">
-                         {[1, 2, 3].map(i => (
-                             <div key={i} className="h-24 w-full bg-zinc-100 dark:bg-zinc-800 rounded-xl animate-pulse" />
-                         ))}
-                     </div>
-                </div>
-                <div className="flex-1 bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-200 dark:border-zinc-800 p-6">
-                    <div className="h-8 w-1/3 bg-zinc-100 dark:bg-zinc-800 rounded animate-pulse mb-6" />
-                    <div className="h-32 w-full bg-zinc-100 dark:bg-zinc-800 rounded animate-pulse mb-6" />
-                    <div className="space-y-4">
-                        {[1, 2, 3, 4].map(i => (
-                            <div key={i} className="h-16 w-full bg-zinc-100 dark:bg-zinc-800 rounded animate-pulse" />
-                        ))}
-                    </div>
-                </div>
-            </div>
+      const prefetched = queryClient.getQueryData(queryKey) as
+        | { pages: SprintDetailPayload[]; pageParams: unknown[] }
+        | undefined;
+      if (prefetched?.pages?.[0]) {
+        syncSliceCaches(
+          prefetched.pages[0],
+          prefetched.pages.flatMap((page) => page.rows),
+          dedupeDrawerPreviews(prefetched.pages.flatMap((page) => page.drawerPreviews)),
         );
-    }
+      }
+    },
+    [projectId, queryClient, syncSliceCaches],
+  );
 
-    // Empty state
-    if (activeSprints.length === 0 && !loadingSprints) {
-        return (
-            <div className="flex flex-col items-center justify-center h-[500px] bg-zinc-50 dark:bg-zinc-900/50 rounded-xl border-2 border-dashed border-zinc-200 dark:border-zinc-800">
-                <div className="text-center space-y-4 max-w-md px-6">
-                    <div className="w-16 h-16 bg-zinc-100 dark:bg-zinc-800 rounded-xl flex items-center justify-center mx-auto">
-                        <CalendarDays className="w-8 h-8 text-zinc-400" />
-                    </div>
-                    <div>
-                        <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100 mb-2">No Sprints Yet</h3>
-                        <p className="text-sm text-zinc-500">Create your first sprint to start tracking goals and progress.</p>
-                    </div>
-                    {isOwnerOrMember && (
-                        <>
-                            <button
-                                onClick={() => setShowCreateModal(true)}
-                                className="px-5 py-2.5 bg-zinc-900 hover:bg-zinc-800 dark:bg-zinc-100 dark:hover:bg-zinc-200 text-zinc-100 dark:text-zinc-900 font-semibold rounded-lg transition-colors inline-flex items-center gap-2"
-                            >
-                                <Plus className="w-4 h-4" />
-                                Create Sprint
-                            </button>
-                            <CreateSprintModal
-                                isOpen={showCreateModal}
-                                onClose={() => setShowCreateModal(false)}
-                                onCreate={async (data) => {
-                                    try {
-                                        const result = await createSprintAction({ ...data, projectId });
-                                        if (result.success) {
-                                            if (onCreateSprint) onCreateSprint();
-                                            setShowCreateModal(false);
-                                            toast.success("Sprint created");
-                                        } else {
-                                            toast.error(result.error);
-                                        }
-                                    } catch {
-                                        toast.error("Failed to create sprint");
-                                    }
-                                }}
-                                sprintCount={0}
-                            />
-                        </>
-                    )}
-                </div>
-            </div>
+  const handleSelectSprint = useCallback(
+    (sprintId: string) => {
+      const wasPrefetched = !!queryClient.getQueryData(SPRINT_DETAIL_QUERY_KEY(projectId, sprintId));
+      recordSprintMetric("project.sprint.prefetch.selection", {
+        projectId,
+        sprintId,
+        hit: wasPrefetched,
+      });
+    },
+    [projectId, queryClient],
+  );
+
+  const handleModeChange = useCallback(
+    (mode: SprintTimelineMode) => {
+      const nextFilter =
+        mode === "files" && resolvedViewState.filter === "files" ? "all" : resolvedViewState.filter;
+
+      savePreference({ mode, filter: nextFilter });
+      replaceRouteState({ mode, filter: nextFilter });
+      recordSprintMetric("project.sprint.timeline.mode", {
+        projectId,
+        sprintId: selectedSprintId,
+        mode,
+      });
+    },
+    [projectId, replaceRouteState, resolvedViewState.filter, savePreference, selectedSprintId],
+  );
+
+  const handleFilterChange = useCallback(
+    (filter: SprintTimelineFilter) => {
+      savePreference({ mode: resolvedViewState.mode, filter });
+      replaceRouteState({ filter });
+      recordSprintMetric("project.sprint.timeline.filter", {
+        projectId,
+        sprintId: selectedSprintId,
+        filter,
+        mode: resolvedViewState.mode,
+      });
+    },
+    [projectId, replaceRouteState, resolvedViewState.mode, savePreference, selectedSprintId],
+  );
+
+  const handleOpenDrawer = useCallback(
+    (nextDrawer: SprintDrawerState) => {
+      replaceRouteState({ drawer: nextDrawer });
+      recordSprintMetric("project.sprint.timeline.drawer_open", {
+        projectId,
+        sprintId: selectedSprintId,
+        drawerType: nextDrawer.type,
+        drawerId: nextDrawer.id,
+      });
+    },
+    [projectId, replaceRouteState, selectedSprintId],
+  );
+
+  const handleCloseDrawer = useCallback(() => {
+    replaceRouteState({ drawer: { type: "none", id: null } });
+  }, [replaceRouteState]);
+
+  const handlePrefetchDrawer = useCallback(
+    async (nextDrawer: SprintDrawerState) => {
+      if (rows.length > DRAWER_PREFETCH_ROW_LIMIT || nextDrawer.type === "none") return;
+      const key = `${nextDrawer.type}:${nextDrawer.id}`;
+      if (drawerPrefetchKeyRef.current === key) return;
+      drawerPrefetchKeyRef.current = key;
+      await prefetchSprintDrawerPayload(queryClient, projectId, nextDrawer);
+    },
+    [projectId, queryClient, rows.length],
+  );
+
+  const handleCreateSprint = useCallback(
+    async (data: CreateSprintDraftInput) => {
+      try {
+        const result = await createSprintAction({ ...data, projectId });
+        if (!result.success || !result.sprint) {
+          return { success: false as const, error: result.error };
+        }
+
+        const nextSprint: SprintListItem = {
+          id: result.sprint.id,
+          projectId: result.sprint.projectId,
+          name: result.sprint.name,
+          goal: result.sprint.goal ?? null,
+          startDate: result.sprint.startDate?.toISOString?.() ?? null,
+          endDate: result.sprint.endDate?.toISOString?.() ?? null,
+          status: result.sprint.status,
+          createdAt: result.sprint.createdAt?.toISOString?.() ?? null,
+          updatedAt: result.sprint.updatedAt?.toISOString?.() ?? null,
+        };
+
+        patchSprintList((existing) => [nextSprint, ...existing.filter((sprint) => sprint.id !== nextSprint.id)]);
+        toast.success("Sprint created");
+
+        await queryClient.invalidateQueries({ queryKey: queryKeys.project.detail.sprintDetailRoot(projectId) });
+        router.push(
+          buildProjectSprintDetailHref(projectSlug, nextSprint.id, {
+            filter: resolvedViewState.filter,
+            mode: resolvedViewState.mode,
+          }),
+          { scroll: false },
         );
-    }
+        return { success: true as const };
+      } catch {
+        return {
+          success: false as const,
+          error: "Failed to create sprint",
+        };
+      }
+    },
+    [patchSprintList, projectId, projectSlug, queryClient, resolvedViewState.filter, resolvedViewState.mode, router],
+  );
 
+  const runLifecycleMutation = useCallback(
+    async (mode: "start" | "complete") => {
+      if (!selectedSprintId || !selectedSprint) return;
+      setIsMutatingLifecycle(true);
+      const previousStates = queryClient.getQueriesData({ queryKey: queryKeys.project.detail.sprintDetailRoot(projectId) });
+      const nextStatus = mode === "start" ? "active" : "completed";
+
+      patchSelectedSprintStatus(selectedSprintId, nextStatus);
+
+      try {
+        const result =
+          mode === "start"
+            ? await startSprintAction(selectedSprintId, projectId)
+            : await completeSprintAction(selectedSprintId, projectId);
+
+        if (!result.success) {
+          throw new Error(result.error || `Failed to ${mode} sprint`);
+        }
+
+        toast.success(mode === "start" ? "Sprint started" : "Sprint completed");
+        await queryClient.invalidateQueries({ queryKey: queryKeys.project.detail.sprintDetailRoot(projectId) });
+      } catch (error) {
+        for (const [queryKey, snapshot] of previousStates) {
+          queryClient.setQueryData(queryKey, snapshot);
+        }
+        toast.error(error instanceof Error ? error.message : `Failed to ${mode} sprint`);
+      } finally {
+        setIsMutatingLifecycle(false);
+      }
+    },
+    [patchSelectedSprintStatus, projectId, queryClient, selectedSprint, selectedSprintId],
+  );
+
+  const handleLoadMore = useCallback(async () => {
+    const startedAt = Date.now();
+    const container = timelineScrollRef.current;
+    const previousBottomOffset = container ? container.scrollHeight - container.scrollTop : null;
+
+    await fetchNextPage();
+
+    requestAnimationFrame(() => {
+      if (container && previousBottomOffset !== null) {
+        container.scrollTop = container.scrollHeight - previousBottomOffset;
+      }
+    });
+
+    recordSprintMetric("project.sprint.timeline.pagination_ms", {
+      projectId,
+      sprintId: selectedSprintId,
+      durationMs: Date.now() - startedAt,
+    });
+  }, [fetchNextPage, projectId, selectedSprintId]);
+
+  useEffect(() => {
+    if (!pathname?.includes("/sprints/")) return;
+    if (!selectedSprintId || routeSprintId === selectedSprintId) return;
+    router.replace(
+      buildProjectSprintDetailHref(projectSlug, selectedSprintId, {
+        filter: resolvedViewState.filter,
+        mode: resolvedViewState.mode,
+        drawer: routeState.drawer,
+      }),
+      { scroll: false },
+    );
+  }, [
+    pathname,
+    projectSlug,
+    resolvedViewState.filter,
+    resolvedViewState.mode,
+    routeSprintId,
+    routeState.drawer,
+    router,
+    selectedSprintId,
+  ]);
+
+  useEffect(() => {
+    if (!selectedSprintId || !detail?.compareSummary) return;
+    const key = `${selectedSprintId}:${detail.compareSummary.baselineKind}`;
+    if (compareMetricKeyRef.current === key) return;
+    compareMetricKeyRef.current = key;
+    recordSprintMetric("project.sprint.compare.visibility", {
+      projectId,
+      sprintId: selectedSprintId,
+      baselineKind: detail.compareSummary.baselineKind,
+      hasPreviousSprint: detail.compareSummary.baselineKind === "previous_sprint",
+    });
+  }, [detail?.compareSummary, projectId, selectedSprintId]);
+
+  if (isLoading && !detail) {
     return (
-        <div className="flex gap-6 h-full min-h-0 overflow-hidden">
-            {/* LEFT SIDEBAR: Sprint Cards - Fixed width */}
-            <div className="w-[320px] min-h-0 flex-shrink-0 flex flex-col gap-4 overflow-y-auto pr-2 app-scroll app-scroll-y app-scroll-gutter">
-                <div>
-                    <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">Sprint History</h3>
-                    <p className="text-xs text-zinc-500 mt-0.5">Select a goal to view details</p>
-                </div>
-
-                {isOwnerOrMember && (
-                    <button
-                        onClick={() => setShowCreateModal(true)}
-                        className="w-full py-2.5 bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 font-semibold rounded-lg hover:opacity-90 transition-opacity flex items-center justify-center gap-2 text-sm shrink-0"
-                    >
-                        <Plus className="w-4 h-4" />
-                        New Goal
-                    </button>
-                )}
-
-                <div className="space-y-2.5 pb-10">
-                    {sortedSprints.map(sprint => (
-                        <button
-                            key={sprint.id}
-                            onClick={() => setSelectedSprintId(sprint.id)}
-                            className={cn(
-                                "w-full text-left p-4 rounded-xl transition-all relative group border flex flex-col gap-3",
-                                currentSprint?.id === sprint.id
-                                    ? "bg-white dark:bg-zinc-900 border-indigo-500/50 shadow-md ring-1 ring-indigo-500/20"
-                                    : "bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 hover:border-zinc-300 dark:hover:border-zinc-700 hover:shadow-sm"
-                            )}
-                        >
-                            {/* Status Stripe */}
-                            {sprint.status === 'active' && (
-                                <div className="absolute left-0 top-3 bottom-3 w-1 bg-emerald-500 rounded-r-full" />
-                            )}
-
-                            {/* Header: Name + Status */}
-                            <div className="flex items-center justify-between w-full">
-                                <span className={cn(
-                                    "text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wide",
-                                    sprint.status === 'active' ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400" :
-                                    sprint.status === 'completed' ? "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400" :
-                                    "bg-indigo-50 text-indigo-600 dark:bg-indigo-500/10 dark:text-indigo-400"
-                                )}>
-                                    {sprint.status}
-                                </span>
-                                {currentSprint?.id === sprint.id && (
-                                    <motion.div layoutId="active-indicator" transition={reduceMotion ? { duration: 0 } : undefined}>
-                                        <ChevronRight className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                                    </motion.div>
-                                )}
-                            </div>
-                            
-                            {/* Sprint Name */}
-                            <h4 className="font-bold text-sm text-zinc-900 dark:text-zinc-100 leading-tight">
-                                {sprint.name}
-                            </h4>
-
-                            {/* Goal Display - Enhancement */}
-                            <div className="text-xs text-zinc-500 dark:text-zinc-400 bg-zinc-50 dark:bg-zinc-800/50 p-2 rounded-lg border border-zinc-100 dark:border-zinc-800/50 line-clamp-2">
-                                <span className="font-semibold text-zinc-700 dark:text-zinc-300 mr-1">Goal:</span>
-                                {sprint.goal || "No goal set for this sprint."}
-                            </div>
-                            
-                            {/* Dates */}
-                            <div className="flex items-center gap-1.5 text-[11px] text-zinc-400 dark:text-zinc-500 font-medium pt-1">
-                                <CalendarDays className="w-3 h-3 shrink-0" />
-                                <span>
-                                    {sprint.startDate && sprint.endDate ? (
-                                        `${format(new Date(sprint.startDate), "MMM d")} - ${format(new Date(sprint.endDate), "MMM d")}`
-                                    ) : "No dates"}
-                                </span>
-                            </div>
-                        </button>
-                    ))}
-                </div>
+      <div className="flex h-full min-h-0 gap-6 overflow-hidden">
+        <div className="w-[280px] flex-shrink-0 space-y-3">
+          <div className="h-4 w-28 animate-pulse rounded bg-zinc-100 dark:bg-zinc-800" />
+          <div className="h-10 w-full animate-pulse rounded-xl bg-zinc-100 dark:bg-zinc-800" />
+          <div className="space-y-2">
+            {[1, 2, 3].map((item) => (
+              <div key={item} className="h-20 w-full animate-pulse rounded-2xl bg-zinc-100 dark:bg-zinc-800" />
+            ))}
+          </div>
+        </div>
+        <div className="flex-1 rounded-[28px] border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
+          <div className="space-y-4 p-8">
+            <div className="h-4 w-24 animate-pulse rounded bg-zinc-100 dark:bg-zinc-800" />
+            <div className="h-8 w-64 animate-pulse rounded bg-zinc-100 dark:bg-zinc-800" />
+            <div className="h-4 w-96 animate-pulse rounded bg-zinc-100 dark:bg-zinc-800" />
+            <div className="pt-6 space-y-8">
+              {[1, 2, 3].map((item) => (
+                <div key={item} className="h-24 w-full animate-pulse rounded-2xl bg-zinc-100/70 dark:bg-zinc-900" />
+              ))}
             </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
-            {/* RIGHT CONTENT: Sprint Details - Flexible width */}
-            <div className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
-                {currentSprint ? (
-                    <AnimatePresence mode="wait" initial={!reduceMotion}>
-                        <motion.div
-                            key={currentSprint.id}
-                            initial={{ opacity: 0 }}
-                            animate={{ opacity: 1 }}
-                            exit={{ opacity: 0 }}
-                            transition={{ duration: 0.15 }}
-                            className="flex flex-col h-full"
-                        >
-                            {/* Sprint Header */}
-                            <div className="p-6 border-b border-zinc-200 dark:border-zinc-800 shrink-0 bg-zinc-50/50 dark:bg-zinc-900/50">
-                                <div className="flex items-start justify-between gap-6 mb-6">
-                                    <div>
-                                         <div className="flex items-center gap-3 mb-2">
-                                            <h2 className="text-2xl font-bold text-zinc-900 dark:text-zinc-100">
-                                                {currentSprint.name}
-                                            </h2>
-                                            <span className={cn(
-                                                "text-xs px-2.5 py-1 rounded-full font-semibold uppercase tracking-wide border",
-                                                currentSprint.status === 'active' 
-                                                    ? "bg-emerald-50 border-emerald-200 text-emerald-700 dark:bg-emerald-900/20 dark:border-emerald-800 dark:text-emerald-400" 
-                                                    : "bg-zinc-100 border-zinc-200 text-zinc-600 dark:bg-zinc-800 dark:border-zinc-700 dark:text-zinc-400"
-                                            )}>
-                                                {currentSprint.status}
-                                            </span>
-                                         </div>
-                                        <p className="text-lg text-zinc-600 dark:text-zinc-400 font-serif italic">
-                                            {`"${goalText}"`}
-                                        </p>
-                                    </div>
-                                    <div className="flex flex-col items-end gap-1">
-                                         <div className="text-2xl font-bold font-mono text-zinc-900 dark:text-zinc-100">
-                                            {progress}%
-                                         </div>
-                                         <div className="text-xs text-zinc-500 font-medium uppercase tracking-wider">Complete</div>
-                                    </div>
-                                </div>
-
-                                {/* Stats Bar */}
-                                <div className="flex items-center gap-6 text-sm text-zinc-500 dark:text-zinc-400 border-t border-zinc-200 dark:border-zinc-800 pt-4">
-                                    <div className="flex items-center gap-2">
-                                        <CalendarDays className="w-4 h-4" />
-                                        <span>
-                                            {format(new Date(currentSprint.startDate), "MMM d")} - {format(new Date(currentSprint.endDate), "MMM d, yyyy")}
-                                        </span>
-                                    </div>
-                                    <div className="w-px h-4 bg-zinc-300 dark:bg-zinc-700" />
-                                    <div>
-                                        <span className="font-semibold text-zinc-900 dark:text-zinc-100 mr-1">{safeSprintTasks.length}</span> Tasks
-                                    </div>
-                                    <div className="w-px h-4 bg-zinc-300 dark:bg-zinc-700" />
-                                    <div>
-                                        <span className="font-semibold text-zinc-900 dark:text-zinc-100 mr-1">
-                                            {safeSprintTasks.reduce((acc, t) => acc + (t.storyPoints || 0), 0)}
-                                        </span> 
-                                        Points
-                                    </div>
-                                </div>
-                            </div>
-
-                            {/* Tasks List - Architectural View */}
-                            <div className="flex-1 min-h-0 overflow-hidden p-0 bg-zinc-50/30 dark:bg-black/20">
-                                {loadingTasks ? (
-                                    <div className="p-6 space-y-4">
-                                        {[1, 2, 3].map(i => (
-                                            <div key={i} className="h-16 w-full bg-zinc-100 dark:bg-zinc-800 rounded animate-pulse" />
-                                        ))}
-                                    </div>
-                                ) : safeSprintTasks.length === 0 ? (
-                                    <div className="h-full flex flex-col items-center justify-center text-center p-10">
-                                        <div className="w-16 h-16 bg-zinc-100 dark:bg-zinc-800 rounded-full flex items-center justify-center mb-4">
-                                            <CheckCircle className="w-8 h-8 text-zinc-300 dark:text-zinc-600" />
-                                        </div>
-                                        <p className="text-zinc-900 dark:text-zinc-100 font-medium">No tasks in this sprint</p>
-                                        <p className="text-zinc-500 text-sm mt-1">Assign tasks from the Tasks tab to see them here.</p>
-                                    </div>
-                                ) : (
-                                    <Virtuoso
-                                        className="h-full app-scroll app-scroll-y app-scroll-gutter"
-                                        data={safeSprintTasks}
-                                        endReached={() => {
-                                            if (hasNextSprintTasks && !isFetchingNextSprintTasks) {
-                                                void fetchNextSprintTasks();
-                                            }
-                                        }}
-                                        itemContent={(_, task) => renderSprintTaskRow(task)}
-                                        components={{
-                                            Footer: () => hasNextSprintTasks ? (
-                                                <div className="p-4 border-t border-zinc-100 dark:border-zinc-800/50">
-                                                    <button
-                                                        onClick={() => fetchNextSprintTasks()}
-                                                        disabled={isFetchingNextSprintTasks}
-                                                        className="w-full py-2 text-xs font-semibold text-indigo-600 dark:text-indigo-400 border border-dashed border-indigo-200 dark:border-indigo-800 rounded-lg hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-colors disabled:opacity-60"
-                                                    >
-                                                        {isFetchingNextSprintTasks ? "Loading more tasks..." : "Load more tasks"}
-                                                    </button>
-                                                </div>
-                                            ) : <div className="h-2" />,
-                                        }}
-                                    />
-                                )}
-                            </div>
-                        </motion.div>
-                    </AnimatePresence>
-                ) : null}
-            </div>
-
-            <CreateSprintModal
+  if (!detail || detail.sprints.length === 0) {
+    return (
+      <div className="flex h-[500px] flex-col items-center justify-center rounded-2xl border border-dashed border-zinc-200 bg-zinc-50 px-6 text-center dark:border-zinc-800 dark:bg-zinc-900/50">
+        <div className="max-w-md space-y-4">
+          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-zinc-100 dark:bg-zinc-800">
+            <CalendarDays className="h-8 w-8 text-zinc-400" />
+          </div>
+          <div className="space-y-2">
+            <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">No sprints yet</h3>
+            <p className="text-sm text-zinc-500 dark:text-zinc-400">
+              Create the first sprint and this space will turn into a clean execution timeline for the work inside it.
+            </p>
+          </div>
+          {permissions.canCreate ? (
+            <>
+              <button
+                type="button"
+                onClick={() => setShowCreateModal(true)}
+                className="inline-flex items-center gap-2 rounded-xl bg-zinc-900 px-5 py-2.5 text-sm font-semibold text-zinc-100 transition-colors hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
+              >
+                <Plus className="h-4 w-4" />
+                Create Sprint
+              </button>
+              <CreateSprintModal
                 isOpen={showCreateModal}
                 onClose={() => setShowCreateModal(false)}
-                onCreate={async (data) => {
-                    try {
-                        const result = await createSprintAction({ ...data, projectId });
-                        if (result.success) {
-                            if (onCreateSprint) onCreateSprint();
-                            setShowCreateModal(false);
-                            toast.success("Sprint created");
-                        } else {
-                            toast.error(result.error);
-                        }
-                    } catch {
-                        toast.error("Failed to create sprint");
-                    }
-                }}
-                sprintCount={sprints.length}
-            />
+                onCreate={handleCreateSprint}
+                sprintCount={0}
+              />
+            </>
+          ) : null}
         </div>
+      </div>
     );
+  }
+
+  return (
+    <>
+      <div className="flex h-full min-h-0 gap-6 overflow-hidden">
+        <SprintLeftRail
+          projectSlug={projectSlug}
+          sprints={detail.sprints}
+          selectedSprintId={selectedSprintId}
+          filter={resolvedViewState.filter}
+          mode={resolvedViewState.mode}
+          canCreate={permissions.canCreate}
+          onCreate={() => setShowCreateModal(true)}
+          onSelect={handleSelectSprint}
+          onPrefetch={prefetchSprintDetail}
+        />
+
+        <section className="flex min-h-0 flex-1 overflow-hidden rounded-[28px] border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
+          <div className="flex min-h-0 flex-1 flex-col">
+            {selectedSprint ? (
+              <SprintHeader
+                sprint={selectedSprint}
+                summary={detail.summary}
+                compareSummary={detail.compareSummary}
+                permissions={permissions}
+                isMutatingLifecycle={isMutatingLifecycle}
+                projectSlug={projectSlug}
+                filter={resolvedViewState.filter}
+                mode={resolvedViewState.mode}
+                onStart={() => void runLifecycleMutation("start")}
+                onComplete={() => void runLifecycleMutation("complete")}
+              />
+            ) : null}
+
+            <SprintTimelineToolbar
+              mode={resolvedViewState.mode}
+              filter={resolvedViewState.filter}
+              visibleCounts={timelineView.visibleCounts}
+              onModeChange={handleModeChange}
+              onFilterChange={handleFilterChange}
+            />
+
+            <div ref={timelineScrollRef} className="min-h-0 flex-1 overflow-y-auto app-scroll app-scroll-y app-scroll-gutter">
+              <SprintTimelineContent
+                viewModel={timelineView}
+                projectSlug={projectSlug}
+                shouldVirtualize={shouldVirtualize}
+                hasMore={hasNextPage ?? false}
+                isFetchingNextPage={isFetchingNextPage}
+                onLoadMore={() => void handleLoadMore()}
+                onOpenDrawer={handleOpenDrawer}
+                onPrefetchDrawer={(nextDrawer) => {
+                  void handlePrefetchDrawer(nextDrawer);
+                }}
+              />
+            </div>
+          </div>
+
+          {drawer.type !== "none" ? (
+            <SprintDetailDrawer
+              projectId={projectId}
+              projectSlug={projectSlug}
+              projectName={projectName}
+              drawer={drawer}
+              preview={activeDrawerPreview}
+              onClose={handleCloseDrawer}
+            />
+          ) : null}
+        </section>
+      </div>
+
+      <CreateSprintModal
+        isOpen={showCreateModal}
+        onClose={() => setShowCreateModal(false)}
+        onCreate={handleCreateSprint}
+        sprintCount={detail.sprints.length}
+      />
+    </>
+  );
 }

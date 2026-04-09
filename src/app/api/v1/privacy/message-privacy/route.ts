@@ -11,12 +11,15 @@ import {
   isProfileNotFoundError,
   updateMessagePrivacySetting,
 } from "@/lib/privacy/settings";
+import { validateCsrf } from "@/lib/security/csrf";
 
 const VALID_MESSAGE_PRIVACY = new Set(["everyone", "connections"]);
 
 export async function PATCH(request: Request) {
   const startedAt = Date.now();
   const requestId = getRequestId(request);
+  const csrfError = await validateCsrf(request);
+  if (csrfError) return csrfError;
   const limitResponse = await enforceRouteLimit(request, "api:v1:privacy:message-privacy:patch", 60, 60);
   if (limitResponse) return limitResponse;
 

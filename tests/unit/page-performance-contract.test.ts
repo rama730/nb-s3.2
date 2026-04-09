@@ -9,7 +9,7 @@ import {
 
 describe("page performance contract", () => {
   it("has one contract per page route", () => {
-    assert.equal(Object.keys(PAGE_PERFORMANCE_CONTRACTS).length, 22);
+    assert.equal(Object.keys(PAGE_PERFORMANCE_CONTRACTS).length, 24);
   });
 
   it("resolves dynamic route contracts from concrete URLs", () => {

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { Bell } from "lucide-react";
 import { useNotifications } from "@/hooks/useNotifications";
 
@@ -11,8 +12,8 @@ export default function NotificationPreview() {
             : "Open notifications";
 
     return (
-        <button
-            type="button"
+        <Link
+            href="/settings/notifications"
             aria-label={label}
             className="relative p-2 rounded-lg hover:bg-zinc-100 dark:bg-zinc-900 dark:hover:bg-zinc-800 transition-colors"
         >
@@ -20,6 +21,6 @@ export default function NotificationPreview() {
             {unreadCount > 0 && (
                 <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full" />
             )}
-        </button>
+        </Link>
     );
 }
