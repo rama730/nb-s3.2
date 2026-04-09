@@ -3,6 +3,7 @@ import type { User } from '@supabase/supabase-js'
 import { cookies } from 'next/headers'
 import { resolveAuthSnapshot, type AuthSnapshotResolution } from '@/lib/auth/snapshot'
 import { resolveSupabasePublicEnv, resolveSupabaseServiceEnv } from '@/lib/supabase/env'
+import { resolveSupabaseServerCookieOptions } from '@/lib/supabase/cookie-options'
 
 const AUTH_COOKIE_MARKERS = ['auth-token', 'sb-access-token', 'sb-refresh-token']
 
@@ -36,6 +37,7 @@ export async function createClient() {
         env.url,
         env.anonKey,
         {
+            cookieOptions: resolveSupabaseServerCookieOptions(),
             cookies: {
                 getAll() {
                     return cookieStore.getAll()
@@ -94,6 +96,7 @@ export async function createAdminClient() {
         env.url,
         env.serviceRoleKey,
         {
+            cookieOptions: resolveSupabaseServerCookieOptions(),
             cookies: {
                 getAll() { return [] },
                 setAll() { }

@@ -38,6 +38,17 @@ interface OAuthResult {
     error: { message: string } | null;
 }
 
+type BrowserSessionBridgeResponse = {
+    data?: {
+        session?: {
+            accessToken?: string | null;
+            refreshToken?: string | null;
+            expiresAt?: number | null;
+        } | null;
+    } | null;
+    error?: string;
+};
+
 interface AuthContextType extends AuthState {
     isAuthenticated: boolean;
     signIn: (email: string, password: string, captchaToken?: string) => Promise<AuthResult>;
@@ -107,6 +118,48 @@ function profileNeedsHydration(profile: any): boolean {
     );
 }
 
+async function syncBrowserSessionToServer(session: Session | null) {
+    const response = await fetch('/api/v1/auth/session', {
+        method: session ? 'POST' : 'DELETE',
+        headers: session ? { 'content-type': 'application/json' } : undefined,
+        credentials: 'same-origin',
+        body: session
+            ? JSON.stringify({
+                mode: 'sync',
+                accessToken: session.access_token,
+                refreshToken: session.refresh_token,
+            })
+            : undefined,
+    });
+
+    if (!response.ok) {
+        throw new Error(`Browser session sync failed (${response.status})`);
+    }
+}
+
+async function bootstrapBrowserSessionFromServer() {
+    const response = await fetch('/api/v1/auth/session', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ mode: 'bootstrap' }),
+    });
+
+    if (!response.ok) {
+        throw new Error(`Browser session bootstrap failed (${response.status})`);
+    }
+
+    const body = await response.json().catch(() => null) as BrowserSessionBridgeResponse | null;
+    const accessToken = body?.data?.session?.accessToken?.trim() || '';
+    const refreshToken = body?.data?.session?.refreshToken?.trim() || '';
+    if (!accessToken || !refreshToken) return null;
+
+    return {
+        access_token: accessToken,
+        refresh_token: refreshToken,
+    };
+}
+
 // --- Provider ---
 export function AuthProvider({
     children,
@@ -127,6 +180,7 @@ export function AuthProvider({
     const activeUserIdRef = useRef<string | null>(initialUser?.id || null);
     const authEventVersionRef = useRef(0);
     const bootstrapHydrationPendingRef = useRef(Boolean(initialUser) && (!initialProfile || profileNeedsHydration(initialProfile)));
+    const bootstrapSessionAttemptedRef = useRef(false);
     const router = useRouter();
 
     // Sync with Supabase Auth Listener
@@ -148,6 +202,12 @@ export function AuthProvider({
                 const eventVersion = ++authEventVersionRef.current;
                 if (cancelled) return;
                 if ((event === 'INITIAL_SESSION' || event === 'SIGNED_IN') && session) {
+                    void syncBrowserSessionToServer(session).catch((error) => {
+                        logger.warn('auth.session.sync_failed', {
+                            event,
+                            error: error instanceof Error ? error.message : String(error),
+                        });
+                    });
                     if (session.user.id !== activeUserIdRef.current) {
                         const profile = await loadProfile(session.user.id);
                         if (cancelled || eventVersion !== authEventVersionRef.current) return;
@@ -186,6 +246,11 @@ export function AuthProvider({
                         });
                     });
                 } else if (event === 'SIGNED_OUT') {
+                    void syncBrowserSessionToServer(null).catch((error) => {
+                        logger.warn('auth.session.clear_failed', {
+                            error: error instanceof Error ? error.message : String(error),
+                        });
+                    });
                     runMonotonicUpdate(MONOTONIC_AUTH_KEY, eventVersion, () => {
                         activeUserIdRef.current = null;
                         setState({
@@ -197,6 +262,12 @@ export function AuthProvider({
                     });
                     router.refresh();
                 } else if (event === 'USER_UPDATED' && session) {
+                    void syncBrowserSessionToServer(session).catch((error) => {
+                        logger.warn('auth.session.sync_failed', {
+                            event,
+                            error: error instanceof Error ? error.message : String(error),
+                        });
+                    });
                     const profile = await loadProfile(session.user.id);
                     if (cancelled || eventVersion !== authEventVersionRef.current) return;
                     runMonotonicUpdate(MONOTONIC_AUTH_KEY, eventVersion, () => {
@@ -211,6 +282,12 @@ export function AuthProvider({
                         }));
                     });
                 } else if (event === 'TOKEN_REFRESHED' && session) {
+                    void syncBrowserSessionToServer(session).catch((error) => {
+                        logger.warn('auth.session.sync_failed', {
+                            event,
+                            error: error instanceof Error ? error.message : String(error),
+                        });
+                    });
                     runMonotonicUpdate(MONOTONIC_AUTH_KEY, eventVersion, () => {
                         activeUserIdRef.current = session.user.id;
                         setState(prev => ({ ...prev, session, user: session.user }));
@@ -218,6 +295,23 @@ export function AuthProvider({
                 }
             }
         );
+
+        void (async () => {
+            if (bootstrapSessionAttemptedRef.current || !initialUser) return;
+            bootstrapSessionAttemptedRef.current = true;
+            const { data: existingSession } = await supabase.auth.getSession();
+            if (cancelled || existingSession.session) return;
+
+            try {
+                const serverSession = await bootstrapBrowserSessionFromServer();
+                if (!serverSession || cancelled) return;
+                await supabase.auth.setSession(serverSession);
+            } catch (error) {
+                logger.warn('auth.session.bootstrap_failed', {
+                    error: error instanceof Error ? error.message : String(error),
+                });
+            }
+        })();
 
         return () => {
             cancelled = true;
@@ -240,7 +334,12 @@ export function AuthProvider({
                     setTimeout(() => reject(new Error('AUTH_TIMEOUT')), AUTH_SIGN_IN_TIMEOUT_MS);
                 }),
             ]);
-            if (!result.error) return result;
+            if (!result.error) {
+                if (result.data.session) {
+                    await syncBrowserSessionToServer(result.data.session).catch(() => null);
+                }
+                return result;
+            }
 
             const message = (result.error.message || '').toLowerCase();
             const isConnectivityError = message.includes('fetch failed') || message.includes('timeout');
@@ -269,7 +368,7 @@ export function AuthProvider({
 
     const signUp = useCallback(async (email: string, password: string, fullName?: string, captchaToken?: string) => {
         const supabase = createClient();
-        return await supabase.auth.signUp({
+        const result = await supabase.auth.signUp({
             email,
             password,
             options: {
@@ -279,6 +378,10 @@ export function AuthProvider({
                 }
             }
         });
+        if (!result.error && result.data.session) {
+            await syncBrowserSessionToServer(result.data.session).catch(() => null);
+        }
+        return result;
     }, []);
 
     const signInWithGoogle = useCallback(async (nextPath?: string | null) => {
@@ -332,6 +435,7 @@ export function AuthProvider({
     const signOut = useCallback(async () => {
         const supabase = createClient();
         await supabase.auth.signOut().catch(() => null);
+        await syncBrowserSessionToServer(null).catch(() => null);
         // State update handled by onAuthStateChange, but we can optimise responsiveness
         setState({
             user: null,
