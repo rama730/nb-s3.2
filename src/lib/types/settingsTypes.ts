@@ -53,6 +53,7 @@ export interface SecurityActivityEntry {
         | 'recovery_codes_generated'
         | 'recovery_codes_regenerated'
         | 'recovery_code_used'
+        | 'recovery_code_redemption_failed'
         | 'password_set'
         | 'password_changed'
         | 'other_sessions_revoked';

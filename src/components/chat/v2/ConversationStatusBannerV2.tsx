@@ -83,9 +83,6 @@ function toTimestamp(value: unknown): number | null {
     return null;
 }
 
-const EDIT_DIALOG_TITLE_ID = 'conversation-status-edit-title';
-const EDIT_DIALOG_DESC_ID = 'conversation-status-edit-description';
-
 function readApplicationStatus(value: unknown): ApplicationBannerStatus | null {
     if (value === 'pending' || value === 'accepted' || value === 'rejected' || value === 'project_deleted') {
         return value;
@@ -465,16 +462,14 @@ export function ConversationStatusBannerV2({
             <Dialog open={isEditOpen} onOpenChange={(open) => !open && setIsEditOpen(false)}>
                 <DialogContent className="sm:max-w-lg">
                     <DialogHeader>
-                        <DialogTitle id={EDIT_DIALOG_TITLE_ID}>Edit application</DialogTitle>
-                        <DialogDescription id={EDIT_DIALOG_DESC_ID}>
+                        <DialogTitle>Edit application</DialogTitle>
+                        <DialogDescription>
                             Keep it concise. Changes are synced into this chat thread.
                         </DialogDescription>
                     </DialogHeader>
                     <textarea
                         value={editDraft}
                         onChange={(event) => setEditDraft(event.target.value)}
-                        aria-labelledby={EDIT_DIALOG_TITLE_ID}
-                        aria-describedby={EDIT_DIALOG_DESC_ID}
                         rows={8}
                         className="w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm outline-none focus:border-primary dark:border-zinc-800 dark:bg-zinc-900"
                     />

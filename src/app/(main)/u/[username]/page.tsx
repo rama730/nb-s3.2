@@ -7,7 +7,7 @@ import { buildRouteMetadata, DEFAULT_ROUTE_OG_IMAGE } from '@/lib/metadata/route
 import { getViewerAuthContext } from '@/lib/server/viewer-context';
 import { buildProfileMetadataDescription, buildPublicProfileTitle } from '@/lib/profile/display';
 
-export const revalidate = 60; // ISR: Revalidate every minute
+export const dynamic = 'force-dynamic';
 export const dynamicParams = true; // Allow new profiles to be generated on demand
 
 function decodeUsernameParam(username: string): string | null {
@@ -16,12 +16,6 @@ function decodeUsernameParam(username: string): string | null {
     } catch {
         return null;
     }
-}
-
-export async function generateStaticParams() {
-    // Intentionally disabled for scalability: we don't prebuild profiles at build time.
-    // Keeping the function to satisfy Next expectations if referenced, but returning empty avoids DB load.
-    return [];
 }
 
 export async function generateMetadata({ params }: { params: Promise<{ username: string }> }): Promise<Metadata> {

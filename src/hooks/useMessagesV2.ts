@@ -225,12 +225,12 @@ export function useConversationThread(conversationId: string | null, limit: numb
     };
 }
 
-export function useConversationCapabilities(conversationId: string | null, userId?: string | null) {
+export function useConversationCapabilities(conversationId: string | null, targetUserId?: string | null) {
     return useQuery({
-        queryKey: queryKeys.messages.v2.capabilities(conversationId, userId ?? null),
-        enabled: Boolean(conversationId || userId),
+        queryKey: queryKeys.messages.v2.capabilities(conversationId, targetUserId ?? null),
+        enabled: Boolean(conversationId || targetUserId),
         queryFn: async () => {
-            const result = await getConversationCapabilityV2({ conversationId, userId });
+            const result = await getConversationCapabilityV2({ conversationId, targetUserId });
             if (!result.success || !result.capability) {
                 throw new Error(result.error || 'Failed to fetch conversation capability');
             }

@@ -73,11 +73,11 @@ test.describe("Settings matrix @critical", () => {
     await page.goto("/settings/security");
     await expect(page.getByRole("heading", { name: "Security" })).toBeVisible();
     await expect(page.getByText("Security Overview")).toBeVisible();
-    await expect(page.getByText("Authenticator App")).toBeVisible();
+    await expect(page.getByTestId("security-authenticator-section")).toBeVisible();
     await expect(page.getByTestId("security-password-section")).toBeVisible();
-    await expect(page.getByText("Active Sessions")).toBeVisible();
-    await expect(page.getByText("Recent Login Activity")).toBeVisible();
-    await expect(page.getByText("Security Activity")).toBeVisible();
+    await expect(page.getByTestId("security-active-sessions-section")).toBeVisible();
+    await expect(page.getByTestId("security-login-activity-section")).toBeVisible();
+    await expect(page.getByTestId("security-activity-section")).toBeVisible();
 
     await page.goto("/settings/privacy");
     await expect(page.getByRole("heading", { name: "Privacy" })).toBeVisible();
@@ -112,7 +112,7 @@ test.describe("Settings matrix @critical", () => {
     await expect(page.getByRole("heading", { name: "Integrations", level: 1 })).toBeVisible();
     await expect(page.getByText("Account Connections")).toBeVisible();
     await expect(page.getByText("External Services")).toBeVisible();
-    await expect(page.getByText(/Account created with/i)).toBeVisible();
+    await expect(page.getByText(/^Account created with$/i)).toBeVisible();
 
     await monitor.assertNoViolations();
     monitor.detach();

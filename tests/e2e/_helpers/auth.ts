@@ -1,8 +1,26 @@
+import { createHmac } from "node:crypto";
 import { expect, type Page } from "@playwright/test";
 
 export const e2eEmail = process.env.E2E_USER_EMAIL;
 export const e2ePassword = process.env.E2E_USER_PASSWORD;
 export const hasE2ECredentials = Boolean(e2eEmail && e2ePassword);
+
+// SEC-L10: when the server is configured with E2E_AUTH_HMAC_SECRET, every
+// request to /api/e2e/auth must carry a matching signature over
+// `timestamp + "\n" + rawBody`. We sign here so Playwright keeps working
+// whether or not CI enables the secondary gate.
+function signE2EAuthRequest(rawBody: string): Record<string, string> {
+  const secret = process.env.E2E_AUTH_HMAC_SECRET?.trim() ?? "";
+  if (!secret) return {};
+  const timestamp = String(Date.now());
+  const signature = createHmac("sha256", secret)
+    .update(`${timestamp}\n${rawBody}`)
+    .digest("hex");
+  return {
+    "x-e2e-timestamp": timestamp,
+    "x-e2e-signature": signature,
+  };
+}
 
 export async function login(page: Page): Promise<void> {
   const email = e2eEmail;
@@ -15,9 +33,13 @@ export async function login(page: Page): Promise<void> {
     process.env.E2E_AUTH_FALLBACK === "1" || process.env.NEXT_PUBLIC_E2E_AUTH_FALLBACK === "1";
 
   if (useE2EFallback) {
+    const rawBody = JSON.stringify({ email, password });
     const fallback = await page.request.post("/api/e2e/auth", {
-      data: { email, password },
-      headers: { "content-type": "application/json" },
+      data: rawBody,
+      headers: {
+        "content-type": "application/json",
+        ...signE2EAuthRequest(rawBody),
+      },
     });
     if (fallback.ok()) {
       await page.goto("/hub");

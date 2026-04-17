@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import { Geist, Geist_Mono } from "next/font/google";
 import Script from "next/script";
 import { QueryProvider } from "@/components/providers/query-provider";
+import { SecurityRuntimeProvider } from "@/components/providers/SecurityRuntimeProvider";
 import { ThemeProvider } from "@/components/providers/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
 import { Analytics } from "@vercel/analytics/react";
@@ -27,6 +29,9 @@ const THEME_PREHYDRATE_SCRIPT = buildThemePrehydrateScript();
 const APP_METADATA_BASE = new URL(
   resolveAuthBaseUrl({ requireConfiguredBaseInProduction: false }),
 );
+const SHOULD_RENDER_VERCEL_ANALYTICS =
+  process.env.NODE_ENV === "production"
+  && ["1", "true", "yes", "on"].includes((process.env.VERCEL || "").trim().toLowerCase());
 
 export const metadata: Metadata = {
   metadataBase: APP_METADATA_BASE,
@@ -37,27 +42,31 @@ export default async function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const headerStore = await headers();
   const messages = await getMessages();
+  const nonce = headerStore.get("x-nonce") || undefined;
 
   return (
-    <html lang="en" data-scroll-behavior="smooth" suppressHydrationWarning>
+    <html lang="en" data-scroll-behavior="smooth" data-csp-nonce={nonce} suppressHydrationWarning>
       <head>
         <meta content="#ffffff" data-app-theme-color="true" name="theme-color" />
-        <Script id="theme-prehydrate" strategy="beforeInteractive">
+        <Script id="theme-prehydrate" nonce={nonce} strategy="beforeInteractive">
           {THEME_PREHYDRATE_SCRIPT}
         </Script>
       </head>
       <body className={`${geistSans.variable} ${geistMono.variable} font-sans antialiased`}>
-        <NextIntlClientProvider messages={messages}>
-          <ThemeProvider>
-            <QueryProvider>
-              <RoutePerformanceObserver />
-              {children}
-              <Toaster position="bottom-right" />
-              {process.env.NODE_ENV === "production" ? <Analytics /> : null}
-            </QueryProvider>
-          </ThemeProvider>
-        </NextIntlClientProvider>
+        <SecurityRuntimeProvider nonce={nonce ?? null}>
+          <NextIntlClientProvider messages={messages}>
+            <ThemeProvider nonce={nonce ?? undefined}>
+              <QueryProvider>
+                <RoutePerformanceObserver />
+                {children}
+                <Toaster position="bottom-right" />
+                {SHOULD_RENDER_VERCEL_ANALYTICS ? <Analytics /> : null}
+              </QueryProvider>
+            </ThemeProvider>
+          </NextIntlClientProvider>
+        </SecurityRuntimeProvider>
       </body>
     </html>
   );

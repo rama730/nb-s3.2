@@ -7,7 +7,7 @@ import { Label } from "@/components/ui-custom/Label";
 import { Loader2, Camera } from "lucide-react";
 import { useToast } from "@/components/ui-custom/Toast";
 import Image from "next/image";
-import { createProfileImageUploadUrlAction, updateProfileAction } from "@/app/actions/profile";
+import { createProfileImageUploadUrlAction, finalizeProfileImageUploadAction, updateProfileAction } from "@/app/actions/profile";
 import { useAuth } from "@/lib/hooks/use-auth";
 import { useQueryClient } from "@tanstack/react-query";
 import { queryKeys } from "@/lib/query-keys";
@@ -71,7 +71,13 @@ export function ProfileForm({ initialData, onOptimisticUpdate }: ProfileFormProp
             if (!uploadResponse.ok) {
                 throw new Error(`Failed to upload avatar (${uploadResponse.status})`);
             }
-            const publicUrl = uploadSession.publicUrl;
+            const finalized = await finalizeProfileImageUploadAction({
+                uploadIntentId: uploadSession.uploadIntentId,
+            });
+            if (!finalized.success) {
+                throw new Error(finalized.error || "Failed to finalize avatar upload");
+            }
+            const publicUrl = finalized.publicUrl;
 
             setFormData((prev) => ({ ...prev, avatar_url: publicUrl }));
 

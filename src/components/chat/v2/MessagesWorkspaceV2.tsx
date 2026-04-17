@@ -18,6 +18,7 @@ import {
 import { useMessagingShortcuts } from '@/hooks/useMessagingShortcuts';
 import { useDoNotDisturb } from '@/hooks/useDoNotDisturb';
 import { useOnlineStatus } from '@/hooks/useOnlineStatus';
+import { usePresenceHealth } from '@/hooks/usePresenceHealth';
 import { useMessagesV2UiStore } from '@/stores/messagesV2UiStore';
 import { cn } from '@/lib/utils';
 import { upsertThreadConversation } from '@/lib/messages/v2-cache';
@@ -69,6 +70,7 @@ export function MessagesWorkspaceV2({
     const [focusMessageId, setFocusMessageId] = useState<string | null>(null);
     const [replyTarget, setReplyTarget] = useState<MessageWithSender | null>(null);
     const [replyContextJumpState, setReplyContextJumpState] = useState<ReplyContextJumpState | null>(null);
+    const [threadScrollToLatestSignal, setThreadScrollToLatestSignal] = useState(0);
     const [globalSearch, setGlobalSearch] = useState('');
     const debouncedSearch = useDebounce(globalSearch.trim(), 250);
     const [visibleConversationIds, setVisibleConversationIds] = useState<string[]>([]);
@@ -90,6 +92,7 @@ export function MessagesWorkspaceV2({
     });
     const isOnline = useOnlineStatus();
     const { isDnd, toggleDnd } = useDoNotDisturb();
+    const presenceHealth = usePresenceHealth();
     const realtime = useMessagesV2Realtime(
         selectedConversationId,
         true,
@@ -281,6 +284,10 @@ export function MessagesWorkspaceV2({
                                 <p className="text-xs text-zinc-500 dark:text-zinc-400">
                                     {!isOnline
                                         ? 'You\u2019re offline'
+                                        : presenceHealth.status === 'unavailable'
+                                            ? 'Presence unavailable\u2026 typing and online updates are paused.'
+                                            : presenceHealth.status === 'degraded'
+                                                ? 'Presence reconnecting\u2026'
                                         : realtime.isDegraded
                                             ? 'Realtime reconnecting\u2026'
                                             : 'Shared inbox for chats, project groups, and applications.'}
@@ -376,7 +383,7 @@ export function MessagesWorkspaceV2({
                 </header>
             ) : null}
 
-            {(!isOnline || realtime.isDegraded) ? (
+            {(!isOnline || realtime.isDegraded || presenceHealth.degraded) ? (
                 <div className={cn(
                     'flex items-center gap-2 border-b border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-200',
                     compact ? 'px-3 py-2 text-xs' : 'px-5 py-2.5 text-sm',
@@ -385,6 +392,10 @@ export function MessagesWorkspaceV2({
                     <span>
                         {!isOnline
                             ? 'You\u2019re offline \u2014 messages will send when your connection restores.'
+                            : presenceHealth.status === 'unavailable'
+                                ? 'Typing indicators and online presence are unavailable until the presence service reconnects.'
+                                : presenceHealth.status === 'degraded'
+                                    ? 'Typing indicators and online presence are reconnecting \u2014 message delivery will continue.'
                             : 'Realtime connection lost \u2014 messages may be delayed.'}
                     </span>
                 </div>
@@ -401,6 +412,7 @@ export function MessagesWorkspaceV2({
                                 key={tab.id}
                                 type="button"
                                 onClick={() => setActiveTab(tab.id)}
+                                data-testid={`messages-tab-${tab.id}`}
                                 className={cn(
                                     'rounded-[14px] px-3.5 py-2 text-sm font-medium transition-colors',
                                     activeTab === tab.id
@@ -536,6 +548,7 @@ export function MessagesWorkspaceV2({
                             />
 
                             <MessageThreadV2
+                                key={selectedConversationId!}
                                 conversationId={selectedConversationId!}
                                 messages={thread.messages}
                                 pinnedMessages={thread.pinnedMessages}
@@ -547,6 +560,7 @@ export function MessagesWorkspaceV2({
                                 viewerUnreadCount={activeConversation.unreadCount}
                                 focusMessageId={focusMessageId}
                                 contextJumpState={replyContextJumpState}
+                                scrollToLatestSignal={threadScrollToLatestSignal}
                                 onDismissContextJumpState={() => setReplyContextJumpState(null)}
                                 onLoadMore={handleThreadLoadMore}
                                 onReply={handleReply}
@@ -578,6 +592,7 @@ export function MessagesWorkspaceV2({
                                 surface={mode}
                                 replyTarget={replyTarget}
                                 sendTyping={sendTyping}
+                                onWillSend={() => setThreadScrollToLatestSignal((current) => current + 1)}
                                 onClearReply={() => setReplyTarget(null)}
                                 onAddFiles={(fn) => { composerAddFilesRef.current = fn; }}
                                 participants={conversationParticipants}

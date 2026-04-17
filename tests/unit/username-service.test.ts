@@ -46,6 +46,7 @@ test('getUsernameAvailability rejects reserved usernames from repository', async
 
     assert.equal(result.available, false)
     assert.equal(result.code, 'USERNAME_RESERVED')
+    assert.equal(result.message, 'Username is unavailable')
 })
 
 test('getUsernameAvailability allows current primary username for the same viewer', async () => {
@@ -83,6 +84,7 @@ test('getUsernameAvailability still rejects retired aliases claimed by another u
 
     assert.equal(result.available, false)
     assert.equal(result.code, 'USERNAME_TAKEN')
+    assert.equal(result.message, 'Username is unavailable')
 })
 
 test('resolvePublicUsernameRoute redirects historical aliases to the current username', async () => {

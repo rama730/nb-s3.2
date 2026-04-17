@@ -1,16 +1,28 @@
 import { NextRequest } from 'next/server';
-import { jsonSuccess, jsonError } from '../_envelope';
-import { enforceRouteLimit, requireAuthenticatedUser } from '../_shared';
+import { jsonSuccess, jsonError } from '@/app/api/v1/_envelope';
+import { enforceRouteLimit, requireAuthenticatedUser } from '@/app/api/v1/_shared';
 import {
     fetchPublicUrlWithRedirectValidation,
     UnsafeOutboundUrlError,
 } from '@/lib/security/outbound-url';
+import { isSafeHttpUrl } from '@/lib/security/urls';
 import { logger } from '@/lib/logger';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const MAX_FETCH_SIZE = 512 * 1024; // 512KB max HTML to parse
+const MAX_FETCH_SIZE = 512 * 1024; // 512KB max HTML to download
+// SEC-H11: regex parsing only ever sees the first 64KB of the document. OG
+// metadata is supposed to live in <head>, which is virtually always smaller
+// than this. A malicious origin that pads <head> beyond this limit is treated
+// as having no preview metadata. This bounds the worst-case work each regex
+// has to do, so even if our patterns are technically polynomial in input
+// length, the constant factor stays tiny.
+const MAX_REGEX_INPUT_BYTES = 64 * 1024;
+// Cap on the captured value of any single OG/meta tag before further trimming.
+// Defends against a 1MB <meta content="..."> blob being matched and held in
+// memory before the post-extraction `.slice` runs.
+const MAX_META_CONTENT_LENGTH = 8 * 1024;
 const FETCH_TIMEOUT_MS = 5000;
 
 interface LinkPreviewData {
@@ -21,21 +33,35 @@ interface LinkPreviewData {
     url: string;
 }
 
+function clampForRegex(html: string): string {
+    return html.length > MAX_REGEX_INPUT_BYTES ? html.slice(0, MAX_REGEX_INPUT_BYTES) : html;
+}
+
 function extractMetaContent(html: string, property: string): string | null {
-    // Match both property="og:X" and name="og:X" patterns
+    // SEC-H11: bounded-length character classes and an anchored literal between
+    // the two `[^>]` runs keep matching linear under all inputs. A second
+    // {0,N} cap is added to make the linearity explicit even if a future
+    // engine-level change loosened semantics.
     const patterns = [
-        new RegExp(`<meta[^>]+(?:property|name)=["']${property}["'][^>]+content=["']([^"']+)["']`, 'i'),
-        new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["']${property}["']`, 'i'),
+        new RegExp(
+            `<meta[^>]{0,256}(?:property|name)=["']${property}["'][^>]{0,256}content=["']([^"']{0,${MAX_META_CONTENT_LENGTH}})["']`,
+            'i',
+        ),
+        new RegExp(
+            `<meta[^>]{0,256}content=["']([^"']{0,${MAX_META_CONTENT_LENGTH}})["'][^>]{0,256}(?:property|name)=["']${property}["']`,
+            'i',
+        ),
     ];
+    const haystack = clampForRegex(html);
     for (const pattern of patterns) {
-        const match = html.match(pattern);
+        const match = haystack.match(pattern);
         if (match?.[1]) return match[1];
     }
     return null;
 }
 
 function extractTitle(html: string): string | null {
-    const match = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+    const match = clampForRegex(html).match(/<title[^>]{0,256}>([^<]{0,1024})<\/title>/i);
     return match?.[1]?.trim() || null;
 }
 
@@ -146,11 +172,16 @@ export async function GET(request: NextRequest) {
         const title = ogTitle || extractTitle(html);
         const description = ogDescription || metaDescription;
 
-        // Resolve relative image URL
-        let image = ogImage;
-        if (image && !image.startsWith('http')) {
+        // Resolve relative image URL and re-validate it. SEC-C6: a malicious
+        // site can advertise og:image="javascript:..." or a private-host URL,
+        // and any consumer that renders <img src={preview.image}> becomes an
+        // XSS / SSRF sink. We accept only absolute http(s) URLs that pass the
+        // shared safe-URL gate.
+        let image: string | null = ogImage;
+        if (image) {
             try {
-                image = new URL(image, parsedUrl).href;
+                const resolved = new URL(image, parsedUrl).href;
+                image = isSafeHttpUrl(resolved) ? resolved : null;
             } catch {
                 image = null;
             }
@@ -159,7 +190,7 @@ export async function GET(request: NextRequest) {
         const preview: LinkPreviewData = {
             title: title?.slice(0, 300) || null,
             description: description?.slice(0, 500) || null,
-            image: image?.slice(0, 2000) || null,
+            image: image ? image.slice(0, 2000) : null,
             domain: parsedUrl.hostname,
             url,
         };

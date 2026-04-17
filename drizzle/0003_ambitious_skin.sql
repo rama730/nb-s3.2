@@ -81,6 +81,7 @@ CREATE TABLE "project_sprints" (
 	"project_id" uuid NOT NULL,
 	"name" text NOT NULL,
 	"goal" text,
+	"description" text,
 	"start_date" timestamp with time zone NOT NULL,
 	"end_date" timestamp with time zone NOT NULL,
 	"status" text DEFAULT 'planning' NOT NULL,

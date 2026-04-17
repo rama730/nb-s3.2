@@ -33,7 +33,7 @@ test('requestUsernameAvailability caches successful lookups', async () => {
     let callCount = 0
     globalThis.fetch = (async () => {
         callCount += 1
-        return new Response(JSON.stringify({ available: false, message: 'This username is reserved', code: 'USERNAME_RESERVED' }), {
+        return new Response(JSON.stringify({ available: false, message: 'Username is unavailable', code: 'USERNAME_RESERVED' }), {
             status: 200,
             headers: { 'content-type': 'application/json' },
         })

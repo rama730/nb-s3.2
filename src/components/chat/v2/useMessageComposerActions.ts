@@ -47,6 +47,7 @@ interface UseMessageComposerActionsParams {
     clearTypingIdleTimer: () => void;
     updateTypingState: (isTyping: boolean) => void;
     setSendAnimating: Dispatch<SetStateAction<boolean>>;
+    onWillSend?: () => void;
 }
 
 function createClientMessageId() {
@@ -75,6 +76,7 @@ export function useMessageComposerActions({
     clearTypingIdleTimer,
     updateTypingState,
     setSendAnimating,
+    onWillSend,
 }: UseMessageComposerActionsParams) {
     const queryClient = useQueryClient();
     const { sendConversationMessage, sendStructuredMessage } = useMessagesActions();
@@ -115,12 +117,13 @@ export function useMessageComposerActions({
     }, [conversationId, queryClient]);
 
     const beginSendAnimation = useCallback(() => {
+        onWillSend?.();
         setIsSending(true);
         setSendAnimating(true);
         setTimeout(() => setSendAnimating(false), 300);
         clearTypingIdleTimer();
         updateTypingState(false);
-    }, [clearTypingIdleTimer, setSendAnimating, updateTypingState]);
+    }, [clearTypingIdleTimer, onWillSend, setSendAnimating, updateTypingState]);
 
     const handleSendStructured = useCallback(async () => {
         if (!structuredDraft.kind || isSending || !canSendFromCapability(capability)) {

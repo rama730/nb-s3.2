@@ -15,6 +15,7 @@ import { getVerifiedTotpFactors, listSecurityMfaFactors } from "@/lib/security/m
 import { verifyPasswordCredential } from "@/lib/security/password-auth";
 import { resolveSecurityStepUp } from "@/lib/security/step-up";
 import { checkIdempotencyKey, saveIdempotencyResult } from "@/lib/security/idempotency";
+import { getPasswordPolicyResult } from "@/lib/security/password-policy";
 import { logger } from "@/lib/logger";
 
 const changePasswordSchema = z.object({
@@ -36,18 +37,6 @@ export async function POST(request: Request) {
       errorCode: "FORBIDDEN",
     });
     return csrfError;
-  }
-
-  // Idempotency — prevent duplicate password changes
-  const idempotencyCheck = await checkIdempotencyKey(request, 'auth.changePassword');
-  if (idempotencyCheck.isDuplicate) {
-    if (idempotencyCheck.cachedResponse) {
-      return new Response(idempotencyCheck.cachedResponse, {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      });
-    }
-    return jsonError('Request is already being processed', 409, 'CONFLICT');
   }
 
   // H9: Tightened from 30/min to 10/hour for security-critical password changes
@@ -86,6 +75,18 @@ export async function POST(request: Request) {
       errorCode: "UNAUTHORIZED",
     });
     return jsonError("Not authenticated", 401, "UNAUTHORIZED");
+  }
+
+  // Idempotency — prevent duplicate password changes
+  const idempotencyCheck = await checkIdempotencyKey(request, 'auth.changePassword', auth.user.id);
+  if (idempotencyCheck.isDuplicate) {
+    if (idempotencyCheck.cachedResponse) {
+      return new Response(idempotencyCheck.cachedResponse, {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    return jsonError('Request is already being processed', 409, 'CONFLICT');
   }
 
   let rawBody: unknown;
@@ -132,7 +133,8 @@ export async function POST(request: Request) {
     });
     return jsonError("A new password is required", 400, "BAD_REQUEST");
   }
-  if (newPassword.length < 12) {
+  const passwordPolicy = getPasswordPolicyResult(newPassword);
+  if (!passwordPolicy.ok) {
     logApiRoute(request, {
       requestId,
       action: "auth.changePassword.post",
@@ -142,7 +144,7 @@ export async function POST(request: Request) {
       status: 400,
       errorCode: "BAD_REQUEST",
     });
-    return jsonError("New password must be at least 12 characters", 400, "BAD_REQUEST");
+    return jsonError(passwordPolicy.error || "New password does not meet security requirements", 400, "BAD_REQUEST");
   }
   if (newPassword === currentPassword) {
     logApiRoute(request, {
@@ -209,6 +211,26 @@ export async function POST(request: Request) {
       }
     }
 
+    if (!accountHasPassword) {
+      const stepUp = await resolveSecurityStepUp(auth.user.id, ["totp", "recovery_code"]);
+      if (!stepUp.ok) {
+        logApiRoute(request, {
+          requestId,
+          action: "auth.changePassword.post",
+          userId: auth.user.id,
+          startedAt,
+          success: false,
+          status: 403,
+          errorCode: "STEP_UP_REQUIRED",
+        });
+        return jsonError(
+          "Set up MFA and verify this device before setting a password on this account",
+          403,
+          "STEP_UP_REQUIRED",
+        );
+      }
+    }
+
     if (accountHasPassword) {
       const verifyResult = await verifyPasswordCredential(auth.user.email, currentPassword);
       if (!verifyResult.ok) {
@@ -252,7 +274,7 @@ export async function POST(request: Request) {
         status: 400,
         errorCode: "PASSWORD_CHANGE_FAILED",
       });
-      return jsonError(updateResult.error.message || "Password update failed", 400, "PASSWORD_CHANGE_FAILED");
+      return jsonError("Password update failed", 400, "PASSWORD_CHANGE_FAILED");
     }
 
     try {
@@ -284,7 +306,7 @@ export async function POST(request: Request) {
       status: 200,
     });
     const successBody = JSON.stringify({ ok: true, message: "Password updated successfully" });
-    await saveIdempotencyResult(request, 'auth.changePassword', successBody, idempotencyCheck.lockToken);
+    await saveIdempotencyResult(request, 'auth.changePassword', successBody, idempotencyCheck.lockToken, auth.user.id);
     return jsonSuccess(undefined, "Password updated successfully");
   } catch (error) {
     logger.error("[api/v1/auth/change-password] failed", { module: 'api', error: error instanceof Error ? error.message : String(error) });

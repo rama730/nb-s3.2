@@ -5,6 +5,7 @@ import {
     messageReactions,
     messageReports,
     messageReadReceipts,
+    messageDeliveryReceipts,
     conversationParticipants,
     messages,
     profiles,
@@ -23,6 +24,31 @@ async function getAuthUser() {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
     return user;
+}
+
+async function listAccessibleMessages(messageIds: string[], userId: string) {
+    const uniqueIds = Array.from(new Set(messageIds.filter(Boolean)));
+    if (uniqueIds.length === 0) return [];
+
+    return db
+        .select({
+            id: messages.id,
+            conversationId: messages.conversationId,
+        })
+        .from(messages)
+        .innerJoin(
+            conversationParticipants,
+            and(
+                eq(conversationParticipants.conversationId, messages.conversationId),
+                eq(conversationParticipants.userId, userId),
+            ),
+        )
+        .where(inArray(messages.id, uniqueIds));
+}
+
+async function assertMessageAccess(messageId: string, userId: string) {
+    const [messageRow] = await listAccessibleMessages([messageId], userId);
+    return messageRow ?? null;
 }
 
 // ============================================================================
@@ -147,6 +173,11 @@ export async function getMessageReactions(
             return { success: true, reactions: {} };
         }
 
+        const accessibleMessages = await listAccessibleMessages(messageIds.slice(0, 100), user.id);
+        if (accessibleMessages.length === 0) {
+            return { success: true, reactions: {} };
+        }
+
         const rows = await db
             .select({
                 messageId: messageReactions.messageId,
@@ -154,7 +185,7 @@ export async function getMessageReactions(
                 userId: messageReactions.userId,
             })
             .from(messageReactions)
-            .where(inArray(messageReactions.messageId, messageIds));
+            .where(inArray(messageReactions.messageId, accessibleMessages.map((message) => message.id)));
 
         return { success: true, reactions: buildReactionSummaryByMessage(rows, user.id) };
     } catch (error) {
@@ -251,12 +282,17 @@ export async function recordReadReceipts(
         if (!messageIds.length) return { success: true };
 
         // Clamp to 50 messages per batch
-        const batch = messageIds.slice(0, 50);
+        const batch = Array.from(new Set(messageIds.slice(0, 50).filter(Boolean)));
+        const accessibleMessages = await listAccessibleMessages(batch, user.id);
+        if (accessibleMessages.length !== batch.length) {
+            return { success: false, error: 'Not authorized' };
+        }
 
         // Insert read receipts, ignoring duplicates
         await db.insert(messageReadReceipts)
-            .values(batch.map((messageId) => ({
-                messageId,
+            .values(accessibleMessages.map((message) => ({
+                messageId: message.id,
+                conversationId: message.conversationId,
                 userId: user.id,
             })))
             .onConflictDoNothing();
@@ -265,6 +301,65 @@ export async function recordReadReceipts(
     } catch (error) {
         console.error('Error recording read receipts:', error);
         return { success: false, error: 'Failed to record read receipts' };
+    }
+}
+
+// ============================================================================
+// DELIVERY RECEIPTS
+// ============================================================================
+
+/**
+ * Record delivery receipts for a batch of message IDs.
+ * Called when the recipient's client receives new messages via realtime.
+ * Drives the WhatsApp-style double gray tick (✓✓).
+ */
+export async function recordDeliveryReceipts(
+    messageIds: string[]
+): Promise<{ success: boolean; error?: string }> {
+    try {
+        const user = await getAuthUser();
+        if (!user) return { success: false, error: 'Not authenticated' };
+
+        if (!messageIds.length) return { success: true };
+
+        // Clamp to 100 messages per batch (delivery acks can arrive in bursts)
+        const batch = Array.from(new Set(messageIds.slice(0, 100).filter(Boolean)));
+
+        // Look up messages with sender IDs so we can filter out the caller's
+        // own messages (you can't deliver a message to yourself) and confirm
+        // the caller is a participant of each conversation.
+        const accessibleRows = await db
+            .select({
+                id: messages.id,
+                conversationId: messages.conversationId,
+                senderId: messages.senderId,
+            })
+            .from(messages)
+            .innerJoin(
+                conversationParticipants,
+                and(
+                    eq(conversationParticipants.conversationId, messages.conversationId),
+                    eq(conversationParticipants.userId, user.id),
+                ),
+            )
+            .where(inArray(messages.id, batch));
+
+        const otherMessages = accessibleRows.filter((row) => row.senderId !== user.id);
+        if (otherMessages.length === 0) return { success: true };
+
+        // Insert delivery receipts, ignoring duplicates
+        await db.insert(messageDeliveryReceipts)
+            .values(otherMessages.map((message) => ({
+                messageId: message.id,
+                conversationId: message.conversationId,
+                userId: user.id,
+            })))
+            .onConflictDoNothing();
+
+        return { success: true };
+    } catch (error) {
+        console.error('Error recording delivery receipts:', error);
+        return { success: false, error: 'Failed to record delivery receipts' };
     }
 }
 
@@ -277,6 +372,11 @@ export async function getMessageReadReceipts(
     try {
         const user = await getAuthUser();
         if (!user) return { success: false, error: 'Not authenticated' };
+
+        const messageRow = await assertMessageAccess(messageId, user.id);
+        if (!messageRow) {
+            return { success: false, error: 'Not authorized' };
+        }
 
         const rows = await db
             .select({

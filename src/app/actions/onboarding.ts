@@ -30,6 +30,7 @@ import { normalizeOnboardingPayload } from '@/lib/validations/onboarding'
 import { normalizeUsername, sanitizeUsernameInput, validateUsername } from '@/lib/validations/username'
 import { and, eq, inArray, isNotNull, sql } from 'drizzle-orm'
 import { headers } from 'next/headers'
+import { getTrustedHeadersIp } from '@/lib/security/request-ip'
 
 const ONBOARDING_COMPLETE_LIMIT = 10
 const ONBOARDING_COMPLETE_WINDOW_SECONDS = 60
@@ -301,7 +302,7 @@ async function getViewerIdentity() {
     ])
 
     const user = authData.user || null
-    const ipAddress = headerStore.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown'
+    const ipAddress = getTrustedHeadersIp(headerStore) ?? 'unknown'
     const userAgent = headerStore.get('user-agent') || 'unknown'
     const viewerKey = user?.id || `anon:${ipAddress}`
 

@@ -22,7 +22,10 @@ interface UseTypingChannelReturn {
     sendTyping: (isTyping: boolean) => Promise<void>;
 }
 
-const TYPING_VISIBLE_TTL_MS = 3_500;
+// Wave 3 Step 12: TTL must cover the composer idle timer (1800 ms) + the 500 ms
+// throttle floor on `isTyping=true` broadcasts + network margin so the banner
+// does not flicker off while the sender is still typing bursty input.
+const TYPING_VISIBLE_TTL_MS = 5_500;
 
 export function useTypingChannel(
     conversationId: string | null,
@@ -177,9 +180,19 @@ export function useTypingChannel(
         subscriptionRef.current = subscription;
 
         return () => {
-            if (requestedTypingStateRef.current) {
-                emitTypingState(false);
+            // Wave 3 Step 12: synchronously flush typing=false to the PREVIOUS
+            // conversation's room via the captured `subscription` (not the ref,
+            // which may already point at the next conversation's room if React
+            // has batched the effect transition). This prevents a race where
+            // the old room's "typing=true" outlives the switch.
+            if (requestedTypingStateRef.current && currentUserProfile) {
+                subscription.send({
+                    type: 'typing',
+                    isTyping: false,
+                    profile: currentUserProfile,
+                });
             }
+            requestedTypingStateRef.current = null;
             subscription.unsubscribe();
             subscriptionRef.current = null;
             connectionStatusRef.current = 'disconnected';

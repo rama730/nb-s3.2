@@ -32,12 +32,16 @@ export async function GET() {
 
     const githubUsage = githubUsageRows[0] ?? { count: 0, lastSyncAt: null };
     const passwordLastChangedAt = await getLatestPasswordChangeAt(user.id);
+    const githubLastSyncAt =
+        githubUsage.lastSyncAt
+            ? new Date(githubUsage.lastSyncAt).toISOString().slice(0, 10)
+            : null;
 
     return jsonSuccess(
         buildIntegrationsData({
             user,
             githubRepoProjectCount: githubUsage.count ?? 0,
-            githubLastSyncAt: githubUsage.lastSyncAt ?? null,
+            githubLastSyncAt,
             passwordLastChangedAt: passwordLastChangedAt ?? null,
         }),
     );

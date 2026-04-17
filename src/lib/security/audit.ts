@@ -10,6 +10,11 @@ export const SECURITY_ACTIVITY_EVENT_TYPES = [
   "recovery_codes_generated",
   "recovery_codes_regenerated",
   "recovery_code_used",
+  // SEC-L7: failed recovery-code redemption attempts are audited so a user
+  // can see when someone tried to redeem a code (useful signal that the
+  // code sheet may have leaked). We never persist the submitted code or a
+  // hash of it — only the fact, the failure reason, and the request fingerprint.
+  "recovery_code_redemption_failed",
   "password_set",
   "password_changed",
   "other_sessions_revoked",

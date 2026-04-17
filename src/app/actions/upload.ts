@@ -9,6 +9,7 @@ import {
     normalizeAndValidateMimeType,
     PROJECT_UPLOAD_MAX_FILE_BYTES,
 } from '@/lib/upload/security';
+import { createUploadIntent, finalizeUploadIntent, cleanupExpiredUploadIntents } from '@/lib/upload/upload-intents';
 
 const MAX_BATCH_UPLOAD_KEYS = 200;
 
@@ -52,7 +53,7 @@ export async function getUploadPresignedUrl(
     contentType: string,
     sizeBytes: number,
     options?: { sessionId?: string | null }
-): Promise<{ url: string } | { error: string; code?: string }> {
+): Promise<{ url: string; uploadIntentId: string; storageKey: string } | { error: string; code?: string }> {
     const startedAt = Date.now();
     try {
         const authClient = await createClient();
@@ -66,6 +67,18 @@ export async function getUploadPresignedUrl(
         const normalizedSize = normalizeAndValidateFileSize(sizeBytes, PROJECT_UPLOAD_MAX_FILE_BYTES);
 
         const supabase = await createAdminClient();
+
+        const intent = await createUploadIntent({
+            userId: user.id,
+            projectId,
+            bucket: 'project-files',
+            storageKey: key,
+            scope: 'project_file',
+            kind: 'file',
+            expectedMimeType: normalizedMimeType,
+            expectedSize: normalizedSize,
+            metadata: { sessionId: options?.sessionId ?? null },
+        });
 
         const { data, error } = await supabase.storage
             .from('project-files')
@@ -86,7 +99,7 @@ export async function getUploadPresignedUrl(
             durationMs: Date.now() - startedAt,
         });
 
-        return { url: data.signedUrl };
+        return { url: data.signedUrl, uploadIntentId: intent.id, storageKey: key };
     } catch (e) {
         if (e instanceof Error && e.message === UPLOAD_ERROR_CODES.KEY_FORMAT_INVALID) {
             return { error: 'Invalid upload key format', code: UPLOAD_ERROR_CODES.KEY_FORMAT_INVALID };
@@ -106,7 +119,7 @@ export async function getUploadPresignedUrl(
 export async function getBatchUploadUrls(
     keys: { key: string; contentType: string; sizeBytes: number }[],
     options?: { sessionId?: string | null }
-): Promise<{ urls: Record<string, string> } | { error: string; code?: string }> {
+): Promise<{ urls: Record<string, string>; uploadIntentIds: Record<string, string> } | { error: string; code?: string }> {
     const startedAt = Date.now();
     try {
         const authClient = await createClient();
@@ -116,7 +129,7 @@ export async function getBatchUploadUrls(
         }
 
         if (!keys || keys.length === 0) {
-            return { urls: {} };
+            return { urls: {}, uploadIntentIds: {} };
         }
         if (keys.length > MAX_BATCH_UPLOAD_KEYS) {
             return { error: `Too many files in one request. Max ${MAX_BATCH_UPLOAD_KEYS}.` };
@@ -146,23 +159,36 @@ export async function getBatchUploadUrls(
 
         const supabase = await createAdminClient();
         const urls: Record<string, string> = {};
+        const uploadIntentIds: Record<string, string> = {};
 
         // Process in parallel batches of 10
         const BATCH_SIZE = 10;
         for (let i = 0; i < normalizedItems.length; i += BATCH_SIZE) {
             const batch = normalizedItems.slice(i, i + BATCH_SIZE);
             const results = await Promise.all(
-                batch.map(async ({ key }) => {
+                batch.map(async ({ key, contentType, sizeBytes }) => {
+                    const intent = await createUploadIntent({
+                        userId: user.id,
+                        projectId: firstProjectId,
+                        bucket: 'project-files',
+                        storageKey: key,
+                        scope: 'project_file',
+                        kind: 'file',
+                        expectedMimeType: contentType,
+                        expectedSize: sizeBytes,
+                        metadata: { sessionId: options?.sessionId ?? null },
+                    });
                     const { data, error } = await supabase.storage
                         .from('project-files')
                         .createSignedUploadUrl(key, { upsert: true });
-                    return { key, url: data?.signedUrl, error };
+                    return { key, url: data?.signedUrl, error, intentId: intent.id };
                 })
             );
 
             for (const result of results) {
                 if (result.url) {
                     urls[result.key] = result.url;
+                    uploadIntentIds[result.key] = result.intentId;
                 }
             }
         }
@@ -176,12 +202,74 @@ export async function getBatchUploadUrls(
             durationMs: Date.now() - startedAt,
         });
 
-        return { urls };
+        return { urls, uploadIntentIds };
     } catch (e) {
         if (e instanceof Error && isUploadValidationError(e.message)) {
             return { error: e.message, code: UPLOAD_ERROR_CODES.UPLOAD_VALIDATION_FAILED };
         }
         console.error('Batch presigned URL error:', e);
         return { error: 'Internal server error' };
+    }
+}
+
+export async function finalizeProjectUploadAction(input: {
+    uploadIntentId?: string;
+    storageKey?: string;
+    projectId: string;
+}): Promise<{ success: true; storageKey: string; uploadIntentId: string } | { success: false; error: string }> {
+    try {
+        const authClient = await createClient();
+        const { data: { user } } = await authClient.auth.getUser();
+        if (!user) {
+            return { success: false, error: 'Unauthorized' };
+        }
+
+        await assertProjectWriteAccess(input.projectId, user.id);
+        const intent = await finalizeUploadIntent({
+            intentId: input.uploadIntentId,
+            storageKey: input.storageKey,
+            bucket: 'project-files',
+            userId: user.id,
+            projectId: input.projectId,
+            expectedScope: 'project_file',
+            expectedKind: 'file',
+        });
+
+        return { success: true, storageKey: intent.storageKey, uploadIntentId: intent.id };
+    } catch (error) {
+        logger.error('upload.project.finalize_failed', {
+            module: 'upload',
+            projectId: input.projectId,
+            uploadIntentId: input.uploadIntentId ?? null,
+            storageKey: input.storageKey ?? null,
+            error: error instanceof Error ? error.message : String(error),
+        });
+        return { success: false, error: 'Failed to finalize upload' };
+    }
+}
+
+export async function cleanupExpiredProjectUploadIntentsAction(): Promise<{
+    success: true;
+    removedObjects: number;
+    expiredIntents: number;
+} | {
+    success: false;
+    error: string;
+}> {
+    try {
+        const authClient = await createClient();
+        const { data: { user } } = await authClient.auth.getUser();
+        if (!user) {
+            return { success: false, error: 'Unauthorized' };
+        }
+
+        const result = await cleanupExpiredUploadIntents();
+        return { success: true, ...result };
+    } catch (error) {
+        logger.error('upload.project.cleanup_failed', {
+            module: 'upload',
+            error: error instanceof Error ? error.message : String(error),
+        });
+        return { success: false, error: 'Failed to clean expired uploads' };
     }
 }

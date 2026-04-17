@@ -81,6 +81,7 @@ export function buildConversationLastMessageSnapshot(
         senderId: message.senderId ?? null,
         createdAt: new Date(epoch),
         type: getStructuredPreviewType(message) ?? 'message',
+        metadata: message.metadata ?? null,
     };
 }
 

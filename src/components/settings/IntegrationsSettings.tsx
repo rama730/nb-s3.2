@@ -17,6 +17,7 @@ import { fetchSecurityStepUpCapabilities, useEnableEmailSignIn, useIntegrationsD
 import { queryKeys } from "@/lib/query-keys";
 import { cn } from "@/lib/utils";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { getPasswordPolicyResult, PASSWORD_MIN_LENGTH } from "@/lib/security/password-policy";
 import type {
     AuthConnectionMethod,
     IntegrationsAuthProvider,
@@ -299,6 +300,7 @@ export default function IntegrationsSettings() {
     const [stepUpMethods, setStepUpMethods] = useState<SecurityStepUpMethod[]>([]);
     const [primaryTotpFactorId, setPrimaryTotpFactorId] = useState<string | undefined>();
     const [linkingProviderId, setLinkingProviderId] = useState<string | null>(null);
+    const passwordPolicy = useMemo(() => getPasswordPolicyResult(newPassword), [newPassword]);
 
     const errorMessage = (() => {
         if (!error) return null;
@@ -359,8 +361,8 @@ export default function IntegrationsSettings() {
             return;
         }
 
-        if (newPassword.length < 12) {
-            showToast("Password must be at least 12 characters", "error");
+        if (!passwordPolicy.ok) {
+            showToast(passwordPolicy.error || "Password does not meet security requirements", "error");
             return;
         }
 
@@ -510,13 +512,13 @@ export default function IntegrationsSettings() {
                                             </div>
                                         </div>
                                         <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">
-                                            Use at least 12 characters. This enables email/password access on the current account email and does not create a second account.
+                                            Use at least {PASSWORD_MIN_LENGTH} characters. This enables email/password access on the current account email and does not create a second account.
                                         </p>
                                         <div className="mt-4 flex flex-wrap gap-3">
                                             <Button
                                                 type="button"
                                                 onClick={() => void submitEnableEmailSignIn()}
-                                                disabled={enableEmailSignInMutation.isPending}
+                                                disabled={enableEmailSignInMutation.isPending || !passwordPolicy.ok}
                                             >
                                                 {enableEmailSignInMutation.isPending ? (
                                                     <>

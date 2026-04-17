@@ -15,12 +15,14 @@ export const SECURITY_STEP_UP_COOKIE_NAME = "nb-security-stepup";
 export const SECURITY_STEP_UP_MAX_AGE_SECONDS = 5 * 60;
 
 function resolveSecurityStepUpSecret(): string {
-  const secret = process.env.SECURITY_STEPUP_SECRET
-    ?? process.env.SUPABASE_JWT_SECRET
-    ?? "";
+  const secret = process.env.SECURITY_STEPUP_SECRET ?? "";
 
   if (!secret.trim()) {
-    throw new Error("Missing SECURITY_STEPUP_SECRET and SUPABASE_JWT_SECRET");
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("Missing SECURITY_STEPUP_SECRET");
+    }
+    console.warn("[security.step-up] using development fallback step-up secret");
+    return "development-security-stepup-secret";
   }
 
   return secret;

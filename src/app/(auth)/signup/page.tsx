@@ -12,6 +12,7 @@ import { Separator } from '@/components/ui/separator'
 import TurnstileWidget, { hasTurnstileSiteKey } from '@/components/auth/TurnstileWidget'
 import { Github, Mail, Loader2, Eye, EyeOff, User, Check, X } from 'lucide-react'
 import { buildAuthPageHref, resolveAuthRedirectPath } from '@/lib/auth/redirects'
+import { getPasswordPolicyResult, PASSWORD_MIN_LENGTH } from '@/lib/security/password-policy'
 
 function SignupPageInner() {
     const router = useRouter()
@@ -57,21 +58,17 @@ function SignupPageInner() {
     }
 
     // Password strength indicators
-    const passwordChecks = {
-        length: password.length >= 8,
-        uppercase: /[A-Z]/.test(password),
-        lowercase: /[a-z]/.test(password),
-        number: /[0-9]/.test(password),
-    }
-    const passwordStrength = Object.values(passwordChecks).filter(Boolean).length
+    const passwordPolicy = getPasswordPolicyResult(password)
+    const passwordChecks = passwordPolicy.checks
+    const passwordStrength = passwordPolicy.score
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault()
         setError(null)
         setSuccess(null)
 
-        if (passwordStrength < 3) {
-            setError('Please create a stronger password')
+        if (!passwordPolicy.ok) {
+            setError(passwordPolicy.error || 'Please create a stronger password')
             return
         }
 
@@ -297,7 +294,7 @@ function SignupPageInner() {
                                             {[1, 2, 3, 4].map((level) => (
                                                 <div
                                                     key={level}
-                                                    className={`h-1 flex-1 rounded-full transition-colors ${passwordStrength >= level
+                                                    className={`h-1 flex-1 rounded-full transition-colors ${Math.min(passwordStrength, 4) >= level
                                                         ? passwordStrength >= 3
                                                             ? 'bg-green-500'
                                                             : passwordStrength >= 2
@@ -310,10 +307,11 @@ function SignupPageInner() {
                                         </div>
                                         <div className="grid grid-cols-2 gap-1 text-xs">
                                             {[
-                                                { check: passwordChecks.length, label: '8+ characters' },
+                                                { check: passwordChecks.minLength, label: `${PASSWORD_MIN_LENGTH}+ characters` },
                                                 { check: passwordChecks.uppercase, label: 'Uppercase' },
                                                 { check: passwordChecks.lowercase, label: 'Lowercase' },
                                                 { check: passwordChecks.number, label: 'Number' },
+                                                { check: passwordChecks.symbol, label: 'Symbol (recommended)' },
                                             ].map(({ check, label }) => (
                                                 <div key={label} className="flex items-center gap-1">
                                                     {check ? (
@@ -347,7 +345,7 @@ function SignupPageInner() {
                             <Button
                                 type="submit"
                                 className="w-full h-11"
-                                disabled={isLoading || passwordStrength < 3}
+                                disabled={isLoading || !passwordPolicy.ok}
                             >
                                 {isLoading ? (
                                     <>

@@ -4,6 +4,7 @@ import {
   type SprintDetailPayload,
   type SprintFileTimelineEntity,
   type SprintHealthSummary,
+  type SprintListItem,
   type SprintTimelinePerson,
   type SprintTimelineRow,
   type SprintTaskTimelineEntity,
@@ -301,6 +302,104 @@ function patchPage(
   };
 }
 
+function toSprintSortTimestamp(value: string | null | undefined) {
+  if (!value) return Number.NEGATIVE_INFINITY;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+}
+
+function sortSprints(sprints: SprintListItem[]) {
+  const statusPriority: Record<SprintListItem["status"], number> = {
+    active: 0,
+    planning: 1,
+    completed: 2,
+  };
+
+  return [...sprints].sort((left, right) => {
+    const byStatus = statusPriority[left.status] - statusPriority[right.status];
+    if (byStatus !== 0) return byStatus;
+
+    const byCreatedAt = toSprintSortTimestamp(right.createdAt) - toSprintSortTimestamp(left.createdAt);
+    if (byCreatedAt !== 0) return byCreatedAt;
+
+    return left.id.localeCompare(right.id);
+  });
+}
+
+const EMPTY_SPRINT_FILTER_COUNTS = buildSprintFilterCounts({
+  totalTasks: 0,
+  completedTasks: 0,
+  blockedTasks: 0,
+  linkedFileCount: 0,
+});
+
+function patchSprintMetadataInPage(page: SprintDetailPayload, sprint: SprintListItem): SprintDetailPayload {
+  const nextSprints = sortSprints(page.sprints.map((item) => (item.id === sprint.id ? sprint : item)));
+  const nextRows = page.rows.map((row) => {
+    if ((row.kind === "kickoff" || row.kind === "closeout") && row.sprint.id === sprint.id) {
+      return {
+        ...row,
+        sprint,
+      };
+    }
+    return row;
+  });
+
+  return {
+    ...page,
+    sprints: nextSprints,
+    rows: nextRows,
+    compareSummary:
+      page.compareSummary?.baselineSprintId === sprint.id
+        ? {
+            ...page.compareSummary,
+            baselineSprintName: sprint.name,
+          }
+        : page.compareSummary,
+  };
+}
+
+function insertSprintInPage(page: SprintDetailPayload, sprint: SprintListItem): SprintDetailPayload {
+  const nextSprints = sortSprints([sprint, ...page.sprints.filter((item) => item.id !== sprint.id)]);
+  return {
+    ...page,
+    sprints: nextSprints,
+    selectedSprintId: page.selectedSprintId ?? sprint.id,
+  };
+}
+
+function removeSprintFromPage(
+  page: SprintDetailPayload,
+  sprintId: string,
+  nextSelectedSprintId: string | null,
+): SprintDetailPayload {
+  const nextSprints = page.sprints.filter((sprint) => sprint.id !== sprintId);
+  const nextRows = page.rows.filter((row) => !((row.kind === "kickoff" || row.kind === "closeout") && row.sprint.id === sprintId));
+  const nextSelected = page.selectedSprintId === sprintId ? nextSelectedSprintId : page.selectedSprintId;
+
+  if (page.selectedSprintId === sprintId) {
+    return {
+      ...page,
+      sprints: nextSprints,
+      selectedSprintId: nextSelected,
+      summary: null,
+      compareSummary: null,
+      filterCounts: EMPTY_SPRINT_FILTER_COUNTS,
+      rows: [],
+      drawerPreviews: [],
+      nextCursor: null,
+      hasMore: false,
+    };
+  }
+
+  return {
+    ...page,
+    sprints: nextSprints,
+    rows: nextRows,
+    compareSummary: page.compareSummary?.baselineSprintId === sprintId ? null : page.compareSummary,
+  };
+}
+
 export function patchSprintDetailInfiniteData(
   existing: unknown,
   beforeTask: SprintTaskMutationRecord | null,
@@ -319,6 +418,46 @@ export function patchSprintDetailInfiniteData(
   return {
     ...infiniteData,
     pages: infiniteData.pages.map((page, index) => patchPage(page, beforeTask, afterTask, index === 0)),
+  };
+}
+
+export function insertSprintIntoInfiniteData(existing: unknown, sprint: SprintListItem) {
+  if (!existing || typeof existing !== "object" || !("pages" in existing) || !Array.isArray((existing as { pages: unknown }).pages)) {
+    return existing;
+  }
+
+  const infiniteData = existing as { pages: SprintDetailPayload[]; pageParams: unknown[] };
+  return {
+    ...infiniteData,
+    pages: infiniteData.pages.map((page) => insertSprintInPage(page, sprint)),
+  };
+}
+
+export function patchSprintMetadataInfiniteData(existing: unknown, sprint: SprintListItem) {
+  if (!existing || typeof existing !== "object" || !("pages" in existing) || !Array.isArray((existing as { pages: unknown }).pages)) {
+    return existing;
+  }
+
+  const infiniteData = existing as { pages: SprintDetailPayload[]; pageParams: unknown[] };
+  return {
+    ...infiniteData,
+    pages: infiniteData.pages.map((page) => patchSprintMetadataInPage(page, sprint)),
+  };
+}
+
+export function removeSprintFromInfiniteData(
+  existing: unknown,
+  sprintId: string,
+  nextSelectedSprintId: string | null,
+) {
+  if (!existing || typeof existing !== "object" || !("pages" in existing) || !Array.isArray((existing as { pages: unknown }).pages)) {
+    return existing;
+  }
+
+  const infiniteData = existing as { pages: SprintDetailPayload[]; pageParams: unknown[] };
+  return {
+    ...infiniteData,
+    pages: infiniteData.pages.map((page) => removeSprintFromPage(page, sprintId, nextSelectedSprintId)),
   };
 }
 

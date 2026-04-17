@@ -435,6 +435,55 @@
       "when": 1775529600000,
       "tag": "0060_messaging_collaboration_foundation",
       "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1775952000000,
+      "tag": "0061_profile_security_state_privacy_rls",
+      "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "7",
+      "when": 1776038400000,
+      "tag": "0062_upload_intents_and_recovery_redemptions",
+      "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "7",
+      "when": 1776102000000,
+      "tag": "0063_database_setup_authority_backfill",
+      "breakpoints": true
+    },
+    {
+      "idx": 65,
+      "version": "7",
+      "when": 1776188400000,
+      "tag": "0064_messaging_reactions_reports_receipts_rls",
+      "breakpoints": true
+    },
+    {
+      "idx": 66,
+      "version": "7",
+      "when": 1776275000000,
+      "tag": "0065_profile_security_recovery_factor_binding",
+      "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "7",
+      "when": 1776361400000,
+      "tag": "0066_message_delivery_receipts",
+      "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1776447800000,
+      "tag": "0067_read_receipts_conversation_id",
+      "breakpoints": true
     }
   ]
 }

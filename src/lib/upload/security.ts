@@ -5,7 +5,57 @@ const BLOCKED_MIME_TYPES = new Set([
   "application/x-msdownload",
   "application/x-dosexec",
   "application/x-msdos-program",
+  "application/svg+xml",
+  "image/svg+xml",
 ]);
+
+const MAGIC_BYTE_CHECKERS: Record<string, (bytes: Uint8Array) => boolean> = {
+  "image/png": (bytes) =>
+    bytes.length >= 8
+    && bytes[0] === 0x89
+    && bytes[1] === 0x50
+    && bytes[2] === 0x4e
+    && bytes[3] === 0x47
+    && bytes[4] === 0x0d
+    && bytes[5] === 0x0a
+    && bytes[6] === 0x1a
+    && bytes[7] === 0x0a,
+  "image/jpeg": (bytes) =>
+    bytes.length >= 3
+    && bytes[0] === 0xff
+    && bytes[1] === 0xd8
+    && bytes[2] === 0xff,
+  "image/gif": (bytes) =>
+    bytes.length >= 6
+    && ((bytes[0] === 0x47
+      && bytes[1] === 0x49
+      && bytes[2] === 0x46
+      && bytes[3] === 0x38
+      && bytes[4] === 0x37
+      && bytes[5] === 0x61)
+      || (bytes[0] === 0x47
+        && bytes[1] === 0x49
+        && bytes[2] === 0x46
+        && bytes[3] === 0x38
+        && bytes[4] === 0x39
+        && bytes[5] === 0x61)),
+  "image/webp": (bytes) =>
+    bytes.length >= 12
+    && bytes[0] === 0x52
+    && bytes[1] === 0x49
+    && bytes[2] === 0x46
+    && bytes[3] === 0x46
+    && bytes[8] === 0x57
+    && bytes[9] === 0x45
+    && bytes[10] === 0x42
+    && bytes[11] === 0x50,
+  "application/pdf": (bytes) =>
+    bytes.length >= 4
+    && bytes[0] === 0x25
+    && bytes[1] === 0x50
+    && bytes[2] === 0x44
+    && bytes[3] === 0x46,
+};
 
 const DEFAULT_PROJECT_UPLOAD_MAX_FILE_BYTES = 25 * 1024 * 1024; // 25MB
 const DEFAULT_ATTACHMENT_UPLOAD_MAX_FILE_BYTES = 50 * 1024 * 1024; // 50MB
@@ -44,6 +94,35 @@ export function normalizeAndValidateMimeType(rawMimeType: unknown): string {
   }
 
   return normalized;
+}
+
+async function validateMagicBytes(
+  source: { arrayBuffer(): Promise<ArrayBuffer>; size: number },
+  mimeType: string,
+): Promise<void> {
+  const checker = MAGIC_BYTE_CHECKERS[mimeType];
+  if (!checker) return;
+
+  const bytesToRead = Math.min(Math.max(Number(source.size) || 0, 16), 32);
+  const buffer = await source.arrayBuffer();
+  const signature = new Uint8Array(buffer.slice(0, bytesToRead));
+  if (!checker(signature)) {
+    throw new Error("File contents do not match the declared MIME type");
+  }
+}
+
+export async function validateUploadedFileMagicBytes(
+  file: Pick<File, "arrayBuffer" | "size">,
+  mimeType: string,
+): Promise<void> {
+  await validateMagicBytes(file, mimeType);
+}
+
+export async function validateUploadedBlobMagicBytes(
+  blob: Pick<Blob, "arrayBuffer" | "size">,
+  mimeType: string,
+): Promise<void> {
+  await validateMagicBytes(blob, mimeType);
 }
 
 export function normalizeAndValidateFileSize(

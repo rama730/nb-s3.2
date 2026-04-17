@@ -116,7 +116,7 @@ export async function DELETE(request: Request) {
         status: 400,
         errorCode: "SESSION_REVOKE_FAILED",
       });
-      return jsonError(result.error.message || "Failed to revoke other sessions", 400, "SESSION_REVOKE_FAILED");
+      return jsonError("Failed to revoke other sessions", 400, "SESSION_REVOKE_FAILED");
     }
 
     await recordSecurityEvent({

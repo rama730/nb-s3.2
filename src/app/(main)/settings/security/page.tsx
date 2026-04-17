@@ -148,6 +148,7 @@ export default function SecurityPage() {
                 <SettingsSectionCard
                     title="Authenticator App"
                     description="Add a 6-digit code from an authenticator app as your main extra layer of protection."
+                    testId="security-authenticator-section"
                 >
                     <MfaSetup
                         initialFactors={securityData?.mfaFactors}
@@ -177,6 +178,7 @@ export default function SecurityPage() {
                 <SettingsSectionCard
                     title="Active Sessions"
                     description="Review where your account is currently signed in."
+                    testId="security-active-sessions-section"
                 >
                     <SessionsList
                         initialSessions={securityData?.sessions}
@@ -188,6 +190,7 @@ export default function SecurityPage() {
                 <SettingsSectionCard
                     title="Recent Login Activity"
                     description="Recent sign-ins to your account."
+                    testId="security-login-activity-section"
                 >
                     <LoginHistory initialHistory={securityData?.loginHistory} />
                 </SettingsSectionCard>
@@ -195,6 +198,7 @@ export default function SecurityPage() {
                 <SettingsSectionCard
                     title="Security Activity"
                     description="Recent changes to your account security."
+                    testId="security-activity-section"
                 >
                     <SecurityActivitySection activity={securityData?.securityActivity} />
                 </SettingsSectionCard>

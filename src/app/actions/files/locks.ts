@@ -32,39 +32,56 @@ export async function acquireProjectNodeLock(projectId: string, nodeId: string, 
         });
         if (!node) throw new Error("File not found");
 
-        const existing = await tx.query.projectNodeLocks.findFirst({
-            where: and(eq(projectNodeLocks.nodeId, nodeId), eq(projectNodeLocks.projectId, projectId)),
-        });
+        const acquiredResult = await tx.execute<{
+            nodeId: string;
+            projectId: string;
+            lockedBy: string;
+            expiresAt: Date;
+        }>(sql`
+            INSERT INTO project_node_locks (node_id, project_id, locked_by, acquired_at, expires_at)
+            VALUES (${nodeId}, ${projectId}, ${user.id}, ${now}, ${expiresAt})
+            ON CONFLICT (node_id) DO UPDATE
+            SET
+                project_id = EXCLUDED.project_id,
+                locked_by = EXCLUDED.locked_by,
+                acquired_at = EXCLUDED.acquired_at,
+                expires_at = EXCLUDED.expires_at
+            WHERE
+                project_node_locks.project_id = EXCLUDED.project_id
+                AND (
+                    project_node_locks.locked_by = EXCLUDED.locked_by
+                    OR project_node_locks.expires_at <= ${now}
+                )
+            RETURNING
+                node_id AS "nodeId",
+                project_id AS "projectId",
+                locked_by AS "lockedBy",
+                expires_at AS "expiresAt"
+        `);
 
-        if (existing && existing.expiresAt > now && existing.lockedBy !== user.id) {
-            const lockUser = await tx.query.profiles.findFirst({
-                where: eq(profiles.id, existing.lockedBy),
-                columns: { id: true, username: true, fullName: true }
+        const acquiredRow = Array.from(acquiredResult)[0];
+        if (!acquiredRow) {
+            const existing = await tx.query.projectNodeLocks.findFirst({
+                where: and(eq(projectNodeLocks.nodeId, nodeId), eq(projectNodeLocks.projectId, projectId)),
             });
+
+            const lockUser = existing
+                ? await tx.query.profiles.findFirst({
+                    where: eq(profiles.id, existing.lockedBy),
+                    columns: { id: true, username: true, fullName: true }
+                })
+                : null;
+
             return {
                 ok: false as const,
                 lock: {
                     nodeId,
                     projectId,
-                    lockedBy: existing.lockedBy,
+                    lockedBy: existing?.lockedBy ?? "",
                     lockedByName: lockUser?.fullName || lockUser?.username || null,
-                    expiresAt: existing.expiresAt.getTime(),
+                    expiresAt: existing?.expiresAt.getTime() ?? expiresAt.getTime(),
                 }
             };
-        }
-
-        if (existing) {
-            await tx.update(projectNodeLocks)
-                .set({ lockedBy: user.id, acquiredAt: now, expiresAt })
-                .where(and(eq(projectNodeLocks.nodeId, nodeId), eq(projectNodeLocks.projectId, projectId)));
-        } else {
-            await tx.insert(projectNodeLocks).values({
-                nodeId,
-                projectId,
-                lockedBy: user.id,
-                acquiredAt: now,
-                expiresAt,
-            });
         }
 
         await tx.insert(projectNodeEvents).values({
@@ -77,13 +94,13 @@ export async function acquireProjectNodeLock(projectId: string, nodeId: string, 
         });
 
         return {
-            ok: true as const,
-            lock: {
-                nodeId,
-                projectId,
-                lockedBy: user.id,
+                ok: true as const,
+                lock: {
+                nodeId: acquiredRow.nodeId,
+                projectId: acquiredRow.projectId,
+                lockedBy: acquiredRow.lockedBy,
                 lockedByName: null,
-                expiresAt: expiresAt.getTime(),
+                expiresAt: acquiredRow.expiresAt.getTime(),
             }
         };
     });

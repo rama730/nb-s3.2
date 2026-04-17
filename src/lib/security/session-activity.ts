@@ -26,11 +26,23 @@ function toIsoString(value: Date | string | null | undefined): string {
     return typeof value === "string" ? value : value.toISOString();
 }
 
-export async function listActiveSessions(
+export type ListActiveSessionsPage = {
+    sessions: SecuritySessionActivity[];
+    hasMore: boolean;
+    nextOffset: number | null;
+};
+
+export async function listActiveSessionsPage(
     userId: string,
     currentSessionId?: string | null,
-    limit: number = 10,
-): Promise<SecuritySessionActivity[]> {
+    options?: {
+        limit?: number;
+        offset?: number;
+    },
+): Promise<ListActiveSessionsPage> {
+    const limit = Number.isFinite(options?.limit) ? Math.max(1, Math.min(Number(options?.limit), 50)) : 10;
+    const offset = Number.isFinite(options?.offset) ? Math.max(0, Number(options?.offset)) : 0;
+
     const rows = await db.execute<{
         id: string;
         ip: string | null;
@@ -52,15 +64,19 @@ export async function listActiveSessions(
       WHERE user_id = ${userId}::uuid
         AND (not_after IS NULL OR not_after > now())
       ORDER BY COALESCE(updated_at, created_at) DESC
-      LIMIT ${limit}
+      LIMIT ${limit + 1}
+      OFFSET ${offset}
     `);
 
+    const hasMore = rows.length > limit;
+    const visibleRows = hasMore ? rows.slice(0, limit) : rows;
+
     const resolvedCurrentSessionId = resolveCurrentSessionRowId(
-        rows.map((row) => row.id),
+        visibleRows.map((row) => row.id),
         currentSessionId,
     );
 
-    return rows.map((row) => ({
+    const sessions = visibleRows.map((row) => ({
         id: row.id,
         device_info: { userAgent: row.user_agent?.trim() || "Unknown device" },
         ip_address: row.ip?.trim() || "unknown",
@@ -69,6 +85,21 @@ export async function listActiveSessions(
         is_current: resolvedCurrentSessionId ? row.id === resolvedCurrentSessionId : false,
         aal: row.aal,
     }));
+
+    return {
+        sessions,
+        hasMore,
+        nextOffset: hasMore ? offset + sessions.length : null,
+    };
+}
+
+export async function listActiveSessions(
+    userId: string,
+    currentSessionId?: string | null,
+    limit: number = 10,
+): Promise<SecuritySessionActivity[]> {
+    const page = await listActiveSessionsPage(userId, currentSessionId, { limit });
+    return page.sessions;
 }
 
 export async function countOtherActiveSessions(

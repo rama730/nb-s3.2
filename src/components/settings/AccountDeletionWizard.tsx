@@ -29,6 +29,14 @@ interface Props {
     showToast: (message: string, type: "success" | "error" | "info") => void;
 }
 
+const EMPTY_DATA_SUMMARY: DataSummary = {
+    projectsCount: 0,
+    connectionsCount: 0,
+    messagesCount: 0,
+    filesCount: 0,
+    collectionsCount: 0,
+};
+
 export default function AccountDeletionWizard({ onClose, onDeleted, showToast }: Props) {
     const [step, setStep] = useState<WizardStep>(1);
     const [loading, setLoading] = useState(false);
@@ -195,14 +203,14 @@ export default function AccountDeletionWizard({ onClose, onDeleted, showToast }:
                                 <div className="flex items-center justify-center py-8">
                                     <div className="animate-spin rounded-full h-6 w-6 border-2 border-zinc-300 border-t-red-500" />
                                 </div>
-                            ) : dataSummary ? (
+                            ) : (
                                 <div className="space-y-2">
                                     {[
-                                        { label: "Projects", value: dataSummary.projectsCount },
-                                        { label: "Connections", value: dataSummary.connectionsCount },
-                                        { label: "Messages", value: dataSummary.messagesCount },
-                                        { label: "Files", value: dataSummary.filesCount },
-                                        { label: "Collections", value: dataSummary.collectionsCount },
+                                        { label: "Projects", value: (dataSummary ?? EMPTY_DATA_SUMMARY).projectsCount },
+                                        { label: "Connections", value: (dataSummary ?? EMPTY_DATA_SUMMARY).connectionsCount },
+                                        { label: "Messages", value: (dataSummary ?? EMPTY_DATA_SUMMARY).messagesCount },
+                                        { label: "Files", value: (dataSummary ?? EMPTY_DATA_SUMMARY).filesCount },
+                                        { label: "Collections", value: (dataSummary ?? EMPTY_DATA_SUMMARY).collectionsCount },
                                     ].map(({ label, value }) => (
                                         <div
                                             key={label}
@@ -215,8 +223,6 @@ export default function AccountDeletionWizard({ onClose, onDeleted, showToast }:
                                         </div>
                                     ))}
                                 </div>
-                            ) : (
-                                <p className="text-sm text-zinc-500">Unable to load data summary.</p>
                             )}
                         </div>
                     )}

@@ -25,11 +25,20 @@ export function getUsernameCheckRateLimitConfig() {
         windowSeconds: parsePositiveInt(process.env.ONBOARDING_USERNAME_CHECK_WINDOW_SECONDS, 60),
         ipLimit: parsePositiveInt(process.env.ONBOARDING_USERNAME_CHECK_IP_LIMIT, 80),
         fingerprintLimit: parsePositiveInt(process.env.ONBOARDING_USERNAME_CHECK_FINGERPRINT_LIMIT, 50),
+        // SEC-H2: anonymous users get a much tighter daily enumeration cap so a
+        // patient attacker cannot chew through tens of thousands of usernames
+        // over a 24 h window by staying within the per-minute limits.
+        anonDailyLimit: parsePositiveInt(process.env.ONBOARDING_USERNAME_CHECK_ANON_DAILY_LIMIT, 500),
+        anonDailyWindowSeconds: parsePositiveInt(
+            process.env.ONBOARDING_USERNAME_CHECK_ANON_DAILY_WINDOW_SECONDS,
+            24 * 60 * 60,
+        ),
     }
 }
 
 export function buildOnboardingRateLimitKeys(params: {
     viewerKey: string
+    normalizedUsername: string
     ipAddress?: string | null
     userAgent?: string | null
 }) {
@@ -40,6 +49,8 @@ export function buildOnboardingRateLimitKeys(params: {
         user: `onboarding:username-check:user:${params.viewerKey}`,
         ip: `onboarding:username-check:ip:${ip}`,
         fingerprint: `onboarding:username-check:fingerprint:${ip}:${ua}`,
+        target: `onboarding:username-check:target:${params.normalizedUsername}`,
+        anonDaily: `onboarding:username-check:anon-daily:${ip}`,
     }
 }
 
@@ -55,11 +66,13 @@ export async function checkUsernameAvailabilityWithClient(params: {
     const rateConfig = getUsernameCheckRateLimitConfig()
     const keys = buildOnboardingRateLimitKeys({
         viewerKey: params.viewerKey,
+        normalizedUsername,
         ipAddress: params.ipAddress,
         userAgent: params.userAgent,
     })
 
-    const [userRate, ipRate, fingerprintRate] = await Promise.all([
+    const isAnonymous = !params.viewerId
+    const [userRate, ipRate, fingerprintRate, targetRate, anonDailyRate] = await Promise.all([
         consumeRateLimit(
             keys.user,
             rateConfig.limit,
@@ -75,9 +88,27 @@ export async function checkUsernameAvailabilityWithClient(params: {
             rateConfig.fingerprintLimit,
             rateConfig.windowSeconds
         ),
+        consumeRateLimit(
+            keys.target,
+            Math.max(5, Math.floor(rateConfig.limit / 2)),
+            rateConfig.windowSeconds
+        ),
+        isAnonymous
+            ? consumeRateLimit(
+                keys.anonDaily,
+                rateConfig.anonDailyLimit,
+                rateConfig.anonDailyWindowSeconds,
+            )
+            : Promise.resolve({ allowed: true } as const),
     ])
 
-    if (!userRate.allowed || !ipRate.allowed || !fingerprintRate.allowed) {
+    if (
+        !userRate.allowed
+        || !ipRate.allowed
+        || !fingerprintRate.allowed
+        || !targetRate.allowed
+        || !anonDailyRate.allowed
+    ) {
         const error = onboardingError(
             'RATE_LIMITED',
             'Too many checks. Please wait and try again.',
@@ -88,6 +119,8 @@ export async function checkUsernameAvailabilityWithClient(params: {
             userAllowed: userRate.allowed,
             ipAllowed: ipRate.allowed,
             fingerprintAllowed: fingerprintRate.allowed,
+            targetAllowed: targetRate.allowed,
+            anonDailyAllowed: anonDailyRate.allowed,
         })
         return {
             available: false,

@@ -159,7 +159,7 @@ export async function runFileInBrowser(
         result = await withTimeout(runPython(content, { stdinLines: opts?.stdinLines }), 30_000);
         break;
       case "javascript":
-        result = runJavaScript(content);
+        result = await withTimeout(runJavaScript(content), 30_000);
         break;
       case "sql":
         result = await withTimeout(runSql(content), 30_000);
@@ -276,7 +276,7 @@ export async function runFileWithContent(
         );
         break;
       case "javascript":
-        result = runJavaScript(content);
+        result = await withTimeout(runJavaScript(content), 30_000);
         break;
       case "sql":
         result = await withTimeout(runSql(content), 30_000);

@@ -13,6 +13,7 @@ import SecurityStepUpDialog from "@/components/settings/SecurityStepUpDialog";
 import { useToast } from "@/components/ui-custom/Toast";
 import { useChangePassword } from "@/hooks/useSettingsQueries";
 import { queryKeys } from "@/lib/query-keys";
+import { getPasswordPolicyResult, PASSWORD_MIN_LENGTH } from "@/lib/security/password-policy";
 
 type SecurityStepUpMethod = "totp" | "recovery_code";
 
@@ -51,8 +52,9 @@ export default function PasswordManagementSection({
     : "Add a password so email sign-in is available on this account.";
   const statusLabel = hasPassword ? "Password available" : "No password set";
   const helperCopy = hasPassword
-    ? "Prefer a strong password with at least 12 characters."
-    : "Add a strong password with at least 12 characters if you want email sign-in available on this account.";
+    ? `Prefer a strong password with at least ${PASSWORD_MIN_LENGTH} characters.`
+    : `Add a strong password with at least ${PASSWORD_MIN_LENGTH} characters if you want email sign-in available on this account.`;
+  const passwordPolicy = getPasswordPolicyResult(newPassword);
 
   const resetForm = () => {
     setCurrentPassword("");
@@ -108,8 +110,8 @@ export default function PasswordManagementSection({
       return;
     }
 
-    if (newPassword.length < 12) {
-      showToast("Password must be at least 12 characters", "error");
+    if (!passwordPolicy.ok) {
+      showToast(passwordPolicy.error || "Password does not meet security requirements", "error");
       return;
     }
 
@@ -195,7 +197,7 @@ export default function PasswordManagementSection({
             </p>
 
             <div className="flex flex-wrap gap-3">
-              <Button type="submit" disabled={isChangingPassword}>
+              <Button type="submit" disabled={isChangingPassword || !passwordPolicy.ok}>
                 {isChangingPassword ? (
                   <>
                     <Loader2 className="h-4 w-4 animate-spin" />

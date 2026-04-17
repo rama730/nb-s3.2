@@ -10,6 +10,7 @@ import { randomUUID } from "crypto";
 import { parseGithubRepo } from "@/lib/github/repo-preview";
 import { resolveGithubRepoAccess } from "@/lib/github/auth-resolver";
 import { normalizeGithubBranch, normalizeGithubRepoUrl } from "@/lib/github/repo-validation";
+import { createSignedJobRequestToken } from "@/lib/security/job-request";
 
 const REQUEST_TIMEOUT_MS = (() => {
     const v = Number(process.env.GITHUB_API_TIMEOUT_MS || 12000);
@@ -202,7 +203,16 @@ export async function pushToGitHub(
         const jobId = randomUUID();
         await inngest.send({
             name: "git/push",
-            data: { projectId, commitMessage, userId: user.id },
+            data: {
+                projectId,
+                commitMessage,
+                userId: user.id,
+                jobSignature: createSignedJobRequestToken({
+                    kind: "git/push",
+                    actorId: user.id,
+                    subjectId: projectId,
+                }),
+            },
             id: jobId,
         });
 
@@ -230,7 +240,15 @@ export async function pullFromGitHub(
         const jobId = randomUUID();
         await inngest.send({
             name: "git/pull",
-            data: { projectId, userId: user.id },
+            data: {
+                projectId,
+                userId: user.id,
+                jobSignature: createSignedJobRequestToken({
+                    kind: "git/pull",
+                    actorId: user.id,
+                    subjectId: projectId,
+                }),
+            },
             id: jobId,
         });
 

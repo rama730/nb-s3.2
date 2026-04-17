@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Image from "next/image";
 import { Loader2, Camera, Plus, X, Trash2, CheckCircle2, AlertTriangle } from "lucide-react";
-import { createProfileImageUploadUrlAction } from "@/app/actions/profile";
+import { createProfileImageUploadUrlAction, finalizeProfileImageUploadAction } from "@/app/actions/profile";
 import { useToast } from "@/components/ui-custom/Toast";
 import Input from "@/components/ui-custom/Input";
 import { Label } from "@/components/ui-custom/Label";
@@ -74,7 +74,14 @@ export function EditProfileTabs({
                 throw new Error(`Failed to upload image (${uploadResponse.status})`);
             }
 
-            const cacheBustedUrl = `${uploadSession.publicUrl}?t=${Date.now()}`;
+            const finalized = await finalizeProfileImageUploadAction({
+                uploadIntentId: uploadSession.uploadIntentId,
+            });
+            if (!finalized.success) {
+                throw new Error(finalized.error || "Failed to finalize image upload");
+            }
+
+            const cacheBustedUrl = `${finalized.publicUrl}?t=${Date.now()}`;
             updateForm(type === "avatar" ? "avatar_url" : "banner_url", cacheBustedUrl);
             showToast(`${type === "avatar" ? "Avatar" : "Banner"} updated`, "success");
         } catch (error: any) {

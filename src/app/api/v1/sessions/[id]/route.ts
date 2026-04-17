@@ -97,7 +97,7 @@ export async function DELETE(
   }
 
   try {
-    const result = await auth.supabase.auth.signOut({ scope: "local" });
+    const result = await auth.supabase.auth.signOut({ scope: "global" });
     if (result.error) {
       logApiRoute(request, {
         requestId,
@@ -108,7 +108,7 @@ export async function DELETE(
         status: 400,
         errorCode: "SESSION_REVOKE_FAILED",
       });
-      return jsonError(result.error.message || "Failed to revoke session", 400, "SESSION_REVOKE_FAILED");
+      return jsonError("Failed to revoke session", 400, "SESSION_REVOKE_FAILED");
     }
     logApiRoute(request, {
       requestId,

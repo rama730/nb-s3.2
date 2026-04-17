@@ -1,12 +1,12 @@
 import { createClient } from '@/lib/supabase/server'
 import { checkUsernameAvailabilityWithClient } from '@/lib/onboarding/username-check'
 import { validateCsrf } from '@/lib/security/csrf'
+import { getTrustedRequestIp } from '@/lib/security/request-ip'
 import { getRequestId, jsonSuccess, jsonError, logApiRoute } from '@/app/api/v1/_shared'
 
 async function runUsernameCheck(username: string, request: Request) {
     const supabase = await createClient()
-    const forwardedFor = request.headers.get('x-forwarded-for') || ''
-    const ipAddress = forwardedFor.split(',')[0]?.trim() || 'unknown'
+    const ipAddress = getTrustedRequestIp(request) ?? 'unknown'
     const userAgent = request.headers.get('user-agent') || 'unknown'
     const { data: authData } = await supabase.auth.getUser()
 

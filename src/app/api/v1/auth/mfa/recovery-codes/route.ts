@@ -1,7 +1,7 @@
 import { and, eq, sql } from "drizzle-orm";
 import { validateCsrf } from "@/lib/security/csrf";
 import { db } from "@/lib/db";
-import { profileAuditEvents, profiles } from "@/lib/db/schema";
+import { profileAuditEvents, profileSecurityStates } from "@/lib/db/schema";
 import {
   enforceRouteLimit,
   getRequestId,
@@ -79,7 +79,7 @@ export async function POST(request: Request) {
   }
 
   // Idempotency — prevent duplicate recovery code generation
-  const idempotencyCheck = await checkIdempotencyKey(request, 'auth.mfa.recoveryCodes');
+  const idempotencyCheck = await checkIdempotencyKey(request, 'auth.mfa.recoveryCodes', user.id);
   if (idempotencyCheck.isDuplicate) {
     if (idempotencyCheck.cachedResponse) {
       logApiRoute(request, {
@@ -129,14 +129,21 @@ export async function POST(request: Request) {
     }
 
     const generated = generateRecoveryCodes();
+    // SEC-H3: bind the generated codes to the TOTP factor that is currently
+    // verified. On redemption we re-check this factor still exists; if the
+    // user rotates their authenticator, codes tied to the old factor become
+    // unusable. The first verified TOTP factor is deterministic per-user —
+    // Supabase orders by created_at ASC.
+    const bindingFactorId = verifiedTotpFactors[0]?.id ?? null;
     const result = await db.transaction(async (tx) => {
       const rows = await tx.execute<{
         security_recovery_codes: unknown;
         recovery_codes_generated_at: Date | string | null;
+        recovery_codes_generation: number | string | null;
       }>(sql`
-        SELECT security_recovery_codes, recovery_codes_generated_at
-        FROM profiles
-        WHERE id = ${user.id}::uuid
+        SELECT security_recovery_codes, recovery_codes_generated_at, recovery_codes_generation
+        FROM profile_security_states
+        WHERE user_id = ${user.id}::uuid
         FOR UPDATE
       `);
 
@@ -144,6 +151,8 @@ export async function POST(request: Request) {
       const existingGeneratedAt = rows[0]?.recovery_codes_generated_at
         ? new Date(rows[0].recovery_codes_generated_at).toISOString()
         : null;
+      const existingGeneration = Number(rows[0]?.recovery_codes_generation ?? 0) || 0;
+      const nextGeneration = existingGeneration + 1;
 
       if (mode === "initial" && (existingCodes.length > 0 || existingGeneratedAt)) {
         return {
@@ -154,13 +163,25 @@ export async function POST(request: Request) {
       }
 
       await tx
-        .update(profiles)
-        .set({
+        .insert(profileSecurityStates)
+        .values({
+          userId: user.id,
           securityRecoveryCodes: generated.storedCodes,
           recoveryCodesGeneratedAt: new Date(generated.generatedAt),
+          recoveryCodesFactorId: bindingFactorId,
+          recoveryCodesGeneration: nextGeneration,
           updatedAt: new Date(),
         })
-        .where(eq(profiles.id, user.id));
+        .onConflictDoUpdate({
+          target: profileSecurityStates.userId,
+          set: {
+            securityRecoveryCodes: generated.storedCodes,
+            recoveryCodesGeneratedAt: new Date(generated.generatedAt),
+            recoveryCodesFactorId: bindingFactorId,
+            recoveryCodesGeneration: nextGeneration,
+            updatedAt: new Date(),
+          },
+        });
 
       await recordSecurityEvent({
         userId: user.id,
@@ -232,7 +253,7 @@ export async function POST(request: Request) {
     };
     const successBody = JSON.stringify({ ok: true, data: responseData });
     try {
-      await saveIdempotencyResult(request, 'auth.mfa.recoveryCodes', successBody, idempotencyCheck.lockToken);
+      await saveIdempotencyResult(request, 'auth.mfa.recoveryCodes', successBody, idempotencyCheck.lockToken, user.id);
     } catch (saveError) {
       logger.error("[api/v1/auth/mfa/recovery-codes] failed to save idempotency result", {
         module: "api",

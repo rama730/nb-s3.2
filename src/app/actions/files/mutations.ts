@@ -15,8 +15,10 @@ import {
     normalizeAndValidateUploadRelativePath,
     PROJECT_UPLOAD_MAX_FILE_BYTES,
 } from "@/lib/upload/security";
+import { finalizeUploadIntent } from "@/lib/upload/upload-intents";
 import {
     assertProjectWriteAccess,
+    assertProjectWriteAccessTx,
     assertValidParentFolder,
     assertUniqueSiblingName,
     assertNotMovingIntoDescendant,
@@ -51,6 +53,7 @@ export async function createFolder(projectId: string, parentId: string | null, n
     assertValidNodeName(safeName);
 
     const node = await db.transaction(async (tx) => {
+        await assertProjectWriteAccessTx(tx, projectId, user.id);
         await assertValidParentFolder(projectId, parentId, tx);
         await assertUniqueSiblingName(projectId, parentId, safeName, tx);
         const parentPath = await getParentPath(tx, projectId, parentId);
@@ -77,6 +80,7 @@ export async function createFileNode(projectId: string, parentId: string | null,
     s3Key: string;
     size: number;
     mimeType: string;
+    uploadIntentId?: string;
 }) {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
@@ -87,16 +91,27 @@ export async function createFileNode(projectId: string, parentId: string | null,
 
     const safeName = normalizeNodeName(file.name);
     assertValidNodeName(safeName);
-    const parsedKey = parseProjectFileKey(file.s3Key);
-    if (!parsedKey || !isCanonicalProjectFileKey(file.s3Key) || parsedKey.projectId !== projectId) {
+    const finalizedIntent = await finalizeUploadIntent({
+        intentId: file.uploadIntentId,
+        storageKey: file.s3Key,
+        bucket: 'project-files',
+        userId: user.id,
+        projectId,
+        expectedScope: 'project_file',
+        expectedKind: 'file',
+    });
+
+    const parsedKey = parseProjectFileKey(finalizedIntent.storageKey);
+    if (!parsedKey || !isCanonicalProjectFileKey(finalizedIntent.storageKey) || parsedKey.projectId !== projectId) {
         throw new Error("Invalid file storage key");
     }
     const normalizedRelativePath = normalizeAndValidateUploadRelativePath(parsedKey.relativePath);
     const canonicalS3Key = buildProjectFileKey(projectId, normalizedRelativePath);
-    const normalizedSize = normalizeAndValidateFileSize(file.size, PROJECT_UPLOAD_MAX_FILE_BYTES);
-    const normalizedMimeType = normalizeAndValidateMimeType(file.mimeType);
+    const normalizedSize = normalizeAndValidateFileSize(finalizedIntent.finalizedSize ?? file.size, PROJECT_UPLOAD_MAX_FILE_BYTES);
+    const normalizedMimeType = normalizeAndValidateMimeType(finalizedIntent.finalizedMimeType ?? file.mimeType);
 
     const node = await db.transaction(async (tx) => {
+        await assertProjectWriteAccessTx(tx, projectId, user.id);
         await assertValidParentFolder(projectId, parentId, tx);
         await assertUniqueSiblingName(projectId, parentId, safeName, tx);
         const parentPath = await getParentPath(tx, projectId, parentId);
@@ -133,6 +148,7 @@ export async function renameNode(nodeId: string, newName: string, projectId: str
     assertValidNodeName(safeName);
 
     const node = await db.transaction(async (tx) => {
+        await assertProjectWriteAccessTx(tx, projectId, user.id);
         await assertNodeNotLockedByAnotherUser(projectId, nodeId, user.id, tx);
         const current = await tx.query.projectNodes.findFirst({
             where: and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId)),
@@ -181,6 +197,7 @@ export async function moveNode(nodeId: string, newParentId: string | null, proje
     await assertProjectWriteAccess(projectId, user.id);
 
     const node = await db.transaction(async (tx) => {
+        await assertProjectWriteAccessTx(tx, projectId, user.id);
         await assertNodeNotLockedByAnotherUser(projectId, nodeId, user.id, tx);
         const current = await tx.query.projectNodes.findFirst({
             where: and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId)),
@@ -236,6 +253,7 @@ export async function bulkMoveNodes(nodeIds: string[], newParentId: string | nul
     assertBulkLimit(uniqueIds);
 
     const moved = await db.transaction(async (tx) => {
+        await assertProjectWriteAccessTx(tx, projectId, user.id);
         await assertValidParentFolder(projectId, newParentId, tx);
 
         const nodes = await tx.query.projectNodes.findMany({
@@ -316,6 +334,7 @@ export async function trashNode(nodeId: string, projectId: string) {
     await assertProjectWriteAccess(projectId, user.id);
 
     await db.transaction(async (tx) => {
+        await assertProjectWriteAccessTx(tx, projectId, user.id);
         const node = await tx.query.projectNodes.findFirst({
             where: and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId)),
             columns: { metadata: true, s3Key: true, deletedAt: true }
@@ -348,11 +367,14 @@ export async function restoreNode(nodeId: string, projectId: string) {
     if (!user) throw new Error("Unauthorized");
     await assertProjectWriteAccess(projectId, user.id);
 
-    await assertNodeNotLockedByAnotherUser(projectId, nodeId, user.id);
+    await db.transaction(async (tx) => {
+        await assertProjectWriteAccessTx(tx, projectId, user.id);
+        await assertNodeNotLockedByAnotherUser(projectId, nodeId, user.id, tx);
 
-    await db.update(projectNodes)
-        .set({ deletedAt: null, deletedBy: null, updatedAt: new Date() })
-        .where(and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId)));
+        await tx.update(projectNodes)
+            .set({ deletedAt: null, deletedBy: null, updatedAt: new Date() })
+            .where(and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId)));
+    });
 
     await recordNodeEvent(projectId, user.id, nodeId, 'restore', {});
     revalidatePath(`/projects/${projectId}`);
@@ -369,6 +391,7 @@ export async function bulkTrashNodes(nodeIds: string[], projectId: string) {
 
     const now = new Date();
     const result = await db.transaction(async (tx) => {
+        await assertProjectWriteAccessTx(tx, projectId, user.id);
         const nodes = await tx.query.projectNodes.findMany({
             where: and(eq(projectNodes.projectId, projectId), inArray(projectNodes.id, uniqueIds)),
             columns: { id: true, name: true, metadata: true, deletedAt: true },
@@ -425,6 +448,7 @@ export async function bulkRestoreNodes(nodeIds: string[], projectId: string) {
 
     const now = new Date();
     const result = await db.transaction(async (tx) => {
+        await assertProjectWriteAccessTx(tx, projectId, user.id);
         const nodes = await tx.query.projectNodes.findMany({
             where: and(eq(projectNodes.projectId, projectId), inArray(projectNodes.id, uniqueIds)),
             columns: { id: true, deletedAt: true },
@@ -489,21 +513,26 @@ export async function purgeNode(nodeId: string, projectId: string) {
     if (!user) throw new Error("Unauthorized");
     await assertProjectWriteAccess(projectId, user.id);
 
-    await assertNodeNotLockedByAnotherUser(projectId, nodeId, user.id);
+    const result = await db.transaction(async (tx) => {
+        await assertProjectWriteAccessTx(tx, projectId, user.id);
+        await assertNodeNotLockedByAnotherUser(projectId, nodeId, user.id, tx);
 
-    const node = await db.query.projectNodes.findFirst({
-        where: and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId)),
-        columns: { metadata: true, s3Key: true, deletedAt: true }
+        const node = await tx.query.projectNodes.findFirst({
+            where: and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId)),
+            columns: { metadata: true, s3Key: true, deletedAt: true }
+        });
+        const isSystemFolder =
+            !!node?.metadata && (node.metadata as { isSystem?: unknown }).isSystem === true;
+        if (isSystemFolder) throw new Error("Cannot delete system folder");
+        if (!node?.deletedAt) throw new Error("Node must be in Trash before purging");
+
+        await tx.delete(projectNodes).where(and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId)));
+        return { s3Key: node.s3Key || null };
     });
-    const isSystemFolder =
-        !!node?.metadata && (node.metadata as { isSystem?: unknown }).isSystem === true;
-    if (isSystemFolder) throw new Error("Cannot delete system folder");
-    if (!node?.deletedAt) throw new Error("Node must be in Trash before purging");
 
     await recordNodeEvent(projectId, user.id, nodeId, 'purge', {});
-    await db.delete(projectNodes).where(and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId)));
     revalidatePath(`/projects/${projectId}`);
-    return { s3Key: node.s3Key || null };
+    return result;
 }
 
 export async function deleteNode(nodeId: string, projectId: string) {
@@ -515,6 +544,7 @@ export async function deleteNode(nodeId: string, projectId: string) {
     await assertProjectWriteAccess(projectId, user.id);
 
     await db.transaction(async (tx) => {
+        await assertProjectWriteAccessTx(tx, projectId, user.id);
         const node = await tx.query.projectNodes.findFirst({
             where: and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId)),
             columns: { metadata: true }
@@ -578,6 +608,7 @@ export async function bulkCreateFolderTree(
     const sortedFolders = Array.from(folderPaths).sort((a, b) => a.split('/').length - b.split('/').length);
 
     return await db.transaction(async (tx) => {
+        await assertProjectWriteAccessTx(tx, projectId, user.id);
         await assertValidParentFolder(projectId, targetParentId, tx);
 
         // Map: virtual path -> physical node ID

@@ -40,6 +40,7 @@ interface MessageComposerV2Props {
     messageCount?: number;
     surface?: 'page' | 'popup';
     sendTyping?: (isTyping: boolean) => Promise<void> | void;
+    onWillSend?: () => void;
     onClearReply: () => void;
     onAddFiles?: (register: (files: File[]) => void) => void;
     participants?: Array<{ id: string; username: string | null; fullName: string | null; avatarUrl: string | null }>;
@@ -56,6 +57,7 @@ export function MessageComposerV2({
     messageCount = 0,
     surface = 'page',
     sendTyping,
+    onWillSend,
     onClearReply,
     onAddFiles,
     participants,
@@ -202,6 +204,7 @@ export function MessageComposerV2({
         clearTypingIdleTimer,
         updateTypingState,
         setSendAnimating,
+        onWillSend,
     });
     const {
         isSending,
@@ -454,7 +457,7 @@ export function MessageComposerV2({
                                 }
                             });
                         }}
-                        placeholder={!capability ? 'Checking messaging permissions…' : canSend ? 'Type a message…' : 'Messaging unavailable'}
+                        placeholder={!capability ? 'Checking messaging permissions…' : canSend ? 'Type a message...' : 'Messaging unavailable'}
                         disabled={!canSend}
                         rows={1}
                         className="max-h-[120px] min-h-[44px] flex-1 resize-none rounded-[22px] border border-transparent bg-zinc-50 px-4 py-3 text-sm outline-none transition-colors focus:border-primary/25 focus:bg-white focus:ring-2 focus:ring-primary/10 dark:bg-zinc-900 dark:focus:bg-zinc-950"

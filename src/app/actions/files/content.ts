@@ -7,9 +7,11 @@ import { eq, and, inArray } from "drizzle-orm";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { runInFlightDeduped } from "@/lib/async/inflight-dedupe";
 import { revalidatePath } from "next/cache";
+import { parseProjectFileKey } from "@/lib/storage/project-file-key";
 import {
     assertProjectReadAccess,
     assertProjectWriteAccess,
+    assertProjectWriteAccessTx,
     assertNodeNotLockedByAnotherUser,
 } from "./_shared";
 import {
@@ -34,6 +36,10 @@ export async function getProjectFileContent(projectId: string, nodeId: string) {
 
         if (!node || !node.s3Key) {
             throw new Error("File not found");
+        }
+        const parsedKey = parseProjectFileKey(node.s3Key);
+        if (!parsedKey || parsedKey.projectId !== projectId) {
+            throw new Error("File key does not belong to this project");
         }
 
         const MAX_INLINE_BYTES = 2 * 1024 * 1024; // 2MB safety cap
@@ -74,6 +80,10 @@ export async function getProjectFileSignedUrl(projectId: string, nodeId: string,
 
         if (!node || !node.s3Key) {
             throw new Error("File not found");
+        }
+        const parsedKey = parseProjectFileKey(node.s3Key);
+        if (!parsedKey || parsedKey.projectId !== projectId) {
+            throw new Error("File key does not belong to this project");
         }
 
         // Use admin client to bypass storage policy edge-cases (public viewers).
@@ -117,7 +127,11 @@ export async function getProjectFileSignedUrlBatch(
 
         const entries = await Promise.all(
             nodes
-                .filter((n) => n.s3Key)
+                .filter((n) => {
+                    if (!n.s3Key) return false;
+                    const parsedKey = parseProjectFileKey(n.s3Key);
+                    return !!parsedKey && parsedKey.projectId === projectId;
+                })
                 .map(async (node) => {
                     const { data, error } = await adminClient.storage
                         .from("project-files")
@@ -169,16 +183,19 @@ export async function updateProjectFileStats(projectId: string, nodeId: string, 
     if (!user) throw new Error("Unauthorized");
     await assertProjectWriteAccess(projectId, user.id);
 
-    await assertNodeNotLockedByAnotherUser(projectId, nodeId, user.id);
+    const node = await db.transaction(async (tx) => {
+        await assertProjectWriteAccessTx(tx, projectId, user.id);
+        await assertNodeNotLockedByAnotherUser(projectId, nodeId, user.id, tx);
 
-    // Update size and updatedAt
-    const [node] = await db.update(projectNodes)
-        .set({
-            size: size,
-            updatedAt: new Date()
-        })
-        .where(and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId)))
-        .returning();
+        const [updated] = await tx.update(projectNodes)
+            .set({
+                size: size,
+                updatedAt: new Date()
+            })
+            .where(and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId)))
+            .returning();
+        return updated;
+    });
 
     revalidatePath(`/projects/${projectId}`);
     return node;

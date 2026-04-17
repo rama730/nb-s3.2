@@ -12,7 +12,9 @@ import { subscribePresenceRoom } from '@/lib/realtime/presence-client';
 
 import type { TypingUser } from './useTypingChannel';
 
-const TYPING_VISIBLE_TTL_MS = 3_500;
+// Wave 3 Step 12: keep in sync with useTypingChannel TTL — covers composer
+// idle timer (1800 ms) + throttle floor (500 ms) + network margin.
+const TYPING_VISIBLE_TTL_MS = 5_500;
 
 export function useConversationTypingIndex(
     conversationIds: ReadonlyArray<string | null | undefined>,

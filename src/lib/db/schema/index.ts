@@ -69,13 +69,6 @@ export const profiles = pgTable('profiles', {
     workspaceDueTodayCount: integer('workspace_due_today_count').default(0).notNull(),
     workspaceOverdueCount: integer('workspace_overdue_count').default(0).notNull(),
     workspaceInProgressCount: integer('workspace_in_progress_count').default(0).notNull(),
-    securityRecoveryCodes: jsonb('security_recovery_codes').$type<Array<{
-        id: string;
-        salt: string;
-        hash: string;
-        usedAt: string | null;
-    }>>().default([]).notNull(),
-    recoveryCodesGeneratedAt: timestamp('recovery_codes_generated_at', { withTimezone: true }),
     // Last activity timestamp (debounced, updated at most every 5 minutes via Redis guard)
     lastActiveAt: timestamp('last_active_at', { withTimezone: true }),
 }, (t) => ({
@@ -99,6 +92,28 @@ export const profiles = pgTable('profiles', {
     workspaceInProgressCountIdx: index('profiles_workspace_in_progress_count_idx').on(t.workspaceInProgressCount),
     // Index for "Active today/this week" filtering in discover
     lastActiveAtIdx: index('profiles_last_active_at_idx').on(t.lastActiveAt),
+}))
+
+export const profileSecurityStates = pgTable('profile_security_states', {
+    userId: uuid('user_id').primaryKey().references(() => profiles.id, { onDelete: 'cascade' }),
+    securityRecoveryCodes: jsonb('security_recovery_codes').$type<Array<{
+        id: string;
+        salt: string;
+        hash: string;
+        usedAt: string | null;
+    }>>().default([]).notNull(),
+    recoveryCodesGeneratedAt: timestamp('recovery_codes_generated_at', { withTimezone: true }),
+    // SEC-H3: bind the stored recovery codes to the TOTP factor that was
+    // verified when they were issued. On redemption we verify the factor is
+    // still present; rotating the TOTP factor therefore invalidates any
+    // codes a past attacker may have exfiltrated.
+    recoveryCodesFactorId: text('recovery_codes_factor_id'),
+    // Monotonic counter bumped on any MFA factor change so codes from a
+    // prior generation can be rejected even if the factor ID is unknown.
+    recoveryCodesGeneration: integer('recovery_codes_generation').default(0).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+    generatedAtIdx: index('profile_security_states_generated_at_idx').on(t.recoveryCodesGeneratedAt),
 }))
 
 export const reservedUsernames = pgTable('reserved_usernames', {
@@ -441,6 +456,7 @@ export const projectSprints = pgTable('project_sprints', {
     projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
     goal: text('goal'),
+    description: text('description'),
     startDate: timestamp('start_date', { withTimezone: true }).notNull(),
     endDate: timestamp('end_date', { withTimezone: true }).notNull(),
     status: text('status', { enum: ['planning', 'active', 'completed'] }).default('planning').notNull(),
@@ -578,6 +594,42 @@ export const projectNodes = pgTable('project_nodes', {
         foreignColumns: [t.id],
     }).onDelete('cascade'),
     noSelfParentCheck: check('project_nodes_no_self_parent_check', sql`${t.parentId} IS NULL OR ${t.parentId} <> ${t.id}`),
+}))
+
+export const uploadIntents = pgTable('upload_intents', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
+    projectId: uuid('project_id').references(() => projects.id, { onDelete: 'cascade' }),
+    bucket: text('bucket').notNull(),
+    storageKey: text('storage_key').notNull(),
+    scope: text('scope', { enum: ['project_file', 'profile_image'] }).notNull(),
+    kind: text('kind', { enum: ['file', 'avatar', 'banner'] }).notNull(),
+    expectedMimeType: text('expected_mime_type').notNull(),
+    expectedSize: bigint('expected_size', { mode: 'number' }).notNull(),
+    finalizedMimeType: text('finalized_mime_type'),
+    finalizedSize: bigint('finalized_size', { mode: 'number' }),
+    status: text('status', { enum: ['pending', 'finalized', 'expired', 'failed'] }).default('pending').notNull(),
+    failureReason: text('failure_reason'),
+    metadata: jsonb('metadata').$type<Record<string, unknown>>().default({}).notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    finalizedAt: timestamp('finalized_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+    userIdx: index('upload_intents_user_idx').on(t.userId, t.createdAt),
+    projectIdx: index('upload_intents_project_idx').on(t.projectId, t.createdAt),
+    storageIdx: uniqueIndex('upload_intents_bucket_key_uidx').on(t.bucket, t.storageKey),
+    statusExpiresIdx: index('upload_intents_status_expires_idx').on(t.status, t.expiresAt),
+}))
+
+export const recoveryCodeRedemptions = pgTable('recovery_code_redemptions', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
+    codeId: text('code_id').notNull(),
+    redeemedAt: timestamp('redeemed_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+    userRedeemedIdx: index('recovery_code_redemptions_user_redeemed_idx').on(t.userId, t.redeemedAt),
+    uniqueUserCodeIdx: uniqueIndex('recovery_code_redemptions_user_code_uidx').on(t.userId, t.codeId),
 }))
 
 // ============================================================================
@@ -719,13 +771,23 @@ export const projectRunDiagnostics = pgTable('project_run_diagnostics', {
 // ============================================================================
 // RELATIONS
 // ============================================================================
-export const profilesRelations = relations(profiles, ({ many }) => ({
+export const profilesRelations = relations(profiles, ({ many, one }) => ({
     sentConnections: many(connections, { relationName: 'requester' }),
     receivedConnections: many(connections, { relationName: 'addressee' }),
     projects: many(projects),
     projectMemberships: many(projectMembers),
     followedProjects: many(projectFollows),
+    securityState: one(profileSecurityStates, {
+        fields: [profiles.id],
+        references: [profileSecurityStates.userId],
+    }),
+}))
 
+export const profileSecurityStatesRelations = relations(profileSecurityStates, ({ one }) => ({
+    profile: one(profiles, {
+        fields: [profileSecurityStates.userId],
+        references: [profiles.id],
+    }),
 }))
 
 export const connectionsRelations = relations(connections, ({ one }) => ({
@@ -909,6 +971,24 @@ export const projectNodesRelations = relations(projectNodes, ({ one, many }) => 
         references: [projectNodeLocks.nodeId],
     }),
     events: many(projectNodeEvents),
+}))
+
+export const uploadIntentsRelations = relations(uploadIntents, ({ one }) => ({
+    user: one(profiles, {
+        fields: [uploadIntents.userId],
+        references: [profiles.id],
+    }),
+    project: one(projects, {
+        fields: [uploadIntents.projectId],
+        references: [projects.id],
+    }),
+}))
+
+export const recoveryCodeRedemptionsRelations = relations(recoveryCodeRedemptions, ({ one }) => ({
+    user: one(profiles, {
+        fields: [recoveryCodeRedemptions.userId],
+        references: [profiles.id],
+    }),
 }))
 
 export const taskNodeLinksRelations = relations(taskNodeLinks, ({ one }) => ({
@@ -1239,6 +1319,8 @@ export const messageWorkflowItemsRelations = relations(messageWorkflowItems, ({ 
 // ============================================================================
 export type Profile = typeof profiles.$inferSelect
 export type NewProfile = typeof profiles.$inferInsert
+export type ProfileSecurityState = typeof profileSecurityStates.$inferSelect
+export type NewProfileSecurityState = typeof profileSecurityStates.$inferInsert
 export type ReservedUsername = typeof reservedUsernames.$inferSelect
 export type NewReservedUsername = typeof reservedUsernames.$inferInsert
 export type UsernameAlias = typeof usernameAliases.$inferSelect
@@ -1485,12 +1567,30 @@ export const messageReports = pgTable('message_reports', {
 export const messageReadReceipts = pgTable('message_read_receipts', {
     id: uuid('id').primaryKey().defaultRandom(),
     messageId: uuid('message_id').notNull().references(() => messages.id, { onDelete: 'cascade' }),
+    conversationId: uuid('conversation_id').notNull().references(() => conversations.id, { onDelete: 'cascade' }),
     userId: uuid('user_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
     readAt: timestamp('read_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
     messageUserUnique: uniqueIndex('message_read_receipts_message_user_unique').on(t.messageId, t.userId),
     messageIdx: index('message_read_receipts_message_idx').on(t.messageId),
     userIdx: index('message_read_receipts_user_idx').on(t.userId, t.readAt),
+    conversationIdx: index('message_read_receipts_conversation_idx').on(t.conversationId, t.readAt),
+}))
+
+// ============================================================================
+// MESSAGE DELIVERY RECEIPTS TABLE
+// ============================================================================
+export const messageDeliveryReceipts = pgTable('message_delivery_receipts', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    messageId: uuid('message_id').notNull().references(() => messages.id, { onDelete: 'cascade' }),
+    conversationId: uuid('conversation_id').notNull().references(() => conversations.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
+    deliveredAt: timestamp('delivered_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+    messageUserUnique: uniqueIndex('message_delivery_receipts_message_user_unique').on(t.messageId, t.userId),
+    messageIdx: index('message_delivery_receipts_message_idx').on(t.messageId),
+    userIdx: index('message_delivery_receipts_user_idx').on(t.userId, t.deliveredAt),
+    conversationIdx: index('message_delivery_receipts_conversation_idx').on(t.conversationId, t.deliveredAt),
 }))
 
 // ============================================================================
@@ -1529,8 +1629,30 @@ export const messageReadReceiptsRelations = relations(messageReadReceipts, ({ on
         fields: [messageReadReceipts.messageId],
         references: [messages.id],
     }),
+    conversation: one(conversations, {
+        fields: [messageReadReceipts.conversationId],
+        references: [conversations.id],
+    }),
     user: one(profiles, {
         fields: [messageReadReceipts.userId],
+        references: [profiles.id],
+    }),
+}))
+
+// ============================================================================
+// MESSAGE DELIVERY RECEIPTS RELATIONS
+// ============================================================================
+export const messageDeliveryReceiptsRelations = relations(messageDeliveryReceipts, ({ one }) => ({
+    message: one(messages, {
+        fields: [messageDeliveryReceipts.messageId],
+        references: [messages.id],
+    }),
+    conversation: one(conversations, {
+        fields: [messageDeliveryReceipts.conversationId],
+        references: [conversations.id],
+    }),
+    user: one(profiles, {
+        fields: [messageDeliveryReceipts.userId],
         references: [profiles.id],
     }),
 }))
@@ -1542,3 +1664,9 @@ export type MessageReport = typeof messageReports.$inferSelect
 export type NewMessageReport = typeof messageReports.$inferInsert
 export type MessageReadReceipt = typeof messageReadReceipts.$inferSelect
 export type NewMessageReadReceipt = typeof messageReadReceipts.$inferInsert
+export type MessageDeliveryReceipt = typeof messageDeliveryReceipts.$inferSelect
+export type NewMessageDeliveryReceipt = typeof messageDeliveryReceipts.$inferInsert
+export type UploadIntent = typeof uploadIntents.$inferSelect
+export type NewUploadIntent = typeof uploadIntents.$inferInsert
+export type RecoveryCodeRedemption = typeof recoveryCodeRedemptions.$inferSelect
+export type NewRecoveryCodeRedemption = typeof recoveryCodeRedemptions.$inferInsert

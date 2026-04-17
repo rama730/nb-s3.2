@@ -64,7 +64,10 @@
     "drizzle/0057_username_index_dedup_cleanup.sql",
     "drizzle/0058_connection_suggestions.sql",
     "drizzle/0059_messaging_reactions_reports_receipts.sql",
-    "drizzle/0060_messaging_collaboration_foundation.sql"
+    "drizzle/0060_messaging_collaboration_foundation.sql",
+    "drizzle/0061_profile_security_state_privacy_rls.sql",
+    "drizzle/0062_upload_intents_and_recovery_redemptions.sql",
+    "drizzle/0063_database_setup_authority_backfill.sql"
   ],
   "allowedUtilitySqlFiles": [
     "checkpoints/005_task_subtasks.sql",

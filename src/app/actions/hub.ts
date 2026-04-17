@@ -9,6 +9,7 @@ import { HubFilters } from '@/types/hub';
 import { headers } from 'next/headers';
 import { unstable_cache } from 'next/cache';
 import { runInFlightDeduped } from '@/lib/async/inflight-dedupe';
+import { getTrustedHeadersIp } from '@/lib/security/request-ip';
 
 export async function fetchHubProjectsAction(
     filters: HubFilters,
@@ -19,7 +20,7 @@ export async function fetchHubProjectsAction(
     try {
         const { user } = await getViewerAuthContext();
         const headerStore = await headers();
-        const ipAddress = headerStore.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
+        const ipAddress = getTrustedHeadersIp(headerStore) ?? 'unknown';
         const normalizedSearch = (filters.search || '').trim();
         const viewerKey = user?.id || `anon:${ipAddress}`;
 

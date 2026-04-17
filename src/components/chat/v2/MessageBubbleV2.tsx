@@ -58,6 +58,7 @@ import {
     getPrivateFollowUpFromMetadata,
     getStructuredMessageFromMetadata,
 } from '@/lib/messages/structured';
+import { areMessageDeliveryRenderStatesEqual } from '@/lib/messages/v2-render-state';
 import { ReactionQuickBar } from './ReactionQuickBar';
 import { ReactionPillRow } from './ReactionPillRow';
 import { LinkPreviewCard } from './LinkPreviewCard';
@@ -76,6 +77,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { UserAvatar } from '@/components/ui/UserAvatar';
+import { useMessagesV2OutboxStore } from '@/stores/messagesV2OutboxStore';
 
 interface MessageBubbleV2Props {
     message: MessageWithSender;
@@ -868,7 +870,35 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
                         <span title={new Date(message.createdAt).toLocaleString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' })}>
                             {format(new Date(message.createdAt), 'p')}
                         </span>
-                        {isOwn ? <DeliveryIndicator deliveryState={deliveryState} /> : null}
+                        {isOwn ? (
+                            deliveryState === 'failed' && message.clientMessageId ? (
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        // Wave 4 Step 16: requeue the outbox item so the
+                                        // sync loop retries immediately (nextRetryAt=now).
+                                        const clientMessageId = message.clientMessageId;
+                                        if (!clientMessageId) return;
+                                        const { items, markItem } = useMessagesV2OutboxStore.getState();
+                                        const item = items.find((entry) => entry.clientMessageId === clientMessageId);
+                                        if (!item) return;
+                                        markItem(clientMessageId, {
+                                            state: 'queued',
+                                            attempts: 0,
+                                            nextRetryAt: Date.now(),
+                                            error: undefined,
+                                        });
+                                    }}
+                                    className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[11px] font-medium text-red-500 transition-colors hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 dark:hover:bg-red-950/40"
+                                    aria-label="Retry sending message"
+                                >
+                                    <DeliveryIndicator deliveryState={deliveryState} />
+                                    <span>Retry</span>
+                                </button>
+                            ) : (
+                                <DeliveryIndicator deliveryState={deliveryState} />
+                            )
+                        ) : null}
                         {message.editedAt ? <span>(edited)</span> : null}
                     </div>
                 </div>
@@ -999,7 +1029,12 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
         {reportOpen && <ReportMessageDialog messageId={message.id} isOpen={reportOpen} onClose={() => setReportOpen(false)} />}
         </>
     );
-}, (prev, next) => {
+}, areMessageBubblePropsEqual);
+
+export function areMessageBubblePropsEqual(
+    prev: Readonly<MessageBubbleV2Props>,
+    next: Readonly<MessageBubbleV2Props>,
+) {
     const prevPinned = Boolean(prev.message.metadata?.pinned);
     const nextPinned = Boolean(next.message.metadata?.pinned);
     const prevReactionSummary = normalizeMessageReactionSummary(prev.message.metadata?.reactionSummary);
@@ -1014,10 +1049,7 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
     const nextAttachments = (next.message.attachments || []) as ChatAttachmentV2[];
 
     return (
-        prev.message.id === next.message.id &&
-        prev.message.content === next.message.content &&
-        prev.message.editedAt === next.message.editedAt &&
-        prev.message.deletedAt === next.message.deletedAt &&
+        areMessageDeliveryRenderStatesEqual(prev.message, next.message) &&
         prevPinned === nextPinned &&
         areReactionSummariesEqual(prevReactionSummary, nextReactionSummary) &&
         areStructuredMessagesEqual(prevStructured, nextStructured) &&
@@ -1031,7 +1063,7 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
         prev.isFocusedReplyTarget === next.isFocusedReplyTarget &&
         prev.focusSource === next.focusSource
     );
-});
+}
 
 export function DeliveryIndicator({ deliveryState }: { deliveryState?: string }) {
     if (!deliveryState) return null;

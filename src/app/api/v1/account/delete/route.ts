@@ -30,6 +30,8 @@ export async function DELETE(request: Request) {
     const startedAt = Date.now();
     const requestId = getRequestId(request);
     const idempotencyKey = request.headers.get('idempotency-key') || undefined;
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
 
     // CSRF check — uses shared validation utility
     const csrfError = validateCsrf(request);
@@ -45,8 +47,20 @@ export async function DELETE(request: Request) {
         return csrfError;
     }
 
+    if (!user) {
+        logApiRoute(request, {
+            requestId,
+            action: 'account.delete',
+            startedAt,
+            success: false,
+            status: 401,
+            errorCode: 'UNAUTHORIZED',
+        });
+        return jsonError('Not authenticated', 401, 'UNAUTHORIZED');
+    }
+
     // Idempotency — prevent duplicate deletion schedules
-    const idempotencyCheck = await checkIdempotencyKey(request, 'account.delete');
+    const idempotencyCheck = await checkIdempotencyKey(request, 'account.delete', user.id);
     if (idempotencyCheck.isDuplicate) {
         if (idempotencyCheck.cachedResponse) {
             logger.info('Account deletion duplicate request returned cached response', {
@@ -88,29 +102,25 @@ export async function DELETE(request: Request) {
 
     // Rate limiting: 3 attempts per hour
     try {
-        const supabase = await createClient();
-        const { data: { user } } = await supabase.auth.getUser();
-        if (user) {
-            const rateLimitResult = await consumeRateLimit(
-                `account-delete:${user.id}`,
-                3,
-                3600,
+        const rateLimitResult = await consumeRateLimit(
+            `account-delete:${user.id}`,
+            3,
+            3600,
+        );
+        if (!rateLimitResult.allowed) {
+            logApiRoute(request, {
+                requestId,
+                action: 'account.delete',
+                startedAt,
+                success: false,
+                status: 429,
+                errorCode: 'RATE_LIMITED',
+            });
+            return jsonError(
+                'Too many deletion attempts. Please try again later.',
+                429,
+                'RATE_LIMITED',
             );
-            if (!rateLimitResult.allowed) {
-                logApiRoute(request, {
-                    requestId,
-                    action: 'account.delete',
-                    startedAt,
-                    success: false,
-                    status: 429,
-                    errorCode: 'RATE_LIMITED',
-                });
-                return jsonError(
-                    'Too many deletion attempts. Please try again later.',
-                    429,
-                    'RATE_LIMITED',
-                );
-            }
         }
     } catch (rlErr) {
         // Rate limit check failure is non-blocking
@@ -163,7 +173,7 @@ export async function DELETE(request: Request) {
             data: { deletionId: result.deletionId, hardDeleteAt: result.hardDeleteAt },
         });
         try {
-            await saveIdempotencyResult(request, 'account.delete', successBody, idempotencyCheck.lockToken);
+            await saveIdempotencyResult(request, 'account.delete', successBody, idempotencyCheck.lockToken, user.id);
         } catch (idempotencyError) {
             logger.warn('Failed to save account deletion idempotency result', {
                 module: 'api',

@@ -22,6 +22,8 @@ function getEventLabel(eventType: SecurityActivityEntry["eventType"]): string {
       return "Recovery codes regenerated";
     case "recovery_code_used":
       return "Recovery code used";
+    case "recovery_code_redemption_failed":
+      return "Recovery code redemption attempted";
     case "password_set":
       return "Password added";
     case "password_changed":
@@ -47,6 +49,19 @@ function getEventSummary(entry: SecurityActivityEntry): string | null {
 
   if (entry.eventType === "authenticator_app_removed" && entry.metadata.clearedRecoveryCodes === true) {
     return "Recovery codes were cleared because no authenticator app remains";
+  }
+
+  if (entry.eventType === "recovery_code_redemption_failed") {
+    const reason = typeof entry.metadata.failureReason === "string"
+      ? entry.metadata.failureReason
+      : null;
+    if (reason === "factor_invalidated") {
+      return "Attempt rejected — authenticator app has been replaced";
+    }
+    if (reason === "code_mismatch") {
+      return "Submitted code did not match any active recovery code";
+    }
+    return "An attempt to redeem a recovery code was rejected";
   }
 
   return null;

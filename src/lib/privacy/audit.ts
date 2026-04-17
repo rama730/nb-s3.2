@@ -11,7 +11,16 @@ export const PRIVACY_ACTIVITY_EVENT_TYPES = [
   "account_unblocked",
 ] as const;
 
+export const PRIVACY_READ_EVENT_TYPES = [
+  "profile_viewed",
+  "discover_profile_served",
+  "network_profile_served",
+  "conversation_opened",
+  "message_history_read",
+] as const;
+
 export type PrivacyActivityEventType = (typeof PRIVACY_ACTIVITY_EVENT_TYPES)[number];
+export type PrivacyReadEventType = (typeof PRIVACY_READ_EVENT_TYPES)[number];
 
 export type PrivacyActivityEntry = {
   id: string;
@@ -86,4 +95,63 @@ export async function listPrivacyActivity(userId: string, limit: number = 20): P
     nextValue: (row.nextValue as Record<string, unknown> | null) ?? null,
     metadata: row.metadata ?? {},
   }));
+}
+
+type PrivacyReadAuditExecutor = Pick<typeof db, "insert">;
+
+export async function recordPrivacyReadEvent(input: {
+  subjectUserId: string;
+  viewerUserId: string;
+  eventType: PrivacyReadEventType;
+  route: string;
+  requestId?: string | null;
+  metadata?: Record<string, unknown>;
+  request?: Request;
+  executor?: PrivacyReadAuditExecutor;
+}) {
+  const requestMetadata = input.request
+    ? buildPseudonymizedAuditRequestMetadata(input.request)
+    : {};
+
+  await (input.executor ?? db).insert(profileAuditEvents).values({
+    userId: input.subjectUserId,
+    eventType: input.eventType,
+    previousValue: null,
+    nextValue: null,
+    metadata: {
+      viewerUserId: input.viewerUserId,
+      route: input.route,
+      requestId: input.requestId ?? null,
+      ...(input.metadata ?? {}),
+      ...requestMetadata,
+    },
+  });
+}
+
+export async function recordPrivacyReadEvents(input: {
+  subjectUserIds: string[];
+  viewerUserId: string;
+  eventType: PrivacyReadEventType;
+  route: string;
+  requestId?: string | null;
+  metadata?: Record<string, unknown>;
+  executor?: PrivacyReadAuditExecutor;
+}) {
+  const subjectUserIds = Array.from(new Set(input.subjectUserIds.filter(Boolean)));
+  if (subjectUserIds.length === 0) return;
+
+  await (input.executor ?? db).insert(profileAuditEvents).values(
+    subjectUserIds.map((subjectUserId) => ({
+      userId: subjectUserId,
+      eventType: input.eventType,
+      previousValue: null,
+      nextValue: null,
+      metadata: {
+        viewerUserId: input.viewerUserId,
+        route: input.route,
+        requestId: input.requestId ?? null,
+        ...(input.metadata ?? {}),
+      },
+    })),
+  );
 }

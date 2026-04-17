@@ -1,4 +1,4 @@
-import type { SprintStatus } from "@/lib/projects/sprint-detail";
+import { SPRINT_STATUS_PRESENTATION, type SprintStatus } from "@/lib/projects/sprint-detail";
 
 export type TaskSurfacePerson = {
   id: string | null;
@@ -48,6 +48,13 @@ function asNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+function asSprintStatus(value: unknown): SprintStatus | null {
+  const trimmed = asTrimmedString(value);
+  return trimmed && Object.hasOwn(SPRINT_STATUS_PRESENTATION, trimmed)
+    ? (trimmed as SprintStatus)
+    : null;
+}
+
 function asIsoString(value: unknown) {
   if (value instanceof Date) {
     return Number.isNaN(value.getTime()) ? asTrimmedString(value) : value.toISOString();
@@ -68,7 +75,7 @@ export function normalizeSprintOption(value: any): SprintOption {
   return {
     id: String(value?.id ?? ""),
     name: asTrimmedString(value?.name) ?? "Untitled sprint",
-    status: (asTrimmedString(value?.status) as SprintStatus | null) ?? null,
+    status: asSprintStatus(value?.status),
     startDate: asIsoString(value?.startDate),
     endDate: asIsoString(value?.endDate),
   };
@@ -106,7 +113,7 @@ export function normalizeTaskSurfaceRecord(value: any): TaskSurfaceRecord {
         ? {
             id: asTrimmedString(sprintRecord?.id) ?? asTrimmedString(value?.sprintId) ?? asTrimmedString(value?.sprint_id) ?? "",
             name: asTrimmedString(sprintRecord?.name) ?? asTrimmedString(value?.sprintName) ?? "Untitled sprint",
-            status: (asTrimmedString(sprintRecord?.status) as SprintStatus | null) ?? null,
+            status: asSprintStatus(sprintRecord?.status),
           }
         : null,
   };

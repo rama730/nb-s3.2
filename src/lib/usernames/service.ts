@@ -102,7 +102,7 @@ function classifyUsernameAvailability(params: {
     claim: UsernameClaim | null
 }): UsernameAvailabilityResult {
     if (params.reserved) {
-        const error = onboardingError('USERNAME_RESERVED', 'This username is reserved')
+        const error = onboardingError('USERNAME_RESERVED', 'Username is unavailable')
         return {
             available: false,
             message: error.message,
@@ -121,7 +121,7 @@ function classifyUsernameAvailability(params: {
             }
         }
 
-        const error = onboardingError('USERNAME_TAKEN', 'Username is already taken')
+        const error = onboardingError('USERNAME_TAKEN', 'Username is unavailable')
         return {
             available: false,
             message: error.message,

@@ -2,21 +2,26 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { REALTIME_SUBSCRIBE_STATES } from '@supabase/supabase-js';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQueryClient, type QueryClient } from '@tanstack/react-query';
+import type { MessageWithSender } from '@/app/actions/messaging';
 import { playMessageSound } from '@/lib/messages/notification-sound';
 import {
     getConversationSummaryV2,
     getConversationThreadPageV2,
     getUnreadSummaryV2,
 } from '@/app/actions/messaging/v2';
+import type { MessagesInboxPageV2 } from '@/app/actions/messaging/v2';
 import {
     getCachedInboxConversationIds,
     hasCachedThreadMessage,
     hideThreadMessageForViewer,
     isCachedConversationLastMessage,
+    patchConversationLastMessageFromMessage,
+    patchThreadMessage,
     replaceThreadSnapshot,
     setUnreadSummary,
     upsertInboxConversation,
+    upsertThreadMessage,
     upsertThreadConversation,
 } from '@/lib/messages/v2-cache';
 import {
@@ -27,6 +32,14 @@ import {
 import { isMessagingDenormalizedInboxRealtimeEnabled } from '@/lib/features/messages';
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
+import { subscribePresenceRoom } from '@/lib/realtime/presence-client';
+import { useMessagesV2OutboxStore } from '@/stores/messagesV2OutboxStore';
+import { queryKeys } from '@/lib/query-keys';
+import {
+    buildViewerSenderIdentity,
+    resolveRealtimeMessageSender,
+    type RealtimeSenderIdentity,
+} from '@/lib/messages/realtime-sender';
 
 const FALLBACK_REFRESH_DEBOUNCE_MS = 220;
 
@@ -51,6 +64,13 @@ function getPayloadHiddenMessageId(payload: { new?: Record<string, unknown>; old
     return typeof previousId === 'string' && previousId.length > 0 ? previousId : null;
 }
 
+function getPayloadClientMessageId(payload: { new?: Record<string, unknown>; old?: Record<string, unknown> }) {
+    const next = payload.new?.client_message_id;
+    if (typeof next === 'string' && next.length > 0) return next;
+    const previous = payload.old?.client_message_id;
+    return typeof previous === 'string' && previous.length > 0 ? previous : null;
+}
+
 function getPayloadStringField(
     payload: { new?: Record<string, unknown>; old?: Record<string, unknown> },
     scope: 'new' | 'old',
@@ -67,6 +87,111 @@ function getPayloadNumberField(
 ) {
     const value = payload[scope]?.[field];
     return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function getPayloadDateField(
+    payload: { new?: Record<string, unknown>; old?: Record<string, unknown> },
+    scope: 'new' | 'old',
+    field: string,
+) {
+    const value = payload[scope]?.[field];
+    if (value instanceof Date) {
+        return Number.isNaN(value.getTime()) ? null : value;
+    }
+    if (typeof value !== 'string' && typeof value !== 'number') {
+        return null;
+    }
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function getCachedThreadSenderCandidates(
+    queryClient: QueryClient,
+    conversationId: string,
+) {
+    const threadData = queryClient.getQueryData<{
+        pages?: Array<{
+            conversation?: {
+                participants?: RealtimeSenderIdentity[] | null;
+            } | null;
+            messages?: MessageWithSender[] | null;
+        }>;
+    }>(queryKeys.messages.v2.thread(conversationId));
+
+    const threadParticipants = threadData?.pages?.[0]?.conversation?.participants ?? [];
+    const threadMessages = threadData?.pages?.flatMap((page) => page.messages ?? []) ?? [];
+    if (threadParticipants.length > 0 || threadMessages.length > 0) {
+        return {
+            participants: threadParticipants,
+            messages: threadMessages,
+        };
+    }
+
+    const inboxQueries = queryClient.getQueriesData<{
+        pages?: MessagesInboxPageV2[];
+    }>({
+        queryKey: ['chat-v2', 'inbox'] as const,
+    });
+
+    for (const [, data] of inboxQueries) {
+        for (const page of data?.pages ?? []) {
+            const conversation = page.conversations.find((entry) => entry.id === conversationId);
+            if (conversation?.participants?.length) {
+                return {
+                    participants: conversation.participants,
+                    messages: [] as MessageWithSender[],
+                };
+            }
+        }
+    }
+
+    return {
+        participants: [] as RealtimeSenderIdentity[],
+        messages: [] as MessageWithSender[],
+    };
+}
+
+function buildThreadMessageFromRealtimePayload(params: {
+    conversationId: string;
+    payload: { new?: Record<string, unknown>; old?: Record<string, unknown> };
+    sender: MessageWithSender['sender'];
+}): MessageWithSender | null {
+    const createdAt = getPayloadDateField(params.payload, 'new', 'created_at');
+    if (!createdAt) {
+        return null;
+    }
+
+    const messageId = getPayloadMessageId(params.payload);
+    if (!messageId) {
+        return null;
+    }
+
+    const replyToMessageId = getPayloadStringField(params.payload, 'new', 'reply_to_message_id');
+    const type = getPayloadStringField(params.payload, 'new', 'type');
+    if (replyToMessageId || type === 'image' || type === 'video' || type === 'file') {
+        return null;
+    }
+
+    const metadata = params.payload.new?.metadata;
+    return {
+        id: messageId,
+        conversationId: params.conversationId,
+        senderId: getPayloadStringField(params.payload, 'new', 'sender_id'),
+        clientMessageId: getPayloadClientMessageId(params.payload),
+        content: typeof params.payload.new?.content === 'string' || params.payload.new?.content === null
+            ? params.payload.new?.content as string | null
+            : null,
+        type: (type ?? 'text') as MessageWithSender['type'],
+        metadata: metadata && typeof metadata === 'object'
+            ? metadata as Record<string, unknown>
+            : {},
+        replyTo: null,
+        createdAt,
+        editedAt: getPayloadDateField(params.payload, 'new', 'edited_at'),
+        deletedAt: getPayloadDateField(params.payload, 'new', 'deleted_at'),
+        sender: params.sender,
+        attachments: [],
+    };
 }
 
 function shouldPlayParticipantUpdateSound(params: {
@@ -244,6 +369,57 @@ export function useMessagesV2Realtime(
         }, FALLBACK_REFRESH_DEBOUNCE_MS);
     }, [refreshConversationSummary]);
 
+    // Wave 1: surgical cache update when a delivery/read receipt arrives.
+    // Bumps the per-message deliveryCounts and derives the deliveryState so
+    // the UI ticks advance within ~100 ms without a full thread refetch.
+    const applyReceiptPatch = useCallback(
+        (
+            conversationId: string,
+            messageId: string,
+            kind: 'delivered' | 'read',
+        ) => {
+            let patchedMessage: MessageWithSender | null = null;
+            patchThreadMessage(queryClient, conversationId, messageId, (message) => {
+                const metadata = (message.metadata || {}) as Record<string, unknown>;
+                const currentCounts = (metadata.deliveryCounts as { total?: number; delivered?: number; read?: number } | undefined) ?? {};
+                const total = typeof currentCounts.total === 'number' ? currentCounts.total : 0;
+                const prevDelivered = typeof currentCounts.delivered === 'number' ? currentCounts.delivered : 0;
+                const prevRead = typeof currentCounts.read === 'number' ? currentCounts.read : 0;
+
+                const nextDelivered = kind === 'delivered' || kind === 'read'
+                    ? Math.max(prevDelivered, Math.min(total || prevDelivered + 1, prevDelivered + 1))
+                    : prevDelivered;
+                const nextRead = kind === 'read' ? Math.min(total || prevRead + 1, prevRead + 1) : prevRead;
+
+                // Never downgrade. If a read receipt arrives after a later
+                // event, keep the stronger state.
+                const currentState = metadata.deliveryState as string | undefined;
+                let nextState: 'sent' | 'delivered' | 'read' = 'sent';
+                if (nextRead > 0 || currentState === 'read') nextState = 'read';
+                else if (nextDelivered > 0 || currentState === 'delivered') nextState = 'delivered';
+
+                patchedMessage = {
+                    ...message,
+                    metadata: {
+                        ...metadata,
+                        deliveryState: nextState,
+                        deliveryCounts: {
+                            total,
+                            delivered: nextDelivered,
+                            read: nextRead,
+                        },
+                    },
+                };
+                return patchedMessage;
+            });
+
+            if (patchedMessage && isCachedConversationLastMessage(queryClient, conversationId, messageId)) {
+                patchConversationLastMessageFromMessage(queryClient, conversationId, patchedMessage);
+            }
+        },
+        [queryClient],
+    );
+
     const flushPendingThreadMessageEvents = useCallback((conversationId: string) => {
         const pendingEntries = Array.from(pendingThreadMessageEventsRef.current.entries());
         pendingThreadMessageEventsRef.current.clear();
@@ -320,7 +496,7 @@ export function useMessagesV2Realtime(
                     if (event.kind === 'conversation_participant') {
                         const conversationId = getPayloadConversationId(event.payload);
                         if (conversationId && denormalizedInboxRealtimeEnabled) {
-                            scheduleConversationSummaryRefresh(conversationId, { syncThread: conversationId === currentActiveId });
+                            scheduleConversationSummaryRefresh(conversationId);
                             scheduleUnreadRefresh();
                             if (shouldPlayParticipantUpdateSound({
                                 payload: event.payload,
@@ -438,7 +614,66 @@ export function useMessagesV2Realtime(
                         table: 'messages',
                         filter: `conversation_id=eq.${activeConversationId}`,
                         handler: (payload) => {
-                            queueThreadMessageSync(activeConversationId, payload);
+                            // Wave 4 Step 15: if the realtime INSERT carries a
+                            // client_message_id that matches an outbox item,
+                            // remove the outbox item eagerly so the optimistic
+                            // "sending" bubble doesn't linger alongside the
+                            // server-confirmed row while the HTTP response is
+                            // still in flight.
+                            if (payload.eventType === 'INSERT') {
+                                const clientMessageId = getPayloadClientMessageId(payload);
+                                if (clientMessageId) {
+                                    const outboxState = useMessagesV2OutboxStore.getState();
+                                    if (outboxState.items.some((item) => item.clientMessageId === clientMessageId)) {
+                                        outboxState.removeItem(clientMessageId);
+                                    }
+                                }
+                            }
+
+                            if (payload.eventType === 'DELETE') {
+                                queueThreadMessageSync(activeConversationId, payload);
+                                return;
+                            }
+
+                            const nextMessage = buildThreadMessageFromRealtimePayload({
+                                conversationId: activeConversationId,
+                                payload,
+                                sender: resolveRealtimeMessageSender({
+                                    senderId: getPayloadStringField(payload, 'new', 'sender_id'),
+                                    viewerIdentity: buildViewerSenderIdentity(user),
+                                    ...getCachedThreadSenderCandidates(queryClient, activeConversationId),
+                                }),
+                            });
+                            if (!nextMessage) {
+                                queueThreadMessageSync(activeConversationId, payload);
+                                return;
+                            }
+
+                            if (payload.eventType === 'INSERT') {
+                                if (!hasCachedThreadMessage(queryClient, activeConversationId, nextMessage.id)) {
+                                    upsertThreadMessage(queryClient, activeConversationId, nextMessage);
+                                }
+                                patchConversationLastMessageFromMessage(queryClient, activeConversationId, nextMessage);
+                                return;
+                            }
+
+                            if (!hasCachedThreadMessage(queryClient, activeConversationId, nextMessage.id) || nextMessage.deletedAt) {
+                                queueThreadMessageSync(activeConversationId, payload);
+                                return;
+                            }
+
+                            patchThreadMessage(queryClient, activeConversationId, nextMessage.id, (current) => ({
+                                ...current,
+                                content: nextMessage.content,
+                                type: nextMessage.type,
+                                metadata: nextMessage.metadata,
+                                editedAt: nextMessage.editedAt,
+                                deletedAt: nextMessage.deletedAt,
+                            }));
+
+                            if (isCachedConversationLastMessage(queryClient, activeConversationId, nextMessage.id)) {
+                                patchConversationLastMessageFromMessage(queryClient, activeConversationId, nextMessage);
+                            }
                         },
                     },
                     {
@@ -447,12 +682,35 @@ export function useMessagesV2Realtime(
                         filter: `conversation_id=eq.${activeConversationId}`,
                         handler: () => {
                             if (denormalizedInboxRealtimeEnabled) {
-                                scheduleConversationSummaryRefresh(activeConversationId, { syncThread: true });
+                                scheduleConversationSummaryRefresh(activeConversationId);
                             } else {
                                 scheduleInboxRefresh();
-                                scheduleThreadRefresh(activeConversationId);
                             }
                             scheduleUnreadRefresh();
+                        },
+                    },
+                    // Wave 1: listen for per-message delivery + read receipts
+                    // so the sender's tick advances live (✓ → ✓✓ → blue ✓✓).
+                    {
+                        event: 'INSERT',
+                        table: 'message_delivery_receipts',
+                        filter: `conversation_id=eq.${activeConversationId}`,
+                        handler: (payload) => {
+                            const messageId = getPayloadStringField(payload, 'new', 'message_id');
+                            if (messageId) {
+                                applyReceiptPatch(activeConversationId, messageId, 'delivered');
+                            }
+                        },
+                    },
+                    {
+                        event: 'INSERT',
+                        table: 'message_read_receipts',
+                        filter: `conversation_id=eq.${activeConversationId}`,
+                        handler: (payload) => {
+                            const messageId = getPayloadStringField(payload, 'new', 'message_id');
+                            if (messageId) {
+                                applyReceiptPatch(activeConversationId, messageId, 'read');
+                            }
                         },
                     },
                 ],
@@ -488,16 +746,15 @@ export function useMessagesV2Realtime(
         };
     }, [
         activeConversationId,
-        bufferEvent,
+        applyReceiptPatch,
         denormalizedInboxRealtimeEnabled,
-        flushPendingThreadMessageEvents,
         queueThreadMessageSync,
+        queryClient,
         realtimeEnabled,
         realtimeToken,
         scheduleInboxRefresh,
         scheduleConversationSummaryRefresh,
         scheduleUnreadRefresh,
-        scheduleThreadRefresh,
     ]);
 
     useEffect(() => {
@@ -507,6 +764,36 @@ export function useMessagesV2Realtime(
             threadMessageSyncTimerRef.current = null;
         }
     }, [activeConversationId]);
+
+    // Wave 2 Step 11: subscribe to the active conversation's presence room
+    // and listen for `receipt.broadcast` events. When a peer's client signals
+    // delivered or read, immediately patch the thread cache so the sender's
+    // delivery tick advances within ~100 ms — before postgres_changes fires.
+    // This is purely additive; the postgres_changes subscriber in the effect
+    // above provides durability (idempotent re-application is safe since
+    // applyReceiptPatch never downgrades state).
+    useEffect(() => {
+        if (!realtimeEnabled || !activeConversationId || !userId) return;
+
+        const subscription = subscribePresenceRoom({
+            roomType: 'conversation',
+            roomId: activeConversationId,
+            role: 'viewer',
+            onEvent: (event) => {
+                if (event.type !== 'receipt.broadcast') return;
+                if (event.roomId !== activeConversationId) return;
+
+                const kind = event.receiptType;
+                for (const messageId of event.messageIds) {
+                    applyReceiptPatch(activeConversationId, messageId, kind);
+                }
+            },
+        });
+
+        return () => {
+            subscription.unsubscribe();
+        };
+    }, [activeConversationId, applyReceiptPatch, realtimeEnabled, userId]);
 
     useEffect(() => {
         return () => {

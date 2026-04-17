@@ -1142,6 +1142,9 @@ export async function acceptApplicationAction(
             if (!application) {
                 return toApplicationFailure(traceId, 'NOT_FOUND', 'Application not found');
             }
+            if (application.applicantId === user.id) {
+                return toApplicationFailure(traceId, 'FORBIDDEN', 'You cannot review your own application');
+            }
 
             const canReview = await canReviewProjectApplicationInternal(
                 db,
@@ -1323,11 +1326,14 @@ export async function rejectApplicationAction(
                     project: { columns: { title: true, slug: true, ownerId: true } },
                     role: { columns: { title: true, role: true } }
                 },
-                columns: { id: true, creatorId: true, projectId: true, roleId: true, status: true, conversationId: true }
+                columns: { id: true, applicantId: true, creatorId: true, projectId: true, roleId: true, status: true, conversationId: true }
             });
 
             if (!application) {
                 return toApplicationFailure(traceId, 'NOT_FOUND', 'Application not found');
+            }
+            if (application.applicantId === user.id) {
+                return toApplicationFailure(traceId, 'FORBIDDEN', 'You cannot review your own application');
             }
 
             const canReview = await canReviewProjectApplicationInternal(
@@ -1662,6 +1668,7 @@ export async function reopenApplicationAction(
             },
             columns: {
                 id: true,
+                applicantId: true,
                 projectId: true,
                 roleId: true,
                 status: true,
@@ -1673,6 +1680,9 @@ export async function reopenApplicationAction(
         });
 
         if (!application) return toApplicationFailure(traceId, 'NOT_FOUND', 'Application not found');
+        if (application.applicantId === user.id) {
+            return toApplicationFailure(traceId, 'FORBIDDEN', 'You cannot review your own application');
+        }
 
         const canReview = await canReviewProjectApplicationInternal(
             db,

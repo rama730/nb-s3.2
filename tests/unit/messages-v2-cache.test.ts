@@ -179,6 +179,42 @@ test('patchConversationLastMessageFromMessage derives preview text from structur
     );
 });
 
+test('patchConversationLastMessageFromMessage preserves delivery metadata for last-message icons', () => {
+    const queryClient = new QueryClient();
+    const initialCreatedAt = new Date('2026-04-07T10:00:00.000Z');
+    const nextCreatedAt = new Date('2026-04-07T10:05:00.000Z');
+    const initialConversation = createConversation('message-1', initialCreatedAt);
+
+    queryClient.setQueryData(queryKeys.messages.v2.inbox(20), {
+        pages: [{ conversations: [initialConversation], hasMore: false, nextCursor: null }],
+        pageParams: [undefined],
+    });
+
+    patchConversationLastMessageFromMessage(queryClient, 'conversation-1', {
+        id: 'message-2',
+        content: 'latest',
+        senderId: 'user-2',
+        createdAt: nextCreatedAt,
+        type: 'text',
+        metadata: {
+            deliveryState: 'delivered',
+            deliveryCounts: { total: 1, delivered: 1, read: 0 },
+        },
+    });
+
+    const inboxData = queryClient.getQueryData<{ pages: Array<{ conversations: InboxConversationV2[] }> }>(
+        queryKeys.messages.v2.inbox(20),
+    );
+
+    assert.deepEqual(
+        inboxData?.pages[0]?.conversations[0]?.lastMessage?.metadata,
+        {
+            deliveryState: 'delivered',
+            deliveryCounts: { total: 1, delivered: 1, read: 0 },
+        },
+    );
+});
+
 test('patchConversationLastMessageFromMessage does not overwrite a newer preview with an older message', () => {
     const queryClient = new QueryClient();
     const newestCreatedAt = new Date('2026-04-07T10:05:00.000Z');

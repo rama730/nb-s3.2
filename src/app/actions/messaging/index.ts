@@ -8,6 +8,7 @@ export {
     // Conversations
     getConversations,
     getConversationById,
+    hydrateConversationLastMessageDeliveryMetadata,
     getOrCreateDMConversation,
     markConversationAsRead,
     setConversationArchived,
@@ -41,12 +42,13 @@ export type {
     UploadedAttachment,
 } from './_all'
 
-// Features: Reactions, Reports, Read Receipts, Pinning
+// Features: Reactions, Reports, Read Receipts, Delivery Receipts, Pinning
 export {
     toggleReaction,
     getMessageReactions,
     reportMessage,
     recordReadReceipts,
+    recordDeliveryReceipts,
     getMessageReadReceipts,
     setConversationPinned,
 } from './features'

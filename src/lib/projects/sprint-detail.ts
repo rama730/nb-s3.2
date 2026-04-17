@@ -43,6 +43,7 @@ export type SprintListItem = {
   projectId: string;
   name: string;
   goal: string | null;
+  description: string | null;
   startDate: string | null;
   endDate: string | null;
   status: SprintStatus;
@@ -476,13 +477,14 @@ export function buildProjectSprintTabHref(projectSlug: string, input?: {
   mode?: SprintTimelineMode;
   drawer?: SprintDrawerState;
 }) {
+  const encodedSlug = encodeURIComponent(projectSlug);
   const query = buildSprintRouteQuery({
     preserveTab: true,
     filter: input?.filter,
     mode: input?.mode,
     drawer: input?.drawer,
   }).toString();
-  return query ? `/projects/${projectSlug}?${query}` : `/projects/${projectSlug}?tab=sprints`;
+  return query ? `/projects/${encodedSlug}?${query}` : `/projects/${encodedSlug}?tab=sprints`;
 }
 
 export function buildProjectSprintDetailHref(projectSlug: string, sprintId: string, input?: {
@@ -490,11 +492,13 @@ export function buildProjectSprintDetailHref(projectSlug: string, sprintId: stri
   mode?: SprintTimelineMode;
   drawer?: SprintDrawerState;
 }) {
+  const encodedSlug = encodeURIComponent(projectSlug);
+  const encodedSprintId = encodeURIComponent(sprintId);
   const query = buildSprintRouteQuery({
     filter: input?.filter,
     mode: input?.mode,
     drawer: input?.drawer,
   }).toString();
-  const base = `/projects/${projectSlug}/sprints/${sprintId}`;
+  const base = `/projects/${encodedSlug}/sprints/${encodedSprintId}`;
   return query ? `${base}?${query}` : base;
 }

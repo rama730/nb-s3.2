@@ -92,22 +92,19 @@ export function useProjectTasks(projectId: string, initialData?: any[], scope: P
 }
 
 export function useSprintDetail(
-    projectId: string,
+    projectId: string | undefined,
     sprintId: string | null | undefined,
     initialPage?: SprintDetailPayload,
     pageSize: number = 24,
 ) {
-    const normalizedProjectId = projectId?.trim() || "__project__";
+    const normalizedProjectId = projectId?.trim() || "";
     const normalizedSprintId = sprintId?.trim() || "__default__";
     const requestSprintId = sprintId?.trim() || null;
+    const isValidProjectId = normalizedProjectId.length > 0;
 
     return useInfiniteQuery({
-        queryKey: SPRINT_DETAIL_QUERY_KEY(normalizedProjectId, normalizedSprintId),
+        queryKey: SPRINT_DETAIL_QUERY_KEY(normalizedProjectId || "__project__", normalizedSprintId),
         queryFn: async ({ pageParam }: { pageParam: string | undefined }) => {
-            if (normalizedProjectId === "__project__") {
-                throw new Error("Invalid projectId");
-            }
-
             const result = await fetchProjectSprintDetailAction({
                 projectId: normalizedProjectId,
                 sprintId: requestSprintId,
@@ -127,6 +124,7 @@ export function useSprintDetail(
             : undefined,
         staleTime: 1000 * 60 * 2, // 2 minutes
         refetchOnWindowFocus: false,
+        enabled: isValidProjectId,
     });
 }
 

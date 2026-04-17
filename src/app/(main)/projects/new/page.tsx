@@ -31,5 +31,9 @@ export default async function NewProjectPage({
         ? (rawSource as 'scratch' | 'github' | 'upload')
         : null
 
-    return <CreateProjectRouteClient initialSource={initialSource} />
+    return (
+        <div data-scroll-root="route">
+            <CreateProjectRouteClient initialSource={initialSource} />
+        </div>
+    )
 }

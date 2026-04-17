@@ -13,11 +13,7 @@ export type SealedImportToken = {
 };
 
 function getTokenEncryptionKey(): Buffer | null {
-  const raw =
-    process.env.GITHUB_IMPORT_TOKEN_ENCRYPTION_KEY
-    ?? process.env.SECURITY_STEPUP_SECRET
-    ?? process.env.SUPABASE_JWT_SECRET
-    ?? "";
+  const raw = process.env.GITHUB_IMPORT_TOKEN_ENCRYPTION_KEY ?? "";
   if (!raw) return null;
 
   try {

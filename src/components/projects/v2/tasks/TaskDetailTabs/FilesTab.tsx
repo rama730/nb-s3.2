@@ -148,6 +148,7 @@ export default function FilesTab({ taskId, isOwnerOrMember, projectId, taskTitle
                                 s3Key: storagePath,
                                 size: file.size,
                                 mimeType: contentType,
+                                uploadIntentId: uploadSession.uploadIntentId,
                             })) as ProjectNode;
                             break;
                         } catch (e: any) {

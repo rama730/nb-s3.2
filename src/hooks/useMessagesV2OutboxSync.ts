@@ -11,12 +11,18 @@ import {
 } from '@/lib/messages/v2-cache';
 import { useMessagesV2OutboxStore } from '@/stores/messagesV2OutboxStore';
 
+// Wave 4 Step 14: tighten the retry backoff so Instagram-style sends that hit a
+// flaky network recover in ~250 ms instead of ~2 s.
+//   attempts=0 → 250 ms, 1 → 500 ms, 2 → 1 s, 3 → 2 s, 4 → 4 s, 5 → 8 s,
+//   6 → 16 s, 7+ → 30 s cap.
 function getRetryDelay(attempt: number) {
-    return Math.min(60_000, 1_000 * (2 ** Math.min(6, attempt)));
+    return Math.min(30_000, 250 * (2 ** Math.min(7, attempt)));
 }
 
 const MAX_RETRY_ATTEMPTS = 20;
-const FLUSH_INTERVAL_MS = 10_000;
+// The interval only serves as a safety net; actual retries fire as soon as
+// `nextRetryAt` is reached, so this can be much tighter than the old 10 s.
+const FLUSH_INTERVAL_MS = 500;
 
 export function useMessagesV2OutboxSync(enabled: boolean) {
     const queryClient = useQueryClient();

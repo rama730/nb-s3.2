@@ -7,6 +7,14 @@ const withNextIntl = createNextIntlPlugin("./src/i18n/request.ts");
 const withBundleAnalyzer = nextBundleAnalyzer({
   enabled: process.env.ANALYZE === "true",
 });
+const e2eAuthRouteImplRelativePath =
+  process.env.NODE_ENV === "production"
+    ? "./src/app/api/e2e/auth/route.disabled.ts"
+    : "./src/app/api/e2e/auth/route.dev.ts";
+const e2eAuthRouteImplAbsolutePath =
+  process.env.NODE_ENV === "production"
+    ? path.resolve(__dirname, "src/app/api/e2e/auth/route.disabled.ts")
+    : path.resolve(__dirname, "src/app/api/e2e/auth/route.dev.ts");
 
 const nextConfig: NextConfig = {
   // Security headers for all routes
@@ -29,6 +37,9 @@ const nextConfig: NextConfig = {
   // Turbopack configuration - use absolute path to silence warning
   turbopack: {
     root: path.resolve(__dirname),
+    resolveAlias: {
+      "@/app/api/e2e/auth/route-impl": e2eAuthRouteImplRelativePath,
+    },
   },
 
   // Image optimization configuration for external domains
@@ -83,6 +94,14 @@ const nextConfig: NextConfig = {
   },
 
   reactStrictMode: true,
+  webpack(config) {
+    config.resolve = config.resolve ?? {};
+    config.resolve.alias = {
+      ...(config.resolve.alias ?? {}),
+      "@/app/api/e2e/auth/route-impl": e2eAuthRouteImplAbsolutePath,
+    };
+    return config;
+  },
 };
 
 export default withBundleAnalyzer(withNextIntl(nextConfig));

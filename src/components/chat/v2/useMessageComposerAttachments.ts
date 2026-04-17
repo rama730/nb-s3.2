@@ -122,7 +122,7 @@ export function useMessageComposerAttachments({
     const enqueueFiles = useCallback(async (files: File[]) => {
         const reservedCount = reserveAttachmentSlots(files.length);
         if (reservedCount === 0) {
-            return;
+            return false;
         }
 
         const epoch = conversationEpochRef.current;
@@ -132,12 +132,14 @@ export function useMessageComposerAttachments({
             );
             if (conversationEpochRef.current !== epoch) {
                 releaseAttachmentSlots(reservedCount);
-                return;
+                return false;
             }
             stagePreparedAttachments(processedFiles, reservedCount, epoch);
+            return true;
         } catch (error) {
             releaseAttachmentSlots(reservedCount);
-            throw error;
+            console.error('Failed to enqueue files:', error);
+            return false;
         }
     }, [releaseAttachmentSlots, reserveAttachmentSlots, stagePreparedAttachments]);
 
@@ -285,8 +287,11 @@ export function useMessageComposerAttachments({
     const handleFileSelect = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
         const files = Array.from(event.target.files || []);
         if (files.length === 0) return;
-        await enqueueFiles(files);
-        if (event.target) event.target.value = '';
+        try {
+            await enqueueFiles(files);
+        } finally {
+            if (event.target) event.target.value = '';
+        }
     }, [enqueueFiles]);
 
     const removeAttachment = useCallback((attachmentId: string) => {

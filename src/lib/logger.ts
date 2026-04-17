@@ -10,6 +10,9 @@ interface LogContext {
     [key: string]: unknown
 }
 
+const REDACT_KEY_PATTERN = /password|token|secret|authorization/i
+const ALLOWED_CONTEXT_KEY_PATTERN = /^(module|userId|viewerUserId|subjectUserId|targetUserId|requestId|sampleRate|route|action|status|success|errorCode|error|reason|failureReason|eventType|event|type|kind|scope|conversationId|projectId|taskId|nodeId|attachmentId|sessionId|uploadIntentId|deliveryId|durationMs|count|remainingCount|sizeBytes|generatedCount|requestedCount|available|blocked|canViewProfile|visibilityReason|connectionState|currentPercent|targetPercent|runId|metric|normalizedUsername|bucket|storageKey|contentType|limit|offset|cursor|attempt|allowed|routePath|path|code|routeId|subjectCount|viewerCount|finalized|removedObjects|expiredIntents|nextCursor|hasMore|createdAt|updatedAt|finalizedAt|redeemedAt|expiresAt|remaining|statusCode|method|_type)$/;
+
 const LEVEL_ORDER: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2, error: 3 }
 
 function isVerboseConsoleLoggingEnabled() {
@@ -48,7 +51,7 @@ function emit(level: LogLevel, message: string, context?: LogContext) {
     if (!shouldLog(level)) return
     if (!shouldSample(level, message, context)) return
 
-    const { sampleRate: _sampleRate, ...safeContext } = context || {}
+    const { sampleRate: _sampleRate, ...safeContext } = sanitizeContext(context || {})
     const entry = { level, msg: message, ts: Date.now(), ...safeContext }
     const verboseConsoleLogs = isVerboseConsoleLoggingEnabled()
 
@@ -70,6 +73,31 @@ function emit(level: LogLevel, message: string, context?: LogContext) {
             }
             break
     }
+}
+
+function sanitizeValue(key: string, value: unknown): unknown {
+    if (REDACT_KEY_PATTERN.test(key)) return '[REDACTED]'
+    if (typeof value === 'string') {
+        if (REDACT_KEY_PATTERN.test(value)) return '[REDACTED]'
+        return value.length > 500 ? `${value.slice(0, 497)}...` : value
+    }
+    if (Array.isArray(value)) {
+        return value.slice(0, 20).map((item) => sanitizeValue(key, item))
+    }
+    if (value && typeof value === 'object') {
+        const entries = Object.entries(value as Record<string, unknown>)
+            .filter(([childKey]) => ALLOWED_CONTEXT_KEY_PATTERN.test(childKey) && !REDACT_KEY_PATTERN.test(childKey))
+            .map(([childKey, childValue]) => [childKey, sanitizeValue(childKey, childValue)])
+        return Object.fromEntries(entries)
+    }
+    return value
+}
+
+function sanitizeContext(context: LogContext): LogContext {
+    const sanitizedEntries = Object.entries(context)
+        .filter(([key]) => ALLOWED_CONTEXT_KEY_PATTERN.test(key) && !REDACT_KEY_PATTERN.test(key))
+        .map(([key, value]) => [key, sanitizeValue(key, value)])
+    return Object.fromEntries(sanitizedEntries)
 }
 
 export const logger = {

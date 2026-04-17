@@ -11,11 +11,29 @@ type UsernameAvailabilityPayload = {
     code?: string
 }
 
+type UsernameAvailabilityEnvelope =
+    | {
+        success: true
+        data?: UsernameAvailabilityPayload
+        message?: string
+    }
+    | {
+        success: false
+        message?: string
+        errorCode?: string
+    }
+
 export type UsernameAvailabilityResult = {
     ok: boolean
     status: number
     payload: UsernameAvailabilityPayload
     responseText: string
+}
+
+function resolveUsernameAvailabilityMessage(payload: UsernameAvailabilityPayload, responseText: string): string {
+    if (payload.code === 'USERNAME_RESERVED') return 'This username is reserved'
+    if (payload.code === 'USERNAME_TAKEN') return 'Username is already taken'
+    return payload.message || responseText
 }
 
 const USERNAME_CHECK_TTL_MS = 20_000
@@ -72,7 +90,22 @@ export async function requestUsernameAvailability(username: string): Promise<Use
 
         if (contentType.includes('application/json')) {
             try {
-                payload = (await response.json()) as UsernameAvailabilityPayload
+                const body = (await response.json()) as UsernameAvailabilityEnvelope
+                if (body && typeof body === 'object' && 'success' in body) {
+                    if (body.success) {
+                        payload = body.data ?? {}
+                        if (!payload.message && typeof body.message === 'string') {
+                            payload.message = body.message
+                        }
+                    } else {
+                        payload = {
+                            message: typeof body.message === 'string' ? body.message : undefined,
+                            code: typeof body.errorCode === 'string' ? body.errorCode : undefined,
+                        }
+                    }
+                } else {
+                    payload = body as UsernameAvailabilityPayload
+                }
             } catch {
                 payload = {}
             }
@@ -162,7 +195,7 @@ export function useUsernameAvailability(params: {
                         return
                     }
                     setStatus('error')
-                    setMessage(payload.message || responseText || `HTTP ${responseStatus}`)
+                    setMessage(resolveUsernameAvailabilityMessage(payload, responseText) || `HTTP ${responseStatus}`)
                     return
                 }
 
@@ -179,7 +212,7 @@ export function useUsernameAvailability(params: {
                 }
 
                 setStatus('invalid')
-                setMessage(payload.message || responseText || 'Username is unavailable')
+                setMessage(resolveUsernameAvailabilityMessage(payload, responseText) || 'Username is unavailable')
             } catch {
                 if (requestId !== requestIdRef.current) return
                 setStatus('error')

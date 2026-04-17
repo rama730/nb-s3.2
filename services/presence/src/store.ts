@@ -8,6 +8,9 @@ export type PresenceSubscriber<TMessage = unknown> = {
 }
 
 export type PresenceStore = {
+    set: (key: string, value: string, options?: { ex?: number }) => Promise<unknown>
+    get: (key: string) => Promise<string | null>
+    del: (key: string) => Promise<unknown>
     hset: (key: string, values: HashEntries) => Promise<unknown>
     expire: (key: string, ttlSeconds: number) => Promise<unknown>
     hdel: (key: string, field: string) => Promise<unknown>
@@ -25,8 +28,25 @@ type InMemorySubscription = {
 
 class InMemoryPresenceStore implements PresenceStore {
     private hashes = new Map<string, Map<string, string>>()
+    private strings = new Map<string, string>()
     private expiryTimers = new Map<string, ReturnType<typeof setTimeout>>()
     private subscriptions = new Set<InMemorySubscription>()
+
+    async set(key: string, value: string, options?: { ex?: number }) {
+        this.strings.set(key, value)
+        if (options?.ex !== undefined) {
+            await this.expire(key, options.ex)
+        }
+        return "OK"
+    }
+
+    async get(key: string) {
+        return this.strings.get(key) ?? null
+    }
+
+    async del(key: string) {
+        this.strings.delete(key)
+    }
 
     async hset(key: string, values: HashEntries) {
         const hash = this.hashes.get(key) ?? new Map<string, string>()
@@ -44,12 +64,14 @@ class InMemoryPresenceStore implements PresenceStore {
 
         if (ttlSeconds <= 0) {
             this.hashes.delete(key)
+            this.strings.delete(key)
             this.expiryTimers.delete(key)
             return
         }
 
         const timer = setTimeout(() => {
             this.hashes.delete(key)
+            this.strings.delete(key)
             this.expiryTimers.delete(key)
         }, ttlSeconds * 1000)
 

@@ -25,9 +25,13 @@ export function SessionsList({
   availableStepUpMethods,
   primaryTotpFactorId,
 }: SessionsListProps) {
+  const pageSize = 12;
   const hasInitialSessions = Array.isArray(initialSessions);
   const [sessions, setSessions] = useState<Session[]>(initialSessions ?? []);
   const [loading, setLoading] = useState(!hasInitialSessions);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
+  const [nextOffset, setNextOffset] = useState<number | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingAction>(null);
   const [stepUpOpen, setStepUpOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -39,9 +43,15 @@ export function SessionsList({
     }
   }, [initialSessions]);
 
-  const fetchSessions = useCallback(async () => {
+  const fetchSessions = useCallback(async (options?: { offset?: number; append?: boolean }) => {
+    const offset = options?.offset ?? 0;
+    const append = options?.append ?? false;
     try {
-      const res = await fetch("/api/v1/sessions");
+      const params = new URLSearchParams({
+        limit: String(pageSize),
+        offset: String(offset),
+      });
+      const res = await fetch(`/api/v1/sessions?${params.toString()}`);
       const contentType = res.headers.get("content-type") || "";
       if (!contentType.includes("application/json")) {
         toast.error(`Failed to load sessions (${res.status})`);
@@ -52,18 +62,24 @@ export function SessionsList({
         toast.error(json?.message || `Failed to load sessions (${res.status})`);
         return;
       }
-      setSessions(json?.data?.sessions || []);
+      const incomingSessions = json?.data?.sessions || [];
+      const pagination = json?.data?.pagination;
+      setSessions((prev) => (append ? [...prev, ...incomingSessions] : incomingSessions));
+      setHasMore(Boolean(pagination?.hasMore));
+      setNextOffset(typeof pagination?.nextOffset === "number" ? pagination.nextOffset : null);
     } catch {
       toast.error("Failed to load sessions");
     } finally {
-      setLoading(false);
+      if (append) {
+        setLoadingMore(false);
+      } else {
+        setLoading(false);
+      }
     }
-  }, []);
+  }, [pageSize]);
 
   useEffect(() => {
-    if (!hasInitialSessions) {
-      void fetchSessions();
-    }
+    void fetchSessions();
   }, [fetchSessions, hasInitialSessions]);
 
   const handleLogOutCurrent = async (id: string) => {
@@ -96,6 +112,8 @@ export function SessionsList({
       }
 
       setSessions((prev) => prev.filter((session) => session.is_current));
+      setHasMore(false);
+      setNextOffset(null);
       toast.success("Other devices were logged out");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to log out other devices");
@@ -211,6 +229,30 @@ export function SessionsList({
               </div>
             );
           })}
+
+          {hasMore ? (
+            <div className="flex justify-center pt-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={loadingMore || nextOffset === null}
+                onClick={() => {
+                  if (nextOffset === null) return;
+                  setLoadingMore(true);
+                  void fetchSessions({ offset: nextOffset, append: true });
+                }}
+              >
+                {loadingMore ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Loading more...
+                  </>
+                ) : (
+                  "Load more sessions"
+                )}
+              </Button>
+            </div>
+          ) : null}
         </div>
       )}
 

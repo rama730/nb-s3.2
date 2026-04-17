@@ -11,6 +11,7 @@ import {
 } from '@/lib/projects/public-feed-service'
 import { consumeRouteClassLoadShedding } from '@/lib/routing/load-shedding'
 import { logger } from '@/lib/logger'
+import { getTrustedRequestIp } from '@/lib/security/request-ip'
 
 function getRequestId(request: Request) {
     const fromHeader = request.headers.get('x-request-id')?.trim()
@@ -26,15 +27,8 @@ function getRequestPath(request: Request) {
 }
 
 function getRequestIp(request: Request) {
-    const forwardedFor = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
-    if (forwardedFor) {
-        return forwardedFor
-    }
-
-    const realIp = request.headers.get('x-real-ip')?.trim()
-    if (realIp) {
-        return realIp
-    }
+    const trustedIp = getTrustedRequestIp(request)
+    if (trustedIp) return trustedIp
 
     const requestPath = getRequestPath(request)
     const userAgent = request.headers.get('user-agent')?.trim() || 'ua:missing'
@@ -46,7 +40,7 @@ function getRequestIp(request: Request) {
 
     logger.warn('api.v1.projects.missing_forwarded_ip', {
         route: requestPath,
-        missingHeaders: ['x-forwarded-for', 'x-real-ip'],
+        missingHeaders: ['trusted-remote-ip'],
         fingerprint,
     })
 

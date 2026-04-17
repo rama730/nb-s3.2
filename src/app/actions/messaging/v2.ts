@@ -26,6 +26,7 @@ import {
     editMessage,
     getConversationById,
     getConversations,
+    hydrateConversationLastMessageDeliveryMetadata,
     getMessagingStructuredCatalogV2,
     getMessageContext,
     getMessages,
@@ -366,7 +367,7 @@ async function getProjectGroupConversationById(
     const row = Array.from(rows)[0];
     if (!row) return null;
 
-    return {
+    const [conversation] = await hydrateConversationLastMessageDeliveryMetadata(viewerId, [{
         id: row.conversation_id,
         type: 'project_group',
         updatedAt: row.last_message_at ?? row.updated_at,
@@ -381,7 +382,9 @@ async function getProjectGroupConversationById(
             }
             : null,
         unreadCount: row.unread_count || 0,
-    };
+    }]);
+
+    return conversation ?? null;
 }
 
 async function getConversationSummarySourceV2(
@@ -510,11 +513,12 @@ export async function getConversationThreadPageV2(
 
 export async function getConversationCapabilityV2(params: {
     conversationId?: string | null;
-    userId?: string | null;
+    targetUserId?: string | null;
 }): Promise<{ success: boolean; error?: string; capability?: ConversationCapabilityV2 }> {
     try {
         const viewer = await getAuthUser();
         if (!viewer) return { success: false, error: 'Not authenticated' };
+        const targetUserId = params.targetUserId?.trim() || null;
 
         if (params.conversationId) {
             const conversation = await getConversationSummarySourceV2(viewer.id, params.conversationId);
@@ -528,15 +532,15 @@ export async function getConversationCapabilityV2(params: {
             };
         }
 
-        if (!params.userId) {
+        if (!targetUserId) {
             return { success: false, error: 'Missing conversation context' };
         }
 
         const dmCandidate: ConversationWithDetails = {
-            id: `draft:${params.userId}`,
+            id: `draft:${targetUserId}`,
             type: 'dm',
             updatedAt: new Date(),
-            participants: [{ id: params.userId, username: null, fullName: null, avatarUrl: null }],
+            participants: [{ id: targetUserId, username: null, fullName: null, avatarUrl: null }],
             lastMessage: null,
             unreadCount: 0,
         };

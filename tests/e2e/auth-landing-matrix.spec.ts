@@ -43,7 +43,7 @@ test.describe("Auth and landing matrix @critical", () => {
     await page.goto("/signup");
     await page.getByLabel("Full Name").fill("E2E Existing User");
     await page.getByLabel("Email").fill(e2eEmail!);
-    await page.getByLabel("Password").fill("Aa12345678");
+    await page.getByLabel("Password").fill("Aa1234567890");
 
     const submitButton = page.getByRole("button", { name: /Create account|Creating account/i });
     await submitButton.click();

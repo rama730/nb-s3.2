@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PasswordStrengthMeter } from "@/components/settings/PasswordStrengthMeter";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { getPasswordPolicyResult } from "@/lib/security/password-policy";
 
 type RecoveryState = "loading" | "ready" | "invalid" | "success";
 
@@ -60,12 +61,14 @@ export default function ResetPasswordPage() {
         };
     }, [supabase]);
 
+    const passwordPolicy = useMemo(() => getPasswordPolicyResult(newPassword), [newPassword]);
+
     const handleSubmit = async (event: FormEvent) => {
         event.preventDefault();
         setError(null);
 
-        if (newPassword.length < 12) {
-            setError("Password must be at least 12 characters.");
+        if (!passwordPolicy.ok) {
+            setError(passwordPolicy.error || "Password does not meet security requirements.");
             return;
         }
 
@@ -171,7 +174,7 @@ export default function ResetPasswordPage() {
                                     />
                                 </div>
 
-                                <Button type="submit" className="w-full h-11" disabled={submitting}>
+                                <Button type="submit" className="w-full h-11" disabled={submitting || !passwordPolicy.ok}>
                                     {submitting ? (
                                         <>
                                             <Loader2 className="mr-2 h-4 w-4 animate-spin" />

@@ -6,20 +6,23 @@
 
 import { createClient } from '@/lib/supabase/server'
 import { isEmailVerified } from '@/lib/auth/email-verification'
+import { db } from '@/lib/db'
+import { profileSecurityStates } from '@/lib/db/schema'
 import type { Profile } from '@/lib/db/schema'
 import { logger } from '@/lib/logger'
+import { buildViewerScopedProfileView, type PrivateProfileSecurityState, type PublicProfileView, type ViewerScopedProfileView } from '@/lib/privacy/profile-views'
+import { resolvePrivacyRelationship } from '@/lib/privacy/resolver'
 import { parseStoredRecoveryCodes, type StoredRecoveryCode } from '@/lib/security/recovery-codes'
+import { eq } from 'drizzle-orm'
 
 // Per-instance in-memory profile cache (shared across requests on one instance).
 // In multi-instance deployments this may serve stale data until TTL expires.
-export type StandardProfile = Omit<Profile, 'securityRecoveryCodes' | 'recoveryCodesGeneratedAt' | 'workspaceLayout'> & {
+export type StandardProfile = Omit<Profile, 'workspaceLayout'> & {
     hasRecoveryCodes: boolean
 }
 
-export type ProtectedRecoveryCodes = {
+export type ProtectedRecoveryCodes = PrivateProfileSecurityState & {
     securityRecoveryCodes: StoredRecoveryCode[]
-    recoveryCodesGeneratedAt: Date | null
-    hasRecoveryCodes: boolean
 }
 
 const profileCache = new Map<string, { profile: StandardProfile; timestamp: number }>()
@@ -78,7 +81,7 @@ export interface ProfileUpdateData {
 /**
  * Get profile by user ID with caching
  */
-export async function getProfile(userId: string): Promise<StandardProfile | null> {
+export async function getSelfProfile(userId: string): Promise<StandardProfile | null> {
     // Check per-instance in-memory cache first.
     const now = Date.now()
     if (PROFILE_IN_MEMORY_CACHE_ENABLED) {
@@ -129,8 +132,6 @@ export async function getProfile(userId: string): Promise<StandardProfile | null
             workspace_due_today_count,
             workspace_overdue_count,
             workspace_in_progress_count,
-            security_recovery_codes,
-            recovery_codes_generated_at,
             last_active_at,
             deleted_at,
             created_at,
@@ -150,10 +151,6 @@ export async function getProfile(userId: string): Promise<StandardProfile | null
     if (!data) {
         return null
     }
-
-    const hasRecoveryCodes =
-        (Array.isArray(data.security_recovery_codes) && data.security_recovery_codes.length > 0)
-        || !!data.recovery_codes_generated_at
 
     // Map snake_case to camelCase for type safety.
     // Recovery-code hashes stay out of the standard profile surface and must be loaded
@@ -191,7 +188,7 @@ export async function getProfile(userId: string): Promise<StandardProfile | null
         workspaceDueTodayCount: data.workspace_due_today_count ?? 0,
         workspaceOverdueCount: data.workspace_overdue_count ?? 0,
         workspaceInProgressCount: data.workspace_in_progress_count ?? 0,
-        hasRecoveryCodes,
+        hasRecoveryCodes: false,
         lastActiveAt: data.last_active_at ? new Date(data.last_active_at) : null,
         deletedAt: data.deleted_at ?? null,
         createdAt: new Date(data.created_at),
@@ -205,6 +202,24 @@ export async function getProfile(userId: string): Promise<StandardProfile | null
     return profile
 }
 
+export async function getViewerScopedProfile(
+    viewerId: string | null,
+    subjectUserId: string,
+): Promise<ViewerScopedProfileView | PublicProfileView | null> {
+    const profile = await getSelfProfile(subjectUserId)
+    if (!profile) return null
+
+    const isOwner = !!viewerId && viewerId === subjectUserId
+    const relationship = isOwner ? null : await resolvePrivacyRelationship(viewerId, subjectUserId)
+    return buildViewerScopedProfileView({
+        profile,
+        relationship,
+        isOwner,
+    })
+}
+
+export const getProfile = getSelfProfile
+
 export async function getProtectedRecoveryCodes(
     userId: string,
     options: { authorized: boolean },
@@ -213,33 +228,36 @@ export async function getProtectedRecoveryCodes(
         throw new Error('Recovery code access is not authorized')
     }
 
-    const supabase = await createClient()
-    const { data, error } = await supabase
-        .from('profiles')
-        .select('security_recovery_codes, recovery_codes_generated_at')
-        .eq('id', userId)
-        .maybeSingle()
+    try {
+        const state = await db.query.profileSecurityStates.findFirst({
+            columns: {
+                securityRecoveryCodes: true,
+                recoveryCodesGeneratedAt: true,
+            },
+            where: eq(profileSecurityStates.userId, userId),
+        })
 
-    if (error) {
+        if (!state) {
+            return {
+                securityRecoveryCodes: [],
+                recoveryCodesGeneratedAt: null,
+                hasRecoveryCodes: false,
+            }
+        }
+
+        const securityRecoveryCodes = parseStoredRecoveryCodes(state.securityRecoveryCodes)
+        return {
+            // Stored recovery codes are hashed + salted entries only, never plaintext values.
+            securityRecoveryCodes,
+            recoveryCodesGeneratedAt: state.recoveryCodesGeneratedAt ?? null,
+            hasRecoveryCodes: securityRecoveryCodes.length > 0 || !!state.recoveryCodesGeneratedAt,
+        }
+    } catch (error) {
         logger.error('profile-service.getProtectedRecoveryCodes.failed', {
             userId,
-            error: error.message,
+            error: error instanceof Error ? error.message : String(error),
         })
         return null
-    }
-
-    if (!data) {
-        return null
-    }
-
-    const securityRecoveryCodes = parseStoredRecoveryCodes(data.security_recovery_codes)
-    return {
-        // Stored recovery codes are hashed + salted entries only, never plaintext values.
-        securityRecoveryCodes,
-        recoveryCodesGeneratedAt: data.recovery_codes_generated_at
-            ? new Date(data.recovery_codes_generated_at)
-            : null,
-        hasRecoveryCodes: securityRecoveryCodes.length > 0 || !!data.recovery_codes_generated_at,
     }
 }
 

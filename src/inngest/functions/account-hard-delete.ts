@@ -2,7 +2,11 @@ import { inngest } from "../client";
 import { db } from "@/lib/db";
 import { accountDeletions } from "@/lib/db/schema";
 import { and, lte, isNull } from "drizzle-orm";
-import { executeHardDelete } from "@/app/actions/account";
+import {
+    ACCOUNT_HARD_DELETE_JOB_KIND,
+    executeHardDelete,
+} from "@/lib/account/hard-delete";
+import { createSignedJobRequestToken } from "@/lib/security/job-request";
 
 /**
  * Daily cron job that hard-deletes accounts whose grace period has expired.
@@ -55,7 +59,21 @@ export const accountHardDelete = inngest.createFunction(
         for (const deletion of eligibleDeletions) {
             const result = await step.run(`hard-delete-${deletion.id}`, async () => {
                 try {
-                    const deleteResult = await executeHardDelete(deletion.userId, deletion.id);
+                    // SEC-C3: mint a short-lived signed token bound to this
+                    // specific (userId, deletionId) so the finalizer can
+                    // prove the request originated from the Inngest runtime
+                    // that holds the shared secret, not a forged RPC call.
+                    const jobSignature = createSignedJobRequestToken({
+                        kind: ACCOUNT_HARD_DELETE_JOB_KIND,
+                        actorId: deletion.userId,
+                        subjectId: deletion.id,
+                        ttlSeconds: 600,
+                    });
+                    const deleteResult = await executeHardDelete(
+                        deletion.userId,
+                        deletion.id,
+                        jobSignature,
+                    );
                     return {
                         deletionId: deletion.id,
                         userId: deletion.userId,

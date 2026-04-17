@@ -6,7 +6,12 @@ import {
   buildSprintHealthSummary,
   type SprintDetailPayload,
 } from "@/lib/projects/sprint-detail";
-import { patchSprintDetailInfiniteData } from "@/lib/projects/sprint-cache";
+import {
+  insertSprintIntoInfiniteData,
+  patchSprintDetailInfiniteData,
+  patchSprintMetadataInfiniteData,
+  removeSprintFromInfiniteData,
+} from "@/lib/projects/sprint-cache";
 
 function buildPayload(): SprintDetailPayload {
   const sprint = {
@@ -14,6 +19,7 @@ function buildPayload(): SprintDetailPayload {
     projectId: "project-1",
     name: "Sprint 1",
     goal: "Ship sprint improvements",
+    description: null,
     startDate: "2026-04-09T00:00:00.000Z",
     endDate: "2026-04-23T00:00:00.000Z",
     status: "active" as const,
@@ -226,5 +232,96 @@ describe("sprint cache patching", () => {
     if (updatedTaskRow?.kind === "task") {
       assert.equal(updatedTaskRow.task.status, "done");
     }
+  });
+
+  it("inserts a new sprint and keeps sprint ordering canonical", () => {
+    const payload = buildPayload();
+    const patched = insertSprintIntoInfiniteData(
+      {
+        pages: [payload],
+        pageParams: [undefined],
+      },
+      {
+        id: "sprint-2",
+        projectId: "project-1",
+        name: "Sprint 2",
+        goal: "Document the sprint editor",
+        description: "A quieter modal for create, edit, and delete.",
+        startDate: "2026-04-24T00:00:00.000Z",
+        endDate: "2026-05-08T00:00:00.000Z",
+        status: "planning",
+        createdAt: "2026-04-20T00:00:00.000Z",
+        updatedAt: "2026-04-20T00:00:00.000Z",
+      },
+    ) as { pages: SprintDetailPayload[] };
+
+    const page = patched.pages[0];
+    assert.equal(page.sprints.length, 2);
+    assert.equal(page.sprints[0]?.id, "sprint-1");
+    assert.equal(page.sprints[1]?.id, "sprint-2");
+  });
+
+  it("patches sprint metadata into the sprint list and anchor rows", () => {
+    const payload = buildPayload();
+    const patched = patchSprintMetadataInfiniteData(
+      {
+        pages: [payload],
+        pageParams: [undefined],
+      },
+      {
+        id: "sprint-1",
+        projectId: "project-1",
+        name: "Sprint 1 refined",
+        goal: "Ship the editor polish",
+        description: "The selected sprint now supports editing and delete safeguards.",
+        startDate: "2026-04-09T00:00:00.000Z",
+        endDate: "2026-04-23T00:00:00.000Z",
+        status: "completed",
+        createdAt: "2026-04-08T00:00:00.000Z",
+        updatedAt: "2026-04-21T00:00:00.000Z",
+      },
+    ) as { pages: SprintDetailPayload[] };
+
+    const page = patched.pages[0];
+    assert.equal(page.sprints[0]?.name, "Sprint 1 refined");
+    const kickoff = page.rows.find((row) => row.kind === "kickoff");
+    assert.equal(kickoff?.kind, "kickoff");
+    if (kickoff?.kind === "kickoff") {
+      assert.equal(kickoff.sprint.description, "The selected sprint now supports editing and delete safeguards.");
+      assert.equal(kickoff.sprint.status, "completed");
+    }
+  });
+
+  it("removes a sprint and reseats selection to the next available sprint", () => {
+    const payload = buildPayload();
+    const withSecondSprint = insertSprintIntoInfiniteData(
+      {
+        pages: [payload],
+        pageParams: [undefined],
+      },
+      {
+        id: "sprint-2",
+        projectId: "project-1",
+        name: "Sprint 2",
+        goal: "Follow-up sprint",
+        description: null,
+        startDate: "2026-04-24T00:00:00.000Z",
+        endDate: "2026-05-08T00:00:00.000Z",
+        status: "planning",
+        createdAt: "2026-04-24T00:00:00.000Z",
+        updatedAt: "2026-04-24T00:00:00.000Z",
+      },
+    );
+
+    const patched = removeSprintFromInfiniteData(withSecondSprint, "sprint-1", "sprint-2") as {
+      pages: SprintDetailPayload[];
+    };
+
+    const page = patched.pages[0];
+    assert.equal(page.selectedSprintId, "sprint-2");
+    assert.equal(page.sprints.length, 1);
+    assert.equal(page.sprints[0]?.id, "sprint-2");
+    assert.deepEqual(page.rows, []);
+    assert.equal(page.summary, null);
   });
 });

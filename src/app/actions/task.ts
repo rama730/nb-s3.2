@@ -1,10 +1,9 @@
 "use server";
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { projectMembers, projectSprints, tasks } from "@/lib/db/schema";
-import { getProjectAccessById } from "@/lib/data/project-access";
 import { createClient } from "@/lib/supabase/server";
 import { consumeRateLimit } from "@/lib/security/rate-limit";
 import { queueCounterRefreshBestEffort } from "@/lib/workspace/counter-buffer";
@@ -22,21 +21,73 @@ const ALLOWED_FIELDS: ReadonlySet<MutableTaskField> = new Set([
 type Priority = "low" | "medium" | "high" | "urgent";
 export type TaskStatus = "todo" | "in_progress" | "done" | "blocked";
 
-async function assertTaskWriteAccess(taskId: string, userId: string) {
-    const existingTask = await db.query.tasks.findFirst({
-        where: eq(tasks.id, taskId),
-        columns: { id: true, projectId: true },
-    });
-    if (!existingTask) {
+/**
+ * SEC-H5: Atomically lock the task's project + membership rows and verify
+ * the caller still has write access. Because the locks are held until the
+ * surrounding transaction commits, a concurrent "remove member" operation
+ * will serialize after the write and can no longer race ahead of the
+ * in-flight update.
+ */
+async function lockTaskForWrite(
+    tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+    taskId: string,
+    userId: string,
+): Promise<{
+    projectId: string;
+    isOwner: boolean;
+    previousAssigneeId: string | null;
+}> {
+    const taskRows = await tx.execute<{
+        id: string;
+        project_id: string;
+        assignee_id: string | null;
+    }>(sql`
+        SELECT id, project_id, assignee_id
+        FROM tasks
+        WHERE id = ${taskId}
+        FOR UPDATE
+    `);
+    const task = Array.from(taskRows)[0];
+    if (!task) {
         throw new Error("Task not found");
     }
 
-    const access = await getProjectAccessById(existingTask.projectId, userId);
-    if (!access.project || !access.canWrite) {
+    const projectRows = await tx.execute<{
+        id: string;
+        owner_id: string;
+        deleted_at: Date | string | null;
+    }>(sql`
+        SELECT id, owner_id, deleted_at
+        FROM projects
+        WHERE id = ${task.project_id}
+        FOR UPDATE
+    `);
+    const project = Array.from(projectRows)[0];
+    if (!project || project.deleted_at) {
         throw new Error("Forbidden");
     }
-
-    return existingTask.projectId;
+    const isOwner = project.owner_id === userId;
+    if (!isOwner) {
+        const memberRows = await tx.execute<{ role: string | null }>(sql`
+            SELECT role
+            FROM project_members
+            WHERE project_id = ${task.project_id}
+              AND user_id = ${userId}
+            FOR UPDATE
+        `);
+        const member = Array.from(memberRows)[0];
+        if (!member) {
+            throw new Error("Forbidden");
+        }
+        if ((member.role ?? "").toLowerCase() === "viewer") {
+            throw new Error("Forbidden");
+        }
+    }
+    return {
+        projectId: task.project_id,
+        isOwner,
+        previousAssigneeId: task.assignee_id ?? null,
+    };
 }
 
 /**
@@ -61,61 +112,61 @@ export async function updateTaskFieldAction(
             return { success: false, error: "Invalid field" };
         }
 
-        const canonicalProjectId = await assertTaskWriteAccess(taskId, user.id);
-        if (canonicalProjectId !== projectId) {
-            return { success: false, error: "Task does not belong to this project" };
-        }
-        const existingTask = await db.query.tasks.findFirst({
-            where: eq(tasks.id, taskId),
-            columns: {
-                assigneeId: true,
-            },
+        const result = await db.transaction(async (tx) => {
+            const locked = await lockTaskForWrite(tx, taskId, user.id);
+            if (locked.projectId !== projectId) {
+                throw new Error("Task does not belong to this project");
+            }
+
+            const updates: Partial<typeof tasks.$inferInsert> = {
+                updatedAt: new Date(),
+            };
+
+            if (field === "title") {
+                const title = typeof value === "string" ? value.trim() : "";
+                if (!title) throw new Error("Title is required");
+                updates.title = title;
+            } else if (field === "description") {
+                updates.description = typeof value === "string" && value.trim() ? value : null;
+            } else if (field === "priority") {
+                const priority = typeof value === "string" ? value : "";
+                if (!["low", "medium", "high", "urgent"].includes(priority)) {
+                    throw new Error("Invalid priority");
+                }
+                updates.priority = priority as Priority;
+            } else if (field === "sprintId") {
+                if (!locked.isOwner) {
+                    throw new Error("Only the project owner can change sprint assignments");
+                }
+                const sprintId = typeof value === "string" && value ? value : null;
+                if (sprintId) {
+                    const sprint = await tx.query.projectSprints.findFirst({
+                        where: and(eq(projectSprints.id, sprintId), eq(projectSprints.projectId, locked.projectId)),
+                        columns: { id: true },
+                    });
+                    if (!sprint) {
+                        throw new Error("Sprint must belong to this project");
+                    }
+                }
+                updates.sprintId = sprintId;
+            } else if (field === "dueDate") {
+                if (typeof value === "string" && value) {
+                    const parsed = new Date(value);
+                    if (Number.isNaN(parsed.getTime())) {
+                        throw new Error("Invalid due date");
+                    }
+                    updates.dueDate = parsed;
+                } else {
+                    updates.dueDate = null;
+                }
+            }
+
+            await tx.update(tasks).set(updates).where(eq(tasks.id, taskId));
+            return { previousAssigneeId: locked.previousAssigneeId, projectId: locked.projectId };
         });
 
-        const updates: Partial<typeof tasks.$inferInsert> = {
-            updatedAt: new Date(),
-        };
-
-        if (field === "title") {
-            const title = typeof value === "string" ? value.trim() : "";
-            if (!title) return { success: false, error: "Title is required" };
-            updates.title = title;
-        } else if (field === "description") {
-            updates.description = typeof value === "string" && value.trim() ? value : null;
-        } else if (field === "priority") {
-            const priority = typeof value === "string" ? value : "";
-            if (!["low", "medium", "high", "urgent"].includes(priority)) {
-                return { success: false, error: "Invalid priority" };
-            }
-            updates.priority = priority as Priority;
-        } else if (field === "sprintId") {
-            const sprintId = typeof value === "string" && value ? value : null;
-            if (sprintId) {
-                const sprint = await db.query.projectSprints.findFirst({
-                    where: and(eq(projectSprints.id, sprintId), eq(projectSprints.projectId, canonicalProjectId)),
-                    columns: { id: true },
-                });
-                if (!sprint) {
-                    return { success: false, error: "Sprint must belong to this project" };
-                }
-            }
-            updates.sprintId = sprintId;
-        } else if (field === "dueDate") {
-            if (typeof value === "string" && value) {
-                const parsed = new Date(value);
-                if (Number.isNaN(parsed.getTime())) {
-                    return { success: false, error: "Invalid due date" };
-                }
-                updates.dueDate = parsed;
-            } else {
-                updates.dueDate = null;
-            }
-        }
-
-        await db.update(tasks).set(updates).where(eq(tasks.id, taskId));
-        await queueCounterRefreshBestEffort([existingTask?.assigneeId ?? null]);
-
-        revalidatePath(`/projects/${canonicalProjectId}`);
+        await queueCounterRefreshBestEffort([result.previousAssigneeId]);
+        revalidatePath(`/projects/${result.projectId}`);
         return { success: true };
     } catch (error: any) {
         console.error("Unexpected error:", error);
@@ -142,24 +193,20 @@ export async function updateTaskStatusAction(
             return { success: false, error: "Invalid status" };
         }
 
-        const canonicalProjectId = await assertTaskWriteAccess(taskId, user.id);
-        if (canonicalProjectId !== projectId) {
-            return { success: false, error: "Task does not belong to this project" };
-        }
-        const existingTask = await db.query.tasks.findFirst({
-            where: eq(tasks.id, taskId),
-            columns: {
-                assigneeId: true,
-            },
+        const result = await db.transaction(async (tx) => {
+            const locked = await lockTaskForWrite(tx, taskId, user.id);
+            if (locked.projectId !== projectId) {
+                throw new Error("Task does not belong to this project");
+            }
+            await tx.update(tasks).set({
+                status,
+                updatedAt: new Date(),
+            }).where(eq(tasks.id, taskId));
+            return { previousAssigneeId: locked.previousAssigneeId, projectId: locked.projectId };
         });
 
-        await db.update(tasks).set({
-            status,
-            updatedAt: new Date(),
-        }).where(eq(tasks.id, taskId));
-        await queueCounterRefreshBestEffort([existingTask?.assigneeId ?? null]);
-
-        revalidatePath(`/projects/${canonicalProjectId}`);
+        await queueCounterRefreshBestEffort([result.previousAssigneeId]);
+        revalidatePath(`/projects/${result.projectId}`);
         return { success: true };
     } catch (error: any) {
         console.error("Unexpected error:", error);
@@ -182,34 +229,38 @@ export async function assignTaskAction(
             return { success: false, error: "Unauthorized" };
         }
 
-        const canonicalProjectId = await assertTaskWriteAccess(taskId, user.id);
-        if (canonicalProjectId !== projectId) {
-            return { success: false, error: "Task does not belong to this project" };
-        }
-        const existingTask = await db.query.tasks.findFirst({
-            where: eq(tasks.id, taskId),
-            columns: {
-                assigneeId: true,
-            },
+        const result = await db.transaction(async (tx) => {
+            const locked = await lockTaskForWrite(tx, taskId, user.id);
+            if (locked.projectId !== projectId) {
+                throw new Error("Task does not belong to this project");
+            }
+
+            if (assigneeId) {
+                const isProjectMember = await tx.query.projectMembers.findFirst({
+                    where: and(
+                        eq(projectMembers.projectId, locked.projectId),
+                        eq(projectMembers.userId, assigneeId),
+                    ),
+                    columns: { id: true, role: true },
+                });
+                if (!isProjectMember) {
+                    throw new Error("Assignee must be a project member");
+                }
+                if (isProjectMember.role === "viewer") {
+                    throw new Error("Viewer members cannot be assigned tasks");
+                }
+            }
+
+            await tx.update(tasks).set({
+                assigneeId: assigneeId || null,
+                updatedAt: new Date(),
+            }).where(eq(tasks.id, taskId));
+
+            return { previousAssigneeId: locked.previousAssigneeId, projectId: locked.projectId };
         });
 
-        if (assigneeId) {
-            const isProjectMember = await db.query.projectMembers.findFirst({
-                where: and(eq(projectMembers.projectId, canonicalProjectId), eq(projectMembers.userId, assigneeId)),
-                columns: { id: true },
-            });
-            if (!isProjectMember) {
-                return { success: false, error: "Assignee must be a project member" };
-            }
-        }
-
-        await db.update(tasks).set({
-            assigneeId: assigneeId || null,
-            updatedAt: new Date(),
-        }).where(eq(tasks.id, taskId));
-        await queueCounterRefreshBestEffort([existingTask?.assigneeId ?? null, assigneeId]);
-
-        revalidatePath(`/projects/${canonicalProjectId}`);
+        await queueCounterRefreshBestEffort([result.previousAssigneeId, assigneeId]);
+        revalidatePath(`/projects/${result.projectId}`);
         return { success: true };
     } catch (error: any) {
         console.error("Unexpected error:", error);

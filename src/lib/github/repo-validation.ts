@@ -40,12 +40,14 @@ export function isValidGithubBranchName(branch: string | null | undefined): bool
   const ref = branch.trim();
   if (!ref) return false;
   if (ref.length > BRANCH_MAX_LENGTH) return false;
+  if (ref.startsWith("-")) return false;
   if (ref.startsWith("/") || ref.endsWith("/")) return false;
   if (ref.startsWith(".") || ref.endsWith(".")) return false;
   if (ref.includes("..")) return false;
   if (ref.includes("@{")) return false;
   if (ref.endsWith(".lock")) return false;
   if (/[\s~^:?*[\]\\]/.test(ref)) return false;
+  if (!/^[A-Za-z0-9/_.-]+$/.test(ref)) return false;
 
   const parts = ref.split("/");
   return parts.every((p) => p.length > 0 && !p.endsWith(".") && !p.includes(".."));

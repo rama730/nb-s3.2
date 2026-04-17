@@ -13,13 +13,13 @@ const RECOVERY_CODE_SEGMENT_COUNT = 2;
 const DEFAULT_RECOVERY_CODE_COUNT = 10;
 
 function resolveRecoveryCodeSecret(): string {
-  const secret = process.env.SECURITY_RECOVERY_CODE_SECRET
-    ?? process.env.SECURITY_STEPUP_SECRET
-    ?? process.env.SUPABASE_JWT_SECRET
-    ?? "";
+  const secret = process.env.SECURITY_RECOVERY_CODE_SECRET ?? "";
 
   if (!secret.trim()) {
-    throw new Error("Missing SECURITY_RECOVERY_CODE_SECRET, SECURITY_STEPUP_SECRET, and SUPABASE_JWT_SECRET");
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("Missing SECURITY_RECOVERY_CODE_SECRET");
+    }
+    return `development-recovery-code-secret:${process.pid}`;
   }
 
   return secret;
@@ -115,6 +115,7 @@ export function consumeRecoveryCode(
   rawCode: string,
 ): {
   matched: boolean;
+  matchedCodeId: string | null;
   updatedCodes: StoredRecoveryCode[];
   remainingCount: number;
 } {
@@ -122,6 +123,7 @@ export function consumeRecoveryCode(
   if (!normalizedCode) {
     return {
       matched: false,
+      matchedCodeId: null,
       updatedCodes: codes,
       remainingCount: countRemainingRecoveryCodes(codes),
     };
@@ -138,14 +140,14 @@ export function consumeRecoveryCode(
     const actual = Buffer.from(hashRecoveryCode(normalizedCode, entry.salt), "hex");
     if (expected.length !== actual.length) continue;
     if (timingSafeEqual(expected, actual)) {
-      matchedIndex = index;
-      break;
+      matchedIndex = matchedIndex === -1 ? index : matchedIndex;
     }
   }
 
   if (matchedIndex === -1) {
     return {
       matched: false,
+      matchedCodeId: null,
       updatedCodes: codes,
       remainingCount: countRemainingRecoveryCodes(codes),
     };
@@ -158,6 +160,7 @@ export function consumeRecoveryCode(
 
   return {
     matched: true,
+    matchedCodeId: updatedCodes[matchedIndex]!.id,
     updatedCodes,
     remainingCount: countRemainingRecoveryCodes(updatedCodes),
   };

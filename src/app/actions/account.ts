@@ -1,19 +1,16 @@
 'use server';
 
 import { db, readDb } from "@/lib/db";
-import { 
-    profiles, 
-    projects, 
-    connections, 
-    projectMembers, 
-    messages, 
+import {
+    profiles,
+    projects,
+    connections,
+    projectMembers,
+    messages,
     conversationParticipants,
-    messageAttachments,
     collections,
     accountDeletions,
-    projectNodes,
     profileAuditEvents,
-    dmPairs,
     projectFollows
 } from "@/lib/db/schema";
 import { createClient } from '@/lib/supabase/server';
@@ -23,6 +20,9 @@ import { revalidatePath } from 'next/cache';
 import { queueCounterRefreshBestEffort } from '@/lib/workspace/counter-buffer';
 import { logger } from '@/lib/logger';
 import { randomBytes } from 'crypto';
+import { createSignedJobRequestToken } from '@/lib/security/job-request';
+import { consumeRateLimit } from '@/lib/security/rate-limit';
+import { resolveSecurityStepUp } from '@/lib/security/step-up';
 
 const UUID_RE =
     /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
@@ -230,7 +230,15 @@ export async function scheduleAccountDeletion(
             const { inngest } = await import('@/inngest/client');
             await inngest.send({
                 name: 'account/cleanup',
-                data: { userId, deletionId },
+                data: {
+                    userId,
+                    deletionId,
+                    jobSignature: createSignedJobRequestToken({
+                        kind: 'account/cleanup',
+                        actorId: userId,
+                        subjectId: deletionId,
+                    }),
+                },
             });
         } catch (inngestErr) {
             logger.warn('account.inngest-dispatch.failed', { module: 'account', error: inngestErr instanceof Error ? inngestErr.message : String(inngestErr) });
@@ -314,118 +322,13 @@ export async function cancelAccountDeletion(): Promise<{ success: boolean; error
 }
 
 // ============================================================================
-// EXECUTE HARD DELETE (Called by Inngest Cron after Grace Period)
+// EXECUTE HARD DELETE
 // ============================================================================
-
-/**
- * Permanently delete a user's account and all associated data.
- * This is called by the background cron job after the grace period expires.
- * DESTRUCTIVE — cannot be undone.
- */
-export async function executeHardDelete(
-    userId: string,
-    deletionId: string,
-): Promise<{ success: boolean; error?: string }> {
-    try {
-        if (!UUID_RE.test(userId)) {
-            return { success: false, error: 'Invalid user ID' };
-        }
-
-        // Verify the deletion record exists and is eligible
-        const [deletion] = await db
-            .select({ id: accountDeletions.id })
-            .from(accountDeletions)
-            .where(
-                and(
-                    eq(accountDeletions.id, deletionId),
-                    eq(accountDeletions.userId, userId),
-                    isNull(accountDeletions.cancelledAt),
-                    isNull(accountDeletions.completedAt),
-                )
-            )
-            .limit(1);
-
-        if (!deletion) {
-            return { success: false, error: 'Deletion record not found or already processed' };
-        }
-
-        // C9: Delete auth user FIRST to avoid orphaned auth records.
-        // If auth deletion fails, DB data is preserved and can be retried.
-        const supabase = await createClient();
-        let authError: { message: string } | null = null;
-        try {
-            const adminResult = await supabase.auth.admin?.deleteUser?.(userId);
-            if (adminResult?.error) {
-                authError = adminResult.error;
-            }
-        } catch {
-            // Admin API not available, try RPC
-            try {
-                const { error } = await supabase.rpc('delete_auth_user', { user_id: userId });
-                if (error) authError = error;
-            } catch {
-                authError = { message: 'Auth deletion not available' };
-            }
-        }
-
-        if (authError) {
-            logger.error('account.hard-delete.auth-deletion.failed', { module: 'account', error: authError.message });
-            // Auth deletion failed — abort to prevent orphaned auth record.
-            // The Inngest job will retry on next scheduled attempt.
-            return { success: false, error: `Auth deletion failed: ${authError.message}` };
-        }
-
-        // Run destructive DB deletes in a transaction (auth user already removed)
-        await db.transaction(async (tx) => {
-            // 1. Remove the user from conversations during the irreversible finalizer path.
-            await tx.delete(conversationParticipants).where(
-                eq(conversationParticipants.userId, userId)
-            );
-
-            // 2. Remove DM pair entries during hard delete so soft delete remains reversible.
-            await tx.delete(dmPairs).where(
-                or(
-                    eq(dmPairs.userLow, userId),
-                    eq(dmPairs.userHigh, userId),
-                )
-            );
-
-            // 3. Delete projects owned by the user (cascade handles members, tasks, nodes, etc.)
-            await tx.delete(projects).where(eq(projects.ownerId, userId));
-
-            // 4. Delete the profile (cascade handles remaining FKs)
-            await tx.delete(profiles).where(eq(profiles.id, userId));
-
-            // 5. Mark deletion as completed
-            await tx
-                .update(accountDeletions)
-                .set({ completedAt: new Date(), cleanupStatus: 'completed' })
-                .where(eq(accountDeletions.id, deletionId));
-        });
-
-        return { success: true };
-    } catch (error) {
-        logger.error('account.hard-delete.failed', { module: 'account', error: error instanceof Error ? error.message : String(error) });
-
-        // Mark the deletion as failed
-        try {
-            await db
-                .update(accountDeletions)
-                .set({
-                    cleanupStatus: 'failed',
-                    cleanupDetails: {
-                        error: error instanceof Error ? error.message : String(error),
-                        failedAt: new Date().toISOString(),
-                    },
-                })
-                .where(eq(accountDeletions.id, deletionId));
-        } catch {
-            // Best effort
-        }
-
-        return { success: false, error: 'Failed to execute hard delete' };
-    }
-}
+//
+// SEC-C3: the destructive finalizer now lives in `src/lib/account/hard-delete`
+// so it is NEVER exposed as a 'use server' RPC action. Only the Inngest cron
+// imports it, and every call must carry a signed job-request token that binds
+// the request to a (userId, deletionId) pair.
 
 // ============================================================================
 // TRANSFER PROJECT OWNERSHIP
@@ -434,33 +337,84 @@ export async function executeHardDelete(
 /**
  * Transfer ownership of a project to another user (must be a project member).
  * Used during the deletion wizard to preserve team projects.
+ *
+ * SEC-C4: transferring ownership can be weaponised to hand a project to a
+ * compromised account before it is hard-deleted, effectively destroying the
+ * original owner's work. Hardening:
+ *   - per-user rate limit to cap damage from a stolen session;
+ *   - step-up auth required (recent password / TOTP / recovery code);
+ *   - `SELECT ... FOR UPDATE` on the project row so concurrent owner mutations
+ *     can't race the ownership check;
+ *   - audit entry on the original owner AND the new owner so either party can
+ *     trace the transfer later.
  */
 export async function transferProjectOwnership(
     projectId: string,
     newOwnerId: string,
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; error?: string; errorCode?: 'UNAUTHORIZED' | 'STEP_UP_REQUIRED' | 'RATE_LIMITED' | 'VALIDATION_ERROR' | 'NOT_OWNER' | 'NOT_A_MEMBER' | 'PROJECT_NOT_FOUND' | 'INTERNAL_ERROR' }> {
     try {
         const supabase = await createClient();
         const { data: { user } } = await supabase.auth.getUser();
 
         if (!user) {
-            return { success: false, error: 'Not authenticated' };
+            return { success: false, error: 'Not authenticated', errorCode: 'UNAUTHORIZED' };
         }
 
         if (!UUID_RE.test(projectId) || !UUID_RE.test(newOwnerId)) {
-            return { success: false, error: 'Invalid IDs' };
+            return { success: false, error: 'Invalid IDs', errorCode: 'VALIDATION_ERROR' };
         }
 
-        await db.transaction(async (tx) => {
-            // Verify current user owns the project
-            const [project] = await tx
-                .select({ ownerId: projects.ownerId })
-                .from(projects)
-                .where(eq(projects.id, projectId))
-                .limit(1);
+        if (newOwnerId === user.id) {
+            return {
+                success: false,
+                error: 'Cannot transfer ownership to yourself',
+                errorCode: 'VALIDATION_ERROR',
+            };
+        }
 
-            if (!project || project.ownerId !== user.id) {
-                throw new Error('Not the project owner');
+        // SEC-C4: cap the rate of ownership transfers per user. 10 transfers
+        // per hour is well above any legitimate deletion-wizard flow but low
+        // enough that an attacker with a valid session cannot sweep an
+        // entire project portfolio before we notice.
+        const rate = await consumeRateLimit(
+            `account:transfer-ownership:${user.id}`,
+            10,
+            60 * 60,
+        );
+        if (!rate.allowed) {
+            return {
+                success: false,
+                error: 'Too many transfer attempts. Please try again later.',
+                errorCode: 'RATE_LIMITED',
+            };
+        }
+
+        // SEC-C4: require a fresh step-up — same invariant as account deletion
+        // because transferring ownership is effectively a silent privilege
+        // hand-off on the project.
+        const stepUp = await resolveSecurityStepUp(user.id);
+        if (!stepUp.ok) {
+            return {
+                success: false,
+                error: 'Re-authenticate to transfer project ownership.',
+                errorCode: 'STEP_UP_REQUIRED',
+            };
+        }
+
+        const transferResult = await db.transaction(async (tx) => {
+            // SEC-C4: `FOR UPDATE` locks the project row for the duration of
+            // the transaction so a second caller (e.g. a parallel transfer or
+            // a soft-delete) cannot race the owner check.
+            const lockedRows = await tx.execute<{ owner_id: string }>(sql`
+                SELECT owner_id FROM ${projects} WHERE id = ${projectId} FOR UPDATE
+            `);
+            const lockedProject = Array.from(lockedRows)[0];
+
+            if (!lockedProject) {
+                return { ok: false as const, code: 'PROJECT_NOT_FOUND' as const };
+            }
+            if (lockedProject.owner_id !== user.id) {
+                return { ok: false as const, code: 'NOT_OWNER' as const };
             }
 
             // Verify new owner is a project member
@@ -476,7 +430,7 @@ export async function transferProjectOwnership(
                 .limit(1);
 
             if (!membership) {
-                throw new Error('New owner must be a project member');
+                return { ok: false as const, code: 'NOT_A_MEMBER' as const };
             }
 
             // Transfer ownership
@@ -498,6 +452,71 @@ export async function transferProjectOwnership(
                         eq(projectMembers.userId, newOwnerId),
                     )
                 );
+
+            // Demote the previous owner to 'admin' on the project so they
+            // lose the destructive capabilities tied to the 'owner' role.
+            await tx
+                .update(projectMembers)
+                .set({ role: 'admin' })
+                .where(
+                    and(
+                        eq(projectMembers.projectId, projectId),
+                        eq(projectMembers.userId, user.id),
+                    )
+                );
+
+            // SEC-C4: write an audit trail row for BOTH parties so either
+            // user can see the transfer in their audit log. `user_id` here
+            // points at the affected user (previous or new owner), and
+            // `metadata.actor_id` records the acting party.
+            const now = new Date();
+            await tx.insert(profileAuditEvents).values([
+                {
+                    userId: user.id,
+                    eventType: 'project_ownership_transferred_out',
+                    previousValue: { ownerId: user.id },
+                    nextValue: { ownerId: newOwnerId },
+                    metadata: {
+                        projectId,
+                        newOwnerId,
+                        actorId: user.id,
+                        stepUpMethod: stepUp.payload?.method ?? null,
+                        at: now.toISOString(),
+                    },
+                },
+                {
+                    userId: newOwnerId,
+                    eventType: 'project_ownership_transferred_in',
+                    previousValue: { ownerId: user.id },
+                    nextValue: { ownerId: newOwnerId },
+                    metadata: {
+                        projectId,
+                        previousOwnerId: user.id,
+                        actorId: user.id,
+                        at: now.toISOString(),
+                    },
+                },
+            ]);
+
+            return { ok: true as const };
+        });
+
+        if (!transferResult.ok) {
+            switch (transferResult.code) {
+                case 'NOT_OWNER':
+                    return { success: false, error: 'Not the project owner', errorCode: 'NOT_OWNER' };
+                case 'NOT_A_MEMBER':
+                    return { success: false, error: 'New owner must be a project member', errorCode: 'NOT_A_MEMBER' };
+                case 'PROJECT_NOT_FOUND':
+                    return { success: false, error: 'Project not found', errorCode: 'PROJECT_NOT_FOUND' };
+            }
+        }
+
+        logger.info('account.transfer-ownership.completed', {
+            module: 'account',
+            projectId,
+            previousOwnerId: user.id,
+            newOwnerId,
         });
 
         return { success: true };
@@ -506,6 +525,7 @@ export async function transferProjectOwnership(
         return {
             success: false,
             error: error instanceof Error ? error.message : 'Failed to transfer ownership',
+            errorCode: 'INTERNAL_ERROR',
         };
     }
 }
@@ -654,9 +674,15 @@ export async function exportAccountData(): Promise<{
             exportedAt: new Date().toISOString(),
             profile,
             projects: userProjects,
-            connections: userConnections.map(c => ({
-                ...c,
+            // SEC-L1: exporting the raw counterparty UUID leaks an internal
+            // identifier that the data subject does not need and that could be
+            // weaponised to correlate accounts across exported corpora. Strip
+            // `requesterId` / `addresseeId` and keep only the
+            // direction-from-the-exporter and status/createdAt.
+            connections: userConnections.map((c) => ({
                 direction: c.requesterId === userId ? 'sent' : 'received',
+                status: c.status,
+                createdAt: c.createdAt,
             })),
             messages: {
                 count: userMessageCount,

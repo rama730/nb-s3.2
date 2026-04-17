@@ -21,7 +21,7 @@ import {
     saveOnboardingDraft,
     trackOnboardingEvent,
 } from '@/app/actions/onboarding'
-import { createProfileImageUploadUrlAction } from '@/app/actions/profile'
+import { createProfileImageUploadUrlAction, finalizeProfileImageUploadAction } from '@/app/actions/profile'
 import { useAuth } from '@/lib/hooks/use-auth'
 import { validateUsername } from '@/lib/validations/username'
 import {
@@ -708,7 +708,14 @@ export default function OnboardingPage() {
                     throw new Error(`Avatar upload failed (${uploadResponse.status})`)
                 }
 
-                updateData({ avatarUrl: `${uploadSession.publicUrl}?t=${Date.now()}` })
+                const finalized = await finalizeProfileImageUploadAction({
+                    uploadIntentId: uploadSession.uploadIntentId,
+                })
+                if (!finalized.success) {
+                    throw new Error(finalized.error || 'Failed to finalize avatar upload')
+                }
+
+                updateData({ avatarUrl: `${finalized.publicUrl}?t=${Date.now()}` })
             } catch {
                 // Silently ignore upload errors - preview is already showing
                 console.log('Storage upload skipped, using preview')

@@ -16,6 +16,7 @@ import {
   normalizeAndValidateUploadRelativePath,
   PROJECT_UPLOAD_MAX_FILE_BYTES,
 } from '@/lib/upload/security';
+import { finalizeUploadIntent } from '@/lib/upload/upload-intents';
 
 export type UploadManifestEntry = {
   relativePath: string;
@@ -322,6 +323,25 @@ export async function registerUploadedFolderAction(
   if (project.ownerId !== user.id) throw new Error('Unauthorized');
 
   const entries = (manifest || []).map((entry) => normalizeManifestEntry(entry));
+
+  if (entries.length > 0) {
+    const FINALIZE_BATCH_SIZE = 25;
+    for (const batch of chunkArray(entries, FINALIZE_BATCH_SIZE)) {
+      await Promise.all(
+        batch.map(async (entry) => {
+          const storageKey = buildProjectFileKey(projectId, entry.relativePath);
+          await finalizeUploadIntent({
+            bucket: 'project-files',
+            storageKey,
+            userId: user.id,
+            projectId,
+            expectedScope: 'project_file',
+            expectedKind: 'file',
+          });
+        }),
+      );
+    }
+  }
 
   const manifestHash = (options?.manifestHash || '').trim() || buildUploadManifestHash(entries);
   const sessionId = normalizeSessionId(options?.sessionId);

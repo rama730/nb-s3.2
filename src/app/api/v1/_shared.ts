@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getSessionIdentifierFromSession } from "@/lib/auth/session-identifier";
 import { consumeRateLimitForRoute } from "@/lib/security/rate-limit";
 import { logger } from "@/lib/logger";
+import { getTrustedRequestIp } from "@/lib/security/request-ip";
 import type { User } from "@supabase/supabase-js";
 import { jsonError, jsonSuccess } from "@/app/api/v1/_envelope";
 export { jsonError, jsonSuccess };
@@ -10,7 +11,7 @@ export type { ApiErrorCode } from "@/app/api/v1/_envelope";
 import type { ApiErrorCode } from "@/app/api/v1/_envelope";
 
 export function getRequestIp(request: Request) {
-  return request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
+  return getTrustedRequestIp(request) ?? "unknown";
 }
 
 export function getRequestPath(request: Request) {

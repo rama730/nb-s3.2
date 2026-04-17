@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowUpRight, Plus } from "lucide-react";
+import { Plus } from "lucide-react";
 
 import {
   buildProjectSprintDetailHref,
@@ -42,7 +42,7 @@ export function SprintLeftRail({
         <div className="space-y-1">
           <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Sprint history</h3>
           <p className="text-xs text-zinc-500 dark:text-zinc-400">
-            Move between sprints quickly and keep a stable deep link for each one.
+            Move between sprints quickly and keep the work focused in one place.
           </p>
         </div>
 
@@ -87,10 +87,7 @@ export function SprintLeftRail({
                     <span className="sr-only">{SPRINT_STATUS_PRESENTATION[sprint.status].label}</span>
                   </div>
                   <div className="min-w-0 flex-1 space-y-1.5">
-                    <div className="flex items-start justify-between gap-3">
-                      <p className="truncate text-sm font-semibold text-zinc-900 dark:text-zinc-100">{sprint.name}</p>
-                      <ArrowUpRight className="mt-0.5 h-4 w-4 flex-shrink-0 text-zinc-400" />
-                    </div>
+                    <p className="truncate text-sm font-semibold text-zinc-900 dark:text-zinc-100">{sprint.name}</p>
                     <p className="line-clamp-2 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
                       {sprint.goal?.trim() || "No sprint goal has been set yet."}
                     </p>

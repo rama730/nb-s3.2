@@ -6,8 +6,10 @@ import { eq, and, or, sql, inArray, isNotNull, isNull, desc } from 'drizzle-orm'
 import { createClient, createAdminClient } from '@/lib/supabase/server';
 import { redis } from '@/lib/redis';
 import { revalidatePath, unstable_cache } from 'next/cache';
+import { cookies } from 'next/headers';
 import { CreateProjectInput } from '@/lib/validations/project';
 import { z } from 'zod';
+import { createHash } from 'crypto';
 import { generateSlug } from '@/lib/utils/slug';
 import { generateProjectKey } from '@/lib/project-key';
 import { computeProjectReadAccess, computeProjectWriteAccess, getProjectAccessById, type ProjectAccess } from '@/lib/data/project-access';
@@ -26,7 +28,15 @@ import { logger } from '@/lib/logger';
 import { buildProjectOwnerPresentation } from '@/lib/privacy/presentation';
 import { resolvePrivacyRelationship } from '@/lib/privacy/resolver';
 import { refreshWorkspaceCountersForUsers } from '@/lib/workspace/profile-counters';
-import { createSprintSchema, parseSprintDateInput, type CreateSprintInput } from '@/lib/projects/sprints';
+import {
+    createSprintSchema,
+    deleteSprintSchema,
+    parseSprintDateInput,
+    updateSprintSchema,
+    type CreateSprintInput,
+    type DeleteSprintResult,
+    type UpdateSprintInput,
+} from '@/lib/projects/sprints';
 import {
     buildSprintFilterCounts,
     buildSprintHealthSummary,
@@ -45,7 +55,7 @@ import {
 import { buildSprintTimeline, type SprintTimelineTaskInput } from '@/lib/projects/sprint-timeline';
 import { recordSprintMetric } from '@/lib/projects/sprint-observability';
 
-const isMissingCounterColumn = (error: unknown, column: string) => {
+const isMissingColumn = (error: unknown, column: string) => {
     const msg = error instanceof Error ? error.message : String(error);
     const lowered = msg.toLowerCase();
     return (
@@ -53,6 +63,34 @@ const isMissingCounterColumn = (error: unknown, column: string) => {
         (lowered.includes('column') || lowered.includes('failed query') || lowered.includes('does not exist'))
     );
 };
+
+const isMissingCounterColumn = (error: unknown, column: string) => isMissingColumn(error, column);
+
+let sprintDescriptionColumnSupport: boolean | null = null;
+
+async function hasProjectSprintDescriptionColumn() {
+    if (sprintDescriptionColumnSupport !== null) {
+        return sprintDescriptionColumnSupport;
+    }
+
+    try {
+        const rows = await db.execute<{ exists: boolean }>(sql`
+            select exists (
+                select 1
+                from information_schema.columns
+                where table_schema = 'public'
+                  and table_name = 'project_sprints'
+                  and column_name = 'description'
+            ) as exists
+        `);
+
+        sprintDescriptionColumnSupport = Boolean(Array.from(rows)[0]?.exists);
+    } catch {
+        sprintDescriptionColumnSupport = false;
+    }
+
+    return sprintDescriptionColumnSupport;
+}
 
 const revalidateProjectPaths = async (projectId: string) => {
     revalidatePath(`/projects/${projectId}`);
@@ -1970,6 +2008,28 @@ export async function toggleProjectFollowAction(projectId: string, shouldFollow:
 
 export async function incrementProjectViewAction(projectId: string): Promise<{ success: boolean; viewCount?: number; error?: string }> {
     try {
+        const supabase = await createClient();
+        const {
+            data: { user },
+        } = await supabase.auth.getUser();
+        const cookieStore = await cookies();
+        const anonymousViewerSeed = cookieStore.get('edge-csrf-token')?.value?.trim() || 'anonymous';
+        const viewerKey = user?.id
+            ? `user:${user.id}`
+            : `anon:${createHash('sha256').update(anonymousViewerSeed).digest('hex').slice(0, 16)}`;
+        const rateLimit = await consumeRateLimit(`project:view:${projectId}:${viewerKey}`, 1, 60 * 30);
+        if (!rateLimit.allowed) {
+            const [current] = await db
+                .select({ viewCount: projects.viewCount })
+                .from(projects)
+                .where(eq(projects.id, projectId))
+                .limit(1);
+            if (!current) {
+                return { success: false, error: "Project not found" };
+            }
+            return { success: true, viewCount: Number(current.viewCount ?? 0) };
+        }
+
         const [updated] = await db.update(projects)
             .set({ viewCount: sql`${projects.viewCount} + 1` })
             .where(eq(projects.id, projectId))
@@ -2270,6 +2330,7 @@ function serializeSprintListItem(sprint: {
     projectId: string;
     name: string;
     goal: string | null;
+    description: string | null;
     startDate: Date | null;
     endDate: Date | null;
     status: SprintListItem["status"];
@@ -2281,6 +2342,7 @@ function serializeSprintListItem(sprint: {
         projectId: sprint.projectId,
         name: sprint.name,
         goal: sprint.goal ?? null,
+        description: sprint.description ?? null,
         startDate: sprint.startDate?.toISOString() ?? null,
         endDate: sprint.endDate?.toISOString() ?? null,
         status: sprint.status,
@@ -2290,27 +2352,65 @@ function serializeSprintListItem(sprint: {
 }
 
 async function readProjectSprintsList(projectId: string, limit: number) {
-    const rows = await db
-        .select({
-            id: projectSprints.id,
-            projectId: projectSprints.projectId,
-            name: projectSprints.name,
-            goal: projectSprints.goal,
-            startDate: projectSprints.startDate,
-            endDate: projectSprints.endDate,
-            status: projectSprints.status,
-            createdAt: projectSprints.createdAt,
-            updatedAt: projectSprints.updatedAt,
-        })
-        .from(projectSprints)
-        .where(eq(projectSprints.projectId, projectId))
-        .orderBy(
-            sql`CASE WHEN ${projectSprints.status} = 'active' THEN 0 WHEN ${projectSprints.status} = 'planning' THEN 1 ELSE 2 END`,
-            desc(projectSprints.createdAt),
-        )
-        .limit(limit);
+    const readSprints = async (supportsDescription: boolean) => {
+        if (supportsDescription) {
+            return db
+                .select({
+                    id: projectSprints.id,
+                    projectId: projectSprints.projectId,
+                    name: projectSprints.name,
+                    goal: projectSprints.goal,
+                    description: projectSprints.description,
+                    startDate: projectSprints.startDate,
+                    endDate: projectSprints.endDate,
+                    status: projectSprints.status,
+                    createdAt: projectSprints.createdAt,
+                    updatedAt: projectSprints.updatedAt,
+                })
+                .from(projectSprints)
+                .where(eq(projectSprints.projectId, projectId))
+                .orderBy(
+                    sql`CASE WHEN ${projectSprints.status} = 'active' THEN 0 WHEN ${projectSprints.status} = 'planning' THEN 1 ELSE 2 END`,
+                    desc(projectSprints.createdAt),
+                )
+                .limit(limit);
+        }
 
-    return rows.map(serializeSprintListItem);
+        return db
+            .select({
+                id: projectSprints.id,
+                projectId: projectSprints.projectId,
+                name: projectSprints.name,
+                goal: projectSprints.goal,
+                startDate: projectSprints.startDate,
+                endDate: projectSprints.endDate,
+                status: projectSprints.status,
+                createdAt: projectSprints.createdAt,
+                updatedAt: projectSprints.updatedAt,
+            })
+            .from(projectSprints)
+            .where(eq(projectSprints.projectId, projectId))
+            .orderBy(
+                sql`CASE WHEN ${projectSprints.status} = 'active' THEN 0 WHEN ${projectSprints.status} = 'planning' THEN 1 ELSE 2 END`,
+                desc(projectSprints.createdAt),
+            )
+            .limit(limit)
+            .then((rows) => rows.map((row) => ({ ...row, description: null })));
+    };
+
+    const supportsDescription = await hasProjectSprintDescriptionColumn();
+
+    try {
+        const rows = await readSprints(supportsDescription);
+        return rows.map(serializeSprintListItem);
+    } catch (error) {
+        if (supportsDescription && isMissingColumn(error, 'description')) {
+            sprintDescriptionColumnSupport = false;
+            const rows = await readSprints(false);
+            return rows.map(serializeSprintListItem);
+        }
+        throw error;
+    }
 }
 
 async function readSprintSummary(sprintId: string) {
@@ -3152,6 +3252,9 @@ export async function createTaskAction(data: z.infer<typeof createTaskSchema>) {
         if (!access.canWrite) {
             throw new Error("You do not have permission to create tasks in this project");
         }
+        if (validated.sprintId && !access.isOwner) {
+            throw new Error("Only the project owner can assign new tasks to a sprint");
+        }
 
         if (validated.assigneeId) {
             const assigneeMember = await db.query.projectMembers.findFirst({
@@ -3159,10 +3262,13 @@ export async function createTaskAction(data: z.infer<typeof createTaskSchema>) {
                     eq(projectMembers.projectId, validated.projectId),
                     eq(projectMembers.userId, validated.assigneeId)
                 ),
-                columns: { id: true },
+                columns: { id: true, role: true },
             });
             if (!assigneeMember) {
                 throw new Error("Assignee must be a project member");
+            }
+            if (assigneeMember.role === 'viewer') {
+                throw new Error("Viewer members cannot be assigned tasks");
             }
         }
 
@@ -3308,24 +3414,76 @@ export async function createSprintAction(data: CreateSprintInput) {
 
         const access = await getProjectAccessById(validated.projectId, user.id);
         if (!access.project) throw new Error("Project not found");
-        if (!access.canWrite) {
+        if (!access.isOwner) {
             throw new Error("You do not have permission to create sprints in this project");
         }
 
-        // 2. Create Sprint
-        const [newSprint] = await db.insert(projectSprints).values({
+        const supportsDescription = await hasProjectSprintDescriptionColumn();
+        const sprintValues: typeof projectSprints.$inferInsert = {
             projectId: validated.projectId,
             name: validated.name,
             goal: validated.goal ?? null,
             startDate,
             endDate,
-            status: 'planning', // Default to planning
-        }).returning();
+            status: 'planning',
+        };
+        if (supportsDescription) {
+            sprintValues.description = validated.description ?? null;
+        }
 
-        const slugOrId = access.project.slug || validated.projectId;
-        revalidatePath(`/projects/${slugOrId}`);
-        revalidatePath(`/projects/${validated.projectId}`);
-        revalidatePath('/hub');
+        let newSprint:
+            | {
+                id: string;
+                projectId: string;
+                name: string;
+                goal: string | null;
+                description: string | null;
+                startDate: Date | null;
+                endDate: Date | null;
+                status: SprintListItem["status"];
+                createdAt: Date | null;
+                updatedAt: Date | null;
+            }
+            | undefined;
+        try {
+            [newSprint] = await db.insert(projectSprints).values(sprintValues).returning({
+                id: projectSprints.id,
+                projectId: projectSprints.projectId,
+                name: projectSprints.name,
+                goal: projectSprints.goal,
+                description: supportsDescription ? projectSprints.description : sql<string | null>`null`,
+                startDate: projectSprints.startDate,
+                endDate: projectSprints.endDate,
+                status: projectSprints.status,
+                createdAt: projectSprints.createdAt,
+                updatedAt: projectSprints.updatedAt,
+            });
+        } catch (error) {
+            if (supportsDescription && isMissingColumn(error, 'description')) {
+                sprintDescriptionColumnSupport = false;
+                delete sprintValues.description;
+                [newSprint] = await db.insert(projectSprints).values(sprintValues).returning({
+                    id: projectSprints.id,
+                    projectId: projectSprints.projectId,
+                    name: projectSprints.name,
+                    goal: projectSprints.goal,
+                    description: sql<string | null>`null`,
+                    startDate: projectSprints.startDate,
+                    endDate: projectSprints.endDate,
+                    status: projectSprints.status,
+                    createdAt: projectSprints.createdAt,
+                    updatedAt: projectSprints.updatedAt,
+                });
+            } else {
+                throw error;
+            }
+        }
+
+        if (!newSprint) {
+            throw new Error("Failed to create sprint");
+        }
+
+        await revalidateProjectPaths(validated.projectId);
 
         recordSprintMetric('project.sprint.create.result', {
             projectId: validated.projectId,
@@ -3354,6 +3512,247 @@ export async function createSprintAction(data: CreateSprintInput) {
     }
 }
 
+export async function updateSprintAction(data: UpdateSprintInput) {
+    let actorIdForMetric: string | null = null;
+    const startedAt = Date.now();
+    try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) throw new Error("Unauthorized");
+        actorIdForMetric = user.id;
+
+        const validated = updateSprintSchema.parse(data);
+        const startDate = parseSprintDateInput(validated.startDate);
+        const endDate = parseSprintDateInput(validated.endDate);
+
+        const access = await getProjectAccessById(validated.projectId, user.id);
+        if (!access.project) throw new Error("Project not found");
+        if (!access.isOwner) {
+            throw new Error("You do not have permission to edit sprints in this project");
+        }
+
+        const [existingSprint] = await db
+            .select({
+                id: projectSprints.id,
+                projectId: projectSprints.projectId,
+            })
+            .from(projectSprints)
+            .where(and(eq(projectSprints.id, validated.sprintId), eq(projectSprints.projectId, validated.projectId)))
+            .limit(1);
+
+        if (!existingSprint) {
+            throw new Error("Sprint not found");
+        }
+
+        const supportsDescription = await hasProjectSprintDescriptionColumn();
+        const sprintPatch: Partial<typeof projectSprints.$inferInsert> & { updatedAt: Date } = {
+            name: validated.name,
+            goal: validated.goal ?? null,
+            startDate,
+            endDate,
+            updatedAt: new Date(),
+        };
+        if (supportsDescription) {
+            sprintPatch.description = validated.description ?? null;
+        }
+
+        let updatedSprint:
+            | {
+                id: string;
+                projectId: string;
+                name: string;
+                goal: string | null;
+                description: string | null;
+                startDate: Date | null;
+                endDate: Date | null;
+                status: SprintListItem["status"];
+                createdAt: Date | null;
+                updatedAt: Date | null;
+            }
+            | undefined;
+        try {
+            [updatedSprint] = await db.update(projectSprints)
+                .set(sprintPatch)
+                .where(eq(projectSprints.id, validated.sprintId))
+                .returning({
+                    id: projectSprints.id,
+                    projectId: projectSprints.projectId,
+                    name: projectSprints.name,
+                    goal: projectSprints.goal,
+                    description: supportsDescription ? projectSprints.description : sql<string | null>`null`,
+                    startDate: projectSprints.startDate,
+                    endDate: projectSprints.endDate,
+                    status: projectSprints.status,
+                    createdAt: projectSprints.createdAt,
+                    updatedAt: projectSprints.updatedAt,
+                });
+        } catch (error) {
+            if (supportsDescription && isMissingColumn(error, 'description')) {
+                sprintDescriptionColumnSupport = false;
+                delete sprintPatch.description;
+                [updatedSprint] = await db.update(projectSprints)
+                    .set(sprintPatch)
+                    .where(eq(projectSprints.id, validated.sprintId))
+                    .returning({
+                        id: projectSprints.id,
+                        projectId: projectSprints.projectId,
+                        name: projectSprints.name,
+                        goal: projectSprints.goal,
+                        description: sql<string | null>`null`,
+                        startDate: projectSprints.startDate,
+                        endDate: projectSprints.endDate,
+                        status: projectSprints.status,
+                        createdAt: projectSprints.createdAt,
+                        updatedAt: projectSprints.updatedAt,
+                    });
+            } else {
+                throw error;
+            }
+        }
+
+        if (!updatedSprint) {
+            throw new Error("Failed to update sprint");
+        }
+
+        await revalidateProjectPaths(validated.projectId);
+
+        recordSprintMetric('project.sprint.update.result', {
+            projectId: validated.projectId,
+            sprintId: validated.sprintId,
+            actorId: actorIdForMetric,
+            success: true,
+            durationMs: Date.now() - startedAt,
+        });
+
+        return { success: true as const, sprint: updatedSprint };
+    } catch (error) {
+        if (error instanceof z.ZodError) {
+            return {
+                success: false as const,
+                error: error.issues[0]?.message ?? "Sprint details are invalid",
+            };
+        }
+
+        console.error("Failed to update sprint:", error);
+        recordSprintMetric('project.sprint.update.result', {
+            projectId: data.projectId,
+            sprintId: data.sprintId,
+            actorId: actorIdForMetric ?? 'unknown',
+            success: false,
+            durationMs: Date.now() - startedAt,
+            message: error instanceof Error ? error.message : 'Failed to update sprint',
+        });
+
+        return { success: false as const, error: error instanceof Error ? error.message : "Failed to update sprint" };
+    }
+}
+
+export async function deleteSprintAction(data: {
+    projectId: string;
+    sprintId: string;
+}): Promise<DeleteSprintResult> {
+    let actorIdForMetric: string | null = null;
+    const startedAt = Date.now();
+    try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) throw new Error("Unauthorized");
+        actorIdForMetric = user.id;
+
+        const validated = deleteSprintSchema.parse(data);
+        const access = await getProjectAccessById(validated.projectId, user.id);
+        if (!access.project) throw new Error("Project not found");
+        if (!access.isOwner) {
+            throw new Error("You do not have permission to delete sprints in this project");
+        }
+
+        const [sprintWithTaskCount] = await db.execute<{
+            id: string;
+            status: SprintListItem["status"];
+            affected_task_count: number;
+        }>(sql`
+            SELECT
+                s.id,
+                s.status,
+                (
+                    SELECT COUNT(*)::int
+                    FROM ${tasks} t
+                    WHERE t.sprint_id = s.id AND t.deleted_at IS NULL
+                ) AS affected_task_count
+            FROM ${projectSprints} s
+            WHERE s.id = ${validated.sprintId}
+              AND s.project_id = ${validated.projectId}
+            LIMIT 1
+        `);
+
+        if (!sprintWithTaskCount) {
+            throw new Error("Sprint not found");
+        }
+
+        if (sprintWithTaskCount.status === 'active') {
+            recordSprintMetric('project.sprint.delete.blocked', {
+                projectId: validated.projectId,
+                sprintId: validated.sprintId,
+                actorId: actorIdForMetric,
+                reason: 'active_sprint',
+                affectedTaskCount: sprintWithTaskCount.affected_task_count,
+            });
+            return {
+                success: false,
+                error: 'Active sprints must be completed before they can be deleted.',
+            };
+        }
+
+        await db.transaction(async (tx) => {
+            await tx.update(tasks)
+                .set({
+                    sprintId: null,
+                    updatedAt: new Date(),
+                })
+                .where(and(eq(tasks.projectId, validated.projectId), eq(tasks.sprintId, validated.sprintId), isNull(tasks.deletedAt)));
+
+            await tx.delete(projectSprints).where(eq(projectSprints.id, validated.sprintId));
+        });
+
+        await revalidateProjectPaths(validated.projectId);
+
+        recordSprintMetric('project.sprint.delete.result', {
+            projectId: validated.projectId,
+            sprintId: validated.sprintId,
+            actorId: actorIdForMetric,
+            success: true,
+            durationMs: Date.now() - startedAt,
+            previousStatus: sprintWithTaskCount.status,
+            affectedTaskCount: sprintWithTaskCount.affected_task_count,
+        });
+
+        return {
+            success: true,
+            deletedSprintId: validated.sprintId,
+            affectedTaskCount: sprintWithTaskCount.affected_task_count,
+            previousStatus: sprintWithTaskCount.status,
+        };
+    } catch (error) {
+        if (error instanceof z.ZodError) {
+            return {
+                success: false,
+                error: error.issues[0]?.message ?? "Sprint details are invalid",
+            };
+        }
+
+        console.error("Failed to delete sprint:", error);
+        recordSprintMetric('project.sprint.delete.result', {
+            projectId: data.projectId,
+            sprintId: data.sprintId,
+            actorId: actorIdForMetric ?? 'unknown',
+            success: false,
+            durationMs: Date.now() - startedAt,
+            message: error instanceof Error ? error.message : 'Failed to delete sprint',
+        });
+        return { success: false, error: error instanceof Error ? error.message : "Failed to delete sprint" };
+    }
+}
+
 export async function startSprintAction(sprintId: string, projectId: string) {
     let actorIdForMetric: string | null = null;
     try {
@@ -3364,7 +3763,7 @@ export async function startSprintAction(sprintId: string, projectId: string) {
 
         const access = await getProjectAccessById(projectId, user.id);
         if (!access.project) throw new Error("Project not found");
-        if (!access.canWrite) {
+        if (!access.isOwner) {
             throw new Error("You do not have permission to start sprints in this project");
         }
 
@@ -3385,9 +3784,7 @@ export async function startSprintAction(sprintId: string, projectId: string) {
             .set({ status: 'active', updatedAt: new Date() })
             .where(eq(projectSprints.id, sprintId));
 
-        const slugOrId = access.project.slug || projectId;
-        revalidatePath(`/projects/${slugOrId}`);
-        revalidatePath(`/projects/${projectId}`);
+        await revalidateProjectPaths(projectId);
 
         recordSprintMetric('project.sprint.start.result', {
             projectId,
@@ -3420,7 +3817,7 @@ export async function completeSprintAction(sprintId: string, projectId: string) 
 
         const access = await getProjectAccessById(projectId, user.id);
         if (!access.project) throw new Error("Project not found");
-        if (!access.canWrite) {
+        if (!access.isOwner) {
             throw new Error("You do not have permission to complete sprints in this project");
         }
 
@@ -3428,9 +3825,7 @@ export async function completeSprintAction(sprintId: string, projectId: string) 
             .set({ status: 'completed', updatedAt: new Date() })
             .where(eq(projectSprints.id, sprintId));
 
-        const slugOrId = access.project.slug || projectId;
-        revalidatePath(`/projects/${slugOrId}`);
-        revalidatePath(`/projects/${projectId}`);
+        await revalidateProjectPaths(projectId);
 
         recordSprintMetric('project.sprint.complete.result', {
             projectId,
@@ -3480,9 +3875,35 @@ export async function moveTaskToSprintAction(taskId: string, sprintId: string | 
             throw new Error("Only the project owner can manage sprint tasks");
         }
 
+        const [task] = await db
+            .select({
+                id: tasks.id,
+            })
+            .from(tasks)
+            .where(and(eq(tasks.id, taskId), eq(tasks.projectId, projectId)))
+            .limit(1);
+
+        if (!task) {
+            throw new Error("Task not found in this project");
+        }
+
+        if (sprintId) {
+            const [sprint] = await db
+                .select({
+                    id: projectSprints.id,
+                })
+                .from(projectSprints)
+                .where(and(eq(projectSprints.id, sprintId), eq(projectSprints.projectId, projectId)))
+                .limit(1);
+
+            if (!sprint) {
+                throw new Error("Sprint not found in this project");
+            }
+        }
+
         await db.update(tasks)
             .set({ sprintId: sprintId, updatedAt: new Date() })
-            .where(eq(tasks.id, taskId));
+            .where(and(eq(tasks.id, taskId), eq(tasks.projectId, projectId)));
 
         const slugOrId = project.slug || projectId;
         revalidatePath(`/projects/${slugOrId}`);
@@ -3514,14 +3935,18 @@ export async function deleteTaskAction(taskId: string, projectId: string) {
 
         await db.transaction(async (tx) => {
             const existingTask = await tx.query.tasks.findFirst({
-                where: eq(tasks.id, taskId),
+                where: and(eq(tasks.id, taskId), eq(tasks.projectId, projectId)),
                 columns: {
                     assigneeId: true,
                 },
             });
 
+            if (!existingTask) {
+                throw new Error("Task not found in this project");
+            }
+
             await tx.delete(tasks)
-                .where(eq(tasks.id, taskId));
+                .where(and(eq(tasks.id, taskId), eq(tasks.projectId, projectId)));
 
             await refreshWorkspaceCountersForUsers(tx, [existingTask?.assigneeId ?? null]);
         });
@@ -3533,7 +3958,7 @@ export async function deleteTaskAction(taskId: string, projectId: string) {
         return { success: true };
     } catch (error) {
         console.error("Failed to delete task:", error);
-        return { success: true, error: error instanceof Error ? error.message : "Failed to delete task" };
+        return { success: false, error: error instanceof Error ? error.message : "Failed to delete task" };
     }
 }
 

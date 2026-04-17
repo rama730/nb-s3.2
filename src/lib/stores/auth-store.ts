@@ -41,10 +41,31 @@ export const useAuthStore = create<AuthState>()(
         }),
         {
             name: 'edge-auth-store',
+            // SEC-M7: only persist the minimum needed to hydrate the UI
+            // before Supabase's cookie-based auth rehydrates. In particular:
+            //   - `session` is NEVER persisted (access/refresh tokens).
+            //   - `app_metadata` is stripped from `user` so an XSS read of
+            //     localStorage cannot identify privileged accounts by role.
+            //   - `user_metadata` is stripped so user-controlled keys cannot
+            //     widen the attack surface.
+            //   - `aud`, `confirmation_sent_at`, and other internals are
+            //     stripped for the same reason.
             partialize: (state) => ({
-                // Only persist user data, not loading states
-                user: state.user,
-                profile: state.profile,
+                user: state.user
+                    ? {
+                        id: state.user.id,
+                        email: state.user.email ?? null,
+                        created_at: state.user.created_at,
+                    }
+                    : null,
+                profile: state.profile
+                    ? {
+                        id: state.profile.id,
+                        username: state.profile.username,
+                        fullName: state.profile.fullName,
+                        avatarUrl: state.profile.avatarUrl,
+                    }
+                    : null,
             }),
         }
     )

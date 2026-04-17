@@ -18,7 +18,8 @@ export type ApiErrorCode =
   | "EMAIL_NOT_CONFIRMED"
   | "DB_ERROR"
   | "DB_UNAVAILABLE"
-  | "READINESS_DEGRADED";
+  | "READINESS_DEGRADED"
+  | "UNAVAILABLE";
 
 export function jsonSuccess<T>(
   data?: T,

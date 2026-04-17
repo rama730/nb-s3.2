@@ -8,12 +8,15 @@ import { Virtuoso } from 'react-virtuoso';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useSwipeAction } from '@/hooks/useSwipeAction';
 import { useAuth } from '@/hooks/useAuth';
+import { useOnlineUsers } from '@/hooks/useOnlineUsers';
 import type { TypingUser } from '@/hooks/useTypingChannel';
 import type { InboxConversationV2 } from '@/hooks/useMessagesV2';
 import { TypingIndicator } from '@/components/chat/TypingIndicator';
 import { OnlineIndicator } from '@/components/ui/OnlineIndicator';
 import { useMessagesV2UiStore } from '@/stores/messagesV2UiStore';
 import { cn } from '@/lib/utils';
+import { getLastMessageDeliveryState } from '@/lib/messages/delivery-state';
+import { areConversationPreviewStatesEqual } from '@/lib/messages/v2-render-state';
 import { formatMessagePreview } from './message-rendering';
 import { DeliveryIndicator } from './MessageBubbleV2';
 import { InboxListSkeletonV2 } from './MessagesSurfaceSkeletons';
@@ -103,6 +106,29 @@ export function ConversationListV2({
         }
         return result;
     }, [conversations, debouncedSearch, activeFilter]);
+
+    // Wave 2 — Presence & online dot. The full page can keep subscriptions
+    // bounded to the virtualized visible slice, but the popup favors
+    // correctness over aggressive pruning because its mount/open timing can
+    // race with Virtuoso's first `rangeChanged` callback. Observing the
+    // filtered popup rows directly keeps the green dot consistent with the
+    // messages page.
+    const visiblePeerUserIds = useMemo(() => {
+        const slice = isPopup
+            ? filteredConversations
+            : filteredConversations.slice(
+                visibleRange.startIndex,
+                visibleRange.endIndex + 1,
+            );
+        const ids: string[] = [];
+        for (const conversation of slice) {
+            if (conversation.type !== 'dm') continue;
+            const peer = conversation.participants[0];
+            if (peer?.id) ids.push(peer.id);
+        }
+        return ids;
+    }, [filteredConversations, isPopup, visibleRange.startIndex, visibleRange.endIndex]);
+    const onlineMap = useOnlineUsers(visiblePeerUserIds);
 
     useEffect(() => {
         const visibleConversationIds = filteredConversations
@@ -243,20 +269,24 @@ export function ConversationListV2({
                             </div>
                         ),
                     }}
-                    itemContent={(_, conversation) => (
-                        <ConversationItemV2
-                            conversation={conversation}
-                            selected={selectedConversationId === conversation.id}
-                            typingUsers={typingUsersByConversation?.[conversation.id] ?? EMPTY_TYPING_USERS}
-                            draft={draftsByConversation[conversation.id] || ''}
-                            onClick={onSelectConversation}
-                            isPopup={isPopup}
-                            viewerUserId={user?.id}
-                            onMute={onMuteConversation ? () => onMuteConversation(conversation.id) : undefined}
-                            onArchive={onArchiveConversation ? () => onArchiveConversation(conversation.id) : undefined}
-                            onPrefetch={onPrefetchConversation ? () => onPrefetchConversation(conversation.id) : undefined}
-                        />
-                    )}
+                    itemContent={(_, conversation) => {
+                        const peerId = conversation.type === 'dm' ? conversation.participants[0]?.id ?? null : null;
+                        return (
+                            <ConversationItemV2
+                                conversation={conversation}
+                                selected={selectedConversationId === conversation.id}
+                                typingUsers={typingUsersByConversation?.[conversation.id] ?? EMPTY_TYPING_USERS}
+                                draft={draftsByConversation[conversation.id] || ''}
+                                onClick={onSelectConversation}
+                                isPopup={isPopup}
+                                viewerUserId={user?.id}
+                                peerOnline={peerId ? onlineMap[peerId] === true : false}
+                                onMute={onMuteConversation ? () => onMuteConversation(conversation.id) : undefined}
+                                onArchive={onArchiveConversation ? () => onArchiveConversation(conversation.id) : undefined}
+                                onPrefetch={onPrefetchConversation ? () => onPrefetchConversation(conversation.id) : undefined}
+                            />
+                        );
+                    }}
                 />
             </div>
         </div>
@@ -295,18 +325,6 @@ function capabilityText(conversation: InboxConversationV2) {
     return 'No messages yet';
 }
 
-function getLastMessageDeliveryState(lastMessage: InboxConversationV2['lastMessage']) {
-    if (!lastMessage || typeof lastMessage !== 'object') {
-        return 'sent';
-    }
-
-    const metadata = 'metadata' in lastMessage
-        ? (lastMessage as { metadata?: Record<string, unknown> | null }).metadata
-        : null;
-    const deliveryState = metadata?.deliveryState;
-    return typeof deliveryState === 'string' ? deliveryState : 'sent';
-}
-
 interface ConversationItemV2Props {
     conversation: InboxConversationV2;
     selected: boolean;
@@ -315,6 +333,7 @@ interface ConversationItemV2Props {
     onClick: (conversationId: string) => void;
     isPopup: boolean;
     viewerUserId?: string;
+    peerOnline?: boolean;
     onMute?: () => void;
     onArchive?: () => void;
     onPrefetch?: () => void;
@@ -328,6 +347,7 @@ export const ConversationItemV2 = React.memo(function ConversationItemV2({
     onClick,
     isPopup,
     viewerUserId,
+    peerOnline = false,
     onMute,
     onArchive,
     onPrefetch,
@@ -364,6 +384,7 @@ export const ConversationItemV2 = React.memo(function ConversationItemV2({
                     <button
                         type="button"
                         onClick={() => onClick(conversation.id)}
+                        data-testid={`conversation-row-${conversation.id}`}
                         onMouseEnter={() => {
                             if (onPrefetch) {
                                 prefetchTimerRef.current = setTimeout(() => onPrefetch(), 200);
@@ -413,7 +434,7 @@ export const ConversationItemV2 = React.memo(function ConversationItemV2({
                                         {unread > 9 ? '9+' : unread}
                                     </span>
                                 ) : null}
-                                <OnlineIndicator online={false} size="sm" />
+                                <OnlineIndicator online={peerOnline} size="sm" />
                             </div>
 
                             <div className="min-w-0 flex-1">
@@ -436,7 +457,7 @@ export const ConversationItemV2 = React.memo(function ConversationItemV2({
                                 </div>
                                 <div className="flex items-center gap-1 truncate text-[12px] leading-5 text-zinc-500 dark:text-zinc-400">
                                     {!typingUsers.length && !draft.trim() && conversation.lastMessage && conversation.lastMessage.senderId === viewerUserId && (
-                                        <DeliveryIndicator deliveryState={getLastMessageDeliveryState(conversation.lastMessage)} />
+                                        <DeliveryIndicator deliveryState={getLastMessageDeliveryState(conversation.lastMessage) ?? 'sent'} />
                                     )}
                                     <span className="truncate">
                                         {typingUsers.length > 0
@@ -455,21 +476,26 @@ export const ConversationItemV2 = React.memo(function ConversationItemV2({
             </div>
         </div>
     );
-}, (prev, next) => {
+}, areConversationItemPropsEqual);
+
+export function areConversationItemPropsEqual(
+    prev: Readonly<ConversationItemV2Props>,
+    next: Readonly<ConversationItemV2Props>,
+) {
     return (
         prev.conversation.id === next.conversation.id &&
         prev.conversation.unreadCount === next.conversation.unreadCount &&
         prev.conversation.muted === next.conversation.muted &&
-        prev.conversation.lastMessage?.id === next.conversation.lastMessage?.id &&
-        prev.conversation.lastMessage?.content === next.conversation.lastMessage?.content &&
+        areConversationPreviewStatesEqual(prev.conversation.lastMessage, next.conversation.lastMessage) &&
         prev.selected === next.selected &&
         prev.typingUsers === next.typingUsers &&
         prev.draft === next.draft &&
         prev.onClick === next.onClick &&
         prev.isPopup === next.isPopup &&
         prev.viewerUserId === next.viewerUserId &&
+        prev.peerOnline === next.peerOnline &&
         prev.onMute === next.onMute &&
         prev.onArchive === next.onArchive &&
         prev.onPrefetch === next.onPrefetch
     );
-});
+}

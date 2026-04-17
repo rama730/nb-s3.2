@@ -8,6 +8,7 @@ import { eq, and, or, desc, asc, sql, inArray } from 'drizzle-orm';
 import { randomUUID } from 'crypto';
 import { revalidatePath } from 'next/cache';
 import { consumeRateLimit } from '@/lib/security/rate-limit';
+import { IdempotencyConflictError, runIdempotent } from '@/lib/security/idempotency';
 import {
     CONNECTION_REQUEST_HISTORY_STATUSES,
     isConnectionHistoryStatus,
@@ -17,7 +18,9 @@ import { runInFlightDeduped } from '@/lib/async/inflight-dedupe';
 import { APPLICATION_BANNER_HIDE_AFTER_MS } from '@/lib/chat/banner-lifecycle';
 import { cacheData, getCachedData, redis } from '@/lib/redis';
 import { queueCounterRefreshBestEffort } from '@/lib/workspace/counter-buffer';
-import { resolvePrivacyRelationship } from '@/lib/privacy/resolver';
+import { recordPrivacyReadEvents } from '@/lib/privacy/audit';
+import { buildViewerScopedProfileView } from '@/lib/privacy/profile-views';
+import { resolvePrivacyRelationship, resolvePrivacyRelationships } from '@/lib/privacy/resolver';
 import { inngest } from '../../inngest/client';
 
 // ============================================================================
@@ -96,6 +99,10 @@ interface ConnectionsFeedStats {
     pendingSent: number;
 }
 
+function isPresent<T>(value: T | null | undefined): value is T {
+    return value !== null && value !== undefined;
+}
+
 async function countPendingIncomingRequests(userId: string): Promise<number> {
     const [row] = await db
         .select({ count: sql<number>`count(*)` })
@@ -103,6 +110,68 @@ async function countPendingIncomingRequests(userId: string): Promise<number> {
         .where(and(eq(connections.addresseeId, userId), eq(connections.status, 'pending')));
 
     return Number(row?.count ?? 0);
+}
+
+async function applySuggestedProfilePrivacy(
+    viewerId: string,
+    items: SuggestedProfile[],
+): Promise<SuggestedProfile[]> {
+    const relationships = await resolvePrivacyRelationships(viewerId, items.map((item) => item.id));
+
+    return items.map((item, index) => {
+        const relationship = relationships.get(item.id) ?? null;
+        const scoped = buildViewerScopedProfileView({
+            profile: item as unknown as Record<string, unknown> & { id: string },
+            relationship,
+            isOwner: viewerId === item.id,
+        });
+        const locked = !!relationship && !relationship.canViewProfile;
+
+        if (!locked) {
+            return {
+                ...item,
+                username: scoped?.username ?? item.username,
+                fullName: scoped?.fullName ?? item.fullName,
+                avatarUrl: scoped?.avatarUrl ?? item.avatarUrl,
+                headline: scoped?.headline ?? item.headline,
+                location: scoped?.location ?? item.location,
+                skills: scoped?.skills ?? item.skills ?? [],
+                interests: scoped?.interests ?? item.interests ?? [],
+                openTo: scoped?.openTo ?? item.openTo ?? [],
+                lastActiveAt: typeof scoped?.lastActiveAt === 'string'
+                    ? scoped.lastActiveAt
+                    : scoped?.lastActiveAt instanceof Date
+                        ? scoped.lastActiveAt.toISOString()
+                        : item.lastActiveAt ?? null,
+                messagePrivacy: (scoped?.messagePrivacy as SuggestedProfile['messagePrivacy']) ?? item.messagePrivacy ?? null,
+                canSendMessage: relationship?.canSendMessage ?? item.canSendMessage,
+                canConnect: relationship?.canSendConnectionRequest ?? item.canConnect,
+                isLockedProfile: false,
+            };
+        }
+
+        return {
+            ...item,
+            username: scoped?.username ?? null,
+            fullName: scoped?.fullName ?? null,
+            avatarUrl: scoped?.avatarUrl ?? null,
+            headline: scoped?.headline ?? null,
+            location: scoped?.location ?? null,
+            projects: [],
+            skills: scoped?.skills ?? [],
+            interests: scoped?.interests ?? [],
+            openTo: scoped?.openTo ?? [],
+            lastActiveAt: typeof scoped?.lastActiveAt === 'string'
+                ? scoped.lastActiveAt
+                : scoped?.lastActiveAt instanceof Date
+                    ? scoped.lastActiveAt.toISOString()
+                    : null,
+            messagePrivacy: (scoped?.messagePrivacy as SuggestedProfile['messagePrivacy']) ?? null,
+            canSendMessage: relationship?.canSendMessage ?? false,
+            canConnect: relationship?.canSendConnectionRequest ?? false,
+            isLockedProfile: locked,
+        };
+    });
 }
 
 type PendingRequestsResult = {
@@ -824,6 +893,61 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
                 lastActiveAt: row.lastActiveAt?.toISOString() ?? null,
             },
         }));
+        const networkRelationships = await resolvePrivacyRelationships(
+            user.id,
+            items.map((item) => item.otherUser.id).filter(Boolean),
+        );
+        const visibleItems = items.map((item) => {
+            const relationship = networkRelationships.get(item.otherUser.id) ?? null;
+            const scoped = buildViewerScopedProfileView({
+                profile: {
+                    id: item.otherUser.id,
+                    username: item.otherUser.username,
+                    fullName: item.otherUser.fullName,
+                    avatarUrl: item.otherUser.avatarUrl,
+                    headline: item.otherUser.headline,
+                    location: item.otherUser.location,
+                    skills: item.otherUser.skills,
+                    interests: item.otherUser.interests,
+                    bio: item.otherUser.bio,
+                    openTo: item.otherUser.openTo,
+                    messagePrivacy: item.otherUser.messagePrivacy,
+                    lastActiveAt: item.otherUser.lastActiveAt,
+                },
+                relationship,
+                isOwner: false,
+            });
+
+            return {
+                ...item,
+                otherUser: {
+                    ...item.otherUser,
+                    username: scoped?.username ?? null,
+                    fullName: scoped?.fullName ?? null,
+                    avatarUrl: scoped?.avatarUrl ?? null,
+                    headline: scoped?.headline ?? null,
+                    location: scoped?.location ?? null,
+                    skills: scoped?.skills ?? [],
+                    interests: scoped?.interests ?? [],
+                    bio: scoped?.bio ?? null,
+                    openTo: scoped?.openTo ?? [],
+                    messagePrivacy: (scoped?.messagePrivacy as SuggestedProfile['messagePrivacy']) ?? null,
+                    canSendMessage: relationship?.canSendMessage ?? false,
+                    lastActiveAt: typeof scoped?.lastActiveAt === 'string'
+                        ? scoped.lastActiveAt
+                        : scoped?.lastActiveAt instanceof Date
+                            ? scoped.lastActiveAt.toISOString()
+                            : null,
+                },
+            };
+        });
+        await recordPrivacyReadEvents({
+            subjectUserIds: visibleItems.map((item) => item.otherUser.id),
+            viewerUserId: user.id,
+            eventType: 'network_profile_served',
+            route: 'connections.network',
+            metadata: { count: visibleItems.length },
+        });
 
         // 1F: Merge monthly stats into network feed response
         const now = new Date();
@@ -845,17 +969,17 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
 
         const enrichedStats = { ...stats, connectionsThisMonth, connectionsGained };
 
-        const nextCursor = hasMore && items.length > 0
+        const nextCursor = hasMore && visibleItems.length > 0
             ? sortBy === 'name'
                 ? encodeConnectionsNameCursor(
-                    items[items.length - 1].otherUser.fullName,
-                    items[items.length - 1].otherUser.username,
-                    items[items.length - 1].id,
+                    visibleItems[visibleItems.length - 1].otherUser.fullName,
+                    visibleItems[visibleItems.length - 1].otherUser.username,
+                    visibleItems[visibleItems.length - 1].id,
                 )
-                : encodeConnectionsCursor(items[items.length - 1].updatedAt, items[items.length - 1].id, sortBy)
+                : encodeConnectionsCursor(visibleItems[visibleItems.length - 1].updatedAt, visibleItems[visibleItems.length - 1].id, sortBy)
             : null;
 
-        return { success: true as const, items, hasMore, nextCursor, stats: enrichedStats };
+        return { success: true as const, items: visibleItems, hasMore, nextCursor, stats: enrichedStats };
     }
 
     if (tab === 'requests_incoming' || tab === 'requests_sent') {
@@ -1155,9 +1279,17 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
                         skills: (p.skills as string[]) ?? [],
                         interests: (p.interests as string[]) ?? [],
                     };
-                }).filter(Boolean);
+                }).filter(isPresent);
 
                 if (preComputedItems.length > 0) {
+                    const visiblePreComputedItems = await applySuggestedProfilePrivacy(user.id, preComputedItems);
+                    await recordPrivacyReadEvents({
+                        subjectUserIds: visiblePreComputedItems.map((item) => item.id),
+                        viewerUserId: user.id,
+                        eventType: 'discover_profile_served',
+                        route: 'connections.discover.precomputed',
+                        metadata: { count: visiblePreComputedItems.length },
+                    });
                     const hasMore = preComputed.length > limit;
                     // 2F: Return keyset cursor using score
                     const lastItem = preComputed[Math.min(limit - 1, preComputed.length - 1)];
@@ -1173,7 +1305,7 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
                     ]);
                     const viewerSkills = (viewerProfileRows[0]?.skills as string[]) ?? [];
                     const viewerLocation = viewerProfileRows[0]?.location ?? null;
-                    return { success: true as const, items: preComputedItems, hasMore, nextCursor, stats, viewerProjectIds, viewerSkills, viewerLocation };
+                    return { success: true as const, items: visiblePreComputedItems, hasMore, nextCursor, stats, viewerProjectIds, viewerSkills, viewerLocation };
                 }
             }
         } catch (e) {
@@ -1617,6 +1749,14 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
                     scoringBreakdown: candidate.scoringBreakdown,
                 };
             });
+            const visibleItems = await applySuggestedProfilePrivacy(user.id, items);
+            await recordPrivacyReadEvents({
+                subjectUserIds: visibleItems.map((item) => item.id),
+                viewerUserId: user.id,
+                eventType: 'discover_profile_served',
+                route: 'connections.discover.realtime',
+                metadata: { count: visibleItems.length },
+            });
 
             // 2F: Use offset pagination when custom scoring is applied; otherwise keep the lightweight keyset.
             let nextCursor: string | null = null;
@@ -1630,7 +1770,7 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
             }
             return {
                 success: true as const,
-                items,
+                items: visibleItems,
                 hasMore,
                 nextCursor,
                 stats,
@@ -1706,6 +1846,14 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
             interests: (p.interests as string[]) ?? [],
         };
     });
+    const visibleTrendingItems = await applySuggestedProfilePrivacy(user.id, trendingItems);
+    await recordPrivacyReadEvents({
+        subjectUserIds: visibleTrendingItems.map((item) => item.id),
+        viewerUserId: user.id,
+        eventType: 'discover_profile_served',
+        route: 'connections.discover.trending',
+        metadata: { count: visibleTrendingItems.length },
+    });
 
     // 2D: Use cached viewer project IDs
     const [fallbackViewerProjectIds, fallbackViewerSkillsRow] = await Promise.all([
@@ -1713,7 +1861,7 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
         db.select({ skills: profiles.skills }).from(profiles).where(eq(profiles.id, user.id)).limit(1),
     ]);
     const fallbackViewerSkills = (fallbackViewerSkillsRow[0]?.skills as string[]) ?? [];
-    const fallbackResult = { success: true as const, items: trendingItems, hasMore: trendingHasMore, nextCursor: trendingHasMore ? `o:${safeOffset + limit}` : null, stats, viewerProjectIds: fallbackViewerProjectIds, viewerSkills: fallbackViewerSkills };
+    const fallbackResult = { success: true as const, items: visibleTrendingItems, hasMore: trendingHasMore, nextCursor: trendingHasMore ? `o:${safeOffset + limit}` : null, stats, viewerProjectIds: fallbackViewerProjectIds, viewerSkills: fallbackViewerSkills };
     try {
         await cacheData(cacheKey, fallbackResult, 5 * 60); // Cache fallback for 5 mins
     } catch { /* ignore */ }
@@ -1869,6 +2017,15 @@ export async function getConnectionRequestHistory(
 
 const CONNECTION_REQUEST_IDEMPOTENCY_TTL_SECONDS = 60;
 
+// SEC-H7: Two anti-spam layers independent of the short-window per-user and
+// per-target token buckets above. The daily cap stops "phishing-style" fan-out
+// where one compromised account DMs hundreds of strangers per day; the
+// per-(sender, target) 24h hold prevents oscillating the same request until a
+// bucket refills.
+const CONNECTION_REQUEST_DAILY_CAP = 50;
+const CONNECTION_REQUEST_DAILY_WINDOW_SECONDS = 24 * 60 * 60;
+const CONNECTION_REQUEST_PER_TARGET_HOLD_SECONDS = 24 * 60 * 60;
+
 export async function sendConnectionRequest(
     addresseeId: string,
     idempotencyKey?: string,
@@ -1919,6 +2076,39 @@ export async function sendConnectionRequest(
         const requestRate = await consumeRateLimit(`connections-send:${user.id}`, 30, 60);
         if (!requestRate.allowed) {
             return await returnFailure('Too many requests. Please wait and try again.');
+        }
+        // SEC-H7: daily global cap per sender. Independent of the 30/60s bucket
+        // above, which only throttles bursts — this one enforces "you can't
+        // DM 500 strangers today."
+        const dailyRate = await consumeRateLimit(
+            `connections-send-daily:${user.id}`,
+            CONNECTION_REQUEST_DAILY_CAP,
+            CONNECTION_REQUEST_DAILY_WINDOW_SECONDS,
+        );
+        if (!dailyRate.allowed) {
+            return await returnFailure('You have sent too many connection requests today. Try again tomorrow.');
+        }
+        const targetRate = await consumeRateLimit(`connections-send-target:${user.id}:${addresseeId}`, 3, 3600);
+        if (!targetRate.allowed) {
+            return await returnFailure('You have sent too many requests to this person. Please wait before trying again.');
+        }
+
+        // SEC-H7: per-(sender, target) 24h hold. Once a request has been
+        // attempted against this target within the past 24 hours, reject any
+        // new attempt — even if the per-hour bucket has since refilled. The
+        // hold is stamped AFTER the DB write succeeds (below) so a legit
+        // retry after an auth failure still works.
+        const perTargetHoldKey = `connections-send-hold:${user.id}:${addresseeId}`;
+        if (redis) {
+            try {
+                const held = await redis.get(perTargetHoldKey);
+                if (held) {
+                    return await returnFailure('You have recently contacted this person. Please wait before trying again.');
+                }
+            } catch {
+                // Fall through — Redis hiccup should not block legit flow;
+                // the DB-level duplicate check below still enforces state.
+            }
         }
 
         // PURE OPTIMIZATION: O(1) Pre-check for already connected users (1M+ Users Scalability)
@@ -2025,6 +2215,18 @@ export async function sendConnectionRequest(
 
         if (!txResult.connectionId) {
             return await returnFailure(txResult.error || 'Failed to send request');
+        }
+
+        // SEC-H7: stamp the per-(sender, target) 24h hold now that the DB
+        // write has committed. If Redis is unavailable the DB unique constraint
+        // + REJECT_REQUEST_COOLDOWN_MS still serve as a backstop.
+        if (redis) {
+            try {
+                await redis.set(perTargetHoldKey, '1', {
+                    nx: true,
+                    ex: CONNECTION_REQUEST_PER_TARGET_HOLD_SECONDS,
+                });
+            } catch { /* ignore */ }
         }
 
         await queueCounterRefreshBestEffort([addresseeId]);
@@ -2358,8 +2560,14 @@ export async function cancelConnectionRequest(
 // ACCEPT CONNECTION REQUEST (Addressee only)
 // ============================================================================
 
+// SEC-H14: accept a caller-supplied `idempotencyKey` so a double-clicked
+// "Accept" button, a flaky network retry, or an offline queue flush never
+// produces two acceptance events for the same pending request. The key is
+// scoped to (user, connectionId) so a key cannot replay across different
+// connections or across users.
 export async function acceptConnectionRequest(
-    connectionId: string
+    connectionId: string,
+    opts?: { idempotencyKey?: string }
 ): Promise<{ success: boolean; error?: string }> {
     try {
         const user = await getAuthUser();
@@ -2369,59 +2577,73 @@ export async function acceptConnectionRequest(
             return { success: false, error: 'Too many actions. Please wait and try again.' };
         }
 
-        const accepted = await db.transaction(async (tx) => {
-            const updated = await tx
-                .update(connections)
-                .set({
-                    status: 'accepted',
-                    updatedAt: new Date(),
-                })
-                .where(
-                    and(
-                        eq(connections.id, connectionId),
-                        eq(connections.addresseeId, user.id),
-                        eq(connections.status, 'pending')
-                    )
-                )
-                .returning({
-                    requesterId: connections.requesterId,
-                    addresseeId: connections.addresseeId,
+        const { result } = await runIdempotent<{ success: boolean; error?: string }>(
+            {
+                namespace: 'connections.accept',
+                scopeId: `${user.id}:${connectionId}`,
+                key: opts?.idempotencyKey,
+            },
+            async () => {
+                const accepted = await db.transaction(async (tx) => {
+                    const updated = await tx
+                        .update(connections)
+                        .set({
+                            status: 'accepted',
+                            updatedAt: new Date(),
+                        })
+                        .where(
+                            and(
+                                eq(connections.id, connectionId),
+                                eq(connections.addresseeId, user.id),
+                                eq(connections.status, 'pending')
+                            )
+                        )
+                        .returning({
+                            requesterId: connections.requesterId,
+                            addresseeId: connections.addresseeId,
+                        });
+
+                    if (updated.length === 0) return null;
+
+                    await applyConnectionsCountDelta(
+                        tx,
+                        [updated[0].requesterId, updated[0].addresseeId],
+                        1
+                    );
+
+                    return updated[0];
                 });
 
-            if (updated.length === 0) return null;
+                if (!accepted) {
+                    return { success: false, error: 'Request not found' };
+                }
 
-            await applyConnectionsCountDelta(
-                tx,
-                [updated[0].requesterId, updated[0].addresseeId],
-                1
-            );
+                await queueCounterRefreshBestEffort([accepted.requesterId, accepted.addresseeId]);
+                await invalidateDiscoverCacheForUsers([accepted.requesterId, accepted.addresseeId]);
 
-            return updated[0];
-        });
+                // PURE OPTIMIZATION: Non-blocking sync to Redis Edge Cache + Suggestion Pre-computation + Rolling Stats
+                const { incrementConnectionStat } = await import('@/lib/connections/connection-stats-counters');
+                Promise.allSettled([
+                    syncConnectionsToRedis(accepted.requesterId),
+                    syncConnectionsToRedis(accepted.addresseeId),
+                    inngest.send({ name: 'workspace/connections.sync_suggestions', data: { userId: accepted.requesterId } }),
+                    inngest.send({ name: 'workspace/connections.sync_suggestions', data: { userId: accepted.addresseeId } }),
+                    // Phase 6C: Rolling window stat counters
+                    incrementConnectionStat(accepted.requesterId, 'this_month'),
+                    incrementConnectionStat(accepted.addresseeId, 'this_month'),
+                    incrementConnectionStat(accepted.addresseeId, 'gained'),
+                ]).catch(console.error);
 
-        if (!accepted) {
-            return { success: false, error: 'Request not found' };
-        }
+                await revalidateConnectionsPaths();
+                return { success: true };
+            },
+        );
 
-        await queueCounterRefreshBestEffort([accepted.requesterId, accepted.addresseeId]);
-        await invalidateDiscoverCacheForUsers([accepted.requesterId, accepted.addresseeId]);
-        
-        // PURE OPTIMIZATION: Non-blocking sync to Redis Edge Cache + Suggestion Pre-computation + Rolling Stats
-        const { incrementConnectionStat } = await import('@/lib/connections/connection-stats-counters');
-        Promise.allSettled([
-            syncConnectionsToRedis(accepted.requesterId),
-            syncConnectionsToRedis(accepted.addresseeId),
-            inngest.send({ name: 'workspace/connections.sync_suggestions', data: { userId: accepted.requesterId } }),
-            inngest.send({ name: 'workspace/connections.sync_suggestions', data: { userId: accepted.addresseeId } }),
-            // Phase 6C: Rolling window stat counters
-            incrementConnectionStat(accepted.requesterId, 'this_month'),
-            incrementConnectionStat(accepted.addresseeId, 'this_month'),
-            incrementConnectionStat(accepted.addresseeId, 'gained'),
-        ]).catch(console.error);
-
-        await revalidateConnectionsPaths();
-        return { success: true };
+        return result;
     } catch (error) {
+        if (error instanceof IdempotencyConflictError) {
+            return { success: false, error: 'Request already in progress. Please wait.' };
+        }
         console.error('Error accepting request:', error);
         return { success: false, error: 'Failed to accept request' };
     }
@@ -2432,9 +2654,13 @@ export async function acceptConnectionRequest(
 // ============================================================================
 
 // 2C: Add optional reason parameter; 2T: Add serverNow for clock drift fix
+// SEC-H14: accept an optional idempotencyKey so rapid double-submits don't
+// produce duplicate rejection rows. The scope includes the connectionId so
+// two different connections can't share a replay window.
 export async function rejectConnectionRequest(
     connectionId: string,
     reason?: string,
+    opts?: { idempotencyKey?: string },
 ): Promise<{ success: boolean; error?: string; undoUntil?: string; serverNow?: string }> {
     try {
         const user = await getAuthUser();
@@ -2448,40 +2674,59 @@ export async function rejectConnectionRequest(
             return { success: false, error: 'Too many actions. Please wait and try again.' };
         }
 
-        const [rejected] = await db
-            .update(connections)
-            .set({
-                status: 'rejected',
-                rejectionReason: reason ?? null,
-                updatedAt: new Date(),
-            })
-            .where(
-                and(
-                    eq(connections.id, connectionId),
-                    eq(connections.addresseeId, user.id),
-                    eq(connections.status, 'pending')
-                )
-            )
-            .returning({
-                id: connections.id,
-                requesterId: connections.requesterId,
-                addresseeId: connections.addresseeId,
-                updatedAt: connections.updatedAt,
-            });
+        const { result } = await runIdempotent<{
+            success: boolean;
+            error?: string;
+            undoUntil?: string;
+            serverNow?: string;
+        }>(
+            {
+                namespace: 'connections.reject',
+                scopeId: `${user.id}:${connectionId}`,
+                key: opts?.idempotencyKey,
+            },
+            async () => {
+                const [rejected] = await db
+                    .update(connections)
+                    .set({
+                        status: 'rejected',
+                        rejectionReason: reason ?? null,
+                        updatedAt: new Date(),
+                    })
+                    .where(
+                        and(
+                            eq(connections.id, connectionId),
+                            eq(connections.addresseeId, user.id),
+                            eq(connections.status, 'pending')
+                        )
+                    )
+                    .returning({
+                        id: connections.id,
+                        requesterId: connections.requesterId,
+                        addresseeId: connections.addresseeId,
+                        updatedAt: connections.updatedAt,
+                    });
 
-        if (!rejected) {
-            return { success: false, error: 'Request not found' };
-        }
+                if (!rejected) {
+                    return { success: false, error: 'Request not found' };
+                }
 
-        await queueCounterRefreshBestEffort([rejected.addresseeId]);
-        await invalidateDiscoverCacheForUsers([rejected.requesterId, rejected.addresseeId]);
-        await revalidateConnectionsPaths();
-        return {
-            success: true,
-            undoUntil: new Date(new Date(rejected.updatedAt).getTime() + 15_000).toISOString(),
-            serverNow: new Date().toISOString(),
-        };
+                await queueCounterRefreshBestEffort([rejected.addresseeId]);
+                await invalidateDiscoverCacheForUsers([rejected.requesterId, rejected.addresseeId]);
+                await revalidateConnectionsPaths();
+                return {
+                    success: true,
+                    undoUntil: new Date(new Date(rejected.updatedAt).getTime() + 15_000).toISOString(),
+                    serverNow: new Date().toISOString(),
+                };
+            },
+        );
+
+        return result;
     } catch (error) {
+        if (error instanceof IdempotencyConflictError) {
+            return { success: false, error: 'Request already in progress. Please wait.' };
+        }
         console.error('Error rejecting request:', error);
         return { success: false, error: 'Failed to reject request' };
     }

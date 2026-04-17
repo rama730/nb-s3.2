@@ -6,6 +6,13 @@ import { createClient } from "@/lib/supabase/server";
 import { runInFlightDeduped } from "@/lib/async/inflight-dedupe";
 import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { z } from "zod";
+import { getProjectAccessById } from "@/lib/data/project-access";
+
+const addProjectsInputSchema = z.object({
+    collectionId: z.string().uuid(),
+    projectIds: z.array(z.string().uuid()).min(1).max(100),
+});
 
 export async function createCollectionAction(name: string) {
     try {
@@ -67,19 +74,36 @@ export async function addProjectsToCollectionAction(collectionId: string, projec
             return { success: false, error: "Unauthorized" };
         }
 
-        if (!projectIds.length) return { success: true };
+        const validated = addProjectsInputSchema.parse({
+            collectionId,
+            projectIds,
+        });
 
         // Verify ownership
         const [collection] = await db.select().from(collections)
-            .where(and(eq(collections.id, collectionId), eq(collections.ownerId, user.id)))
+            .where(and(eq(collections.id, validated.collectionId), eq(collections.ownerId, user.id)))
             .limit(1);
 
         if (!collection) {
             return { success: false, error: "Collection not found or unauthorized" };
         }
 
-        const values = projectIds.map(projectId => ({
-            collectionId,
+        const accessByProject = await Promise.all(
+            validated.projectIds.map(async (projectId) => ({
+                projectId,
+                access: await getProjectAccessById(projectId, user.id),
+            }))
+        );
+        const readableProjectIds = accessByProject
+            .filter(({ access }) => access.canRead)
+            .map(({ projectId }) => projectId);
+
+        if (!readableProjectIds.length) {
+            return { success: false, error: "No readable projects were provided" };
+        }
+
+        const values = readableProjectIds.map(projectId => ({
+            collectionId: validated.collectionId,
             projectId,
         }));
 

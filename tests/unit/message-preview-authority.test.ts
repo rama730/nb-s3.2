@@ -44,7 +44,10 @@ test('buildConversationLastMessageSnapshot normalizes a thread preview snapshot'
         type: 'text',
         senderId: 'user-2',
         createdAt: '2026-04-07T10:02:00.000Z',
-        metadata: null,
+        metadata: {
+            deliveryState: 'read',
+            deliveryCounts: { total: 1, delivered: 1, read: 1 },
+        },
     });
 
     assert.equal(snapshot?.id, 'message-2');
@@ -52,6 +55,10 @@ test('buildConversationLastMessageSnapshot normalizes a thread preview snapshot'
     assert.equal(snapshot?.senderId, 'user-2');
     assert.equal(snapshot?.type, 'text');
     assert.equal(snapshot?.createdAt.toISOString(), '2026-04-07T10:02:00.000Z');
+    assert.deepEqual(snapshot?.metadata, {
+        deliveryState: 'read',
+        deliveryCounts: { total: 1, delivered: 1, read: 1 },
+    });
 });
 
 test('shouldReplaceConversationLastMessage preserves chronological authority', () => {

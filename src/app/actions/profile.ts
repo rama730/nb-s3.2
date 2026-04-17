@@ -16,6 +16,7 @@ import {
 import { clearProfileCache } from '@/lib/services/profile-service'
 import { runInFlightDeduped } from '@/lib/async/inflight-dedupe'
 import { normalizeAndValidateFileSize, normalizeAndValidateMimeType } from '@/lib/upload/security'
+import { cleanupExpiredUploadIntents, createUploadIntent, finalizeUploadIntent } from '@/lib/upload/upload-intents'
 import { resolvePrivacyRelationship } from '@/lib/privacy/resolver'
 import { logger } from '@/lib/logger'
 import { UsernamePersistenceError, getUsernameAvailability, mapUsernamePersistenceError } from '@/lib/usernames/service'
@@ -34,6 +35,7 @@ export type ProfileUpdateErrorCode =
     | 'USERNAME_RESERVED'
     | 'PROFILE_CONFLICT'
     | 'PROFILE_UPDATE_FAILED'
+    | 'UPLOAD_RATE_LIMITED'
 
 export type UpdateProfileActionResult =
     | { success: true; updatedAt: string }
@@ -43,9 +45,12 @@ const PROFILE_UPDATE_LIMIT = 30
 const PROFILE_UPDATE_WINDOW_SECONDS = 60
 const USERNAME_CHANGE_LIMIT = 5
 const USERNAME_CHANGE_WINDOW_SECONDS = 24 * 60 * 60
-const USERNAME_CHANGE_COOLDOWN_MS = 14 * 24 * 60 * 60 * 1000
+// SEC-L9: 30-day cooldown between successful username changes. Prevents
+// rapid handle-squatting and impersonation cycles while still allowing one
+// legitimate rename per month for users who mistype or rebrand.
+const USERNAME_CHANGE_COOLDOWN_MS = 30 * 24 * 60 * 60 * 1000
 const PROFILE_IMAGE_UPLOAD_MAX_FILE_BYTES = Number.parseInt(
-    process.env.PROFILE_IMAGE_UPLOAD_MAX_FILE_BYTES || `${10 * 1024 * 1024}`,
+    process.env.PROFILE_IMAGE_UPLOAD_MAX_FILE_BYTES || `${2 * 1024 * 1024}`,
     10,
 )
 const ALLOWED_PROFILE_IMAGE_MIME_TYPES = new Set([
@@ -55,7 +60,22 @@ const ALLOWED_PROFILE_IMAGE_MIME_TYPES = new Set([
     'image/gif',
 ])
 
-type ProfileImageUploadErrorCode = 'UNAUTHORIZED' | 'VALIDATION_ERROR' | 'UPLOAD_URL_FAILED'
+// SEC-H6 / SEC-H12: per-kind per-user throttle so a compromised session can't
+// storage-bomb the `avatars` bucket or abuse the avatar/banner pipeline as a
+// secondary payload channel. Caps are tight (10/hour) because legitimate use
+// is rare (users change avatars once, then never). The pre-decode size cap
+// above (`PROFILE_IMAGE_UPLOAD_MAX_FILE_BYTES`) was dropped from 10MB → 2MB
+// so a compromised client can't smuggle 10MB payloads through the intent
+// pipeline.
+const PROFILE_IMAGE_UPLOAD_LIMIT = 10
+const PROFILE_IMAGE_UPLOAD_WINDOW_SECONDS = 60 * 60
+
+type ProfileImageUploadErrorCode =
+    | 'UNAUTHORIZED'
+    | 'VALIDATION_ERROR'
+    | 'UPLOAD_URL_FAILED'
+    | 'FINALIZE_FAILED'
+    | 'RATE_LIMITED'
 
 function profileImageExtensionFromMimeType(mimeType: string): string {
     switch (mimeType) {
@@ -77,13 +97,30 @@ export async function createProfileImageUploadUrlAction(input: {
     sizeBytes: number
     kind?: 'avatar' | 'banner'
 }): Promise<
-    | { success: true; uploadUrl: string; publicUrl: string; storagePath: string; contentType: string }
+    | { success: true; uploadUrl: string; uploadIntentId: string; storagePath: string; contentType: string }
     | { success: false; error: string; errorCode: ProfileImageUploadErrorCode }
 > {
     const supabase = await createClient()
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) {
         return { success: false, error: 'Unauthorized', errorCode: 'UNAUTHORIZED' }
+    }
+
+    // SEC-H6: per-kind throttle BEFORE we do any work. We consume a token
+    // for each URL creation attempt — a legitimate user only needs one per
+    // change; anything beyond the bucket size is almost certainly abuse.
+    const kind = input.kind === 'banner' ? 'banner' : 'avatar'
+    const { allowed: uploadAllowed } = await consumeRateLimit(
+        `upload:${kind}:user:${user.id}`,
+        PROFILE_IMAGE_UPLOAD_LIMIT,
+        PROFILE_IMAGE_UPLOAD_WINDOW_SECONDS,
+    )
+    if (!uploadAllowed) {
+        return {
+            success: false,
+            error: 'Too many upload attempts. Please try again later.',
+            errorCode: 'RATE_LIMITED',
+        }
     }
 
     let normalizedMimeType = ''
@@ -96,7 +133,7 @@ export async function createProfileImageUploadUrlAction(input: {
             input.sizeBytes,
             Number.isFinite(PROFILE_IMAGE_UPLOAD_MAX_FILE_BYTES) && PROFILE_IMAGE_UPLOAD_MAX_FILE_BYTES > 0
                 ? PROFILE_IMAGE_UPLOAD_MAX_FILE_BYTES
-                : 10 * 1024 * 1024,
+                : 2 * 1024 * 1024,
             input.kind === 'banner' ? 'Banner image' : 'Avatar image',
         )
     } catch (error) {
@@ -110,22 +147,112 @@ export async function createProfileImageUploadUrlAction(input: {
     const extension = profileImageExtensionFromMimeType(normalizedMimeType)
     const storagePath = `${user.id}/${Date.now()}-${randomUUID()}.${extension}`
     const admin = await createAdminClient()
+    const intent = await createUploadIntent({
+        userId: user.id,
+        bucket: 'avatars',
+        storageKey: storagePath,
+        scope: 'profile_image',
+        kind: input.kind === 'banner' ? 'banner' : 'avatar',
+        expectedMimeType: normalizedMimeType,
+        expectedSize: input.sizeBytes,
+        metadata: { kind: input.kind === 'banner' ? 'banner' : 'avatar' },
+    })
     const { data, error } = await admin.storage.from('avatars').createSignedUploadUrl(storagePath, { upsert: false })
     if (error || !data?.signedUrl) {
         return {
             success: false,
-            error: error?.message || 'Failed to create upload URL',
+            error: 'Failed to create upload URL',
             errorCode: 'UPLOAD_URL_FAILED',
         }
     }
 
-    const { data: { publicUrl } } = admin.storage.from('avatars').getPublicUrl(storagePath)
     return {
         success: true,
         uploadUrl: data.signedUrl,
-        publicUrl,
+        uploadIntentId: intent.id,
         storagePath,
         contentType: normalizedMimeType,
+    }
+}
+
+export async function finalizeProfileImageUploadAction(input: {
+    uploadIntentId: string
+}): Promise<
+    | { success: true; publicUrl: string; storagePath: string; uploadIntentId: string }
+    | { success: false; error: string; errorCode: ProfileImageUploadErrorCode }
+> {
+    const supabase = await createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) {
+        return { success: false, error: 'Unauthorized', errorCode: 'UNAUTHORIZED' }
+    }
+
+    // SEC-H6: defence-in-depth — cap finalize storms. Legit use finalizes
+    // exactly once per `createProfileImageUploadUrlAction` call, so the same
+    // 10/hour budget is more than sufficient here.
+    const { allowed: finalizeAllowed } = await consumeRateLimit(
+        `upload:profile-image:finalize:user:${user.id}`,
+        PROFILE_IMAGE_UPLOAD_LIMIT,
+        PROFILE_IMAGE_UPLOAD_WINDOW_SECONDS,
+    )
+    if (!finalizeAllowed) {
+        return {
+            success: false,
+            error: 'Too many upload attempts. Please try again later.',
+            errorCode: 'RATE_LIMITED',
+        }
+    }
+
+    try {
+        const intent = await finalizeUploadIntent({
+            intentId: input.uploadIntentId,
+            bucket: 'avatars',
+            userId: user.id,
+            expectedScope: 'profile_image',
+        })
+        const admin = await createAdminClient()
+        const { data: { publicUrl } } = admin.storage.from('avatars').getPublicUrl(intent.storageKey)
+        return {
+            success: true,
+            publicUrl,
+            storagePath: intent.storageKey,
+            uploadIntentId: intent.id,
+        }
+    } catch (error) {
+        logger.error('profile.image.finalize_failed', {
+            module: 'profile',
+            userId: user.id,
+            uploadIntentId: input.uploadIntentId,
+            error: error instanceof Error ? error.message : String(error),
+        })
+        return {
+            success: false,
+            error: 'Failed to finalize image upload',
+            errorCode: 'FINALIZE_FAILED',
+        }
+    }
+}
+
+export async function cleanupExpiredProfileImageUploadIntentsAction(): Promise<
+    | { success: true; removedObjects: number; expiredIntents: number }
+    | { success: false; error: string }
+> {
+    const supabase = await createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) {
+        return { success: false, error: 'Unauthorized' }
+    }
+
+    try {
+        const result = await cleanupExpiredUploadIntents()
+        return { success: true, ...result }
+    } catch (error) {
+        logger.error('profile.image.cleanup_failed', {
+            module: 'profile',
+            userId: user.id,
+            error: error instanceof Error ? error.message : String(error),
+        })
+        return { success: false, error: 'Failed to clean expired uploads' }
     }
 }
 

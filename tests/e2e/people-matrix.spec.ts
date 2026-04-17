@@ -13,14 +13,14 @@ test.describe("People matrix @critical", () => {
     await login(page);
     await page.goto("/people?tab=discover");
 
-    await expect(page.getByRole("button", { name: "Discover" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Network" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Requests" })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "Discover" })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "Network" })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "Requests" })).toBeVisible();
 
-    await page.getByRole("button", { name: "Network" }).click();
+    await page.getByRole("tab", { name: "Network" }).click();
     await expect(page.getByLabel("Search connections")).toBeVisible({ timeout: 15000 });
 
-    await page.getByRole("button", { name: "Requests" }).click();
+    await page.getByRole("tab", { name: "Requests" }).click();
     await expect(page.getByText(/Incoming Requests|Sent Requests|Project Applications|No pending requests/i).first()).toBeVisible({ timeout: 15000 });
 
     await monitor.assertNoViolations();

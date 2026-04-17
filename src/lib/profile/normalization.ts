@@ -4,6 +4,8 @@
  * form state, server payload, and optimistic update transformations.
  */
 
+import { isSafeHttpUrl } from '@/lib/security/urls';
+
 // ── Form State (used by EditProfileModal) ───────────────────────────
 
 export type ProfileFormState = {
@@ -166,10 +168,15 @@ export function normalizeSocialLinks(
     const out: NormalizedSocialLink[] = [];
     const seen = new Set<string>();
 
+    // SEC-M12: rendering-time defense in depth. The server-side zod schema
+    // already passes socialLinks through `isSafeHttpUrl`, but stale rows,
+    // legacy imports, and future data sources can sneak unsafe URLs in. Run
+    // the same gate here so `<a href={link.url}>` can never render a
+    // javascript:/data:/private-host URL.
     const add = (label: string, url: string) => {
         const u = String(url || "").trim();
         if (!u || seen.has(u)) return;
-        if (!/^https?:\/\//i.test(u)) return;
+        if (!isSafeHttpUrl(u)) return;
         const l = String(label || "Link").trim();
         const formatted = l.charAt(0).toUpperCase() + l.slice(1);
         seen.add(u);

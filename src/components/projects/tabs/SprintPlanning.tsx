@@ -15,13 +15,16 @@ import { SprintTimelineToolbar } from "@/components/projects/tabs/sprint/SprintT
 import {
   completeSprintAction,
   createSprintAction,
+  deleteSprintAction,
   fetchProjectSprintDetailAction,
   startSprintAction,
+  updateSprintAction,
 } from "@/app/actions/project";
 import { useSprintDetail, SPRINT_DETAIL_QUERY_KEY } from "@/hooks/hub/useProjectData";
 import { useSprintViewPreferences } from "@/hooks/hub/useSprintViewPreferences";
 import { queryKeys } from "@/lib/query-keys";
 import {
+  buildProjectSprintTabHref,
   buildProjectSprintDetailHref,
   parseSprintRouteState,
   type SprintDetailPayload,
@@ -33,6 +36,11 @@ import {
   type SprintTimelineMode,
 } from "@/lib/projects/sprint-detail";
 import {
+  insertSprintIntoInfiniteData,
+  patchSprintMetadataInfiniteData,
+  removeSprintFromInfiniteData,
+} from "@/lib/projects/sprint-cache";
+import {
   buildSprintShellSlice,
   buildSprintSummarySlice,
   buildSprintTimelineSlice,
@@ -40,7 +48,12 @@ import {
   resolveSprintViewState,
 } from "@/lib/projects/sprint-presentation";
 import { recordSprintMetric } from "@/lib/projects/sprint-observability";
-import type { CreateSprintDraftInput } from "@/lib/projects/sprints";
+import {
+  buildSprintDeleteImpact,
+  type CreateSprintDraftInput,
+  type SprintDeleteImpact,
+  type SprintEditorMode,
+} from "@/lib/projects/sprints";
 
 interface SprintPlanningProps {
   projectId: string;
@@ -56,6 +69,13 @@ export type Sprint = SprintListItem;
 export type SprintTask = SprintTaskTimelineEntity;
 
 const DRAWER_PREFETCH_ROW_LIMIT = 80;
+
+type SprintEditorState =
+  | {
+      mode: SprintEditorMode;
+      sprint: SprintListItem | null;
+    }
+  | null;
 
 function dedupeDrawerPreviews(previews: SprintDrawerPreview[]) {
   const seen = new Set<string>();
@@ -91,7 +111,7 @@ export default function SprintPlanning({
   const compareMetricKeyRef = useRef<string | null>(null);
   const drawerPrefetchKeyRef = useRef<string | null>(null);
 
-  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [editorState, setEditorState] = useState<SprintEditorState>(null);
   const [isMutatingLifecycle, setIsMutatingLifecycle] = useState(false);
 
   const routeState = useMemo(() => parseSprintRouteState(searchParams), [searchParams]);
@@ -141,6 +161,14 @@ export default function SprintPlanning({
     isMember: isOwnerOrMember && !isOwner,
     memberRole: isOwner ? "owner" : isOwnerOrMember ? "member" : "viewer",
   };
+  const isEditorOpen = editorState !== null;
+  const deleteImpact: SprintDeleteImpact | null =
+    editorState?.mode === "edit" && editorState.sprint && detail?.summary && selectedSprintId === editorState.sprint.id
+      ? buildSprintDeleteImpact({
+          sprint: editorState.sprint,
+          affectedTaskCount: detail.summary.totalTasks,
+        })
+      : null;
 
   const timelineView = useMemo(
     () =>
@@ -246,14 +274,33 @@ export default function SprintPlanning({
     [projectId, queryClient, syncSliceCaches],
   );
 
-  const patchSprintList = useCallback(
-    (updater: (sprints: SprintListItem[]) => SprintListItem[]) => {
-      patchSprintDetailCache((page) => ({
-        ...page,
-        sprints: updater(page.sprints),
-      }));
+  const patchSprintRootData = useCallback(
+    (updater: (existing: unknown) => unknown) => {
+      queryClient.setQueriesData(
+        { queryKey: queryKeys.project.detail.sprintDetailRoot(projectId) },
+        (existing: unknown) => {
+          const next = updater(existing);
+          if (
+            next &&
+            typeof next === "object" &&
+            "pages" in next &&
+            Array.isArray((next as { pages: unknown }).pages)
+          ) {
+            const infiniteData = next as { pages: SprintDetailPayload[]; pageParams: unknown[] };
+            const head = infiniteData.pages[0];
+            if (head) {
+              syncSliceCaches(
+                head,
+                infiniteData.pages.flatMap((page) => page.rows),
+                dedupeDrawerPreviews(infiniteData.pages.flatMap((page) => page.drawerPreviews)),
+              );
+            }
+          }
+          return next;
+        },
+      );
     },
-    [patchSprintDetailCache],
+    [projectId, queryClient, syncSliceCaches],
   );
 
   const patchSelectedSprintStatus = useCallback(
@@ -272,8 +319,13 @@ export default function SprintPlanning({
           rows: nextRows,
         };
       });
+      queryClient.setQueryData(queryKeys.project.detail.sprints(projectId), (existing: unknown) =>
+        Array.isArray(existing)
+          ? existing.map((sprint) => (sprint?.id === sprintId ? { ...sprint, status } : sprint))
+          : existing,
+      );
     },
-    [patchSprintDetailCache],
+    [patchSprintDetailCache, projectId, queryClient],
   );
 
   const prefetchSprintDetail = useCallback(
@@ -386,28 +438,51 @@ export default function SprintPlanning({
     [projectId, queryClient, rows.length],
   );
 
+  const toSprintListItem = useCallback((sprint: {
+    id: string;
+    projectId: string;
+    name: string;
+    goal: string | null;
+    description?: string | null;
+    startDate: Date | string | null;
+    endDate: Date | string | null;
+    status: SprintListItem["status"];
+    createdAt: Date | string | null;
+    updatedAt: Date | string | null;
+  }): SprintListItem => ({
+    id: sprint.id,
+    projectId: sprint.projectId,
+    name: sprint.name,
+    goal: sprint.goal ?? null,
+    description: sprint.description ?? null,
+    startDate: typeof sprint.startDate === "string" ? sprint.startDate : sprint.startDate?.toISOString?.() ?? null,
+    endDate: typeof sprint.endDate === "string" ? sprint.endDate : sprint.endDate?.toISOString?.() ?? null,
+    status: sprint.status,
+    createdAt: typeof sprint.createdAt === "string" ? sprint.createdAt : sprint.createdAt?.toISOString?.() ?? null,
+    updatedAt: typeof sprint.updatedAt === "string" ? sprint.updatedAt : sprint.updatedAt?.toISOString?.() ?? null,
+  }), []);
+
   const handleCreateSprint = useCallback(
     async (data: CreateSprintDraftInput) => {
+      const startedAt = Date.now();
       try {
         const result = await createSprintAction({ ...data, projectId });
         if (!result.success || !result.sprint) {
           return { success: false as const, error: result.error };
         }
 
-        const nextSprint: SprintListItem = {
-          id: result.sprint.id,
-          projectId: result.sprint.projectId,
-          name: result.sprint.name,
-          goal: result.sprint.goal ?? null,
-          startDate: result.sprint.startDate?.toISOString?.() ?? null,
-          endDate: result.sprint.endDate?.toISOString?.() ?? null,
-          status: result.sprint.status,
-          createdAt: result.sprint.createdAt?.toISOString?.() ?? null,
-          updatedAt: result.sprint.updatedAt?.toISOString?.() ?? null,
-        };
-
-        patchSprintList((existing) => [nextSprint, ...existing.filter((sprint) => sprint.id !== nextSprint.id)]);
+        const nextSprint = toSprintListItem(result.sprint);
+        patchSprintRootData((existing) => insertSprintIntoInfiniteData(existing, nextSprint));
+        queryClient.setQueryData(queryKeys.project.detail.sprints(projectId), (existing: unknown) =>
+          Array.isArray(existing) ? [nextSprint, ...existing.filter((item) => item?.id !== nextSprint.id)] : [nextSprint],
+        );
         toast.success("Sprint created");
+        recordSprintMetric("project.sprint.editor.create", {
+          projectId,
+          sprintId: nextSprint.id,
+          success: true,
+          durationMs: Date.now() - startedAt,
+        });
 
         await queryClient.invalidateQueries({ queryKey: queryKeys.project.detail.sprintDetailRoot(projectId) });
         router.push(
@@ -418,14 +493,177 @@ export default function SprintPlanning({
           { scroll: false },
         );
         return { success: true as const };
-      } catch {
+      } catch (error) {
+        recordSprintMetric("project.sprint.editor.create", {
+          projectId,
+          success: false,
+          durationMs: Date.now() - startedAt,
+          message: error instanceof Error ? error.message : "Failed to create sprint",
+        });
         return {
           success: false as const,
-          error: "Failed to create sprint",
+          error: error instanceof Error ? error.message : "Failed to create sprint",
         };
       }
     },
-    [patchSprintList, projectId, projectSlug, queryClient, resolvedViewState.filter, resolvedViewState.mode, router],
+    [patchSprintRootData, projectId, projectSlug, queryClient, resolvedViewState.filter, resolvedViewState.mode, router, toSprintListItem],
+  );
+
+  const handleUpdateSprint = useCallback(
+    async (data: CreateSprintDraftInput) => {
+      if (!editorState?.sprint) {
+        return { success: false as const, error: "Sprint not found" };
+      }
+
+      const startedAt = Date.now();
+      const previousStates = queryClient.getQueriesData({ queryKey: queryKeys.project.detail.sprintDetailRoot(projectId) });
+      const previousSprintList = queryClient.getQueryData(queryKeys.project.detail.sprints(projectId));
+      const updatedSprint: SprintListItem = {
+        ...editorState.sprint,
+        name: data.name,
+        goal: data.goal ?? null,
+        description: data.description ?? null,
+        startDate: data.startDate,
+        endDate: data.endDate,
+      };
+
+      patchSprintRootData((existing) => patchSprintMetadataInfiniteData(existing, updatedSprint));
+      queryClient.setQueryData(queryKeys.project.detail.sprints(projectId), (existing: unknown) =>
+        Array.isArray(existing)
+          ? existing.map((sprint) => (sprint?.id === updatedSprint.id ? updatedSprint : sprint))
+          : existing,
+      );
+
+      try {
+        const result = await updateSprintAction({
+          projectId,
+          sprintId: editorState.sprint.id,
+          ...data,
+        });
+
+        if (!result.success || !result.sprint) {
+          throw new Error(result.error ?? "Failed to update sprint");
+        }
+
+        const nextSprint = toSprintListItem(result.sprint);
+        patchSprintRootData((existing) => patchSprintMetadataInfiniteData(existing, nextSprint));
+        queryClient.setQueryData(queryKeys.project.detail.sprints(projectId), (existing: unknown) =>
+          Array.isArray(existing)
+            ? existing.map((sprint) => (sprint?.id === nextSprint.id ? nextSprint : sprint))
+            : existing,
+        );
+        toast.success("Sprint updated");
+        recordSprintMetric("project.sprint.editor.update", {
+          projectId,
+          sprintId: editorState.sprint.id,
+          success: true,
+          durationMs: Date.now() - startedAt,
+        });
+        await queryClient.invalidateQueries({ queryKey: queryKeys.project.detail.sprintDetailRoot(projectId) });
+        return { success: true as const };
+      } catch (error) {
+        for (const [queryKey, snapshot] of previousStates) {
+          queryClient.setQueryData(queryKey, snapshot);
+        }
+        queryClient.setQueryData(queryKeys.project.detail.sprints(projectId), previousSprintList);
+        recordSprintMetric("project.sprint.editor.update", {
+          projectId,
+          sprintId: editorState.sprint.id,
+          success: false,
+          durationMs: Date.now() - startedAt,
+          message: error instanceof Error ? error.message : "Failed to update sprint",
+        });
+        return {
+          success: false as const,
+          error: error instanceof Error ? error.message : "Failed to update sprint",
+        };
+      }
+    },
+    [editorState?.sprint, patchSprintRootData, projectId, queryClient, toSprintListItem],
+  );
+
+  const handleDeleteSprint = useCallback(
+    async () => {
+      if (!editorState?.sprint) {
+        return { success: false as const, error: "Sprint not found" };
+      }
+
+      const startedAt = Date.now();
+      const deletedSprint = editorState.sprint;
+      const remainingSprints = detail?.sprints.filter((sprint) => sprint.id !== deletedSprint.id) ?? [];
+      const nextSelectedSprint = remainingSprints[0] ?? null;
+      const previousStates = queryClient.getQueriesData({ queryKey: queryKeys.project.detail.sprintDetailRoot(projectId) });
+      const previousSprintList = queryClient.getQueryData(queryKeys.project.detail.sprints(projectId));
+
+      patchSprintRootData((existing) => removeSprintFromInfiniteData(existing, deletedSprint.id, nextSelectedSprint?.id ?? null));
+      queryClient.setQueryData(queryKeys.project.detail.sprints(projectId), (existing: unknown) =>
+        Array.isArray(existing) ? existing.filter((sprint) => sprint?.id !== deletedSprint.id) : existing,
+      );
+      router.replace(
+        nextSelectedSprint
+          ? buildProjectSprintDetailHref(projectSlug, nextSelectedSprint.id, {
+              filter: resolvedViewState.filter,
+              mode: resolvedViewState.mode,
+            })
+          : buildProjectSprintTabHref(projectSlug, {
+              filter: resolvedViewState.filter,
+              mode: resolvedViewState.mode,
+            }),
+        { scroll: false },
+      );
+
+      try {
+        const result = await deleteSprintAction({
+          projectId,
+          sprintId: deletedSprint.id,
+        });
+
+        if (!result.success) {
+          throw new Error(result.error ?? "Failed to delete sprint");
+        }
+
+        toast.success(
+          result.affectedTaskCount
+            ? `Sprint deleted and ${result.affectedTaskCount} work item${result.affectedTaskCount === 1 ? "" : "s"} unassigned`
+            : "Sprint deleted",
+        );
+        recordSprintMetric("project.sprint.editor.delete", {
+          projectId,
+          sprintId: deletedSprint.id,
+          success: true,
+          durationMs: Date.now() - startedAt,
+          affectedTaskCount: result.affectedTaskCount ?? 0,
+          previousStatus: result.previousStatus ?? deletedSprint.status,
+        });
+        await queryClient.invalidateQueries({ queryKey: queryKeys.project.detail.sprintDetailRoot(projectId) });
+        return { success: true as const };
+      } catch (error) {
+        for (const [queryKey, snapshot] of previousStates) {
+          queryClient.setQueryData(queryKey, snapshot);
+        }
+        queryClient.setQueryData(queryKeys.project.detail.sprints(projectId), previousSprintList);
+        router.replace(
+          buildProjectSprintDetailHref(projectSlug, deletedSprint.id, {
+            filter: resolvedViewState.filter,
+            mode: resolvedViewState.mode,
+          }),
+          { scroll: false },
+        );
+        recordSprintMetric("project.sprint.editor.delete", {
+          projectId,
+          sprintId: deletedSprint.id,
+          success: false,
+          durationMs: Date.now() - startedAt,
+          affectedTaskCount: deleteImpact?.affectedTaskCount ?? 0,
+          message: error instanceof Error ? error.message : "Failed to delete sprint",
+        });
+        return {
+          success: false as const,
+          error: error instanceof Error ? error.message : "Failed to delete sprint",
+        };
+      }
+    },
+    [deleteImpact?.affectedTaskCount, detail?.sprints, editorState?.sprint, patchSprintRootData, projectId, projectSlug, queryClient, resolvedViewState.filter, resolvedViewState.mode, router],
   );
 
   const runLifecycleMutation = useCallback(
@@ -516,6 +754,15 @@ export default function SprintPlanning({
     });
   }, [detail?.compareSummary, projectId, selectedSprintId]);
 
+  useEffect(() => {
+    if (!editorState) return;
+    recordSprintMetric("project.sprint.editor.open", {
+      projectId,
+      sprintId: editorState.sprint?.id ?? null,
+      mode: editorState.mode,
+    });
+  }, [editorState, projectId]);
+
   if (isLoading && !detail) {
     return (
       <div className="flex h-full min-h-0 gap-6 overflow-hidden">
@@ -561,16 +808,18 @@ export default function SprintPlanning({
             <>
               <button
                 type="button"
-                onClick={() => setShowCreateModal(true)}
+                onClick={() => setEditorState({ mode: "create", sprint: null })}
                 className="inline-flex items-center gap-2 rounded-xl bg-zinc-900 px-5 py-2.5 text-sm font-semibold text-zinc-100 transition-colors hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
               >
                 <Plus className="h-4 w-4" />
                 Create Sprint
               </button>
               <CreateSprintModal
-                isOpen={showCreateModal}
-                onClose={() => setShowCreateModal(false)}
-                onCreate={handleCreateSprint}
+                projectId={projectId}
+                isOpen={isEditorOpen}
+                mode="create"
+                onClose={() => setEditorState(null)}
+                onSubmit={handleCreateSprint}
                 sprintCount={0}
               />
             </>
@@ -590,7 +839,7 @@ export default function SprintPlanning({
           filter={resolvedViewState.filter}
           mode={resolvedViewState.mode}
           canCreate={permissions.canCreate}
-          onCreate={() => setShowCreateModal(true)}
+          onCreate={() => setEditorState({ mode: "create", sprint: null })}
           onSelect={handleSelectSprint}
           onPrefetch={prefetchSprintDetail}
         />
@@ -605,8 +854,7 @@ export default function SprintPlanning({
                 permissions={permissions}
                 isMutatingLifecycle={isMutatingLifecycle}
                 projectSlug={projectSlug}
-                filter={resolvedViewState.filter}
-                mode={resolvedViewState.mode}
+                onEdit={() => setEditorState({ mode: "edit", sprint: selectedSprint })}
                 onStart={() => void runLifecycleMutation("start")}
                 onComplete={() => void runLifecycleMutation("complete")}
               />
@@ -650,10 +898,15 @@ export default function SprintPlanning({
       </div>
 
       <CreateSprintModal
-        isOpen={showCreateModal}
-        onClose={() => setShowCreateModal(false)}
-        onCreate={handleCreateSprint}
+        projectId={projectId}
+        isOpen={isEditorOpen}
+        mode={editorState?.mode ?? "create"}
+        onClose={() => setEditorState(null)}
+        onSubmit={editorState?.mode === "edit" ? handleUpdateSprint : handleCreateSprint}
+        onDelete={editorState?.mode === "edit" ? handleDeleteSprint : undefined}
+        sprint={editorState?.sprint ?? null}
         sprintCount={detail.sprints.length}
+        deleteImpact={deleteImpact}
       />
     </>
   );

@@ -9,6 +9,8 @@ import {
     messageWorkflowItems,
     messageAttachments,
     messageReactions,
+    messageReadReceipts,
+    messageDeliveryReceipts,
     attachmentUploads,
     messageHiddenForUsers,
     messageEditLogs,
@@ -20,10 +22,11 @@ import {
     tasks,
 } from '@/lib/db/schema';
 import { createClient, createAdminClient } from '@/lib/supabase/server';
-import { eq, and, asc, desc, lt, gt, ne, isNull, inArray, sql, or } from 'drizzle-orm';
+import { eq, and, asc, desc, lt, lte, gt, ne, isNull, inArray, sql, or } from 'drizzle-orm';
 import { consumeRateLimit } from '@/lib/security/rate-limit';
 import { runInFlightDeduped } from '@/lib/async/inflight-dedupe';
 import { resolvePrivacyRelationship } from '@/lib/privacy/resolver';
+import { recordPrivacyReadEvent } from '@/lib/privacy/audit';
 import {
     buildReactionSummaryByMessage,
     withReactionSummaryMetadata,
@@ -36,11 +39,19 @@ import {
     getStructuredMessageSearchKind,
 } from '@/lib/messages/structured';
 import { buildConversationParticipantPreview } from '@/lib/messages/preview-authority';
+import { buildMessageAttachmentAccessUrl } from '@/lib/messages/attachment-access';
 import { buildMessageSearchDocumentSql } from '@/lib/messages/search-document';
+import {
+    deriveReceiptDeliveryState,
+    type DeliveryCounts,
+    type MessageDeliveryState,
+    withDeliveryMetadata,
+} from '@/lib/messages/delivery-state';
 import {
     ATTACHMENT_UPLOAD_MAX_FILE_BYTES,
     normalizeAndValidateFileSize,
     normalizeAndValidateMimeType,
+    validateUploadedFileMagicBytes,
 } from '@/lib/upload/security';
 
 // ============================================================================
@@ -65,6 +76,7 @@ export interface ConversationWithDetails {
         senderId: string | null;
         createdAt: Date;
         type: string | null;
+        metadata?: Record<string, unknown> | null;
     } | null;
     unreadCount: number;
 }
@@ -143,6 +155,14 @@ async function getConversationMembershipId(
     return membership?.id ?? null;
 }
 
+async function assertDirectMessageReadable(viewerId: string, otherUserId: string): Promise<{ ok: boolean; error?: string }> {
+    const privacy = await resolvePrivacyRelationship(viewerId, otherUserId);
+    if (!privacy || privacy.blockedByViewer || privacy.blockedByTarget) {
+        return { ok: false, error: 'Conversation not found' };
+    }
+    return { ok: true };
+}
+
 async function isDirectMessagingAllowed(viewerId: string, otherUserId: string): Promise<{ allowed: boolean; error?: string }> {
     const [privacy, recentApplication] = await Promise.all([
         resolvePrivacyRelationship(viewerId, otherUserId),
@@ -191,7 +211,6 @@ const SEARCH_CONTROL_CHARS_REGEX = /[\u0000-\u001F\u007F]/g;
 const UUID_V4_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 type ReplyPreview = NonNullable<MessageWithSender['replyTo']>;
-type MessageDeliveryState = 'sending' | 'queued' | 'sent' | 'delivered' | 'read' | 'failed';
 
 function sanitizeMessageSearchText(input: string): string {
     return input
@@ -278,16 +297,6 @@ function extractMessageMentions(content: string) {
     return {
         mentionedUsernames: Array.from(usernames),
         mentionRoles: Array.from(roleMentions),
-    };
-}
-
-function withDeliveryMetadata(
-    metadata: Record<string, unknown> | null | undefined,
-    state: MessageDeliveryState
-): Record<string, unknown> {
-    return {
-        ...(metadata || {}),
-        deliveryState: state,
     };
 }
 
@@ -583,6 +592,67 @@ async function hydrateConversationMessages(params: {
         });
     }
 
+    // ────────────────────────────────────────────────────────────────────────
+    // Delivery-state computation from receipt tables (Wave 1)
+    //
+    // For the sender's own messages, derive the delivery state:
+    //   sent (1 ✓) → delivered (✓✓ gray) → read (✓✓ blue)
+    //
+    // DM: single recipient — any delivery receipt → delivered, read receipt → read
+    // Group/project_group: counts across all non-sender participants
+    // ────────────────────────────────────────────────────────────────────────
+    const senderMessageIds = messageIds.filter((id) => {
+        const row = rows.find((r) => r.id === id);
+        return row?.senderId === viewerId;
+    });
+
+    // Count other participants (recipients) for this conversation
+    let recipientCount = 0;
+    if (senderMessageIds.length > 0) {
+        const [countResult] = await db
+            .select({ count: sql<number>`count(*)::int` })
+            .from(conversationParticipants)
+            .where(
+                and(
+                    eq(conversationParticipants.conversationId, conversationId),
+                    ne(conversationParticipants.userId, viewerId),
+                ),
+            );
+        recipientCount = countResult?.count ?? 0;
+    }
+
+    // Fetch delivery + read receipt counts per message (only for sender's messages)
+    const deliveryCountMap = new Map<string, number>();
+    const readCountMap = new Map<string, number>();
+
+    if (senderMessageIds.length > 0) {
+        const [deliveryRows, readRows] = await Promise.all([
+            db
+                .select({
+                    messageId: messageDeliveryReceipts.messageId,
+                    count: sql<number>`count(*)::int`,
+                })
+                .from(messageDeliveryReceipts)
+                .where(inArray(messageDeliveryReceipts.messageId, senderMessageIds))
+                .groupBy(messageDeliveryReceipts.messageId),
+            db
+                .select({
+                    messageId: messageReadReceipts.messageId,
+                    count: sql<number>`count(*)::int`,
+                })
+                .from(messageReadReceipts)
+                .where(inArray(messageReadReceipts.messageId, senderMessageIds))
+                .groupBy(messageReadReceipts.messageId),
+        ]);
+
+        for (const row of deliveryRows) {
+            deliveryCountMap.set(row.messageId, row.count);
+        }
+        for (const row of readRows) {
+            readCountMap.set(row.messageId, row.count);
+        }
+    }
+
     return rows.map((messageRow) => {
         const baseMetadata = withPrivateFollowUpMetadata(
             withReactionSummaryMetadata(
@@ -591,13 +661,27 @@ async function hydrateConversationMessages(params: {
             ),
             privateFollowUpByMessageId.get(messageRow.id) || null,
         );
-        let deliveryState = baseMetadata.deliveryState as MessageDeliveryState | undefined;
 
-        if (messageRow.senderId === viewerId && conversationType === 'dm' && !deliveryState) {
-            deliveryState =
-                otherParticipantLastReadAt && messageRow.createdAt <= otherParticipantLastReadAt
-                    ? 'read'
-                    : 'delivered';
+        // Compute delivery state for the sender's own messages
+        let deliveryState: MessageDeliveryState | undefined;
+        let deliveryCounts: DeliveryCounts | undefined;
+
+        if (messageRow.senderId === viewerId) {
+            const deliveredCount = deliveryCountMap.get(messageRow.id) ?? 0;
+            const readCount = readCountMap.get(messageRow.id) ?? 0;
+
+            // Also honour the legacy watermark for backwards-compat with
+            // messages that existed before the receipt tables were populated.
+            const legacyRead = conversationType === 'dm'
+                && Boolean(otherParticipantLastReadAt && messageRow.createdAt <= otherParticipantLastReadAt);
+            const derivedDeliveryState = deriveReceiptDeliveryState({
+                recipientCount,
+                deliveredCount,
+                readCount,
+                legacyRead,
+            });
+            deliveryState = derivedDeliveryState.state;
+            deliveryCounts = derivedDeliveryState.counts;
         }
 
         return {
@@ -608,13 +692,142 @@ async function hydrateConversationMessages(params: {
             clientMessageId: messageRow.clientMessageId,
             content: messageRow.content,
             type: messageRow.type as MessageWithSender['type'],
-            metadata: deliveryState ? withDeliveryMetadata(baseMetadata, deliveryState) : baseMetadata,
+            metadata: deliveryState
+                ? withDeliveryMetadata(baseMetadata, deliveryState, deliveryCounts)
+                : baseMetadata,
             createdAt: messageRow.createdAt,
             editedAt: messageRow.editedAt,
             deletedAt: messageRow.deletedAt,
             sender: messageRow.senderId ? senderMap.get(messageRow.senderId) || null : null,
             attachments: resolvedAttachmentMap.get(messageRow.id) || [],
         } satisfies MessageWithSender;
+    });
+}
+
+type ConversationLastMessagePreview = {
+    id: string;
+    type: ConversationWithDetails['type'];
+    lastMessage: {
+        id: string;
+        senderId: string | null;
+        createdAt: Date;
+        metadata?: Record<string, unknown> | null;
+    } | null;
+};
+
+export async function hydrateConversationLastMessageDeliveryMetadata<
+    TConversation extends ConversationLastMessagePreview,
+>(
+    viewerId: string,
+    conversationsToHydrate: TConversation[],
+): Promise<TConversation[]> {
+    const authoredConversations = conversationsToHydrate.filter((conversation) =>
+        conversation.lastMessage?.senderId === viewerId,
+    );
+    if (authoredConversations.length === 0) {
+        return conversationsToHydrate;
+    }
+
+    const messageIds = Array.from(new Set(
+        authoredConversations
+            .map((conversation) => conversation.lastMessage?.id ?? null)
+            .filter(Boolean),
+    )) as string[];
+    const conversationIds = Array.from(new Set(authoredConversations.map((conversation) => conversation.id)));
+    const dmConversationIds = authoredConversations
+        .filter((conversation) => conversation.type === 'dm')
+        .map((conversation) => conversation.id);
+
+    const [recipientRows, deliveryRows, readRows, dmOtherParticipantRows] = await Promise.all([
+        db
+            .select({
+                conversationId: conversationParticipants.conversationId,
+                count: sql<number>`count(*)::int`,
+            })
+            .from(conversationParticipants)
+            .where(
+                and(
+                    inArray(conversationParticipants.conversationId, conversationIds),
+                    ne(conversationParticipants.userId, viewerId),
+                ),
+            )
+            .groupBy(conversationParticipants.conversationId),
+        db
+            .select({
+                messageId: messageDeliveryReceipts.messageId,
+                count: sql<number>`count(*)::int`,
+            })
+            .from(messageDeliveryReceipts)
+            .where(inArray(messageDeliveryReceipts.messageId, messageIds))
+            .groupBy(messageDeliveryReceipts.messageId),
+        db
+            .select({
+                messageId: messageReadReceipts.messageId,
+                count: sql<number>`count(*)::int`,
+            })
+            .from(messageReadReceipts)
+            .where(inArray(messageReadReceipts.messageId, messageIds))
+            .groupBy(messageReadReceipts.messageId),
+        dmConversationIds.length > 0
+            ? db
+                .select({
+                    conversationId: conversationParticipants.conversationId,
+                    lastReadAt: conversationParticipants.lastReadAt,
+                })
+                .from(conversationParticipants)
+                .where(
+                    and(
+                        inArray(conversationParticipants.conversationId, dmConversationIds),
+                        ne(conversationParticipants.userId, viewerId),
+                    ),
+                )
+            : Promise.resolve([] as Array<{
+                conversationId: string;
+                lastReadAt: Date | null;
+            }>),
+    ]);
+
+    const recipientCountByConversationId = new Map(
+        recipientRows.map((row) => [row.conversationId, row.count] as const),
+    );
+    const deliveredCountByMessageId = new Map(
+        deliveryRows.map((row) => [row.messageId, row.count] as const),
+    );
+    const readCountByMessageId = new Map(
+        readRows.map((row) => [row.messageId, row.count] as const),
+    );
+    const otherParticipantLastReadAtByConversationId = new Map(
+        dmOtherParticipantRows.map((row) => [row.conversationId, row.lastReadAt] as const),
+    );
+
+    return conversationsToHydrate.map((conversation) => {
+        const lastMessage = conversation.lastMessage;
+        if (!lastMessage || lastMessage.senderId !== viewerId) {
+            return conversation;
+        }
+
+        const derivedDeliveryState = deriveReceiptDeliveryState({
+            recipientCount: recipientCountByConversationId.get(conversation.id) ?? 0,
+            deliveredCount: deliveredCountByMessageId.get(lastMessage.id) ?? 0,
+            readCount: readCountByMessageId.get(lastMessage.id) ?? 0,
+            legacyRead: conversation.type === 'dm'
+                && Boolean(
+                    otherParticipantLastReadAtByConversationId.get(conversation.id)
+                    && lastMessage.createdAt <= otherParticipantLastReadAtByConversationId.get(conversation.id)!,
+                ),
+        });
+
+        return {
+            ...conversation,
+            lastMessage: {
+                ...lastMessage,
+                metadata: withDeliveryMetadata(
+                    lastMessage.metadata,
+                    derivedDeliveryState.state,
+                    derivedDeliveryState.counts,
+                ),
+            },
+        };
     });
 }
 
@@ -757,30 +970,9 @@ async function resolveSignedAttachmentUrls(paths: string[]): Promise<Map<string,
 async function hydrateAttachmentUrls(attachmentRows: AttachmentRowForResolution[]) {
     if (attachmentRows.length === 0) return [];
 
-    const pathByAttachmentId = new Map<string, string | null>();
-    for (const attachment of attachmentRows) {
-        const derivedPath = attachment.storagePath || extractStoragePathFromAttachmentUrl(attachment.url);
-        pathByAttachmentId.set(attachment.id, derivedPath);
-    }
-
-    const signedByPath = await resolveSignedAttachmentUrls(
-        attachmentRows
-            .map((attachment) => pathByAttachmentId.get(attachment.id))
-            .filter((value): value is string => Boolean(value))
-    );
-
     return attachmentRows.map((attachment) => {
-        const resolvedPath = pathByAttachmentId.get(attachment.id);
-        const resolvedUrl = resolvedPath
-            ? signedByPath.get(resolvedPath) || attachment.url
-            : attachment.url;
-
-        const resolvedThumbnail =
-            attachment.type === 'image'
-                ? (resolvedPath && resolvedUrl
-                    ? buildImageThumbnailUrl(resolvedUrl)
-                    : (attachment.thumbnailUrl || (resolvedUrl ? buildImageThumbnailUrl(resolvedUrl) : null)))
-                : attachment.thumbnailUrl;
+        const resolvedUrl = buildMessageAttachmentAccessUrl(attachment.id);
+        const resolvedThumbnail = attachment.type === 'image' ? resolvedUrl : attachment.thumbnailUrl;
 
         return {
             id: attachment.id,
@@ -1126,13 +1318,14 @@ export async function getConversations(
                 unreadCount: userConv.unread_count || 0, // O(1) Read from denormalized column
             };
         }).filter(Boolean) as ConversationWithDetails[];
+        const hydratedResult = await hydrateConversationLastMessageDeliveryMetadata(user.id, result);
 
         // Re-sort client side just in case mapping shuffled, though map preservation usually works
         // The initial query defined the order.
 
             return {
                 success: true,
-                conversations: result,
+                conversations: hydratedResult,
                 hasMore,
                 nextCursor: hasMore
                     ? `${paginatedConvs[paginatedConvs.length - 1].sort_at.toISOString()}|${paginatedConvs[paginatedConvs.length - 1].conversation_id}`
@@ -1217,31 +1410,52 @@ export async function getConversationById(
                 )
             );
 
+        if (details.type === 'dm') {
+            const otherParticipantId = participants[0]?.id ?? null;
+            if (!otherParticipantId) {
+                return { success: false, error: 'Conversation not found' };
+            }
+            const readability = await assertDirectMessageReadable(user.id, otherParticipantId);
+            if (!readability.ok) {
+                return { success: false, error: readability.error || 'Conversation not found' };
+            }
+            await recordPrivacyReadEvent({
+                subjectUserId: otherParticipantId,
+                viewerUserId: user.id,
+                eventType: 'conversation_opened',
+                route: 'messaging.conversation',
+                metadata: { conversationId },
+            });
+        }
+
+        const baseConversation: ConversationWithDetails = {
+            id: details.id,
+            type: details.type as 'dm' | 'group' | 'project_group',
+            updatedAt: membership[0].lastMessageAt || details.updated_at || new Date(),
+            lifecycleState: membership[0].archivedAt ? 'archived' : membership[0].lastMessageId ? 'active' : 'draft',
+            muted: Boolean(membership[0].muted),
+            participants: participants.map((participant) => ({
+                id: participant.id,
+                username: participant.username,
+                fullName: participant.fullName,
+                avatarUrl: participant.avatarUrl,
+            })),
+            lastMessage: membership[0].lastMessageId
+                ? {
+                    id: membership[0].lastMessageId,
+                    content: membership[0].lastMessagePreview,
+                    senderId: membership[0].lastMessageSenderId,
+                    createdAt: membership[0].lastMessageAt || details.updated_at || new Date(),
+                    type: membership[0].lastMessageType,
+                }
+                : null,
+            unreadCount: membership[0].unreadCount || 0,
+        };
+        const [conversation] = await hydrateConversationLastMessageDeliveryMetadata(user.id, [baseConversation]);
+
         return {
             success: true,
-            conversation: {
-                id: details.id,
-                type: details.type as 'dm' | 'group' | 'project_group',
-                updatedAt: membership[0].lastMessageAt || details.updated_at || new Date(),
-                lifecycleState: membership[0].archivedAt ? 'archived' : membership[0].lastMessageId ? 'active' : 'draft',
-                muted: Boolean(membership[0].muted),
-                participants: participants.map((participant) => ({
-                    id: participant.id,
-                    username: participant.username,
-                    fullName: participant.fullName,
-                    avatarUrl: participant.avatarUrl,
-                })),
-                lastMessage: membership[0].lastMessageId
-                    ? {
-                        id: membership[0].lastMessageId,
-                        content: membership[0].lastMessagePreview,
-                        senderId: membership[0].lastMessageSenderId,
-                        createdAt: membership[0].lastMessageAt || details.updated_at || new Date(),
-                        type: membership[0].lastMessageType,
-                    }
-                    : null,
-                unreadCount: membership[0].unreadCount || 0,
-            },
+            conversation,
         };
         });
     } catch (error) {
@@ -1290,6 +1504,30 @@ export async function getMessages(
             .from(conversations)
             .where(eq(conversations.id, conversationId))
             .limit(1);
+
+        let dmOtherParticipantId: string | null = null;
+        if (conversationMeta?.type === 'dm') {
+            const [otherParticipant] = await db
+                .select({ userId: conversationParticipants.userId })
+                .from(conversationParticipants)
+                .where(
+                    and(
+                        eq(conversationParticipants.conversationId, conversationId),
+                        ne(conversationParticipants.userId, user.id)
+                    )
+                )
+                .limit(1);
+
+            if (!otherParticipant) {
+                return { success: false, error: 'Conversation not found' };
+            }
+            dmOtherParticipantId = otherParticipant.userId;
+
+            const readability = await assertDirectMessageReadable(user.id, otherParticipant.userId);
+            if (!readability.ok) {
+                return { success: false, error: readability.error || 'Conversation not found' };
+            }
+        }
 
         let otherParticipantLastReadAt: Date | null = null;
         if (conversationMeta?.type === 'dm') {
@@ -1368,6 +1606,19 @@ export async function getMessages(
             conversationType: conversationMeta?.type as ConversationWithDetails['type'] | undefined,
             otherParticipantLastReadAt,
         });
+
+        if (dmOtherParticipantId) {
+            await recordPrivacyReadEvent({
+                subjectUserId: dmOtherParticipantId,
+                viewerUserId: user.id,
+                eventType: 'message_history_read',
+                route: 'messaging.history',
+                metadata: {
+                    conversationId,
+                    count: result.length,
+                },
+            });
+        }
 
         return {
             success: true,
@@ -1470,6 +1721,28 @@ export async function getMessageContext(
                     .from(conversations)
                     .where(eq(conversations.id, conversationId))
                     .limit(1);
+
+                if (conversationMeta?.type === 'dm') {
+                    const [otherParticipant] = await db
+                        .select({ userId: conversationParticipants.userId })
+                        .from(conversationParticipants)
+                        .where(
+                            and(
+                                eq(conversationParticipants.conversationId, conversationId),
+                                ne(conversationParticipants.userId, user.id)
+                            )
+                        )
+                        .limit(1);
+
+                    if (!otherParticipant) {
+                        return { success: false, error: 'Conversation not found', available: false };
+                    }
+
+                    const readability = await assertDirectMessageReadable(user.id, otherParticipant.userId);
+                    if (!readability.ok) {
+                        return { success: false, error: readability.error || 'Conversation not found', available: false };
+                    }
+                }
 
                 let otherParticipantLastReadAt: Date | null = null;
                 if (conversationMeta?.type === 'dm') {
@@ -1587,6 +1860,10 @@ export async function getMessageContext(
 // SEND MESSAGE
 // ============================================================================
 
+async function consumeDirectMessageTargetRateLimit(viewerId: string, targetUserId: string) {
+    return consumeRateLimit(`msg-target:${viewerId}:${targetUserId}`, 60, 300);
+}
+
 export async function sendMessage(
     conversationId: string,
     content: string,
@@ -1643,6 +1920,11 @@ export async function sendMessage(
             const permission = await isDirectMessagingAllowed(user.id, otherParticipant.userId);
             if (!permission.allowed) {
                 return { success: false, error: permission.error || 'Messaging is not allowed' };
+            }
+
+            const { allowed: targetRlOk } = await consumeDirectMessageTargetRateLimit(user.id, otherParticipant.userId);
+            if (!targetRlOk) {
+                return { success: false, error: 'You are messaging this user too quickly. Please slow down.' };
             }
         }
 
@@ -1885,6 +2167,59 @@ export async function markConversationAsRead(
             watermarkMessage = latest || null;
         }
 
+        // Wave 1: also bulk-insert per-message read receipts for messages from
+        // other senders up to the watermark. This populates the receipt table
+        // that drives the blue-tick state for the message sender. Capped at
+        // 200 messages per call to avoid oversized INSERTs.
+        if (watermarkMessage) {
+            const previousWatermarkId = membership.lastReadMessageId;
+
+            // Find messages from other senders between old watermark and new one
+            const unreadMessages = await db
+                .select({ id: messages.id })
+                .from(messages)
+                .where(
+                    and(
+                        eq(messages.conversationId, conversationId),
+                        ne(messages.senderId, user.id),
+                        isNull(messages.deletedAt),
+                        // Only messages up to the new watermark.
+                        // IMPORTANT: the pg driver cannot serialize a JS Date via `sql`
+                        // template interpolation (the error reads: `The "string" argument
+                        // must be of type string or an instance of Buffer or ArrayBuffer.
+                        // Received an instance of Date`). Use Drizzle's `lte` helper which
+                        // serializes column values correctly.
+                        lte(messages.createdAt, watermarkMessage.createdAt),
+                        // After the previous watermark (if any). This clause uses a
+                        // subquery on `messages.id`, so no Date interpolation is needed.
+                        previousWatermarkId
+                            ? sql`${messages.id} != ${previousWatermarkId} AND ${messages.createdAt} > COALESCE(
+                                (SELECT created_at FROM ${messages} WHERE id = ${previousWatermarkId}),
+                                '1970-01-01'::timestamptz
+                              )`
+                            : sql`true`,
+                        // Skip messages we already have read receipts for
+                        sql`NOT EXISTS (
+                            SELECT 1 FROM ${messageReadReceipts} rr
+                            WHERE rr.message_id = ${messages.id}
+                            AND rr.user_id = ${user.id}
+                        )`,
+                    ),
+                )
+                .orderBy(desc(messages.createdAt))
+                .limit(200);
+
+            if (unreadMessages.length > 0) {
+                await db.insert(messageReadReceipts)
+                    .values(unreadMessages.map((m) => ({
+                        messageId: m.id,
+                        conversationId,
+                        userId: user.id,
+                    })))
+                    .onConflictDoNothing();
+            }
+        }
+
         await db
             .update(conversationParticipants)
             .set({
@@ -2033,6 +2368,47 @@ export async function searchMessages(
             return { success: true, results: [] };
         }
 
+        const dmConversationIds = userConversations
+            .filter((conversation) => conversation.type === 'dm' && conversationIds.includes(conversation.conversationId))
+            .map((conversation) => conversation.conversationId);
+
+        const blockedDmConversationIds = new Set<string>();
+        if (dmConversationIds.length > 0) {
+            const dmParticipants = await db
+                .select({
+                    conversationId: conversationParticipants.conversationId,
+                    userId: conversationParticipants.userId,
+                })
+                .from(conversationParticipants)
+                .where(
+                    and(
+                        inArray(conversationParticipants.conversationId, dmConversationIds),
+                        ne(conversationParticipants.userId, user.id),
+                    ),
+                );
+
+            const otherUserIds = Array.from(new Set(dmParticipants.map((participant) => participant.userId).filter(Boolean)));
+            if (otherUserIds.length > 0) {
+                const privacyMap = new Map(
+                    await Promise.all(
+                        otherUserIds.map(async (otherUserId) => [otherUserId, await resolvePrivacyRelationship(user.id, otherUserId)] as const)
+                    )
+                );
+
+                for (const participant of dmParticipants) {
+                    const privacy = privacyMap.get(participant.userId) ?? null;
+                    if (!privacy || privacy.blockedByViewer || privacy.blockedByTarget) {
+                        blockedDmConversationIds.add(participant.conversationId);
+                    }
+                }
+            }
+        }
+
+        const readableConversationIds = conversationIds.filter((conversationId) => !blockedDmConversationIds.has(conversationId));
+        if (readableConversationIds.length === 0) {
+            return { success: true, results: [] };
+        }
+
         const textPredicate = normalizedQuery
             ? sql`(
                 to_tsvector('english', ${searchDocument}) @@ websearch_to_tsquery('english', ${normalizedQuery})
@@ -2083,7 +2459,7 @@ export async function searchMessages(
             .from(messages)
             .where(
                 and(
-                    inArray(messages.conversationId, conversationIds),
+                    inArray(messages.conversationId, readableConversationIds),
                     sql`${messages.deletedAt} IS NULL`,
                     sql`NOT EXISTS (
                         SELECT 1
@@ -2249,8 +2625,21 @@ export async function searchMessages(
             const senderText = `${sender?.fullName || ''} ${sender?.username || ''}`.toLowerCase();
             return senderText.includes(fromFilter);
         }).slice(0, limit);
+        const hydratedConversations = await hydrateConversationLastMessageDeliveryMetadata(
+            user.id,
+            results.map((item) => item.conversation),
+        );
+        const hydratedConversationById = new Map(
+            hydratedConversations.map((conversation) => [conversation.id, conversation] as const),
+        );
 
-        return { success: true, results };
+        return {
+            success: true,
+            results: results.map((item) => ({
+                ...item,
+                conversation: hydratedConversationById.get(item.conversation.id) ?? item.conversation,
+            })),
+        };
     } catch (error) {
         console.error('Error searching messages:', error);
         return { success: false, error: 'Failed to search messages' };
@@ -2805,6 +3194,25 @@ export async function uploadAttachment(
             return { success: false, error: 'Unsupported file type.' };
         }
 
+        try {
+            await validateUploadedFileMagicBytes(file, mimeType);
+        } catch {
+            await db
+                .update(attachmentUploads)
+                .set({
+                    status: 'failed',
+                    error: 'File contents do not match the declared MIME type',
+                    updatedAt: new Date(),
+                })
+                .where(
+                    and(
+                        eq(attachmentUploads.userId, user.id),
+                        eq(attachmentUploads.clientUploadId, clientUploadId)
+                    )
+                );
+            return { success: false, error: 'Uploaded file contents do not match the declared type.' };
+        }
+
         const ext = (file.name.split('.').pop() || '').toLowerCase();
         const allowedDocumentMimes = new Set([
             'application/pdf',
@@ -2987,6 +3395,8 @@ export async function sendMessageWithAttachments(
     try {
         const user = await getAuthUser();
         if (!user) return { success: false, error: 'Not authenticated' };
+        const { allowed: msgRlOk } = await consumeRateLimit(`msg:${user.id}`, 120, 60);
+        if (!msgRlOk) return { success: false, error: 'Rate limit exceeded' };
         const clientMessageId = options?.clientMessageId?.trim() || undefined;
         const replyToMessageId = options?.replyToMessageId?.trim() || undefined;
         const contextChips = options?.contextChips ?? [];
@@ -3027,6 +3437,11 @@ export async function sendMessageWithAttachments(
             const permission = await isDirectMessagingAllowed(user.id, otherParticipant.userId);
             if (!permission.allowed) {
                 return { success: false, error: permission.error || 'Messaging is not allowed' };
+            }
+
+            const { allowed: targetRlOk } = await consumeDirectMessageTargetRateLimit(user.id, otherParticipant.userId);
+            if (!targetRlOk) {
+                return { success: false, error: 'You are messaging this user too quickly. Please slow down.' };
             }
         }
 
@@ -3188,15 +3603,18 @@ export async function sendMessageWithAttachments(
             const committed = attachment.storagePath
                 ? committedAttachmentsByPath.get(attachment.storagePath)
                 : null;
+            const accessUrl = buildMessageAttachmentAccessUrl(attachment.id);
 
             return {
                 id: attachment.id,
                 type: attachment.type as 'image' | 'video' | 'file',
-                url: committed?.signedUrl || attachment.url,
+                url: accessUrl,
                 filename: attachment.filename,
                 sizeBytes: attachment.sizeBytes,
                 mimeType: attachment.mimeType,
-                thumbnailUrl: committed?.thumbnailUrl || attachment.thumbnailUrl,
+                thumbnailUrl: attachment.type === 'image'
+                    ? accessUrl
+                    : (committed?.thumbnailUrl || attachment.thumbnailUrl),
                 width: attachment.width,
                 height: attachment.height,
             };
@@ -3297,6 +3715,7 @@ export interface ProjectGroupConversation {
         senderId: string | null;
         createdAt: Date;
         type: string | null;
+        metadata?: Record<string, unknown> | null;
     } | null;
     unreadCount: number;
     memberCount: number;
@@ -3472,8 +3891,19 @@ export async function getProjectGroups(
             memberCount: proj.member_count || 1,
             members: membersByProjectId.get(proj.project_id) ?? [],
         }));
+        const hydratedProjectGroups = await hydrateConversationLastMessageDeliveryMetadata(
+            user.id,
+            result.map((project) => ({
+                ...project,
+                type: 'project_group' as const,
+            })),
+        );
 
-        return { success: true, projectGroups: result, hasMore };
+        return {
+            success: true,
+            projectGroups: hydratedProjectGroups.map(({ type: _type, ...project }) => project),
+            hasMore,
+        };
     } catch (error) {
         console.error('Error fetching project groups:', error);
         return { success: false, error: 'Failed to fetch project groups' };

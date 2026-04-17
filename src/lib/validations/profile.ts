@@ -1,5 +1,29 @@
 import { z } from 'zod'
 import { normalizeUsername, validateUsername } from '@/lib/validations/username'
+import { isSafeHttpUrl } from '@/lib/security/urls'
+
+// SEC-C5 / SEC-H9 / SEC-M12: allowlisted social-link platforms. Rejecting
+// unknown keys blocks prototype-pollution payloads (`__proto__`,
+// `constructor`, `prototype`) from surviving the zod parse and landing in
+// JSONB storage, and keeps the surface area of rendered user-provided URLs
+// finite so every consumer knows which fields exist.
+export const SOCIAL_LINK_PLATFORMS = [
+    'github',
+    'x',
+    'twitter',
+    'linkedin',
+    'website',
+    'dribbble',
+    'instagram',
+    'bluesky',
+    'mastodon',
+    'youtube',
+    'twitch',
+    'threads',
+    'facebook',
+] as const
+export type SocialLinkPlatform = (typeof SOCIAL_LINK_PLATFORMS)[number]
+const SOCIAL_LINK_PLATFORM_SET = new Set<string>(SOCIAL_LINK_PLATFORMS)
 
 export const PROFILE_LIMITS = {
     usernameMin: 3,
@@ -39,11 +63,37 @@ export const profileUpdateSchema = z.object({
     bio: optionalTrimmedString(PROFILE_LIMITS.bioMax),
     location: optionalTrimmedString(PROFILE_LIMITS.locationMax),
     website: z.string().trim().max(PROFILE_LIMITS.websiteMax).optional(),
-    avatarUrl: z.string().trim().optional(),
-    bannerUrl: z.string().trim().optional(),
+    // SEC-C5: avatar/banner URLs are rendered in <img src> across the app and
+    // MUST be safe http(s) URLs. We accept the empty string (clears the field)
+    // and otherwise require the shared safe-URL gate to pass. The explicit
+    // `https://` prefix that `normalizeOptionalUrl` adds later means a bare
+    // `javascript:alert(1)` becomes `https://javascript:alert(1)` before the
+    // check runs — still rejected because the resulting hostname is invalid.
+    avatarUrl: z
+        .string()
+        .trim()
+        .refine(
+            (value) => value.length === 0 || isSafeHttpUrl(value),
+            'avatarUrl must be a safe http(s) URL',
+        )
+        .optional(),
+    bannerUrl: z
+        .string()
+        .trim()
+        .refine(
+            (value) => value.length === 0 || isSafeHttpUrl(value),
+            'bannerUrl must be a safe http(s) URL',
+        )
+        .optional(),
     skills: z.array(z.string()).optional(),
     interests: z.array(z.string()).optional(),
-    socialLinks: z.record(z.string(), z.string()).optional(),
+    // SEC-H9: only accept values for the well-known platforms, reject any
+    // other key (including `__proto__`, `constructor`, `prototype`). Each
+    // value is range-checked and re-validated via `isSafeHttpUrl` inside the
+    // normaliser so we never persist a non-http(s) URL.
+    socialLinks: z
+        .record(z.string().min(1).max(32), z.string().max(PROFILE_LIMITS.websiteMax))
+        .optional(),
     visibility: z.enum(['public', 'connections', 'private']).optional(),
     availabilityStatus: z.enum(['available', 'busy', 'offline', 'focusing']).optional(),
     openTo: z.array(z.string()).optional(),
@@ -91,8 +141,11 @@ function normalizeOptionalUrl(value: string | undefined): string | undefined {
     if (value === undefined) return undefined
     const trimmed = value.trim()
     if (!trimmed) return ''
-    if (/^https?:\/\//i.test(trimmed)) return trimmed
-    return `https://${trimmed}`
+    const candidate = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`
+    // SEC-C5 / SEC-M12: refuse anything that isn't a public http(s) URL so we
+    // never hand a javascript:/data:/private-host URL back to the caller. The
+    // empty string here tells the action layer to clear the field.
+    return isSafeHttpUrl(candidate) ? candidate : ''
 }
 
 function normalizeSocialLinks(
@@ -101,8 +154,14 @@ function normalizeSocialLinks(
     if (!links) return undefined
     const out: Record<string, string> = {}
     for (const [key, raw] of Object.entries(links)) {
+        // SEC-H9: skip prototype-polluting or unknown platform keys. `Object`
+        // iteration itself won't surface `__proto__` on a fresh object, but a
+        // caller-constructed payload that spreads untrusted input can still
+        // reach us.
+        if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue
         const platform = key.trim().toLowerCase().slice(0, 32)
         if (!platform) continue
+        if (!SOCIAL_LINK_PLATFORM_SET.has(platform)) continue
         const normalizedUrl = normalizeOptionalUrl(String(raw || ''))
         if (!normalizedUrl) continue
         out[platform] = normalizedUrl

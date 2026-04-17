@@ -441,7 +441,7 @@ export default function PeopleClient({ initialUser }: PeopleClientProps) {
             </div>
 
             {/* Filter Chips */}
-            <div className="flex items-center gap-2 mb-8 overflow-x-auto pb-1 scrollbar-none">
+            <div className="flex items-center gap-2 mb-8 overflow-x-auto pb-1">
                 {FILTER_CHIPS.map((chip) => (
                     <Badge
                         key={chip.id}

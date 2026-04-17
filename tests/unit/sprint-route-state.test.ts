@@ -52,5 +52,13 @@ describe("sprint route state", () => {
       }),
       "/projects/network-for-builders/sprints/sprint-1?filter=files&mode=files&drawerType=file&drawerId=node-1",
     );
+    assert.equal(
+      buildProjectSprintTabHref("network/builders & co"),
+      "/projects/network%2Fbuilders%20%26%20co?tab=sprints",
+    );
+    assert.equal(
+      buildProjectSprintDetailHref("network/builders & co", "sprint/1?draft=true"),
+      "/projects/network%2Fbuilders%20%26%20co/sprints/sprint%2F1%3Fdraft%3Dtrue",
+    );
   });
 });

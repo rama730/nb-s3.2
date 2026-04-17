@@ -125,9 +125,6 @@ export default function ProjectDashboardClient({
     const resolvedActiveTab = forcedActiveTab || (isSprintRoute ? "sprints" : (searchParams?.get("tab") || "dashboard"));
 
     const [activeTab, setActiveTab] = useState(() => resolvedActiveTab);
-    const [hasMountedFilesTab, setHasMountedFilesTab] = useState(
-        () => resolvedActiveTab === "files"
-    );
 
     // State management
     const [isFollowing, setIsFollowing] = useState((project as any).isFollowed || false);
@@ -332,16 +329,14 @@ export default function ProjectDashboardClient({
         const nextParams = new URLSearchParams(window.location.search);
         nextParams.set("tab", tabId);
         const nextQuery = nextParams.toString();
-        const nextUrl = nextQuery ? `${pathname}?${nextQuery}` : pathname;
+        const safePath = pathname ?? window.location.pathname;
+        const nextUrl = nextQuery ? `${safePath}?${nextQuery}` : safePath;
         window.history.replaceState(window.history.state, "", nextUrl);
     }, [activeTab, canonicalProjectHref, forcedActiveTab, isSprintRoute, pathname, router]);
 
     useEffect(() => {
         const nextTab = forcedActiveTab || (isSprintRoute ? "sprints" : (searchParams?.get("tab") || "dashboard"));
         setActiveTab((prev) => (prev === nextTab ? prev : nextTab));
-        if (nextTab === "files") {
-            setHasMountedFilesTab(true);
-        }
     }, [forcedActiveTab, isSprintRoute, searchParams]);
 
     const filesPrefetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -672,32 +667,7 @@ export default function ProjectDashboardClient({
     const initialOpenLine = Number.isFinite(initialOpenLineRaw) ? initialOpenLineRaw : null;
     const initialOpenColumn = Number.isFinite(initialOpenColumnRaw) ? initialOpenColumnRaw : null;
 
-    // PD1: Mount files tab on first visit; unmount after 5 minutes of inactivity
-    const filesUnmountTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-    useEffect(() => {
-        if (activeTab === "files") {
-            setHasMountedFilesTab(true);
-            // Cancel any pending unmount timer
-            if (filesUnmountTimerRef.current) {
-                clearTimeout(filesUnmountTimerRef.current);
-                filesUnmountTimerRef.current = null;
-            }
-        } else if (hasMountedFilesTab) {
-            // Start 5-minute unmount timer when leaving files tab
-            filesUnmountTimerRef.current = setTimeout(() => {
-                setHasMountedFilesTab(false);
-                filesUnmountTimerRef.current = null;
-            }, 5 * 60 * 1000);
-        }
-        return () => {
-            if (filesUnmountTimerRef.current) {
-                clearTimeout(filesUnmountTimerRef.current);
-            }
-        };
-    }, [activeTab, hasMountedFilesTab]);
-
-    // Memoize the Files tab to prevent unmounting/remounting on parent re-renders (e.g. scroll)
+    // Memoize the Files tab while active so parent shell updates do not churn the workspace.
     const filesTabContent = useMemo(() => (
         <TabErrorBoundary tabName="Files" fillContainer>
             <FilesTab
@@ -873,9 +843,6 @@ export default function ProjectDashboardClient({
                 )}
                 
                 {activeTab === "files" ? filesTabContent : renderTabContent()}
-                {hasMountedFilesTab && activeTab !== "files" ? (
-                    <div className="hidden">{filesTabContent}</div>
-                ) : null}
 
                 <ProjectOnboardingModal
                     isOpen={isOnboardingOpen}

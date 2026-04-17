@@ -112,7 +112,7 @@ export default function CacheSettingsSection() {
 
     return (
         <SettingsSectionCard
-            title="Cache & Local Storage"
+            title="Cache Management"
             description="Manage how your device stores application data, offline drafts, and assets."
         >
             <div className="space-y-8">
@@ -182,13 +182,13 @@ export default function CacheSettingsSection() {
                         className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl border border-zinc-200 dark:border-zinc-800 text-sm font-medium hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
                     >
                         <FileJson className="h-4 w-4" />
-                        Backup Workspace
+                        Export Snapshot
                     </button>
                 </div>
 
                 <div className="flex items-center gap-2 py-2">
                     <div className="h-px flex-1 bg-zinc-100 dark:bg-zinc-800" />
-                    <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Danger Zone</span>
+                    <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Reset Zone</span>
                     <div className="h-px flex-1 bg-zinc-100 dark:bg-zinc-800" />
                 </div>
 

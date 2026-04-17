@@ -24,7 +24,11 @@ export type UsernameValidationResult = {
 }
 
 export function normalizeUsername(value: string): string {
-    return value.trim().toLowerCase()
+    return value
+        .normalize('NFKC')
+        .replace(/[\u200B-\u200D\uFEFF]/g, '')
+        .trim()
+        .toLowerCase()
 }
 
 export function sanitizeUsernameInput(value: string): string {

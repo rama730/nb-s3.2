@@ -95,7 +95,7 @@ export const TaskCard = memo(function TaskCard({
                 <div className="flex flex-wrap items-center gap-1.5">
                     <TaskStatusBadge status={taskRecord.status} />
                     <TaskPriorityBadge priority={taskRecord.priority} />
-                    {taskRecord.sprint ? (
+                    {taskRecord.sprint?.name ? (
                         <span
                             className={cn(
                                 "px-2 py-0.5 rounded-md text-[10px] font-bold border",

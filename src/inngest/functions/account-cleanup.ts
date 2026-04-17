@@ -4,6 +4,7 @@ import { projects, projectNodes, messages, messageAttachments, accountDeletions 
 import { createClient } from "@/lib/supabase/server";
 import { eq, and, isNotNull } from "drizzle-orm";
 import { purgeUserCache } from "@/lib/utils/cdn";
+import { verifySignedJobRequestToken } from "@/lib/security/job-request";
 
 /**
  * Async S3 cleanup for account deletion.
@@ -18,7 +19,16 @@ export const accountCleanup = inngest.createFunction(
     },
     { event: "account/cleanup" },
     async ({ event, step }) => {
-        const { userId, deletionId } = event.data;
+        const { userId, deletionId, jobSignature } = event.data;
+
+        const requestVerification = verifySignedJobRequestToken(jobSignature, {
+            kind: "account/cleanup",
+            actorId: userId,
+            subjectId: deletionId,
+        });
+        if (!requestVerification.ok) {
+            throw new Error("Invalid account cleanup job request");
+        }
 
         // Mark cleanup as in progress
         await step.run("mark-in-progress", async () => {
@@ -171,4 +181,3 @@ export const accountCleanup = inngest.createFunction(
         };
     }
 );
-

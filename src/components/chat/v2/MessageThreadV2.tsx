@@ -7,6 +7,9 @@ import { toast } from 'sonner';
 import type { MessageWithSender } from '@/app/actions/messaging';
 import type { TypingUser } from '@/hooks/useTypingChannel';
 import { TypingIndicator } from '@/components/chat/TypingIndicator';
+import { useAuth } from '@/hooks/useAuth';
+import { useMarkMessagesRead } from '@/hooks/useMarkMessagesRead';
+import { useDeliveryAcks } from '@/hooks/useDeliveryAcks';
 import { MessageBubbleV2 } from './MessageBubbleV2';
 import { BulkActionsBar } from './BulkActionsBar';
 import { ScrollToBottomFab } from './ScrollToBottomFab';
@@ -36,6 +39,7 @@ interface MessageThreadV2Props {
         hasOlderContext: boolean;
         hasNewerContext: boolean;
     } | null;
+    scrollToLatestSignal?: number;
     onLoadMore: () => void;
     onReply: (message: MessageWithSender) => void;
     onTogglePin: (messageId: string, pinned: boolean) => void;
@@ -59,6 +63,7 @@ export function MessageThreadV2({
     viewerUnreadCount = 0,
     focusMessageId,
     contextJumpState = null,
+    scrollToLatestSignal = 0,
     onLoadMore,
     onReply,
     onTogglePin,
@@ -74,22 +79,44 @@ export function MessageThreadV2({
     const [stickyDate, setStickyDate] = useState<string | null>(null);
     const [focusedMessage, setFocusedMessage] = useState<FocusedMessageState | null>(null);
     const virtuosoRef = useRef<VirtuosoHandle | null>(null);
-    const scrollerRef = useRef<HTMLElement | null>(null);
     const isAtBottomRef = useRef(true);
-    const initialBottomAppliedRef = useRef<string | null>(null);
+    const pinnedToLatestRef = useRef(true);
     const lastMessageIdRef = useRef<string | null>(null);
+    const lastScrollToLatestSignalRef = useRef(scrollToLatestSignal);
     const focusResetTimeoutRef = useRef<number | null>(null);
     const focusAnimationFrameRef = useRef<number | null>(null);
 
-    const scrollToTrueBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
-        const scroller = scrollerRef.current;
-        if (!scroller) return;
-        const prefersReducedMotion = typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-        const resolvedBehavior = prefersReducedMotion ? 'instant' : behavior;
-        requestAnimationFrame(() => {
-            scroller.scrollTo({ top: scroller.scrollHeight, behavior: resolvedBehavior });
-        });
-    }, []);
+    // Wave 1: wire delivery-ack and read-receipt buffers.
+    // - ackDelivery: fires once per NEW incoming message from others → ✓✓ gray
+    // - markRead: fires when messages scroll into view → ✓✓ blue
+    const { user } = useAuth();
+    const viewerId = user?.id ?? null;
+    // Wave 2 Step 11: pass conversationId so delivery acks are also
+    // broadcast via the conversation presence room for ~100 ms latency.
+    const { ackDelivery } = useDeliveryAcks(viewerId, conversationId);
+    const { markRead } = useMarkMessagesRead(conversationId, viewerId);
+    const ackedMessageIdsRef = useRef<Set<string>>(new Set());
+
+    // When the messages prop changes, ack delivery for any newly-seen messages
+    // that are NOT from the viewer. This runs exactly once per message.
+    useEffect(() => {
+        if (!viewerId) return;
+        const unseen: Array<{ id: string; senderId: string | null }> = [];
+        for (const message of messages) {
+            if (message.senderId === viewerId) continue;
+            if (ackedMessageIdsRef.current.has(message.id)) continue;
+            ackedMessageIdsRef.current.add(message.id);
+            unseen.push({ id: message.id, senderId: message.senderId });
+        }
+        if (unseen.length > 0) {
+            ackDelivery(unseen);
+        }
+    }, [messages, viewerId, ackDelivery]);
+
+    // Clear the ack set when the conversation changes
+    useEffect(() => {
+        ackedMessageIdsRef.current.clear();
+    }, [conversationId]);
 
     const items = useMemo(() => {
         const result: Array<
@@ -150,6 +177,19 @@ export function MessageThreadV2({
         return indexMap;
     }, [items]);
 
+    const scrollToLatest = useCallback((behavior: 'auto' | 'smooth' = 'smooth') => {
+        if (items.length === 0) return;
+        const prefersReducedMotion = typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        const resolvedBehavior = prefersReducedMotion ? 'auto' : behavior;
+        requestAnimationFrame(() => {
+            virtuosoRef.current?.scrollToIndex({
+                index: items.length - 1,
+                align: 'end',
+                behavior: resolvedBehavior,
+            });
+        });
+    }, [items.length]);
+
     const focusMessage = useCallback(async (
         messageId: string,
         source: MessageFocusSource = 'external',
@@ -200,30 +240,46 @@ export function MessageThreadV2({
     }, []);
 
     useEffect(() => {
-        initialBottomAppliedRef.current = null;
         lastMessageIdRef.current = null;
+        pinnedToLatestRef.current = true;
+        isAtBottomRef.current = true;
+        lastScrollToLatestSignalRef.current = scrollToLatestSignal;
+        setIsAtBottom(true);
+        setUnreadBelow(0);
     }, [conversationId]);
 
     useEffect(() => {
-        if (isLoading || messages.length === 0) return;
-        if (initialBottomAppliedRef.current === conversationId) return;
-        initialBottomAppliedRef.current = conversationId;
-        scrollToTrueBottom('instant');
-    }, [conversationId, isLoading, messages.length, scrollToTrueBottom]);
+        if (lastScrollToLatestSignalRef.current === scrollToLatestSignal) {
+            return;
+        }
+
+        lastScrollToLatestSignalRef.current = scrollToLatestSignal;
+        pinnedToLatestRef.current = true;
+        setUnreadBelow(0);
+        scrollToLatest('smooth');
+    }, [scrollToLatest, scrollToLatestSignal]);
 
     useEffect(() => {
         if (isLoading || messages.length === 0) return;
-        if (initialBottomAppliedRef.current !== conversationId) return;
-
         const lastMessageId = messages[messages.length - 1]?.id ?? null;
         const previousLastMessageId = lastMessageIdRef.current;
         lastMessageIdRef.current = lastMessageId;
 
-        if (!previousLastMessageId || !lastMessageId || previousLastMessageId === lastMessageId) return;
-        if (!isAtBottomRef.current) { setUnreadBelow(prev => prev + 1); return; }
+        if (!lastMessageId) return;
+        if (!previousLastMessageId) {
+            if (pinnedToLatestRef.current) {
+                scrollToLatest('auto');
+            }
+            return;
+        }
+        if (previousLastMessageId === lastMessageId) return;
+        if (!pinnedToLatestRef.current) {
+            setUnreadBelow((prev) => prev + 1);
+            return;
+        }
 
-        scrollToTrueBottom('smooth');
-    }, [conversationId, isLoading, messages, scrollToTrueBottom]);
+        scrollToLatest('smooth');
+    }, [isLoading, messages, scrollToLatest]);
 
     useEffect(() => {
         if (!focusMessageId) return;
@@ -233,12 +289,6 @@ export function MessageThreadV2({
     const handleFocusMessage = useCallback((messageId: string, source: MessageFocusSource = 'reply') => {
         void focusMessage(messageId, source);
     }, [focusMessage]);
-
-    useEffect(() => {
-        if (typingUsers.length === 0) return;
-        if (!isAtBottomRef.current) return;
-        scrollToTrueBottom('smooth');
-    }, [typingUsers.length, scrollToTrueBottom]);
 
     return (
         <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -282,7 +332,11 @@ export function MessageThreadV2({
                                 </span>
                                 <button
                                     type="button"
-                                    onClick={() => scrollToTrueBottom('smooth')}
+                                    onClick={() => {
+                                        pinnedToLatestRef.current = true;
+                                        setUnreadBelow(0);
+                                        scrollToLatest('smooth');
+                                    }}
                                     className="rounded-full border border-primary/20 px-2 py-0.5 font-semibold hover:bg-primary/10"
                                 >
                                     Back to latest
@@ -301,16 +355,20 @@ export function MessageThreadV2({
                     ) : null}
                     <Virtuoso
                         ref={virtuosoRef}
-                        scrollerRef={(ref) => { scrollerRef.current = ref as HTMLElement | null; }}
                         style={{ height: '100%', flex: 1, overscrollBehavior: 'contain' }}
                         data={items}
-                        alignToBottom
+                        initialTopMostItemIndex={
+                            items.length > 0
+                                ? { index: items.length - 1, align: 'end' }
+                                : 0
+                        }
                         atBottomThreshold={120}
                         increaseViewportBy={isPopup ? { top: 140, bottom: 96 } : { top: 220, bottom: 140 }}
                         computeItemKey={(_, item) => item.id}
-                        followOutput={(atBottom) => (atBottom ? 'smooth' : false)}
+                        followOutput={() => (pinnedToLatestRef.current ? 'smooth' : false)}
                         atBottomStateChange={(atBottom) => {
                             isAtBottomRef.current = atBottom;
+                            pinnedToLatestRef.current = atBottom;
                             setIsAtBottom(atBottom);
                             if (atBottom) setUnreadBelow(0);
                         }}
@@ -319,7 +377,7 @@ export function MessageThreadV2({
                                 onLoadMore();
                             }
                         }}
-                        rangeChanged={({ startIndex }) => {
+                        rangeChanged={({ startIndex, endIndex }) => {
                             let dateLabel: string | null = null;
                             for (let i = startIndex; i >= 0; i--) {
                                 const item = items[i];
@@ -329,6 +387,22 @@ export function MessageThreadV2({
                                 }
                             }
                             setStickyDate(dateLabel);
+
+                            // Wave 1: mark visible messages (from other senders) as read.
+                            // The hook dedups + batches, so pushing on every range
+                            // change is safe and cheap.
+                            if (viewerId) {
+                                const visible: Array<{ id: string; senderId: string | null }> = [];
+                                for (let i = startIndex; i <= endIndex; i += 1) {
+                                    const item = items[i];
+                                    if (item?.type === 'message') {
+                                        visible.push({ id: item.message.id, senderId: item.message.senderId });
+                                    }
+                                }
+                                if (visible.length > 0) {
+                                    markRead(visible);
+                                }
+                            }
                         }}
                         components={{
                             Header: () =>
@@ -417,7 +491,11 @@ export function MessageThreadV2({
             <ScrollToBottomFab
                 visible={!isAtBottom}
                 unreadBelow={unreadBelow}
-                onClick={() => scrollToTrueBottom('smooth')}
+                onClick={() => {
+                    pinnedToLatestRef.current = true;
+                    setUnreadBelow(0);
+                    scrollToLatest('smooth');
+                }}
             />
             <div aria-live="polite" className="sr-only">
                 {messages.length > 0 && messages[messages.length - 1]?.sender

@@ -17,7 +17,7 @@ const DEFAULT_ALLOWED_CONSOLE_PATTERNS = [
   /Download the React DevTools/i,
   /favicon\.ico/i,
   /NO_COLOR/i,
-  /Failed to load resource: the server responded with a status of (400|401|403|404)/i,
+  /Failed to load resource: the server responded with a status of (400|401|403|404|409)/i,
   /Error initializing chat: TypeError: Failed to fetch/i,
   /Error initializing chat: TypeError: network error/i,
 ];

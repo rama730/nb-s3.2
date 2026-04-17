@@ -1,6 +1,6 @@
 import { resolveFlagWithRollout } from '@/lib/features/hardening';
 
-const asEnabledDefault = (value: string | undefined | null, fallback: boolean = false) => {
+const asEnabledDefault = (value: string | undefined | null, fallback: boolean = true) => {
     if (value === undefined || value === null) return fallback;
     const trimmed = value.trim().toLowerCase();
     if (trimmed === '') return fallback;

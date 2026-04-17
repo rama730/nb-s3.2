@@ -61,6 +61,7 @@ const AppearanceContext = createContext<AppearanceContextValue | undefined>(unde
 
 interface ThemeProviderProps {
     children: ReactNode
+    nonce?: string
 }
 
 type IdleWindow = Window & typeof globalThis & {
@@ -576,9 +577,9 @@ function ThemeRuntimeProvider({ children }: ThemeProviderProps) {
     )
 }
 
-export function ThemeProvider({ children }: ThemeProviderProps) {
+export function ThemeProvider({ children, nonce }: ThemeProviderProps) {
     return (
-        <NextThemesProvider attribute="class" defaultTheme="system" enableSystem>
+        <NextThemesProvider attribute="class" defaultTheme="system" enableSystem nonce={nonce}>
             <ThemeRuntimeProvider>{children}</ThemeRuntimeProvider>
         </NextThemesProvider>
     )

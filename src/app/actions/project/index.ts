@@ -41,6 +41,8 @@ export {
     // Task & Sprint CRUD
     createTaskAction,
     createSprintAction,
+    updateSprintAction,
+    deleteSprintAction,
     startSprintAction,
     completeSprintAction,
     moveTaskToSprintAction,

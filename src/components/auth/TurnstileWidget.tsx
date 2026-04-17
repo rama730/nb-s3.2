@@ -2,6 +2,7 @@
 
 import Script from 'next/script'
 import { useEffect, useRef, useState } from 'react'
+import { useSecurityRuntime } from '@/components/providers/SecurityRuntimeProvider'
 
 declare global {
     interface Window {
@@ -39,6 +40,7 @@ export default function TurnstileWidget({
     onExpire: () => void
     onError?: () => void
 }) {
+    const { nonce } = useSecurityRuntime()
     const containerRef = useRef<HTMLDivElement | null>(null)
     const widgetIdRef = useRef<string | null>(null)
     const [scriptReady, setScriptReady] = useState(false)
@@ -85,6 +87,7 @@ export default function TurnstileWidget({
         <>
             <Script
                 src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"
+                nonce={nonce ?? undefined}
                 strategy="afterInteractive"
                 onLoad={() => setScriptReady(true)}
                 onError={() => errorRef.current?.()}

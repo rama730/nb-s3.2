@@ -49,6 +49,22 @@ type BrowserSessionBridgeResponse = {
     error?: string;
 };
 
+type SignUpApiResponse = {
+    success: boolean;
+    data?: {
+        session?: {
+            accessToken?: string | null;
+            refreshToken?: string | null;
+            expiresAt?: number | null;
+        } | null;
+        user?: {
+            id: string;
+            email?: string | null;
+        } | null;
+    };
+    message?: string;
+};
+
 interface AuthContextType extends AuthState {
     isAuthenticated: boolean;
     signIn: (email: string, password: string, captchaToken?: string) => Promise<AuthResult>;
@@ -94,8 +110,6 @@ function transformProfile(profile: any): Profile | null {
             workspaceDueTodayCount: profile.workspace_due_today_count ?? 0,
             workspaceOverdueCount: profile.workspace_overdue_count ?? 0,
             workspaceInProgressCount: profile.workspace_in_progress_count ?? 0,
-            securityRecoveryCodes: profile.security_recovery_codes ?? [],
-            recoveryCodesGeneratedAt: profile.recovery_codes_generated_at,
             createdAt: profile.created_at ? new Date(profile.created_at) : undefined,
             updatedAt: profile.updated_at ? new Date(profile.updated_at) : undefined,
             deletedAt: profile.deleted_at ? new Date(profile.deleted_at) : undefined,
@@ -368,20 +382,64 @@ export function AuthProvider({
 
     const signUp = useCallback(async (email: string, password: string, fullName?: string, captchaToken?: string) => {
         const supabase = createClient();
-        const result = await supabase.auth.signUp({
-            email,
-            password,
-            options: {
-                ...(captchaToken ? { captchaToken } : {}),
-                data: {
-                    full_name: fullName || '',
-                }
+        try {
+            const response = await fetch('/api/v1/auth/signup', {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                credentials: 'same-origin',
+                body: JSON.stringify({
+                    email,
+                    password,
+                    fullName,
+                    ...(captchaToken ? { captchaToken } : {}),
+                }),
+            });
+            const body = await response.json().catch(() => null) as SignUpApiResponse | null;
+            if (!response.ok || body?.success === false) {
+                return {
+                    data: null,
+                    error: { message: body?.message || 'Unable to create account' },
+                };
             }
-        });
-        if (!result.error && result.data.session) {
-            await syncBrowserSessionToServer(result.data.session).catch(() => null);
+
+            const sessionPayload = body?.data?.session;
+            if (sessionPayload?.accessToken && sessionPayload.refreshToken) {
+                const result = await supabase.auth.setSession({
+                    access_token: sessionPayload.accessToken,
+                    refresh_token: sessionPayload.refreshToken,
+                });
+                if (result.error) {
+                    return {
+                        data: null,
+                        error: { message: result.error.message || 'Unable to establish session' },
+                    };
+                }
+                if (result.data.session) {
+                    await syncBrowserSessionToServer(result.data.session).catch(() => null);
+                }
+                return result;
+            }
+
+            return {
+                data: {
+                    user: body?.data?.user
+                        ? ({
+                            id: body.data.user.id,
+                            email: body.data.user.email ?? undefined,
+                          } as User)
+                        : null,
+                    session: null,
+                },
+                error: null,
+            };
+        } catch (error) {
+            const message = error instanceof Error ? error.message : '';
+            const isConnectivityError = message.toLowerCase().includes('fetch failed') || message.toLowerCase().includes('network');
+            return {
+                data: null,
+                error: { message: isConnectivityError ? AUTH_UNREACHABLE_MESSAGE : 'Unable to create account' },
+            };
         }
-        return result;
     }, []);
 
     const signInWithGoogle = useCallback(async (nextPath?: string | null) => {

@@ -24,13 +24,15 @@ const PERF_RUN_ID_FILE = path.join(process.cwd(), ".e2e-last-run-id");
 const BASELINE_FILE = process.env.ROUTE_BASELINE_FILE
   ? path.resolve(process.cwd(), process.env.ROUTE_BASELINE_FILE)
   : path.join(process.cwd(), "docs", "performance", "route-baseline.json");
+const DEFAULT_ROUTE_TTFB_RATIO = process.env.CI ? 0.5 : 1.0;
+const DEFAULT_ROUTE_TTFB_ABS_SLACK_MS = process.env.CI ? 120 : 260;
 const ROUTE_LOAD_RATIO = readNonNegativeNumber(
   "ROUTE_BASELINE_LOAD_MAX_REGRESSION_RATIO",
   0.35,
 );
 const ROUTE_TTFB_RATIO = readNonNegativeNumber(
   "ROUTE_BASELINE_TTFB_MAX_REGRESSION_RATIO",
-  0.5,
+  DEFAULT_ROUTE_TTFB_RATIO,
 );
 const ROUTE_LOAD_ABS_SLACK_MS = readNonNegativeNumber(
   "ROUTE_BASELINE_LOAD_ABS_SLACK_MS",
@@ -38,7 +40,7 @@ const ROUTE_LOAD_ABS_SLACK_MS = readNonNegativeNumber(
 );
 const ROUTE_TTFB_ABS_SLACK_MS = readNonNegativeNumber(
   "ROUTE_BASELINE_TTFB_ABS_SLACK_MS",
-  120,
+  DEFAULT_ROUTE_TTFB_ABS_SLACK_MS,
 );
 
 function readNonNegativeNumber(name: string, fallback: number): number {

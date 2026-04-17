@@ -52,3 +52,17 @@ test('resolvePresenceWebSocketUrl stays empty in production without explicit con
         null,
     )
 })
+
+test('resolvePresenceWebSocketUrl ignores disabled placeholder hosts in development and falls back locally', () => {
+    assert.equal(
+        resolvePresenceWebSocketUrl({
+            env: makeEnv({
+                NODE_ENV: 'development',
+                PRESENCE_SERVICE_PORT: '4010',
+                PRESENCE_WS_URL: 'wss://presence.local.invalid/socket',
+            }),
+            hostname: 'localhost',
+        }),
+        'ws://127.0.0.1:4010/ws',
+    )
+})

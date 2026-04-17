@@ -1,3 +1,13 @@
+// Wave 1 fix: the presence service is spawned by `tsx` in the dev script and
+// by the production runtime outside of Next.js, neither of which auto-loads
+// `.env.local`. Without these env vars, `PRESENCE_TOKEN_SECRET` is undefined
+// and every WebSocket auth throws `MissingPresenceSecretError`, which in turn
+// closes every client connection. Load env BEFORE any other import so the
+// first read of `process.env.*` (inside imported modules) sees real values.
+import { config as loadDotenv } from "dotenv";
+loadDotenv({ path: ".env.local" });
+loadDotenv();
+
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 
@@ -5,6 +15,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { z } from "zod";
 
 import { recordOtlpMetric } from "../../../src/lib/telemetry/otlp";
+import { signPresenceEventEnvelope, verifyPresenceEventEnvelope, type SignedPresenceEventEnvelope } from "../../../src/lib/realtime/presence-event-signing";
 import { verifyPresenceToken, type PresenceTokenClaims } from "../../../src/lib/realtime/presence-token";
 import type {
   PresenceClientEvent,
@@ -18,6 +29,17 @@ import { createPresenceStore, type PresenceStore, type PresenceSubscriber } from
 const PRESENCE_SERVICE_PORT = Number(process.env.PRESENCE_SERVICE_PORT || 4010);
 const PRESENCE_TTL_SECONDS = 45;
 const AUTH_TIMEOUT_MS = 5_000;
+const LIVE_SESSION_TTL_SECONDS = 90;
+const PRESENCE_ALLOWED_ORIGINS = (
+  process.env.ALLOWED_WS_ORIGINS
+  || process.env.PRESENCE_ALLOWED_ORIGINS
+  || process.env.APP_URL
+  || process.env.NEXT_PUBLIC_APP_URL
+  || ""
+)
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
 const MAX_RATE_LIMIT_VIOLATIONS = 8;
 const EVENT_RATE_LIMITS = {
   heartbeat: {
@@ -34,6 +56,19 @@ const EVENT_RATE_LIMITS = {
     windowMs: 5_000,
     maxEvents: 30,
     minIntervalMs: 250,
+  },
+  // Wave 2 Step 11: delivered/read are batched on the client (250 ms / 600 ms
+  // flush intervals) so they arrive at low frequency. The limits below match
+  // typing but with a generous message-count cap to allow bulk acks.
+  delivered: {
+    windowMs: 5_000,
+    maxEvents: 30,
+    minIntervalMs: 200,
+  },
+  read: {
+    windowMs: 5_000,
+    maxEvents: 30,
+    minIntervalMs: 200,
   },
 } as const;
 const authEventSchema = z.object({
@@ -55,6 +90,12 @@ const typingEventSchema = z.object({
   isTyping: z.boolean(),
   profile: presenceMemberProfileSchema.nullable().optional(),
 });
+// Wave 2 Step 11: delivered/read receipt broadcast schemas.
+const MAX_RECEIPT_MESSAGE_IDS = 200;
+const receiptEventSchema = z.object({
+  type: z.enum(["delivered", "read"]),
+  messageIds: z.array(z.string().uuid()).min(1).max(MAX_RECEIPT_MESSAGE_IDS),
+});
 
 type RoomKeys = {
   roomKey: string;
@@ -67,7 +108,7 @@ type RoomConnectionContext = {
   claims: PresenceTokenClaims;
   roomKeys: RoomKeys;
   state: PresenceMemberState;
-  rateState: Record<"heartbeat" | "cursor" | "typing", {
+  rateState: Record<"heartbeat" | "cursor" | "typing" | "delivered" | "read", {
     timestamps: number[];
     lastAcceptedAt: number;
   }>;
@@ -106,6 +147,17 @@ function buildRoomKeys(claims: Pick<PresenceTokenClaims, "roomType" | "roomId">)
     memberHashKey: `presence:room:${roomKey}:members_v2`,
     channelKey: `presence:room:${roomKey}:events`,
   };
+}
+
+function buildLiveSessionKey(claims: Pick<PresenceTokenClaims, "userId" | "sessionId">) {
+  if (!claims.sessionId) return null;
+  return `presence:live-session:${claims.userId}:${claims.sessionId}`;
+}
+
+async function touchLiveSession(claims: Pick<PresenceTokenClaims, "userId" | "sessionId">) {
+  const key = buildLiveSessionKey(claims);
+  if (!key) return;
+  await redis.set(key, presenceServerInstanceId, { ex: LIVE_SESSION_TTL_SECONDS });
 }
 
 function toPresenceState(input: {
@@ -180,7 +232,10 @@ async function publishPresenceEvent(roomKeys: RoomKeys, event: PresenceServerEve
     ...event,
     originServerId: presenceServerInstanceId,
   };
-  await redis.publish(roomKeys.channelKey, JSON.stringify(publishedEvent));
+  await redis.publish(
+    roomKeys.channelKey,
+    JSON.stringify(signPresenceEventEnvelope(publishedEvent)),
+  );
 }
 
 async function ensureRoom(roomKeys: RoomKeys) {
@@ -197,12 +252,19 @@ async function ensureRoom(roomKeys: RoomKeys) {
 
   const subscriber = redis.subscribe<PresenceServerEvent>(roomKeys.channelKey);
   room.subscriber = subscriber;
-  subscriber.on("message", (event: { message?: PublishedPresenceServerEvent | string }) => {
+  subscriber.on("message", (event: { message?: SignedPresenceEventEnvelope<PublishedPresenceServerEvent> | string }) => {
     try {
-      const payload = typeof event.message === "string"
-        ? JSON.parse(event.message) as PublishedPresenceServerEvent
+      const envelope = typeof event.message === "string"
+        ? JSON.parse(event.message) as SignedPresenceEventEnvelope<PublishedPresenceServerEvent>
         : event.message;
-      if (!payload) return;
+      if (!envelope || !verifyPresenceEventEnvelope(envelope)) {
+        emitMetric("presence.room.subscriber_message_rejected", {
+          roomKey: roomKeys.roomKey,
+          value: 1,
+        });
+        return;
+      }
+      const payload = envelope.payload;
       if (payload.originServerId === presenceServerInstanceId) {
         return;
       }
@@ -243,7 +305,7 @@ async function cleanupRoom(roomKeys: RoomKeys) {
 
 function buildAck(
   context: Pick<RoomConnectionContext, "claims">,
-  ackType: "auth" | "heartbeat" | "cursor" | "typing",
+  ackType: "auth" | "heartbeat" | "cursor" | "typing" | "delivered" | "read",
 ): PresenceServerEvent {
   return {
     type: "ack",
@@ -259,10 +321,12 @@ function createInitialRateState() {
     heartbeat: { timestamps: [], lastAcceptedAt: 0 },
     cursor: { timestamps: [], lastAcceptedAt: 0 },
     typing: { timestamps: [], lastAcceptedAt: 0 },
+    delivered: { timestamps: [], lastAcceptedAt: 0 },
+    read: { timestamps: [], lastAcceptedAt: 0 },
   } satisfies RoomConnectionContext["rateState"];
 }
 
-function consumeEventRateLimit(context: RoomConnectionContext, type: "heartbeat" | "cursor" | "typing") {
+function consumeEventRateLimit(context: RoomConnectionContext, type: "heartbeat" | "cursor" | "typing" | "delivered" | "read") {
   const limit = EVENT_RATE_LIMITS[type];
   const state = context.rateState[type];
   const now = Date.now();
@@ -280,7 +344,7 @@ function consumeEventRateLimit(context: RoomConnectionContext, type: "heartbeat"
   return true;
 }
 
-function handleRateLimitedEvent(socket: WebSocket, context: RoomConnectionContext, type: "heartbeat" | "cursor" | "typing") {
+function handleRateLimitedEvent(socket: WebSocket, context: RoomConnectionContext, type: "heartbeat" | "cursor" | "typing" | "delivered" | "read") {
   context.rateLimitViolations += 1;
   sendJson(socket, {
     type: "error",
@@ -319,6 +383,7 @@ async function handlePresenceEvent(socket: WebSocket, event: PresenceClientEvent
         return;
       }
       await persistMemberState(context);
+      await touchLiveSession(context.claims);
       sendJson(socket, buildAck(context, "heartbeat"));
       return;
     }
@@ -423,6 +488,63 @@ async function handlePresenceEvent(socket: WebSocket, event: PresenceClientEvent
       });
       return;
     }
+    case "delivered":
+    case "read": {
+      // Wave 2 Step 11: receipt broadcast — the recipient's client signals
+      // that one or more messages have been delivered/read. We rate-limit
+      // and then broadcast a `receipt.broadcast` to every room member so
+      // the sender's UI can advance the tick within ~100 ms, before the
+      // postgres_changes INSERT from the receipt table propagates.
+      //
+      // Only conversation rooms carry receipt semantics; user/workspace
+      // rooms silently ignore these events.
+      if (context.claims.roomType !== "conversation") {
+        sendJson(socket, {
+          type: "error",
+          code: "BAD_PAYLOAD",
+          message: "Receipt events are only valid in conversation rooms.",
+        });
+        return;
+      }
+
+      const parsedReceipt = receiptEventSchema.safeParse(event);
+      if (!parsedReceipt.success) {
+        sendJson(socket, {
+          type: "error",
+          code: "BAD_PAYLOAD",
+          message: `Invalid ${event.type} event.`,
+        });
+        return;
+      }
+
+      const receiptType = event.type as "delivered" | "read";
+      if (!consumeEventRateLimit(context, receiptType)) {
+        handleRateLimitedEvent(socket, context, receiptType);
+        return;
+      }
+
+      const receiptBroadcast: PresenceServerEvent = {
+        type: "receipt.broadcast",
+        receiptType,
+        roomType: context.claims.roomType,
+        roomId: context.claims.roomId,
+        userId: context.claims.userId,
+        messageIds: parsedReceipt.data.messageIds,
+        serverTime: Date.now(),
+      };
+
+      broadcastRoomLocally(context.roomKeys, receiptBroadcast);
+      await publishPresenceEvent(context.roomKeys, receiptBroadcast);
+      sendJson(socket, buildAck(context, receiptType));
+
+      emitMetric(`presence.room.${receiptType}`, {
+        roomType: context.claims.roomType,
+        roomId: context.claims.roomId,
+        messageCount: parsedReceipt.data.messageIds.length,
+        value: 1,
+      });
+      return;
+    }
     default: {
       sendJson(socket, {
         type: "error",
@@ -455,6 +577,7 @@ async function initializePresenceConnection(websocket: WebSocket, claims: Presen
 
   try {
     await persistMemberState(context);
+    await touchLiveSession(claims);
     sendJson(websocket, buildAck(context, "auth"));
 
     const snapshotMembers = await readRoomMembers(roomKeys);
@@ -569,6 +692,17 @@ function closeSocket(socket: WebSocket, code: number, message: string) {
   }
 }
 
+function isAllowedUpgradeOrigin(originHeader: string | undefined) {
+  if (process.env.NODE_ENV !== "production") return true;
+  if (!originHeader) return false;
+  try {
+    const origin = new URL(originHeader).origin;
+    return PRESENCE_ALLOWED_ORIGINS.includes(origin);
+  } catch {
+    return false;
+  }
+}
+
 const server = createServer((request, response) => {
   if (request.url === "/health") {
     response.writeHead(200, { "content-type": "application/json" });
@@ -586,6 +720,11 @@ server.on("upgrade", async (request, socket, head) => {
   try {
     const requestUrl = new URL(request.url || "/", "http://presence.local");
     if (requestUrl.pathname !== "/ws") {
+      socket.destroy();
+      return;
+    }
+
+    if (!isAllowedUpgradeOrigin(request.headers.origin)) {
       socket.destroy();
       return;
     }

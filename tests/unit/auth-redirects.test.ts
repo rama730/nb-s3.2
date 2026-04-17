@@ -38,6 +38,9 @@ describe('auth redirects', () => {
         assert.equal(normalizeAuthNextPath('//evil.example/steal'), '/hub')
         assert.equal(normalizeAuthNextPath('hub'), '/hub')
         assert.equal(normalizeAuthNextPath('/auth/callback'), '/hub')
+        assert.equal(normalizeAuthNextPath('/\\evil'), '/hub')
+        assert.equal(normalizeAuthNextPath('/%5cevil'), '/hub')
+        assert.equal(normalizeAuthNextPath('/_internal'), '/hub')
     })
 
     it('resolves canonical auth base URL using APP_URL precedence', () => {
@@ -51,6 +54,20 @@ describe('auth redirects', () => {
                 browserOrigin: 'https://browser.example.com',
             })
             assert.equal(baseUrl, 'https://app.example.com')
+        } finally {
+            Reflect.set(process.env, 'NODE_ENV', previousNodeEnv)
+        }
+    })
+
+    it('uses the active loopback request origin during local production verification', () => {
+        const previousNodeEnv = process.env.NODE_ENV
+        try {
+            Reflect.set(process.env, 'NODE_ENV', 'production')
+            const baseUrl = resolveAuthBaseUrl({
+                appUrl: 'http://localhost:3000',
+                requestUrl: 'http://localhost:3100/auth/callback?code=test',
+            })
+            assert.equal(baseUrl, 'http://localhost:3100')
         } finally {
             Reflect.set(process.env, 'NODE_ENV', previousNodeEnv)
         }

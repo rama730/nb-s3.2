@@ -8,7 +8,7 @@ import {
   requireAuthenticatedUser,
 } from "@/app/api/v1/_shared";
 import { logger } from "@/lib/logger";
-import { listActiveSessions } from "@/lib/security/session-activity";
+import { listActiveSessionsPage } from "@/lib/security/session-activity";
 
 type SessionPayload = {
   id: string;
@@ -19,6 +19,14 @@ type SessionPayload = {
   is_current?: boolean;
   aal?: "aal1" | "aal2" | null;
 };
+
+function parsePaginationNumber(value: string | null, fallback: number, max: number) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.max(0, Math.min(Math.trunc(parsed), max));
+}
 
 export async function GET(request: Request) {
   const startedAt = Date.now();
@@ -61,12 +69,16 @@ export async function GET(request: Request) {
   }
 
   try {
+    const { searchParams } = new URL(request.url);
+    const limit = Math.max(1, parsePaginationNumber(searchParams.get("limit"), 12, 50));
+    const offset = parsePaginationNumber(searchParams.get("offset"), 0, 500);
     const {
       data: { session },
     } = await auth.supabase.auth.getSession();
     const currentSessionId =
       session ? getSessionIdentifier(session) ?? null : null;
-    const sessions: SessionPayload[] = await listActiveSessions(auth.user.id, currentSessionId, 12);
+    const page = await listActiveSessionsPage(auth.user.id, currentSessionId, { limit, offset });
+    const sessions: SessionPayload[] = page.sessions;
 
     logApiRoute(request, {
       requestId,
@@ -76,7 +88,15 @@ export async function GET(request: Request) {
       success: true,
       status: 200,
     });
-    return jsonSuccess({ sessions });
+    return jsonSuccess({
+      sessions,
+      pagination: {
+        limit,
+        offset,
+        hasMore: page.hasMore,
+        nextOffset: page.nextOffset,
+      },
+    });
   } catch (error) {
     logger.error("[api/v1/sessions] failed", { module: 'api', error: error instanceof Error ? error.message : String(error) });
     logApiRoute(request, {

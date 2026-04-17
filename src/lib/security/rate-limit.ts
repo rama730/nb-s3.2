@@ -83,11 +83,66 @@ export const RATE_LIMIT_ROUTE_POLICIES: Record<string, RouteRateLimitPolicy> = {
     publicRead: { mode: 'distributed-only', failMode: 'stale_or_shed' },
 }
 
+// SEC-H4 / SEC-L3: per-scope fail-mode registry. Without this, Redis outages
+// either silently let every request through (catastrophic for bruteforce
+// paths like login / MFA / password) or block everything (catastrophic for
+// typing / presence heartbeats).
+//
+// Matching is first-prefix-wins. Any identifier that does not match a scope
+// here falls back to the mode default — which is `fail_closed` in production
+// (`distributed-only`) and `allow` in tests / dev. New sensitive endpoints
+// SHOULD be listed here explicitly so the fail posture is visible at review
+// time rather than buried in a call site.
+export type RateLimitScopePolicy = {
+    prefix: string
+    failMode: RateLimitFailMode
+    // Optional metadata – future: telemetry tagging.
+    category: 'sensitive' | 'soft' | 'public'
+}
+
+export const RATE_LIMIT_SCOPE_POLICIES: RateLimitScopePolicy[] = [
+    // Credential / auth surface — never allow during an outage.
+    { prefix: 'auth:', failMode: 'fail_closed', category: 'sensitive' },
+    { prefix: 'login:', failMode: 'fail_closed', category: 'sensitive' },
+    { prefix: 'signup:', failMode: 'fail_closed', category: 'sensitive' },
+    { prefix: 'password:', failMode: 'fail_closed', category: 'sensitive' },
+    { prefix: 'mfa:', failMode: 'fail_closed', category: 'sensitive' },
+    { prefix: 'step-up:', failMode: 'fail_closed', category: 'sensitive' },
+    { prefix: 'recovery:', failMode: 'fail_closed', category: 'sensitive' },
+    { prefix: 'account:', failMode: 'fail_closed', category: 'sensitive' },
+    { prefix: 'onboarding:', failMode: 'fail_closed', category: 'sensitive' },
+    { prefix: 'upload:', failMode: 'fail_closed', category: 'sensitive' },
+    { prefix: 'admin-', failMode: 'fail_closed', category: 'sensitive' },
+    { prefix: 'connections-send', failMode: 'fail_closed', category: 'sensitive' },
+    // Hot paths where blocking every user on Redis hiccup is worse than the
+    // short window of unchecked traffic. The local bucket in dev avoids
+    // letting tests flake when Redis isn't available.
+    { prefix: 'presence:', failMode: 'stale_or_shed', category: 'soft' },
+    { prefix: 'typing:', failMode: 'stale_or_shed', category: 'soft' },
+    { prefix: 'realtime:', failMode: 'stale_or_shed', category: 'soft' },
+    // Public, unauthenticated read endpoints: fail open so the site stays up.
+    { prefix: 'health:', failMode: 'allow', category: 'public' },
+    { prefix: 'ready:', failMode: 'allow', category: 'public' },
+]
+
+export function resolveScopeFailMode(identifier: string): RateLimitFailMode | undefined {
+    for (const policy of RATE_LIMIT_SCOPE_POLICIES) {
+        if (identifier.startsWith(policy.prefix)) return policy.failMode
+    }
+    return undefined
+}
+
 export type ConsumeRateLimitOptions = {
     mode?: RateLimitMode
     failMode?: RateLimitFailMode
     fallback?: 'deny' | 'allow' | 'local'
     route?: keyof typeof RATE_LIMIT_ROUTE_POLICIES
+    /**
+     * Scope identifier used to look up `RATE_LIMIT_SCOPE_POLICIES` when no
+     * explicit `failMode` is provided. Defaults to the identifier passed to
+     * `consumeRateLimit`.
+     */
+    scope?: string
 }
 
 function getRateLimitMode(): RateLimitMode {
@@ -116,19 +171,29 @@ function defaultFailMode(mode: RateLimitMode): RateLimitFailMode {
     return mode === 'distributed-only' ? 'fail_closed' : 'allow'
 }
 
-function resolveConsumeOptions(options?: ConsumeRateLimitOptions): {
+function resolveConsumeOptions(
+    identifier: string,
+    options?: ConsumeRateLimitOptions,
+): {
     mode: RateLimitMode
     failMode: RateLimitFailMode
     testLocal: boolean
 } {
     const routePolicy = options?.route ? RATE_LIMIT_ROUTE_POLICIES[options.route] : undefined
     const mode = options?.mode ?? routePolicy?.mode ?? getRateLimitMode()
-    const failMode = normalizeFailMode(options) ?? routePolicy?.failMode ?? defaultFailMode(mode)
+    const scopeLookup = options?.scope ?? identifier
+    const scopeFailMode = resolveScopeFailMode(scopeLookup)
+    const failMode =
+        normalizeFailMode(options)
+        ?? routePolicy?.failMode
+        ?? scopeFailMode
+        ?? defaultFailMode(mode)
     const testLocal =
         process.env.NODE_ENV === 'test'
         && options?.failMode === undefined
         && options?.fallback === undefined
         && routePolicy?.failMode === undefined
+        && scopeFailMode === undefined
     return { mode, failMode, testLocal }
 }
 
@@ -140,7 +205,7 @@ function buildPolicy(
 ): RateLimitPolicy {
     const effectiveLimit = Math.max(1, Math.trunc(limit))
     const effectiveWindowSeconds = Math.max(1, Math.trunc(windowSeconds))
-    const { failMode, testLocal } = resolveConsumeOptions(options)
+    const { failMode, testLocal } = resolveConsumeOptions(identifier, options)
 
     return {
         scope: options?.route ?? 'default',

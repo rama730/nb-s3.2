@@ -2,7 +2,7 @@ import { eq, sql } from "drizzle-orm";
 import { validateCsrf } from "@/lib/security/csrf";
 import { resolvePasswordCredentialState } from "@/lib/auth/account-identity";
 import { db } from "@/lib/db";
-import { profiles } from "@/lib/db/schema";
+import { profileSecurityStates, recoveryCodeRedemptions } from "@/lib/db/schema";
 import {
   enforceRouteLimit,
   getRequestId,
@@ -255,39 +255,126 @@ export async function POST(request: Request) {
 
     if (method === "recovery_code") {
       const rawCode = typeof body.code === "string" ? body.code : "";
+
+      // SEC-H3: before redeeming, confirm the codes are still bound to a
+      // TOTP factor that is currently verified for this user. When a user
+      // rotates their authenticator the old factor disappears and we must
+      // reject any surviving recovery codes rather than grant step-up.
+      const currentFactors = await listSecurityMfaFactors(auth.supabase);
+      const verifiedTotpFactorIds = new Set(
+        getVerifiedTotpFactors(currentFactors).map((factor) => factor.id),
+      );
+
       const recoveryResult = await db.transaction(async (tx) => {
-        const rows = await tx.execute<{ security_recovery_codes: unknown }>(sql`
-          SELECT security_recovery_codes
-          FROM profiles
-          WHERE id = ${user.id}::uuid
+        const rows = await tx.execute<{
+          security_recovery_codes: unknown;
+          recovery_codes_factor_id: string | null;
+        }>(sql`
+          SELECT security_recovery_codes, recovery_codes_factor_id
+          FROM profile_security_states
+          WHERE user_id = ${user.id}::uuid
           FOR UPDATE
         `);
 
         const storedCodes = parseStoredRecoveryCodes(rows[0]?.security_recovery_codes);
         if (storedCodes.length === 0) {
-          return { matched: false, remainingCount: 0 };
+          return { matched: false, remainingCount: 0, factorInvalidated: false };
+        }
+
+        const storedFactorId = rows[0]?.recovery_codes_factor_id ?? null;
+        // Reject when:
+        //   a) codes were bound to a factor that is no longer verified, or
+        //   b) codes were never bound (pre-SEC-H3) AND the user currently
+        //      has no verified TOTP factor — users are expected to regen.
+        const factorStillVerified = storedFactorId
+          ? verifiedTotpFactorIds.has(storedFactorId)
+          : verifiedTotpFactorIds.size > 0;
+        if (!factorStillVerified) {
+          return { matched: false, remainingCount: storedCodes.length, factorInvalidated: true };
         }
 
         const consumed = consumeRecoveryCode(storedCodes, rawCode);
         if (!consumed.matched) {
-          return { matched: false, remainingCount: countRemainingRecoveryCodes(storedCodes) };
+          return {
+            matched: false,
+            remainingCount: countRemainingRecoveryCodes(storedCodes),
+            factorInvalidated: false,
+          };
+        }
+
+        const redemption = await tx
+          .insert(recoveryCodeRedemptions)
+          .values({
+            userId: user.id,
+            codeId: consumed.matchedCodeId!,
+          })
+          .onConflictDoNothing()
+          .returning({ id: recoveryCodeRedemptions.id });
+
+        if (redemption.length === 0) {
+          return {
+            matched: false,
+            remainingCount: countRemainingRecoveryCodes(storedCodes),
+            factorInvalidated: false,
+          };
         }
 
         await tx
-          .update(profiles)
-          .set({
+          .insert(profileSecurityStates)
+          .values({
+            userId: user.id,
             securityRecoveryCodes: consumed.updatedCodes,
             updatedAt: new Date(),
           })
-          .where(eq(profiles.id, user.id));
+          .onConflictDoUpdate({
+            target: profileSecurityStates.userId,
+            set: {
+              securityRecoveryCodes: consumed.updatedCodes,
+              updatedAt: new Date(),
+            },
+          });
 
         return {
           matched: true,
           remainingCount: consumed.remainingCount,
+          factorInvalidated: false,
         };
       });
 
       if (!recoveryResult.matched) {
+        // SEC-L7: persist a redemption-attempt record (without the submitted
+        // code or any derivative) so the legitimate account owner can see
+        // that someone tried to use their recovery codes. Non-blocking —
+        // failure to audit must not mask the underlying rejection.
+        try {
+          await recordSecurityEvent({
+            userId: user.id,
+            eventType: "recovery_code_redemption_failed",
+            request,
+            metadata: {
+              failureReason: recoveryResult.factorInvalidated
+                ? "factor_invalidated"
+                : "code_mismatch",
+              remainingCount: recoveryResult.remainingCount,
+            },
+          });
+        } catch (auditError) {
+          logger.error("auth.step_up.audit_failed", {
+            requestId,
+            userId: user.id,
+            eventType: "recovery_code_redemption_failed",
+            error: auditError instanceof Error ? auditError.message : String(auditError),
+          });
+        }
+
+        if (recoveryResult.factorInvalidated) {
+          return logAndJsonError(
+            "These recovery codes are no longer valid because your authenticator app was changed. Generate a new set from the Security tab.",
+            400,
+            "RECOVERY_CODE_INVALID",
+            "RECOVERY_CODE_FACTOR_INVALIDATED",
+          );
+        }
         return logAndJsonError(
           "That recovery code did not match. Check the code and try again.",
           400,

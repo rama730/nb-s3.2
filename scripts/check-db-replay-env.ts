@@ -36,3 +36,5 @@ try {
   console.error("[db-replay-env] failed:", error);
   process.exit(1);
 }
+
+export {};

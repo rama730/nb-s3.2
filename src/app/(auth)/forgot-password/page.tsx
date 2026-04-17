@@ -77,7 +77,7 @@ export default function ForgotPasswordPage() {
                     <CardContent className="space-y-4">
                         {sent ? (
                             <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800 dark:border-emerald-900/40 dark:bg-emerald-950/20 dark:text-emerald-200">
-                                If an account exists for <span className="font-semibold">{email}</span>, a reset link has been sent. Check your inbox and spam folder.
+                                If the account exists, a reset link has been sent. Check your inbox and spam folder.
                             </div>
                         ) : (
                             <form onSubmit={handleSubmit} className="space-y-4">

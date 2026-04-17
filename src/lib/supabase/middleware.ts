@@ -20,6 +20,10 @@ const AUTH_COOKIE_MARKERS = ['auth-token', 'sb-access-token', 'sb-refresh-token'
 const LOG_THROTTLE_MS = 60_000
 let lastAuthSnapshotWarnAt = 0
 
+type UpdateSessionOptions = {
+    requestHeaders?: Headers
+}
+
 function readBooleanFromEnv(name: string, fallback: boolean): boolean {
     const raw = process.env[name]
     if (!raw) return fallback
@@ -33,6 +37,18 @@ function withRequestId(response: NextResponse, requestId: string, routeClass: st
     response.headers.set('x-request-id', requestId)
     response.headers.set('x-route-class', routeClass)
     return response
+}
+
+function createPassThroughResponse(requestHeaders?: Headers): NextResponse {
+    if (!requestHeaders) {
+        return NextResponse.next()
+    }
+
+    return NextResponse.next({
+        request: {
+            headers: requestHeaders,
+        },
+    })
 }
 
 function redirectWithRequestId(url: URL, requestId: string, routeClass: string): NextResponse {
@@ -87,17 +103,15 @@ function shouldLogAuthWarning(now: number): boolean {
     return true
 }
 
-export async function updateSession(request: NextRequest) {
+export async function updateSession(request: NextRequest, options: UpdateSessionOptions = {}) {
     const requestId = crypto.randomUUID()
     const pathname = request.nextUrl.pathname
     const routeClass = classifyRoute(pathname)
     const hardeningPhase = getAuthHardeningPhase()
-    let supabaseResponse = NextResponse.next({
-        request,
-    })
+    let supabaseResponse = createPassThroughResponse(options.requestHeaders)
 
     if (pathname.startsWith('/_next')) {
-        return withRequestId(supabaseResponse, requestId, routeClass)
+        return withRequestId(createPassThroughResponse(options.requestHeaders), requestId, routeClass)
     }
 
     const canonicalPublicUsernamePath = getCanonicalPublicUsernamePath(pathname)
@@ -158,9 +172,7 @@ export async function updateSession(request: NextRequest) {
                 },
                 setAll(cookiesToSet) {
                     cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value))
-                    supabaseResponse = NextResponse.next({
-                        request,
-                    })
+                    supabaseResponse = createPassThroughResponse(options.requestHeaders)
                     cookiesToSet.forEach(({ name, value, options }) =>
                         supabaseResponse.cookies.set(name, value, options)
                     )

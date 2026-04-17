@@ -1,18 +1,16 @@
 'use client'
 
-import { Suspense, useMemo, useState } from 'react'
+import { Suspense, useState } from 'react'
 import Link from 'next/link'
 
 import { Mail, Loader2, RefreshCcw } from 'lucide-react'
 
-import { createClient } from '@/lib/supabase/client'
 import { useAuth } from '@/lib/hooks/use-auth'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 
 function VerifyEmailPageInner() {
     const { user, signOut } = useAuth()
-    const supabase = useMemo(() => createClient(), [])
     const [isSending, setIsSending] = useState(false)
     const [isSigningOut, setIsSigningOut] = useState(false)
     const [message, setMessage] = useState<string | null>(null)
@@ -29,17 +27,18 @@ function VerifyEmailPageInner() {
         setError(null)
 
         try {
-            const { error: resendError } = await supabase.auth.resend({
-                type: 'signup',
-                email: user.email,
+            const response = await fetch('/api/v1/auth/verify-email', {
+                method: 'POST',
+                credentials: 'same-origin',
             })
+            const body = await response.json().catch(() => null) as { success?: boolean; message?: string } | null;
 
-            if (resendError) {
-                setError(resendError.message || 'Unable to resend verification email.')
+            if (!response.ok || body?.success === false) {
+                setError(body?.message || 'Unable to resend verification email.')
                 return
             }
 
-            setMessage(`Verification email sent to ${user.email}.`)
+            setMessage(body?.message || 'Verification email sent. Please check your inbox.')
         } catch (resendError) {
             setError(resendError instanceof Error ? resendError.message : 'Unable to resend verification email.')
         } finally {

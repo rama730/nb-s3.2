@@ -125,6 +125,7 @@ export function useExplorerMutations({
       if (!response.ok) {
         throw new Error(`Upload failed (${response.status})`);
       }
+      return presigned;
     },
     []
   );
@@ -179,13 +180,14 @@ export function useExplorerMutations({
         const fileExt = name.includes(".") ? name.split(".").pop() : "txt";
         const storagePath = buildProjectFileKey(projectId, `${Math.random().toString(36).substring(2)}.${fileExt}`);
         const emptyBlob = new Blob([""], { type: "text/plain" });
-        await uploadWithPresignedUrl(storagePath, emptyBlob, "text/plain", emptyBlob.size);
+        const uploadSession = await uploadWithPresignedUrl(storagePath, emptyBlob, "text/plain", emptyBlob.size);
 
         return (await createFileNode(projectId, parentId, {
           name,
           s3Key: storagePath,
           size: 0,
           mimeType: "text/plain",
+          uploadIntentId: uploadSession.uploadIntentId,
         })) as ProjectNode;
       });
 
@@ -281,21 +283,28 @@ export function useExplorerMutations({
               throw new Error(presignedBatch.error || "Failed to prepare upload URLs");
             }
             const uploadUrlMap = presignedBatch.urls || {};
+            const uploadIntentIdMap = presignedBatch.uploadIntentIds || {};
 
             await runWithConcurrency(uploadPlans, uploadConcurrency, async ({ file, filePath, contentType, sizeBytes }) => {
               try {
-                const uploadUrl =
+                const uploadSession =
                   uploadUrlMap[filePath] ||
                   (
                     await getUploadPresignedUrl(filePath, contentType, sizeBytes)
                   );
 
                 const resolvedUploadUrl =
-                  typeof uploadUrl === "string"
-                    ? uploadUrl
-                    : "error" in uploadUrl
+                  typeof uploadSession === "string"
+                    ? uploadSession
+                    : "error" in uploadSession
                       ? null
-                      : uploadUrl.url;
+                      : uploadSession.url;
+                const resolvedUploadIntentId =
+                  typeof uploadSession === "string"
+                    ? uploadIntentIdMap[filePath] ?? null
+                    : "error" in uploadSession
+                      ? null
+                      : uploadSession.uploadIntentId;
 
                 if (!resolvedUploadUrl) {
                   throw new Error("Failed to prepare upload URL");
@@ -315,6 +324,7 @@ export function useExplorerMutations({
                   s3Key: filePath,
                   size: file.size,
                   mimeType: contentType,
+                  uploadIntentId: resolvedUploadIntentId ?? undefined,
                 })) as ProjectNode;
                 createdNodes.push(node);
               } catch {
@@ -981,21 +991,28 @@ export function useExplorerMutations({
             throw new Error(presignedBatch.error || "Failed to prepare upload URLs");
           }
           const uploadUrlMap = presignedBatch.urls || {};
+          const uploadIntentIdMap = presignedBatch.uploadIntentIds || {};
 
           for (const { file, filePath, contentType, sizeBytes } of uploadPlans) {
             try {
-              const uploadUrl =
+              const uploadSession =
                 uploadUrlMap[filePath] ||
                 (
                   await getUploadPresignedUrl(filePath, contentType, sizeBytes)
                 );
 
               const resolvedUploadUrl =
-                typeof uploadUrl === "string"
-                  ? uploadUrl
-                  : "error" in uploadUrl
+                typeof uploadSession === "string"
+                  ? uploadSession
+                  : "error" in uploadSession
                     ? null
-                    : uploadUrl.url;
+                    : uploadSession.url;
+              const resolvedUploadIntentId =
+                typeof uploadSession === "string"
+                  ? uploadIntentIdMap[filePath] ?? null
+                  : "error" in uploadSession
+                    ? null
+                    : uploadSession.uploadIntentId;
 
               if (!resolvedUploadUrl) {
                 throw new Error("Failed to prepare upload URL");
@@ -1015,6 +1032,7 @@ export function useExplorerMutations({
                 s3Key: filePath,
                 size: file.size,
                 mimeType: contentType,
+                uploadIntentId: resolvedUploadIntentId ?? undefined,
               })) as ProjectNode;
               createdNodes.push(node);
             } catch {

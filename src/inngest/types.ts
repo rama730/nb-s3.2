@@ -19,6 +19,7 @@ type GitPushEvent = {
         projectId: string;
         commitMessage: string;
         userId: string;
+        jobSignature: string;
     };
 };
 
@@ -30,6 +31,7 @@ type GitPullEvent = {
         deliveryId?: string | null;
         afterSha?: string | null;
         source?: "webhook" | "manual" | "system";
+        jobSignature: string;
     };
 };
 
@@ -37,6 +39,7 @@ type AccountCleanupEvent = {
     data: {
         userId: string;
         deletionId: string;
+        jobSignature: string;
     };
 };
 
@@ -70,4 +73,3 @@ export const schemas = new EventSchemas().fromRecord<{
     "workspace/connections.bulk": ConnectionsBulkEvent;
     "workspace/connections.sync_suggestions": ConnectionsSyncSuggestionsEvent;
 }>();
-

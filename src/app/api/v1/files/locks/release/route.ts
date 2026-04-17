@@ -5,6 +5,7 @@ import { projectNodeLocks } from '@/lib/db/schema';
 import { and, eq, inArray } from 'drizzle-orm';
 import { jsonError, jsonSuccess } from '@/app/api/v1/_envelope';
 import { validateCsrf } from '@/lib/security/csrf';
+import { assertProjectWriteAccess } from '@/app/actions/files/_shared';
 
 /**
  * POST /api/v1/files/locks/release
@@ -32,6 +33,7 @@ export async function POST(request: NextRequest) {
         }
 
         const { projectId, nodeIds } = body as { projectId: string; nodeIds: string[] };
+        await assertProjectWriteAccess(projectId, user.id);
         const validNodeIds = nodeIds.filter((id): id is string => typeof id === 'string' && id.length > 0).slice(0, 100);
         if (validNodeIds.length === 0) {
             return jsonSuccess(null, 'No locks to release');

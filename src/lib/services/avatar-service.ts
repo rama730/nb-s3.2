@@ -3,7 +3,7 @@
  * Shows immediate preview, uploads in background
  */
 
-import { createProfileImageUploadUrlAction } from '@/app/actions/profile'
+import { createProfileImageUploadUrlAction, finalizeProfileImageUploadAction } from '@/app/actions/profile'
 
 /**
  * Compress and resize image to 400x400 JPEG
@@ -97,8 +97,15 @@ export async function uploadAvatarWithPreview(
             return { success: true }
         }
 
+        const finalized = await finalizeProfileImageUploadAction({
+            uploadIntentId: uploadSession.uploadIntentId,
+        })
+        if (!finalized.success) {
+            return { success: true }
+        }
+
         if (onUploaded) {
-            onUploaded(uploadSession.publicUrl)
+            onUploaded(finalized.publicUrl)
         }
 
         return { success: true }
@@ -135,7 +142,12 @@ export async function uploadAvatar(
                     body: compressedBlob,
                 })
                 if (uploadResponse.ok) {
-                    return { url: uploadSession.publicUrl, error: null }
+                    const finalized = await finalizeProfileImageUploadAction({
+                        uploadIntentId: uploadSession.uploadIntentId,
+                    })
+                    if (finalized.success) {
+                        return { url: finalized.publicUrl, error: null }
+                    }
                 }
             }
         } catch (e) {

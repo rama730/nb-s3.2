@@ -33,12 +33,17 @@ const REQUIRED_TABLES = [
   "onboarding_submissions",
   "onboarding_events",
   "profile_audit_events",
+  "profile_security_states",
+  "upload_intents",
+  "recovery_code_redemptions",
+  "message_read_receipts",
+  "message_delivery_receipts",
 ];
 
 const REQUIRED_RLS_TABLES = [...REQUIRED_TABLES];
 
 const REQUIRED_POLICIES = [
-  "Users can view all profiles",
+  "Profiles are viewable by allowed users",
   "Users can insert own profile",
   "Users can update own profile",
   "Users can view own connections",
@@ -64,9 +69,28 @@ const REQUIRED_POLICIES = [
   "Users can update own onboarding submissions",
   "Users can view own onboarding events",
   "Users can view own profile audit events",
+  "Users can view own profile security state",
+  "Users can update own profile security state",
+  "Users can view own upload intents",
+  "Users can update own upload intents",
+  "Users can create own recovery code redemptions",
   "project_files_read",
   "project_files_public_read",
   "project_files_write",
+  "Users can view delivery receipts in their conversations",
+  "Users can insert their own delivery receipts",
+  "Users can view read receipts in their conversations",
+  "Users can upsert their own read receipts",
+];
+
+const REQUIRED_COLUMNS = [
+  { tableName: "message_read_receipts", columnName: "conversation_id" },
+  { tableName: "message_delivery_receipts", columnName: "conversation_id" },
+];
+
+const REQUIRED_REALTIME_PUBLICATION_TABLES = [
+  "message_read_receipts",
+  "message_delivery_receipts",
 ];
 
 const PG_IDENTIFIER_MAX = 63;
@@ -253,6 +277,40 @@ async function validateDatabase(
       }
     }
 
+    const columnRows = await sql<{ tableName: string; columnName: string }[]>`
+      SELECT table_name AS "tableName", column_name AS "columnName"
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND (
+          (table_name = 'message_read_receipts' AND column_name = 'conversation_id')
+          OR (table_name = 'message_delivery_receipts' AND column_name = 'conversation_id')
+        )
+    `;
+    if (options.strict) {
+      const found = new Set(columnRows.map((row) => `${row.tableName}.${row.columnName}`));
+      const missing = REQUIRED_COLUMNS
+        .map(({ tableName, columnName }) => `${tableName}.${columnName}`)
+        .filter((entry) => !found.has(entry));
+      if (missing.length > 0) {
+        throw new Error(`[${label}] missing required messaging receipt columns: ${missing.join(", ")}`);
+      }
+    }
+
+    const publicationRows = await sql<{ tableName: string }[]>`
+      SELECT tablename AS "tableName"
+      FROM pg_publication_tables
+      WHERE schemaname = 'public'
+        AND pubname = 'supabase_realtime'
+        AND tablename IN ${sql(REQUIRED_REALTIME_PUBLICATION_TABLES)}
+    `;
+    if (options.strict) {
+      const found = new Set(publicationRows.map((row) => row.tableName));
+      const missing = REQUIRED_REALTIME_PUBLICATION_TABLES.filter((tableName) => !found.has(tableName));
+      if (missing.length > 0) {
+        throw new Error(`[${label}] missing Supabase realtime publication tables: ${missing.join(", ")}`);
+      }
+    }
+
     const [sloViewRow] = await sql<{ exists: boolean }[]>`
       SELECT to_regclass('public.onboarding_slo_daily') IS NOT NULL AS exists
     `;
@@ -280,20 +338,20 @@ async function replayForDatabase(databaseUrl: string, label: string) {
   console.log(`\n[db-remigration] validating ${label} (pre-check)...`);
   await validateDatabase(databaseUrl, `${label}:pre`, { strict: false });
 
-  console.log(`[db-remigration] applying setup pass 1 (${label})...`);
+  console.log(`[db-remigration] applying migration journal pass 1 (${label})...`);
   runWithRetry(
     "pnpm",
     ["exec", "tsx", "scripts/setup-database.ts"],
     { DATABASE_URL: databaseUrl },
-    `${label}:setup-pass-1`,
+    `${label}:migration-pass-1`,
   );
 
-  console.log(`[db-remigration] applying setup pass 2 (${label})...`);
+  console.log(`[db-remigration] applying migration journal pass 2 (${label})...`);
   runWithRetry(
     "pnpm",
     ["exec", "tsx", "scripts/setup-database.ts"],
     { DATABASE_URL: databaseUrl },
-    `${label}:setup-pass-2`,
+    `${label}:migration-pass-2`,
   );
 
   console.log(`[db-remigration] validating ${label} (post-check)...`);

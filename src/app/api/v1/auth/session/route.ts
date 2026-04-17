@@ -58,7 +58,7 @@ export async function POST(request: Request) {
           status: 500,
           errorCode: "INTERNAL_ERROR",
         });
-        return jsonError(error.message || "Failed to bootstrap browser session", 500, "INTERNAL_ERROR");
+        return jsonError("Failed to bootstrap browser session", 500, "INTERNAL_ERROR");
       }
 
       const {
@@ -103,7 +103,7 @@ export async function POST(request: Request) {
         status: 400,
         errorCode: "BAD_REQUEST",
       });
-      return jsonError(error.message || "Failed to sync browser session", 400, "BAD_REQUEST");
+      return jsonError("Failed to sync browser session", 400, "BAD_REQUEST");
     }
 
     logApiRoute(request, {
@@ -124,11 +124,7 @@ export async function POST(request: Request) {
       status: 500,
       errorCode: "INTERNAL_ERROR",
     });
-    return jsonError(
-      error instanceof Error ? error.message : "Failed to bridge browser session",
-      500,
-      "INTERNAL_ERROR",
-    );
+    return jsonError("Failed to bridge browser session", 500, "INTERNAL_ERROR");
   }
 }
 
@@ -153,7 +149,7 @@ export async function DELETE(request: Request) {
     const {
       data: { user },
     } = await supabase.auth.getUser();
-    const { error } = await supabase.auth.signOut({ scope: "local" });
+    const { error } = await supabase.auth.signOut({ scope: "global" });
     if (error) {
       logApiRoute(request, {
         requestId,
@@ -164,7 +160,7 @@ export async function DELETE(request: Request) {
         status: 400,
         errorCode: "BAD_REQUEST",
       });
-      return jsonError(error.message || "Failed to clear browser session", 400, "BAD_REQUEST");
+      return jsonError("Failed to clear browser session", 400, "BAD_REQUEST");
     }
 
     logApiRoute(request, {
@@ -185,10 +181,6 @@ export async function DELETE(request: Request) {
       status: 500,
       errorCode: "INTERNAL_ERROR",
     });
-    return jsonError(
-      error instanceof Error ? error.message : "Failed to clear browser session",
-      500,
-      "INTERNAL_ERROR",
-    );
+    return jsonError("Failed to clear browser session", 500, "INTERNAL_ERROR");
   }
 }

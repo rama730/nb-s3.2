@@ -58,6 +58,18 @@ function getWindowOrigin(): string | null {
     return toOrigin(window.location.origin);
 }
 
+function isLocalOrigin(value: string | null | undefined): boolean {
+    if (!value) return false;
+    try {
+        const parsed = new URL(value);
+        return parsed.hostname === 'localhost'
+            || parsed.hostname === '127.0.0.1'
+            || parsed.hostname === '0.0.0.0';
+    } catch {
+        return false;
+    }
+}
+
 export function resolveAuthBaseUrl(options: ResolveAuthBaseUrlOptions = {}): string {
     const appUrl = options.appUrl ?? process.env.APP_URL;
     const publicAppUrl = options.publicAppUrl ?? process.env.NEXT_PUBLIC_APP_URL;
@@ -73,7 +85,12 @@ export function resolveAuthBaseUrl(options: ResolveAuthBaseUrlOptions = {}): str
     const isProductionRuntime = process.env.NODE_ENV === 'production';
 
     if (configuredOrigin) {
-        if (isProductionRuntime) return configuredOrigin;
+        if (isProductionRuntime) {
+            if (requestOrigin && isLocalOrigin(configuredOrigin) && isLocalOrigin(requestOrigin)) {
+                return requestOrigin;
+            }
+            return configuredOrigin;
+        }
         return requestOrigin ?? browserOrigin ?? configuredOrigin;
     }
 
@@ -96,11 +113,14 @@ export function normalizeAuthNextPath(
     if (raw.startsWith('http://') || raw.startsWith('https://')) return fallbackPath;
     if (!raw.startsWith('/')) return fallbackPath;
     if (raw.startsWith('//')) return fallbackPath;
+    if (raw.includes('\\')) return fallbackPath;
 
     try {
         const parsed = new URL(raw, 'http://local.test');
         if (parsed.origin !== 'http://local.test') return fallbackPath;
         if (parsed.pathname === '/auth/callback') return fallbackPath;
+        if (parsed.pathname !== '/' && !/^\/[A-Za-z0-9]/.test(parsed.pathname)) return fallbackPath;
+        if (parsed.pathname.includes('\\')) return fallbackPath;
         const normalized = `${parsed.pathname}${parsed.search}${parsed.hash}`;
         return normalized || fallbackPath;
     } catch {

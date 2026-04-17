@@ -1,7 +1,7 @@
 import { validateCsrf } from "@/lib/security/csrf";
 import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { profiles } from "@/lib/db/schema";
+import { profileSecurityStates } from "@/lib/db/schema";
 import {
   enforceRouteLimit,
   getRequestId,
@@ -36,18 +36,6 @@ export async function DELETE(
     return csrfError;
   }
 
-  // Idempotency — prevent duplicate MFA factor deletions
-  const idempotencyCheck = await checkIdempotencyKey(request, 'auth.mfa.deleteFactor');
-  if (idempotencyCheck.isDuplicate) {
-    if (idempotencyCheck.cachedResponse) {
-      return new Response(idempotencyCheck.cachedResponse, {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      });
-    }
-    return jsonError('Request is already being processed', 409, 'CONFLICT');
-  }
-
   const limitResponse = await enforceRouteLimit(request, "api:v1:auth:mfa:factors:delete", 40, 60);
   if (limitResponse) {
     logApiRoute(request, {
@@ -76,6 +64,18 @@ export async function DELETE(
   const user = auth.user;
   if (!user) {
     return jsonError("Not authenticated", 401, "UNAUTHORIZED");
+  }
+
+  // Idempotency — prevent duplicate MFA factor deletions
+  const idempotencyCheck = await checkIdempotencyKey(request, 'auth.mfa.deleteFactor', user.id);
+  if (idempotencyCheck.isDuplicate) {
+    if (idempotencyCheck.cachedResponse) {
+      return new Response(idempotencyCheck.cachedResponse, {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    return jsonError('Request is already being processed', 409, 'CONFLICT');
   }
 
   const { id } = await context.params;
@@ -195,26 +195,53 @@ export async function DELETE(
       const removingLastVerifiedTotp = isVerifiedTotp && verifiedTotpFactors.length === 1;
       let clearedRecoveryCodes = false;
       let previousRemainingRecoveryCodes = 0;
+      let bumpedGeneration = false;
 
-      if (removingLastVerifiedTotp) {
-        const existingProfile = await db.query.profiles.findFirst({
+      if (isVerifiedTotp) {
+        // SEC-H3: any TOTP factor change invalidates recovery codes issued
+        // against the old factor. Either (a) the removed factor was the one
+        // bound to the stored codes (unbind + clear), or (b) it was a
+        // secondary factor (bump generation only, retain codes).
+        const existingProfileSecurityState = await db.query.profileSecurityStates.findFirst({
           columns: {
             securityRecoveryCodes: true,
+            recoveryCodesFactorId: true,
+            recoveryCodesGeneration: true,
           },
-          where: eq(profiles.id, user.id),
+          where: eq(profileSecurityStates.userId, user.id),
         });
-        const storedCodes = parseStoredRecoveryCodes(existingProfile?.securityRecoveryCodes);
+        const storedCodes = parseStoredRecoveryCodes(existingProfileSecurityState?.securityRecoveryCodes);
         previousRemainingRecoveryCodes = countRemainingRecoveryCodes(storedCodes);
-        clearedRecoveryCodes = storedCodes.length > 0;
+        const boundToThisFactor = existingProfileSecurityState?.recoveryCodesFactorId === id;
+        const shouldClear = removingLastVerifiedTotp || boundToThisFactor;
+        clearedRecoveryCodes = shouldClear && storedCodes.length > 0;
+        const currentGeneration = Number(existingProfileSecurityState?.recoveryCodesGeneration ?? 0) || 0;
+        bumpedGeneration = true;
 
         await db
-          .update(profiles)
-          .set({
-            securityRecoveryCodes: [],
-            recoveryCodesGeneratedAt: null,
+          .insert(profileSecurityStates)
+          .values({
+            userId: user.id,
+            securityRecoveryCodes: shouldClear ? [] : storedCodes,
+            recoveryCodesGeneratedAt: shouldClear ? null : undefined,
+            recoveryCodesFactorId: shouldClear ? null : existingProfileSecurityState?.recoveryCodesFactorId ?? null,
+            recoveryCodesGeneration: currentGeneration + 1,
             updatedAt: new Date(),
           })
-          .where(eq(profiles.id, user.id));
+          .onConflictDoUpdate({
+            target: profileSecurityStates.userId,
+            set: {
+              ...(shouldClear
+                ? {
+                    securityRecoveryCodes: [],
+                    recoveryCodesGeneratedAt: null,
+                    recoveryCodesFactorId: null,
+                  }
+                : {}),
+              recoveryCodesGeneration: currentGeneration + 1,
+              updatedAt: new Date(),
+            },
+          });
       }
 
       await recordSecurityEvent({
@@ -226,6 +253,7 @@ export async function DELETE(
           friendlyName: factorToRemove?.friendly_name ?? "Authenticator app",
           clearedRecoveryCodes,
           previousRemainingRecoveryCodes,
+          bumpedRecoveryCodesGeneration: bumpedGeneration,
         },
       });
     } catch (cleanupError) {
@@ -246,7 +274,7 @@ export async function DELETE(
       status: 200,
     });
     const successBody = JSON.stringify({ ok: true, message: "MFA factor removed" });
-    await saveIdempotencyResult(request, 'auth.mfa.deleteFactor', successBody, idempotencyCheck.lockToken);
+    await saveIdempotencyResult(request, 'auth.mfa.deleteFactor', successBody, idempotencyCheck.lockToken, user.id);
     return jsonSuccess(undefined, "MFA factor removed");
   } catch (error) {
     logger.error("[api/v1/auth/mfa/factors/:id] failed", { module: 'api', error: error instanceof Error ? error.message : String(error) });

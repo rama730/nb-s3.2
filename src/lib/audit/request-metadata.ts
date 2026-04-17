@@ -1,4 +1,5 @@
-import { createHmac } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
+import { getTrustedRequestIp } from "@/lib/security/request-ip";
 
 type RequestWithNetworkHints = Request & {
   ip?: string | null;
@@ -17,10 +18,7 @@ function normalizeIpCandidate(value: unknown): string | null {
 }
 
 function resolveAuditMetadataHashSecret(): string {
-  const configuredSecret =
-    process.env.AUDIT_METADATA_HASH_SECRET?.trim()
-    || process.env.SECURITY_STEPUP_SECRET?.trim()
-    || process.env.SUPABASE_JWT_SECRET?.trim();
+  const configuredSecret = process.env.AUDIT_METADATA_HASH_SECRET?.trim();
 
   if (configuredSecret) return configuredSecret;
 
@@ -28,8 +26,12 @@ function resolveAuditMetadataHashSecret(): string {
     throw new Error("AUDIT_METADATA_HASH_SECRET must be configured in production");
   }
 
-  console.warn("[audit] using development fallback audit metadata hash secret; do not use in production");
-  return "development-audit-metadata-secret";
+  const globalScope = globalThis as typeof globalThis & {
+    __NB_AUDIT_METADATA_HASH_SECRET__?: string;
+  };
+  globalScope.__NB_AUDIT_METADATA_HASH_SECRET__ ||= randomUUID();
+  console.warn("[audit] using ephemeral development audit metadata hash secret; do not use in production");
+  return globalScope.__NB_AUDIT_METADATA_HASH_SECRET__;
 }
 
 function pseudonymizeAuditValue(scope: "network" | "device", value: string): string {
@@ -45,6 +47,9 @@ export type PseudonymizedAuditRequestMetadata = {
 };
 
 export function getInformationalRequestIp(request: Request): string | null {
+  const trustedRequestIp = getTrustedRequestIp(request);
+  if (trustedRequestIp) return trustedRequestIp;
+
   // Informational only: these values may come from proxy headers or runtime-specific hints
   // and must not be used for auth, authorization, rate limiting, or other security decisions.
   const requestWithNetworkHints = request as RequestWithNetworkHints;
@@ -52,15 +57,7 @@ export function getInformationalRequestIp(request: Request): string | null {
     normalizeIpCandidate(requestWithNetworkHints.ip)
     ?? normalizeIpCandidate(requestWithNetworkHints.socket?.remoteAddress)
     ?? normalizeIpCandidate(requestWithNetworkHints.connection?.remoteAddress);
-  if (remoteAddress) return remoteAddress;
-
-  const realIp = normalizeIpCandidate(request.headers.get("x-real-ip"));
-  if (realIp) return realIp;
-
-  const forwardedFor = request.headers.get("x-forwarded-for");
-  if (!forwardedFor) return null;
-
-  return normalizeIpCandidate(forwardedFor.split(",")[0]);
+  return remoteAddress;
 }
 
 export function getRequestUserAgent(request: Request): string | null {

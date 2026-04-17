@@ -4,6 +4,8 @@ import { eq, or, and, desc, ne, inArray, asc, sql } from 'drizzle-orm'
 import { cache } from 'react'
 import type { User } from '@supabase/supabase-js'
 import type { ConnectionState } from '@/components/profile/v2/types'
+import { recordPrivacyReadEvent } from '@/lib/privacy/audit'
+import { buildViewerScopedProfileView } from '@/lib/privacy/profile-views'
 import { createClient } from '@/lib/supabase/server'
 import { type StandardProfile } from '@/lib/services/profile-service'
 import { resolvePrivacyRelationship } from '@/lib/privacy/resolver'
@@ -536,9 +538,26 @@ export async function getProfileDetails(username?: string, options: ProfileDetai
             image: normalizedProfile.avatarUrl,
         }
         : null
-    const visibleProfile = canViewProfile && !lockedShell
-        ? normalizedProfile
-        : toLockedShellProfile(normalizedProfile)
+    const visibleProfile = normalizedProfile
+        ? buildViewerScopedProfileView({
+            profile: normalizedProfile as Record<string, unknown> & { id: string },
+            relationship: privacyRelationship,
+            isOwner: !!isOwner,
+        })
+        : null
+
+    if (viewerUser?.id && viewerUser.id !== profileData.id) {
+        await recordPrivacyReadEvent({
+            subjectUserId: profileData.id,
+            viewerUserId: viewerUser.id,
+            eventType: 'profile_viewed',
+            route: 'profile.details',
+            metadata: {
+                visibilityReason: privacyRelationship.visibilityReason,
+                canViewProfile: privacyRelationship.canViewProfile,
+            },
+        })
+    }
 
     return {
         privacyStatus: lockedShell ? 'private' : 'public',

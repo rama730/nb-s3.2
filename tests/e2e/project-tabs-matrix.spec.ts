@@ -123,6 +123,11 @@ test.describe("Project tabs matrix @critical", () => {
     await expect(page.getByTestId("files-explorer-actions-trigger").first()).toBeVisible({ timeout: 15000 });
     await expect(page.locator('[role="tree"] [role="treeitem"]').first()).toBeVisible({ timeout: 15000 });
 
+    // Let the initial files workspace bootstrap settle before we start counting
+    // post-hide background traffic. The contract here is "no hidden polling",
+    // not "no startup work that was already in flight while the tab opened".
+    await page.waitForTimeout(1500);
+
     backgroundWorkspaceRequests.presenceToken = 0;
     backgroundWorkspaceRequests.pageActions = 0;
     await switchTab("project-tab-dashboard", "dashboard", "dashboard");

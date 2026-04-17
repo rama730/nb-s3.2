@@ -7,25 +7,94 @@ import { inngest } from "@/inngest/client";
 import { logger } from "@/lib/logger";
 import { jsonError, jsonSuccess } from "@/app/api/v1/_envelope";
 import { normalizeGithubRepoUrl } from "@/lib/github/repo-validation";
+import { getRedisClient } from "@/lib/redis";
+import { createSignedJobRequestToken } from "@/lib/security/job-request";
 
 const WEBHOOK_SECRET = process.env.GITHUB_WEBHOOK_SECRET;
 const MIN_SYNC_INTERVAL_MS = 30_000;
+const WEBHOOK_DELIVERY_TTL_SECONDS = 86_400;
 
+let loggedMissingSecret = false;
+
+// SEC-H10: in production the boot-time check in `assertProductionSecurityEnv`
+// already refuses to start without `GITHUB_WEBHOOK_SECRET`, so this function
+// should never encounter an empty secret there. In dev/staging we still want
+// to refuse (rather than fall through silently) and log once so the operator
+// sees that webhooks are disabled.
 function verifySignature(payload: string, signature: string | null): boolean {
-    if (!WEBHOOK_SECRET || !signature) return false;
+    if (!WEBHOOK_SECRET) {
+        if (!loggedMissingSecret) {
+            loggedMissingSecret = true;
+            logger.error("github.webhook.secret_missing", {
+                module: "webhooks.github",
+                message:
+                    "GITHUB_WEBHOOK_SECRET is not configured. Refusing all webhook deliveries.",
+            });
+        }
+        return false;
+    }
+    if (!signature) return false;
 
     const expected = `sha256=${createHmac("sha256", WEBHOOK_SECRET)
         .update(payload)
         .digest("hex")}`;
 
+    const expectedBuf = Buffer.from(expected);
+    const receivedBuf = Buffer.from(signature);
+    if (expectedBuf.length !== receivedBuf.length) return false;
+
     try {
-        return timingSafeEqual(
-            Buffer.from(expected),
-            Buffer.from(signature),
-        );
+        return timingSafeEqual(expectedBuf, receivedBuf);
     } catch {
         return false;
     }
+}
+
+function asPositiveInteger(value: unknown): number | null {
+    if (typeof value === "number" && Number.isInteger(value) && value > 0) {
+        return value;
+    }
+    if (typeof value === "string" && /^\d+$/.test(value.trim())) {
+        const parsed = Number(value.trim());
+        return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+    }
+    return null;
+}
+
+function readProjectGithubIdentity(importSource: unknown) {
+    const source = importSource as {
+        repoUrl?: unknown;
+        metadata?: {
+            githubRepoId?: unknown;
+            githubInstallationId?: unknown;
+        } | null;
+    } | null;
+
+    const normalizedRepoUrl = normalizeGithubRepoUrl(typeof source?.repoUrl === "string" ? source.repoUrl : "");
+    return {
+        repoUrl: normalizedRepoUrl,
+        repoId: asPositiveInteger(source?.metadata?.githubRepoId),
+        installationId: asPositiveInteger(source?.metadata?.githubInstallationId),
+    };
+}
+
+async function claimGithubDeliveryId(deliveryId: string | null) {
+    if (!deliveryId) return { duplicate: false, degraded: false } as const;
+
+    const redis = getRedisClient();
+    if (!redis) {
+        return { duplicate: false, degraded: true } as const;
+    }
+
+    const claimed = await redis.set(`github:webhook:delivery:${deliveryId}`, "1", {
+        nx: true,
+        ex: WEBHOOK_DELIVERY_TTL_SECONDS,
+    });
+
+    return {
+        duplicate: !claimed,
+        degraded: false,
+    } as const;
 }
 
 function getRequestId(request: Request) {
@@ -91,7 +160,8 @@ export async function POST(request: NextRequest) {
     }
 
     let payload: {
-        repository?: { clone_url?: string; html_url?: string };
+        repository?: { id?: number | string; clone_url?: string; html_url?: string };
+        installation?: { id?: number | string } | null;
         ref?: string;
         after?: string;
     };
@@ -128,10 +198,33 @@ export async function POST(request: NextRequest) {
     }
 
     const deliveryId = request.headers.get("x-github-delivery")?.trim() || null;
+    const claimedDelivery = await claimGithubDeliveryId(deliveryId);
+    if (claimedDelivery.duplicate) {
+        logWebhookRequest(request, {
+            requestId,
+            startedAt,
+            status: 200,
+            success: true,
+        });
+        return jsonSuccess({ skipped: true, reason: "duplicate delivery" });
+    }
+
     const pushedBranch = typeof payload.ref === "string" && payload.ref.startsWith("refs/heads/")
         ? payload.ref.slice("refs/heads/".length)
         : null;
     const afterSha = typeof payload.after === "string" ? payload.after : null;
+    const payloadRepoId = asPositiveInteger(payload.repository?.id);
+    const payloadInstallationId = asPositiveInteger(payload.installation?.id);
+
+    if (!payloadRepoId || !payloadInstallationId) {
+        logWebhookRequest(request, {
+            requestId,
+            startedAt,
+            status: 200,
+            success: true,
+        });
+        return jsonSuccess({ skipped: true, reason: "missing immutable repository identity" });
+    }
 
     const candidateProjects = await db
         .select({
@@ -139,6 +232,7 @@ export async function POST(request: NextRequest) {
             ownerId: projects.ownerId,
             githubDefaultBranch: projects.githubDefaultBranch,
             githubLastSyncAt: projects.githubLastSyncAt,
+            importSource: projects.importSource,
         })
         .from(projects)
         .where(
@@ -160,10 +254,22 @@ export async function POST(request: NextRequest) {
 
     const nowMs = Date.now();
     const sendJobs: Promise<unknown>[] = [];
+    let skippedIdentityMismatch = 0;
     let skippedBranchMismatch = 0;
     let skippedThrottled = 0;
 
     for (const project of candidateProjects) {
+        const identity = readProjectGithubIdentity(project.importSource);
+        if (
+            !identity.repoUrl
+            || !normalizedRepoUrls.has(identity.repoUrl)
+            || identity.repoId !== payloadRepoId
+            || identity.installationId !== payloadInstallationId
+        ) {
+            skippedIdentityMismatch += 1;
+            continue;
+        }
+
         const defaultBranch = (project.githubDefaultBranch || "main").trim() || "main";
         if (pushedBranch && defaultBranch !== pushedBranch) {
             skippedBranchMismatch += 1;
@@ -190,6 +296,11 @@ export async function POST(request: NextRequest) {
                     deliveryId,
                     afterSha,
                     source: "webhook",
+                    jobSignature: createSignedJobRequestToken({
+                        kind: "git/pull",
+                        actorId: project.ownerId,
+                        subjectId: project.id,
+                    }),
                 },
             }),
         );
@@ -203,11 +314,13 @@ export async function POST(request: NextRequest) {
         requestId,
         matchedProjects: candidateProjects.length,
         triggered,
+        skippedIdentityMismatch,
         skippedBranchMismatch,
         skippedThrottled,
         enqueueFailures,
         deliveryId,
         branch: pushedBranch,
+        degradedDeliveryDedup: claimedDelivery.degraded,
     });
 
     logWebhookRequest(request, {
@@ -220,6 +333,7 @@ export async function POST(request: NextRequest) {
         matched: candidateProjects.length,
         triggered,
         skipped: {
+            identityMismatch: skippedIdentityMismatch,
             branchMismatch: skippedBranchMismatch,
             throttled: skippedThrottled,
         },

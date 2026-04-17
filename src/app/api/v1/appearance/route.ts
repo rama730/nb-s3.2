@@ -143,7 +143,11 @@ export async function PUT(request: Request) {
                 status: 500,
                 errorCode: "INTERNAL_ERROR",
             });
-            return jsonError(updateResult.error.message || "Failed to update appearance settings", 500, "INTERNAL_ERROR");
+            // SEC-L6: never echo the raw upstream error message to the client.
+            // Supabase error strings can include schema, column, or constraint
+            // details that we don't want to advertise. Map to a stable,
+            // user-safe string and keep the detail in the server log above.
+            return jsonError("Failed to update appearance settings", 500, "INTERNAL_ERROR");
         }
 
         const savedSnapshot =
@@ -173,11 +177,8 @@ export async function PUT(request: Request) {
             status: 500,
             errorCode: "INTERNAL_ERROR",
         });
-        return jsonError(
-            error instanceof Error ? error.message : "Failed to update appearance settings",
-            500,
-            "INTERNAL_ERROR",
-        );
+        // SEC-L6: do not leak raw exception messages to the client.
+        return jsonError("Failed to update appearance settings", 500, "INTERNAL_ERROR");
     }
 }
 
@@ -220,7 +221,8 @@ export async function DELETE(request: Request) {
                 status: 500,
                 errorCode: "INTERNAL_ERROR",
             });
-            return jsonError(updateResult.error.message || "Failed to reset appearance settings", 500, "INTERNAL_ERROR");
+            // SEC-L6: never echo the raw upstream error message to the client.
+            return jsonError("Failed to reset appearance settings", 500, "INTERNAL_ERROR");
         }
 
         logApiRoute(request, {
@@ -246,10 +248,7 @@ export async function DELETE(request: Request) {
             status: 500,
             errorCode: "INTERNAL_ERROR",
         });
-        return jsonError(
-            error instanceof Error ? error.message : "Failed to reset appearance settings",
-            500,
-            "INTERNAL_ERROR",
-        );
+        // SEC-L6: do not leak raw exception messages to the client.
+        return jsonError("Failed to reset appearance settings", 500, "INTERNAL_ERROR");
     }
 }

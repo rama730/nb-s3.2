@@ -1,10 +1,12 @@
 'use client';
 
+import { useMemo } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { MoreVertical, ArrowLeft, Archive, Bell, BellOff, Ban, Send } from 'lucide-react';
 import type { TypingUser } from '@/hooks/useTypingChannel';
 import type { InboxConversationV2 } from '@/hooks/useMessagesV2';
+import { useOnlineUsers } from '@/hooks/useOnlineUsers';
 import { OnlineIndicator } from '@/components/ui/OnlineIndicator';
 import { getTypingStatusText } from '@/lib/chat/typing-display';
 import {
@@ -45,6 +47,28 @@ export function ConversationHeaderV2({
     const canInvite = isDirectMessage && conversation.capability.canInvite && otherParticipant?.username;
     const isPopup = surface === 'popup';
 
+    // Wave 2 — Presence & online dot. Only observe the DM counterpart; group /
+    // project_group headers don't expose a single-user online state.
+    const observedUserIds = useMemo(
+        () => (isDirectMessage && otherParticipant?.id ? [otherParticipant.id] : []),
+        [isDirectMessage, otherParticipant?.id],
+    );
+    const onlineMap = useOnlineUsers(observedUserIds);
+    const peerOnline = otherParticipant?.id ? onlineMap[otherParticipant.id] === true : false;
+    const statusLine = (() => {
+        if (typingUsers && typingUsers.length > 0) {
+            return <span className="text-primary">{getTypingStatusText(typingUsers) || 'typing...'}</span>;
+        }
+        if (conversation.capability.blocked) return 'Blocked';
+        if (peerOnline && conversation.capability.canSend) {
+            return <span className="text-emerald-600 dark:text-emerald-400">Online</span>;
+        }
+        if (conversation.capability.canSend) return 'Ready to message';
+        if (conversation.capability.status === 'pending_received') return 'Incoming request';
+        if (conversation.capability.status === 'pending_sent') return 'Request pending';
+        return 'Messaging restricted';
+    })();
+
     return (
         <div className={`flex items-center justify-between border-b border-zinc-100 bg-white ${
             isPopup ? 'px-3 py-3' : 'px-5 py-4'
@@ -84,7 +108,7 @@ export function ConversationHeaderV2({
                                         </span>
                                     )}
                                 </div>
-                                <OnlineIndicator online={false} size="md" />
+                                <OnlineIndicator online={peerOnline} size="md" />
                             </div>
                             <div className="min-w-0 text-left">
                                 <div className={`truncate font-semibold text-zinc-900 dark:text-zinc-100 ${
@@ -93,17 +117,7 @@ export function ConversationHeaderV2({
                                     {otherParticipant.fullName || otherParticipant.username || 'Unknown'}
                                 </div>
                                 <div className="truncate text-xs text-zinc-500 dark:text-zinc-400">
-                                    {typingUsers && typingUsers.length > 0
-                                        ? <span className="text-primary">{getTypingStatusText(typingUsers) || 'typing...'}</span>
-                                        : conversation.capability.blocked
-                                            ? 'Blocked'
-                                            : conversation.capability.canSend
-                                                ? 'Ready to message'
-                                                : conversation.capability.status === 'pending_received'
-                                                    ? 'Incoming request'
-                                                    : conversation.capability.status === 'pending_sent'
-                                                        ? 'Request pending'
-                                                        : 'Messaging restricted'}
+                                    {statusLine}
                                 </div>
                             </div>
                         </button>
@@ -128,7 +142,7 @@ export function ConversationHeaderV2({
                                         </span>
                                     )}
                                 </div>
-                                <OnlineIndicator online={false} size="md" />
+                                <OnlineIndicator online={peerOnline} size="md" />
                             </div>
                             <div className="min-w-0">
                                 <div className={`truncate font-semibold text-zinc-900 dark:text-zinc-100 ${
@@ -137,17 +151,7 @@ export function ConversationHeaderV2({
                                     {otherParticipant.fullName || otherParticipant.username || 'Unknown'}
                                 </div>
                                 <div className="truncate text-xs text-zinc-500 dark:text-zinc-400">
-                                    {typingUsers && typingUsers.length > 0
-                                        ? <span className="text-primary">{getTypingStatusText(typingUsers) || 'typing...'}</span>
-                                        : conversation.capability.blocked
-                                            ? 'Blocked'
-                                            : conversation.capability.canSend
-                                                ? 'Ready to message'
-                                                : conversation.capability.status === 'pending_received'
-                                                    ? 'Incoming request'
-                                                    : conversation.capability.status === 'pending_sent'
-                                                        ? 'Request pending'
-                                                        : 'Messaging restricted'}
+                                    {statusLine}
                                 </div>
                             </div>
                         </>

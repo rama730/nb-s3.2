@@ -7,22 +7,24 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { tmpdir } from "os";
 import { mkdtemp, rm, readFile, writeFile, mkdir } from "fs/promises";
 import { join, relative, dirname } from "path";
-import { readdirSync, statSync } from "fs";
+import { lstatSync, readdirSync } from "fs";
 import { createHash, randomUUID } from "crypto";
 import { buildProjectFileKey } from "@/lib/storage/project-file-key";
 import { appendSafePathSegment, resolvePathUnderRoot } from "@/lib/security/path-safety";
 import { resolveGithubRepoAccess } from "@/lib/github/auth-resolver";
+import { normalizeGithubBranch } from "@/lib/github/repo-validation";
 import { assertRepositoryWithinBudgets, GITHUB_WORKER_BUDGETS, withTenantSyncLock } from "@/lib/github/worker-guard";
 import { withGitCredentialEnv } from "@/lib/github/git-auth";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { runWithConcurrency } from "@/lib/utils/concurrency";
 import { logger } from "@/lib/logger";
+import { verifySignedJobRequestToken } from "@/lib/security/job-request";
 
 const execFileAsync = promisify(execFile);
 const GIT_COMMAND_TIMEOUT_MS = (() => {
     const v = Number(process.env.GITHUB_IMPORT_CLONE_TIMEOUT_MS || 120000);
-    return Number.isFinite(v) && v >= 30_000 ? Math.floor(v) : 120000;
+    return Number.isFinite(v) && v >= 30_000 && v <= 120_000 ? Math.floor(v) : 120000;
 })();
 const LOCK_NAMESPACE = "project-git-sync";
 
@@ -49,7 +51,8 @@ function walkDir(dir: string, base: string = dir): string[] {
     for (const entry of readdirSync(dir)) {
         if (entry === ".git") continue;
         const full = appendSafePathSegment(dir, entry, "repository entry");
-        const stat = statSync(full);
+        const stat = lstatSync(full);
+        if (stat.isSymbolicLink()) continue;
         if (stat.isDirectory()) {
             results.push(...walkDir(full, base));
         } else {
@@ -100,6 +103,10 @@ async function withProjectSyncLock<T>(projectId: string, task: () => Promise<T>)
 }
 
 async function cloneRepository(repoUrl: string, tempDir: string, branch: string, accessToken?: string | null) {
+    const normalizedBranch = normalizeGithubBranch(branch);
+    if (!normalizedBranch) {
+        throw new Error("Invalid GitHub branch name");
+    }
     const cloneArgs = [
         "clone",
         repoUrl,
@@ -108,7 +115,7 @@ async function cloneRepository(repoUrl: string, tempDir: string, branch: string,
         "1",
         "--single-branch",
         "--branch",
-        branch,
+        normalizedBranch,
     ];
     await withGitCredentialEnv(accessToken, async (gitEnv) =>
         execFileAsync("git", cloneArgs, {
@@ -120,7 +127,11 @@ async function cloneRepository(repoUrl: string, tempDir: string, branch: string,
 }
 
 async function pushRepository(tempDir: string, branch: string, accessToken?: string | null) {
-    const pushArgs = ["-C", tempDir, "push", "origin", branch];
+    const normalizedBranch = normalizeGithubBranch(branch);
+    if (!normalizedBranch) {
+        throw new Error("Invalid GitHub branch name");
+    }
+    const pushArgs = ["-C", tempDir, "push", "origin", normalizedBranch];
     await withGitCredentialEnv(accessToken, async (gitEnv) =>
         execFileAsync("git", pushArgs, {
             timeout: GIT_COMMAND_TIMEOUT_MS,
@@ -151,7 +162,16 @@ export const gitPush = inngest.createFunction(
     { id: "git-push", retries: 1, concurrency: 4 },
     { event: "git/push" },
     async ({ event, step }) => {
-        const { projectId, commitMessage, userId } = event.data;
+        const { projectId, commitMessage, userId, jobSignature } = event.data;
+
+        const requestVerification = verifySignedJobRequestToken(jobSignature, {
+            kind: "git/push",
+            actorId: userId,
+            subjectId: projectId,
+        });
+        if (!requestVerification.ok) {
+            throw new Error("Invalid git push job request");
+        }
 
         logger.metric("github.sync.push.start", {
             projectId,
@@ -355,7 +375,16 @@ export const gitPull = inngest.createFunction(
     { id: "git-pull", retries: 1, concurrency: 4 },
     { event: "git/pull" },
     async ({ event, step }) => {
-        const { projectId, userId, deliveryId } = event.data;
+        const { projectId, userId, deliveryId, jobSignature } = event.data;
+
+        const requestVerification = verifySignedJobRequestToken(jobSignature, {
+            kind: "git/pull",
+            actorId: userId,
+            subjectId: projectId,
+        });
+        if (!requestVerification.ok) {
+            throw new Error("Invalid git pull job request");
+        }
 
         logger.metric("github.sync.pull.start", {
             projectId,

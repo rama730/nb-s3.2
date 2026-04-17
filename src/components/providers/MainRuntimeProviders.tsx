@@ -7,6 +7,7 @@ import { AuthProvider } from '@/components/providers/AuthProvider';
 import { PeopleNotificationsProvider } from '@/components/providers/PeopleNotificationsProvider';
 import { RealtimeProvider } from '@/components/providers/RealtimeProvider';
 import { startPresenceHeartbeat, stopPresenceHeartbeat } from '@/hooks/usePresenceStatus';
+import { usePublishOnlinePresence } from '@/hooks/usePublishOnlinePresence';
 
 const LazyChatProvider = dynamic(
   () => import('@/components/chat/ChatProvider').then((mod) => mod.ChatProvider),
@@ -17,6 +18,11 @@ interface MainRuntimeProvidersProps {
   children: React.ReactNode;
   initialUser: User | null;
   initialProfile: unknown | null;
+}
+
+function PresencePublisher() {
+  usePublishOnlinePresence();
+  return null;
 }
 
 export function MainRuntimeProviders({
@@ -59,6 +65,7 @@ export function MainRuntimeProviders({
 
   return (
     <AuthProvider initialUser={initialUser} initialProfile={initialProfile}>
+      <PresencePublisher />
       <RealtimeProvider>
         <PeopleNotificationsProvider>
           {children}
