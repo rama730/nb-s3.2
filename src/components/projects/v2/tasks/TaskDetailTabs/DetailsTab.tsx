@@ -1,553 +1,463 @@
 "use client";
 
-import React, { useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
-import { User, Calendar, Flag, Zap, Clock, Paperclip, CheckSquare, Check } from "lucide-react";
-import { updateTaskFieldAction, updateTaskStatusAction, assignTaskAction, type TaskStatus } from "@/app/actions/task";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Calendar, Check, CheckSquare, Clock, Flag, Paperclip, TriangleAlert, User, Zap } from "lucide-react";
 import { format } from "date-fns";
-import { cn } from "@/lib/utils";
-import { useTaskSubtasks } from "@/hooks/useTaskSubtasks";
-import { useTaskAttachments } from "@/hooks/useTaskAttachments"; // New Hook
-import { toggleSubtaskAction } from "@/app/actions/subtask";
+
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import type { ProjectNode } from "@/lib/db/schema";
-import { createClient } from "@/lib/supabase/client";
-import { queryKeys } from "@/lib/query-keys";
-import { recordSprintMetric } from "@/lib/projects/sprint-observability";
-import { patchSprintDetailInfiniteData, type SprintTaskMutationRecord } from "@/lib/projects/sprint-cache";
+import type { TaskFileReadinessWarning } from "@/lib/projects/task-file-intelligence";
+import { normalizeTaskTitleDraft } from "@/lib/projects/task-file-intelligence";
 import {
-    normalizeSprintOptions,
-    normalizeTaskSurfacePerson,
-    normalizeTaskSurfaceRecord,
-    type TaskSurfaceRecord,
+  normalizeSprintOptions,
+  normalizeTaskSurfacePerson,
+  type TaskSurfaceRecord,
 } from "@/lib/projects/task-presentation";
-
-function toLinkedSprintFiles(nodes: ProjectNode[], taskId: string, occurredAt: string | null) {
-    return nodes.map((node, index) => ({
-        id: `linked-file:${taskId}:${node.id}:${index}`,
-        taskId,
-        nodeId: node.id,
-        nodeName: node.name,
-        nodePath: node.path ?? node.name,
-        nodeType: node.type === "folder" ? ("folder" as const) : ("file" as const),
-        annotation: null,
-        linkedAt: occurredAt ?? null,
-        lastEventType: null,
-        lastEventAt: node.updatedAt instanceof Date ? node.updatedAt.toISOString() : null,
-        lastEventBy: null,
-    }));
-}
-
-function isTaskStatus(value: string): value is TaskStatus {
-    return value === "todo" || value === "in_progress" || value === "blocked" || value === "done";
-}
+import {
+  TASK_PRIORITY_VALUES,
+  TASK_WORKFLOW_STATUSES,
+  getTaskPriorityPresentation,
+  getTaskStatusPresentation,
+} from "@/lib/projects/task-workflow";
+import { cn } from "@/lib/utils";
+import type { TaskPanelSubtask } from "@/hooks/useTaskPanelResource";
 
 interface DetailsTabProps {
-    task: any;
-    onTaskChange: (task: any) => void;
-    isOwnerOrMember: boolean;
-    sprints?: any[];
-    members?: any[];
-    projectId: string;
+  task: TaskSurfaceRecord;
+  canEdit: boolean;
+  isMutating: boolean;
+  mutationError: string | null;
+  members?: any[];
+  sprints?: any[];
+  subtasks: TaskPanelSubtask[];
+  attachments: ProjectNode[];
+  fileWarnings?: TaskFileReadinessWarning[];
+  fileWarningSummary?: string | null;
+  onUpdateField: (
+    field: "title" | "description" | "priority" | "sprintId" | "dueDate",
+    value: unknown,
+  ) => Promise<{ success: boolean; error?: string }>;
+  onUpdateStatus: (status: string) => Promise<{ success: boolean; error?: string }>;
+  onUpdateAssignee: (assigneeId: string | null) => Promise<{ success: boolean; error?: string }>;
+  onToggleSubtask: (subtaskId: string, completed: boolean) => Promise<{ success: boolean; error?: string }>;
+  onDownloadAttachment: (node: ProjectNode) => Promise<void> | void;
 }
 
-function toSprintMutationRecord(
-    task: TaskSurfaceRecord,
-    projectId: string,
-    attachments: ProjectNode[],
-): SprintTaskMutationRecord {
-    return {
-        id: task.id,
-        projectId,
-        projectKey: task.projectKey,
-        title: task.title,
-        description: task.description,
-        status: task.status,
-        priority: task.priority,
-        storyPoints: task.storyPoints,
-        sprintId: task.sprintId,
-        createdAt: task.createdAt,
-        updatedAt: task.updatedAt,
-        taskNumber: task.taskNumber,
-        assignee: task.assignee,
-        creator: task.creator,
-        linkedFileCount: attachments.length,
-        linkedFiles: toLinkedSprintFiles(attachments, task.id, task.updatedAt ?? task.createdAt),
-    };
+function autosizeTextarea(element: HTMLTextAreaElement | null) {
+  if (!element) return;
+  element.style.height = "0px";
+  element.style.height = `${element.scrollHeight}px`;
 }
 
 export default function DetailsTab({
-    task,
-    onTaskChange,
-    isOwnerOrMember,
-    sprints = [],
-    members = [],
-    projectId,
+  task,
+  canEdit,
+  isMutating,
+  mutationError,
+  members = [],
+  sprints = [],
+  subtasks,
+  attachments,
+  fileWarnings = [],
+  fileWarningSummary = null,
+  onUpdateField,
+  onUpdateStatus,
+  onUpdateAssignee,
+  onToggleSubtask,
+  onDownloadAttachment,
 }: DetailsTabProps) {
-    const [isUpdating, setIsUpdating] = useState(false);
-    const queryClient = useQueryClient();
-    
-    // Unified Data Flow: Hooks subscribe to realtime changes
-    const { subtasks } = useTaskSubtasks(task.id);
-    const { attachments } = useTaskAttachments(task.id);
-    const taskRecord = normalizeTaskSurfaceRecord(task);
-    const createdAtLabel =
-        taskRecord.createdAt && Number.isFinite(Date.parse(taskRecord.createdAt))
-            ? format(new Date(taskRecord.createdAt), "MMM d, yyyy h:mm a")
-            : "Unknown";
-    const availableSprints = normalizeSprintOptions(sprints);
-    const availableMembers = members
+  const [titleDraft, setTitleDraft] = useState(task.title);
+  const [descriptionDraft, setDescriptionDraft] = useState(task.description || "");
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [titleError, setTitleError] = useState<string | null>(null);
+  const titleTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const titleSaveInFlightRef = useRef(false);
+
+  useEffect(() => {
+    setDescriptionDraft(task.description || "");
+  }, [task.description]);
+
+  useEffect(() => {
+    if (!isEditingTitle) {
+      setTitleDraft(task.title);
+      setTitleError(null);
+    }
+  }, [isEditingTitle, task.title]);
+
+  useEffect(() => {
+    if (!isEditingTitle) return;
+    autosizeTextarea(titleTextareaRef.current);
+  }, [isEditingTitle, titleDraft]);
+
+  const availableSprints = useMemo(() => normalizeSprintOptions(sprints), [sprints]);
+  const availableMembers = useMemo(
+    () =>
+      members
         .map((member) => {
-            const identity = normalizeTaskSurfacePerson(member?.user ?? member);
-            const id = member?.user_id || member?.id || identity?.id;
-            if (!id) return null;
-            return {
-                id: String(id),
-                identity,
-            };
+          const identity = normalizeTaskSurfacePerson(member?.user ?? member);
+          const id = member?.user_id || member?.id || identity?.id;
+          if (!id) return null;
+          return { id: String(id), identity };
         })
-        .filter(Boolean) as { id: string; identity: ReturnType<typeof normalizeTaskSurfacePerson> }[];
+        .filter(Boolean) as { id: string; identity: ReturnType<typeof normalizeTaskSurfacePerson> }[],
+    [members],
+  );
 
-    const invalidateProjectTaskSlices = async () => {
-        await Promise.all([
-            queryClient.invalidateQueries({ queryKey: queryKeys.project.detail.tasksRoot(projectId) }),
-            queryClient.invalidateQueries({ queryKey: queryKeys.project.detail.sprints(projectId) }),
-            queryClient.invalidateQueries({ queryKey: queryKeys.project.detail.sprintDetailRoot(projectId) }),
-        ]);
-    };
+  const createdAtLabel =
+    task.createdAt && Number.isFinite(Date.parse(task.createdAt))
+      ? format(new Date(task.createdAt), "MMM d, yyyy h:mm a")
+      : "Unknown";
+  const creatorName = task.creator?.fullName || "Unknown";
+  const creatorAvatar = task.creator?.avatarUrl || null;
+  const completedSubtasks = subtasks.filter((subtask) => subtask.completed).length;
+  const showDoneWarnings = task.status === "done" && fileWarnings.length > 0;
 
-    const patchSprintCaches = (beforeTask: SprintTaskMutationRecord | null, afterTask: SprintTaskMutationRecord | null) => {
-        queryClient.setQueriesData(
-            { queryKey: queryKeys.project.detail.sprintDetailRoot(projectId) },
-            (existing: unknown) => patchSprintDetailInfiniteData(existing, beforeTask, afterTask),
-        );
-    };
+  const enterTitleEditMode = useCallback(() => {
+    if (!canEdit) return;
+    setTitleError(null);
+    setIsEditingTitle(true);
+    requestAnimationFrame(() => {
+      if (!titleTextareaRef.current) return;
+      autosizeTextarea(titleTextareaRef.current);
+      titleTextareaRef.current.focus();
+      const end = titleTextareaRef.current.value.length;
+      titleTextareaRef.current.setSelectionRange(end, end);
+    });
+  }, [canEdit]);
 
-    const buildTaskUpdate = (field: string, value: any) => {
-        const nextTask = { ...task };
-        if (field === "title") {
-            nextTask.title = typeof value === "string" ? value.trim() : "";
-        } else if (field === "description") {
-            nextTask.description = typeof value === "string" && value.trim() ? value : "";
-        } else if (field === "priority") {
-            nextTask.priority = value;
-        } else if (field === "sprintId") {
-            nextTask.sprintId = value || null;
-            const nextSprint = availableSprints.find((sprint) => sprint.id === value) ?? null;
-            nextTask.sprint = nextSprint
-                ? { id: nextSprint.id, name: nextSprint.name, status: nextSprint.status }
-                : null;
-        } else if (field === "dueDate") {
-            nextTask.dueDate = value || null;
-        }
-        nextTask.updatedAt = new Date().toISOString();
-        return nextTask;
-    };
-    
-    const handleUpdate = async (field: string, value: any) => {
-        if (!isOwnerOrMember) return;
-        setIsUpdating(true);
-        const previousTask = task;
-        const nextTask = buildTaskUpdate(field, value);
-        const beforeRecord = toSprintMutationRecord(taskRecord, projectId, attachments);
-        const afterRecord = toSprintMutationRecord(
-            normalizeTaskSurfaceRecord(nextTask),
-            projectId,
-            attachments,
-        );
-        const previousSprintStates = queryClient.getQueriesData({
-            queryKey: queryKeys.project.detail.sprintDetailRoot(projectId),
-        });
+  const cancelTitleEdit = useCallback(() => {
+    setTitleDraft(task.title);
+    setTitleError(null);
+    setIsEditingTitle(false);
+  }, [task.title]);
 
-        onTaskChange(nextTask);
-        patchSprintCaches(beforeRecord, afterRecord);
-        try {
-            const result = await updateTaskFieldAction(task.id, field, value, projectId);
-            if (!result.success) {
-                throw new Error(result.error || "Failed to update task");
-            }
-            recordSprintMetric("project.sprint.optimistic_patch", {
-                projectId,
-                taskId: task.id,
-                field,
-                result: "applied",
-            });
-            await invalidateProjectTaskSlices();
-        } catch (error) {
-            for (const [queryKey, snapshot] of previousSprintStates) {
-                queryClient.setQueryData(queryKey, snapshot);
-            }
-            onTaskChange(previousTask);
-            recordSprintMetric("project.sprint.optimistic_patch", {
-                projectId,
-                taskId: task.id,
-                field,
-                result: "rolled_back",
-            });
-            console.error("Error updating:", error);
-        } finally {
-            setIsUpdating(false);
-        }
-    };
+  const saveTitleDraft = useCallback(async () => {
+    if (titleSaveInFlightRef.current) {
+      return { success: false as const, error: "Title update already in progress." };
+    }
 
-    const handleStatusChange = async (status: TaskStatus) => {
-        if (!isOwnerOrMember) return;
-        setIsUpdating(true);
-        const previousTask = task;
-        const nextTask = {
-            ...task,
-            status,
-            updatedAt: new Date().toISOString(),
-        };
-        const beforeRecord = toSprintMutationRecord(taskRecord, projectId, attachments);
-        const afterRecord = toSprintMutationRecord(
-            normalizeTaskSurfaceRecord(nextTask),
-            projectId,
-            attachments,
-        );
-        const previousSprintStates = queryClient.getQueriesData({
-            queryKey: queryKeys.project.detail.sprintDetailRoot(projectId),
-        });
+    const normalizedTitle = normalizeTaskTitleDraft(titleDraft);
+    if (!normalizedTitle) {
+      setTitleError("Task title is required.");
+      requestAnimationFrame(() => titleTextareaRef.current?.focus());
+      return { success: false as const, error: "Task title is required." };
+    }
 
-        onTaskChange(nextTask);
-        patchSprintCaches(beforeRecord, afterRecord);
-        try {
-            const result = await updateTaskStatusAction(task.id, status, projectId);
-            if (!result.success) {
-                throw new Error(result.error || "Failed to update task status");
-            }
-            recordSprintMetric("project.sprint.optimistic_patch", {
-                projectId,
-                taskId: task.id,
-                field: "status",
-                result: "applied",
-            });
-            await invalidateProjectTaskSlices();
-        } catch (error) {
-            for (const [queryKey, snapshot] of previousSprintStates) {
-                queryClient.setQueryData(queryKey, snapshot);
-            }
-            onTaskChange(previousTask);
-            recordSprintMetric("project.sprint.optimistic_patch", {
-                projectId,
-                taskId: task.id,
-                field: "status",
-                result: "rolled_back",
-            });
-            console.error("Error updating status:", error);
-        } finally {
-            setIsUpdating(false);
-        }
-    };
+    setTitleDraft(normalizedTitle);
+    setTitleError(null);
 
-    const handleAssigneeChange = async (assigneeId: string) => {
-        if (!isOwnerOrMember) return;
-        setIsUpdating(true);
-        const previousTask = task;
-        const nextMember = availableMembers.find((member) => member.id === assigneeId) ?? null;
-        const nextTask = {
-            ...task,
-            assigneeId: assigneeId || null,
-            assignee: assigneeId
-                ? {
-                    fullName: nextMember?.identity?.fullName ?? "Assigned user",
-                    avatarUrl: nextMember?.identity?.avatarUrl ?? null,
-                }
-                : null,
-            updatedAt: new Date().toISOString(),
-        };
-        const beforeRecord = toSprintMutationRecord(taskRecord, projectId, attachments);
-        const afterRecord = toSprintMutationRecord(
-            normalizeTaskSurfaceRecord(nextTask),
-            projectId,
-            attachments,
-        );
-        const previousSprintStates = queryClient.getQueriesData({
-            queryKey: queryKeys.project.detail.sprintDetailRoot(projectId),
-        });
+    if (normalizedTitle === task.title) {
+      setIsEditingTitle(false);
+      return { success: true as const };
+    }
 
-        onTaskChange(nextTask);
-        patchSprintCaches(beforeRecord, afterRecord);
-        try {
-            const result = await assignTaskAction(task.id, assigneeId || null, projectId);
-            if (!result.success) {
-                throw new Error(result.error || "Failed to assign task");
-            }
-            recordSprintMetric("project.sprint.optimistic_patch", {
-                projectId,
-                taskId: task.id,
-                field: "assigneeId",
-                result: "applied",
-            });
-            await invalidateProjectTaskSlices();
-        } catch (error) {
-            for (const [queryKey, snapshot] of previousSprintStates) {
-                queryClient.setQueryData(queryKey, snapshot);
-            }
-            onTaskChange(previousTask);
-            recordSprintMetric("project.sprint.optimistic_patch", {
-                projectId,
-                taskId: task.id,
-                field: "assigneeId",
-                result: "rolled_back",
-            });
-            console.error("Error assigning:", error);
-        } finally {
-            setIsUpdating(false);
-        }
-    };
+    titleSaveInFlightRef.current = true;
+    try {
+      const result = await onUpdateField("title", normalizedTitle);
+      if (result.success) {
+        setIsEditingTitle(false);
+      } else if (result.error) {
+        setTitleError(result.error);
+        requestAnimationFrame(() => titleTextareaRef.current?.focus());
+      }
+      return result;
+    } finally {
+      titleSaveInFlightRef.current = false;
+    }
+  }, [onUpdateField, task.title, titleDraft]);
 
-    const handleToggleSubtask = async (subtaskId: string, completed: boolean) => {
-        if (!isOwnerOrMember) return;
-        try {
-            await toggleSubtaskAction(subtaskId, !completed, projectId);
-        } catch (error) {
-            console.error("Error toggling subtask:", error);
-        }
-    };
+  return (
+    <div className="grid min-h-full grid-cols-1 items-start gap-8 p-6 lg:grid-cols-3">
+      <div className="min-w-0 space-y-8 lg:col-span-2">
+        {mutationError ? (
+          <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:border-rose-900/40 dark:bg-rose-900/20 dark:text-rose-200">
+            {mutationError}
+          </div>
+        ) : null}
 
-    const creatorName = taskRecord.creator?.fullName || "Unknown";
-    const creatorAvatar = taskRecord.creator?.avatarUrl;
-
-    const supabase = createClient();
-    const handleDownload = async (node: ProjectNode) => {
-        if (!node.s3Key) return;
-        try {
-            const { data } = await supabase.storage.from("project-files").createSignedUrl(node.s3Key, 3600);
-            if (data?.signedUrl) window.open(data.signedUrl, "_blank");
-        } catch (e) {
-            console.error("Download failed", e);
-        }
-    };
-
-    return (
-        <div className="p-6 grid grid-cols-1 lg:grid-cols-3 gap-8 items-start min-h-full">
-            {/* Main Content (Left Col) */}
-            <div className="lg:col-span-2 space-y-8 min-w-0">
-                {/* Header Info */}
-                <div className="space-y-4">
-                    <input 
-                        type="text"
-                        defaultValue={taskRecord.title}
-                        onBlur={(e) => handleUpdate("title", e.target.value)}
-                        disabled={!isOwnerOrMember || isUpdating}
-                        className="w-full bg-transparent text-2xl font-bold text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 border-none p-0 focus:ring-0 transition-colors"
-                        placeholder="Task Title"
-                    />
-                    
-                    {/* Creator Metadata - Using simple flex for Safari safety */}
-                    <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-500">
-                        <div className="inline-flex items-center gap-1.5 bg-zinc-100 dark:bg-zinc-800 px-2.5 py-1 rounded-full border border-zinc-200 dark:border-zinc-700">
-                            <span className="text-zinc-400">Created by</span>
-                            <div className="flex items-center gap-1.5">
-                                <Avatar className="w-4 h-4">
-                                    <AvatarImage src={creatorAvatar ?? undefined} />
-                                    <AvatarFallback>{creatorName.substring(0, 2).toUpperCase()}</AvatarFallback>
-                                </Avatar>
-                                <span className="font-medium text-zinc-900 dark:text-zinc-200 truncate max-w-[120px]">
-                                    {creatorName}
-                                </span>
-                            </div>
-                        </div>
-	                        <span className="text-zinc-300 dark:text-zinc-700">•</span>
-	                        <div className="inline-flex items-center gap-1.5">
-	                             <Clock className="w-3.5 h-3.5 text-zinc-400" />
-	                             <span>{createdAtLabel}</span>
-	                        </div>
-	                    </div>
-	                </div>
-
-                {/* Description */}
-                <div className="space-y-3">
-                    <label className="text-xs font-semibold text-zinc-500 uppercase tracking-wider flex items-center gap-2">
-                        Description
-                    </label>
-                    <textarea 
-                        rows={8}
-                        defaultValue={taskRecord.description || ""}
-                        onBlur={(e) => handleUpdate("description", e.target.value)}
-                        disabled={!isOwnerOrMember || isUpdating}
-                        placeholder="Add a description..."
-                        className="w-full px-4 py-3 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 text-sm focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none resize-none disabled:opacity-50"
-                    />
+        {showDoneWarnings ? (
+          <div className="rounded-xl border border-amber-200 bg-amber-50/90 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-100">
+            <div className="flex items-start gap-3">
+              <TriangleAlert className="mt-0.5 h-4 w-4 flex-shrink-0" />
+              <div className="space-y-2">
+                <div className="font-medium">
+                  {fileWarningSummary || "This task is done, but its file state still needs follow-up."}
                 </div>
-
-                {/* Attachments Summary */}
-                {attachments.length > 0 && (
-                    <div className="space-y-3">
-                        <label className="text-xs font-semibold text-zinc-500 uppercase tracking-wider flex items-center gap-2">
-                            <Paperclip className="w-3.5 h-3.5" /> Attachments ({attachments.length})
-                        </label>
-                        <div className="flex flex-wrap gap-3">
-                            {attachments.map(file => (
-                                <button 
-                                    key={file.id} 
-                                    onClick={() => handleDownload(file)}
-                                    // Safari: Specific width/height and flex layout
-                                    className="group relative w-28 h-24 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 flex flex-col items-center justify-center cursor-pointer hover:border-indigo-500 hover:shadow-sm transition-all"
-                                >
-                                    <Paperclip className="w-6 h-6 text-zinc-400 mb-2 group-hover:text-indigo-500 transition-colors" />
-                                    <span className="text-[10px] text-zinc-600 dark:text-zinc-400 truncate w-full px-2 text-center">
-                                        {file.name}
-                                    </span>
-                                </button>
-                            ))}
-                        </div>
-                    </div>
-                )}
-
-                {/* Subtasks Preview */}
-                <div className="space-y-3">
-                    <div className="flex items-center justify-between">
-                        <label className="text-xs font-semibold text-zinc-500 uppercase tracking-wider flex items-center gap-2">
-                            <CheckSquare className="w-3.5 h-3.5" /> Subtasks ({subtasks.filter(t => t.completed).length}/{subtasks.length})
-                        </label>
-                        {/* Progress Bar */}
-                        {subtasks.length > 0 && (
-                            <div className="w-24 h-1.5 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden">
-                                <div 
-                                    className="h-full bg-indigo-500 transition-all duration-300"
-                                    style={{ width: `${(subtasks.filter(t => t.completed).length / subtasks.length) * 100}%` }}
-                                />
-                            </div>
-                        )}
-                    </div>
-                    
-                    {subtasks.length === 0 ? (
-                        <div className="rounded-lg border border-dashed border-zinc-200 dark:border-zinc-800 p-4 text-center">
-                             <p className="text-sm text-zinc-400">No subtasks yet. Add them in the Subtasks tab.</p>
-                        </div>
-                    ) : (
-                        <div className="space-y-2">
-                            {subtasks.map(st => (
-                                <div key={st.id} className="flex items-start gap-3 group p-2 rounded-lg hover:bg-zinc-50 dark:hover:bg-zinc-900/50 transition-colors">
-                                    <button
-                                        onClick={() => handleToggleSubtask(st.id, st.completed)}
-                                        disabled={!isOwnerOrMember}
-                                        className={cn(
-                                            "flex-shrink-0 mt-0.5 w-4 h-4 rounded border flex items-center justify-center transition-colors",
-                                            st.completed
-                                                ? "bg-indigo-600 border-indigo-600"
-                                                : "border-zinc-300 dark:border-zinc-600 hover:border-indigo-600",
-                                            !isOwnerOrMember && "cursor-not-allowed opacity-50"
-                                        )}
-                                    >
-                                        {st.completed && <Check className="w-3 h-3 text-white" />}
-                                    </button>
-                                    <span className={cn(
-                                        "text-sm leading-tight transition-all",
-                                        st.completed ? "line-through text-zinc-400" : "text-zinc-700 dark:text-zinc-300"
-                                    )}>
-                                        {st.title}
-                                    </span>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-                </div>
+                <ul className="space-y-1 text-xs text-amber-700 dark:text-amber-200">
+                  {fileWarnings.map((warning) => (
+                    <li key={warning.code} className="list-inside list-disc">
+                      {warning.message}
+                    </li>
+                  ))}
+                </ul>
+              </div>
             </div>
+          </div>
+        ) : null}
 
-            {/* Sidebar Properties (Right Col) */}
-            <div className="space-y-6 w-full min-w-0">
-                <div className="sticky top-6 p-5 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-sm space-y-6">
-                    <div className="flex items-center gap-2 pb-4 border-b border-zinc-100 dark:border-zinc-800">
-                        <h3 className="text-xs font-bold text-zinc-900 dark:text-zinc-100 uppercase tracking-wider">Properties</h3>
-                    </div>
-
-                    {/* Status */}
-                    <div className="space-y-1.5">
-                        <label className="text-[10px] font-semibold text-zinc-500 uppercase flex items-center gap-2">
-                            <Flag className="w-3 h-3" /> Status
-                        </label>
-                        <select 
-                            value={taskRecord.status}
-                            onChange={(e) => {
-                                const nextStatus = e.target.value;
-                                if (isTaskStatus(nextStatus)) {
-                                    void handleStatusChange(nextStatus);
-                                }
-                            }}
-                            disabled={!isOwnerOrMember || isUpdating}
-                            className="w-full px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 text-sm focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-50 capitalize"
-                        >
-                            <option value="todo">To Do</option>
-                            <option value="in_progress">In Progress</option>
-                            <option value="blocked">Blocked</option>
-                            <option value="done">Done</option>
-                        </select>
-                    </div>
-
-                    {/* Priority */}
-                    <div className="space-y-1.5">
-                        <label className="text-[10px] font-semibold text-zinc-500 uppercase">Priority</label>
-                        <select 
-                            value={taskRecord.priority}
-                            onChange={(e) => handleUpdate("priority", e.target.value)}
-                            disabled={!isOwnerOrMember || isUpdating}
-                            className="w-full px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 text-sm focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-50 capitalize"
-                        >
-                            <option value="low">Low</option>
-                            <option value="medium">Medium</option>
-                            <option value="high">High</option>
-                            <option value="urgent">Urgent</option>
-                        </select>
-                    </div>
-
-                    {/* Assignee */}
-                    <div className="space-y-1.5">
-                        <label className="text-[10px] font-semibold text-zinc-500 uppercase flex items-center gap-2">
-                            <User className="w-3 h-3" /> Assignee
-                        </label>
-                        <select 
-                            value={taskRecord.assigneeId || ""}
-                            onChange={(e) => handleAssigneeChange(e.target.value)}
-                            disabled={!isOwnerOrMember || isUpdating}
-                            className="w-full px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 text-sm focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-50"
-                        >
-                            <option value="">Unassigned</option>
-                            {availableMembers.map((member) => (
-                                    <option key={member.id} value={member.id}>
-                                        {member.identity?.fullName || "Unknown"}
-                                    </option>
-                                ))}
-                        </select>
-                    </div>
-
-                    {/* Sprint */}
-                    <div className="space-y-1.5">
-                        <label className="text-[10px] font-semibold text-zinc-500 uppercase flex items-center gap-2">
-                            <Zap className="w-3 h-3" /> Sprint
-                        </label>
-                        <select 
-                            value={taskRecord.sprintId || ""}
-                            onChange={(e) => handleUpdate("sprintId", e.target.value || null)}
-                            disabled={!isOwnerOrMember || isUpdating}
-                            className="w-full px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 text-sm focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-50"
-                        >
-                            <option value="">Backlog (No Sprint)</option>
-                            {availableSprints.map((sprint: any) => (
-                                <option key={sprint.id} value={sprint.id}>{sprint.name}</option>
-                            ))}
-                        </select>
-                    </div>
-                    
-                    {/* Due Date */}
-                    <div className="space-y-1.5">
-                        <label className="text-[10px] font-semibold text-zinc-500 uppercase flex items-center gap-2">
-                            <Calendar className="w-3 h-3" /> Due Date
-                        </label>
-                        <input 
-                            type="date"
-                            defaultValue={taskRecord.dueDate ? taskRecord.dueDate.split('T')[0] : ""}
-                            onChange={(e) => handleUpdate("dueDate", e.target.value || null)}
-                            disabled={!isOwnerOrMember || isUpdating}
-                            className="w-full px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 text-sm focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-50"
-                        />
-                    </div>
-
-
-                </div>
+        <div className="space-y-4">
+          {isEditingTitle ? (
+            <div className="space-y-2">
+              <textarea
+                ref={titleTextareaRef}
+                value={titleDraft}
+                onChange={(event) => {
+                  setTitleDraft(event.target.value);
+                  if (titleError) setTitleError(null);
+                }}
+                onBlur={() => {
+                  void saveTitleDraft();
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    cancelTitleEdit();
+                    return;
+                  }
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    void saveTitleDraft();
+                  }
+                }}
+                disabled={!canEdit || isMutating}
+                rows={1}
+                aria-label="Task title"
+                className="w-full resize-none overflow-hidden bg-transparent text-2xl font-bold leading-tight text-zinc-900 outline-none placeholder:text-zinc-400 disabled:opacity-60 dark:text-zinc-100"
+                placeholder="Task title"
+              />
+              {titleError ? <p className="text-xs text-rose-500">{titleError}</p> : null}
             </div>
+          ) : canEdit ? (
+            <button
+              type="button"
+              onClick={enterTitleEditMode}
+              className="w-full rounded-lg text-left outline-none transition focus-visible:ring-2 focus-visible:ring-indigo-500/40"
+              aria-label="Edit task title"
+            >
+              <h1 className="whitespace-pre-wrap break-words text-2xl font-bold leading-tight text-zinc-900 dark:text-zinc-100">
+                {task.title}
+              </h1>
+            </button>
+          ) : (
+            <h1 className="whitespace-pre-wrap break-words text-2xl font-bold leading-tight text-zinc-900 dark:text-zinc-100">
+              {task.title}
+            </h1>
+          )}
+
+          <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-500">
+            <div className="inline-flex items-center gap-1.5 rounded-full border border-zinc-200 bg-zinc-100 px-2.5 py-1 dark:border-zinc-700 dark:bg-zinc-800">
+              <span className="text-zinc-400">Created by</span>
+              <div className="flex items-center gap-1.5">
+                <Avatar className="h-4 w-4">
+                  <AvatarImage src={creatorAvatar ?? undefined} />
+                  <AvatarFallback>{creatorName.slice(0, 2).toUpperCase()}</AvatarFallback>
+                </Avatar>
+                <span className="max-w-[140px] truncate font-medium text-zinc-900 dark:text-zinc-200">
+                  {creatorName}
+                </span>
+              </div>
+            </div>
+            <span className="text-zinc-300 dark:text-zinc-700">•</span>
+            <div className="inline-flex items-center gap-1.5">
+              <Clock className="h-3.5 w-3.5 text-zinc-400" />
+              <span>{createdAtLabel}</span>
+            </div>
+          </div>
         </div>
-    );
+
+        <div className="space-y-3">
+          <label className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Description</label>
+          <textarea
+            rows={8}
+            value={descriptionDraft}
+            onChange={(event) => setDescriptionDraft(event.target.value)}
+            onBlur={() => {
+              if ((descriptionDraft || "") !== (task.description || "")) {
+                void onUpdateField("description", descriptionDraft);
+              }
+            }}
+            disabled={!canEdit || isMutating}
+            placeholder="Add a description..."
+            className="w-full resize-none rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-zinc-900 outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-50 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-100"
+          />
+        </div>
+
+        {attachments.length > 0 ? (
+          <div className="space-y-3">
+            <label className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+              <Paperclip className="h-3.5 w-3.5" />
+              Attachments ({attachments.length})
+            </label>
+            <div className="flex flex-wrap gap-3">
+              {attachments.map((attachment) => (
+                <button
+                  key={attachment.id}
+                  onClick={() => void onDownloadAttachment(attachment)}
+                  className="group relative flex h-24 w-28 flex-col items-center justify-center rounded-lg border border-zinc-200 bg-zinc-50 transition-all hover:border-indigo-500 hover:shadow-sm dark:border-zinc-800 dark:bg-zinc-900"
+                >
+                  <Paperclip className="mb-2 h-6 w-6 text-zinc-400 transition-colors group-hover:text-indigo-500" />
+                  <span className="w-full truncate px-2 text-center text-[10px] text-zinc-600 dark:text-zinc-400">
+                    {attachment.name}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        <div className="space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <label className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+              <CheckSquare className="h-3.5 w-3.5" />
+              Subtasks ({completedSubtasks}/{subtasks.length})
+            </label>
+            {subtasks.length > 0 ? (
+              <div className="h-1.5 w-24 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
+                <div
+                  className="h-full bg-indigo-500 transition-all"
+                  style={{ width: `${(completedSubtasks / Math.max(1, subtasks.length)) * 100}%` }}
+                />
+              </div>
+            ) : null}
+          </div>
+
+          {subtasks.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-zinc-200 px-4 py-6 text-center text-sm text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
+              No subtasks yet. Use the Subtasks tab to add them.
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {subtasks.map((subtask) => (
+                <div
+                  key={subtask.id}
+                  className="group flex items-start gap-3 rounded-lg p-2 transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-900/50"
+                >
+                  <button
+                    onClick={() => void onToggleSubtask(subtask.id, subtask.completed)}
+                    disabled={!canEdit}
+                    className={cn(
+                      "mt-0.5 flex h-4 w-4 flex-shrink-0 items-center justify-center rounded border transition-colors",
+                      subtask.completed
+                        ? "border-indigo-600 bg-indigo-600 text-white"
+                        : "border-zinc-300 text-zinc-400 hover:border-indigo-500 dark:border-zinc-700",
+                      !canEdit && "cursor-not-allowed opacity-50",
+                    )}
+                  >
+                    {subtask.completed ? <Check className="h-3 w-3" /> : null}
+                  </button>
+                  <span
+                    className={cn(
+                      "text-sm leading-tight",
+                      subtask.completed ? "text-zinc-400 line-through" : "text-zinc-700 dark:text-zinc-300",
+                    )}
+                  >
+                    {subtask.title}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="min-w-0 space-y-6">
+        <div className="sticky top-6 space-y-6 rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+          <div className="border-b border-zinc-100 pb-4 dark:border-zinc-800">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-900 dark:text-zinc-100">
+              Properties
+            </h3>
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="flex items-center gap-2 text-[10px] font-semibold uppercase text-zinc-500">
+              <Flag className="h-3 w-3" />
+              Status
+            </label>
+            <select
+              value={task.status}
+              onChange={(event) => void onUpdateStatus(event.target.value)}
+              disabled={!canEdit || isMutating}
+              className="w-full rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800/50 dark:text-zinc-100"
+            >
+              {TASK_WORKFLOW_STATUSES.map((status) => (
+                <option key={status} value={status}>
+                  {getTaskStatusPresentation(status).label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-semibold uppercase text-zinc-500">Priority</label>
+            <select
+              value={task.priority}
+              onChange={(event) => void onUpdateField("priority", event.target.value)}
+              disabled={!canEdit || isMutating}
+              className="w-full rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800/50 dark:text-zinc-100"
+            >
+              {TASK_PRIORITY_VALUES.map((priority) => (
+                <option key={priority} value={priority}>
+                  {getTaskPriorityPresentation(priority).label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="flex items-center gap-2 text-[10px] font-semibold uppercase text-zinc-500">
+              <User className="h-3 w-3" />
+              Assignee
+            </label>
+            <select
+              value={task.assigneeId || ""}
+              onChange={(event) => void onUpdateAssignee(event.target.value || null)}
+              disabled={!canEdit || isMutating}
+              className="w-full rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800/50 dark:text-zinc-100"
+            >
+              <option value="">Unassigned</option>
+              {availableMembers.map((member) => (
+                <option key={member.id} value={member.id}>
+                  {member.identity?.fullName || "Unknown"}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="flex items-center gap-2 text-[10px] font-semibold uppercase text-zinc-500">
+              <Zap className="h-3 w-3" />
+              Sprint
+            </label>
+            <select
+              value={task.sprintId || ""}
+              onChange={(event) => void onUpdateField("sprintId", event.target.value || null)}
+              disabled={!canEdit || isMutating}
+              className="w-full rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800/50 dark:text-zinc-100"
+            >
+              <option value="">Backlog</option>
+              {availableSprints.map((sprint) => (
+                <option key={sprint.id} value={sprint.id}>
+                  {sprint.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="flex items-center gap-2 text-[10px] font-semibold uppercase text-zinc-500">
+              <Calendar className="h-3 w-3" />
+              Due date
+            </label>
+            <input
+              type="date"
+              value={task.dueDate ? task.dueDate.slice(0, 10) : ""}
+              onChange={(event) => void onUpdateField("dueDate", event.target.value || null)}
+              disabled={!canEdit || isMutating}
+              className="w-full rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800/50 dark:text-zinc-100"
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }

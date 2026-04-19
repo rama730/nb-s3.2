@@ -1,12 +1,13 @@
 "use server";
 
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
-import { projectMembers, projectSprints, tasks } from "@/lib/db/schema";
+import { projectMembers, projectNodes, projectSprints, taskNodeLinks, tasks } from "@/lib/db/schema";
 import { createClient } from "@/lib/supabase/server";
 import { consumeRateLimit } from "@/lib/security/rate-limit";
 import { queueCounterRefreshBestEffort } from "@/lib/workspace/counter-buffer";
+import { getTaskFileWarnings } from "@/lib/projects/task-file-intelligence";
 
 type MutableTaskField = "title" | "description" | "priority" | "sprintId" | "dueDate";
 
@@ -205,9 +206,34 @@ export async function updateTaskStatusAction(
             return { previousAssigneeId: locked.previousAssigneeId, projectId: locked.projectId };
         });
 
+        const warnings =
+            status === "done"
+                ? await db
+                    .select({
+                        id: projectNodes.id,
+                        name: projectNodes.name,
+                        type: projectNodes.type,
+                        path: projectNodes.path,
+                        annotation: taskNodeLinks.annotation,
+                    })
+                    .from(taskNodeLinks)
+                    .innerJoin(projectNodes, eq(taskNodeLinks.nodeId, projectNodes.id))
+                    .where(
+                        and(
+                            eq(taskNodeLinks.taskId, taskId),
+                            eq(projectNodes.projectId, projectId),
+                            isNull(projectNodes.deletedAt),
+                        ),
+                    )
+                    .then((rows) => getTaskFileWarnings({
+                        status,
+                        attachments: rows,
+                    }))
+                : [];
+
         await queueCounterRefreshBestEffort([result.previousAssigneeId]);
         revalidatePath(`/projects/${result.projectId}`);
-        return { success: true };
+        return { success: true, warnings };
     } catch (error: any) {
         console.error("Unexpected error:", error);
         return { success: false, error: error?.message || "Failed to update task status" };

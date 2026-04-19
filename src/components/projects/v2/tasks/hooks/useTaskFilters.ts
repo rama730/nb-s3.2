@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { Task } from "../TaskCard";
+import { rankFocusTasks } from "@/lib/projects/task-focus";
 
 interface UseTaskFiltersProps {
     tasks: Task[];
@@ -22,16 +23,20 @@ export function useTaskFilters({ tasks, currentUserId, scope }: UseTaskFiltersPr
 
     const myFocusTasks = useMemo(() => {
         if (!currentUserId) return [];
-        return filteredTasks.filter(t =>
-            t.assigneeId === currentUserId &&
-            t.status !== 'done'
+        return rankFocusTasks(
+            filteredTasks.filter(t =>
+                t.assigneeId === currentUserId &&
+                t.status !== 'done'
+            ),
         );
     }, [filteredTasks, currentUserId]);
 
     const needsOwnerTasks = useMemo(() => {
-        return filteredTasks.filter(t =>
-            !t.assigneeId &&
-            t.status !== 'done'
+        return rankFocusTasks(
+            filteredTasks.filter(t =>
+                !t.assigneeId &&
+                t.status !== 'done'
+            ),
         );
     }, [filteredTasks]);
 

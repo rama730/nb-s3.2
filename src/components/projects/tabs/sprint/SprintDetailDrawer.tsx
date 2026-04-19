@@ -230,7 +230,7 @@ export function SprintDetailDrawer({
               <div className="space-y-2">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-xs font-mono text-zinc-500">
-                    {task.taskNumber && task.project?.key ? `${task.project.key}-${task.taskNumber}` : `#${task.id.slice(0, 8)}`}
+                    {task.taskNumber && task.projectKey ? `${task.projectKey}-${task.taskNumber}` : `#${task.id.slice(0, 8)}`}
                   </span>
                   <span
                     className={cn(

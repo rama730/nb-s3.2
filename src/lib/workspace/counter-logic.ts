@@ -19,6 +19,10 @@ export function getWorkspaceCounterWindow(referenceNow: Date = new Date()) {
     return { now, todayEnd }
 }
 
+export function serializeWorkspaceCounterTimestamp(value: Date | string) {
+    return typeof value === 'string' ? value : value.toISOString()
+}
+
 export function isOpenWorkspaceTaskStatus(status: string | null | undefined) {
     return status !== 'done'
 }
@@ -47,19 +51,22 @@ export function buildWorkspaceTaskCounterFilters(
     deletedAtExpression: SQL,
     statusExpression: SQL,
     dueDateExpression: SQL,
-    now: Date,
-    todayEnd: Date,
+    now: Date | string,
+    todayEnd: Date | string,
 ) {
+    const nowParam = sql`${serializeWorkspaceCounterTimestamp(now)}::timestamptz`
+    const todayEndParam = sql`${serializeWorkspaceCounterTimestamp(todayEnd)}::timestamptz`
+
     return {
         dueToday: sql`${deletedAtExpression} IS NULL
             AND (${statusExpression} IS NULL OR ${statusExpression} <> 'done')
             AND ${dueDateExpression} IS NOT NULL
-            AND ${dueDateExpression} >= ${now}
-            AND ${dueDateExpression} <= ${todayEnd}`,
+            AND ${dueDateExpression} >= ${nowParam}
+            AND ${dueDateExpression} <= ${todayEndParam}`,
         overdue: sql`${deletedAtExpression} IS NULL
             AND (${statusExpression} IS NULL OR ${statusExpression} <> 'done')
             AND ${dueDateExpression} IS NOT NULL
-            AND ${dueDateExpression} < ${now}`,
+            AND ${dueDateExpression} < ${nowParam}`,
         inProgress: sql`${deletedAtExpression} IS NULL
             AND ${statusExpression} = 'in_progress'`,
     }

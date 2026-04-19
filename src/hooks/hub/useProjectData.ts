@@ -11,6 +11,7 @@ import {
 import { Task } from "@/components/projects/v2/tasks/TaskCard";
 import { queryKeys } from "@/lib/query-keys";
 import type { SprintDetailPayload } from "@/lib/projects/sprint-detail";
+import { normalizeTaskSurfaceRecord } from "@/lib/projects/task-presentation";
 
 // Types matching the server action return (or inferred)
 export type ProjectTaskScope = 'all' | 'backlog' | 'sprint';
@@ -20,9 +21,10 @@ const normalizeScope = (scope: ProjectTaskScope): ProjectTaskScope =>
 
 const filterTasksByScope = (tasks: any[], scope: ProjectTaskScope) => {
     if (!Array.isArray(tasks) || tasks.length === 0) return [];
-    if (scope === 'backlog') return tasks.filter((task) => !task?.sprintId && !task?.sprint_id);
-    if (scope === 'sprint') return tasks.filter((task) => !!task?.sprintId || !!task?.sprint_id);
-    return tasks;
+    const normalized = tasks.map(normalizeTaskSurfaceRecord);
+    if (scope === 'backlog') return normalized.filter((task) => !task.sprintId);
+    if (scope === 'sprint') return normalized.filter((task) => !!task.sprintId);
+    return normalized;
 };
 
 export const PROJECT_TASKS_QUERY_KEY = (projectId: string, scope: ProjectTaskScope = 'all') =>

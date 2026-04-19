@@ -1,7 +1,8 @@
 import { z } from 'zod'
+import { TASK_PRIORITY_VALUES, TASK_WORKFLOW_STATUSES } from "@/lib/projects/task-workflow"
 
-export const taskStatusEnum = z.enum(['todo', 'in_progress', 'done', 'blocked'])
-export const taskPriorityEnum = z.enum(['low', 'medium', 'high', 'urgent'])
+export const taskStatusEnum = z.enum(TASK_WORKFLOW_STATUSES)
+export const taskPriorityEnum = z.enum(TASK_PRIORITY_VALUES)
 
 export const createTaskSchema = z.object({
     projectId: z.string().uuid(),

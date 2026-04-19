@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Users, UserPlus, Plus, LayoutGrid, List, CheckSquare } from "lucide-react";
+import { Users, UserPlus, Plus, LayoutGrid, List } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AnimatePresence } from "framer-motion";
 import { useRealtimeTasks } from "@/hooks/useRealtimeTasks";
@@ -14,15 +14,16 @@ import KanbanBoard from "@/components/projects/v2/tasks/KanbanBoard";
 import TasksTable from "@/components/projects/v2/tasks/TasksTable";
 import CreateTaskModal from "@/components/projects/v2/tasks/CreateTaskModal";
 import TaskDetailPanel from "@/components/projects/v2/tasks/TaskDetailPanel";
-import { Task } from "@/components/projects/v2/tasks/TaskCard";
 
 import FocusStrip from "./tasks/components/FocusStrip";
 import { useTaskFilters } from "./tasks/hooks/useTaskFilters";
-import { useProjectInfiniteTasks, type ProjectTaskScope } from "@/hooks/hub/useProjectData";
-import { queryKeys } from "@/lib/query-keys";
+import { useProjectInfiniteTasks, useProjectSprints, type ProjectTaskScope } from "@/hooks/hub/useProjectData";
 import { patchSprintDetailInfiniteData } from "@/lib/projects/sprint-cache";
-import { normalizeSprintOptions, normalizeTaskSurfaceRecord } from "@/lib/projects/task-presentation";
+import { normalizeSprintOptions, normalizeTaskSurfaceRecord, type TaskSurfaceRecord } from "@/lib/projects/task-presentation";
+import { buildTaskSubmitPayload } from "@/lib/projects/task-draft";
+import { patchProjectTaskCaches } from "@/lib/projects/task-cache";
 import type { ProjectNode } from "@/lib/db/schema";
+import { queryKeys } from "@/lib/query-keys";
 
 interface TasksTabProps {
     projectId: string;
@@ -73,17 +74,18 @@ export default function TasksTab({
 }: TasksTabProps) {
     const reduceMotion = useReducedMotionPreference();
     const queryClient = useQueryClient();
-    const sprintOptions = useMemo(() => normalizeSprintOptions(sprints), [sprints]);
+    const { data: projectSprintsData, isFetched: hasFetchedProjectSprints } = useProjectSprints(projectId);
+    const sprintOptions = useMemo(() => {
+        const sprintSource = hasFetchedProjectSprints ? (projectSprintsData ?? []) : sprints;
+        return normalizeSprintOptions(sprintSource);
+    }, [hasFetchedProjectSprints, projectSprintsData, sprints]);
     const sprintById = useMemo(() => new Map(sprintOptions.map((sprint) => [sprint.id, sprint])), [sprintOptions]);
     // Local State
     const [viewMode, setViewMode] = useState<'board' | 'list'>('board');
     const [scope, setScope] = useState<'all' | 'backlog' | 'sprint'>('all');
-    const [isBulkMode, setIsBulkMode] = useState(false);
-    const [isReorderMode, setIsReorderMode] = useState(false);
-    const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(new Set());
 
     const [showCreateModal, setShowCreateModal] = useState(false);
-    const [editingTask, setEditingTask] = useState<Task | null>(null);
+    const [editingTask, setEditingTask] = useState<TaskSurfaceRecord | null>(null);
     const [createTaskError, setCreateTaskError] = useState<string | null>(null);
     const queryScope: ProjectTaskScope = useMemo(() => {
         if (scope === "backlog") return "backlog";
@@ -102,13 +104,13 @@ export default function TasksTab({
     
     // Flatten pages for filtering and focus strips
     const fetchedTasks = useMemo(() => {
-        return (infiniteData?.pages.flatMap(page => page.tasks) || []) as Task[];
+        return (infiniteData?.pages.flatMap(page => page.tasks) || []).map(normalizeTaskSurfaceRecord);
     }, [infiniteData]);
-    
-    // Combine realtime updates with fetched data
-    const { tasks: allTasks, setTasks } = useRealtimeTasks(projectId, fetchedTasks.length > 0 ? fetchedTasks : undefined); 
+
+    useRealtimeTasks(projectId);
+
     const sprintAwareTasks = useMemo(() => {
-        return allTasks.map((task) => {
+        return fetchedTasks.map((task) => {
             const normalizedTask = normalizeTaskSurfaceRecord(task);
             if (normalizedTask.sprint || !normalizedTask.sprintId) return task;
             const sprint = sprintById.get(normalizedTask.sprintId);
@@ -123,8 +125,8 @@ export default function TasksTab({
                 sprintName: sprint.name,
             };
         });
-    }, [allTasks, sprintById]);
-    const withSprintContext = useCallback((task: Task) => {
+    }, [fetchedTasks, sprintById]);
+    const withSprintContext = useCallback((task: TaskSurfaceRecord) => {
         const normalizedTask = normalizeTaskSurfaceRecord(task);
         if (normalizedTask.sprint || !normalizedTask.sprintId) return task;
         const sprint = sprintById.get(normalizedTask.sprintId);
@@ -137,7 +139,7 @@ export default function TasksTab({
                 status: sprint.status,
             },
             sprintName: sprint.name,
-        } as Task;
+        } as TaskSurfaceRecord;
     }, [sprintById]);
 
     // Optimized Filters Hook
@@ -146,31 +148,15 @@ export default function TasksTab({
         currentUserId,
         scope
     });
-
-    // Handlers
-    const toggleTaskSelection = (taskId: string) => {
-        const newSet = new Set(selectedTaskIds);
-        if (newSet.has(taskId)) newSet.delete(taskId);
-        else newSet.add(taskId);
-        setSelectedTaskIds(newSet);
-    };
+    const showMyFocusStrip = myFocusTasks.length > 0;
+    const showNeedsOwnerStrip = needsOwnerTasks.length > 0;
+    const hasFocusStrips = showMyFocusStrip || showNeedsOwnerStrip;
+    const focusStripColumnsClass = showMyFocusStrip && showNeedsOwnerStrip ? "lg:grid-cols-2" : "lg:grid-cols-1";
 
     const handleCreateTask = useCallback(async (data: any): Promise<{ success: boolean; error?: string }> => {
         setCreateTaskError(null);
         try {
-            const result = await createTaskAction({
-                projectId,
-                title: data.title,
-                description: data.description || "",
-                priority: data.priority || "medium",
-                status: data.status || "todo",
-                assigneeId: data.assigneeId || null,
-                sprintId: data.sprintId || null,
-                storyPoints: data.storyPoints || undefined,
-                dueDate: data.dueDate || null,
-                subtasks: data.subtasks || [],
-                attachmentNodeIds: data.attachmentIds || [],
-            });
+            const result = await createTaskAction(data);
 
             if (!result.success || !result.task) {
                 const error = result.error || "Failed to create task";
@@ -178,15 +164,8 @@ export default function TasksTab({
                 return { success: false, error };
             }
 
-            const createdTask = result.task as unknown as Task;
-            const normalizedCreatedTask = normalizeTaskSurfaceRecord(createdTask);
-            const sprintAwareTask = withSprintContext(createdTask);
-            setTasks((prev) => {
-                if (prev.some((task) => task.id === sprintAwareTask.id)) {
-                    return prev.map((task) => (task.id === sprintAwareTask.id ? sprintAwareTask : task));
-                }
-                return [sprintAwareTask, ...prev];
-            });
+            const normalizedCreatedTask = withSprintContext(normalizeTaskSurfaceRecord(result.task));
+            patchProjectTaskCaches(queryClient, projectId, normalizedCreatedTask);
             if (normalizedCreatedTask.sprintId) {
                 const linkedFiles = Array.isArray(data.attachments)
                     ? toLinkedSprintFiles(
@@ -218,11 +197,6 @@ export default function TasksTab({
                         }),
                 );
             }
-            void Promise.all([
-                queryClient.invalidateQueries({ queryKey: queryKeys.project.detail.tasksRoot(projectId) }),
-                queryClient.invalidateQueries({ queryKey: queryKeys.project.detail.sprints(projectId) }),
-                queryClient.invalidateQueries({ queryKey: queryKeys.project.detail.sprintDetailRoot(projectId) }),
-            ]);
             return { success: true };
         } catch (err) {
             console.error("Exception creating task", err);
@@ -230,7 +204,7 @@ export default function TasksTab({
             setCreateTaskError(error);
             return { success: false, error };
         }
-    }, [projectId, queryClient, setTasks, withSprintContext]);
+    }, [projectId, queryClient, withSprintContext]);
 
     // Loading State
     if (isLoading && !initialTasks?.length) {
@@ -294,15 +268,6 @@ export default function TasksTab({
                             setViewMode={setViewMode}
                             scope={scope}
                             setScope={setScope}
-                            isBulkMode={isBulkMode}
-                            setBulkMode={(enabled) => {
-                                setIsBulkMode(enabled);
-                                if (!enabled) setSelectedTaskIds(new Set());
-                            }}
-                            isReorderMode={isReorderMode}
-                            setReorderMode={setIsReorderMode}
-                            activeCount={0}
-                            selectedCount={selectedTaskIds.size}
                         />
 
                         {/* New Task — Hub-style indigo rounded-xl */}
@@ -318,25 +283,28 @@ export default function TasksTab({
             </div>
 
             {/* Focus Strips */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-                 <FocusStrip 
-                    title="My Focus" 
-                    icon={Users} 
-                    iconColorClass="text-primary"
-                    tasks={myFocusTasks}
-                    onTaskClick={setEditingTask}
-                 />
-                 <FocusStrip 
-                    title="Needs Owner" 
-                    icon={UserPlus} 
-                    iconColorClass="text-orange-500"
-                    tasks={needsOwnerTasks}
-                    onTaskClick={setEditingTask}
-                    renderTaskAction={() => (
-                        <button className="px-2 py-1 text-xs bg-primary/10 text-primary rounded border border-primary/15 hover:bg-primary/15">Claim</button>
-                    )}
-                 />
-            </div>
+            {hasFocusStrips ? (
+                <div className={cn("grid grid-cols-1 items-start gap-3", focusStripColumnsClass)}>
+                    {showMyFocusStrip ? (
+                        <FocusStrip
+                            title="My Focus"
+                            icon={Users}
+                            iconColorClass="text-primary"
+                            tasks={myFocusTasks}
+                            onTaskClick={setEditingTask}
+                        />
+                    ) : null}
+                    {showNeedsOwnerStrip ? (
+                        <FocusStrip
+                            title="Needs Owner"
+                            icon={UserPlus}
+                            iconColorClass="text-orange-500"
+                            tasks={needsOwnerTasks}
+                            onTaskClick={setEditingTask}
+                        />
+                    ) : null}
+                </div>
+            ) : null}
 
             {createTaskError ? (
                 <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:border-rose-900/40 dark:bg-rose-900/20 dark:text-rose-200">
@@ -349,9 +317,6 @@ export default function TasksTab({
                 <KanbanBoard
                     tasks={filteredTasks}
                     onTaskClick={setEditingTask}
-                    selectedTaskIds={selectedTaskIds}
-                    toggleTaskSelection={toggleTaskSelection}
-                    isBulkMode={isBulkMode}
                     fetchNextPage={fetchNextPage}
                     hasNextPage={hasNextPage}
                     isFetchingNextPage={isFetchingNextPage}
@@ -360,9 +325,6 @@ export default function TasksTab({
                 <TasksTable
                     tasks={filteredTasks}
                     onTaskClick={setEditingTask}
-                    selectedTaskIds={selectedTaskIds}
-                    toggleTaskSelection={toggleTaskSelection}
-                    isBulkMode={isBulkMode}
                     fetchNextPage={fetchNextPage}
                     hasNextPage={hasNextPage}
                     isFetchingNextPage={isFetchingNextPage}
@@ -373,7 +335,15 @@ export default function TasksTab({
             <CreateTaskModal
                 isOpen={showCreateModal}
                 onClose={() => setShowCreateModal(false)}
-                onCreate={handleCreateTask}
+                onCreate={async (value) => {
+                    const payload = buildTaskSubmitPayload({
+                        draft: value.draft,
+                        projectId,
+                        subtasks: value.subtasks,
+                        attachments: value.attachments,
+                    });
+                    return handleCreateTask({ ...payload, attachments: value.attachments });
+                }}
                 projectId={projectId}
                 projectName={projectName}
                 members={members}
@@ -385,12 +355,9 @@ export default function TasksTab({
                     <TaskDetailPanel
                         task={editingTask}
                         onTaskUpdated={(nextTask) => {
-                            const sprintAwareTask = withSprintContext(nextTask as Task);
+                            const sprintAwareTask = withSprintContext(normalizeTaskSurfaceRecord(nextTask));
                             setEditingTask(sprintAwareTask);
-                            setTasks((prev) => prev.map((task) => (task.id === sprintAwareTask.id ? {
-                                ...task,
-                                ...sprintAwareTask,
-                            } : task)));
+                            patchProjectTaskCaches(queryClient, projectId, sprintAwareTask);
                         }}
                         onClose={() => setEditingTask(null)}
                         projectId={projectId}

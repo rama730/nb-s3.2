@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useRef, useEffect } from "react";
-import { Filter, ChevronDown, Check, LayoutGrid, List, Layers, Archive, CheckSquare, Search } from "lucide-react";
+import { Filter, Check, LayoutGrid, List, Layers, Archive } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { useReducedMotionPreference } from "@/components/providers/theme-provider";
@@ -11,12 +11,6 @@ interface TaskFiltersProps {
     setViewMode: (mode: 'board' | 'list') => void;
     scope: 'all' | 'backlog' | 'sprint';
     setScope?: (scope: 'all' | 'backlog' | 'sprint') => void;
-    activeCount?: number;
-    isBulkMode?: boolean;
-    setBulkMode?: (enabled: boolean) => void;
-    isReorderMode?: boolean;
-    setReorderMode?: (enabled: boolean) => void;
-    selectedCount?: number;
 }
 
 export default function TaskFilters({
@@ -24,12 +18,6 @@ export default function TaskFilters({
     setViewMode,
     scope = 'all',
     setScope,
-    activeCount = 0,
-    isBulkMode = false,
-    setBulkMode,
-    isReorderMode = false,
-    setReorderMode,
-    selectedCount = 0,
 }: TaskFiltersProps) {
     const reduceMotion = useReducedMotionPreference();
     const [isOpen, setIsOpen] = useState(false);
@@ -51,7 +39,7 @@ export default function TaskFilters({
         };
     }, [isOpen]);
 
-    const hasActiveFilters = activeCount > 0 || scope !== 'all' || isBulkMode;
+    const hasActiveFilters = scope !== 'all';
 
     return (
         <div className="relative" ref={containerRef}>
@@ -68,7 +56,7 @@ export default function TaskFilters({
                 <span>Filter</span>
                 {hasActiveFilters && (
                     <span className="flex items-center justify-center min-w-5 h-5 px-1 text-xs font-bold rounded-full bg-primary/10 text-primary">
-                        {activeCount || (scope !== 'all' ? 1 : 0)}
+                        1
                     </span>
                 )}
             </button>
@@ -89,8 +77,6 @@ export default function TaskFilters({
                                 <button
                                     onClick={() => {
                                         setScope?.('all');
-                                        setBulkMode?.(false);
-                                        setReorderMode?.(false);
                                         setViewMode('board');
                                     }}
                                     className="text-xs text-primary hover:opacity-80 font-medium"
@@ -167,50 +153,6 @@ export default function TaskFilters({
                                         {scope === 'backlog' && <Check className="w-4 h-4 text-primary" />}
                                     </button>
                                 </div>
-                            </div>
-
-                            {/* Backlog Options - Conditional */}
-                            {scope === 'backlog' && (
-                                <div className="pt-2 border-t border-zinc-100 dark:border-zinc-800">
-                                    <label className="flex items-center justify-between cursor-pointer group">
-                                        <span className="text-sm text-zinc-700 dark:text-zinc-300 group-hover:text-zinc-900 transition-colors">Enable manual reorder</span>
-                                        <input
-                                            type="checkbox"
-                                            checked={isReorderMode}
-                                            onChange={(e) => setReorderMode?.(e.target.checked)}
-                                            className="rounded border-zinc-300 text-primary focus:ring-ring"
-                                        />
-                                    </label>
-                                </div>
-                            )}
-
-                            {/* Bulk Actions */}
-                            <div className="pt-4 border-t border-zinc-100 dark:border-zinc-800 space-y-2">
-                                <label className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Bulk Actions</label>
-                                <button
-                                    onClick={() => setBulkMode?.(!isBulkMode)}
-                                    className={cn(
-                                        "w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm font-medium border transition-colors",
-                                        isBulkMode
-                                            ? "app-selected-surface border-primary/15"
-                                            : "border-zinc-200 text-zinc-700 hover:bg-zinc-50 dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                                    )}
-                                >
-                                    <span className="flex items-center gap-2">
-                                        <CheckSquare className="w-4 h-4" />
-                                        {isBulkMode ? "Bulk Mode Active" : "Enable Bulk Mode"}
-                                    </span>
-                                    {isBulkMode && (
-                                        <span className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-full">
-                                            On
-                                        </span>
-                                    )}
-                                </button>
-                                {isBulkMode && (
-                                    <p className="text-xs text-zinc-500 px-1">
-                                        {selectedCount} item{selectedCount !== 1 ? 's' : ''} selected
-                                    </p>
-                                )}
                             </div>
                         </div>
                     </motion.div>

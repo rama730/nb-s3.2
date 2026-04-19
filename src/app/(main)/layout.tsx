@@ -1,16 +1,16 @@
 import { MainLayout } from '@/components/layout/MainLayout';
 import { MainRuntimeProviders } from '@/components/providers/MainRuntimeProviders';
-import { getViewerAuthContext } from '@/lib/server/viewer-context';
+import { getViewerProfileContext } from '@/lib/server/viewer-context';
 
 export default async function MainRouteLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const { user } = await getViewerAuthContext();
+  const { user, profile } = await getViewerProfileContext();
 
   return (
-    <MainRuntimeProviders initialUser={user} initialProfile={null}>
+    <MainRuntimeProviders initialUser={user} initialProfile={profile}>
       <MainLayout>{children}</MainLayout>
     </MainRuntimeProviders>
   );

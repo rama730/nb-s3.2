@@ -15,6 +15,19 @@ import {
     type FilesActionResult,
 } from "./_constants";
 
+function toDbTimestamp(value: Date) {
+    return value.toISOString();
+}
+
+function toEpochMs(value: Date | string | null | undefined, fallback: number) {
+    if (!value) return fallback;
+    if (value instanceof Date) {
+        return Number.isNaN(value.getTime()) ? fallback : value.getTime();
+    }
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 export async function acquireProjectNodeLock(projectId: string, nodeId: string, ttlSeconds: number = 120) {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
@@ -23,6 +36,8 @@ export async function acquireProjectNodeLock(projectId: string, nodeId: string, 
 
     const now = new Date();
     const expiresAt = new Date(now.getTime() + ttlSeconds * 1000);
+    const nowIso = toDbTimestamp(now);
+    const expiresAtIso = toDbTimestamp(expiresAt);
 
     return await db.transaction(async (tx) => {
         // Ensure node belongs to project
@@ -36,10 +51,16 @@ export async function acquireProjectNodeLock(projectId: string, nodeId: string, 
             nodeId: string;
             projectId: string;
             lockedBy: string;
-            expiresAt: Date;
+            expiresAt: Date | string | null;
         }>(sql`
             INSERT INTO project_node_locks (node_id, project_id, locked_by, acquired_at, expires_at)
-            VALUES (${nodeId}, ${projectId}, ${user.id}, ${now}, ${expiresAt})
+            VALUES (
+                ${nodeId},
+                ${projectId},
+                ${user.id},
+                CAST(${nowIso} AS timestamptz),
+                CAST(${expiresAtIso} AS timestamptz)
+            )
             ON CONFLICT (node_id) DO UPDATE
             SET
                 project_id = EXCLUDED.project_id,
@@ -50,7 +71,7 @@ export async function acquireProjectNodeLock(projectId: string, nodeId: string, 
                 project_node_locks.project_id = EXCLUDED.project_id
                 AND (
                     project_node_locks.locked_by = EXCLUDED.locked_by
-                    OR project_node_locks.expires_at <= ${now}
+                    OR project_node_locks.expires_at <= CAST(${nowIso} AS timestamptz)
                 )
             RETURNING
                 node_id AS "nodeId",
@@ -79,7 +100,7 @@ export async function acquireProjectNodeLock(projectId: string, nodeId: string, 
                     projectId,
                     lockedBy: existing?.lockedBy ?? "",
                     lockedByName: lockUser?.fullName || lockUser?.username || null,
-                    expiresAt: existing?.expiresAt.getTime() ?? expiresAt.getTime(),
+                    expiresAt: toEpochMs(existing?.expiresAt, expiresAt.getTime()),
                 }
             };
         }
@@ -100,7 +121,7 @@ export async function acquireProjectNodeLock(projectId: string, nodeId: string, 
                 projectId: acquiredRow.projectId,
                 lockedBy: acquiredRow.lockedBy,
                 lockedByName: null,
-                expiresAt: acquiredRow.expiresAt.getTime(),
+                expiresAt: toEpochMs(acquiredRow.expiresAt, expiresAt.getTime()),
             }
         };
     });

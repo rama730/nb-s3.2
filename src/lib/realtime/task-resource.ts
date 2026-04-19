@@ -5,6 +5,7 @@ import { subscribeActiveResource, type DbRealtimePayload } from '@/lib/realtime/
 
 export type TaskResourceEvent =
     | { kind: 'comment'; payload: DbRealtimePayload }
+    | { kind: 'comment_like'; payload: DbRealtimePayload }
     | { kind: 'subtask'; payload: DbRealtimePayload }
     | { kind: 'attachment_link'; payload: DbRealtimePayload }
 
@@ -96,6 +97,15 @@ function openTaskResource(entry: TaskResourceEntry) {
             },
             {
                 event: '*',
+                table: 'task_comment_likes',
+                handler: (payload) => {
+                    for (const listener of entry.listeners) {
+                        listener({ kind: 'comment_like', payload })
+                    }
+                },
+            },
+            {
+                event: '*',
                 table: 'task_node_links',
                 filter: `task_id=eq.${entry.taskId}`,
                 handler: (payload) => {
@@ -158,4 +168,3 @@ export function subscribeTaskResource(params: {
         }
     }
 }
-

@@ -115,7 +115,7 @@ export function verifyPresenceToken(token: string) {
     || (claims.sessionId !== null && typeof claims.sessionId !== "string")
     || typeof claims.roomId !== "string"
     || claims.roomId.trim().length === 0
-    || (claims.roomType !== "conversation" && claims.roomType !== "workspace" && claims.roomType !== "user")
+    || (claims.roomType !== "conversation" && claims.roomType !== "workspace" && claims.roomType !== "user" && claims.roomType !== "task")
     || (claims.role !== "viewer" && claims.role !== "editor")
     || typeof claims.exp !== "number"
     || typeof claims.iat !== "number"

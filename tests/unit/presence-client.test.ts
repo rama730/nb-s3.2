@@ -176,3 +176,133 @@ test('subscribePresenceRoom reuses the same room during strict-mode style remoun
         globalThis.WebSocket = originalWebSocket;
     }
 });
+
+test('subscribePresenceRoom replays the current status and latest presence state to late subscribers', async () => {
+    resetPresenceClientForTests();
+
+    const originalFetch = globalThis.fetch;
+    const originalWindow = globalThis.window;
+    const originalWebSocket = globalThis.WebSocket;
+
+    class FakeWebSocket {
+        static OPEN = 1;
+        static CONNECTING = 0;
+        static CLOSED = 3;
+        readyState = FakeWebSocket.CONNECTING;
+        onopen: (() => void) | null = null;
+        onmessage: ((message: { data: string }) => void) | null = null;
+        onerror: (() => void) | null = null;
+        onclose: (() => void) | null = null;
+
+        constructor(_url: string) {
+            setTimeout(() => {
+                this.readyState = FakeWebSocket.OPEN;
+                this.onopen?.();
+            }, 0);
+        }
+
+        send(payload: string) {
+            const parsed = JSON.parse(payload) as { type: string };
+            if (parsed.type === 'auth') {
+                setTimeout(() => {
+                    this.onmessage?.({
+                        data: JSON.stringify({
+                            type: 'ack',
+                            ackType: 'auth',
+                            roomType: 'task',
+                            roomId: 'task-1',
+                            serverTime: Date.now(),
+                        }),
+                    });
+                    this.onmessage?.({
+                        data: JSON.stringify({
+                            type: 'presence.state',
+                            roomType: 'task',
+                            roomId: 'task-1',
+                            members: [{
+                                connectionId: 'connection-1',
+                                userId: 'user-2',
+                                roomType: 'task',
+                                roomId: 'task-1',
+                                role: 'viewer',
+                                lastSeenAt: Date.now(),
+                                cursorFrame: null,
+                                typing: true,
+                                typingContext: { scope: 'task_comment', parentCommentId: null },
+                                userName: 'User Two',
+                                profile: {
+                                    username: 'user_two',
+                                    fullName: 'User Two',
+                                    avatarUrl: null,
+                                },
+                            }],
+                        }),
+                    });
+                }, 0);
+            }
+        }
+
+        close() {
+            this.readyState = FakeWebSocket.CLOSED;
+            this.onclose?.();
+        }
+    }
+
+    globalThis.fetch = async () => new Response(
+        JSON.stringify({
+            ok: true,
+            data: {
+                token: 'presence-token',
+                wsUrl: 'ws://presence.test/ws',
+            },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+    );
+    globalThis.window = { location: { protocol: 'https:', hostname: 'edge.test' } } as Window & typeof globalThis;
+    globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+
+    try {
+        const firstStatuses: string[] = [];
+        const firstEvents: string[] = [];
+        const first = subscribePresenceRoom({
+            roomType: 'task',
+            roomId: 'task-1',
+            onStatus: (status) => {
+                firstStatuses.push(status);
+            },
+            onEvent: (event) => {
+                firstEvents.push(event.type);
+            },
+        });
+
+        await new Promise((resolve) => setTimeout(resolve, 20));
+
+        assert.equal(firstStatuses.includes('connected'), true);
+        assert.equal(firstEvents.includes('presence.state'), true);
+
+        const secondStatuses: string[] = [];
+        const secondEvents: string[] = [];
+        const second = subscribePresenceRoom({
+            roomType: 'task',
+            roomId: 'task-1',
+            onStatus: (status) => {
+                secondStatuses.push(status);
+            },
+            onEvent: (event) => {
+                secondEvents.push(event.type);
+            },
+        });
+
+        assert.deepEqual(secondStatuses, ['connected']);
+        assert.deepEqual(secondEvents, ['presence.state']);
+
+        second.unsubscribe();
+        first.unsubscribe();
+        await new Promise((resolve) => setTimeout(resolve, 1_700));
+    } finally {
+        resetPresenceClientForTests();
+        globalThis.fetch = originalFetch;
+        globalThis.window = originalWindow;
+        globalThis.WebSocket = originalWebSocket;
+    }
+});

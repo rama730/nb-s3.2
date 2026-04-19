@@ -3,15 +3,11 @@
 import React, { useMemo, useState, useEffect } from "react";
 import { TaskCard, Task } from "./TaskCard";
 import { cn } from "@/lib/utils";
+import { TASK_BOARD_COLUMNS } from "@/lib/projects/task-workflow";
 
 interface KanbanBoardProps {
     tasks: Task[];
     onTaskClick: (task: Task) => void;
-    onClaimTask?: (taskId: string) => void;
-    claimLoading?: Record<string, boolean>;
-    selectedTaskIds: Set<string>;
-    toggleTaskSelection: (taskId: string) => void;
-    isBulkMode: boolean;
     fetchNextPage: () => void;
     hasNextPage: boolean;
     isFetchingNextPage: boolean;
@@ -20,11 +16,6 @@ interface KanbanBoardProps {
 export default function KanbanBoard({
     tasks,
     onTaskClick,
-    onClaimTask,
-    claimLoading = {},
-    selectedTaskIds,
-    toggleTaskSelection,
-    isBulkMode,
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage
@@ -65,17 +56,10 @@ export default function KanbanBoard({
         return cols;
     }, [tasks]);
 
-    const columnConfig = [
-        { id: 'todo', title: 'To Do', color: 'bg-zinc-500' },
-        { id: 'in_progress', title: 'In Progress', color: 'bg-blue-500' },
-        { id: 'blocked', title: 'Blocked', color: 'bg-rose-500' },
-        { id: 'done', title: 'Done', color: 'bg-emerald-500' }
-    ];
-
     return (
         <>
         <div role="region" aria-label="Kanban board" className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-4 gap-6 items-start">
-            {columnConfig.map(col => {
+            {TASK_BOARD_COLUMNS.map(col => {
                 const colTasks = columns[col.id as keyof typeof columns];
                 const visibleLimit = visibleCounts[col.id as keyof typeof visibleCounts] || DEFAULT_VISIBLE;
                 const visibleTasks = colTasks.slice(0, visibleLimit);
@@ -86,7 +70,7 @@ export default function KanbanBoard({
                         {/* Column Header */}
                         <div className="p-4 shrink-0 flex items-center justify-between border-b border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 rounded-t-xl">
                             <div className="flex items-center gap-2">
-                                <div className={cn("w-2 h-2 rounded-full", col.color)} />
+                                <div className={cn("w-2 h-2 rounded-full", col.accentClassName)} />
                                 <h3 className="font-semibold text-sm text-zinc-900 dark:text-zinc-100">{col.title}</h3>
                             </div>
                             <span className="px-2 py-0.5 rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 text-xs font-bold border border-zinc-200 dark:border-zinc-700">
@@ -103,11 +87,6 @@ export default function KanbanBoard({
                                     <TaskCard
                                         task={task}
                                         onClick={onTaskClick}
-                                        onClaim={onClaimTask}
-                                        isClaiming={claimLoading[task.id]}
-                                        isSelected={selectedTaskIds.has(task.id)}
-                                        onSelect={() => toggleTaskSelection(task.id)}
-                                        isBulkMode={isBulkMode}
                                     />
                                     </div>
                                 ))}
@@ -128,7 +107,8 @@ export default function KanbanBoard({
                                 </>
                             ) : (
                                 <div role="status" className="h-24 flex flex-col items-center justify-center text-zinc-400 border-2 border-dashed border-zinc-200 dark:border-zinc-800 rounded-lg">
-                                    <p className="text-xs font-medium">No tasks in {col.title.toLowerCase()}</p>
+                                    <p className="text-xs font-medium">{col.emptyTitle}</p>
+                                    <p className="mt-1 text-[11px] text-zinc-400">{col.emptyDescription}</p>
                                 </div>
                             )}
                         </div>

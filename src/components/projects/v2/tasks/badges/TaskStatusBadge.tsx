@@ -1,5 +1,7 @@
 import React from "react";
 import { cn } from "@/lib/utils";
+import { getTaskStatusLabel } from "@/lib/projects/task-presentation";
+import { getTaskStatusPresentation } from "@/lib/projects/task-workflow";
 
 interface TaskStatusBadgeProps {
     status: string;
@@ -7,26 +9,15 @@ interface TaskStatusBadgeProps {
 }
 
 export default function TaskStatusBadge({ status, className }: TaskStatusBadgeProps) {
-    const getStatusStyles = (s: string) => {
-        switch (s) {
-            case 'done':
-                return "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400";
-            case 'in_progress':
-                return "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400";
-            case 'blocked':
-                return "bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400";
-            default:
-                return "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400";
-        }
-    };
+    const presentation = getTaskStatusPresentation(status);
 
     return (
         <span className={cn(
             "px-2 py-0.5 rounded text-xs font-medium capitalize whitespace-nowrap",
-            getStatusStyles(status),
+            presentation.badgeClassName,
             className
         )}>
-            {status.replace("_", " ")}
+            {getTaskStatusLabel(status)}
         </span>
     );
 }

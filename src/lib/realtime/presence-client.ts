@@ -48,6 +48,7 @@ type PresenceRoomEntry = {
   latestWsUrl: string | null;
   authenticated: boolean;
   status: PresenceStatus;
+  latestStateEvent: Extract<PresenceServerEvent, { type: "presence.state" }> | null;
 };
 
 export type PresenceHealthSnapshot = {
@@ -247,6 +248,31 @@ function notifyStatus(entry: PresenceRoomEntry, status: PresenceStatus) {
 }
 
 function broadcastEvent(entry: PresenceRoomEntry, event: PresenceServerEvent) {
+  if (event.type === "presence.state") {
+    entry.latestStateEvent = event;
+  } else if (event.type === "presence.delta" && entry.latestStateEvent) {
+    const nextMembers = [...entry.latestStateEvent.members];
+    const memberIndex = nextMembers.findIndex(
+      (member) => member.connectionId === event.member.connectionId,
+    );
+    if (event.action === "leave") {
+      if (memberIndex >= 0) {
+        nextMembers.splice(memberIndex, 1);
+      }
+    } else if (memberIndex >= 0) {
+      nextMembers[memberIndex] = event.member;
+    } else {
+      nextMembers.push(event.member);
+    }
+
+    entry.latestStateEvent = {
+      ...entry.latestStateEvent,
+      roomType: event.roomType,
+      roomId: event.roomId,
+      members: nextMembers,
+    };
+  }
+
   for (const listener of Array.from(entry.listeners)) {
     try {
       listener(event);
@@ -587,6 +613,7 @@ function ensureEntry(roomType: PresenceRoomType, roomId: string, role: PresenceR
     latestWsUrl: null,
     authenticated: false,
     status: "connecting",
+    latestStateEvent: null,
   };
   presenceEntries.set(roomKey, entry);
   emitPresenceHealth();
@@ -607,6 +634,13 @@ export function subscribePresenceRoom(params: {
   }
   if (params.onStatus) {
     entry.statusListeners.add(params.onStatus);
+  }
+
+  if (params.onStatus) {
+    params.onStatus(entry.status);
+  }
+  if (params.onEvent && entry.latestStateEvent) {
+    params.onEvent(entry.latestStateEvent);
   }
 
   return {

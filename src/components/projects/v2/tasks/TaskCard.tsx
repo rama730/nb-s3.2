@@ -1,97 +1,45 @@
 "use client";
 
 import React, { memo } from "react";
-import { Calendar, User, CheckCircle2, MoreHorizontal } from "lucide-react";
+import { Calendar, User } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import { UserAvatar } from "@/components/ui/UserAvatar";
 import { SPRINT_STATUS_PRESENTATION } from "@/lib/projects/sprint-detail";
-import { normalizeTaskSurfaceRecord } from "@/lib/projects/task-presentation";
-
-export interface Task {
-    id: string;
-    title: string;
-    status: string;
-    priority: string;
-    assigneeId?: string | null;
-    dueDate?: string | null;
-    storyPoints?: number | null;
-    sprintId?: string | null;
-    creatorId?: string | null;
-    assignee?: {
-        fullName?: string;
-        avatarUrl?: string;
-    } | null;
-    sprint?: {
-        id?: string;
-        name?: string;
-        status?: "planning" | "active" | "completed" | null;
-    } | null;
-}
+import { normalizeTaskSurfaceRecord, type TaskSurfaceRecord } from "@/lib/projects/task-presentation";
 
 interface TaskCardProps {
-    task: Task;
-    onClick?: (task: Task) => void;
-    onClaim?: (taskId: string) => void;
-    isClaiming?: boolean;
-    isSelected?: boolean;
-    onSelect?: () => void;
-    isBulkMode?: boolean;
+    task: TaskSurfaceRecord;
+    onClick?: (task: TaskSurfaceRecord) => void;
 }
 
 import TaskStatusBadge from "./badges/TaskStatusBadge";
 import TaskPriorityBadge from "./badges/TaskPriorityBadge";
 import { formatTaskId } from "@/lib/project-key";
 
+export type Task = TaskSurfaceRecord;
+
 export const TaskCard = memo(function TaskCard({
     task,
     onClick,
-    onClaim,
-    isClaiming,
-    isSelected,
-    onSelect,
-    isBulkMode
 }: TaskCardProps) {
     const taskRecord = normalizeTaskSurfaceRecord(task);
 
     return (
         <div
-            onClick={(e) => {
-                if (isBulkMode && onSelect) {
-                    e.stopPropagation();
-                    onSelect();
-                } else {
-                    onClick?.(task);
-                }
-            }}
+            onClick={() => onClick?.(taskRecord)}
             className={cn(
                 "group relative rounded-lg border-2 bg-white dark:bg-zinc-900 transition-all duration-200 hover:shadow-md cursor-pointer",
-                isSelected
-                    ? "border-indigo-500 ring-1 ring-indigo-500 z-10"
-                    : "border-zinc-100 dark:border-zinc-800 hover:border-zinc-300 dark:hover:border-zinc-700"
+                "border-zinc-100 dark:border-zinc-800 hover:border-zinc-300 dark:hover:border-zinc-700"
             )}
         >
             <div className="p-3 space-y-3">
-                {/* Header: Title + Menu */}
-                <div className="flex items-start justify-between gap-2">
+                <div className="flex items-start gap-2">
                     <h4 className="font-semibold text-sm text-zinc-900 dark:text-zinc-100 line-clamp-2 leading-snug">
                         {taskRecord.title}
                     </h4>
-                    {isBulkMode ? (
-                        <div className={cn(
-                            "w-5 h-5 rounded border flex items-center justify-center shrink-0 transition-colors",
-                            isSelected ? "bg-indigo-600 border-indigo-600 text-white" : "border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800"
-                        )}>
-                            {isSelected && <CheckCircle2 className="w-3.5 h-3.5" />}
-                        </div>
-                    ) : (
-                        <button className="opacity-0 group-hover:opacity-100 text-zinc-400 hover:text-zinc-600 transition-opacity">
-                            <MoreHorizontal className="w-4 h-4" />
-                        </button>
-                    )}
                 </div>
 
-                {/* Chips Row */}
                 <div className="flex flex-wrap items-center gap-1.5">
                     <TaskStatusBadge status={taskRecord.status} />
                     <TaskPriorityBadge priority={taskRecord.priority} />
@@ -152,22 +100,6 @@ export const TaskCard = memo(function TaskCard({
                         )}
                     </div>
                 </div>
-
-                {/* Claim Action (Optional) */}
-                {onClaim && !taskRecord.assigneeId && (
-                    <div className="pt-2 border-t border-zinc-100 dark:border-zinc-800">
-                        <button
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                onClaim(task.id);
-                            }}
-                            disabled={isClaiming}
-                            className="w-full px-3 py-1.5 text-xs font-semibold rounded-md bg-zinc-50 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 hover:bg-blue-50 hover:text-blue-600 hover:border-blue-200 border border-transparent transition-all"
-                        >
-                            {isClaiming ? "Claiming..." : "Claim & Start"}
-                        </button>
-                    </div>
-                )}
             </div>
         </div>
     );

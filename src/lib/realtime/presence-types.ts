@@ -1,5 +1,14 @@
-export type PresenceRoomType = "conversation" | "workspace" | "user";
+export type PresenceRoomType = "conversation" | "workspace" | "user" | "task";
 export type PresenceRoomRole = "viewer" | "editor";
+
+export type PresenceTypingContext =
+  | {
+      scope: "conversation";
+    }
+  | {
+      scope: "task_comment";
+      parentCommentId?: string | null;
+    };
 
 export type PresenceMemberProfile = {
   username: string | null;
@@ -16,6 +25,7 @@ export type PresenceMemberState = {
   lastSeenAt: number;
   cursorFrame: string | null;
   typing: boolean;
+  typingContext: PresenceTypingContext | null;
   userName: string | null;
   profile: PresenceMemberProfile | null;
 };
@@ -80,6 +90,7 @@ export type PresenceClientEvent =
       type: "typing";
       isTyping: boolean;
       profile?: PresenceMemberProfile | null;
+      context?: PresenceTypingContext | null;
     }
   | {
       // Wave 2 Step 11: sent by the recipient's client to the conversation

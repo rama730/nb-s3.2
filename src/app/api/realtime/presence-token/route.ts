@@ -5,7 +5,7 @@ import { z } from "zod";
 
 import { getRequestId, getRequestIp } from "@/app/api/v1/_shared";
 import { db } from "@/lib/db";
-import { conversationParticipants, projectMembers } from "@/lib/db/schema";
+import { conversationParticipants, projectMembers, projects, tasks } from "@/lib/db/schema";
 import { logger } from "@/lib/logger";
 import { resolvePresenceWebSocketUrl } from "@/lib/realtime/presence-config";
 import {
@@ -19,7 +19,7 @@ import { consumeRateLimitPolicy } from "@/lib/security/rate-limit";
 import { getViewerAuthContext } from "@/lib/server/viewer-context";
 
 const requestSchema = z.object({
-  roomType: z.enum(["conversation", "workspace", "user"]),
+  roomType: z.enum(["conversation", "workspace", "user", "task"]),
   roomId: z.string().uuid("Invalid room ID format"),
   role: z.enum(["viewer", "editor"]).optional(),
 });
@@ -94,6 +94,60 @@ async function assertPresenceRoomAccess(input: {
       .limit(1);
 
     return sharedConversation
+      ? {
+          allowed: true as const,
+          role: "viewer" as PresenceRoomRole,
+        }
+      : {
+          allowed: false as const,
+          role: null,
+        };
+  }
+
+  if (input.roomType === "task") {
+    const [taskRoom] = await db
+      .select({
+        id: tasks.id,
+        projectId: tasks.projectId,
+      })
+      .from(tasks)
+      .where(eq(tasks.id, input.roomId))
+      .limit(1);
+
+    if (!taskRoom) {
+      return {
+        allowed: false as const,
+        role: null,
+      };
+    }
+
+    const [projectOwner] = await db
+      .select({ ownerId: projects.ownerId })
+      .from(projects)
+      .where(eq(projects.id, taskRoom.projectId))
+      .limit(1);
+
+    if (projectOwner?.ownerId === input.userId) {
+      return {
+        allowed: true as const,
+        role: "viewer" as PresenceRoomRole,
+      };
+    }
+
+    const [membership] = await db
+      .select({
+        role: projectMembers.role,
+      })
+      .from(projectMembers)
+      .where(
+        and(
+          eq(projectMembers.projectId, taskRoom.projectId),
+          eq(projectMembers.userId, input.userId),
+        ),
+      )
+      .limit(1);
+
+    return membership
       ? {
           allowed: true as const,
           role: "viewer" as PresenceRoomRole,

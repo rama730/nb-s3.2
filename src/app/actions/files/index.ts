@@ -7,3 +7,4 @@ export * from './search';
 export * from './locks';
 export * from './links';
 export * from './events';
+export * from './versions';

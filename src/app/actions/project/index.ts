@@ -35,6 +35,7 @@ export {
     fetchProjectSprintDetailAction,
     fetchSprintTasksAction,
     getProjectTaskDetailAction,
+    getProjectTaskActivityAction,
     getProjectAnalyticsAction,
     getProjectSyncStatus,
 

@@ -17,13 +17,18 @@ CREATE TABLE IF NOT EXISTS task_comments (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
     user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    parent_comment_id UUID REFERENCES task_comments(id) ON DELETE CASCADE,
     content TEXT NOT NULL,
+    deleted_by UUID REFERENCES profiles(id) ON DELETE SET NULL,
+    deleted_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX idx_task_comments_task_id ON task_comments(task_id);
 CREATE INDEX idx_task_comments_created_at ON task_comments(task_id, created_at DESC);
+CREATE INDEX idx_task_comments_parent_id ON task_comments(parent_comment_id);
+CREATE INDEX idx_task_comments_parent_created_at ON task_comments(task_id, parent_comment_id, created_at DESC);
 
 -- Task Comment Likes Table
 CREATE TABLE IF NOT EXISTS task_comment_likes (
@@ -138,6 +143,11 @@ WITH CHECK (
         AND (p.creator_id = auth.uid() OR pm.user_id = auth.uid())
     )
 );
+
+CREATE POLICY "Comment owners can update their own comments"
+ON task_comments FOR UPDATE
+USING (user_id = auth.uid())
+WITH CHECK (user_id = auth.uid());
 
 CREATE POLICY "Users can delete their own comments"
 ON task_comments FOR DELETE

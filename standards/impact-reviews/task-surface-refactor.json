@@ -1,0 +1,104 @@
+{
+  "id": "impact-2026-04-17-task-surface-refactor",
+  "title": "Canonical task surface refactor for project detail",
+  "summary": "Refactors the project task surface around a canonical workflow config, normalized task records, React Query cache ownership, a shared task panel resource layer, schema-backed task editor drafts, a persisted-signals-only activity feed, and a new threaded task discussion system with presence-based typing while removing misleading create-task and task-board affordances.",
+  "riskLevel": "high",
+  "runtimePlanes": [
+    "request",
+    "realtime",
+    "database",
+    "ops"
+  ],
+  "routeClasses": [
+    "active_surface",
+    "user_shell"
+  ],
+  "dataSourcesChanged": [
+    "tasks",
+    "project_sprints",
+    "task_comments",
+    "task_comment_likes",
+    "presence_rooms",
+    "task_subtasks",
+    "task_node_links",
+    "project_nodes",
+    "project_detail_shell"
+  ],
+  "canonicalLogicDomains": [
+    "status_lifecycle",
+    "profile_display",
+    "import_boundaries"
+  ],
+  "concurrencyRisk": "Moderate client-cache and realtime coordination risk across board/list/detail/task-resource paths; mitigated by canonical task normalization, targeted React Query cache patching, single task-resource subscriptions per open panel, bounded fallback refreshes, and rollback snapshots for task mutations.",
+  "observability": {
+    "metrics": [
+      "project.sprint.optimistic_patch",
+      "task.discussion.optimistic_patch"
+    ],
+    "logs": [
+      "project task activity load errors",
+      "task discussion load errors",
+      "task mutation rollback errors"
+    ],
+    "alerts": []
+  },
+  "rollback": {
+    "strategy": "Revert the task-surface module set together: canonical task workflow/draft/cache helpers, threaded discussion actions and reducer hooks, the task panel resource layer, and the task tabs. Do not keep a mixed panel/resource implementation in place.",
+    "validation": [
+      "npm run typecheck",
+      "npx tsx --test tests/unit/task-validation.test.ts tests/unit/task-workflow.test.ts tests/unit/task-draft.test.ts tests/unit/task-cache.test.ts tests/unit/task-activity.test.ts tests/unit/task-discussion.test.ts"
+    ]
+  },
+  "evidence": {
+    "commands": [
+      "npm run typecheck",
+      "npx tsx --test tests/unit/task-validation.test.ts tests/unit/task-workflow.test.ts tests/unit/task-draft.test.ts tests/unit/task-cache.test.ts tests/unit/task-activity.test.ts tests/unit/task-discussion.test.ts",
+      "tsx scripts/check-impact-review.ts"
+    ],
+    "reports": []
+  },
+  "paths": [
+    "src/app/actions/project/_all.ts",
+    "src/app/actions/project/index.ts",
+    "src/app/actions/task-comment.ts",
+    "src/app/api/realtime/presence-token/route.ts",
+    "src/components/projects/tabs/sprint/SprintDetailDrawer.tsx",
+    "src/components/projects/v2/TasksTab.tsx",
+    "src/components/projects/v2/tasks/CreateTaskModal.tsx",
+    "src/components/projects/v2/tasks/KanbanBoard.tsx",
+    "src/components/projects/v2/tasks/TaskCard.tsx",
+    "src/components/projects/v2/tasks/TaskDetailPanel.tsx",
+    "src/components/projects/v2/tasks/TaskDetailTabs/ActivityTab.tsx",
+    "src/components/projects/v2/tasks/TaskDetailTabs/CommentsTab.tsx",
+    "src/components/projects/v2/tasks/TaskDetailTabs/DetailsTab.tsx",
+    "src/components/projects/v2/tasks/TaskDetailTabs/FilesTab.tsx",
+    "src/components/projects/v2/tasks/TaskDetailTabs/SubtasksTab.tsx",
+    "src/components/projects/v2/tasks/TaskFilters.tsx",
+    "src/components/projects/v2/tasks/TasksTable.tsx",
+    "src/components/projects/v2/tasks/badges/TaskPriorityBadge.tsx",
+    "src/components/projects/v2/tasks/badges/TaskStatusBadge.tsx",
+    "src/components/projects/v2/tasks/components/FocusStrip.tsx",
+    "src/hooks/hub/useProjectData.ts",
+    "src/hooks/useRealtimeTasks.ts",
+    "src/hooks/useTaskDiscussionResource.ts",
+    "src/hooks/useTaskDiscussionTyping.ts",
+    "src/hooks/useTaskFileMutations.ts",
+    "src/hooks/useTaskPanelResource.ts",
+    "src/hooks/useTaskSurfaceMutations.ts",
+    "src/lib/projects/task-activity.ts",
+    "src/lib/projects/task-cache.ts",
+    "src/lib/projects/task-discussion.ts",
+    "src/lib/projects/task-draft.ts",
+    "src/lib/projects/task-presentation.ts",
+    "src/lib/projects/task-workflow.ts",
+    "src/lib/realtime/presence-token.ts",
+    "src/lib/realtime/presence-types.ts",
+    "src/lib/validations/task.ts",
+    "services/presence/src/server.ts",
+    "tests/unit/task-activity.test.ts",
+    "tests/unit/task-cache.test.ts",
+    "tests/unit/task-draft.test.ts",
+    "tests/unit/task-discussion.test.ts",
+    "tests/unit/task-workflow.test.ts"
+  ]
+}

@@ -530,12 +530,17 @@ export const taskComments = pgTable('task_comments', {
     id: uuid('id').primaryKey().defaultRandom(),
     taskId: uuid('task_id').notNull().references(() => tasks.id, { onDelete: 'cascade' }),
     userId: uuid('user_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
+    parentCommentId: uuid('parent_comment_id').references((): any => taskComments.id, { onDelete: 'cascade' }),
     content: text('content').notNull(),
+    deletedBy: uuid('deleted_by').references(() => profiles.id, { onDelete: 'set null' }),
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
     taskIdx: index('idx_task_comments_task_id').on(t.taskId),
     createdAtIdx: index('idx_task_comments_created_at').on(t.taskId, t.createdAt),
+    parentCreatedAtIdx: index('idx_task_comments_parent_created_at').on(t.taskId, t.parentCommentId, t.createdAt),
+    parentIdx: index('idx_task_comments_parent_id').on(t.parentCommentId),
 }))
 
 // ============================================================================
@@ -550,6 +555,23 @@ export const taskCommentLikes = pgTable('task_comment_likes', {
     commentIdx: index('idx_task_comment_likes_comment_id').on(t.commentId),
     userIdx: index('idx_task_comment_likes_user_id').on(t.userId),
     uniqueLike: uniqueIndex('task_comment_likes_unique').on(t.commentId, t.userId),
+}))
+
+// ============================================================================
+// COMMENT MENTIONS TABLE
+// One row per (comment, mentioned_user) pair. Raw mention text lives inside
+// `taskComments.content` as `@{userId|DisplayName}` tokens; this table is the
+// indexed projection used for notification fan-out and mention-inbox queries.
+// ============================================================================
+export const commentMentions = pgTable('comment_mentions', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    commentId: uuid('comment_id').notNull().references(() => taskComments.id, { onDelete: 'cascade' }),
+    mentionedUserId: uuid('mentioned_user_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+    uniquePair: uniqueIndex('comment_mentions_comment_user_unique').on(t.commentId, t.mentionedUserId),
+    userCreatedIdx: index('comment_mentions_user_created_idx').on(t.mentionedUserId, t.createdAt),
+    commentIdx: index('comment_mentions_comment_idx').on(t.commentId),
 }))
 
 // ============================================================================
@@ -568,6 +590,10 @@ export const projectNodes = pgTable('project_nodes', {
     s3Key: text('s3_key'),
     size: bigint('size', { mode: 'number' }).default(0),
     mimeType: text('mime_type'),
+    // Version counter — bumped each time replaceNodeWithNewVersion() lands a
+    // new blob for this file node. Folders always stay at 1.  A pill of "vN"
+    // is rendered in the Files tab whenever current_version > 1.
+    currentVersion: integer('current_version').notNull().default(1),
 
     // Metadata
     metadata: jsonb('metadata').$type<Record<string, unknown>>().default({}),
@@ -594,6 +620,34 @@ export const projectNodes = pgTable('project_nodes', {
         foreignColumns: [t.id],
     }).onDelete('cascade'),
     noSelfParentCheck: check('project_nodes_no_self_parent_check', sql`${t.parentId} IS NULL OR ${t.parentId} <> ${t.id}`),
+}))
+
+// ============================================================================
+// FILE VERSIONS
+// Version history sidecar for `projectNodes` rows where type='file'. Each row
+// captures the blob metadata for a specific version; the newest row for a
+// node has version = projectNodes.currentVersion. Inserts go through the
+// `replaceNodeWithNewVersion` server action; the table is append-only.
+// ============================================================================
+export const fileVersions = pgTable('file_versions', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    nodeId: uuid('node_id').notNull().references(() => projectNodes.id, { onDelete: 'cascade' }),
+    version: integer('version').notNull(),
+    s3Key: text('s3_key').notNull(),
+    size: bigint('size', { mode: 'number' }).notNull(),
+    mimeType: text('mime_type').notNull(),
+    // Lowercase hex SHA-256 of the blob. NULL only for legacy rows backfilled
+    // by migration 0069; subsequent uploads always populate this for dedup.
+    contentHash: text('content_hash'),
+    uploadedBy: uuid('uploaded_by').references(() => profiles.id, { onDelete: 'set null' }),
+    uploadedAt: timestamp('uploaded_at', { withTimezone: true }).defaultNow().notNull(),
+    // Optional version note supplied by the uploader ("fixed typo", etc).
+    comment: text('comment'),
+}, (t) => ({
+    uniqueNodeVersion: uniqueIndex('file_versions_node_version_unique').on(t.nodeId, t.version),
+    // Latest-first scan: ORDER BY version DESC LIMIT 1 becomes an index scan.
+    nodeVersionDescIdx: index('file_versions_node_version_desc_idx').on(t.nodeId, t.version.desc()),
+    contentHashIdx: index('file_versions_content_hash_idx').on(t.contentHash),
 }))
 
 export const uploadIntents = pgTable('upload_intents', {
@@ -917,6 +971,19 @@ export const taskCommentsRelations = relations(taskComments, ({ one, many }) => 
     user: one(profiles, {
         fields: [taskComments.userId],
         references: [profiles.id],
+    }),
+    parentComment: one(taskComments, {
+        fields: [taskComments.parentCommentId],
+        references: [taskComments.id],
+        relationName: 'task_comment_parent',
+    }),
+    deletedByProfile: one(profiles, {
+        fields: [taskComments.deletedBy],
+        references: [profiles.id],
+        relationName: 'task_comment_deleted_by',
+    }),
+    replies: many(taskComments, {
+        relationName: 'task_comment_parent',
     }),
     likes: many(taskCommentLikes),
 }))
@@ -1454,6 +1521,10 @@ export type TaskComment = typeof taskComments.$inferSelect
 export type NewTaskComment = typeof taskComments.$inferInsert
 export type TaskCommentLike = typeof taskCommentLikes.$inferSelect
 export type NewTaskCommentLike = typeof taskCommentLikes.$inferInsert
+export type CommentMention = typeof commentMentions.$inferSelect
+export type NewCommentMention = typeof commentMentions.$inferInsert
+export type FileVersion = typeof fileVersions.$inferSelect
+export type NewFileVersion = typeof fileVersions.$inferInsert
 
 // ============================================================================
 // NORMALIZATION: SKILLS, INTERESTS, TAGS

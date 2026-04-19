@@ -58,6 +58,7 @@ USING (
 -- Fix task_comments policies
 DROP POLICY IF EXISTS "Users can view comments of tasks they can access" ON task_comments;
 DROP POLICY IF EXISTS "Members can create comments" ON task_comments;
+DROP POLICY IF EXISTS "Comment owners can update their own comments" ON task_comments;
 
 CREATE POLICY "Users can view comments of tasks they can access"
 ON task_comments FOR SELECT
@@ -83,6 +84,11 @@ WITH CHECK (
         AND (p.owner_id = auth.uid() OR pm.user_id = auth.uid())
     )
 );
+
+CREATE POLICY "Comment owners can update their own comments"
+ON task_comments FOR UPDATE
+USING (user_id = auth.uid())
+WITH CHECK (user_id = auth.uid());
 
 -- Fix task_comment_likes policies  
 DROP POLICY IF EXISTS "Users can view comment likes" ON task_comment_likes;

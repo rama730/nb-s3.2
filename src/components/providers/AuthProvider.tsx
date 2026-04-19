@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
+import { createContext, useContext, useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import type { User, Session } from '@supabase/supabase-js';
 import { useRouter } from 'next/navigation';
@@ -185,11 +185,15 @@ export function AuthProvider({
     initialProfile: any | null;
 }) {
     const MONOTONIC_AUTH_KEY = 'auth-provider:state';
+    const transformedInitialProfile = useMemo(
+        () => (initialProfile ? transformProfile(initialProfile) : null),
+        [initialProfile],
+    );
     const [state, setState] = useState<AuthState>({
         user: initialUser,
         session: null, // session will be populated by client-side listener
-        profile: initialProfile ? transformProfile(initialProfile) : null,
-        isLoading: false, // Initialized immediately with server data
+        profile: transformedInitialProfile,
+        isLoading: !initialUser, // Stay unresolved until the client auth snapshot confirms signed-in or signed-out
     });
     const activeUserIdRef = useRef<string | null>(initialUser?.id || null);
     const authEventVersionRef = useRef(0);
@@ -311,18 +315,73 @@ export function AuthProvider({
         );
 
         void (async () => {
-            if (bootstrapSessionAttemptedRef.current || !initialUser) return;
+            if (bootstrapSessionAttemptedRef.current) return;
             bootstrapSessionAttemptedRef.current = true;
-            const { data: existingSession } = await supabase.auth.getSession();
-            if (cancelled || existingSession.session) return;
 
             try {
-                const serverSession = await bootstrapBrowserSessionFromServer();
-                if (!serverSession || cancelled) return;
-                await supabase.auth.setSession(serverSession);
+                const { data: existingSession } = await supabase.auth.getSession();
+                if (cancelled) return;
+
+                if (existingSession.session) {
+                    const eventVersion = ++authEventVersionRef.current;
+                    if (existingSession.session.user.id !== activeUserIdRef.current) {
+                        const profile = await loadProfile(existingSession.session.user.id);
+                        if (cancelled || eventVersion !== authEventVersionRef.current) return;
+                        runMonotonicUpdate(MONOTONIC_AUTH_KEY, eventVersion, () => {
+                            activeUserIdRef.current = existingSession.session!.user.id;
+                            setState({
+                                user: existingSession.session!.user,
+                                session: existingSession.session,
+                                profile,
+                                isLoading: false,
+                            });
+                        });
+                        return;
+                    }
+
+                    runMonotonicUpdate(MONOTONIC_AUTH_KEY, eventVersion, () => {
+                        setState((prev) => ({
+                            ...prev,
+                            user: existingSession.session!.user,
+                            session: existingSession.session,
+                            profile: prev.profile ?? transformedInitialProfile,
+                            isLoading: false,
+                        }));
+                    });
+                    return;
+                }
+
+                if (initialUser) {
+                    const serverSession = await bootstrapBrowserSessionFromServer();
+                    if (!serverSession || cancelled) return;
+                    await supabase.auth.setSession(serverSession);
+                    return;
+                }
+
+                const eventVersion = ++authEventVersionRef.current;
+                runMonotonicUpdate(MONOTONIC_AUTH_KEY, eventVersion, () => {
+                    activeUserIdRef.current = null;
+                    setState({
+                        user: null,
+                        session: null,
+                        profile: null,
+                        isLoading: false,
+                    });
+                });
             } catch (error) {
                 logger.warn('auth.session.bootstrap_failed', {
                     error: error instanceof Error ? error.message : String(error),
+                });
+                if (cancelled || initialUser) return;
+                const eventVersion = ++authEventVersionRef.current;
+                runMonotonicUpdate(MONOTONIC_AUTH_KEY, eventVersion, () => {
+                    activeUserIdRef.current = null;
+                    setState({
+                        user: null,
+                        session: null,
+                        profile: null,
+                        isLoading: false,
+                    });
                 });
             }
         })();
@@ -332,7 +391,7 @@ export function AuthProvider({
             subscription.unsubscribe();
             resetMonotonicEntity(MONOTONIC_AUTH_KEY);
         };
-    }, [router]);
+    }, [initialUser, router, transformedInitialProfile]);
 
     // --- Actions ---
     const signIn = useCallback(async (email: string, password: string, captchaToken?: string) => {

@@ -27,6 +27,7 @@ import { usePeopleNotifications } from "@/hooks/usePeopleNotifications";
 import { ROUTES } from "@/constants/routes";
 import MessageIndicator from "./MessageIndicator";
 import { logger } from "@/lib/logger";
+import { resolveTopNavAuthUiState } from "./topnav-auth-state";
 
 export default function TopNav() {
     const pathname = usePathname();
@@ -52,7 +53,10 @@ export default function TopNav() {
 
     const hasScrolled = useScrollShadow();
 
-    const isLoading = authLoading; // Profile loading is part of auth loading now
+    const authUiState = resolveTopNavAuthUiState({
+        isAuthenticated: isSignedIn,
+        isLoading: authLoading,
+    });
 
     // Global keyboard shortcut for command palette
     useEffect(() => {
@@ -145,7 +149,7 @@ export default function TopNav() {
                         <Logo />
                     </div>
 
-                    {mounted && isSignedIn && (
+                    {authUiState === "signed-in" && (
                         <>
                             <div className="hidden md:block h-6 w-px bg-gradient-to-b from-transparent via-zinc-200 dark:via-zinc-800 to-transparent" />
                             <WorkspaceIndicator />
@@ -186,7 +190,7 @@ export default function TopNav() {
                 </nav>
 
                 <div className="flex items-center gap-2">
-                    {mounted && isSignedIn && (
+                    {mounted && authUiState === "signed-in" && (
                         <Suspense fallback={<div className="hidden md:block w-9 h-9 bg-zinc-100 dark:bg-zinc-800 rounded-full animate-pulse" />}>
                             <GlobalSearch
                                 condensed={false}
@@ -199,18 +203,18 @@ export default function TopNav() {
                         </Suspense>
                     )}
 
-                    {mounted && isSignedIn && <NotificationPreview />}
+                    {mounted && authUiState === "signed-in" && <NotificationPreview />}
 
                     <ThemeToggle />
 
-                    {mounted && isLoading ? (
+                    {authUiState === "loading" ? (
                         <div className="flex items-center gap-2">
                             <div className="h-8 w-8 rounded-full bg-zinc-200 dark:bg-zinc-800 animate-pulse" />
                             <div className="hidden sm:block h-4 w-20 bg-zinc-200 dark:bg-zinc-800 rounded animate-pulse" />
                         </div>
                     ) : (
                         <div className="relative">
-                            {mounted && isSignedIn ? (
+                            {authUiState === "signed-in" ? (
                                 <Link
                                     href={ROUTES.PROFILE}
                                     className="flex items-center gap-2 rounded-lg px-2 hover:bg-zinc-100 dark:bg-zinc-900 dark:hover:bg-zinc-800 transition-colors group focus:outline-none app-density-nav-item"
@@ -232,7 +236,7 @@ export default function TopNav() {
                         </div>
                     )}
 
-                    {mounted && isSignedIn && (
+                    {mounted && authUiState === "signed-in" && (
                         <button
                             onClick={() => setShowMobileMenu(true)}
                             className="md:hidden p-2 rounded-lg hover:bg-zinc-100 dark:bg-zinc-900 dark:hover:bg-zinc-800 transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 dark:focus:ring-offset-zinc-900"
@@ -244,7 +248,7 @@ export default function TopNav() {
                     )}
                 </div>
 
-                {mounted && isSignedIn && (
+                {mounted && authUiState === "signed-in" && (
                     <Suspense fallback={null}>
                         <MobileMenu
                             isOpen={showMobileMenu}
@@ -256,7 +260,7 @@ export default function TopNav() {
                     </Suspense>
                 )}
 
-                {mounted && isSignedIn && (
+                {mounted && authUiState === "signed-in" && (
                     <CommandPalette
                         isOpen={showCommandPalette}
                         onClose={() => {

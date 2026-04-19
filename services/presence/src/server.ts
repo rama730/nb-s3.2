@@ -89,6 +89,18 @@ const typingEventSchema = z.object({
   type: z.literal("typing"),
   isTyping: z.boolean(),
   profile: presenceMemberProfileSchema.nullable().optional(),
+  context: z
+    .discriminatedUnion("scope", [
+      z.object({
+        scope: z.literal("conversation"),
+      }).strict(),
+      z.object({
+        scope: z.literal("task_comment"),
+        parentCommentId: z.string().uuid().nullable().optional(),
+      }).strict(),
+    ])
+    .nullable()
+    .optional(),
 });
 // Wave 2 Step 11: delivered/read receipt broadcast schemas.
 const MAX_RECEIPT_MESSAGE_IDS = 200;
@@ -165,6 +177,7 @@ function toPresenceState(input: {
   connectionId: string;
   cursorFrame?: string | null;
   typing?: boolean;
+  typingContext?: PresenceMemberState["typingContext"];
   userName?: string | null;
   profile?: PresenceMemberProfile | null;
 }) {
@@ -177,6 +190,7 @@ function toPresenceState(input: {
     lastSeenAt: Date.now(),
     cursorFrame: input.cursorFrame ?? null,
     typing: input.typing ?? false,
+    typingContext: input.typingContext ?? null,
     userName: input.userName ?? null,
     profile: input.profile ?? null,
   } satisfies PresenceMemberState;
@@ -469,6 +483,9 @@ async function handlePresenceEvent(socket: WebSocket, event: PresenceClientEvent
         return;
       }
       context.state.typing = parsedEvent.data.isTyping;
+      context.state.typingContext = parsedEvent.data.isTyping
+        ? (parsedEvent.data.context ?? null)
+        : null;
       context.state.profile = parsedEvent.data.profile ?? context.state.profile;
       await persistMemberState(context);
       const delta: PresenceServerEvent = {

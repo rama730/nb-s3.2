@@ -1,7 +1,7 @@
 'use server';
 
 import { db } from '@/lib/db';
-import { projects, projectFollows, projectOpenRoles, roleApplications, conversations, conversationParticipants, messages, projectNodes, projectNodeEvents, projectMembers, profiles, tasks, projectSprints, taskNodeLinks, taskSubtasks, tags, projectTags, skills, projectSkills } from '@/lib/db/schema';
+import { projects, projectFollows, projectOpenRoles, roleApplications, conversations, conversationParticipants, messages, projectNodes, projectNodeEvents, projectMembers, profiles, tasks, projectSprints, taskNodeLinks, taskSubtasks, taskComments, tags, projectTags, skills, projectSkills } from '@/lib/db/schema';
 import { eq, and, or, sql, inArray, isNotNull, isNull, desc } from 'drizzle-orm';
 import { createClient, createAdminClient } from '@/lib/supabase/server';
 import { redis } from '@/lib/redis';
@@ -27,7 +27,7 @@ import type { Project } from '@/types/hub';
 import { logger } from '@/lib/logger';
 import { buildProjectOwnerPresentation } from '@/lib/privacy/presentation';
 import { resolvePrivacyRelationship } from '@/lib/privacy/resolver';
-import { refreshWorkspaceCountersForUsers } from '@/lib/workspace/profile-counters';
+import { queueCounterRefreshBestEffort } from '@/lib/workspace/counter-buffer';
 import {
     createSprintSchema,
     deleteSprintSchema,
@@ -54,6 +54,9 @@ import {
 } from '@/lib/projects/sprint-presentation';
 import { buildSprintTimeline, type SprintTimelineTaskInput } from '@/lib/projects/sprint-timeline';
 import { recordSprintMetric } from '@/lib/projects/sprint-observability';
+import { buildTaskActivityItems } from '@/lib/projects/task-activity';
+import { normalizeTaskSurfaceRecord } from '@/lib/projects/task-presentation';
+import { taskPriorityEnum, taskStatusEnum } from '@/lib/validations/task';
 
 const isMissingColumn = (error: unknown, column: string) => {
     const msg = error instanceof Error ? error.message : String(error);
@@ -2224,6 +2227,16 @@ export async function fetchProjectTasksAction(
                         updatedAt: true,
                     },
                     with: {
+                        project: {
+                            columns: { key: true },
+                        },
+                        sprint: {
+                            columns: {
+                                id: true,
+                                name: true,
+                                status: true,
+                            },
+                        },
                         assignee: {
                             columns: {
                                 id: true,
@@ -2242,10 +2255,10 @@ export async function fetchProjectTasksAction(
                 });
 
                 const hasMore = projectTasks.length > safeLimit;
-                const tasks = projectTasks.slice(0, safeLimit);
+                const tasks = projectTasks.slice(0, safeLimit).map((task) => normalizeTaskSurfaceRecord(task));
                 const nextCursor = hasMore
                     ? encodeTaskPaginationCursor({
-                        createdAt: tasks[tasks.length - 1].createdAt,
+                        createdAt: new Date(tasks[tasks.length - 1].createdAt ?? new Date().toISOString()),
                         id: tasks[tasks.length - 1].id,
                     })
                     : undefined;
@@ -2289,10 +2302,10 @@ type SprintTaskActivityQueryRow = {
     priority: SprintTaskTimelineEntity["priority"];
     task_number: number | null;
     story_points: number | null;
-    due_date: Date | null;
-    created_at: Date | null;
-    updated_at: Date | null;
-    activity_at: Date | null;
+    due_date: Date | string | null;
+    created_at: Date | string | null;
+    updated_at: Date | string | null;
+    activity_at: Date | string | null;
     linked_file_count: number;
     assignee_id: string | null;
     creator_id: string | null;
@@ -2303,7 +2316,7 @@ type SprintTaskFileQueryRow = {
     task_id: string;
     node_id: string;
     annotation: string | null;
-    linked_at: Date | null;
+    linked_at: Date | string | null;
     node_name: string;
     node_path: string;
     node_type: SprintFileTimelineEntity["nodeType"];
@@ -2312,9 +2325,22 @@ type SprintTaskFileQueryRow = {
 type SprintNodeEventQueryRow = {
     nodeId: string | null;
     type: string;
-    createdAt: Date;
+    createdAt: Date | string | null;
     actorName: string | null;
 };
+
+function toDateValue(value: Date | string | null | undefined): Date | null {
+    if (!value) return null;
+    if (value instanceof Date) {
+        return Number.isNaN(value.getTime()) ? null : value;
+    }
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function toIsoString(value: Date | string | null | undefined): string | null {
+    return toDateValue(value)?.toISOString() ?? null;
+}
 
 type SprintSummaryQueryRow = {
     total_tasks: number;
@@ -2505,9 +2531,10 @@ async function readSprintTaskActivityPage(input: {
     const hasMore = activityRows.length > limit;
     const pageRows = hasMore ? activityRows.slice(0, limit) : activityRows;
     const lastRow = pageRows[pageRows.length - 1];
-    const nextCursor = hasMore && lastRow?.activity_at
+    const nextCursorActivityAt = toDateValue(lastRow?.activity_at);
+    const nextCursor = hasMore && nextCursorActivityAt
         ? encodeSprintDetailPaginationCursor({
-            activityAt: lastRow.activity_at,
+            activityAt: nextCursorActivityAt,
             taskId: lastRow.id,
         })
         : null;
@@ -2546,7 +2573,7 @@ async function readSprintTaskActivityPage(input: {
                     pn.type AS node_type
                 FROM ${taskNodeLinks} lnk
                 INNER JOIN ${projectNodes} pn ON pn.id = lnk.node_id
-                WHERE lnk.task_id IN ${sql.join(taskIds.map((taskId) => sql`${taskId}`), sql`, `)}
+                WHERE lnk.task_id IN (${sql.join(taskIds.map((taskId) => sql`${taskId}`), sql`, `)})
                   AND pn.project_id = ${projectId}
                   AND pn.deleted_at IS NULL
                 ORDER BY lnk.linked_at ASC, lnk.id ASC
@@ -2592,9 +2619,9 @@ async function readSprintTaskActivityPage(input: {
             nodePath: fileRow.node_path,
             nodeType: fileRow.node_type,
             annotation: fileRow.annotation ?? null,
-            linkedAt: fileRow.linked_at?.toISOString() ?? null,
+            linkedAt: toIsoString(fileRow.linked_at),
             lastEventType: latestNodeEvent?.type ?? null,
-            lastEventAt: latestNodeEvent?.createdAt?.toISOString() ?? null,
+            lastEventAt: toIsoString(latestNodeEvent?.createdAt),
             lastEventBy: latestNodeEvent?.actorName ?? null,
         });
         filesByTaskId.set(fileRow.task_id, current);
@@ -2610,10 +2637,10 @@ async function readSprintTaskActivityPage(input: {
         status: row.status,
         priority: row.priority,
         storyPoints: row.story_points ?? null,
-        dueDate: row.due_date?.toISOString() ?? null,
-        createdAt: row.created_at?.toISOString() ?? null,
-        updatedAt: row.updated_at?.toISOString() ?? null,
-        activityAt: row.activity_at?.toISOString() ?? row.updated_at?.toISOString() ?? row.created_at?.toISOString() ?? null,
+        dueDate: toIsoString(row.due_date),
+        createdAt: toIsoString(row.created_at),
+        updatedAt: toIsoString(row.updated_at),
+        activityAt: toIsoString(row.activity_at) ?? toIsoString(row.updated_at) ?? toIsoString(row.created_at) ?? null,
         linkedFileCount: Number(row.linked_file_count || 0),
         assignee: row.assignee_id
             ? actorById.get(row.assignee_id)
@@ -2936,6 +2963,16 @@ export async function fetchSprintTasksAction(
                         updatedAt: true,
                     },
                     with: {
+                        project: {
+                            columns: { key: true },
+                        },
+                        sprint: {
+                            columns: {
+                                id: true,
+                                name: true,
+                                status: true,
+                            },
+                        },
                         assignee: {
                             columns: {
                                 id: true,
@@ -2960,10 +2997,10 @@ export async function fetchSprintTasksAction(
                 });
 
                 const hasMore = sprintTasks.length > safeLimit;
-                const tasks = sprintTasks.slice(0, safeLimit);
+                const tasks = sprintTasks.slice(0, safeLimit).map((task) => normalizeTaskSurfaceRecord(task));
                 const nextCursor = hasMore
                     ? encodeTaskPaginationCursor({
-                        createdAt: tasks[tasks.length - 1].createdAt,
+                        createdAt: new Date(tasks[tasks.length - 1].createdAt ?? new Date().toISOString()),
                         id: tasks[tasks.length - 1].id,
                     })
                     : undefined;
@@ -3009,6 +3046,13 @@ export async function getProjectTaskDetailAction(projectId: string, taskId: stri
                 project: {
                     columns: { key: true },
                 },
+                sprint: {
+                    columns: {
+                        id: true,
+                        name: true,
+                        status: true,
+                    },
+                },
                 assignee: {
                     columns: {
                         id: true,
@@ -3030,10 +3074,117 @@ export async function getProjectTaskDetailAction(projectId: string, taskId: stri
             return { success: false as const, error: "Task not found" };
         }
 
-        return { success: true as const, task };
+        return { success: true as const, task: normalizeTaskSurfaceRecord(task) };
     } catch (error) {
         console.error("Failed to fetch task detail:", error);
         return { success: false as const, error: "Failed to fetch task detail" };
+    }
+}
+
+export async function getProjectTaskActivityAction(projectId: string, taskId: string, limit: number = 40) {
+    try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        await assertProjectReadAccess(projectId, user?.id ?? null);
+
+        const safeLimit = Math.min(Math.max(limit, 1), 100);
+        const task = await db.query.tasks.findFirst({
+            where: and(
+                eq(tasks.id, taskId),
+                eq(tasks.projectId, projectId),
+                isNull(tasks.deletedAt),
+            ),
+            columns: {
+                id: true,
+                title: true,
+                createdAt: true,
+                updatedAt: true,
+            },
+            with: {
+                creator: {
+                    columns: {
+                        id: true,
+                        fullName: true,
+                        avatarUrl: true,
+                    },
+                },
+            },
+        });
+
+        if (!task) {
+            return { success: false as const, error: "Task not found" };
+        }
+
+        const [comments, subtasks, links] = await Promise.all([
+            db.query.taskComments.findMany({
+                where: eq(taskComments.taskId, taskId),
+                columns: {
+                    id: true,
+                    content: true,
+                    createdAt: true,
+                },
+                with: {
+                    user: {
+                        columns: {
+                            id: true,
+                            fullName: true,
+                            avatarUrl: true,
+                        },
+                    },
+                },
+                orderBy: (table, { desc }) => [desc(table.createdAt)],
+                limit: safeLimit,
+            }),
+            db.query.taskSubtasks.findMany({
+                where: eq(taskSubtasks.taskId, taskId),
+                columns: {
+                    id: true,
+                    title: true,
+                    completed: true,
+                    createdAt: true,
+                    updatedAt: true,
+                },
+                orderBy: (table, { desc }) => [desc(table.updatedAt)],
+                limit: safeLimit,
+            }),
+            db.query.taskNodeLinks.findMany({
+                where: eq(taskNodeLinks.taskId, taskId),
+                columns: {
+                    id: true,
+                    linkedAt: true,
+                },
+                with: {
+                    creator: {
+                        columns: {
+                            id: true,
+                            fullName: true,
+                            avatarUrl: true,
+                        },
+                    },
+                    node: {
+                        columns: {
+                            id: true,
+                            name: true,
+                        },
+                    },
+                },
+                orderBy: (table, { desc }) => [desc(table.linkedAt)],
+                limit: safeLimit,
+            }),
+        ]);
+
+        const items = buildTaskActivityItems({
+            task,
+            comments,
+            subtasks,
+            links,
+            limit: safeLimit,
+        });
+
+        return { success: true as const, items };
+    } catch (error) {
+        console.error("Failed to fetch task activity:", error);
+        return { success: false as const, error: "Failed to fetch task activity" };
     }
 }
 
@@ -3225,8 +3376,8 @@ const createTaskSchema = z.object({
     projectId: z.string().uuid(),
     title: z.string().min(1, "Title is required"),
     description: z.string().optional(),
-    status: z.enum(["todo", "in_progress", "done"]).default("todo"),
-    priority: z.enum(["low", "medium", "high", "urgent"]).default("medium"),
+    status: taskStatusEnum.default("todo"),
+    priority: taskPriorityEnum.default("medium"),
     sprintId: z.string().uuid().optional().nullable(),
     assigneeId: z.string().uuid().optional().nullable(),
     storyPoints: z.number().min(0).optional(),
@@ -3235,7 +3386,6 @@ const createTaskSchema = z.object({
         title: z.string(),
         completed: z.boolean().default(false)
     })).optional(),
-    tags: z.array(z.string()).optional(),
     attachmentNodeIds: z.array(z.string().uuid()).optional()
 });
 
@@ -3342,10 +3492,10 @@ export async function createTaskAction(data: z.infer<typeof createTaskSchema>) {
                 );
             }
 
-            await refreshWorkspaceCountersForUsers(tx, [validated.assigneeId ?? null]);
-
             return newTask;
         });
+
+        await queueCounterRefreshBestEffort([validated.assigneeId ?? null]);
 
         const hydratedTask = await db.query.tasks.findFirst({
             where: eq(tasks.id, createdTask.id),
@@ -3368,6 +3518,13 @@ export async function createTaskAction(data: z.infer<typeof createTaskSchema>) {
             with: {
                 project: {
                     columns: { key: true },
+                },
+                sprint: {
+                    columns: {
+                        id: true,
+                        name: true,
+                        status: true,
+                    },
                 },
                 assignee: {
                     columns: {
@@ -3393,10 +3550,11 @@ export async function createTaskAction(data: z.infer<typeof createTaskSchema>) {
         // But for fallback and initial load consistency:
         revalidatePath(`/projects/${validated.projectId}`);
 
-        return { success: true, task: hydratedTask };
+        return { success: true, task: normalizeTaskSurfaceRecord(hydratedTask) };
     } catch (error) {
         console.error("Failed to create task:", error);
-        return { success: false, error: error instanceof Error ? error.message : "Failed to create task" };
+        const message = error instanceof Error ? error.message : "Failed to create task";
+        return { success: false, error: message.includes("Failed query:") ? "Failed to create task" : message };
     }
 }
 
@@ -3933,7 +4091,7 @@ export async function deleteTaskAction(taskId: string, projectId: string) {
             throw new Error("Only the project owner can delete tasks");
         }
 
-        await db.transaction(async (tx) => {
+        const deletedTask = await db.transaction(async (tx) => {
             const existingTask = await tx.query.tasks.findFirst({
                 where: and(eq(tasks.id, taskId), eq(tasks.projectId, projectId)),
                 columns: {
@@ -3947,9 +4105,10 @@ export async function deleteTaskAction(taskId: string, projectId: string) {
 
             await tx.delete(tasks)
                 .where(and(eq(tasks.id, taskId), eq(tasks.projectId, projectId)));
-
-            await refreshWorkspaceCountersForUsers(tx, [existingTask?.assigneeId ?? null]);
+            return existingTask;
         });
+
+        await queueCounterRefreshBestEffort([deletedTask?.assigneeId ?? null]);
 
         const slugOrId = project.slug || projectId;
         revalidatePath(`/projects/${slugOrId}`);

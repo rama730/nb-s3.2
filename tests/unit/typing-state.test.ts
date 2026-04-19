@@ -17,6 +17,7 @@ function createMember(overrides: Partial<PresenceMemberState>): PresenceMemberSt
     lastSeenAt: overrides.lastSeenAt ?? Date.now(),
     cursorFrame: overrides.cursorFrame ?? null,
     typing: overrides.typing ?? false,
+    typingContext: overrides.typingContext ?? null,
     userName: overrides.userName ?? null,
     profile: overrides.profile ?? null,
   };
