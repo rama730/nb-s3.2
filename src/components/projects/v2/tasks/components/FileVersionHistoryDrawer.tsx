@@ -214,7 +214,7 @@ export function FileVersionHistoryDrawer({
             </DialogTitle>
             <DialogDescription className="mt-1 truncate text-xs">
               {node.name}
-              {currentVersion ? ` • currently on v${currentVersion}` : null}
+              {currentVersion ? ` • active task version is v${currentVersion}` : null}
             </DialogDescription>
           </div>
           <button
@@ -269,7 +269,7 @@ export function FileVersionHistoryDrawer({
                         </span>
                         {isCurrent ? (
                           <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-200">
-                            Current
+                            Active
                           </span>
                         ) : null}
                       </div>
