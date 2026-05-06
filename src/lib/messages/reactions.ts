@@ -159,3 +159,12 @@ export function withReactionSummaryMetadata(
     nextMetadata.reactionSummary = normalizedSummary;
     return nextMetadata;
 }
+
+export function toPersistedReactionSummary(
+    reactionSummary: ReadonlyArray<MessageReactionSummary>,
+): MessageReactionSummary[] {
+    return normalizeMessageReactionSummary(reactionSummary).map((reaction) => ({
+        ...reaction,
+        viewerReacted: false,
+    }));
+}
