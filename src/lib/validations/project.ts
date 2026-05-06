@@ -52,8 +52,8 @@ export const externalLinksSchema = z.object({
     notion: z.string().url().optional().or(z.literal('')),
 });
 
-// Notification Preferences
-export const notificationPreferencesSchema = z.object({
+// Project creation notification defaults (not the global user inbox preferences).
+export const projectNotificationSettingsSchema = z.object({
     on_application: z.boolean().default(true),
     on_task_complete: z.boolean().default(true),
     on_chat_message: z.boolean().default(true),
@@ -85,7 +85,7 @@ export const createProjectSchema = z.object({
     application_settings: applicationSettingsSchema.optional(),
     terms: termsSchema.optional(),
     external_links: externalLinksSchema.optional(),
-    notification_preferences: notificationPreferencesSchema.optional(),
+    notification_preferences: projectNotificationSettingsSchema.optional(),
     is_draft: z.boolean().default(false),
     metadata: z.record(z.string(), z.any()).default({}),
     import_source: z.object({
