@@ -1,7 +1,7 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { GroupedVirtuoso } from 'react-virtuoso';
 import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import type { MessageWithSender } from '@/app/actions/messaging';
@@ -10,10 +10,13 @@ import { TypingIndicator } from '@/components/chat/TypingIndicator';
 import { useAuth } from '@/hooks/useAuth';
 import { useMarkMessagesRead } from '@/hooks/useMarkMessagesRead';
 import { useDeliveryAcks } from '@/hooks/useDeliveryAcks';
+import { useMessageWorkLinks } from '@/hooks/useMessageWorkLinks';
+import { useMessageThreadAnchor } from '@/hooks/useMessageThreadAnchor';
+import { formatMessageCalendarLabel } from '@/lib/messages/date-buckets';
+import { buildMessageThreadModel } from '@/lib/messages/thread-items';
 import { MessageBubbleV2 } from './MessageBubbleV2';
 import { BulkActionsBar } from './BulkActionsBar';
 import { ScrollToBottomFab } from './ScrollToBottomFab';
-import { StickyDateHeader } from './StickyDateHeader';
 import { EmptyConversation } from './EmptyConversation';
 
 type MessageFocusSource = 'reply' | 'pin' | 'external';
@@ -44,12 +47,15 @@ interface MessageThreadV2Props {
     onReply: (message: MessageWithSender) => void;
     onTogglePin: (messageId: string, pinned: boolean) => void;
     onRequestMessageContext: (messageId: string) => Promise<boolean>;
+    onVisibleReadWatermark?: (messageId: string) => void;
+    onClearFocusTarget?: () => void;
     onDismissContextJumpState?: () => void;
     onBulkDelete?: (messageIds: string[]) => void;
 }
 
 const EMPTY_PINNED_MESSAGES: MessageWithSender[] = [];
 const EMPTY_TYPING_USERS: TypingUser[] = [];
+const OLDER_MESSAGES_PRELOAD_THRESHOLD = 6;
 
 export function MessageThreadV2({
     conversationId,
@@ -68,23 +74,29 @@ export function MessageThreadV2({
     onReply,
     onTogglePin,
     onRequestMessageContext,
+    onVisibleReadWatermark,
+    onClearFocusTarget,
     onDismissContextJumpState,
     onBulkDelete,
 }: MessageThreadV2Props) {
     const isPopup = surface === 'popup';
-    const [isAtBottom, setIsAtBottom] = useState(true);
-    const [unreadBelow, setUnreadBelow] = useState(0);
     const [isSelectMode, setIsSelectMode] = useState(false);
     const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
-    const [stickyDate, setStickyDate] = useState<string | null>(null);
     const [focusedMessage, setFocusedMessage] = useState<FocusedMessageState | null>(null);
-    const virtuosoRef = useRef<VirtuosoHandle | null>(null);
-    const isAtBottomRef = useRef(true);
-    const pinnedToLatestRef = useRef(true);
-    const lastMessageIdRef = useRef<string | null>(null);
+    const rootRef = useRef<HTMLDivElement | null>(null);
+    const latestScrollToLatestSignalRef = useRef(scrollToLatestSignal);
     const lastScrollToLatestSignalRef = useRef(scrollToLatestSignal);
     const focusResetTimeoutRef = useRef<number | null>(null);
     const focusAnimationFrameRef = useRef<number | null>(null);
+    const unreadVisibilityObserverRef = useRef<IntersectionObserver | null>(null);
+    const unreadVisibilityNodeByMessageIdRef = useRef<Map<string, Element>>(new Map());
+    const unreadMessageIdSetRef = useRef<Set<string>>(new Set());
+    const messageDataIndexByIdRef = useRef<Map<string, number>>(new Map());
+    const onVisibleReadWatermarkRef = useRef<typeof onVisibleReadWatermark>(onVisibleReadWatermark);
+    const touchYRef = useRef<number | null>(null);
+    const userInteractedAfterOpenRef = useRef(false);
+    const initialAnchorSettleTimersRef = useRef<number[]>([]);
+    const olderMessagesRequestInFlightRef = useRef(false);
 
     // Wave 1: wire delivery-ack and read-receipt buffers.
     // - ackDelivery: fires once per NEW incoming message from others → ✓✓ gray
@@ -96,13 +108,29 @@ export function MessageThreadV2({
     const { ackDelivery } = useDeliveryAcks(viewerId, conversationId);
     const { markRead } = useMarkMessagesRead(conversationId, viewerId);
     const ackedMessageIdsRef = useRef<Set<string>>(new Set());
+    const threadModel = useMemo(() => buildMessageThreadModel({
+        conversationId,
+        messages,
+        viewerId,
+        viewerUnreadCount: 0,
+    }), [conversationId, messages, viewerId]);
+    const canonicalUnreadModel = useMemo(() => buildMessageThreadModel({
+        conversationId,
+        messages,
+        viewerId,
+        viewerUnreadCount,
+    }), [conversationId, messages, viewerId, viewerUnreadCount]);
+    const orderedMessages = threadModel.messages;
+    const messageIds = useMemo(() => orderedMessages.map((message) => message.id), [orderedMessages]);
+    const linkedWorkQuery = useMessageWorkLinks(conversationId, messageIds);
+    const linkedWorkByMessageId = linkedWorkQuery.data ?? {};
 
     // When the messages prop changes, ack delivery for any newly-seen messages
     // that are NOT from the viewer. This runs exactly once per message.
     useEffect(() => {
         if (!viewerId) return;
         const unseen: Array<{ id: string; senderId: string | null }> = [];
-        for (const message of messages) {
+        for (const message of orderedMessages) {
             if (message.senderId === viewerId) continue;
             if (ackedMessageIdsRef.current.has(message.id)) continue;
             ackedMessageIdsRef.current.add(message.id);
@@ -111,63 +139,23 @@ export function MessageThreadV2({
         if (unseen.length > 0) {
             ackDelivery(unseen);
         }
-    }, [messages, viewerId, ackDelivery]);
+    }, [orderedMessages, viewerId, ackDelivery]);
 
     // Clear the ack set when the conversation changes
     useEffect(() => {
         ackedMessageIdsRef.current.clear();
     }, [conversationId]);
 
-    const items = useMemo(() => {
-        const result: Array<
-            | { type: 'date'; id: string; date: Date }
-            | { type: 'message'; id: string; message: MessageWithSender }
-            | { type: 'unread-divider'; id: string; count: number }
-        > = [];
-        let dayKey: string | null = null;
+    const items = threadModel.items;
+    const groups = threadModel.groups;
+    const groupCounts = threadModel.groupCounts;
+    const groupHeaderIndexes = threadModel.groupHeaderIndexes;
+    const unreadMessageIdSet = useMemo(
+        () => new Set(canonicalUnreadModel.unreadMessageIds),
+        [canonicalUnreadModel.unreadMessageIds],
+    );
 
-        for (const message of messages) {
-            const createdAt = new Date(message.createdAt);
-            if (Number.isNaN(createdAt.getTime())) {
-                result.push({ type: 'message', id: message.id, message });
-                continue;
-            }
-            const nextDayKey = `${createdAt.getFullYear()}-${createdAt.getMonth()}-${createdAt.getDate()}`;
-            if (dayKey !== nextDayKey) {
-                dayKey = nextDayKey;
-                result.push({
-                    type: 'date',
-                    id: `date-${nextDayKey}`,
-                    date: new Date(createdAt.getFullYear(), createdAt.getMonth(), createdAt.getDate()),
-                });
-            }
-            result.push({ type: 'message', id: message.id, message });
-        }
-
-        const normalizedUnreadCount = Math.min(Math.max(0, viewerUnreadCount), messages.length);
-        if (normalizedUnreadCount > 0) {
-            const messageItems = result.filter(
-                (item): item is Extract<(typeof result)[number], { type: 'message' }> => item.type === 'message',
-            );
-            const firstUnreadMessage = messageItems[messageItems.length - normalizedUnreadCount];
-            if (firstUnreadMessage) {
-                const dividerIndex = result.findIndex(
-                    (item) => item.type === 'message' && item.message.id === firstUnreadMessage.message.id,
-                );
-                if (dividerIndex >= 0) {
-                    result.splice(dividerIndex, 0, {
-                        type: 'unread-divider' as const,
-                        id: `unread-divider-${conversationId}`,
-                        count: normalizedUnreadCount,
-                    });
-                }
-            }
-        }
-
-        return result;
-    }, [conversationId, messages, viewerUnreadCount]);
-
-    const messageIndexById = useMemo(() => {
+    const messageDataIndexById = useMemo(() => {
         const indexMap = new Map<string, number>();
         items.forEach((item, index) => {
             if (item.type === 'message') {
@@ -177,19 +165,121 @@ export function MessageThreadV2({
         return indexMap;
     }, [items]);
 
-    const scrollToLatest = useCallback((behavior: 'auto' | 'smooth' = 'smooth') => {
-        if (items.length === 0) return;
-        const prefersReducedMotion = typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-        const resolvedBehavior = prefersReducedMotion ? 'auto' : behavior;
-        requestAnimationFrame(() => {
-            virtuosoRef.current?.scrollToIndex({
-                index: items.length - 1,
-                align: 'end',
-                behavior: resolvedBehavior,
-            });
-        });
-    }, [items.length]);
+    useLayoutEffect(() => {
+        unreadMessageIdSetRef.current = unreadMessageIdSet;
+        messageDataIndexByIdRef.current = messageDataIndexById;
+        onVisibleReadWatermarkRef.current = onVisibleReadWatermark;
+    }, [messageDataIndexById, onVisibleReadWatermark, unreadMessageIdSet]);
 
+    const getUnreadVisibilityObserver = useCallback(() => {
+        if (typeof IntersectionObserver === 'undefined') return null;
+        if (unreadVisibilityObserverRef.current) return unreadVisibilityObserverRef.current;
+
+        unreadVisibilityObserverRef.current = new IntersectionObserver((entries) => {
+            let latestVisibleUnreadMessageId: string | null = null;
+            let latestVisibleUnreadIndex = -1;
+
+            for (const entry of entries) {
+                if (!entry.isIntersecting || entry.intersectionRatio < 0.25) continue;
+                const messageId = (entry.target as HTMLElement).dataset.messageId;
+                if (!messageId || !unreadMessageIdSetRef.current.has(messageId)) continue;
+                const messageIndex = messageDataIndexByIdRef.current.get(messageId) ?? -1;
+                if (messageIndex > latestVisibleUnreadIndex) {
+                    latestVisibleUnreadIndex = messageIndex;
+                    latestVisibleUnreadMessageId = messageId;
+                }
+            }
+
+            if (latestVisibleUnreadMessageId) {
+                onVisibleReadWatermarkRef.current?.(latestVisibleUnreadMessageId);
+            }
+        }, {
+            threshold: [0.25, 0.5],
+        });
+
+        return unreadVisibilityObserverRef.current;
+    }, []);
+
+    const registerUnreadMessageRow = useCallback((messageId: string, node: HTMLDivElement | null) => {
+        const observer = getUnreadVisibilityObserver();
+        const previousNode = unreadVisibilityNodeByMessageIdRef.current.get(messageId);
+        if (previousNode && previousNode !== node) {
+            observer?.unobserve(previousNode);
+            unreadVisibilityNodeByMessageIdRef.current.delete(messageId);
+        }
+
+        if (!node) {
+            return;
+        }
+
+        node.dataset.messageId = messageId;
+        unreadVisibilityNodeByMessageIdRef.current.set(messageId, node);
+        observer?.observe(node);
+    }, [getUnreadVisibilityObserver]);
+
+    useEffect(() => {
+        const observer = unreadVisibilityObserverRef.current;
+        for (const [messageId, node] of unreadVisibilityNodeByMessageIdRef.current.entries()) {
+            if (unreadMessageIdSet.has(messageId)) continue;
+            observer?.unobserve(node);
+            unreadVisibilityNodeByMessageIdRef.current.delete(messageId);
+        }
+    }, [unreadMessageIdSet]);
+
+    const hasFocusTarget = Boolean(focusMessageId || contextJumpState);
+    const bottomIndex = items.length - 1;
+    const {
+        virtuosoRef,
+        firstItemIndex,
+        followBottom,
+        isAtLatest,
+        unreadBelow,
+        noteUserScrollIntent,
+        enterFocusedMode,
+        handleAtBottomChange,
+        handleLatestMessageChange,
+        handleRange,
+        scrollToLatest,
+        canLoadOlderMessages,
+        decrementFirstItemIndex,
+    } = useMessageThreadAnchor({
+        conversationId,
+        bottomIndex,
+        hasFocusTarget,
+    });
+
+    const groupHeaderKeyByVirtualIndex = useMemo(() => {
+        const keyMap = new Map<number, string>();
+        groupHeaderIndexes.forEach((headerIndex, groupIndex) => {
+            const group = groups[groupIndex];
+            if (!group) return;
+            keyMap.set(firstItemIndex + headerIndex, `group-${group.id}`);
+        });
+        return keyMap;
+    }, [firstItemIndex, groupHeaderIndexes, groups]);
+
+    // When older messages are prepended, decrement firstItemIndex by the
+    // rendered item delta so grouped headers and unread dividers stay anchored.
+    const initialLatestAnchorConversationRef = useRef<string | null>(null);
+    const previousItemsLengthRef = useRef(items.length);
+    const previousFirstMessageIdRef = useRef<string | null>(orderedMessages[0]?.id ?? null);
+    useEffect(() => {
+        const previousLength = previousItemsLengthRef.current;
+        const previousFirstId = previousFirstMessageIdRef.current;
+        const nextLength = items.length;
+        const nextFirstId = orderedMessages[0]?.id ?? null;
+        previousItemsLengthRef.current = nextLength;
+        previousFirstMessageIdRef.current = nextFirstId;
+
+        if (previousLength === 0 || nextLength <= previousLength) return;
+        // Prepend detected if first message id changed AND rendered item count grew.
+        if (previousFirstId && nextFirstId && previousFirstId !== nextFirstId) {
+            decrementFirstItemIndex(nextLength - previousLength);
+            if (!hasFocusTarget && followBottom) {
+                scrollToLatest('auto', 3);
+            }
+        }
+    }, [decrementFirstItemIndex, followBottom, hasFocusTarget, items.length, orderedMessages, scrollToLatest]);
     const focusMessage = useCallback(async (
         messageId: string,
         source: MessageFocusSource = 'external',
@@ -203,16 +293,18 @@ export function MessageThreadV2({
             focusAnimationFrameRef.current = null;
         }
 
-        const index = messageIndexById.get(messageId);
+        const index = messageDataIndexById.get(messageId);
         if (typeof index === 'number') {
+            const absoluteIndex = firstItemIndex + index;
             const prefersReducedMotion = typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+            enterFocusedMode();
             setFocusedMessage(null);
             focusAnimationFrameRef.current = window.requestAnimationFrame(() => {
                 setFocusedMessage({ id: messageId, source });
                 focusAnimationFrameRef.current = null;
             });
             virtuosoRef.current?.scrollToIndex({
-                index,
+                index: absoluteIndex,
                 align: 'center',
                 behavior: prefersReducedMotion ? 'auto' : 'smooth',
             });
@@ -224,9 +316,30 @@ export function MessageThreadV2({
         }
 
         return onRequestMessageContext(messageId);
-    }, [messageIndexById, onRequestMessageContext]);
+    }, [enterFocusedMode, firstItemIndex, messageDataIndexById, onRequestMessageContext, virtuosoRef]);
 
     useEffect(() => {
+        if (!isFetchingMore || !hasMore) {
+            olderMessagesRequestInFlightRef.current = false;
+        }
+    }, [hasMore, isFetchingMore, orderedMessages.length]);
+
+    const requestOlderMessages = useCallback(() => {
+        if (
+            !hasMore
+            || isFetchingMore
+            || olderMessagesRequestInFlightRef.current
+            || !canLoadOlderMessages()
+        ) {
+            return;
+        }
+
+        olderMessagesRequestInFlightRef.current = true;
+        onLoadMore();
+    }, [canLoadOlderMessages, hasMore, isFetchingMore, onLoadMore]);
+
+    useEffect(() => {
+        const observedUnreadNodes = unreadVisibilityNodeByMessageIdRef.current;
         return () => {
             if (focusResetTimeoutRef.current) {
                 window.clearTimeout(focusResetTimeoutRef.current);
@@ -236,17 +349,54 @@ export function MessageThreadV2({
                 window.cancelAnimationFrame(focusAnimationFrameRef.current);
                 focusAnimationFrameRef.current = null;
             }
+            unreadVisibilityObserverRef.current?.disconnect();
+            unreadVisibilityObserverRef.current = null;
+            observedUnreadNodes.clear();
+            initialAnchorSettleTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+            initialAnchorSettleTimersRef.current = [];
         };
     }, []);
 
     useEffect(() => {
-        lastMessageIdRef.current = null;
-        pinnedToLatestRef.current = true;
-        isAtBottomRef.current = true;
-        lastScrollToLatestSignalRef.current = scrollToLatestSignal;
-        setIsAtBottom(true);
-        setUnreadBelow(0);
+        latestScrollToLatestSignalRef.current = scrollToLatestSignal;
+    }, [scrollToLatestSignal]);
+
+    useEffect(() => {
+        lastScrollToLatestSignalRef.current = latestScrollToLatestSignalRef.current;
+        initialLatestAnchorConversationRef.current = null;
+        userInteractedAfterOpenRef.current = false;
+        initialAnchorSettleTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+        initialAnchorSettleTimersRef.current = [];
     }, [conversationId]);
+
+    useEffect(() => {
+        if (
+            isLoading
+            || hasFocusTarget
+            || items.length === 0
+            || initialLatestAnchorConversationRef.current === conversationId
+        ) {
+            return;
+        }
+
+        initialLatestAnchorConversationRef.current = conversationId;
+        scrollToLatest('auto', 6);
+        initialAnchorSettleTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+        initialAnchorSettleTimersRef.current = [120, 360, 720].map((delay) => {
+            const timer = window.setTimeout(() => {
+                initialAnchorSettleTimersRef.current = initialAnchorSettleTimersRef.current.filter((item) => item !== timer);
+                if (userInteractedAfterOpenRef.current) return;
+                scrollToLatest('auto', 2);
+            }, delay);
+            return timer;
+        });
+    }, [
+        conversationId,
+        hasFocusTarget,
+        isLoading,
+        items.length,
+        scrollToLatest,
+    ]);
 
     useEffect(() => {
         if (lastScrollToLatestSignalRef.current === scrollToLatestSignal) {
@@ -254,32 +404,39 @@ export function MessageThreadV2({
         }
 
         lastScrollToLatestSignalRef.current = scrollToLatestSignal;
-        pinnedToLatestRef.current = true;
-        setUnreadBelow(0);
-        scrollToLatest('smooth');
+        scrollToLatest('auto');
     }, [scrollToLatest, scrollToLatestSignal]);
 
     useEffect(() => {
-        if (isLoading || messages.length === 0) return;
-        const lastMessageId = messages[messages.length - 1]?.id ?? null;
-        const previousLastMessageId = lastMessageIdRef.current;
-        lastMessageIdRef.current = lastMessageId;
+        if (isLoading || orderedMessages.length === 0) return;
+        handleLatestMessageChange({
+            latestMessage: orderedMessages[orderedMessages.length - 1] ?? null,
+            viewerId,
+        });
+    }, [handleLatestMessageChange, isLoading, orderedMessages, viewerId]);
 
-        if (!lastMessageId) return;
-        if (!previousLastMessageId) {
-            if (pinnedToLatestRef.current) {
+    // Resize / layout-change re-anchor: only when user is at bottom.
+    // Content-owned height changes call autoscrollToBottom; this covers parent
+    // viewport changes like keyboard show/hide, density toggles, or sidebars.
+    useEffect(() => {
+        if (typeof ResizeObserver === 'undefined') return;
+        const element = rootRef.current;
+        if (!element) return;
+        let resizeFrame: number | null = null;
+        const observer = new ResizeObserver(() => {
+            if (hasFocusTarget || !followBottom || items.length === 0) return;
+            if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame);
+            resizeFrame = window.requestAnimationFrame(() => {
+                resizeFrame = null;
                 scrollToLatest('auto');
-            }
-            return;
-        }
-        if (previousLastMessageId === lastMessageId) return;
-        if (!pinnedToLatestRef.current) {
-            setUnreadBelow((prev) => prev + 1);
-            return;
-        }
-
-        scrollToLatest('smooth');
-    }, [isLoading, messages, scrollToLatest]);
+            });
+        });
+        observer.observe(element);
+        return () => {
+            observer.disconnect();
+            if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame);
+        };
+    }, [followBottom, hasFocusTarget, items.length, scrollToLatest]);
 
     useEffect(() => {
         if (!focusMessageId) return;
@@ -290,8 +447,34 @@ export function MessageThreadV2({
         void focusMessage(messageId, source);
     }, [focusMessage]);
 
+    const handleContentLoad = useCallback(() => {
+        if (hasFocusTarget || !followBottom) return;
+        virtuosoRef.current?.autoscrollToBottom();
+    }, [followBottom, hasFocusTarget, virtuosoRef]);
+
     return (
-        <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div
+            ref={rootRef}
+            className="relative flex min-h-0 flex-1 flex-col overflow-hidden"
+            onTouchStartCapture={(event) => {
+                touchYRef.current = event.touches[0]?.clientY ?? null;
+            }}
+            onTouchMoveCapture={(event) => {
+                const nextY = event.touches[0]?.clientY ?? null;
+                const previousY = touchYRef.current;
+                touchYRef.current = nextY;
+                if (previousY === null || nextY === null) return;
+                const delta = nextY - previousY;
+                if (Math.abs(delta) < 4) return;
+                userInteractedAfterOpenRef.current = true;
+                noteUserScrollIntent(delta > 0 ? 'up' : 'down');
+            }}
+            onWheelCapture={(event) => {
+                if (Math.abs(event.deltaY) < 4) return;
+                userInteractedAfterOpenRef.current = true;
+                noteUserScrollIntent(event.deltaY < 0 ? 'up' : 'down');
+            }}
+        >
             {pinnedMessages.length > 0 && (
                 <div className={`border-b border-zinc-100 bg-zinc-50/80 dark:border-zinc-800 dark:bg-zinc-900/70 ${
                     isPopup ? 'px-3 py-2' : 'px-5 py-2.5'
@@ -315,7 +498,7 @@ export function MessageThreadV2({
                 </div>
             )}
 
-            {!isLoading && messages.length === 0 ? (
+            {!isLoading && orderedMessages.length === 0 ? (
                 <EmptyConversation />
             ) : (
                 <>
@@ -333,8 +516,8 @@ export function MessageThreadV2({
                                 <button
                                     type="button"
                                     onClick={() => {
-                                        pinnedToLatestRef.current = true;
-                                        setUnreadBelow(0);
+                                        onClearFocusTarget?.();
+                                        onDismissContextJumpState?.();
                                         scrollToLatest('smooth');
                                     }}
                                     className="rounded-full border border-primary/20 px-2 py-0.5 font-semibold hover:bg-primary/10"
@@ -353,153 +536,133 @@ export function MessageThreadV2({
                             </div>
                         </div>
                     ) : null}
-                    <Virtuoso
-                        ref={virtuosoRef}
-                        style={{ height: '100%', flex: 1, overscrollBehavior: 'contain' }}
-                        data={items}
-                        initialTopMostItemIndex={
-                            items.length > 0
-                                ? { index: items.length - 1, align: 'end' }
-                                : 0
-                        }
-                        atBottomThreshold={120}
-                        increaseViewportBy={isPopup ? { top: 140, bottom: 96 } : { top: 220, bottom: 140 }}
-                        computeItemKey={(_, item) => item.id}
-                        followOutput={() => (pinnedToLatestRef.current ? 'smooth' : false)}
-                        atBottomStateChange={(atBottom) => {
-                            isAtBottomRef.current = atBottom;
-                            pinnedToLatestRef.current = atBottom;
-                            setIsAtBottom(atBottom);
-                            if (atBottom) setUnreadBelow(0);
-                        }}
-                        startReached={() => {
-                            if (hasMore && !isFetchingMore) {
-                                onLoadMore();
+                    <div className="min-h-0 flex-1 overflow-hidden">
+                        <GroupedVirtuoso
+                            ref={virtuosoRef}
+                            style={{ height: '100%', overscrollBehavior: 'contain', overflowX: 'hidden' }}
+                            data={items}
+                            groupCounts={groupCounts}
+                            firstItemIndex={firstItemIndex}
+                            alignToBottom
+                            initialTopMostItemIndex={
+                                bottomIndex >= 0
+                                    ? { index: 'LAST', align: 'end' }
+                                    : 0
                             }
-                        }}
-                        rangeChanged={({ startIndex, endIndex }) => {
-                            let dateLabel: string | null = null;
-                            for (let i = startIndex; i >= 0; i--) {
-                                const item = items[i];
-                                if (item?.type === 'date') {
-                                    dateLabel = formatDateLabel(item.date);
-                                    break;
+                            atBottomThreshold={120}
+                            increaseViewportBy={isPopup ? { top: 80, bottom: 80 } : { top: 80, bottom: 80 }}
+                            computeItemKey={(index, item) => groupHeaderKeyByVirtualIndex.get(index) ?? item?.id ?? `message-thread-item-${index}`}
+                            atBottomStateChange={handleAtBottomChange}
+                            startReached={() => {
+                                requestOlderMessages();
+                            }}
+                            rangeChanged={({ startIndex, endIndex }) => {
+                                handleRange(endIndex);
+                                const startDataIndex = Math.max(0, startIndex - firstItemIndex);
+                                const endDataIndex = Math.min(items.length - 1, endIndex - firstItemIndex);
+                                if (startDataIndex <= OLDER_MESSAGES_PRELOAD_THRESHOLD) {
+                                    requestOlderMessages();
                                 }
-                            }
-                            setStickyDate(dateLabel);
 
-                            // Wave 1: mark visible messages (from other senders) as read.
-                            // The hook dedups + batches, so pushing on every range
-                            // change is safe and cheap.
-                            if (viewerId) {
-                                const visible: Array<{ id: string; senderId: string | null }> = [];
-                                for (let i = startIndex; i <= endIndex; i += 1) {
-                                    const item = items[i];
-                                    if (item?.type === 'message') {
-                                        visible.push({ id: item.message.id, senderId: item.message.senderId });
+                                // Wave 1: mark visible messages (from other senders) as read.
+                                // The hook dedups + batches, so pushing on every range
+                                // change is safe and cheap.
+                                if (viewerId) {
+                                    const visible: Array<{ id: string; senderId: string | null }> = [];
+                                    let latestVisibleUnreadMessageId: string | null = null;
+                                    for (let i = startDataIndex; i <= endDataIndex; i += 1) {
+                                        const item = items[i];
+                                        if (item?.type === 'message') {
+                                            visible.push({ id: item.message.id, senderId: item.message.senderId });
+                                            if (unreadMessageIdSet.has(item.message.id)) {
+                                                latestVisibleUnreadMessageId = item.message.id;
+                                            }
+                                        }
+                                    }
+                                    if (visible.length > 0) {
+                                        markRead(visible);
+                                    }
+                                    if (latestVisibleUnreadMessageId) {
+                                        onVisibleReadWatermark?.(latestVisibleUnreadMessageId);
                                     }
                                 }
-                                if (visible.length > 0) {
-                                    markRead(visible);
-                                }
-                            }
-                        }}
-                        components={{
-                            Header: () =>
-                                isFetchingMore ? (
-                                    <div className="flex justify-center py-2">
-                                        <Loader2 className="h-5 w-5 animate-spin text-zinc-400" />
-                                    </div>
-                                ) : null,
-                            Footer: () => (
-                                <div className={isPopup ? 'px-3 pb-2 pt-1' : 'px-5 pb-2 pt-1'}>
-                                    {typingUsers.length > 0 ? (
-                                        <TypingIndicator users={typingUsers} className="mb-0 pl-0" />
-                                    ) : null}
-                                    <div className="pb-1" />
-                                </div>
-                            ),
-                        }}
-                        itemContent={(index, item) => {
-                            if (item.type === 'date') {
+                            }}
+                            components={{
+                                Header: () =>
+                                    isFetchingMore ? (
+                                        <OlderMessagesLoader />
+                                    ) : null,
+                                Footer: () => (
+                                    <div
+                                        aria-hidden="true"
+                                        className={typingUsers.length > 0 ? 'h-14' : 'h-5'}
+                                    />
+                                ),
+                            }}
+                            groupContent={(groupIndex) => {
+                                const group = groups[groupIndex];
+                                if (!group) return null;
+                                return <ThreadDateGroupHeader label={formatMessageCalendarLabel(group.dateKey)} />;
+                            }}
+                            itemContent={(_, __, item) => {
+                                if (item.type !== 'message') return null;
                                 return (
-                                    <div className="my-4 flex items-center justify-center">
-                                        <span className="rounded-full bg-zinc-100 px-3 py-1 text-xs text-zinc-500 dark:bg-zinc-800">
-                                            {formatDateLabel(item.date)}
-                                        </span>
+                                    <div
+                                        ref={unreadMessageIdSet.has(item.message.id)
+                                            ? (node) => registerUnreadMessageRow(item.message.id, node)
+                                            : undefined}
+                                        id={`msg-${item.message.id}`}
+                                        className={`msg-message-row flex w-full max-w-full min-w-0 items-start gap-2 rounded-md py-1 ${isPopup ? 'px-3' : 'px-5'}`}
+                                    >
+                                        {isSelectMode && (
+                                            <input
+                                                type="checkbox"
+                                                checked={selectedMessageIds.has(item.message.id)}
+                                                onChange={() => {
+                                                    setSelectedMessageIds((prev) => {
+                                                        const next = new Set(prev);
+                                                        if (next.has(item.message.id)) next.delete(item.message.id);
+                                                        else next.add(item.message.id);
+                                                        return next;
+                                                    });
+                                                }}
+                                                className="mt-3 shrink-0 accent-primary"
+                                                aria-label="Select message"
+                                            />
+                                        )}
+                                        <div className="min-w-0 flex-1">
+                                            <MessageBubbleV2
+                                                message={item.message}
+                                                linkedWork={linkedWorkByMessageId[item.message.id] ?? []}
+                                                showAvatar={item.showAvatar}
+                                                surface={surface}
+                                                onReply={onReply}
+                                                onTogglePin={onTogglePin}
+                                                onFocusMessage={handleFocusMessage}
+                                                onContentLoad={handleContentLoad}
+                                                isFocusedReplyTarget={focusedMessage?.id === item.message.id}
+                                                focusSource={focusedMessage?.id === item.message.id ? focusedMessage.source : null}
+                                            />
+                                        </div>
                                     </div>
                                 );
-                            }
-
-                            if (item.type === 'unread-divider') {
-                                return (
-                                    <div className="my-3 flex items-center gap-3 px-4">
-                                        <div className="h-px flex-1 bg-primary/20" />
-                                        <span className="rounded-full bg-primary/5 px-3 py-1 text-xs font-semibold text-primary">
-                                            {item.count} UNREAD {item.count === 1 ? 'MESSAGE' : 'MESSAGES'}
-                                        </span>
-                                        <div className="h-px flex-1 bg-primary/20" />
-                                    </div>
-                                );
-                            }
-
-                            const previousItem = index > 0 ? items[index - 1] : null;
-                            const showAvatar =
-                                !previousItem ||
-                                previousItem.type === 'date' ||
-                                (previousItem.type === 'message' && previousItem.message.senderId !== item.message.senderId);
-
-                            return (
-                                <div
-                                    id={`msg-${item.message.id}`}
-                                    className={`flex items-start gap-2 rounded-md py-1 ${isPopup ? 'px-3' : 'px-5'}`}
-                                >
-                                    {isSelectMode && (
-                                        <input
-                                            type="checkbox"
-                                            checked={selectedMessageIds.has(item.message.id)}
-                                            onChange={() => {
-                                                setSelectedMessageIds((prev) => {
-                                                    const next = new Set(prev);
-                                                    if (next.has(item.message.id)) next.delete(item.message.id);
-                                                    else next.add(item.message.id);
-                                                    return next;
-                                                });
-                                            }}
-                                            className="mt-3 shrink-0 accent-primary"
-                                            aria-label="Select message"
-                                        />
-                                    )}
-                                    <div className="min-w-0 flex-1">
-                                        <MessageBubbleV2
-                                            message={item.message}
-                                            showAvatar={showAvatar}
-                                            onReply={onReply}
-                                            onTogglePin={onTogglePin}
-                                            onFocusMessage={handleFocusMessage}
-                                            isFocusedReplyTarget={focusedMessage?.id === item.message.id}
-                                            focusSource={focusedMessage?.id === item.message.id ? focusedMessage.source : null}
-                                        />
-                                    </div>
-                                </div>
-                            );
-                        }}
-                    />
+                            }}
+                        />
+                    </div>
+                    <ThreadBottomDock typingUsers={typingUsers} isPopup={isPopup} />
                 </>
             )}
-            <StickyDateHeader label={stickyDate || ''} visible={Boolean(stickyDate)} />
             <ScrollToBottomFab
-                visible={!isAtBottom}
-                unreadBelow={unreadBelow}
+                visible={!isAtLatest || unreadBelow > 0}
+                showNewMessages={unreadBelow > 0}
                 onClick={() => {
-                    pinnedToLatestRef.current = true;
-                    setUnreadBelow(0);
+                    onClearFocusTarget?.();
                     scrollToLatest('smooth');
                 }}
             />
             <div aria-live="polite" className="sr-only">
-                {messages.length > 0 && messages[messages.length - 1]?.sender
-                    ? `${messages[messages.length - 1].sender?.fullName || 'Someone'}: ${messages[messages.length - 1].content || 'sent a message'}`
+                {orderedMessages.length > 0 && orderedMessages[orderedMessages.length - 1]?.sender
+                    ? `${orderedMessages[orderedMessages.length - 1].sender?.fullName || 'Someone'}: ${orderedMessages[orderedMessages.length - 1].content || 'sent a message'}`
                     : ''}
             </div>
             {isSelectMode && selectedMessageIds.size > 0 && (
@@ -511,7 +674,7 @@ export function MessageThreadV2({
                         setIsSelectMode(false);
                     }}
                     onCopy={async () => {
-                        const selectedMessages = messages
+                        const selectedMessages = orderedMessages
                             .filter((m) => selectedMessageIds.has(m.id))
                             .map((m) => `${m.sender?.fullName || 'Unknown'}: ${m.content || ''}`)
                             .join('\n');
@@ -530,16 +693,40 @@ export function MessageThreadV2({
     );
 }
 
-function formatDateLabel(date: Date) {
-    const today = new Date();
-    const yesterday = new Date(today);
-    yesterday.setDate(yesterday.getDate() - 1);
+function ThreadBottomDock({
+    typingUsers,
+    isPopup,
+}: {
+    typingUsers: ReadonlyArray<TypingUser>;
+    isPopup: boolean;
+}) {
+    return (
+        <div
+            className={`pointer-events-none absolute bottom-0 left-0 right-0 z-10 h-14 ${isPopup ? 'px-3 pb-1 pt-1' : 'px-5 pb-1 pt-1'}`}
+            aria-live="polite"
+        >
+            {typingUsers.length > 0 ? (
+                <TypingIndicator users={typingUsers} className="mb-0 pl-0" />
+            ) : null}
+        </div>
+    );
+}
 
-    if (date.toDateString() === today.toDateString()) return 'Today';
-    if (date.toDateString() === yesterday.toDateString()) return 'Yesterday';
-    return date.toLocaleDateString('en-US', {
-        weekday: 'short',
-        month: 'short',
-        day: 'numeric',
-    });
+function ThreadDateGroupHeader({ label }: { label: string }) {
+    return (
+        <div className="msg-date-group-header flex justify-center px-4 py-2">
+            <span className="msg-date-pill shadow-sm">{label}</span>
+        </div>
+    );
+}
+
+function OlderMessagesLoader() {
+    return (
+        <div className="flex justify-center px-4 pb-3 pt-12" role="status" aria-live="polite">
+            <div className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-background/90 px-3 py-1.5 text-xs font-medium text-muted-foreground shadow-sm backdrop-blur-md">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                <span>Loading earlier messages...</span>
+            </div>
+        </div>
+    );
 }
