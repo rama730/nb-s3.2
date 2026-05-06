@@ -69,6 +69,8 @@ export interface ConversationCapabilityV2 {
 }
 
 export interface InboxConversationV2 extends ConversationWithDetails {
+    lastReadAt: Date | null;
+    lastReadMessageId: string | null;
     capability: ConversationCapabilityV2;
 }
 
@@ -342,6 +344,8 @@ async function getProjectGroupConversationById(
         last_message_at: Date | null;
         last_message_type: string | null;
         unread_count: number;
+        last_read_at: Date | null;
+        last_read_message_id: string | null;
     }>(sql`
         SELECT
             c.id as conversation_id,
@@ -351,6 +355,8 @@ async function getProjectGroupConversationById(
             p.cover_image as project_cover_image,
             c.updated_at,
             cp.unread_count,
+            cp.last_read_at,
+            cp.last_read_message_id,
             cp.last_message_id,
             cp.last_message_preview,
             cp.last_message_sender_id,
@@ -382,6 +388,8 @@ async function getProjectGroupConversationById(
             }
             : null,
         unreadCount: row.unread_count || 0,
+        lastReadAt: row.last_read_at ?? null,
+        lastReadMessageId: row.last_read_message_id ?? null,
     }]);
 
     return conversation ?? null;
@@ -407,6 +415,8 @@ async function hydrateConversationSummariesV2(
     const capabilitiesByConversation = await buildConversationCapabilitiesBatch(viewerId, conversationsToHydrate);
     return conversationsToHydrate.map((conversation) => ({
         ...conversation,
+        lastReadAt: conversation.lastReadAt ?? null,
+        lastReadMessageId: conversation.lastReadMessageId ?? null,
         capability: capabilitiesByConversation.get(conversation.id) ?? getDefaultCapability(conversation.type),
     }));
 }
@@ -543,6 +553,8 @@ export async function getConversationCapabilityV2(params: {
             participants: [{ id: targetUserId, username: null, fullName: null, avatarUrl: null }],
             lastMessage: null,
             unreadCount: 0,
+            lastReadAt: null,
+            lastReadMessageId: null,
         };
 
         return {
