@@ -42,6 +42,7 @@ interface TaskDetailPanelProps {
   members?: any[];
   projectId: string;
   currentUserId?: string;
+  initialTab?: TaskPanelTab | null;
 }
 
 export default function TaskDetailPanel({
@@ -54,10 +55,11 @@ export default function TaskDetailPanel({
   members = [],
   projectId,
   currentUserId,
+  initialTab = null,
 }: TaskDetailPanelProps) {
   const reduceMotion = useReducedMotionPreference();
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState<TaskPanelTab>("details");
+  const [activeTab, setActiveTab] = useState<TaskPanelTab>(initialTab ?? "details");
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -74,8 +76,8 @@ export default function TaskDetailPanel({
   });
 
   useEffect(() => {
-    setActiveTab("details");
-  }, [normalizedTask.id]);
+    setActiveTab(initialTab ?? "details");
+  }, [initialTab, normalizedTask.id]);
 
   useEffect(() => {
     void resource.ensureTabLoaded(activeTab);
