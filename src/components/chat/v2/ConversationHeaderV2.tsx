@@ -70,9 +70,9 @@ export function ConversationHeaderV2({
     })();
 
     return (
-        <div className={`flex items-center justify-between border-b border-zinc-100 bg-white ${
-            isPopup ? 'px-3 py-3' : 'px-5 py-4'
-        } dark:border-zinc-800 dark:bg-zinc-950`}>
+        <div className={`flex shrink-0 items-center justify-between border-b border-border/60 bg-card ${
+            isPopup ? 'h-14 px-3' : 'h-16 px-5'
+        }`}>
             <div className="flex min-w-0 items-center gap-3">
                 {compact && onBack && (
                     <button
