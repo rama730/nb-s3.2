@@ -35,6 +35,27 @@ const SHOULD_RENDER_VERCEL_ANALYTICS =
 
 export const metadata: Metadata = {
   metadataBase: APP_METADATA_BASE,
+  applicationName: "Edge",
+  manifest: "/manifest.webmanifest",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "default",
+    title: "Edge",
+  },
+  formatDetection: {
+    telephone: false,
+  },
+};
+
+export const viewport: import("next").Viewport = {
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
+    { media: "(prefers-color-scheme: dark)", color: "#09090b" },
+  ],
+  colorScheme: "light dark",
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
 };
 
 export default async function RootLayout({
