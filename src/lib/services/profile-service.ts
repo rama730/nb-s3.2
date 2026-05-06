@@ -10,6 +10,7 @@ import { db } from '@/lib/db'
 import { profileSecurityStates } from '@/lib/db/schema'
 import type { Profile } from '@/lib/db/schema'
 import { logger } from '@/lib/logger'
+import { normalizeNotificationPreferences } from '@/lib/notifications/preferences'
 import { buildViewerScopedProfileView, type PrivateProfileSecurityState, type PublicProfileView, type ViewerScopedProfileView } from '@/lib/privacy/profile-views'
 import { resolvePrivacyRelationship } from '@/lib/privacy/resolver'
 import { parseStoredRecoveryCodes, type StoredRecoveryCode } from '@/lib/security/recovery-codes'
@@ -171,6 +172,7 @@ export async function getSelfProfile(userId: string): Promise<StandardProfile | 
         socialLinks: data.social_links || {},
         visibility: data.visibility || 'public',
         connectionPrivacy: data.connection_privacy || 'everyone',
+        notificationPreferences: normalizeNotificationPreferences(undefined),
         // New fields
         experience: data.experience || [],
         education: data.education || [],
