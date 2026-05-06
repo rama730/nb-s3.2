@@ -18,7 +18,7 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useState, useRef } from "react";
-import { ArrowDownToLine, History, Link as LinkIcon, Loader2 } from "lucide-react";
+import { ArrowDownToLine, Check, History, Link as LinkIcon, Loader2, Pencil, X } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -30,6 +30,11 @@ import type { ProjectNode } from "@/lib/db/schema";
 import { getProjectNodes } from "@/app/actions/files";
 import { useFilesWorkspaceStore, filesParentKey } from "@/stores/filesWorkspaceStore";
 import { updateTaskNodeLink, updateTaskNodeLinksOrder } from "@/app/actions/files/links";
+import {
+  mergeLinkedNodesWithAnnotationOverrides,
+  pruneSettledAnnotationOverrides,
+  type LinkedTaskFileNode,
+} from "@/lib/projects/task-file-note-sync";
 import { TaskFileRow } from "@/components/projects/v2/tasks/components/TaskFileRow";
 import {
   DndContext,
@@ -73,6 +78,8 @@ interface TaskFilesExplorerProps {
     file: File,
   ) => Promise<{ success: boolean; error?: string }> | void;
   onReorder?: (newOrder: string[]) => void;
+  currentDeliverableId?: string | null;
+  linkCounts?: Record<string, number>;
 }
 
 /**
@@ -97,8 +104,8 @@ type VisibleRow =
   | { kind: "loading"; level: number };
 
 function sameLinkedNodesContent(
-  a: (ProjectNode & { order?: number; annotation?: string | null })[],
-  b: (ProjectNode & { order?: number; annotation?: string | null })[],
+  a: LinkedTaskFileNode[],
+  b: LinkedTaskFileNode[],
 ) {
   return JSON.stringify(a) === JSON.stringify(b);
 }
@@ -165,14 +172,18 @@ export function TaskFilesExplorer({
   onOpenInWorkspace,
   onReplaceWithNewVersion,
   onReorder,
+  currentDeliverableId = null,
+  linkCounts = EMPTY_OBJ,
 }: TaskFilesExplorerProps) {
   const { showToast } = useToast();
 
   // Local optimistic mirror to avoid jank during reorder / annotation edits.
   const [localNodes, setLocalNodes] = useState(linkedNodes);
   const [annotationDrafts, setAnnotationDrafts] = useState<Record<string, string>>({});
+  const [editingNoteNodeId, setEditingNoteNodeId] = useState<string | null>(null);
   const pendingOptimisticRef = useRef(0);
   const linkedNodesRef = useRef(linkedNodes);
+  const annotationOverridesRef = useRef<Record<string, string | null>>({});
 
   useEffect(() => {
     linkedNodesRef.current = linkedNodes;
@@ -180,8 +191,17 @@ export function TaskFilesExplorer({
 
   const syncLocalNodesFromProps = useCallback(() => {
     if (pendingOptimisticRef.current > 0) return;
+    const nextOverrides = pruneSettledAnnotationOverrides(
+      linkedNodesRef.current,
+      annotationOverridesRef.current,
+    );
+    annotationOverridesRef.current = nextOverrides;
+    const nextNodes = mergeLinkedNodesWithAnnotationOverrides(
+      linkedNodesRef.current,
+      nextOverrides,
+    );
     setLocalNodes((prev) =>
-      sameLinkedNodesContent(prev, linkedNodesRef.current) ? prev : linkedNodesRef.current,
+      sameLinkedNodesContent(prev, nextNodes) ? prev : nextNodes,
     );
   }, []);
 
@@ -336,6 +356,10 @@ export function TaskFilesExplorer({
       const value = val.trim();
       const previousAnnotation = localNodes.find((n) => n.id === nodeId)?.annotation;
       pendingOptimisticRef.current += 1;
+      annotationOverridesRef.current = {
+        ...annotationOverridesRef.current,
+        [nodeId]: value || null,
+      };
       setLocalNodes((prev) =>
         prev.map((n) => (n.id === nodeId ? { ...n, annotation: value || null } : n)),
       );
@@ -343,6 +367,9 @@ export function TaskFilesExplorer({
         await updateTaskNodeLink(taskId, nodeId, { annotation: value || null });
       } catch (e: unknown) {
         const message = e instanceof Error ? e.message : "Failed to save annotation";
+        const nextOverrides = { ...annotationOverridesRef.current };
+        delete nextOverrides[nodeId];
+        annotationOverridesRef.current = nextOverrides;
         setLocalNodes((prev) =>
           prev.map((n) => (n.id === nodeId ? { ...n, annotation: previousAnnotation } : n)),
         );
@@ -353,6 +380,37 @@ export function TaskFilesExplorer({
       }
     },
     [localNodes, showToast, syncLocalNodesFromProps, taskId],
+  );
+
+  const openNoteEditor = useCallback((nodeId: string, currentAnnotation: string | null) => {
+    setEditingNoteNodeId(nodeId);
+    setAnnotationDrafts((prev) =>
+      typeof prev[nodeId] === "string"
+        ? prev
+        : { ...prev, [nodeId]: currentAnnotation ?? "" },
+    );
+  }, []);
+
+  const closeNoteEditor = useCallback((nodeId: string) => {
+    setEditingNoteNodeId((current) => (current === nodeId ? null : current));
+    setAnnotationDrafts((prev) => {
+      if (!(nodeId in prev)) return prev;
+      const next = { ...prev };
+      delete next[nodeId];
+      return next;
+    });
+  }, []);
+
+  const saveNoteEditor = useCallback(
+    async (nodeId: string) => {
+      const currentAnnotation = localNodes.find((n) => n.id === nodeId)?.annotation ?? "";
+      const nextValue = annotationDrafts[nodeId] ?? currentAnnotation ?? "";
+      if (nextValue.trim() !== `${currentAnnotation ?? ""}`.trim()) {
+        await handleAnnotationChange(nodeId, nextValue);
+      }
+      closeNoteEditor(nodeId);
+    },
+    [annotationDrafts, closeNoteEditor, handleAnnotationChange, localNodes],
   );
 
   const handleDragEnd = useCallback(
@@ -413,6 +471,8 @@ export function TaskFilesExplorer({
       const annotation = row.node.annotation ?? null;
       const isRoot = row.isRoot;
       const indentPx = row.level * 20;
+      const noteDraft = annotationDrafts[node.id] ?? annotation ?? "";
+      const isEditingNote = editingNoteNodeId === node.id;
 
       const renderRowBody = (handle?: {
         attributes: Record<string, unknown>;
@@ -425,6 +485,8 @@ export function TaskFilesExplorer({
             projectSlug={projectSlug}
             taskId={taskId}
             canEdit={canEdit}
+            isCurrentDeliverable={node.type !== "folder" && node.id === currentDeliverableId}
+            sharedLinkCount={linkCounts[node.id] ?? 0}
             isExpanded={isExpanded}
             onToggleExpanded={handleToggle}
             dragHandleProps={
@@ -441,6 +503,13 @@ export function TaskFilesExplorer({
             onUnlink={(n) => onUnlink?.(n.id)}
             onOpenInWorkspace={onOpenInWorkspace}
             onReplaceWithNewVersion={onReplaceWithNewVersion}
+            onMarkNeedsReview={(n) => {
+              const current = n.annotation?.trim();
+              const normalized = current?.toLowerCase();
+              if (normalized && /\breview\b/i.test(normalized)) return;
+              const next = current ? `${current}\nNeeds review` : "Needs review";
+              void handleAnnotationChange(n.id, next);
+            }}
             onContextMenu={(event) => {
               event.preventDefault();
               setContextMenuState({
@@ -453,32 +522,101 @@ export function TaskFilesExplorer({
           />
           {isRoot ? (
             <div className="mt-1 pl-9 pr-2 pb-1">
-              <input
-                type="text"
-                maxLength={255}
-                placeholder="Add a note (e.g. 'Final delivery', 'Reference only')"
-                value={annotationDrafts[node.id] ?? annotation ?? ""}
-                onChange={(e) => {
-                  const nextValue = e.target.value;
-                  setAnnotationDrafts((prev) => ({ ...prev, [node.id]: nextValue }));
-                }}
-                onBlur={(e) => {
-                  const nextValue = e.target.value;
-                  setAnnotationDrafts((prev) => {
-                    const next = { ...prev };
-                    delete next[node.id];
-                    return next;
-                  });
-                  if (nextValue.trim() !== (annotation || "").trim()) {
-                    void handleAnnotationChange(node.id, nextValue);
-                  }
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") e.currentTarget.blur();
-                }}
-                disabled={!canEdit}
-                className="w-full rounded bg-transparent px-1 py-0.5 text-xs text-zinc-500 outline-none transition-colors hover:bg-zinc-100 focus:bg-white focus:ring-1 focus:ring-indigo-500 dark:hover:bg-zinc-800 dark:focus:bg-zinc-950"
-              />
+              {isEditingNote ? (
+                <div className="rounded-lg border border-zinc-200 bg-zinc-50/80 p-3 dark:border-zinc-800 dark:bg-zinc-900/70">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
+                      Task note
+                    </span>
+                    <button
+                      type="button"
+                      data-testid="task-file-row-note-close"
+                      onClick={() => closeNoteEditor(node.id)}
+                      className="rounded p-1 text-zinc-400 transition-colors hover:bg-zinc-200 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                  <textarea
+                    data-testid="task-file-row-note-editor"
+                    rows={3}
+                    maxLength={255}
+                    placeholder="Add task-specific guidance, version context, or delivery notes."
+                    value={noteDraft}
+                    onChange={(event) => {
+                      const nextValue = event.target.value;
+                      setAnnotationDrafts((prev) => ({ ...prev, [node.id]: nextValue }));
+                    }}
+                    onKeyDown={(event) => {
+                      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                        event.preventDefault();
+                        void saveNoteEditor(node.id);
+                      } else if (event.key === "Escape") {
+                        event.preventDefault();
+                        closeNoteEditor(node.id);
+                      }
+                    }}
+                    disabled={!canEdit}
+                    className="min-h-[88px] w-full resize-y rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-700 outline-none transition-colors focus:border-indigo-300 focus:ring-2 focus:ring-indigo-200 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-200 dark:focus:border-indigo-500/60 dark:focus:ring-indigo-500/20"
+                  />
+                  <div className="mt-2 flex items-center justify-between gap-3">
+                    <span className="text-[11px] text-zinc-500">
+                      Saved per task-file link. Press Ctrl/Cmd + Enter to save.
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        data-testid="task-file-row-note-cancel"
+                        onClick={() => closeNoteEditor(node.id)}
+                        className="inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium text-zinc-500 transition-colors hover:bg-zinc-200 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        data-testid="task-file-row-note-save"
+                        onClick={() => void saveNoteEditor(node.id)}
+                        className="inline-flex items-center gap-1 rounded-md bg-indigo-600 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-400"
+                      >
+                        <Check className="h-3.5 w-3.5" />
+                        Save note
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : annotation ? (
+                <div className="flex items-start justify-between gap-3 rounded-lg border border-zinc-200/80 bg-zinc-50/60 px-3 py-2 dark:border-zinc-800 dark:bg-zinc-900/50">
+                  <div className="min-w-0">
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
+                      Task note
+                    </div>
+                    <p className="mt-1 break-words text-xs text-zinc-600 dark:text-zinc-300">
+                      {annotation}
+                    </p>
+                  </div>
+                  {canEdit ? (
+                    <button
+                      type="button"
+                      data-testid="task-file-row-note-edit"
+                      onClick={() => openNoteEditor(node.id, annotation)}
+                      className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-zinc-500 transition-colors hover:bg-zinc-200 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+                    >
+                      <Pencil className="h-3 w-3" />
+                      Edit
+                    </button>
+                  ) : null}
+                </div>
+              ) : canEdit ? (
+                <button
+                  type="button"
+                  data-testid="task-file-row-note-add"
+                  onClick={() => openNoteEditor(node.id, null)}
+                  className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                  Add why-this-matters note
+                </button>
+              ) : null}
             </div>
           ) : null}
         </div>
@@ -498,9 +636,14 @@ export function TaskFilesExplorer({
     [
       annotationDrafts,
       canEdit,
+      closeNoteEditor,
+      currentDeliverableId,
+      editingNoteNodeId,
       expandedFolderIds,
       handleAnnotationChange,
       handleToggle,
+      linkCounts,
+      openNoteEditor,
       onOpenFile,
       onOpenInWorkspace,
       onReplaceWithNewVersion,
@@ -508,6 +651,7 @@ export function TaskFilesExplorer({
       onUnlink,
       projectId,
       projectSlug,
+      saveNoteEditor,
       taskId,
     ],
   );
@@ -595,7 +739,7 @@ export function TaskFilesExplorer({
                   onClick={() => onOpenFile(contextMenuState.node!)}
                 >
                   <ArrowDownToLine className="mr-2 h-4 w-4" />
-                  Open / Download
+                  Download current file
                 </DropdownMenuItem>
               )}
               {onShowHistory && contextMenuState.node.type === "file" && (
