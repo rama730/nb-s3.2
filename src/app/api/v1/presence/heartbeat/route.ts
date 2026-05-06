@@ -12,6 +12,27 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const DEBOUNCE_SECONDS = 300; // 5 minutes
+const localHeartbeatDebounce = new Map<string, number>();
+
+function shouldUseRedisPresenceHeartbeat() {
+    const mode = (process.env.PRESENCE_STORE_MODE || process.env.PRESENCE_TRANSPORT || '').trim().toLowerCase();
+    return process.env.NODE_ENV === 'production' || mode === 'redis';
+}
+
+function isLocallyDebounced(key: string) {
+    const now = Date.now();
+    const existing = localHeartbeatDebounce.get(key);
+    if (existing && existing > now) return true;
+
+    if (localHeartbeatDebounce.size > 5_000) {
+        for (const [entryKey, expiresAt] of localHeartbeatDebounce.entries()) {
+            if (expiresAt <= now) localHeartbeatDebounce.delete(entryKey);
+        }
+    }
+
+    localHeartbeatDebounce.set(key, now + DEBOUNCE_SECONDS * 1000);
+    return false;
+}
 
 export async function POST(request: NextRequest) {
     try {
@@ -29,11 +50,14 @@ export async function POST(request: NextRequest) {
         }
 
         // Debounce: only update DB if last update was more than 5 minutes ago
-        const redis = getRedisClient();
         const liveSessionKey = `presence:live-session:${auth.userId}:${sessionId}`;
         const debounceKey = `presence:heartbeat:${auth.userId}:${sessionId}`;
 
-        if (redis) {
+        if (shouldUseRedisPresenceHeartbeat()) {
+            const redis = getRedisClient();
+            if (!redis) {
+                return jsonSuccess({ updated: false });
+            }
             const liveSession = await redis.get(liveSessionKey);
             if (!liveSession) {
                 return jsonSuccess({ updated: false });
@@ -44,6 +68,8 @@ export async function POST(request: NextRequest) {
             }
             // Set debounce key with TTL
             await redis.set(debounceKey, '1', { ex: DEBOUNCE_SECONDS });
+        } else if (isLocallyDebounced(debounceKey)) {
+            return jsonSuccess({ updated: false });
         }
 
         // Update last_active_at
