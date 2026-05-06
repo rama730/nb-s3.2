@@ -512,6 +512,13 @@
       "when": 1776793400000,
       "tag": "0071_realtime_publication_extension",
       "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1776879800000,
+      "tag": "0072_user_notifications",
+      "breakpoints": true
     }
   ]
 }
