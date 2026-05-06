@@ -305,9 +305,9 @@ export function OpenInIdeMenu({
   );
 
   // Primary trigger — used as the row's main action in the task Files tab.
-  // Solid indigo, large enough that the affordance is unambiguous: clicking
-  // the row opens the file, the chevron shows there's a chooser. Sized to
-  // sit alongside a 32px overflow button without dominating the row.
+  // Solid indigo, large enough that the affordance is unambiguous, and
+  // explicitly labelled "Open with" so users understand this is a chooser
+  // for IDEs, workspace editing, and download.
   const primaryTrigger = (
     <button
       type="button"
@@ -322,7 +322,7 @@ export function OpenInIdeMenu({
       ) : (
         <ExternalLink className="h-3.5 w-3.5" />
       )}
-      <span>Open</span>
+      <span>Open with</span>
       <ChevronDown className="h-3 w-3 opacity-90" />
     </button>
   );
@@ -346,7 +346,7 @@ export function OpenInIdeMenu({
         data-testid="open-in-ide-menu"
       >
         <DropdownMenuLabel className="text-xs text-zinc-500">
-          Open {node.name}
+          Open with
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
         <DropdownMenuItem
@@ -394,7 +394,7 @@ export function OpenInIdeMenu({
             <div className="flex flex-col">
               <span>Open in Workspace</span>
               <span className="text-[10px] text-zinc-500">
-                Basic editing — best for text &amp; markdown
+                Leaves this panel and opens the project workspace editor
               </span>
             </div>
           </DropdownMenuItem>
