@@ -37,12 +37,12 @@ export function MessageContextChipRowV2({
     }
 
     return (
-        <div className={cn('flex flex-wrap gap-1.5', compact ? 'mt-1.5' : 'mt-2')}>
+        <div className={cn('flex min-w-0 max-w-full flex-wrap gap-1.5 overflow-hidden', compact ? 'mt-1.5' : 'mt-2')}>
             {chips.map((chip) => (
                 <div
                     key={`${chip.kind}:${chip.id}`}
                     className={cn(
-                        'inline-flex max-w-full items-center gap-2 rounded-full border px-2.5 py-1 text-[11px] leading-none',
+                        'inline-flex min-w-0 max-w-full items-center gap-2 rounded-full border px-2.5 py-1 text-[11px] leading-none',
                         tone === 'inverted'
                             ? 'border-white/15 bg-white/10 text-white/85'
                             : 'border-zinc-200 bg-zinc-50 text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-200',
