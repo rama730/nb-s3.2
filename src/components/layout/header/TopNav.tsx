@@ -21,11 +21,9 @@ import { useScrollShadow } from "@/hooks/useScrollShadow";
 
 import { useAuth } from "@/lib/hooks/use-auth";
 import { useNotifications } from "@/hooks/useNotifications";
-import { useUnreadSummary } from "@/hooks/useMessagesV2";
 import { usePeopleNotifications } from "@/hooks/usePeopleNotifications";
 
 import { ROUTES } from "@/constants/routes";
-import MessageIndicator from "./MessageIndicator";
 import { logger } from "@/lib/logger";
 import { resolveTopNavAuthUiState } from "./topnav-auth-state";
 
@@ -35,9 +33,7 @@ export default function TopNav() {
     const supabase = useMemo(() => createSupabaseBrowserClient(), []);
     const { isAuthenticated: isSignedIn, isLoading: authLoading, profile } = useAuth();
 
-    const { unreadCount: unreadNotifications } = useNotifications();
-    const { data: unreadMessagesCount } = useUnreadSummary();
-    const hasUnreadMessages = (unreadMessagesCount ?? 0) > 0;
+    const notifications = useNotifications();
     const { totalPending } = usePeopleNotifications();
 
     // Hydration fix: ensures we only render auth-dependent UI after mount
@@ -168,9 +164,7 @@ export default function TopNav() {
                                 : pathname?.startsWith(item.href);
 
                         let badge;
-                        if (item.href === ROUTES.MESSAGES) {
-                            badge = <MessageIndicator hasUnread={hasUnreadMessages} />;
-                        } else if (item.href === ROUTES.PEOPLE && totalPending > 0) {
+                        if (item.href === ROUTES.PEOPLE && totalPending > 0) {
                             badge = (
                                 <div className="absolute right-1 top-1 h-2 w-2 rounded-full bg-red-500 ring-2 ring-white dark:ring-zinc-950" />
                             );
@@ -203,7 +197,30 @@ export default function TopNav() {
                         </Suspense>
                     )}
 
-                    {mounted && authUiState === "signed-in" && <NotificationPreview />}
+                    {mounted && authUiState === "signed-in" && (
+                        <NotificationPreview
+                            unreadCount={notifications.unreadCount}
+                            unreadImportantCount={notifications.unreadImportantCount}
+                            items={notifications.items}
+                            activeFilter={notifications.activeFilter}
+                            isOpen={notifications.isTrayOpen}
+                            isLoading={notifications.isLoading}
+                            hasMore={notifications.hasMore}
+                            isLoadingMore={notifications.isLoadingMore}
+                            isRealtimeHealthy={notifications.isRealtimeHealthy}
+                            onOpenChange={notifications.setTrayOpen}
+                            onFilterChange={notifications.setActiveFilter}
+                            onOpenItem={notifications.openItem}
+                            onMarkRead={notifications.markRead}
+                            onMarkUnread={notifications.markUnread}
+                            onMarkAllRead={notifications.markAllRead}
+                            onDismiss={notifications.dismiss}
+                            onMuteScope={notifications.muteScope}
+                            onPause={notifications.pause}
+                            onSnooze={notifications.snooze}
+                            onLoadMore={notifications.loadMore}
+                        />
+                    )}
 
                     <ThemeToggle />
 
@@ -254,8 +271,12 @@ export default function TopNav() {
                             isOpen={showMobileMenu}
                             onClose={() => setShowMobileMenu(false)}
                             profile={profile}
-                            unreadNotificationsCount={unreadNotifications}
                             onSignOut={signOut}
+                            notificationUnreadCount={notifications.unreadImportantCount}
+                            onOpenNotifications={() => {
+                                setShowMobileMenu(false);
+                                notifications.openTray();
+                            }}
                         />
                     </Suspense>
                 )}
