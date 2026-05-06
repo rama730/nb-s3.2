@@ -5,9 +5,11 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { projectMembers, projectNodes, projectSprints, taskNodeLinks, tasks } from "@/lib/db/schema";
 import { createClient } from "@/lib/supabase/server";
+import { emitTaskAssignedNotification, emitTaskStatusAttentionNotification } from "@/lib/notifications/emitters";
 import { consumeRateLimit } from "@/lib/security/rate-limit";
 import { queueCounterRefreshBestEffort } from "@/lib/workspace/counter-buffer";
 import { getTaskFileWarnings } from "@/lib/projects/task-file-intelligence";
+import { logger } from "@/lib/logger";
 
 type MutableTaskField = "title" | "description" | "priority" | "sprintId" | "dueDate";
 
@@ -37,13 +39,23 @@ async function lockTaskForWrite(
     projectId: string;
     isOwner: boolean;
     previousAssigneeId: string | null;
+    creatorId: string;
+    title: string;
+    taskNumber: number | null;
+    currentStatus: TaskStatus;
+    projectSlug: string | null;
+    projectKey: string | null;
 }> {
     const taskRows = await tx.execute<{
         id: string;
         project_id: string;
         assignee_id: string | null;
+        creator_id: string;
+        title: string;
+        task_number: number | null;
+        status: TaskStatus;
     }>(sql`
-        SELECT id, project_id, assignee_id
+        SELECT id, project_id, assignee_id, creator_id, title, task_number, status
         FROM tasks
         WHERE id = ${taskId}
         FOR UPDATE
@@ -56,9 +68,11 @@ async function lockTaskForWrite(
     const projectRows = await tx.execute<{
         id: string;
         owner_id: string;
+        slug: string | null;
+        key: string | null;
         deleted_at: Date | string | null;
     }>(sql`
-        SELECT id, owner_id, deleted_at
+        SELECT id, owner_id, slug, key, deleted_at
         FROM projects
         WHERE id = ${task.project_id}
         FOR UPDATE
@@ -88,6 +102,12 @@ async function lockTaskForWrite(
         projectId: task.project_id,
         isOwner,
         previousAssigneeId: task.assignee_id ?? null,
+        creatorId: task.creator_id,
+        title: task.title,
+        taskNumber: task.task_number ?? null,
+        currentStatus: task.status,
+        projectSlug: project.slug ?? null,
+        projectKey: project.key ?? null,
     };
 }
 
@@ -203,7 +223,7 @@ export async function updateTaskStatusAction(
                 status,
                 updatedAt: new Date(),
             }).where(eq(tasks.id, taskId));
-            return { previousAssigneeId: locked.previousAssigneeId, projectId: locked.projectId };
+            return locked;
         });
 
         const warnings =
@@ -232,6 +252,48 @@ export async function updateTaskStatusAction(
                 : [];
 
         await queueCounterRefreshBestEffort([result.previousAssigneeId]);
+        if ((status === "blocked" || status === "done") && status !== result.currentStatus) {
+            const actorName = (user.user_metadata?.full_name as string | undefined) ?? (user.user_metadata?.username as string | undefined) ?? null;
+            const actorAvatarUrl = (user.user_metadata?.avatar_url as string | undefined) ?? null;
+            const recipients = new Set<string>();
+            if (result.creatorId !== user.id) {
+                recipients.add(result.creatorId);
+            }
+            if (result.previousAssigneeId && result.previousAssigneeId !== user.id) {
+                recipients.add(result.previousAssigneeId);
+            }
+            try {
+                const eventKey = new Date().toISOString();
+                await Promise.all(
+                    Array.from(recipients).map((recipientUserId) =>
+                        emitTaskStatusAttentionNotification({
+                            recipientUserId,
+                            actorUserId: user.id,
+                            actorName,
+                            actorAvatarUrl,
+                            taskId,
+                            taskTitle: result.title,
+                            status,
+                            projectId: result.projectId,
+                            projectSlug: result.projectSlug,
+                            projectKey: result.projectKey,
+                            taskNumber: result.taskNumber,
+                            eventKey,
+                        }),
+                    ),
+                );
+            } catch (notificationError) {
+                logger.error("tasks.status_attention_notification_failed", {
+                    module: "tasks",
+                    projectId: result.projectId,
+                    taskId,
+                    actorUserId: user.id,
+                    status,
+                    count: recipients.size,
+                    error: notificationError instanceof Error ? notificationError.message : String(notificationError),
+                });
+            }
+        }
         revalidatePath(`/projects/${result.projectId}`);
         return { success: true, warnings };
     } catch (error: any) {
@@ -282,10 +344,36 @@ export async function assignTaskAction(
                 updatedAt: new Date(),
             }).where(eq(tasks.id, taskId));
 
-            return { previousAssigneeId: locked.previousAssigneeId, projectId: locked.projectId };
+            return locked;
         });
 
         await queueCounterRefreshBestEffort([result.previousAssigneeId, assigneeId]);
+        if (assigneeId && assigneeId !== user.id && assigneeId !== result.previousAssigneeId) {
+            try {
+                await emitTaskAssignedNotification({
+                    recipientUserId: assigneeId,
+                    actorUserId: user.id,
+                    actorName: (user.user_metadata?.full_name as string | undefined) ?? (user.user_metadata?.username as string | undefined) ?? null,
+                    actorAvatarUrl: (user.user_metadata?.avatar_url as string | undefined) ?? null,
+                    taskId,
+                    taskTitle: result.title,
+                    taskNumber: result.taskNumber,
+                    projectId: result.projectId,
+                    projectSlug: result.projectSlug,
+                    projectKey: result.projectKey,
+                    eventKey: new Date().toISOString(),
+                });
+            } catch (notificationError) {
+                logger.error("tasks.assignment_notification_failed", {
+                    module: "tasks",
+                    projectId: result.projectId,
+                    taskId,
+                    actorUserId: user.id,
+                    targetUserId: assigneeId,
+                    error: notificationError instanceof Error ? notificationError.message : String(notificationError),
+                });
+            }
+        }
         revalidatePath(`/projects/${result.projectId}`);
         return { success: true };
     } catch (error: any) {
