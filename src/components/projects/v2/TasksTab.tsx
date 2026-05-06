@@ -1,12 +1,12 @@
 "use client";
 
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Users, UserPlus, Plus, LayoutGrid, List } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AnimatePresence } from "framer-motion";
 import { useRealtimeTasks } from "@/hooks/useRealtimeTasks";
-import { createTaskAction } from "@/app/actions/project";
+import { createTaskAction, getProjectTaskDetailAction } from "@/app/actions/project";
 import { useReducedMotionPreference } from "@/components/providers/theme-provider";
 
 import TaskFilters from "@/components/projects/v2/tasks/TaskFilters";
@@ -22,8 +22,10 @@ import { patchSprintDetailInfiniteData } from "@/lib/projects/sprint-cache";
 import { normalizeSprintOptions, normalizeTaskSurfaceRecord, type TaskSurfaceRecord } from "@/lib/projects/task-presentation";
 import { buildTaskSubmitPayload } from "@/lib/projects/task-draft";
 import { patchProjectTaskCaches } from "@/lib/projects/task-cache";
+import { useToast } from "@/components/ui-custom/Toast";
 import type { ProjectNode } from "@/lib/db/schema";
 import { queryKeys } from "@/lib/query-keys";
+import type { TaskPanelTab } from "@/hooks/useTaskPanelResource";
 
 interface TasksTabProps {
     projectId: string;
@@ -36,6 +38,8 @@ interface TasksTabProps {
     totalCount?: number;
     members?: any[];
     sprints?: any[];
+    initialOpenTaskId?: string | null;
+    initialPanelTab?: TaskPanelTab | null;
 }
 
 function toLinkedSprintFiles(nodes: ProjectNode[], taskId: string, occurredAt: string | null) {
@@ -71,9 +75,12 @@ export default function TasksTab({
     totalCount = 0,
     members = [],
     sprints = [],
+    initialOpenTaskId = null,
+    initialPanelTab = null,
 }: TasksTabProps) {
     const reduceMotion = useReducedMotionPreference();
     const queryClient = useQueryClient();
+    const { showToast } = useToast();
     const { data: projectSprintsData, isFetched: hasFetchedProjectSprints } = useProjectSprints(projectId);
     const sprintOptions = useMemo(() => {
         const sprintSource = hasFetchedProjectSprints ? (projectSprintsData ?? []) : sprints;
@@ -86,7 +93,10 @@ export default function TasksTab({
 
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [editingTask, setEditingTask] = useState<TaskSurfaceRecord | null>(null);
+    const [editingInitialTab, setEditingInitialTab] = useState<TaskPanelTab | null>(null);
     const [createTaskError, setCreateTaskError] = useState<string | null>(null);
+    const [initialTaskLoadError, setInitialTaskLoadError] = useState<string | null>(null);
+    const handledInitialOpenTaskRef = useRef<string | null>(null);
     const queryScope: ProjectTaskScope = useMemo(() => {
         if (scope === "backlog") return "backlog";
         if (scope === "sprint") return "sprint";
@@ -142,6 +152,16 @@ export default function TasksTab({
         } as TaskSurfaceRecord;
     }, [sprintById]);
 
+    const openTask = useCallback((task: TaskSurfaceRecord | any, panelTab: TaskPanelTab | null = null) => {
+        setEditingTask(withSprintContext(normalizeTaskSurfaceRecord(task)));
+        setEditingInitialTab(panelTab);
+    }, [withSprintContext]);
+
+    const closeTaskPanel = useCallback(() => {
+        setEditingTask(null);
+        setEditingInitialTab(null);
+    }, []);
+
     // Optimized Filters Hook
     const { filteredTasks, myFocusTasks, needsOwnerTasks } = useTaskFilters({
         tasks: sprintAwareTasks,
@@ -152,6 +172,63 @@ export default function TasksTab({
     const showNeedsOwnerStrip = needsOwnerTasks.length > 0;
     const hasFocusStrips = showMyFocusStrip || showNeedsOwnerStrip;
     const focusStripColumnsClass = showMyFocusStrip && showNeedsOwnerStrip ? "lg:grid-cols-2" : "lg:grid-cols-1";
+
+    useEffect(() => {
+        if (!initialOpenTaskId || handledInitialOpenTaskRef.current === initialOpenTaskId) return;
+
+        handledInitialOpenTaskRef.current = initialOpenTaskId;
+        const localTask = sprintAwareTasks.find((task) => task.id === initialOpenTaskId);
+        if (localTask) {
+            setInitialTaskLoadError(null);
+            openTask(localTask, initialPanelTab);
+            return;
+        }
+
+        let cancelled = false;
+        const reportInitialTaskLoadFailure = (reason: unknown) => {
+            const detail = reason instanceof Error
+                ? reason.message
+                : typeof reason === "string"
+                    ? reason
+                    : "Task detail request failed";
+            console.warn("Failed to load initial task", {
+                projectId,
+                taskId: initialOpenTaskId,
+                error: detail,
+            });
+            const message = "Could not open the requested task. It may have been moved, deleted, or unavailable.";
+            setInitialTaskLoadError(message);
+            showToast(message, "error");
+        };
+
+        void getProjectTaskDetailAction(projectId, initialOpenTaskId).then((result) => {
+            if (cancelled) return;
+            if (!result.success || !result.task) {
+                reportInitialTaskLoadFailure(result.error || "Task was not returned");
+                return;
+            }
+            const normalizedTask = withSprintContext(normalizeTaskSurfaceRecord(result.task));
+            patchProjectTaskCaches(queryClient, projectId, normalizedTask);
+            setInitialTaskLoadError(null);
+            openTask(normalizedTask, initialPanelTab);
+        }).catch((error) => {
+            if (cancelled) return;
+            reportInitialTaskLoadFailure(error);
+        });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [
+        initialOpenTaskId,
+        initialPanelTab,
+        openTask,
+        projectId,
+        queryClient,
+        showToast,
+        sprintAwareTasks,
+        withSprintContext,
+    ]);
 
     const handleCreateTask = useCallback(async (data: any): Promise<{ success: boolean; error?: string }> => {
         setCreateTaskError(null);
@@ -291,7 +368,7 @@ export default function TasksTab({
                             icon={Users}
                             iconColorClass="text-primary"
                             tasks={myFocusTasks}
-                            onTaskClick={setEditingTask}
+                            onTaskClick={openTask}
                         />
                     ) : null}
                     {showNeedsOwnerStrip ? (
@@ -300,7 +377,7 @@ export default function TasksTab({
                             icon={UserPlus}
                             iconColorClass="text-orange-500"
                             tasks={needsOwnerTasks}
-                            onTaskClick={setEditingTask}
+                            onTaskClick={openTask}
                         />
                     ) : null}
                 </div>
@@ -312,11 +389,17 @@ export default function TasksTab({
                 </div>
             ) : null}
 
+            {initialTaskLoadError ? (
+                <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:border-rose-900/40 dark:bg-rose-900/20 dark:text-rose-200">
+                    {initialTaskLoadError}
+                </div>
+            ) : null}
+
             {/* Main Content */}
             {viewMode === 'board' ? (
                 <KanbanBoard
                     tasks={filteredTasks}
-                    onTaskClick={setEditingTask}
+                    onTaskClick={openTask}
                     fetchNextPage={fetchNextPage}
                     hasNextPage={hasNextPage}
                     isFetchingNextPage={isFetchingNextPage}
@@ -324,7 +407,7 @@ export default function TasksTab({
             ) : (
                 <TasksTable
                     tasks={filteredTasks}
-                    onTaskClick={setEditingTask}
+                    onTaskClick={openTask}
                     fetchNextPage={fetchNextPage}
                     hasNextPage={hasNextPage}
                     isFetchingNextPage={isFetchingNextPage}
@@ -359,7 +442,8 @@ export default function TasksTab({
                             setEditingTask(sprintAwareTask);
                             patchProjectTaskCaches(queryClient, projectId, sprintAwareTask);
                         }}
-                        onClose={() => setEditingTask(null)}
+                        onClose={closeTaskPanel}
+                        initialTab={editingInitialTab}
                         projectId={projectId}
                         isOwnerOrMember={isOwnerOrMember}
                         isOwner={isOwner}
