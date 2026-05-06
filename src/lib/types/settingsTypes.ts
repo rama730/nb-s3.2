@@ -1,11 +1,7 @@
+import type { NotificationPreferences } from "@/lib/notifications/types";
+
 // Settings types
-export interface NotificationPreferences {
-    email: boolean;
-    push: boolean;
-    projects: boolean;
-    messages: boolean;
-    mentions: boolean;
-}
+export type { NotificationPreferences };
 
 export interface Session {
     id: string;
