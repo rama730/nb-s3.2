@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { projectNodes, taskNodeLinks } from "@/lib/db/schema";
 import { eq, and, isNull, inArray, sql, desc } from "drizzle-orm";
 import { createClient } from "@/lib/supabase/server";
+import { notifyTaskParticipantsForFileEvent } from "@/lib/notifications/task-file";
 import {
     assertProjectReadAccess,
     assertProjectWriteAccess,
@@ -33,7 +34,11 @@ export async function getTaskLinkCounts(projectId: string, nodeIds: string[]) {
     return out;
 }
 
-export async function linkNodeToTask(taskId: string, nodeId: string) {
+export async function linkNodeToTask(
+    taskId: string,
+    nodeId: string,
+    options?: { notificationKind?: "task_file_replaced" | "task_file_needs_review" },
+) {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new Error("Unauthorized");
@@ -56,7 +61,17 @@ export async function linkNodeToTask(taskId: string, nodeId: string) {
         target: [taskNodeLinks.taskId, taskNodeLinks.nodeId],
     }).returning();
 
-    if (inserted[0]) return inserted[0];
+    if (inserted[0]) {
+        if (options?.notificationKind) {
+            await notifyTaskParticipantsForFileEvent({
+                actorUserId: user.id,
+                projectId,
+                nodeId,
+                kind: options.notificationKind,
+            });
+        }
+        return inserted[0];
+    }
 
     const existing = await db.query.taskNodeLinks.findFirst({
         where: and(eq(taskNodeLinks.taskId, taskId), eq(taskNodeLinks.nodeId, nodeId)),
@@ -128,9 +143,30 @@ export async function updateTaskNodeLink(taskId: string, nodeId: string, updates
 
     if (Object.keys(updates).length === 0) return;
 
-    await db.update(taskNodeLinks)
+    const previous = typeof updates.annotation === "string"
+        ? await db.query.taskNodeLinks.findFirst({
+            where: and(eq(taskNodeLinks.taskId, taskId), eq(taskNodeLinks.nodeId, nodeId)),
+            columns: { annotation: true },
+        })
+        : null;
+
+    const updated = await db.update(taskNodeLinks)
         .set(updates)
-        .where(and(eq(taskNodeLinks.taskId, taskId), eq(taskNodeLinks.nodeId, nodeId)));
+        .where(and(eq(taskNodeLinks.taskId, taskId), eq(taskNodeLinks.nodeId, nodeId)))
+        .returning({ annotation: taskNodeLinks.annotation });
+
+    if (updated.length === 0) return;
+
+    const nextAnnotation = typeof updates.annotation === "string" ? updates.annotation.toLowerCase() : "";
+    const previousAnnotation = previous?.annotation?.toLowerCase() ?? "";
+    if (nextAnnotation.includes("review") && !previousAnnotation.includes("review")) {
+        await notifyTaskParticipantsForFileEvent({
+            actorUserId: user.id,
+            projectId,
+            nodeId,
+            kind: "task_file_needs_review",
+        });
+    }
 }
 
 export async function updateTaskNodeLinksOrder(taskId: string, updates: { nodeId: string, order: number }[]) {
