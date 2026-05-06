@@ -71,13 +71,13 @@ export function StructuredMessageCardV2({
 
     return (
         <div className={cn(
-            'rounded-2xl border px-3 py-3',
+            'msg-rich-content w-full max-w-full min-w-0 rounded-2xl border px-3 py-3',
             isOwn
                 ? 'border-white/15 bg-white/8 text-primary-foreground'
                 : 'border-zinc-200 bg-zinc-50/90 text-zinc-900 dark:border-zinc-800 dark:bg-zinc-950/70 dark:text-zinc-100',
         )}>
-            <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex flex-wrap items-center gap-2">
+            <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
                     <span className={cn(
                         'rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide',
                         isOwn ? 'bg-white/10 text-white/75' : 'bg-primary/10 text-primary',
@@ -106,11 +106,11 @@ export function StructuredMessageCardV2({
                 ) : null}
             </div>
 
-            <div className="mt-2 text-sm font-semibold leading-5">
+            <div className="mt-2 break-words text-sm font-semibold leading-5">
                 {structured.title}
             </div>
             <div className={cn(
-                'mt-1 text-sm leading-6',
+                'mt-1 break-words text-sm leading-6',
                 isOwn ? 'text-primary-foreground/85' : 'text-zinc-600 dark:text-zinc-300',
             )}>
                 {structured.summary}
@@ -118,7 +118,7 @@ export function StructuredMessageCardV2({
 
             {note ? (
                 <div className={cn(
-                    'mt-2 rounded-xl border px-2.5 py-2 text-xs leading-5',
+                    'mt-2 rounded-xl border px-2.5 py-2 text-xs leading-5 break-words',
                     isOwn
                         ? 'border-white/10 bg-black/10 text-primary-foreground/80'
                         : 'border-zinc-200 bg-white text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300',
@@ -132,19 +132,19 @@ export function StructuredMessageCardV2({
                     {handoffCompleted ? (
                         <div>
                             <div className={cn('font-semibold uppercase tracking-wide', isOwn ? 'text-white/75' : 'text-zinc-500 dark:text-zinc-400')}>Completed</div>
-                            <div className={cn('mt-1 leading-5', isOwn ? 'text-white/85' : 'text-zinc-700 dark:text-zinc-200')}>{handoffCompleted}</div>
+                            <div className={cn('mt-1 break-words leading-5', isOwn ? 'text-white/85' : 'text-zinc-700 dark:text-zinc-200')}>{handoffCompleted}</div>
                         </div>
                     ) : null}
                     {handoffBlocked ? (
                         <div>
                             <div className={cn('font-semibold uppercase tracking-wide', isOwn ? 'text-white/75' : 'text-zinc-500 dark:text-zinc-400')}>Blocked</div>
-                            <div className={cn('mt-1 leading-5', isOwn ? 'text-white/85' : 'text-zinc-700 dark:text-zinc-200')}>{handoffBlocked}</div>
+                            <div className={cn('mt-1 break-words leading-5', isOwn ? 'text-white/85' : 'text-zinc-700 dark:text-zinc-200')}>{handoffBlocked}</div>
                         </div>
                     ) : null}
                     {handoffNext ? (
                         <div>
                             <div className={cn('font-semibold uppercase tracking-wide', isOwn ? 'text-white/75' : 'text-zinc-500 dark:text-zinc-400')}>Next</div>
-                            <div className={cn('mt-1 leading-5', isOwn ? 'text-white/85' : 'text-zinc-700 dark:text-zinc-200')}>{handoffNext}</div>
+                            <div className={cn('mt-1 break-words leading-5', isOwn ? 'text-white/85' : 'text-zinc-700 dark:text-zinc-200')}>{handoffNext}</div>
                         </div>
                     ) : null}
                 </div>
