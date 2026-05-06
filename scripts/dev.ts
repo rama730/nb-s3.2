@@ -1,4 +1,8 @@
 import { spawn, type ChildProcess } from 'node:child_process'
+import { config as loadDotenv } from 'dotenv'
+
+loadDotenv({ path: '.env.local' })
+loadDotenv()
 
 type ProcSpec = {
     name: string
