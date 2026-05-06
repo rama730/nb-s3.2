@@ -44,14 +44,14 @@ export function MessageTextContentV2({
     if (isApplication) {
         const lines = content.split(/\r?\n/);
         return (
-            <div className="space-y-1.5">
+            <div className="min-w-0 max-w-full space-y-1.5">
                 {lines.map((line, index) => {
                     const trimmed = line.trim();
                     if (!trimmed) return <div key={`app-space-${index}`} className="h-2" />;
                     const match = trimmed.match(/^([A-Za-z][A-Za-z ]{1,24}):\s*(.+)$/);
                     if (!match) {
                         return (
-                            <p key={`app-line-${index}`} className="whitespace-pre-wrap break-words leading-relaxed">
+                            <p key={`app-line-${index}`} className="msg-message-text leading-relaxed">
                                 {renderTextWithMentions(trimmed, isOwn)}
                             </p>
                         );
@@ -61,7 +61,7 @@ export function MessageTextContentV2({
                     const value = match[2].trim();
                     const normalizedUrl = normalizeSafeExternalUrl(value);
                     return (
-                        <p key={`app-meta-${index}`} className="whitespace-pre-wrap break-words leading-relaxed">
+                        <p key={`app-meta-${index}`} className="msg-message-text leading-relaxed">
                             <span className="font-semibold">{label}: </span>
                             {normalizedUrl ? (
                                 <a
@@ -84,7 +84,7 @@ export function MessageTextContentV2({
 
     const segments = getCachedMessageSegments(content);
     return (
-        <div className="space-y-2">
+        <div className="min-w-0 max-w-full space-y-2">
             {segments.map((segment, index) =>
                 segment.type === 'code' ? (
                     <CodeSegmentV2
@@ -94,7 +94,7 @@ export function MessageTextContentV2({
                         isOwn={isOwn}
                     />
                 ) : (
-                    <p key={`text-${index}`} className="whitespace-pre-wrap break-words leading-relaxed">
+                    <p key={`text-${index}`} className="msg-message-text leading-relaxed">
                         {renderTextWithMentions(segment.content, isOwn)}
                     </p>
                 ),
@@ -105,8 +105,10 @@ export function MessageTextContentV2({
 
 export function MessageAttachmentsV2({
     attachments,
+    onContentLoad,
 }: {
     attachments: ChatAttachmentV2[];
+    onContentLoad?: () => void;
 }) {
     const [activeAttachmentId, setActiveAttachmentId] = useState<string | null>(null);
 
@@ -130,11 +132,12 @@ export function MessageAttachmentsV2({
 
     return (
         <>
-            <div className="mt-2 space-y-2">
+            <div className="mt-2 min-w-0 max-w-full space-y-2">
                 {mediaAttachments.length > 0 && (
                     <MediaAttachmentGridV2
                         attachments={mediaAttachments}
                         onOpenMedia={(id) => setActiveAttachmentId(id)}
+                        onContentLoad={onContentLoad}
                     />
                 )}
 
@@ -295,7 +298,7 @@ function CodeSegmentV2({
 
     return (
         <div
-            className={`overflow-hidden rounded-lg border ${
+            className={`msg-rich-content max-w-full min-w-0 overflow-hidden rounded-lg border ${
                 isOwn
                     ? 'border-white/30 bg-black/25'
                     : 'border-zinc-300 bg-zinc-900/90 dark:border-zinc-700'
@@ -312,7 +315,7 @@ function CodeSegmentV2({
                     <span>{copied ? 'Copied' : 'Copy'}</span>
                 </button>
             </div>
-            <pre className="overflow-x-auto px-3 py-2 text-[12px] leading-5 text-zinc-100">
+            <pre className="max-w-full overflow-x-auto px-3 py-2 text-[12px] leading-5 text-zinc-100">
                 <code>{code}</code>
             </pre>
         </div>
@@ -322,9 +325,11 @@ function CodeSegmentV2({
 function MediaAttachmentGridV2({
     attachments,
     onOpenMedia,
+    onContentLoad,
 }: {
     attachments: ChatAttachmentV2[];
     onOpenMedia: (id: string) => void;
+    onContentLoad?: () => void;
 }) {
     const visibleAttachments = attachments.slice(0, 4);
     const overflowCount = attachments.length - visibleAttachments.length;
@@ -333,7 +338,7 @@ function MediaAttachmentGridV2({
     const isTriple = visibleAttachments.length === 3;
 
     return (
-        <div className={`${isSingle ? 'grid grid-cols-1' : 'grid grid-cols-2'} max-w-[360px] gap-1`}>
+        <div className={`${isSingle ? 'grid grid-cols-1' : 'grid grid-cols-2'} w-full max-w-full min-w-0 gap-1`}>
             {visibleAttachments.map((attachment, index) => (
                 <MediaAttachmentTileV2
                     key={attachment.id}
@@ -342,6 +347,7 @@ function MediaAttachmentGridV2({
                     spanFull={isTriple && index === 2}
                     overlayLabel={index === visibleAttachments.length - 1 && overflowCount > 0 ? `+${overflowCount}` : null}
                     onClick={() => onOpenMedia(attachment.id)}
+                    onContentLoad={onContentLoad}
                 />
             ))}
         </div>
@@ -354,24 +360,30 @@ function MediaAttachmentTileV2({
     spanFull = false,
     overlayLabel,
     onClick,
+    onContentLoad,
 }: {
     attachment: ChatAttachmentV2;
     isSingle: boolean;
     spanFull?: boolean;
     overlayLabel: string | null;
     onClick: () => void;
+    onContentLoad?: () => void;
 }) {
     const [loaded, setLoaded] = useState(false);
     const previewUrl = attachment.thumbnailUrl || attachment.url;
     const [retried, setRetried] = useState(false);
     const [currentUrl, setCurrentUrl] = useState(previewUrl);
+    const aspectRatio = attachment.width && attachment.height && attachment.width > 0 && attachment.height > 0
+        ? `${attachment.width} / ${attachment.height}`
+        : '16 / 10';
 
     return (
         <button
             type="button"
             onClick={onClick}
             aria-label={attachment.filename ? `Open media viewer for ${attachment.filename}` : 'Open media viewer'}
-            className={`relative overflow-hidden rounded-lg bg-zinc-100 focus:outline-none focus:ring-2 focus:ring-ring/60 dark:bg-zinc-800 ${isSingle ? 'h-auto' : 'h-36'} ${spanFull ? 'col-span-2' : ''}`}
+            className={`relative min-w-0 overflow-hidden rounded-lg bg-zinc-100 focus:outline-none focus:ring-2 focus:ring-ring/60 dark:bg-zinc-800 ${isSingle ? 'w-full max-h-80' : 'h-36'} ${spanFull ? 'col-span-2' : ''}`}
+            style={isSingle ? { aspectRatio } : undefined}
         >
             {!loaded && <div className="absolute inset-0 animate-pulse bg-zinc-200/80 dark:bg-zinc-700/70" />}
             <Image
@@ -381,15 +393,18 @@ function MediaAttachmentTileV2({
                 height={360}
                 loading="lazy"
                 unoptimized
-                onLoad={() => setLoaded(true)}
+                onLoad={() => {
+                    setLoaded(true);
+                    onContentLoad?.();
+                }}
                 onError={() => {
                     if (!retried && attachment.url !== previewUrl) {
                         setRetried(true);
                         setCurrentUrl(attachment.url);
                     }
                 }}
-                className={`w-full transition-opacity duration-200 ${
-                    isSingle ? 'max-h-80 object-contain bg-zinc-900/40' : 'h-36 object-cover'
+                className={`h-full w-full transition-opacity duration-200 ${
+                    isSingle ? 'object-contain bg-zinc-900/40' : 'object-cover'
                 } ${loaded ? 'opacity-100' : 'opacity-0'}`}
             />
 
@@ -594,12 +609,16 @@ function MediaViewerModalV2({
                             className="max-h-[82vh] w-auto cursor-pointer rounded-lg bg-black"
                         />
                     ) : currentAttachment.filename.toLowerCase().endsWith('.pdf') ? (
-                        <iframe
-                            key={currentAttachment.id}
-                            src={`${currentAttachment.url}#view=FitH`}
-                            className="h-[82vh] w-full rounded-lg bg-white"
-                            title={currentAttachment.filename}
-                        />
+                        <div className="relative h-[82vh] w-full overflow-hidden rounded-lg bg-white">
+                            <iframe
+                                key={currentAttachment.id}
+                                src={`${currentAttachment.url}#view=FitH&toolbar=0&navpanes=0`}
+                                sandbox="allow-scripts allow-same-origin"
+                                className="block h-full w-full border-0"
+                                style={{ colorScheme: 'light' }}
+                                title={currentAttachment.filename}
+                            />
+                        </div>
                     ) : (
                         <Image
                             key={currentAttachment.id}
