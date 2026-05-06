@@ -67,7 +67,16 @@
     "drizzle/0060_messaging_collaboration_foundation.sql",
     "drizzle/0061_profile_security_state_privacy_rls.sql",
     "drizzle/0062_upload_intents_and_recovery_redemptions.sql",
-    "drizzle/0063_database_setup_authority_backfill.sql"
+    "drizzle/0063_database_setup_authority_backfill.sql",
+    "drizzle/0064_messaging_reactions_reports_receipts_rls.sql",
+    "drizzle/0065_profile_security_recovery_factor_binding.sql",
+    "drizzle/0066_message_delivery_receipts.sql",
+    "drizzle/0067_read_receipts_conversation_id.sql",
+    "drizzle/0068_file_versions.sql",
+    "drizzle/0069_project_nodes_current_version.sql",
+    "drizzle/0070_comment_mentions.sql",
+    "drizzle/0071_realtime_publication_extension.sql",
+    "drizzle/0072_user_notifications.sql"
   ],
   "allowedUtilitySqlFiles": [
     "checkpoints/005_task_subtasks.sql",
