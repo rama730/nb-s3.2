@@ -1,10 +1,12 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Calendar, Check, CheckSquare, Clock, Flag, Paperclip, TriangleAlert, User, Zap } from "lucide-react";
+import { Calendar, Check, CheckSquare, Clock, ExternalLink, Flag, MessageSquareQuote, Paperclip, TriangleAlert, User, Zap } from "lucide-react";
 import { format } from "date-fns";
+import { useQuery } from "@tanstack/react-query";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { readTaskSourceMessageLinksAction } from "@/app/actions/messaging/linked-work";
 import type { ProjectNode } from "@/lib/db/schema";
 import type { TaskFileReadinessWarning } from "@/lib/projects/task-file-intelligence";
 import { normalizeTaskTitleDraft } from "@/lib/projects/task-file-intelligence";
@@ -111,6 +113,18 @@ export default function DetailsTab({
   const creatorAvatar = task.creator?.avatarUrl || null;
   const completedSubtasks = subtasks.filter((subtask) => subtask.completed).length;
   const showDoneWarnings = task.status === "done" && fileWarnings.length > 0;
+  const sourceLinksQuery = useQuery({
+    queryKey: ["task-source-message-links", task.projectId, task.id],
+    enabled: Boolean(task.projectId),
+    staleTime: 60_000,
+    queryFn: async () => {
+      if (!task.projectId) return [];
+      const result = await readTaskSourceMessageLinksAction(task.projectId, task.id);
+      if (!result.success) throw new Error(result.error || "Failed to load source message");
+      return result.links;
+    },
+  });
+  const sourceLinks = sourceLinksQuery.data ?? [];
 
   const enterTitleEditMode = useCallback(() => {
     if (!canEdit) return;
@@ -244,7 +258,7 @@ export default function DetailsTab({
             </h1>
           )}
 
-          <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-500">
+	          <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-500">
             <div className="inline-flex items-center gap-1.5 rounded-full border border-zinc-200 bg-zinc-100 px-2.5 py-1 dark:border-zinc-700 dark:bg-zinc-800">
               <span className="text-zinc-400">Created by</span>
               <div className="flex items-center gap-1.5">
@@ -262,10 +276,35 @@ export default function DetailsTab({
               <Clock className="h-3.5 w-3.5 text-zinc-400" />
               <span>{createdAtLabel}</span>
             </div>
-          </div>
-        </div>
+	          </div>
+	        </div>
 
-        <div className="space-y-3">
+        {sourceLinks.length > 0 ? (
+          <div className="rounded-xl border border-blue-200 bg-blue-50/80 px-4 py-3 text-sm text-blue-800 dark:border-blue-900/50 dark:bg-blue-950/30 dark:text-blue-100">
+            <div className="flex items-start gap-3">
+              <MessageSquareQuote className="mt-0.5 h-4 w-4 flex-shrink-0" />
+              <div className="min-w-0 flex-1">
+                <div className="font-medium">Created from message</div>
+                <div className="mt-1 line-clamp-2 text-xs text-blue-700/80 dark:text-blue-200/80">
+                  {String(sourceLinks[0]?.metadata?.sourcePreview || sourceLinks[0]?.subtitle || "Open the original conversation context.")}
+                </div>
+              </div>
+              {typeof sourceLinks[0]?.metadata?.sourceMessageHref === "string" ? (
+                <a
+                  href={sourceLinks[0].metadata.sourceMessageHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 rounded-lg border border-blue-200 bg-white/70 px-2.5 py-1.5 text-xs font-semibold text-blue-700 hover:bg-white dark:border-blue-800 dark:bg-blue-950/60 dark:text-blue-100"
+                >
+                  Open source
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+
+	        <div className="space-y-3">
           <label className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Description</label>
           <textarea
             rows={8}
