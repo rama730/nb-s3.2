@@ -41,6 +41,7 @@ interface MessageComposerV2Props {
     surface?: 'page' | 'popup';
     sendTyping?: (isTyping: boolean) => Promise<void> | void;
     onWillSend?: () => void;
+    onComposerEngagement?: () => void;
     onClearReply: () => void;
     onAddFiles?: (register: (files: File[]) => void) => void;
     participants?: Array<{ id: string; username: string | null; fullName: string | null; avatarUrl: string | null }>;
@@ -58,6 +59,7 @@ export function MessageComposerV2({
     surface = 'page',
     sendTyping,
     onWillSend,
+    onComposerEngagement,
     onClearReply,
     onAddFiles,
     participants,
@@ -174,6 +176,19 @@ export function MessageComposerV2({
     }, [conversationId]);
 
     useEffect(() => {
+        const el = inputRef.current;
+        if (!el) return;
+        const supportsFieldSizing = typeof CSS !== 'undefined'
+            && typeof CSS.supports === 'function'
+            && CSS.supports('field-sizing', 'content');
+        if (!supportsFieldSizing) {
+            el.style.height = 'auto';
+            el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+        }
+        el.dataset.overflowing = el.scrollHeight > 160 ? 'true' : 'false';
+    }, [draft]);
+
+    useEffect(() => {
         if (!slashMenuOpen) return;
         const handlePointerDown = (event: MouseEvent) => {
             if (!composerShellRef.current?.contains(event.target as Node)) {
@@ -221,6 +236,7 @@ export function MessageComposerV2({
         setDraft(conversationId, nextValue);
 
         if (nextValue.length > 0) {
+            onComposerEngagement?.();
             updateTypingState(true);
             scheduleTypingStop();
         } else {
@@ -230,13 +246,21 @@ export function MessageComposerV2({
 
         syncCommandsFromInput(nextValue, event.target.selectionStart);
 
-        if (inputRef.current) {
-            inputRef.current.style.height = 'auto';
-            inputRef.current.style.height = `${Math.min(inputRef.current.scrollHeight, 120)}px`;
+        const el = inputRef.current;
+        if (el) {
+            const supportsFieldSizing = typeof CSS !== 'undefined'
+                && typeof CSS.supports === 'function'
+                && CSS.supports('field-sizing', 'content');
+            if (!supportsFieldSizing) {
+                el.style.height = 'auto';
+                el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+            }
+            el.dataset.overflowing = el.scrollHeight > 160 ? 'true' : 'false';
         }
     }, [
         clearTypingIdleTimer,
         conversationId,
+        onComposerEngagement,
         scheduleTypingStop,
         setDraft,
         syncCommandsFromInput,
@@ -460,7 +484,8 @@ export function MessageComposerV2({
                         placeholder={!capability ? 'Checking messaging permissions…' : canSend ? 'Type a message...' : 'Messaging unavailable'}
                         disabled={!canSend}
                         rows={1}
-                        className="max-h-[120px] min-h-[44px] flex-1 resize-none rounded-[22px] border border-transparent bg-zinc-50 px-4 py-3 text-sm outline-none transition-colors focus:border-primary/25 focus:bg-white focus:ring-2 focus:ring-primary/10 dark:bg-zinc-900 dark:focus:bg-zinc-950"
+                        style={{ fieldSizing: 'content' } as React.CSSProperties}
+                        className="max-h-[160px] min-h-[44px] flex-1 resize-none overflow-hidden rounded-[22px] border border-transparent bg-zinc-50 px-4 py-3 text-sm outline-none transition-colors data-[overflowing=true]:overflow-y-auto focus:border-primary/25 focus:bg-white focus:ring-2 focus:ring-primary/10 dark:bg-zinc-900 dark:focus:bg-zinc-950"
                     />
                     <button
                         type="button"
