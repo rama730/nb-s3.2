@@ -2,7 +2,6 @@
 
 import { ChevronDown, MessageSquare } from 'lucide-react';
 import { usePathname } from 'next/navigation';
-import { useUnreadSummary } from '@/hooks/useMessagesV2';
 import { useMessagesV2UiStore } from '@/stores/messagesV2UiStore';
 import { MessagesWorkspaceV2 } from './MessagesWorkspaceV2';
 
@@ -13,8 +12,6 @@ export function ChatPopupV2() {
     const selectedConversationId = useMessagesV2UiStore((state) => state.selectedConversationId);
     const setPopupOpen = useMessagesV2UiStore((state) => state.setPopupOpen);
     const setPopupMinimized = useMessagesV2UiStore((state) => state.setPopupMinimized);
-    const unreadQuery = useUnreadSummary();
-    const totalUnread = unreadQuery.data ?? 0;
 
     if (pathname.startsWith('/messages')) return null;
 
@@ -27,14 +24,9 @@ export function ChatPopupV2() {
                     setPopupMinimized(false);
                 }}
                 className="fixed bottom-6 right-6 z-50 flex h-14 w-14 items-center justify-center rounded-full app-accent-solid shadow-lg transition-all hover:scale-105 hover:bg-primary/90"
-                aria-label={totalUnread > 0 ? `Open messages, ${totalUnread} unread` : 'Open messages'}
+                aria-label="Open messages"
             >
                 <MessageSquare className="h-6 w-6" />
-                {totalUnread > 0 && (
-                    <span className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-xs font-bold text-white">
-                        {totalUnread > 9 ? '9+' : totalUnread}
-                    </span>
-                )}
             </button>
         );
     }
@@ -54,7 +46,10 @@ export function ChatPopupV2() {
                 </div>
             ) : null}
 
-            <div className="h-[min(680px,calc(100dvh-5.5rem))] w-[min(420px,calc(100vw-1.5rem))] overflow-hidden rounded-[30px] border border-zinc-200/80 bg-white shadow-[0_24px_80px_rgba(15,23,42,0.18)] ring-1 ring-black/[0.02] dark:border-zinc-800/80 dark:bg-zinc-950">
+            <div
+                className="h-[min(640px,calc(100dvh-5.5rem))] w-[min(400px,calc(100vw-1.5rem))] min-w-0 overflow-hidden rounded-2xl border border-border/70 bg-card ring-1 ring-black/[0.02]"
+                style={{ boxShadow: 'var(--msg-shadow-lg, 0 24px 60px rgba(15,23,42,0.18))', animation: 'message-appear 240ms ease-out' }}
+            >
                 <MessagesWorkspaceV2 mode="popup" />
             </div>
         </div>
