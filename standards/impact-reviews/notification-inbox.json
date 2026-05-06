@@ -1,0 +1,111 @@
+{
+  "id": "impact-2026-04-21-notification-inbox",
+  "title": "Realtime durable notification inbox",
+  "summary": "Introduces a canonical user notification inbox table, server-side notification service, realtime tray resource, desktop/mobile bell tray, category preferences, durable dismiss/mute/pause controls, and trigger wiring for messages, workflows, applications, connections, tasks, files, and task discussion events.",
+  "riskLevel": "high",
+  "runtimePlanes": [
+    "request",
+    "realtime",
+    "database",
+    "ops"
+  ],
+  "routeClasses": [
+    "user_shell",
+    "active_surface"
+  ],
+  "dataSourcesChanged": [
+    "profiles.notification_preferences",
+    "user_notifications",
+    "messages",
+    "message_workflow_items",
+    "project_applications",
+    "connections",
+    "tasks",
+    "task_comments",
+    "comment_mentions",
+    "task_node_links",
+    "file_versions"
+  ],
+  "canonicalLogicDomains": [
+    "profile_display",
+    "status_lifecycle",
+    "relationship_actions",
+    "connection_feed"
+  ],
+  "concurrencyRisk": "Moderate realtime/cache coordination risk: inserts, updates, aggregated message bursts, and read/unread actions can arrive from server actions and realtime echoes. Mitigation is a single notification cache reducer keyed by row id, durable dedupe keys, optimistic read patching, and query-derived unread counts.",
+  "observability": {
+    "metrics": [
+      "user_notifications created/updated rows",
+      "notification unread count",
+      "realtime subscription health"
+    ],
+    "logs": [
+      "notification action failures",
+      "source-domain notification emitter failures",
+      "notification realtime reconnect warnings"
+    ],
+    "alerts": []
+  },
+  "rollback": {
+    "strategy": "Revert the notification service, user_notifications schema/migration, trigger emitter calls, notification hook/UI tray, settings preference model, and deep-link task-panel routing together. Do not leave trigger emitters pointing at a removed inbox table.",
+    "validation": [
+      "npm run typecheck",
+      "npx tsx --test tests/unit/notification-preferences.test.ts tests/unit/notification-cache.test.ts tests/unit/notification-presentation.test.ts",
+      "npm run check:db:migration-journal",
+      "npm run check:impact-review"
+    ]
+  },
+  "evidence": {
+    "commands": [
+      "npm run typecheck",
+      "npx tsx --test tests/unit/notification-preferences.test.ts tests/unit/notification-cache.test.ts tests/unit/notification-presentation.test.ts",
+      "npm run check:db:migration-journal",
+      "npm run check:impact-review"
+    ],
+    "reports": []
+  },
+  "paths": [
+    "drizzle/0072_user_notifications.sql",
+    "drizzle/meta/_journal.json",
+    "standards/sql-governance.manifest.json",
+    "src/app/(main)/projects/[slug]/page.tsx",
+    "src/app/(main)/settings/notifications/page.tsx",
+    "src/app/actions/applications/internal.ts",
+    "src/app/actions/connections.ts",
+    "src/app/actions/messaging/_all.ts",
+    "src/app/actions/messaging/collaboration.ts",
+    "src/app/actions/notifications.ts",
+    "src/app/actions/files/links.ts",
+    "src/app/actions/files/versions.ts",
+    "src/app/actions/project/_all.ts",
+    "src/app/actions/task-comment.ts",
+    "src/app/actions/task.ts",
+    "src/components/layout/header/MobileMenu.tsx",
+    "src/components/layout/header/NotificationPreview.tsx",
+    "src/components/layout/header/TopNav.tsx",
+    "src/components/notifications/NotificationList.tsx",
+    "src/components/notifications/NotificationRow.tsx",
+    "src/components/projects/dashboard/ProjectDashboardClient.tsx",
+    "src/components/projects/v2/TasksTab.tsx",
+    "src/components/projects/v2/tasks/TaskDetailPanel.tsx",
+    "src/constants/routes.ts",
+    "src/hooks/useNotifications.ts",
+    "src/hooks/useSettingsQueries.ts",
+    "src/lib/db/schema/index.ts",
+    "src/lib/notifications/cache.ts",
+    "src/lib/notifications/emitters.ts",
+    "src/lib/notifications/preferences.ts",
+    "src/lib/notifications/presentation.ts",
+    "src/lib/notifications/service.ts",
+    "src/lib/notifications/task-comment-mention.ts",
+    "src/lib/notifications/task-file.ts",
+    "src/lib/notifications/types.ts",
+    "src/lib/query-keys.ts",
+    "src/lib/realtime/subscriptions.ts",
+    "src/lib/types/settingsTypes.ts",
+    "src/lib/validations/project.ts",
+    "tests/unit/notification-cache.test.ts",
+    "tests/unit/notification-preferences.test.ts",
+    "tests/unit/notification-presentation.test.ts"
+  ]
+}
