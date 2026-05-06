@@ -27,7 +27,13 @@ export default async function ProjectDetailPage({
     searchParams,
 }: {
     params: Promise<{ slug: string }>;
-    searchParams: Promise<{ tab?: string; filter?: string; drawerType?: string; drawerId?: string }>;
+    searchParams: Promise<{
+        tab?: string;
+        filter?: string;
+        drawerType?: string;
+        drawerId?: string;
+        panelTab?: string;
+    }>;
 }) {
     const [{ slug }, _searchParams] = await Promise.all([params, searchParams]);
 
