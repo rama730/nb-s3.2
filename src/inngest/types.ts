@@ -1,5 +1,6 @@
 
 import { EventSchemas } from "inngest";
+import type { NotificationFanoutEvent } from "@/lib/notifications/types";
 
 type ProjectImportEvent = {
     data: {
@@ -64,6 +65,18 @@ type ConnectionsSyncSuggestionsEvent = {
     };
 };
 
+type NotificationFanoutInngestEvent = {
+    data: NotificationFanoutEvent;
+};
+
+type NotificationDeliveryRefreshEvent = {
+    data: {
+        userId?: string | null;
+        reason?: "snooze_due" | "pause_due" | "quiet_hours_due" | "reconnect" | "manual";
+        requestedAt?: string | null;
+    };
+};
+
 export const schemas = new EventSchemas().fromRecord<{
     "project/import": ProjectImportEvent;
     "git/push": GitPushEvent;
@@ -72,4 +85,7 @@ export const schemas = new EventSchemas().fromRecord<{
     "workspace/counters.refresh": WorkspaceCountersRefreshEvent;
     "workspace/connections.bulk": ConnectionsBulkEvent;
     "workspace/connections.sync_suggestions": ConnectionsSyncSuggestionsEvent;
+    "notification/fanout": NotificationFanoutInngestEvent;
+    "notification/burst": NotificationFanoutInngestEvent;
+    "notification/delivery.refresh": NotificationDeliveryRefreshEvent;
 }>();
