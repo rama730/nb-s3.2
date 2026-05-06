@@ -6,6 +6,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { consumeRateLimit } from "@/lib/security/rate-limit";
+import { logger } from "@/lib/logger";
 import {
   buildProjectFileKey,
   isCanonicalProjectFileKey,
@@ -18,6 +19,7 @@ import {
   PROJECT_UPLOAD_MAX_FILE_BYTES,
 } from "@/lib/upload/security";
 import { finalizeUploadIntent } from "@/lib/upload/upload-intents";
+import { notifyTaskParticipantsForFileEvent } from "@/lib/notifications/task-file";
 import {
   assertProjectReadAccess,
   assertProjectWriteAccess,
@@ -227,6 +229,24 @@ export async function replaceNodeWithNewVersion(input: {
     mimeType: normalizedMimeType,
     hash: normalizedHash,
   });
+  try {
+    await notifyTaskParticipantsForFileEvent({
+      actorUserId: user.id,
+      projectId: input.projectId,
+      nodeId: input.nodeId,
+      kind: "task_file_version",
+      version: result.version.version,
+    });
+  } catch (error) {
+    logger.warn("files.version.notification_failed", {
+      module: "files",
+      projectId: input.projectId,
+      nodeId: input.nodeId,
+      version: result.version.version,
+      actorUserId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
   revalidatePath(`/projects/${input.projectId}`);
   return result;
 }
