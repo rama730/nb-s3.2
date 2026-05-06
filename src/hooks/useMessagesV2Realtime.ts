@@ -40,6 +40,7 @@ import {
     resolveRealtimeMessageSender,
     type RealtimeSenderIdentity,
 } from '@/lib/messages/realtime-sender';
+import { withReactionSummaryMetadata } from '@/lib/messages/reactions';
 
 const FALLBACK_REFRESH_DEBOUNCE_MS = 220;
 
@@ -69,6 +70,14 @@ function getPayloadClientMessageId(payload: { new?: Record<string, unknown>; old
     if (typeof next === 'string' && next.length > 0) return next;
     const previous = payload.old?.client_message_id;
     return typeof previous === 'string' && previous.length > 0 ? previous : null;
+}
+
+function removeOutboxItemIfPresent(clientMessageId: string | null | undefined) {
+    if (!clientMessageId) return;
+    const outboxState = useMessagesV2OutboxStore.getState();
+    if (outboxState.items.some((item) => item.clientMessageId === clientMessageId)) {
+        outboxState.removeItem(clientMessageId);
+    }
 }
 
 function getPayloadStringField(
@@ -103,6 +112,49 @@ function getPayloadDateField(
     }
     const date = new Date(value);
     return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function getPayloadMetadataField(
+    payload: { new?: Record<string, unknown>; old?: Record<string, unknown> },
+    scope: 'new' | 'old',
+) {
+    const metadata = payload[scope]?.metadata;
+    return metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+        ? metadata as Record<string, unknown>
+        : {};
+}
+
+function hasOwnMetadataField(metadata: Record<string, unknown>, field: string) {
+    return Object.prototype.hasOwnProperty.call(metadata, field);
+}
+
+function hasRealtimeReactionSummaryChange(payload: { new?: Record<string, unknown>; old?: Record<string, unknown> }) {
+    return hasOwnMetadataField(getPayloadMetadataField(payload, 'new'), 'reactionSummary')
+        || hasOwnMetadataField(getPayloadMetadataField(payload, 'old'), 'reactionSummary');
+}
+
+function mergeRealtimeMessageMetadata(
+    currentMetadata: Record<string, unknown> | null | undefined,
+    nextMetadata: Record<string, unknown> | null | undefined,
+    options?: { preserveReactionSummary?: boolean },
+) {
+    const current = { ...(currentMetadata || {}) };
+    const merged = {
+        ...current,
+        ...(nextMetadata || {}),
+    };
+
+    if (!options?.preserveReactionSummary) {
+        return merged;
+    }
+
+    if (hasOwnMetadataField(current, 'reactionSummary')) {
+        merged.reactionSummary = current.reactionSummary;
+    } else {
+        delete merged.reactionSummary;
+    }
+
+    return merged;
 }
 
 function getCachedThreadSenderCandidates(
@@ -218,6 +270,75 @@ function shouldPlayParticipantUpdateSound(params: {
     return nextUnreadCount !== null && previousUnreadCount !== null && nextUnreadCount > previousUnreadCount;
 }
 
+function getCachedConversationSnapshot(
+    queryClient: QueryClient,
+    conversationId: string,
+) {
+    const threadData = queryClient.getQueryData<{
+        pages?: Array<{
+            conversation?: {
+                id: string;
+                unreadCount: number;
+                lastReadAt?: Date | string | null;
+                lastReadMessageId?: string | null;
+                lastMessage?: { id: string; createdAt: Date | string | null } | null;
+            } | null;
+        }>;
+    }>(queryKeys.messages.v2.thread(conversationId));
+    const threadConversation = threadData?.pages?.[0]?.conversation;
+    if (threadConversation) return threadConversation;
+
+    const inboxQueries = queryClient.getQueriesData<{
+        pages?: MessagesInboxPageV2[];
+    }>({ queryKey: ['chat-v2', 'inbox'] as const });
+    for (const [, data] of inboxQueries) {
+        for (const page of data?.pages ?? []) {
+            const conversation = page.conversations.find((entry) => entry.id === conversationId);
+            if (conversation) return conversation;
+        }
+    }
+    return null;
+}
+
+function compareReadWatermarks(
+    current: { lastReadAt?: Date | string | null; lastReadMessageId?: string | null } | null | undefined,
+    next: { lastReadAt?: Date | string | null; lastReadMessageId?: string | null } | null | undefined,
+) {
+    const currentMs = current?.lastReadAt ? new Date(current.lastReadAt).getTime() : 0;
+    const nextMs = next?.lastReadAt ? new Date(next.lastReadAt).getTime() : 0;
+    const safeCurrentMs = Number.isNaN(currentMs) ? 0 : currentMs;
+    const safeNextMs = Number.isNaN(nextMs) ? 0 : nextMs;
+    if (safeCurrentMs !== safeNextMs) {
+        return safeCurrentMs - safeNextMs;
+    }
+    return 0;
+}
+
+function isLastMessageAfterReadWatermark(
+    lastMessage: { id: string; createdAt: Date | string | null } | null | undefined,
+    readWatermark: { lastReadAt?: Date | string | null; lastReadMessageId?: string | null } | null | undefined,
+) {
+    if (!lastMessage?.createdAt) return false;
+    const messageMs = new Date(lastMessage.createdAt).getTime();
+    const readMs = readWatermark?.lastReadAt ? new Date(readWatermark.lastReadAt).getTime() : 0;
+    const safeMessageMs = Number.isNaN(messageMs) ? 0 : messageMs;
+    const safeReadMs = Number.isNaN(readMs) ? 0 : readMs;
+    if (safeMessageMs <= 0) return false;
+    if (safeReadMs <= 0) return true;
+    if (safeMessageMs !== safeReadMs) {
+        return safeMessageMs > safeReadMs;
+    }
+    return false;
+}
+
+function hasPendingReadCommit(queryClient: QueryClient) {
+    return queryClient
+        .getQueriesData<{ requestId: string } | null>({
+            queryKey: ['chat-v2', 'read-commit-state'] as const,
+        })
+        .some(([, state]) => Boolean(state?.requestId));
+}
+
 export function useMessagesV2Realtime(
     activeConversationId: string | null,
     enabled: boolean,
@@ -260,6 +381,15 @@ export function useMessagesV2Realtime(
     const refreshUnreadSummary = useCallback(async () => {
         const result = await getUnreadSummaryV2();
         if (result.success && typeof result.count === 'number') {
+            const cachedCount = queryClient.getQueryData<number | undefined>(queryKeys.messages.v2.unread()) ?? 0;
+            if (result.count > cachedCount && hasPendingReadCommit(queryClient)) {
+                console.debug('[messages-v2] read_summary_ignored_stale', {
+                    previousUnread: cachedCount,
+                    nextUnread: result.count,
+                    source: 'unread-summary',
+                });
+                return;
+            }
             setUnreadSummary(queryClient, result.count);
         }
     }, [queryClient]);
@@ -324,6 +454,41 @@ export function useMessagesV2Realtime(
         }, FALLBACK_REFRESH_DEBOUNCE_MS);
     }, [refreshThreadSnapshot]);
 
+    const refreshMessageReactionSummary = useCallback(async (conversationId: string, messageId: string) => {
+        try {
+            const { getMessageReactions } = await import('@/app/actions/messaging/features');
+            const result = await getMessageReactions([messageId]);
+            if (!result.success) {
+                scheduleThreadRefresh(conversationId);
+                return;
+            }
+
+            const reactionSummary = result.reactions?.[messageId] ?? [];
+            let patchedMessage: MessageWithSender | null = null;
+            patchThreadMessage(queryClient, conversationId, messageId, (current) => {
+                patchedMessage = {
+                    ...current,
+                    metadata: withReactionSummaryMetadata(
+                        (current.metadata || {}) as Record<string, unknown>,
+                        reactionSummary,
+                    ),
+                };
+                return patchedMessage;
+            });
+
+            if (patchedMessage && isCachedConversationLastMessage(queryClient, conversationId, messageId)) {
+                patchConversationLastMessageFromMessage(queryClient, conversationId, patchedMessage);
+            }
+        } catch (error) {
+            console.error('[messages-v2] failed to refresh message reactions', {
+                conversationId,
+                messageId,
+                error,
+            });
+            scheduleThreadRefresh(conversationId);
+        }
+    }, [queryClient, scheduleThreadRefresh]);
+
     const refreshConversationSummary = useCallback(async (
         conversationId: string,
         options?: { syncThread?: boolean },
@@ -333,6 +498,23 @@ export function useMessagesV2Realtime(
             scheduleInboxRefresh();
             if (options?.syncThread) scheduleThreadRefresh(conversationId);
             return null;
+        }
+
+        const cachedConversation = getCachedConversationSnapshot(queryClient, conversationId);
+        if (
+            cachedConversation
+            && result.conversation.unreadCount > cachedConversation.unreadCount
+            && compareReadWatermarks(cachedConversation, result.conversation) >= 0
+            && !isLastMessageAfterReadWatermark(result.conversation.lastMessage, cachedConversation)
+        ) {
+            console.debug('[messages-v2] read_summary_ignored_stale', {
+                conversationId,
+                previousUnread: cachedConversation.unreadCount,
+                nextUnread: result.conversation.unreadCount,
+                cachedReadMessageId: cachedConversation.lastReadMessageId ?? null,
+                summaryReadMessageId: result.conversation.lastReadMessageId ?? null,
+            });
+            return cachedConversation as typeof result.conversation;
         }
 
         if (options?.syncThread) {
@@ -614,22 +796,6 @@ export function useMessagesV2Realtime(
                         table: 'messages',
                         filter: `conversation_id=eq.${activeConversationId}`,
                         handler: (payload) => {
-                            // Wave 4 Step 15: if the realtime INSERT carries a
-                            // client_message_id that matches an outbox item,
-                            // remove the outbox item eagerly so the optimistic
-                            // "sending" bubble doesn't linger alongside the
-                            // server-confirmed row while the HTTP response is
-                            // still in flight.
-                            if (payload.eventType === 'INSERT') {
-                                const clientMessageId = getPayloadClientMessageId(payload);
-                                if (clientMessageId) {
-                                    const outboxState = useMessagesV2OutboxStore.getState();
-                                    if (outboxState.items.some((item) => item.clientMessageId === clientMessageId)) {
-                                        outboxState.removeItem(clientMessageId);
-                                    }
-                                }
-                            }
-
                             if (payload.eventType === 'DELETE') {
                                 queueThreadMessageSync(activeConversationId, payload);
                                 return;
@@ -645,6 +811,9 @@ export function useMessagesV2Realtime(
                                 }),
                             });
                             if (!nextMessage) {
+                                // Keep the optimistic outbox row visible until
+                                // the fallback snapshot can hydrate the full
+                                // server message (attachments, replies, etc.).
                                 queueThreadMessageSync(activeConversationId, payload);
                                 return;
                             }
@@ -653,6 +822,7 @@ export function useMessagesV2Realtime(
                                 if (!hasCachedThreadMessage(queryClient, activeConversationId, nextMessage.id)) {
                                     upsertThreadMessage(queryClient, activeConversationId, nextMessage);
                                 }
+                                removeOutboxItemIfPresent(nextMessage.clientMessageId);
                                 patchConversationLastMessageFromMessage(queryClient, activeConversationId, nextMessage);
                                 return;
                             }
@@ -662,17 +832,34 @@ export function useMessagesV2Realtime(
                                 return;
                             }
 
-                            patchThreadMessage(queryClient, activeConversationId, nextMessage.id, (current) => ({
-                                ...current,
-                                content: nextMessage.content,
-                                type: nextMessage.type,
-                                metadata: nextMessage.metadata,
-                                editedAt: nextMessage.editedAt,
-                                deletedAt: nextMessage.deletedAt,
-                            }));
+                            const reactionSummaryChanged = hasRealtimeReactionSummaryChange(payload);
+                            let patchedMessage: MessageWithSender | null = null;
+                            patchThreadMessage(queryClient, activeConversationId, nextMessage.id, (current) => {
+                                patchedMessage = {
+                                    ...current,
+                                    content: nextMessage.content,
+                                    type: nextMessage.type,
+                                    metadata: mergeRealtimeMessageMetadata(
+                                        (current.metadata || {}) as Record<string, unknown>,
+                                        (nextMessage.metadata || {}) as Record<string, unknown>,
+                                        { preserveReactionSummary: reactionSummaryChanged },
+                                    ),
+                                    editedAt: nextMessage.editedAt,
+                                    deletedAt: nextMessage.deletedAt,
+                                };
+                                return patchedMessage;
+                            });
 
                             if (isCachedConversationLastMessage(queryClient, activeConversationId, nextMessage.id)) {
-                                patchConversationLastMessageFromMessage(queryClient, activeConversationId, nextMessage);
+                                patchConversationLastMessageFromMessage(
+                                    queryClient,
+                                    activeConversationId,
+                                    patchedMessage ?? nextMessage,
+                                );
+                            }
+
+                            if (reactionSummaryChanged) {
+                                void refreshMessageReactionSummary(activeConversationId, nextMessage.id);
                             }
                         },
                     },
@@ -682,7 +869,7 @@ export function useMessagesV2Realtime(
                         filter: `conversation_id=eq.${activeConversationId}`,
                         handler: () => {
                             if (denormalizedInboxRealtimeEnabled) {
-                                scheduleConversationSummaryRefresh(activeConversationId);
+                                scheduleConversationSummaryRefresh(activeConversationId, { syncThread: true });
                             } else {
                                 scheduleInboxRefresh();
                             }
@@ -752,6 +939,7 @@ export function useMessagesV2Realtime(
         queryClient,
         realtimeEnabled,
         realtimeToken,
+        refreshMessageReactionSummary,
         scheduleInboxRefresh,
         scheduleConversationSummaryRefresh,
         scheduleUnreadRefresh,
