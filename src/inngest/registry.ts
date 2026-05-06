@@ -19,6 +19,10 @@ export const WORKER_ONLY_FUNCTION_IDS = [
   "workspace-connections-bulk",
   "social-graph-suggestions",
   "compute-active-connections",
+  "notifications-retention",
+  "notifications-retention-watchdog",
+  "notification-fanout",
+  "notification-delivery-refresh",
 ] as const;
 
 function getWorkerOnlyFunctions() {
@@ -37,6 +41,9 @@ function getWorkerOnlyFunctions() {
   const { processBulkConnections } = loadModule("./functions/connections-bulk");
   const { computeSocialGraphSuggestions } = loadModule("./functions/social-graph-suggestions");
   const { computeActiveConnections } = loadModule("./functions/active-connections");
+  const { notificationsRetention } = loadModule("./functions/notifications-retention");
+  const { notificationsRetentionWatchdog } = loadModule("./functions/notifications-retention-watchdog");
+  const { notificationFanout, notificationDeliveryRefresh } = loadModule("./functions/notification-fanout");
 
   return [
     projectImport,
@@ -55,6 +62,10 @@ function getWorkerOnlyFunctions() {
     processBulkConnections,
     computeSocialGraphSuggestions,
     computeActiveConnections,
+    notificationsRetention,
+    notificationsRetentionWatchdog,
+    notificationFanout,
+    notificationDeliveryRefresh,
   ] as const;
 }
 
