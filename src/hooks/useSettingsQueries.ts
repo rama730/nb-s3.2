@@ -5,14 +5,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { IntegrationsData, NotificationPreferences, PrivacyData, SecurityData, SecurityStepUpCapabilitiesData } from "@/lib/types/settingsTypes";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { queryKeys } from "@/lib/query-keys";
-
-const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = {
-    email: true,
-    push: true,
-    projects: true,
-    messages: true,
-    mentions: true,
-};
+import { DEFAULT_NOTIFICATION_PREFERENCES, normalizeNotificationPreferences } from "@/lib/notifications/preferences";
 
 const DEFAULT_PRIVACY_SETTINGS: PrivacyData = {
     settings: {
@@ -182,7 +175,7 @@ export function useNotificationPreferences() {
                 return DEFAULT_NOTIFICATION_PREFERENCES;
             }
 
-            return data?.notification_preferences || DEFAULT_NOTIFICATION_PREFERENCES;
+            return normalizeNotificationPreferences(data?.notification_preferences);
         },
     });
 }
@@ -199,7 +192,7 @@ export function useUpdateNotificationPreferences() {
 
             const { error } = await supabase
                 .from("profiles")
-                .update({ notification_preferences: preferences })
+                .update({ notification_preferences: normalizeNotificationPreferences(preferences) })
                 .eq("id", userId);
 
             if (error) throw error;
@@ -416,7 +409,7 @@ export function usePrefetchSettings() {
                     return DEFAULT_NOTIFICATION_PREFERENCES;
                 }
 
-                return data?.notification_preferences || DEFAULT_NOTIFICATION_PREFERENCES;
+                return normalizeNotificationPreferences(data?.notification_preferences);
             },
         });
     };
