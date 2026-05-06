@@ -21,6 +21,7 @@ import { queueCounterRefreshBestEffort } from '@/lib/workspace/counter-buffer';
 import { recordPrivacyReadEvents } from '@/lib/privacy/audit';
 import { buildViewerScopedProfileView } from '@/lib/privacy/profile-views';
 import { resolvePrivacyRelationship, resolvePrivacyRelationships } from '@/lib/privacy/resolver';
+import { emitConnectionAcceptedNotification, emitConnectionRequestReceivedNotification } from '@/lib/notifications/emitters';
 import { inngest } from '../../inngest/client';
 
 // ============================================================================
@@ -2241,6 +2242,24 @@ export async function sendConnectionRequest(
             } catch { /* ignore */ }
         }
 
+        try {
+            await emitConnectionRequestReceivedNotification({
+                recipientUserId: addresseeId,
+                actorUserId: user.id,
+                actorName: (user.user_metadata?.full_name as string | undefined) ?? (user.user_metadata?.username as string | undefined) ?? null,
+                actorAvatarUrl: (user.user_metadata?.avatar_url as string | undefined) ?? null,
+                connectionId: txResult.connectionId,
+                eventKey: new Date().toISOString(),
+            });
+        } catch (notificationError) {
+            console.error('[sendConnectionRequest] Notification failed:', {
+                connectionId: txResult.connectionId,
+                actorUserId: user.id,
+                recipientUserId: addresseeId,
+                error: notificationError instanceof Error ? notificationError.message : String(notificationError),
+            });
+        }
+
         await revalidateConnectionsPaths();
         return { success: true, connectionId: txResult.connectionId };
     } catch (error) {
@@ -2568,7 +2587,7 @@ export async function cancelConnectionRequest(
 export async function acceptConnectionRequest(
     connectionId: string,
     opts?: { idempotencyKey?: string }
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; error?: string; requesterId?: string; addresseeId?: string }> {
     try {
         const user = await getAuthUser();
         if (!user) return { success: false, error: 'Not authenticated' };
@@ -2577,7 +2596,7 @@ export async function acceptConnectionRequest(
             return { success: false, error: 'Too many actions. Please wait and try again.' };
         }
 
-        const { result } = await runIdempotent<{ success: boolean; error?: string }>(
+        const { result } = await runIdempotent<{ success: boolean; error?: string; requesterId?: string; addresseeId?: string }>(
             {
                 namespace: 'connections.accept',
                 scopeId: `${user.id}:${connectionId}`,
@@ -2634,8 +2653,26 @@ export async function acceptConnectionRequest(
                     incrementConnectionStat(accepted.addresseeId, 'gained'),
                 ]).catch(console.error);
 
+                try {
+                    await emitConnectionAcceptedNotification({
+                        recipientUserId: accepted.requesterId,
+                        actorUserId: accepted.addresseeId,
+                        actorName: (user.user_metadata?.full_name as string | undefined) ?? (user.user_metadata?.username as string | undefined) ?? null,
+                        actorAvatarUrl: (user.user_metadata?.avatar_url as string | undefined) ?? null,
+                        connectionId,
+                        eventKey: new Date().toISOString(),
+                    });
+                } catch (notificationError) {
+                    console.error('[acceptConnectionRequest] Notification failed:', {
+                        connectionId,
+                        actorUserId: accepted.addresseeId,
+                        recipientUserId: accepted.requesterId,
+                        error: notificationError instanceof Error ? notificationError.message : String(notificationError),
+                    });
+                }
+
                 await revalidateConnectionsPaths();
-                return { success: true };
+                return { success: true, requesterId: accepted.requesterId, addresseeId: accepted.addresseeId };
             },
         );
 
