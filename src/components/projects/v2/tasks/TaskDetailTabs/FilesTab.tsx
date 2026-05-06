@@ -1,29 +1,24 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
-  AlertCircle,
-  FileText,
-  Folder,
-  FolderPlus,
-  Link2,
   Loader2,
   Paperclip,
-  Plus,
-  Search,
-  ShieldAlert,
-  Upload,
-  X,
 } from "lucide-react";
 
 import type { ProjectNode } from "@/lib/db/schema";
 import { getProjectNodes, getProjectRecentNodes } from "@/app/actions/files";
 import { getTaskLinkCounts } from "@/app/actions/files/links";
 import { TaskFilesExplorer } from "@/components/projects/v2/tasks/components/TaskFilesExplorer";
+import { TaskFilesActionMenu } from "@/components/projects/v2/tasks/components/TaskFilesActionMenu";
+import { TaskFileAttachPickerDialog } from "@/components/projects/v2/tasks/components/TaskFileAttachPickerDialog";
+import { TaskFileDecisionDialog } from "@/components/projects/v2/tasks/components/TaskFileDecisionDialog";
+import { TaskFileUploadQueueList } from "@/components/projects/v2/tasks/components/TaskFileUploadQueueList";
 import { TaskFilesEmptyState } from "@/components/projects/v2/tasks/components/TaskFilesEmptyState";
+import { TaskFilesWarningBanner } from "@/components/projects/v2/tasks/components/TaskFilesWarningBanner";
 import { FileVersionHistoryDrawer } from "@/components/projects/v2/tasks/components/FileVersionHistoryDrawer";
 import {
-  inferTaskFileRole,
   type TaskFileReadinessWarning,
   type TaskFileResolutionChoice,
 } from "@/lib/projects/task-file-intelligence";
@@ -38,6 +33,13 @@ import {
   type DroppedFolder,
   type ExtractedDrop,
 } from "@/lib/files/folder-drop";
+import {
+  buildTaskFileChoicePreview,
+  buildTaskFileOutcomeSummary,
+  formatTaskFileRoleSummaryLabel,
+  getTaskFileResolutionChoiceCopy,
+  summarizeTaskFileRoles,
+} from "@/lib/projects/task-file-presentation";
 
 interface FilesTabProps {
   projectId: string;
@@ -99,81 +101,6 @@ type PickerState =
   | { open: false }
   | { open: true; query: string; loading: boolean; results: ProjectNode[]; suggestions: ProjectNode[] };
 
-function formatBytes(bytes?: number | null) {
-  const b = bytes ?? 0;
-  if (b < 1024) return `${b} B`;
-  const kb = b / 1024;
-  if (kb < 1024) return `${kb.toFixed(1)} KB`;
-  const mb = kb / 1024;
-  return `${mb.toFixed(1)} MB`;
-}
-
-function resolutionChoiceCopy(
-  choice: TaskFileResolutionChoice,
-  candidateType: "file" | "folder" = "file",
-) {
-  // Folder-specific copy — Wave 3 adds `merge`, `subfolder`, and reworded
-  // `replace`/`attach_new` labels so the choices are unambiguous when the
-  // candidate is a folder rather than a single file.
-  if (candidateType === "folder") {
-    if (choice === "replace") {
-      return {
-        label: "Replace folder contents",
-        description:
-          "Upload into the existing linked folder. Files with matching names collide — we'll suffix them so nothing is silently overwritten.",
-      };
-    }
-    if (choice === "merge") {
-      return {
-        label: "Merge into existing folder",
-        description:
-          "Drop these files into the linked folder. Matching names get saved as new files alongside originals.",
-      };
-    }
-    if (choice === "subfolder") {
-      return {
-        label: "Add as a subfolder",
-        description:
-          "Create a new folder inside the linked one. Keeps the original contents untouched.",
-      };
-    }
-    if (choice === "attach_new") {
-      return {
-        label: "Attach as new folder",
-        description:
-          "Create a fresh folder at the task root and link it. Existing attachments are left alone.",
-      };
-    }
-    return {
-      label: "Cancel",
-      description: "Leave the drop unresolved. Nothing gets uploaded.",
-    };
-  }
-
-  if (choice === "replace") {
-    return {
-      label: "Replace existing link",
-      description: "Use the new file for this task and unlink the older direct task file.",
-    };
-  }
-  if (choice === "link_existing") {
-    return {
-      label: "Keep folder context",
-      description: "Use the file that already exists under the linked folder without creating a second root attachment.",
-    };
-  }
-  if (choice === "attach_new") {
-    return {
-      label: "Attach as new",
-      description: "Keep the current linked files untouched and add this as a separate task attachment.",
-    };
-  }
-  return {
-    label: "Cancel",
-    description: "Leave the file unresolved for now and keep the current task attachments unchanged.",
-  };
-}
-
 export default function FilesTab({
   projectId,
   projectSlug,
@@ -197,6 +124,9 @@ export default function FilesTab({
   onSaveAsNewVersion,
 }: FilesTabProps) {
   const { showToast } = useToast();
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const fileInputRef = useRef<HTMLInputElement>(null);
   /** Separate ref for the folder picker — Chromium requires the element to
    *  carry `webkitdirectory` at render time; you can't toggle it on the
@@ -211,6 +141,7 @@ export default function FilesTab({
   const [reuploadPrompt, setReuploadPrompt] = useState<ReuploadPrompt | null>(null);
   const [isDragActive, setIsDragActive] = useState(false);
   const [isProcessingDrop, setIsProcessingDrop] = useState(false);
+  const [showWarningDetails, setShowWarningDetails] = useState(false);
   const dragCounterRef = useRef(0);
 
   const openPicker = useCallback(async () => {
@@ -464,30 +395,38 @@ export default function FilesTab({
   }, [attachments.length, taskTitle]);
 
   const roleSummary = useMemo(() => {
-    const counts = attachments.reduce(
-      (acc, attachment) => {
-        const role = inferTaskFileRole({
-          name: attachment.name,
-          type: attachment.type,
-          path: attachment.path,
-          annotation: attachment.annotation ?? null,
-        });
-        acc[role] += 1;
-        return acc;
-      },
-      { deliverable: 0, reference: 0, working: 0 },
-    );
-
-    return [
-      counts.deliverable > 0 ? { label: "Deliverables", count: counts.deliverable } : null,
-      counts.working > 0 ? { label: "Working", count: counts.working } : null,
-      counts.reference > 0 ? { label: "Reference", count: counts.reference } : null,
-    ].filter(Boolean) as { label: string; count: number }[];
+    return summarizeTaskFileRoles(attachments);
   }, [attachments]);
+
+  const roleSummaryLabel = useMemo(() => {
+    return formatTaskFileRoleSummaryLabel(roleSummary);
+  }, [roleSummary]);
+
+  const fileOutcomeSummary = useMemo(() => {
+    return buildTaskFileOutcomeSummary(attachments, fileWarnings);
+  }, [attachments, fileWarnings]);
 
   const matchedNodeSharedCount = pendingResolution?.resolution.matchedNodeId
     ? linkCounts[pendingResolution.resolution.matchedNodeId] ?? 0
     : 0;
+
+  const handleOpenInWorkspace = useCallback(
+    (node: ProjectNode) => {
+      const nodePath = node.path?.trim() || node.name?.trim();
+      if (!nodePath) {
+        showToast("This file does not have a workspace path yet.", "error");
+        return;
+      }
+
+      const nextParams = new URLSearchParams(searchParams?.toString() ?? "");
+      nextParams.set("tab", "files");
+      nextParams.set("path", nodePath);
+      nextParams.delete("line");
+      nextParams.delete("column");
+      router.push(`${pathname}?${nextParams.toString()}`);
+    },
+    [pathname, router, searchParams, showToast],
+  );
 
   return (
     <div
@@ -519,17 +458,24 @@ export default function FilesTab({
             <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Attachments</h3>
           </div>
           <p className="mt-1 truncate text-xs text-zinc-500">{headerSubtitle}</p>
-          {roleSummary.length > 0 ? (
-            <div className="mt-2 flex flex-wrap gap-2">
-              {roleSummary.map((item) => (
-                <span
-                  key={item.label}
-                  className="rounded-full border border-zinc-200 bg-zinc-50 px-2 py-1 text-[10px] font-medium text-zinc-600 dark:border-zinc-700 dark:bg-zinc-800/60 dark:text-zinc-300"
-                >
-                  {item.label} {item.count}
-                </span>
-              ))}
+          <p className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400">
+            {roleSummaryLabel}
+          </p>
+          <div className="mt-2 rounded-lg border border-zinc-200 bg-zinc-50/80 px-3 py-2 dark:border-zinc-800 dark:bg-zinc-900/60">
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
+              Finish line
             </div>
+            <div className="mt-1 text-sm font-medium text-zinc-900 dark:text-zinc-100">
+              {fileOutcomeSummary.headline}
+            </div>
+            <div className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+              {fileOutcomeSummary.detail}
+            </div>
+          </div>
+          {fileWarnings.length > 0 ? (
+            <p className="mt-2 text-[11px] font-medium text-amber-700 dark:text-amber-300">
+              {fileWarningSummary || "Some file relationships still need review before this task is truly complete."}
+            </p>
           ) : null}
         </div>
 
@@ -551,12 +497,6 @@ export default function FilesTab({
               }
             }}
           />
-          {/*
-           * Wave 3 — keyboard-accessible folder picker. Hidden native
-           * <input type="file" webkitdirectory /> normalized via
-           * extractFoldersFromWebkitInput. Ref-only (not id-linked) so
-           * we can keep the button visual treatment consistent.
-           */}
           <input
             ref={folderInputRef}
             type="file"
@@ -578,126 +518,37 @@ export default function FilesTab({
               if (folderInputRef.current) folderInputRef.current.value = "";
             }}
           />
-          <label
-            htmlFor={`task-attach-upload-${taskId}`}
-            className={[
-              "inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
-              canEdit
-                ? "cursor-pointer bg-indigo-600 text-white hover:bg-indigo-700"
-                : "cursor-not-allowed bg-zinc-200 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400",
-            ].join(" ")}
-          >
-            {isUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-            Upload
-          </label>
-
-          {onUploadFolders ? (
-            <button
-              type="button"
-              onClick={() => folderInputRef.current?.click()}
-              disabled={!canEdit || isUploading}
-              className={[
-                "inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-colors",
-                canEdit && !isUploading
-                  ? "border-zinc-200 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-800"
-                  : "cursor-not-allowed border-zinc-200 text-zinc-400 dark:border-zinc-800",
-              ].join(" ")}
-              title="Upload a folder"
-            >
-              <FolderPlus className="h-4 w-4" />
-              Upload folder
-            </button>
-          ) : null}
-
-          <button
-            type="button"
-            onClick={openPicker}
-            disabled={!canEdit}
-            className={[
-              "inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-colors",
-              canEdit
-                ? "border-zinc-200 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-800"
-                : "cursor-not-allowed border-zinc-200 text-zinc-400 dark:border-zinc-800",
-            ].join(" ")}
-          >
-            <Plus className="h-4 w-4" />
-            Attach existing
-          </button>
+          <TaskFilesActionMenu
+            canEdit={canEdit}
+            disabled={isUploading}
+            onPickFiles={() => fileInputRef.current?.click()}
+            onPickFolder={onUploadFolders ? () => folderInputRef.current?.click() : undefined}
+            onPickExisting={() => void openPicker()}
+          />
         </div>
       </div>
 
-      {fileWarnings.length > 0 ? (
-        <div className="rounded-xl border border-amber-200 bg-amber-50/90 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-100">
-          <div className="flex items-start gap-3">
-            <ShieldAlert className="mt-0.5 h-4 w-4 flex-shrink-0" />
-            <div className="space-y-2">
-              <div className="font-medium">
-                {fileWarningSummary || "This task’s files still need a quick follow-up."}
-              </div>
-              <ul className="space-y-1 text-xs text-amber-700 dark:text-amber-200">
-                {fileWarnings.map((warning) => (
-                  <li key={warning.code} className="list-inside list-disc">
-                    {warning.message}
-                  </li>
-                ))}
-              </ul>
-            </div>
+      <TaskFilesWarningBanner
+        warnings={fileWarnings}
+        summary={fileWarningSummary}
+        showDetails={showWarningDetails}
+        onToggleDetails={() => setShowWarningDetails((current) => !current)}
+      />
+
+      {pendingResolution || reuploadPrompt ? (
+        <div className="rounded-lg border border-indigo-200 bg-indigo-50/80 px-4 py-3 text-sm text-indigo-800 dark:border-indigo-500/30 dark:bg-indigo-500/10 dark:text-indigo-100">
+          <div className="font-medium">
+            File intake is paused until you confirm the current decision.
+          </div>
+          <div className="mt-1 text-xs text-indigo-700 dark:text-indigo-200">
+            {pendingResolution
+              ? `Finish the ${pendingResolution.candidateType} placement decision so the remaining files can be attached cleanly.`
+              : `Decide whether ${reuploadPrompt?.filename ?? "this file"} should become a new version or a separate task file.`}
           </div>
         </div>
       ) : null}
 
-      {uploadQueue.length > 0 ? (
-        <div className="mt-2 flex flex-col gap-2">
-          {uploadQueue.map((item) => {
-            const isAwaitingResolution = item.status === "awaiting_resolution";
-            const progressLabel =
-              item.status === "success"
-                ? "Uploaded"
-                : item.status === "error"
-                  ? item.error || "Upload failed"
-                  : isAwaitingResolution
-                    ? "Needs a decision before this file can be attached cleanly."
-                    : `${item.progress}%`;
-
-            return (
-              <div
-                key={item.id}
-                className="flex items-center justify-between rounded border bg-zinc-50 p-2 dark:border-zinc-700 dark:bg-zinc-800"
-              >
-                <div className="min-w-0 flex-1 pr-4">
-                  <div className="truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">
-                    {item.filename}
-                  </div>
-                  <div
-                    className={cn(
-                      "mt-1 truncate text-xs",
-                      item.status === "error"
-                        ? "text-rose-500"
-                        : isAwaitingResolution
-                          ? "text-amber-600 dark:text-amber-300"
-                          : "text-zinc-500",
-                    )}
-                  >
-                    {progressLabel}
-                  </div>
-                </div>
-
-                {item.status === "uploading" ? (
-                  <div className="h-1.5 w-24 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-700">
-                    <div className="h-full bg-indigo-600 transition-all" style={{ width: `${item.progress}%` }} />
-                  </div>
-                ) : item.status === "success" ? (
-                  <div className="h-4 w-4 rounded-full bg-emerald-500" />
-                ) : item.status === "awaiting_resolution" ? (
-                  <div className="h-4 w-4 rounded-full bg-amber-500" />
-                ) : (
-                  <div className="h-4 w-4 rounded-full bg-rose-500" />
-                )}
-              </div>
-            );
-          })}
-        </div>
-      ) : null}
+      <TaskFileUploadQueueList queue={uploadQueue} />
 
       {error ? (
         <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:border-rose-900/40 dark:bg-rose-900/20 dark:text-rose-200">
@@ -733,6 +584,7 @@ export default function FilesTab({
             onOpenFile={(node) => {
               void onOpenFile(node);
             }}
+            onOpenInWorkspace={handleOpenInWorkspace}
             onShowHistory={(node) => setHistoryNode(node)}
             onReplaceWithNewVersion={
               onSaveAsNewVersion
@@ -750,6 +602,8 @@ export default function FilesTab({
                   }
                 : undefined
             }
+            currentDeliverableId={fileOutcomeSummary.currentDeliverableId}
+            linkCounts={linkCounts}
             onReorder={() => {
               // Ordering persists inside the explorer; the parent resource reloads linked nodes after mutations.
             }}
@@ -757,257 +611,108 @@ export default function FilesTab({
         )}
       </div>
 
-      {picker.open ? (
-        <div className="fixed inset-0 z-[220] flex items-center justify-center bg-black/50 p-4">
-          <div className="w-full max-w-2xl overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-2xl dark:border-zinc-800 dark:bg-zinc-900">
-            <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
-              <div className="flex items-center gap-2">
-                <Link2 className="h-4 w-4 text-zinc-400" />
-                <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-                  Attach existing file or folder
-                </div>
-              </div>
-              <button
-                type="button"
-                className="rounded p-2 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-                onClick={closePicker}
-                aria-label="Close"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            <div className="space-y-3 p-4">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
-                <input
-                  autoFocus
-                  value={picker.query}
-                  onChange={(event) => {
-                    const query = event.target.value;
-                    setPicker((current) => (current.open ? { ...current, query } : current));
-                    if (pickerTimerRef.current) clearTimeout(pickerTimerRef.current);
-                    pickerTimerRef.current = setTimeout(() => {
-                      void runPickerSearch(query.trim());
-                    }, 180);
-                  }}
-                  placeholder="Search project files/folders by name..."
-                  className="h-10 w-full rounded-lg border border-zinc-200 bg-white pl-9 pr-3 text-sm outline-none dark:border-zinc-800 dark:bg-zinc-950"
-                />
-              </div>
-
-              <div className="max-h-[50vh] overflow-y-auto rounded-lg border border-zinc-200 dark:border-zinc-800">
-                {picker.loading ? (
-                  <div className="flex items-center gap-2 p-4 text-sm text-zinc-500">
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Searching...
-                  </div>
-                ) : !picker.query && picker.suggestions.length > 0 ? (
-                  <div className="space-y-1 p-2">
-                    <div className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-zinc-500">
-                      Recently updated files
-                    </div>
-                    {picker.suggestions.map((node) => {
-                      const alreadyAttached = attachments.some((attachment) => attachment.id === node.id);
-                      return (
-                        <div
-                          key={node.id}
-                          className="flex items-center justify-between gap-3 rounded-lg px-3 py-2 transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800"
-                        >
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2 truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">
-                              {node.type === "folder" ? (
-                                <Folder className="h-4 w-4 flex-shrink-0 text-blue-500" />
-                              ) : (
-                                <FileText className="h-4 w-4 flex-shrink-0 text-zinc-400" />
-                              )}
-                              {node.name}
-                            </div>
-                            <div className="mt-0.5 text-xs text-zinc-500">
-                              {node.type === "folder"
-                                ? "Folder"
-                                : `${formatBytes(node.size)} • Modified ${node.updatedAt ? new Date(node.updatedAt).toLocaleDateString() : "Unknown"}`}
-                            </div>
-                          </div>
-                          <button
-                            type="button"
-                            disabled={!canEdit || alreadyAttached}
-                            onClick={async () => {
-                              const result = await onAttachExisting(node);
-                              if (result.success) closePicker();
-                            }}
-                            className={[
-                              "inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm font-medium transition-colors",
-                              canEdit && !alreadyAttached
-                                ? "border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                                : "cursor-not-allowed border-transparent bg-zinc-100 text-zinc-400 dark:bg-zinc-800/50",
-                            ].join(" ")}
-                          >
-                            {alreadyAttached ? "Attached" : "Attach"}
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : picker.query && picker.results.length === 0 ? (
-                  <div className="p-4 text-sm text-zinc-500">
-                    No matches found for &quot;{picker.query}&quot;
-                  </div>
-                ) : picker.query ? (
-                  <div className="divide-y divide-zinc-200 dark:divide-zinc-800">
-                    <div className="bg-zinc-50 px-5 py-2 text-xs font-semibold text-zinc-500 dark:bg-zinc-900/50">
-                      Search Results
-                    </div>
-                    {picker.results.map((node) => {
-                      const alreadyAttached = attachments.some((attachment) => attachment.id === node.id);
-                      return (
-                        <div key={node.id} className="flex items-center justify-between gap-3 px-4 py-3">
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2 truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">
-                              {node.type === "folder" ? (
-                                <Folder className="h-4 w-4 flex-shrink-0 text-blue-500" />
-                              ) : (
-                                <FileText className="h-4 w-4 flex-shrink-0 text-zinc-400" />
-                              )}
-                              {node.name}
-                            </div>
-                            <div className="mt-0.5 text-xs text-zinc-500">
-                              {node.type === "folder" ? "Folder" : formatBytes(node.size)}
-                            </div>
-                          </div>
-                          <button
-                            type="button"
-                            disabled={!canEdit || alreadyAttached}
-                            onClick={async () => {
-                              const result = await onAttachExisting(node);
-                              if (result.success) closePicker();
-                            }}
-                            className={[
-                              "inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm font-medium transition-colors",
-                              canEdit && !alreadyAttached
-                                ? "border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                                : "cursor-not-allowed border-transparent bg-zinc-100 text-zinc-400 dark:bg-zinc-800/50",
-                            ].join(" ")}
-                          >
-                            {alreadyAttached ? "Attached" : "Attach"}
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : null}
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      <TaskFileAttachPickerDialog
+        open={picker.open}
+        query={picker.open ? picker.query : ""}
+        loading={picker.open ? picker.loading : false}
+        results={picker.open ? picker.results : []}
+        suggestions={picker.open ? picker.suggestions : []}
+        attachments={attachments}
+        canEdit={canEdit}
+        onQueryChange={(query) => {
+          setPicker((current) => (current.open ? { ...current, query } : current));
+          if (pickerTimerRef.current) clearTimeout(pickerTimerRef.current);
+          pickerTimerRef.current = setTimeout(() => {
+            void runPickerSearch(query.trim());
+          }, 180);
+        }}
+        onAttach={async (node) => {
+          const result = await onAttachExisting(node);
+          if (result.success) closePicker();
+        }}
+        onOpenChange={(open) => {
+          if (!open) closePicker();
+        }}
+      />
 
       {pendingResolution ? (
-        <div className="fixed inset-0 z-[230] flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-xl rounded-2xl border border-zinc-200 bg-white shadow-2xl dark:border-zinc-800 dark:bg-zinc-900">
-            <div className="border-b border-zinc-200 px-5 py-4 dark:border-zinc-800">
-              <h4 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">
-                {pendingResolution.candidateType === "folder"
-                  ? "Resolve folder drop"
-                  : "Resolve file action"}
-              </h4>
-              <p className="mt-1 text-sm text-zinc-500">
-                {pendingResolution.candidateType === "folder"
-                  ? `Folder "${pendingResolution.candidateName}" overlaps with something already linked. Pick how it should land.`
-                  : `${pendingResolution.candidateName} needs a quick decision before the task file list can stay clean.`}
-              </p>
-            </div>
-
-            <div className="space-y-4 px-5 py-4">
-              <div className="rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-3 dark:border-zinc-800 dark:bg-zinc-950/50">
-                <div className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
-                  {pendingResolution.resolution.reason}
-                </div>
-                <div className="mt-2 grid gap-2 text-xs text-zinc-500 sm:grid-cols-2">
-                  <div>
-                    <span className="font-medium text-zinc-700 dark:text-zinc-300">Suggested action:</span>{" "}
-                    {
-                      resolutionChoiceCopy(
+        <TaskFileDecisionDialog
+          open
+          title={pendingResolution.candidateType === "folder" ? "Resolve folder placement" : "Resolve file action"}
+          description={
+            pendingResolution.candidateType === "folder"
+              ? `Folder "${pendingResolution.candidateName}" overlaps with something already linked. Decide whether this should be a new root folder, a subfolder, or part of an existing folder context.`
+              : `${pendingResolution.candidateName} needs a quick decision so the task file list stays clean and version choices stay obvious.`
+          }
+          summary={
+            <div>
+              <div className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                {pendingResolution.resolution.reason}
+              </div>
+              <div className="mt-2 grid gap-2 text-xs text-zinc-500 sm:grid-cols-2">
+                <div>
+                  <span className="font-medium text-zinc-700 dark:text-zinc-300">Suggested action:</span>{" "}
+                  {
+                      getTaskFileResolutionChoiceCopy(
                         pendingResolution.resolution.recommendedChoice,
                         pendingResolution.candidateType,
                       ).label
-                    }
-                  </div>
-                  <div>
-                    <span className="font-medium text-zinc-700 dark:text-zinc-300">Confidence:</span>{" "}
-                    {pendingResolution.resolution.confidence}
-                  </div>
-                  {pendingResolution.resolution.matchedNodeName ? (
-                    <div className="sm:col-span-2">
-                      <span className="font-medium text-zinc-700 dark:text-zinc-300">Matched node:</span>{" "}
-                      {pendingResolution.resolution.matchedNodeName}
-                      {matchedNodeSharedCount > 1 ? ` • Shared across ${matchedNodeSharedCount} tasks` : ""}
-                    </div>
-                  ) : null}
-                  {pendingResolution.resolution.linkedFolderName ? (
-                    <div className="sm:col-span-2">
-                      <span className="font-medium text-zinc-700 dark:text-zinc-300">Linked folder:</span>{" "}
-                      {pendingResolution.resolution.linkedFolderName}
-                    </div>
-                  ) : null}
+                  }
                 </div>
-              </div>
-
-              {resolutionError ? (
-                <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:border-rose-900/40 dark:bg-rose-900/20 dark:text-rose-200">
-                  {resolutionError}
+                <div>
+                  <span className="font-medium text-zinc-700 dark:text-zinc-300">Confidence:</span>{" "}
+                  {pendingResolution.resolution.confidence}
                 </div>
-              ) : null}
-
-              <div className="space-y-2">
-                {pendingResolution.options.map((choice) => {
-                  const copy = resolutionChoiceCopy(choice, pendingResolution.candidateType);
-                  const isRecommended = pendingResolution.resolution.recommendedChoice === choice;
-                  return (
-                    <button
-                      key={choice}
-                      type="button"
-                      disabled={isResolving}
-                      onClick={async () => {
-                        setResolutionError(null);
-                        setIsResolving(true);
-                        const result = await onResolvePendingResolution(choice);
-                        if (!result.success) {
-                          setResolutionError(result.error || "Could not apply that file choice.");
-                        }
-                        setIsResolving(false);
-                      }}
-                      className={cn(
-                        "flex w-full items-start justify-between gap-3 rounded-xl border px-4 py-3 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60",
-                        isRecommended
-                          ? "border-indigo-500 bg-indigo-50 dark:border-indigo-500/70 dark:bg-indigo-500/10"
-                          : "border-zinc-200 bg-white hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:bg-zinc-800/70",
-                      )}
-                    >
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2 text-sm font-medium text-zinc-900 dark:text-zinc-100">
-                          {copy.label}
-                          {isRecommended ? (
-                            <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-200">
-                              Recommended
-                            </span>
-                          ) : null}
-                        </div>
-                        <p className="text-xs text-zinc-500">{copy.description}</p>
-                      </div>
-                      {isResolving ? <Loader2 className="mt-1 h-4 w-4 animate-spin text-zinc-400" /> : null}
-                    </button>
-                  );
-                })}
-              </div>
-
-              <div className="flex items-start gap-2 rounded-lg bg-zinc-50 px-3 py-2 text-xs text-zinc-500 dark:bg-zinc-800/50 dark:text-zinc-400">
-                <AlertCircle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
-                We always ask before replacing or folding a file into an existing folder context, so task attachments stay predictable.
+                {pendingResolution.resolution.matchedNodeName ? (
+                  <div className="sm:col-span-2">
+                    <span className="font-medium text-zinc-700 dark:text-zinc-300">Matched item:</span>{" "}
+                    {pendingResolution.resolution.matchedNodeName}
+                    {matchedNodeSharedCount > 1 ? ` • Shared across ${matchedNodeSharedCount} tasks` : ""}
+                  </div>
+                ) : null}
+                {pendingResolution.resolution.linkedFolderName ? (
+                  <div className="sm:col-span-2">
+                    <span className="font-medium text-zinc-700 dark:text-zinc-300">Linked folder:</span>{" "}
+                    {pendingResolution.resolution.linkedFolderName}
+                  </div>
+                ) : null}
+                <div className="sm:col-span-2">
+                  <span className="font-medium text-zinc-700 dark:text-zinc-300">
+                    After this choice:
+                  </span>{" "}
+                  {
+                    buildTaskFileChoicePreview(
+                      pendingResolution.resolution.recommendedChoice,
+                      pendingResolution.candidateType,
+                    ).detail
+                  }
+                </div>
               </div>
             </div>
-          </div>
-        </div>
+          }
+          error={resolutionError}
+          isSubmitting={isResolving}
+          footerHint="We always ask before replacing, merging, or folding files into an existing folder context, so task attachments stay predictable."
+          options={pendingResolution.options.map((choice) => {
+            const copy = getTaskFileResolutionChoiceCopy(choice, pendingResolution.candidateType);
+            return {
+              value: choice,
+              label: copy.label,
+              description: copy.description,
+              recommended: pendingResolution.resolution.recommendedChoice === choice,
+            };
+          })}
+          onSelect={async (value) => {
+            const choice = value as TaskFileResolutionChoice;
+            setResolutionError(null);
+            setIsResolving(true);
+            const result = await onResolvePendingResolution(choice);
+            if (!result.success) {
+              setResolutionError(result.error || "Could not apply that file choice.");
+            }
+            setIsResolving(false);
+          }}
+        />
       ) : null}
 
       {historyNode ? (
@@ -1023,53 +728,48 @@ export default function FilesTab({
       ) : null}
 
       {reuploadPrompt ? (
-        <div className="fixed inset-0 z-[240] flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white shadow-2xl dark:border-zinc-800 dark:bg-zinc-900">
-            <div className="border-b border-zinc-200 px-5 py-4 dark:border-zinc-800">
-              <h4 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">
-                You edited this file
-              </h4>
-              <p className="mt-1 text-sm text-zinc-500">
-                {reuploadPrompt.confidence === "changed"
-                  ? `${reuploadPrompt.filename} looks different from when you opened it. Save it as a new version of the existing attachment?`
-                  : `${reuploadPrompt.filename} was opened from this task. Save it as a new version of the existing attachment?`}
-              </p>
-            </div>
-            <div className="space-y-2 px-5 py-4">
-              <button
-                type="button"
-                onClick={() => void confirmSaveAsNewVersion()}
-                className="flex w-full items-start gap-3 rounded-xl border border-indigo-500 bg-indigo-50 px-4 py-3 text-left text-sm font-medium text-indigo-800 transition-colors hover:bg-indigo-100 dark:border-indigo-500/70 dark:bg-indigo-500/10 dark:text-indigo-200 dark:hover:bg-indigo-500/20"
-              >
-                <span className="flex-1">
-                  <span className="block">Save as new version</span>
-                  <span className="mt-0.5 block text-[11px] font-normal text-indigo-700/80 dark:text-indigo-200/70">
-                    Keeps the previous blob downloadable from the history drawer.
-                  </span>
-                </span>
-              </button>
-              <button
-                type="button"
-                onClick={() => void attachAsNewFromPrompt()}
-                className="flex w-full items-start gap-3 rounded-xl border border-zinc-200 bg-white px-4 py-3 text-left text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
-              >
-                <span className="flex-1">
-                  <span className="block">Attach as a new file</span>
-                  <span className="mt-0.5 block text-[11px] font-normal text-zinc-500">
-                    Uploads alongside the original and lets you decide later.
-                  </span>
-                </span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setReuploadPrompt(null)}
-                className="flex w-full items-start gap-3 rounded-xl px-4 py-3 text-left text-sm font-medium text-zinc-500 transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
+        <TaskFileDecisionDialog
+          open
+          title="You edited this file"
+          description={
+            reuploadPrompt.confidence === "changed"
+              ? `${reuploadPrompt.filename} looks different from when you opened it. Decide whether this should become the next version or a separate task file.`
+              : `${reuploadPrompt.filename} was opened from this task. Decide whether it should become the next version or stay separate.`
+          }
+          options={[
+            {
+              value: "replace",
+              label: "Save as new version",
+              description: "Keeps the current version history intact and makes this the latest file.",
+              recommended: true,
+            },
+            {
+              value: "attach_new",
+              label: "Attach as a new file",
+              description: "Uploads alongside the original and lets you decide later how it relates.",
+            },
+            {
+              value: "cancel",
+              label: "Cancel",
+              description: "Leave the current attachment untouched for now.",
+            },
+          ]}
+          footerHint="Version updates stay downloadable from the history drawer, so using a new version is the cleanest option when this file edits an existing attachment."
+          onSelect={async (value) => {
+            if (value === "replace") {
+              await confirmSaveAsNewVersion();
+              return;
+            }
+            if (value === "attach_new") {
+              await attachAsNewFromPrompt();
+              return;
+            }
+            setReuploadPrompt(null);
+          }}
+          onOpenChange={(open) => {
+            if (!open) setReuploadPrompt(null);
+          }}
+        />
       ) : null}
     </div>
   );
