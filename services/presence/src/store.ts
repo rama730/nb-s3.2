@@ -155,24 +155,51 @@ function getInMemoryPresenceStore() {
     return inMemoryPresenceStore
 }
 
+type PresenceStoreMode = 'auto' | 'redis' | 'memory'
+
+function getPresenceStoreMode(env: NodeJS.ProcessEnv): PresenceStoreMode {
+    const rawMode = (env.PRESENCE_STORE_MODE || env.PRESENCE_TRANSPORT || '').trim().toLowerCase()
+    if (rawMode === 'redis' || rawMode === 'memory') {
+        return rawMode
+    }
+    return 'auto'
+}
+
 export function createPresenceStore(options?: {
     env?: NodeJS.ProcessEnv
-    redisClient?: ReturnType<typeof getRedisClient>
+    redisClient?: PresenceStore | ReturnType<typeof getRedisClient>
 }) {
     const env = options?.env ?? process.env
-    const redisClient = options && 'redisClient' in options ? options.redisClient : getRedisClient()
-    if (redisClient) {
+    const mode = getPresenceStoreMode(env)
+    const isProduction = env.NODE_ENV === 'production'
+
+    if (mode === 'memory') {
+        if (isProduction) {
+            throw new Error('In-memory presence transport is not allowed in production')
+        }
+        console.warn('[presence] Using in-memory local presence transport.')
         return {
-            mode: 'redis' as const,
-            store: redisClient as unknown as PresenceStore,
+            mode: 'memory' as const,
+            store: getInMemoryPresenceStore(),
         }
     }
 
-    if (env.NODE_ENV === 'production') {
+    const shouldUseRedis = mode === 'redis' || isProduction
+    if (shouldUseRedis) {
+        const redisClient = options && 'redisClient' in options ? options.redisClient : getRedisClient()
+        if (redisClient) {
+            return {
+                mode: 'redis' as const,
+                store: redisClient as unknown as PresenceStore,
+            }
+        }
         throw new Error('Upstash Redis is required for the dedicated presence service')
     }
 
-    console.warn('[presence] Upstash Redis is not configured; falling back to in-memory local presence transport.')
+    // Local development runs a single dedicated presence service, so Redis pub/sub is
+    // unnecessary and can produce noisy aborted stream logs from Upstash's SSE reader.
+    // Set PRESENCE_STORE_MODE=redis when explicitly testing the Redis backplane.
+    console.warn('[presence] Using in-memory local presence transport. Set PRESENCE_STORE_MODE=redis to test Redis pub/sub locally.')
 
     return {
         mode: 'memory' as const,
