@@ -26,7 +26,8 @@ export function getDeliveryRank(message: MessageWithSender): number {
     return 4;
 }
 
-function isTemporaryMessageId(id: string): boolean {
+export function isTemporaryMessageId(id: string | null | undefined): id is string {
+    if (!id) return false;
     return id.startsWith('temp-');
 }
 
@@ -109,11 +110,9 @@ export function mergeMessageCollections(
     ...collections: ReadonlyArray<ReadonlyArray<MessageWithSender>>
 ): MessageWithSender[] {
     const normalizedCollections = collections.filter(Array.isArray) as ReadonlyArray<ReadonlyArray<MessageWithSender>>;
-    if (normalizedCollections.length === 0) return [];
-
-    let result: MessageWithSender[] = [...normalizedCollections[0]];
-    for (let i = 1; i < normalizedCollections.length; i++) {
-        result = mergeMessages(result, normalizedCollections[i]);
+    let result: MessageWithSender[] = [];
+    for (const collection of normalizedCollections) {
+        result = mergeMessages(result, collection);
     }
     return result;
 }
