@@ -24,6 +24,7 @@ export function useMarkMessagesRead(
     viewerId: string | null,
 ) {
     const bufferRef = useRef<Set<string>>(new Set());
+    const flushedRef = useRef<Set<string>>(new Set());
     const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const presenceRef = useRef<ReturnType<typeof subscribePresenceRoom> | null>(null);
 
@@ -62,6 +63,9 @@ export function useMarkMessagesRead(
 
         try {
             await recordReadReceipts(ids);
+            for (const id of ids) {
+                flushedRef.current.add(id);
+            }
         } catch {
             // Re-add failed IDs so they are retried on next flush
             for (const id of ids) {
@@ -74,6 +78,8 @@ export function useMarkMessagesRead(
     useEffect(() => {
         if (!conversationId || !viewerId) return;
 
+        bufferRef.current.clear();
+        flushedRef.current.clear();
         timerRef.current = setInterval(flush, FLUSH_INTERVAL_MS);
         return () => {
             if (timerRef.current) {
@@ -100,6 +106,7 @@ export function useMarkMessagesRead(
             for (const msg of messageIds) {
                 // Skip own messages — you don't read-receipt yourself
                 if (msg.senderId === viewerId) continue;
+                if (flushedRef.current.has(msg.id) || bufferRef.current.has(msg.id)) continue;
                 bufferRef.current.add(msg.id);
             }
         },
