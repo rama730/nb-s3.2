@@ -182,6 +182,187 @@ WITH CHECK (
 );
 --> statement-breakpoint
 
+-- ============================================================================
+-- Message Linked Work
+--
+-- Canonical source-to-destination projection for task conversions, private
+-- follow-ups, workflow requests, file reviews, and decision records.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS "message_work_links" (
+  "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+  "source_message_id" uuid NOT NULL,
+  "source_conversation_id" uuid NOT NULL,
+  "target_type" text NOT NULL,
+  "target_id" uuid NOT NULL,
+  "target_project_id" uuid,
+  "visibility" text DEFAULT 'shared' NOT NULL,
+  "status" text DEFAULT 'active' NOT NULL,
+  "owner_user_id" uuid,
+  "assignee_user_id" uuid,
+  "created_by" uuid NOT NULL,
+  "href" text,
+  "metadata" jsonb DEFAULT '{}'::jsonb NOT NULL,
+  "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+  "updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+  "deleted_at" timestamp with time zone,
+  CONSTRAINT "message_work_links_target_type_check"
+    CHECK ("target_type" IN ('task', 'follow_up', 'workflow', 'file_review', 'decision')),
+  CONSTRAINT "message_work_links_visibility_check"
+    CHECK ("visibility" IN ('private', 'shared')),
+  CONSTRAINT "message_work_links_status_check"
+    CHECK ("status" IN ('pending', 'active', 'done', 'dismissed', 'blocked', 'unavailable'))
+);
+--> statement-breakpoint
+
+DO $$ BEGIN
+ ALTER TABLE "message_work_links"
+    ADD CONSTRAINT "message_work_links_source_message_id_messages_id_fk"
+    FOREIGN KEY ("source_message_id")
+    REFERENCES "public"."messages"("id")
+    ON DELETE cascade ON UPDATE no action;
+EXCEPTION
+ WHEN duplicate_object THEN null;
+END $$;
+--> statement-breakpoint
+
+DO $$ BEGIN
+ ALTER TABLE "message_work_links"
+    ADD CONSTRAINT "message_work_links_source_conversation_id_conversations_id_fk"
+    FOREIGN KEY ("source_conversation_id")
+    REFERENCES "public"."conversations"("id")
+    ON DELETE cascade ON UPDATE no action;
+EXCEPTION
+ WHEN duplicate_object THEN null;
+END $$;
+--> statement-breakpoint
+
+DO $$ BEGIN
+ ALTER TABLE "message_work_links"
+    ADD CONSTRAINT "message_work_links_target_project_id_projects_id_fk"
+    FOREIGN KEY ("target_project_id")
+    REFERENCES "public"."projects"("id")
+    ON DELETE set null ON UPDATE no action;
+EXCEPTION
+ WHEN duplicate_object THEN null;
+END $$;
+--> statement-breakpoint
+
+DO $$ BEGIN
+ ALTER TABLE "message_work_links"
+    ADD CONSTRAINT "message_work_links_owner_user_id_profiles_id_fk"
+    FOREIGN KEY ("owner_user_id")
+    REFERENCES "public"."profiles"("id")
+    ON DELETE set null ON UPDATE no action;
+EXCEPTION
+ WHEN duplicate_object THEN null;
+END $$;
+--> statement-breakpoint
+
+DO $$ BEGIN
+ ALTER TABLE "message_work_links"
+    ADD CONSTRAINT "message_work_links_assignee_user_id_profiles_id_fk"
+    FOREIGN KEY ("assignee_user_id")
+    REFERENCES "public"."profiles"("id")
+    ON DELETE set null ON UPDATE no action;
+EXCEPTION
+ WHEN duplicate_object THEN null;
+END $$;
+--> statement-breakpoint
+
+DO $$ BEGIN
+ ALTER TABLE "message_work_links"
+    ADD CONSTRAINT "message_work_links_created_by_profiles_id_fk"
+    FOREIGN KEY ("created_by")
+    REFERENCES "public"."profiles"("id")
+    ON DELETE cascade ON UPDATE no action;
+EXCEPTION
+ WHEN duplicate_object THEN null;
+END $$;
+--> statement-breakpoint
+
+CREATE INDEX IF NOT EXISTS "message_work_links_source_message_idx"
+  ON "message_work_links" USING btree ("source_message_id", "updated_at");
+--> statement-breakpoint
+
+CREATE INDEX IF NOT EXISTS "message_work_links_conversation_idx"
+  ON "message_work_links" USING btree ("source_conversation_id", "updated_at");
+--> statement-breakpoint
+
+CREATE INDEX IF NOT EXISTS "message_work_links_assignee_status_idx"
+  ON "message_work_links" USING btree ("assignee_user_id", "status", "updated_at");
+--> statement-breakpoint
+
+CREATE INDEX IF NOT EXISTS "message_work_links_owner_private_idx"
+  ON "message_work_links" USING btree ("owner_user_id", "visibility", "status", "updated_at");
+--> statement-breakpoint
+
+CREATE INDEX IF NOT EXISTS "message_work_links_target_idx"
+  ON "message_work_links" USING btree ("target_type", "target_id");
+--> statement-breakpoint
+
+CREATE INDEX IF NOT EXISTS "message_work_links_project_idx"
+  ON "message_work_links" USING btree ("target_project_id", "updated_at");
+--> statement-breakpoint
+
+CREATE UNIQUE INDEX IF NOT EXISTS "message_work_links_source_target_unique"
+  ON "message_work_links" USING btree ("source_message_id", "target_type", "target_id")
+  WHERE "deleted_at" IS NULL;
+--> statement-breakpoint
+
+ALTER TABLE "message_work_links" ENABLE ROW LEVEL SECURITY;
+--> statement-breakpoint
+
+DROP POLICY IF EXISTS "Conversation participants can view message work links" ON "message_work_links";
+CREATE POLICY "Conversation participants can view message work links"
+ON "message_work_links" FOR SELECT
+USING (
+  EXISTS (
+    SELECT 1
+    FROM "conversation_participants" cp
+    WHERE cp.conversation_id = message_work_links.source_conversation_id
+      AND cp.user_id = auth.uid()
+  )
+  AND (
+    message_work_links.visibility = 'shared'
+    OR message_work_links.owner_user_id = auth.uid()
+    OR message_work_links.created_by = auth.uid()
+  )
+);
+--> statement-breakpoint
+
+DROP POLICY IF EXISTS "Conversation participants can create message work links" ON "message_work_links";
+CREATE POLICY "Conversation participants can create message work links"
+ON "message_work_links" FOR INSERT
+WITH CHECK (
+  created_by = auth.uid()
+  AND EXISTS (
+    SELECT 1
+    FROM "conversation_participants" cp
+    WHERE cp.conversation_id = message_work_links.source_conversation_id
+      AND cp.user_id = auth.uid()
+  )
+  AND (
+    message_work_links.visibility = 'shared'
+    OR message_work_links.owner_user_id = auth.uid()
+  )
+);
+--> statement-breakpoint
+
+DROP POLICY IF EXISTS "Owners and assignees can update message work links" ON "message_work_links";
+CREATE POLICY "Owners and assignees can update message work links"
+ON "message_work_links" FOR UPDATE
+USING (
+  created_by = auth.uid()
+  OR owner_user_id = auth.uid()
+  OR assignee_user_id = auth.uid()
+)
+WITH CHECK (
+  created_by = auth.uid()
+  OR owner_user_id = auth.uid()
+  OR assignee_user_id = auth.uid()
+);
+--> statement-breakpoint
+
 CREATE OR REPLACE FUNCTION public.handle_message_insert_consistency()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -308,6 +489,15 @@ BEGIN
         AND tablename = 'message_workflow_items'
     ) THEN
       EXECUTE 'ALTER PUBLICATION supabase_realtime ADD TABLE public.message_workflow_items';
+    END IF;
+    IF NOT EXISTS (
+      SELECT 1
+      FROM pg_publication_tables
+      WHERE pubname = 'supabase_realtime'
+        AND schemaname = 'public'
+        AND tablename = 'message_work_links'
+    ) THEN
+      EXECUTE 'ALTER PUBLICATION supabase_realtime ADD TABLE public.message_work_links';
     END IF;
   END IF;
 END $$;
