@@ -5,6 +5,44 @@ import { buildMessageSearchDocumentSql } from '@/lib/messages/search-document'
 type ProfileExperienceEntry = Record<string, unknown>;
 type ProfileEducationEntry = Record<string, unknown>;
 type ImportSourceMetadata = Record<string, unknown>;
+type NotificationPreferencesRecord = {
+    messages: boolean;
+    mentions: boolean;
+    workflows: boolean;
+    projects: boolean;
+    tasks: boolean;
+    applications: boolean;
+    connections: boolean;
+    pausedUntil?: string | null;
+    mutedScopes?: Array<{
+        kind: 'notification_type' | 'project' | 'task' | 'conversation' | 'person';
+        value: string;
+        label?: string | null;
+        mutedAt?: string | null;
+    }>;
+};
+type UserNotificationEntityRefs = {
+    projectId?: string | null;
+    projectSlug?: string | null;
+    taskId?: string | null;
+    commentId?: string | null;
+    conversationId?: string | null;
+    workflowItemId?: string | null;
+    applicationId?: string | null;
+    connectionId?: string | null;
+    fileId?: string | null;
+    parentCommentId?: string | null;
+    status?: string | null;
+};
+type UserNotificationPreview = {
+    actorName?: string | null;
+    actorAvatarUrl?: string | null;
+    thumbnailUrl?: string | null;
+    secondaryText?: string | null;
+    contextLabel?: string | null;
+    contextKind?: 'project' | 'task' | 'conversation' | 'connection' | 'application' | 'workflow' | 'file' | null;
+};
+type MessageWorkLinkMetadata = Record<string, unknown>;
 
 // ============================================================================
 // PROFILES TABLE
@@ -34,6 +72,17 @@ export const profiles = pgTable('profiles', {
     visibility: text('visibility', { enum: ['public', 'connections', 'private'] }).default('public'),
     messagePrivacy: text('message_privacy', { enum: ['everyone', 'connections'] }).default('connections'),
     connectionPrivacy: text('connection_privacy', { enum: ['everyone', 'mutuals_only', 'nobody'] }).default('everyone'),
+    notificationPreferences: jsonb('notification_preferences').$type<NotificationPreferencesRecord>().default({
+        messages: true,
+        mentions: true,
+        workflows: true,
+        projects: true,
+        tasks: true,
+        applications: true,
+        connections: true,
+        pausedUntil: null,
+        mutedScopes: [],
+    }),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
@@ -575,6 +624,97 @@ export const commentMentions = pgTable('comment_mentions', {
 }))
 
 // ============================================================================
+// USER NOTIFICATIONS
+// ============================================================================
+export const userNotifications = pgTable('user_notifications', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
+    actorUserId: uuid('actor_user_id').references(() => profiles.id, { onDelete: 'set null' }),
+    kind: text('kind').notNull(),
+    importance: text('importance', { enum: ['important', 'more'] }).notNull().default('more'),
+    title: text('title').notNull(),
+    body: text('body'),
+    href: text('href'),
+    entityRefs: jsonb('entity_refs').$type<UserNotificationEntityRefs | null>().default(null),
+    preview: jsonb('preview').$type<UserNotificationPreview | null>().default(null),
+    dedupeKey: text('dedupe_key').notNull(),
+    aggregateCount: integer('aggregate_count').notNull().default(1),
+    readAt: timestamp('read_at', { withTimezone: true }),
+    seenAt: timestamp('seen_at', { withTimezone: true }),
+    dismissedAt: timestamp('dismissed_at', { withTimezone: true }),
+    snoozedUntil: timestamp('snoozed_until', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+    userUpdatedIdx: index('user_notifications_user_updated_idx').on(t.userId, t.updatedAt),
+    userReadIdx: index('user_notifications_user_read_idx').on(t.userId, t.readAt),
+    userDismissedIdx: index('user_notifications_user_dismissed_idx').on(t.userId, t.dismissedAt),
+    userSnoozedIdx: index('user_notifications_user_snoozed_idx').on(t.userId, t.snoozedUntil),
+    trayVisibleIdx: index('user_notifications_tray_visible_idx')
+        .on(t.userId, t.updatedAt)
+        .where(sql`${t.dismissedAt} IS NULL`),
+    unreadIdx: index('user_notifications_unread_idx')
+        .on(t.userId, t.importance)
+        .where(sql`${t.readAt} IS NULL AND ${t.dismissedAt} IS NULL`),
+    dismissedAgeIdx: index('user_notifications_dismissed_age_idx')
+        .on(t.dismissedAt)
+        .where(sql`${t.dismissedAt} IS NOT NULL`),
+    readAgeIdx: index('user_notifications_read_age_idx')
+        .on(t.readAt)
+        .where(sql`${t.readAt} IS NOT NULL AND ${t.dismissedAt} IS NULL`),
+    userDedupeUnique: uniqueIndex('user_notifications_user_dedupe_unique').on(t.userId, t.dedupeKey),
+}))
+
+// ============================================================================
+// PUSH SUBSCRIPTIONS (WEB PUSH)
+// ============================================================================
+export const pushSubscriptions = pgTable('push_subscriptions', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
+    endpoint: text('endpoint').notNull(),
+    p256dh: text('p256dh').notNull(),
+    auth: text('auth').notNull(),
+    userAgent: text('user_agent'),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).defaultNow().notNull(),
+    failureCount: integer('failure_count').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+    endpointUnique: uniqueIndex('push_subscriptions_endpoint_unique').on(t.endpoint),
+    userIdx: index('push_subscriptions_user_idx').on(t.userId),
+    staleIdx: index('push_subscriptions_stale_idx').on(t.lastSeenAt),
+}))
+
+// ============================================================================
+// NOTIFICATION DELIVERIES (per-channel attempt log)
+// ============================================================================
+export const notificationDeliveries = pgTable('notification_deliveries', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    notificationId: uuid('notification_id'),
+    userId: uuid('user_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
+    channel: text('channel', { enum: ['in_app', 'web_push', 'email'] }).notNull(),
+    status: text('status', { enum: ['delivered', 'failed', 'dropped'] }).notNull(),
+    errorCode: text('error_code'),
+    errorMessage: text('error_message'),
+    attemptedAt: timestamp('attempted_at', { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+    channelStatusTimeIdx: index('notification_deliveries_channel_status_time_idx').on(t.channel, t.status, t.attemptedAt.desc()),
+    userTimeIdx: index('notification_deliveries_user_time_idx').on(t.userId, t.attemptedAt.desc()),
+    notificationIdx: index('notification_deliveries_notification_idx').on(t.notificationId).where(sql`${t.notificationId} IS NOT NULL`),
+}))
+
+// ============================================================================
+// JOB HEARTBEATS (watchdog for recurring background jobs)
+// ============================================================================
+export const jobHeartbeats = pgTable('job_heartbeats', {
+    jobId: text('job_id').primaryKey(),
+    lastSuccessAt: timestamp('last_success_at', { withTimezone: true }).notNull(),
+    lastPayload: jsonb('last_payload'),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+})
+
+// ============================================================================
 // PROJECT NODES (FILE SYSTEM)
 // ============================================================================
 export const projectNodes = pgTable('project_nodes', {
@@ -831,6 +971,8 @@ export const profilesRelations = relations(profiles, ({ many, one }) => ({
     projects: many(projects),
     projectMemberships: many(projectMembers),
     followedProjects: many(projectFollows),
+    receivedNotifications: many(userNotifications, { relationName: 'notification_recipient' }),
+    authoredNotifications: many(userNotifications, { relationName: 'notification_actor' }),
     securityState: one(profileSecurityStates, {
         fields: [profiles.id],
         references: [profileSecurityStates.userId],
@@ -1210,6 +1352,39 @@ export const messageWorkflowItems = pgTable('message_workflow_items', {
     kindStatusIdx: index('message_workflow_items_kind_status_idx').on(t.kind, t.status, t.updatedAt),
 }))
 
+export const messageWorkLinks = pgTable('message_work_links', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    sourceMessageId: uuid('source_message_id').notNull().references(() => messages.id, { onDelete: 'cascade' }),
+    sourceConversationId: uuid('source_conversation_id').notNull().references(() => conversations.id, { onDelete: 'cascade' }),
+    targetType: text('target_type', {
+        enum: ['task', 'follow_up', 'workflow', 'file_review', 'decision'],
+    }).notNull(),
+    targetId: uuid('target_id').notNull(),
+    targetProjectId: uuid('target_project_id').references(() => projects.id, { onDelete: 'set null' }),
+    visibility: text('visibility', { enum: ['private', 'shared'] }).default('shared').notNull(),
+    status: text('status', {
+        enum: ['pending', 'active', 'done', 'dismissed', 'blocked', 'unavailable'],
+    }).default('active').notNull(),
+    ownerUserId: uuid('owner_user_id').references(() => profiles.id, { onDelete: 'set null' }),
+    assigneeUserId: uuid('assignee_user_id').references(() => profiles.id, { onDelete: 'set null' }),
+    createdBy: uuid('created_by').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
+    href: text('href'),
+    metadata: jsonb('metadata').$type<MessageWorkLinkMetadata>().default({}).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
+}, (t) => ({
+    sourceMessageIdx: index('message_work_links_source_message_idx').on(t.sourceMessageId, t.updatedAt),
+    conversationIdx: index('message_work_links_conversation_idx').on(t.sourceConversationId, t.updatedAt),
+    assigneeStatusIdx: index('message_work_links_assignee_status_idx').on(t.assigneeUserId, t.status, t.updatedAt),
+    ownerPrivateIdx: index('message_work_links_owner_private_idx').on(t.ownerUserId, t.visibility, t.status, t.updatedAt),
+    targetIdx: index('message_work_links_target_idx').on(t.targetType, t.targetId),
+    projectIdx: index('message_work_links_project_idx').on(t.targetProjectId, t.updatedAt),
+    sourceTargetUnique: uniqueIndex('message_work_links_source_target_unique')
+        .on(t.sourceMessageId, t.targetType, t.targetId)
+        .where(sql`${t.deletedAt} IS NULL`),
+}))
+
 // ============================================================================
 // MESSAGE ATTACHMENTS TABLE
 // ============================================================================
@@ -1343,6 +1518,7 @@ export const messagesRelations = relations(messages, ({ one, many }) => ({
     reactions: many(messageReactions),
     readReceipts: many(messageReadReceipts),
     workflowItems: many(messageWorkflowItems),
+    workLinks: many(messageWorkLinks),
 }))
 
 export const messageAttachmentsRelations = relations(messageAttachments, ({ one }) => ({
@@ -1378,6 +1554,49 @@ export const messageWorkflowItemsRelations = relations(messageWorkflowItems, ({ 
     task: one(tasks, {
         fields: [messageWorkflowItems.taskId],
         references: [tasks.id],
+    }),
+}))
+
+export const messageWorkLinksRelations = relations(messageWorkLinks, ({ one }) => ({
+    sourceMessage: one(messages, {
+        fields: [messageWorkLinks.sourceMessageId],
+        references: [messages.id],
+    }),
+    sourceConversation: one(conversations, {
+        fields: [messageWorkLinks.sourceConversationId],
+        references: [conversations.id],
+    }),
+    targetProject: one(projects, {
+        fields: [messageWorkLinks.targetProjectId],
+        references: [projects.id],
+    }),
+    owner: one(profiles, {
+        fields: [messageWorkLinks.ownerUserId],
+        references: [profiles.id],
+        relationName: 'message_work_link_owner',
+    }),
+    assignee: one(profiles, {
+        fields: [messageWorkLinks.assigneeUserId],
+        references: [profiles.id],
+        relationName: 'message_work_link_assignee',
+    }),
+    creator: one(profiles, {
+        fields: [messageWorkLinks.createdBy],
+        references: [profiles.id],
+        relationName: 'message_work_link_creator',
+    }),
+}))
+
+export const userNotificationsRelations = relations(userNotifications, ({ one }) => ({
+    user: one(profiles, {
+        relationName: 'notification_recipient',
+        fields: [userNotifications.userId],
+        references: [profiles.id],
+    }),
+    actor: one(profiles, {
+        relationName: 'notification_actor',
+        fields: [userNotifications.actorUserId],
+        references: [profiles.id],
     }),
 }))
 
@@ -1488,6 +1707,8 @@ export type Message = typeof messages.$inferSelect
 export type NewMessage = typeof messages.$inferInsert
 export type MessageWorkflowItem = typeof messageWorkflowItems.$inferSelect
 export type NewMessageWorkflowItem = typeof messageWorkflowItems.$inferInsert
+export type MessageWorkLink = typeof messageWorkLinks.$inferSelect
+export type NewMessageWorkLink = typeof messageWorkLinks.$inferInsert
 export type MessageAttachment = typeof messageAttachments.$inferSelect
 export type NewMessageAttachment = typeof messageAttachments.$inferInsert
 export type MessageHiddenForUser = typeof messageHiddenForUsers.$inferSelect
@@ -1523,6 +1744,8 @@ export type TaskCommentLike = typeof taskCommentLikes.$inferSelect
 export type NewTaskCommentLike = typeof taskCommentLikes.$inferInsert
 export type CommentMention = typeof commentMentions.$inferSelect
 export type NewCommentMention = typeof commentMentions.$inferInsert
+export type UserNotification = typeof userNotifications.$inferSelect
+export type NewUserNotification = typeof userNotifications.$inferInsert
 export type FileVersion = typeof fileVersions.$inferSelect
 export type NewFileVersion = typeof fileVersions.$inferInsert
 
@@ -1741,3 +1964,5 @@ export type UploadIntent = typeof uploadIntents.$inferSelect
 export type NewUploadIntent = typeof uploadIntents.$inferInsert
 export type RecoveryCodeRedemption = typeof recoveryCodeRedemptions.$inferSelect
 export type NewRecoveryCodeRedemption = typeof recoveryCodeRedemptions.$inferInsert
+export type PushSubscription = typeof pushSubscriptions.$inferSelect
+export type NewPushSubscription = typeof pushSubscriptions.$inferInsert
