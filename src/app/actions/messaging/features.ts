@@ -15,8 +15,8 @@ import { eq, and, desc, inArray, sql } from 'drizzle-orm';
 import { consumeRateLimit } from '@/lib/security/rate-limit';
 import {
     buildReactionSummaryByMessage,
+    toPersistedReactionSummary,
     type MessageReactionSummary,
-    withReactionSummaryMetadata,
 } from '@/lib/messages/reactions';
 
 // Auth helper — same pattern as _all.ts
@@ -146,7 +146,7 @@ export async function toggleReaction(
             .set({
                 metadata: reactionSummary.length > 0
                     ? sql`coalesce(${messages.metadata}, '{}'::jsonb) || ${JSON.stringify({
-                        reactionSummary: withReactionSummaryMetadata({}, reactionSummary).reactionSummary,
+                        reactionSummary: toPersistedReactionSummary(reactionSummary),
                     })}::jsonb`
                     : sql`coalesce(${messages.metadata}, '{}'::jsonb) - 'reactionSummary'`,
             })
