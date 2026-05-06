@@ -41,6 +41,10 @@ import {
 import { buildConversationParticipantPreview } from '@/lib/messages/preview-authority';
 import { buildMessageAttachmentAccessUrl } from '@/lib/messages/attachment-access';
 import { buildMessageSearchDocumentSql } from '@/lib/messages/search-document';
+import { isTemporaryMessageId } from '@/lib/messages/utils';
+import { emitMessageBurstNotifications } from '@/lib/notifications/emitters';
+import { markConversationNotificationsRead } from '@/lib/notifications/service';
+import { logger } from '@/lib/logger';
 import {
     deriveReceiptDeliveryState,
     type DeliveryCounts,
@@ -79,6 +83,8 @@ export interface ConversationWithDetails {
         metadata?: Record<string, unknown> | null;
     } | null;
     unreadCount: number;
+    lastReadAt?: Date | null;
+    lastReadMessageId?: string | null;
 }
 
 export interface MessageWithSender {
@@ -898,6 +904,197 @@ async function refreshConversationParticipantPreviews(conversationId: string) {
     }));
 }
 
+async function readLatestVisibleConversationPreview(
+    conversationId: string,
+    userId: string,
+): Promise<ConversationWithDetails['lastMessage']> {
+    const [latestMessage] = await db
+        .select({
+            id: messages.id,
+            content: messages.content,
+            type: messages.type,
+            metadata: messages.metadata,
+            createdAt: messages.createdAt,
+            senderId: messages.senderId,
+        })
+        .from(messages)
+        .where(
+            and(
+                eq(messages.conversationId, conversationId),
+                isNull(messages.deletedAt),
+                sql`NOT EXISTS (
+                    SELECT 1
+                    FROM ${messageHiddenForUsers} h
+                    WHERE h.message_id = ${messages.id}
+                      AND h.user_id = ${userId}
+                )`,
+            ),
+        )
+        .orderBy(desc(messages.createdAt), desc(messages.id))
+        .limit(1);
+
+    return latestMessage
+        ? {
+            id: latestMessage.id,
+            content: latestMessage.content,
+            senderId: latestMessage.senderId,
+            createdAt: latestMessage.createdAt,
+            type: latestMessage.type,
+            metadata: latestMessage.metadata as Record<string, unknown> | null,
+        }
+        : null;
+}
+
+async function reconcileConversationLastMessagePreviews(
+    viewerId: string,
+    conversationRows: ConversationWithDetails[],
+): Promise<ConversationWithDetails[]> {
+    const lastMessageIds = Array.from(new Set(
+        conversationRows
+            .map((conversation) => conversation.lastMessage?.id ?? null)
+            .filter(Boolean),
+    )) as string[];
+    if (lastMessageIds.length === 0) {
+        return conversationRows;
+    }
+
+    const visibleRows = await db
+        .select({ id: messages.id })
+        .from(messages)
+        .where(
+            and(
+                inArray(messages.id, lastMessageIds),
+                isNull(messages.deletedAt),
+                sql`NOT EXISTS (
+                    SELECT 1
+                    FROM ${messageHiddenForUsers} h
+                    WHERE h.message_id = ${messages.id}
+                      AND h.user_id = ${viewerId}
+                )`,
+            ),
+        );
+    const visibleLastMessageIds = new Set(visibleRows.map((row) => row.id));
+    const staleConversationIds = Array.from(new Set(
+        conversationRows.flatMap((conversation) =>
+            conversation.lastMessage && !visibleLastMessageIds.has(conversation.lastMessage.id)
+                ? [conversation.id]
+                : [],
+        ),
+    ));
+    if (staleConversationIds.length === 0) {
+        return conversationRows;
+    }
+
+    const refreshedEntries = await Promise.all(staleConversationIds.map(async (conversationId) => {
+        await refreshConversationParticipantPreviews(conversationId);
+        return [
+            conversationId,
+            await readLatestVisibleConversationPreview(conversationId, viewerId),
+        ] as const;
+    }));
+    const refreshedLastMessageByConversationId = new Map(refreshedEntries);
+
+    return conversationRows.map((conversation) => {
+        if (!refreshedLastMessageByConversationId.has(conversation.id)) {
+            return conversation;
+        }
+        const lastMessage = refreshedLastMessageByConversationId.get(conversation.id) ?? null;
+        return {
+            ...conversation,
+            updatedAt: lastMessage?.createdAt ?? conversation.updatedAt,
+            lifecycleState: lastMessage
+                ? 'active'
+                : conversation.lifecycleState === 'archived'
+                    ? 'archived'
+                    : 'draft',
+            lastMessage,
+        };
+    });
+}
+
+function sortConversationsByLatestActivity<TConversation extends ConversationWithDetails>(
+    conversationRows: TConversation[],
+): TConversation[] {
+    return [...conversationRows].sort((left, right) => {
+        const leftMs = left.updatedAt instanceof Date ? left.updatedAt.getTime() : new Date(left.updatedAt).getTime();
+        const rightMs = right.updatedAt instanceof Date ? right.updatedAt.getTime() : new Date(right.updatedAt).getTime();
+        const activityDiff = (Number.isFinite(rightMs) ? rightMs : 0) - (Number.isFinite(leftMs) ? leftMs : 0);
+        if (activityDiff !== 0) return activityDiff;
+        return right.id.localeCompare(left.id);
+    });
+}
+
+function compareReadWatermark(
+    left: { id: string | null; createdAt: Date | null },
+    right: { id: string | null; createdAt: Date | null },
+) {
+    const leftEpoch = left.createdAt instanceof Date ? left.createdAt.getTime() : 0;
+    const rightEpoch = right.createdAt instanceof Date ? right.createdAt.getTime() : 0;
+    if (leftEpoch !== rightEpoch) {
+        return leftEpoch - rightEpoch;
+    }
+    return 0;
+}
+
+function shouldAdvanceReadWatermark(
+    current: { id: string | null; createdAt: Date | null },
+    next: { id: string; createdAt: Date } | null,
+) {
+    if (!next) return !current.createdAt;
+    if (!current.createdAt) return true;
+    return compareReadWatermark(next, current) > 0;
+}
+
+async function reconcileConversationUnreadCounts(
+    conversationId: string,
+    userIds?: string[],
+) {
+    const targetUserIds = Array.from(new Set((userIds ?? []).filter(Boolean)));
+    const participants = await db
+        .select({
+            id: conversationParticipants.id,
+            userId: conversationParticipants.userId,
+            lastReadAt: conversationParticipants.lastReadAt,
+            lastReadMessageId: conversationParticipants.lastReadMessageId,
+        })
+        .from(conversationParticipants)
+        .where(
+            targetUserIds.length > 0
+                ? and(
+                    eq(conversationParticipants.conversationId, conversationId),
+                    inArray(conversationParticipants.userId, targetUserIds),
+                )
+                : eq(conversationParticipants.conversationId, conversationId),
+        );
+
+    await Promise.all(participants.map(async (participant) => {
+        const predicates = [
+            eq(messages.conversationId, conversationId),
+            or(isNull(messages.senderId), ne(messages.senderId, participant.userId)),
+            isNull(messages.deletedAt),
+            sql`NOT EXISTS (
+                SELECT 1
+                FROM ${messageHiddenForUsers} h
+                WHERE h.message_id = ${messages.id}
+                  AND h.user_id = ${participant.userId}
+            )`,
+        ];
+        if (participant.lastReadAt) {
+            predicates.push(gt(messages.createdAt, participant.lastReadAt));
+        }
+
+        const [row] = await db
+            .select({ count: sql<number>`COUNT(*)::int` })
+            .from(messages)
+            .where(and(...predicates));
+
+        await db
+            .update(conversationParticipants)
+            .set({ unreadCount: Number(row?.count ?? 0) })
+            .where(eq(conversationParticipants.id, participant.id));
+    }));
+}
+
 type NormalizedAttachmentInput = UploadedAttachment & {
     storagePath: string;
     signedUrl: string;
@@ -1224,6 +1421,8 @@ export async function getConversations(
                 last_message_preview: string | null;
                 last_message_sender_id: string | null;
                 last_message_type: string | null;
+                last_read_at: Date | null;
+                last_read_message_id: string | null;
                 updated_at: Date;
                 sort_at: Date;
                 archived_at: Date | null;
@@ -1238,6 +1437,8 @@ export async function getConversations(
                     cp.last_message_preview,
                     cp.last_message_sender_id,
                     cp.last_message_type,
+                    cp.last_read_at,
+                    cp.last_read_message_id,
                     c.updated_at,
                     cp.archived_at,
                     cp.muted,
@@ -1316,16 +1517,20 @@ export async function getConversations(
                     type: userConv.last_message_type,
                 } : null,
                 unreadCount: userConv.unread_count || 0, // O(1) Read from denormalized column
+                lastReadAt: userConv.last_read_at ?? null,
+                lastReadMessageId: userConv.last_read_message_id ?? null,
             };
         }).filter(Boolean) as ConversationWithDetails[];
-        const hydratedResult = await hydrateConversationLastMessageDeliveryMetadata(user.id, result);
+        const reconciledResult = await reconcileConversationLastMessagePreviews(user.id, result);
+        const hydratedResult = await hydrateConversationLastMessageDeliveryMetadata(user.id, reconciledResult);
+        const orderedResult = sortConversationsByLatestActivity(hydratedResult);
 
         // Re-sort client side just in case mapping shuffled, though map preservation usually works
         // The initial query defined the order.
 
             return {
                 success: true,
-                conversations: hydratedResult,
+                conversations: orderedResult,
                 hasMore,
                 nextCursor: hasMore
                     ? `${paginatedConvs[paginatedConvs.length - 1].sort_at.toISOString()}|${paginatedConvs[paginatedConvs.length - 1].conversation_id}`
@@ -1360,6 +1565,8 @@ export async function getConversationById(
                 lastMessageSenderId: conversationParticipants.lastMessageSenderId,
                 lastMessageType: conversationParticipants.lastMessageType,
                 lastMessageAt: conversationParticipants.lastMessageAt,
+                lastReadAt: conversationParticipants.lastReadAt,
+                lastReadMessageId: conversationParticipants.lastReadMessageId,
             })
             .from(conversationParticipants)
             .where(
@@ -1450,8 +1657,14 @@ export async function getConversationById(
                 }
                 : null,
             unreadCount: membership[0].unreadCount || 0,
+            lastReadAt: membership[0].lastReadAt ?? null,
+            lastReadMessageId: membership[0].lastReadMessageId ?? null,
         };
-        const [conversation] = await hydrateConversationLastMessageDeliveryMetadata(user.id, [baseConversation]);
+        const [reconciledConversation] = await reconcileConversationLastMessagePreviews(user.id, [baseConversation]);
+        const [conversation] = await hydrateConversationLastMessageDeliveryMetadata(
+            user.id,
+            [reconciledConversation ?? baseConversation],
+        );
 
         return {
             success: true,
@@ -2023,6 +2236,39 @@ export async function sendMessage(
             return { newMessage: msg, senderProfile: profile };
         });
 
+        const recipients = await db
+            .select({
+                userId: conversationParticipants.userId,
+                muted: conversationParticipants.muted,
+            })
+            .from(conversationParticipants)
+            .where(
+                and(
+                    eq(conversationParticipants.conversationId, conversationId),
+                    ne(conversationParticipants.userId, user.id),
+                    isNull(conversationParticipants.archivedAt),
+                ),
+            );
+
+        try {
+            await emitMessageBurstNotifications({
+                recipients,
+                actorUserId: user.id,
+                actorName: senderProfile?.fullName ?? senderProfile?.username ?? null,
+                actorAvatarUrl: senderProfile?.avatarUrl ?? null,
+                conversationId,
+                previewText: normalizedContent || (attachmentIds?.length ? 'Sent an attachment' : 'Sent a message'),
+            });
+        } catch (error) {
+            logger.error('messages.notification_emit_failed', {
+                module: 'messaging',
+                conversationId,
+                actorUserId: user.id,
+                count: recipients.length,
+                error: error instanceof Error ? error.message : String(error),
+            });
+        }
+
         return {
             success: true,
             message: {
@@ -2101,141 +2347,228 @@ export async function sendMessage(
 export async function markConversationAsRead(
     conversationId: string,
     lastReadMessageId?: string
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{
+    success: boolean;
+    error?: string;
+    conversationId?: string;
+    unreadCount?: number;
+    lastReadAt?: Date | null;
+    lastReadMessageId?: string | null;
+    serverAppliedAt?: string;
+}> {
     try {
         const user = await getAuthUser();
         if (!user) return { success: false, error: 'Not authenticated' };
+        const requestId = `${conversationId}:${user.id}:${Date.now()}`;
+        logger.info('read_commit_requested', {
+            module: 'messaging',
+            conversationId,
+            userId: user.id,
+            requestId,
+        });
+        const serverLastReadMessageId = isTemporaryMessageId(lastReadMessageId)
+            ? undefined
+            : lastReadMessageId;
 
-        const [membership] = await db
-            .select({
-                id: conversationParticipants.id,
-                lastReadMessageId: conversationParticipants.lastReadMessageId,
-            })
-            .from(conversationParticipants)
-            .where(
-                and(
-                    eq(conversationParticipants.conversationId, conversationId),
-                    eq(conversationParticipants.userId, user.id)
-                )
-            )
-            .limit(1);
-
-        if (!membership) {
-            return { success: false, error: 'Not a participant of this conversation' };
-        }
-
-        let watermarkMessage:
-            | { id: string; createdAt: Date }
-            | null = null;
-
-        if (lastReadMessageId) {
-            const [explicit] = await db
-                .select({ id: messages.id, createdAt: messages.createdAt })
-                .from(messages)
+        const result = await db.transaction(async (tx) => {
+            const [membership] = await tx
+                .select({
+                    id: conversationParticipants.id,
+                    lastReadMessageId: conversationParticipants.lastReadMessageId,
+                    lastReadAt: conversationParticipants.lastReadAt,
+                    unreadCount: conversationParticipants.unreadCount,
+                })
+                .from(conversationParticipants)
                 .where(
                     and(
-                        eq(messages.id, lastReadMessageId),
-                        eq(messages.conversationId, conversationId),
-                        isNull(messages.deletedAt)
+                        eq(conversationParticipants.conversationId, conversationId),
+                        eq(conversationParticipants.userId, user.id)
                     )
                 )
                 .limit(1);
 
-            if (!explicit) {
-                return { success: false, error: 'Read watermark message not found' };
+            if (!membership) {
+                return { ok: false as const, error: 'Not a participant of this conversation' };
             }
-            watermarkMessage = explicit;
-        } else {
-            const [latest] = await db
-                .select({ id: messages.id, createdAt: messages.createdAt })
-                .from(messages)
-                .where(
-                    and(
-                        eq(messages.conversationId, conversationId),
-                        isNull(messages.deletedAt),
-                        sql`NOT EXISTS (
-                            SELECT 1
-                            FROM ${messageHiddenForUsers} h
-                            WHERE h.message_id = ${messages.id}
-                            AND h.user_id = ${user.id}
-                        )`
+
+            let watermarkMessage:
+                | { id: string; createdAt: Date }
+                | null = null;
+
+            if (serverLastReadMessageId) {
+                const [explicit] = await tx
+                    .select({ id: messages.id, createdAt: messages.createdAt })
+                    .from(messages)
+                    .where(
+                        and(
+                            eq(messages.id, serverLastReadMessageId),
+                            eq(messages.conversationId, conversationId),
+                            isNull(messages.deletedAt)
+                        )
                     )
-                )
-                .orderBy(desc(messages.createdAt))
-                .limit(1);
+                    .limit(1);
 
-            watermarkMessage = latest || null;
-        }
+                if (!explicit) {
+                    return { ok: false as const, error: 'Read watermark message not found' };
+                }
+                watermarkMessage = explicit;
+            } else {
+                const [latest] = await tx
+                    .select({ id: messages.id, createdAt: messages.createdAt })
+                    .from(messages)
+                    .where(
+                        and(
+                            eq(messages.conversationId, conversationId),
+                            isNull(messages.deletedAt),
+                            sql`NOT EXISTS (
+                                SELECT 1
+                                FROM ${messageHiddenForUsers} h
+                                WHERE h.message_id = ${messages.id}
+                                AND h.user_id = ${user.id}
+                            )`
+                        )
+                    )
+                    .orderBy(desc(messages.createdAt), desc(messages.id))
+                    .limit(1);
 
-        // Wave 1: also bulk-insert per-message read receipts for messages from
-        // other senders up to the watermark. This populates the receipt table
-        // that drives the blue-tick state for the message sender. Capped at
-        // 200 messages per call to avoid oversized INSERTs.
-        if (watermarkMessage) {
-            const previousWatermarkId = membership.lastReadMessageId;
-
-            // Find messages from other senders between old watermark and new one
-            const unreadMessages = await db
-                .select({ id: messages.id })
-                .from(messages)
-                .where(
-                    and(
-                        eq(messages.conversationId, conversationId),
-                        ne(messages.senderId, user.id),
-                        isNull(messages.deletedAt),
-                        // Only messages up to the new watermark.
-                        // IMPORTANT: the pg driver cannot serialize a JS Date via `sql`
-                        // template interpolation (the error reads: `The "string" argument
-                        // must be of type string or an instance of Buffer or ArrayBuffer.
-                        // Received an instance of Date`). Use Drizzle's `lte` helper which
-                        // serializes column values correctly.
-                        lte(messages.createdAt, watermarkMessage.createdAt),
-                        // After the previous watermark (if any). This clause uses a
-                        // subquery on `messages.id`, so no Date interpolation is needed.
-                        previousWatermarkId
-                            ? sql`${messages.id} != ${previousWatermarkId} AND ${messages.createdAt} > COALESCE(
-                                (SELECT created_at FROM ${messages} WHERE id = ${previousWatermarkId}),
-                                '1970-01-01'::timestamptz
-                              )`
-                            : sql`true`,
-                        // Skip messages we already have read receipts for
-                        sql`NOT EXISTS (
-                            SELECT 1 FROM ${messageReadReceipts} rr
-                            WHERE rr.message_id = ${messages.id}
-                            AND rr.user_id = ${user.id}
-                        )`,
-                    ),
-                )
-                .orderBy(desc(messages.createdAt))
-                .limit(200);
-
-            if (unreadMessages.length > 0) {
-                await db.insert(messageReadReceipts)
-                    .values(unreadMessages.map((m) => ({
-                        messageId: m.id,
-                        conversationId,
-                        userId: user.id,
-                    })))
-                    .onConflictDoNothing();
+                watermarkMessage = latest || null;
             }
-        }
 
-        await db
-            .update(conversationParticipants)
-            .set({
-                lastReadAt: watermarkMessage?.createdAt || new Date(),
-                lastReadMessageId: watermarkMessage?.id || membership.lastReadMessageId || null,
-                unreadCount: 0, // Reset denormalized counter
-                archivedAt: null,
-            })
-            .where(
-                and(
-                    eq(conversationParticipants.conversationId, conversationId),
-                    eq(conversationParticipants.userId, user.id)
-                )
+            const shouldAdvanceWatermark = shouldAdvanceReadWatermark(
+                {
+                    id: membership.lastReadMessageId ?? null,
+                    createdAt: membership.lastReadAt ?? null,
+                },
+                watermarkMessage,
             );
+            const nextLastReadAt = watermarkMessage
+                ? shouldAdvanceWatermark
+                    ? watermarkMessage.createdAt
+                    : membership.lastReadAt
+                : membership.lastReadAt ?? new Date();
+            const nextLastReadMessageId = watermarkMessage
+                ? shouldAdvanceWatermark
+                    ? watermarkMessage.id
+                    : membership.lastReadMessageId ?? watermarkMessage.id
+                : membership.lastReadMessageId ?? null;
 
-        return { success: true };
+            if (watermarkMessage && shouldAdvanceWatermark) {
+                const previousWatermarkId = membership.lastReadMessageId;
+                const unreadMessages = await tx
+                    .select({ id: messages.id })
+                    .from(messages)
+                    .where(
+                        and(
+                            eq(messages.conversationId, conversationId),
+                            or(isNull(messages.senderId), ne(messages.senderId, user.id)),
+                            isNull(messages.deletedAt),
+                            lte(messages.createdAt, watermarkMessage.createdAt),
+                            previousWatermarkId
+                                ? sql`${messages.createdAt} > COALESCE(
+                                    (SELECT created_at FROM ${messages} WHERE id = ${previousWatermarkId}),
+                                    '1970-01-01'::timestamptz
+                                  )`
+                                : sql`true`,
+                            sql`NOT EXISTS (
+                                SELECT 1 FROM ${messageReadReceipts} rr
+                                WHERE rr.message_id = ${messages.id}
+                                AND rr.user_id = ${user.id}
+                            )`,
+                        ),
+                    )
+                    .orderBy(desc(messages.createdAt))
+                    .limit(200);
+
+                if (unreadMessages.length > 0) {
+                    await tx.insert(messageReadReceipts)
+                        .values(unreadMessages.map((m) => ({
+                            messageId: m.id,
+                            conversationId,
+                            userId: user.id,
+                        })))
+                        .onConflictDoNothing();
+                }
+            }
+
+            const predicates = [
+                eq(messages.conversationId, conversationId),
+                or(isNull(messages.senderId), ne(messages.senderId, user.id)),
+                isNull(messages.deletedAt),
+                sql`NOT EXISTS (
+                    SELECT 1
+                    FROM ${messageHiddenForUsers} h
+                    WHERE h.message_id = ${messages.id}
+                      AND h.user_id = ${user.id}
+                )`,
+            ];
+            if (nextLastReadAt) {
+                predicates.push(gt(messages.createdAt, nextLastReadAt));
+            }
+
+            const [row] = await tx
+                .select({ count: sql<number>`COUNT(*)::int` })
+                .from(messages)
+                .where(and(...predicates));
+            const finalUnreadCount = Number(row?.count ?? 0);
+
+            const [updatedMembership] = await tx
+                .update(conversationParticipants)
+                .set({
+                    lastReadAt: nextLastReadAt,
+                    lastReadMessageId: nextLastReadMessageId,
+                    unreadCount: finalUnreadCount,
+                    archivedAt: null,
+                })
+                .where(eq(conversationParticipants.id, membership.id))
+                .returning({
+                    unreadCount: conversationParticipants.unreadCount,
+                    lastReadAt: conversationParticipants.lastReadAt,
+                    lastReadMessageId: conversationParticipants.lastReadMessageId,
+                });
+
+            return {
+                ok: true as const,
+                membership,
+                updatedMembership,
+            };
+        });
+
+        if (!result.ok) {
+            return { success: false, error: result.error };
+        }
+        const updatedMembership = result.updatedMembership;
+
+        if ((updatedMembership?.unreadCount ?? 0) === 0) {
+            try {
+                await markConversationNotificationsRead(user.id, conversationId);
+            } catch (error) {
+                logger.error('messages.mark_notifications_read_failed', {
+                    module: 'messaging',
+                    conversationId,
+                    userId: user.id,
+                    error: error instanceof Error ? error.message : String(error),
+                });
+            }
+        }
+
+        logger.info('read_commit_applied', {
+            module: 'messaging',
+            conversationId,
+            userId: user.id,
+            requestId,
+            previousCount: result.membership.unreadCount ?? 0,
+            count: updatedMembership?.unreadCount ?? 0,
+            status: 'success',
+        });
+
+        return {
+            success: true,
+            conversationId,
+            unreadCount: updatedMembership?.unreadCount ?? 0,
+            lastReadAt: updatedMembership?.lastReadAt ?? null,
+            lastReadMessageId: updatedMembership?.lastReadMessageId ?? null,
+            serverAppliedAt: new Date().toISOString(),
+        };
     } catch (error) {
         console.error('Error marking as read:', error);
         return { success: false, error: 'Failed to mark as read' };
@@ -2520,6 +2853,8 @@ export async function searchMessages(
             last_message_at: Date | null;
             last_message_type: string | null;
             unread_count: number;
+            last_read_at: Date | null;
+            last_read_message_id: string | null;
             muted: boolean | null;
         }>(sql`
             SELECT 
@@ -2532,6 +2867,8 @@ export async function searchMessages(
                 cp.last_message_at,
                 cp.last_message_type,
                 cp.unread_count,
+                cp.last_read_at,
+                cp.last_read_message_id,
                 cp.muted
             FROM ${conversations} c
             INNER JOIN ${conversationParticipants} cp
@@ -2594,7 +2931,9 @@ export async function searchMessages(
                     createdAt: details.last_message_at || details.updated_at || new Date(),
                     type: details.last_message_type,
                 } : null,
-                unreadCount: details?.unread_count || 0
+                unreadCount: details?.unread_count || 0,
+                lastReadAt: details?.last_read_at ?? null,
+                lastReadMessageId: details?.last_read_message_id ?? null,
             };
 
             return {
@@ -2786,6 +3125,8 @@ export async function deleteMessage(
                     target: [messageHiddenForUsers.messageId, messageHiddenForUsers.userId],
                 });
 
+            await reconcileConversationUnreadCounts(messageRow.conversationId, [user.id]);
+
             try {
                 if (await conversationNeedsPreviewRefresh(messageRow.conversationId, messageRow.id)) {
                     await refreshConversationParticipantPreviews(messageRow.conversationId);
@@ -2809,6 +3150,7 @@ export async function deleteMessage(
         }
 
         if (messageRow.deletedAt) {
+            await reconcileConversationUnreadCounts(messageRow.conversationId);
             return { success: true };
         }
 
@@ -2824,6 +3166,8 @@ export async function deleteMessage(
                 },
             })
             .where(eq(messages.id, messageRow.id));
+
+        await reconcileConversationUnreadCounts(messageRow.conversationId);
 
         try {
             if (await conversationNeedsPreviewRefresh(messageRow.conversationId, messageRow.id)) {
@@ -3595,6 +3939,39 @@ export async function sendMessageWithAttachments(
 
             return { newMessage: msg, senderProfile: profile, persistedAttachments: insertedAttachments };
         });
+
+        const recipients = await db
+            .select({
+                userId: conversationParticipants.userId,
+                muted: conversationParticipants.muted,
+            })
+            .from(conversationParticipants)
+            .where(
+                and(
+                    eq(conversationParticipants.conversationId, conversationId),
+                    ne(conversationParticipants.userId, user.id),
+                    isNull(conversationParticipants.archivedAt),
+                ),
+            );
+
+        try {
+            await emitMessageBurstNotifications({
+                recipients,
+                actorUserId: user.id,
+                actorName: senderProfile?.fullName ?? senderProfile?.username ?? null,
+                actorAvatarUrl: senderProfile?.avatarUrl ?? null,
+                conversationId,
+                previewText: normalizedContent || (attachments.length ? 'Sent an attachment' : 'Sent a message'),
+            });
+        } catch (error) {
+            logger.error('messages.notification_emit_failed', {
+                module: 'messaging',
+                conversationId,
+                actorUserId: user.id,
+                count: recipients.length,
+                error: error instanceof Error ? error.message : String(error),
+            });
+        }
 
         const committedAttachmentsByPath = new Map(
             committedAttachments.map((attachment) => [attachment.storagePath, attachment] as const),
