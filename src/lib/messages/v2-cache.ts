@@ -15,6 +15,11 @@ import { queryKeys } from '@/lib/query-keys';
 import { mergeMessages, toEpochMs } from '@/lib/messages/utils';
 
 const INBOX_QUERY_PREFIX = ['chat-v2', 'inbox'] as const;
+export interface PendingReadCommitState {
+    requestId: string;
+    requestedAtMs: number;
+    requestedMessageId: string | null;
+}
 
 function updateThreadData(
     queryClient: QueryClient,
@@ -39,6 +44,132 @@ function normalizeConversationRows(conversations: InboxConversationV2[]) {
         if (updatedDiff !== 0) return updatedDiff;
         return left.id.localeCompare(right.id);
     });
+}
+
+function doesLastMessageAdvance(
+    currentLastMessage: InboxConversationV2['lastMessage'] | null | undefined,
+    nextLastMessage: InboxConversationV2['lastMessage'] | null | undefined,
+) {
+    if (!nextLastMessage) return false;
+    if (!currentLastMessage) return true;
+    if (currentLastMessage.id === nextLastMessage.id) return false;
+
+    const currentEpoch = toEpochMs(currentLastMessage.createdAt);
+    const nextEpoch = toEpochMs(nextLastMessage.createdAt);
+    if (nextEpoch <= 0) return false;
+    if (currentEpoch <= 0) return true;
+    if (nextEpoch !== currentEpoch) {
+        return nextEpoch > currentEpoch;
+    }
+    return nextLastMessage.id.localeCompare(currentLastMessage.id) > 0;
+}
+
+function compareConversationReadWatermarks(
+    left: Pick<InboxConversationV2, 'lastReadAt' | 'lastReadMessageId'> | null | undefined,
+    right: Pick<InboxConversationV2, 'lastReadAt' | 'lastReadMessageId'> | null | undefined,
+) {
+    const leftEpoch = toEpochMs(left?.lastReadAt);
+    const rightEpoch = toEpochMs(right?.lastReadAt);
+    if (leftEpoch !== rightEpoch) {
+        return leftEpoch - rightEpoch;
+    }
+    return 0;
+}
+
+function isLastMessageAfterReadWatermark(
+    lastMessage: InboxConversationV2['lastMessage'] | null | undefined,
+    readWatermark: Pick<InboxConversationV2, 'lastReadAt' | 'lastReadMessageId'> | null | undefined,
+) {
+    if (!lastMessage) return false;
+    const messageEpoch = toEpochMs(lastMessage.createdAt);
+    const readEpoch = toEpochMs(readWatermark?.lastReadAt);
+    if (messageEpoch <= 0) return false;
+    if (readEpoch <= 0) return true;
+    if (messageEpoch !== readEpoch) {
+        return messageEpoch > readEpoch;
+    }
+    return false;
+}
+
+function mergeConversationSnapshot(
+    current: InboxConversationV2 | null | undefined,
+    next: InboxConversationV2,
+    _options?: { pendingReadCommit?: PendingReadCommitState | null },
+): InboxConversationV2 {
+    if (!current) {
+        return next;
+    }
+
+    const shouldUseNextLastMessage = Boolean(
+        next.lastMessage && shouldReplaceConversationLastMessage(current.lastMessage, next.lastMessage),
+    );
+    const lastMessage = shouldUseNextLastMessage
+        ? next.lastMessage
+        : current.lastMessage ?? next.lastMessage;
+    const currentReadIsAtLeastNext = compareConversationReadWatermarks(current, next) >= 0;
+    const shouldKeepCurrentReadWatermark = currentReadIsAtLeastNext;
+    const shouldIgnoreStaleUnread =
+        currentReadIsAtLeastNext
+        && next.unreadCount > current.unreadCount
+        && !isLastMessageAfterReadWatermark(next.lastMessage, current);
+    if (shouldIgnoreStaleUnread) {
+        console.debug('[messages-v2] read_summary_ignored_stale', {
+            conversationId: current.id,
+            previousUnread: current.unreadCount,
+            nextUnread: next.unreadCount,
+            cachedReadMessageId: current.lastReadMessageId,
+            summaryReadMessageId: next.lastReadMessageId,
+        });
+    }
+    const updatedAtEpoch = Math.max(
+        toEpochMs(current.updatedAt),
+        toEpochMs(next.updatedAt),
+        toEpochMs(lastMessage?.createdAt),
+    );
+
+    return {
+        ...next,
+        updatedAt: updatedAtEpoch > 0 ? new Date(updatedAtEpoch) : next.updatedAt,
+        lastMessage,
+        lastReadAt: shouldKeepCurrentReadWatermark ? current.lastReadAt : next.lastReadAt,
+        lastReadMessageId: shouldKeepCurrentReadWatermark ? current.lastReadMessageId : next.lastReadMessageId,
+        unreadCount: shouldIgnoreStaleUnread ? current.unreadCount : next.unreadCount,
+    };
+}
+
+export function getPendingReadCommitState(
+    queryClient: QueryClient,
+    conversationId: string,
+): PendingReadCommitState | null {
+    return queryClient.getQueryData<PendingReadCommitState | null>(
+        queryKeys.messages.v2.readCommitState(conversationId),
+    ) ?? null;
+}
+
+export function setPendingReadCommitState(
+    queryClient: QueryClient,
+    conversationId: string,
+    state: PendingReadCommitState | null,
+) {
+    queryClient.setQueryData<PendingReadCommitState | null>(
+        queryKeys.messages.v2.readCommitState(conversationId),
+        state,
+    );
+}
+
+export function clearPendingReadCommitState(
+    queryClient: QueryClient,
+    conversationId: string,
+    requestId?: string | null,
+) {
+    queryClient.setQueryData<PendingReadCommitState | null>(
+        queryKeys.messages.v2.readCommitState(conversationId),
+        (current) => {
+            if (!current) return null;
+            if (requestId && current.requestId !== requestId) return current;
+            return null;
+        },
+    );
 }
 
 function repartitionConversations(
@@ -78,10 +209,36 @@ function updateInboxData(
     );
 }
 
+function isMessageOlderThanBoundary(
+    message: Pick<MessageWithSender, 'id' | 'createdAt'>,
+    boundary: Pick<MessageWithSender, 'id' | 'createdAt'>,
+): boolean {
+    const messageCreatedAt = toEpochMs(message.createdAt);
+    const boundaryCreatedAt = toEpochMs(boundary.createdAt);
+    if (messageCreatedAt !== boundaryCreatedAt) {
+        return messageCreatedAt < boundaryCreatedAt;
+    }
+    return message.id.localeCompare(boundary.id) < 0;
+}
+
+function isMessageNewerThanBoundary(
+    message: Pick<MessageWithSender, 'id' | 'createdAt'>,
+    boundary: Pick<MessageWithSender, 'id' | 'createdAt'>,
+): boolean {
+    const messageCreatedAt = toEpochMs(message.createdAt);
+    const boundaryCreatedAt = toEpochMs(boundary.createdAt);
+    if (messageCreatedAt !== boundaryCreatedAt) {
+        return messageCreatedAt > boundaryCreatedAt;
+    }
+    return message.id.localeCompare(boundary.id) > 0;
+}
+
 export function upsertInboxConversation(queryClient: QueryClient, conversation: InboxConversationV2) {
     updateInboxData(queryClient, (conversations) => {
         const byId = new Map(conversations.map((entry) => [entry.id, entry] as const));
-        byId.set(conversation.id, conversation);
+        byId.set(conversation.id, mergeConversationSnapshot(byId.get(conversation.id), conversation, {
+            pendingReadCommit: getPendingReadCommitState(queryClient, conversation.id),
+        }));
         return Array.from(byId.values());
     });
 }
@@ -108,16 +265,22 @@ export function upsertThreadConversation(
     queryClient: QueryClient,
     conversation: InboxConversationV2,
 ) {
+    let committedConversation = conversation;
     updateThreadData(queryClient, conversation.id, (page, pageIndex) =>
         pageIndex === 0
-            ? {
-                ...page,
-                conversation,
-                capability: conversation.capability,
-            }
+            ? (() => {
+                committedConversation = mergeConversationSnapshot(page.conversation, conversation, {
+                    pendingReadCommit: getPendingReadCommitState(queryClient, conversation.id),
+                });
+                return {
+                    ...page,
+                    conversation: committedConversation,
+                    capability: committedConversation.capability,
+                };
+            })()
             : page,
     );
-    upsertInboxConversation(queryClient, conversation);
+    upsertInboxConversation(queryClient, committedConversation);
 }
 
 export function patchThreadConversation(
@@ -229,16 +392,15 @@ export function patchThreadMessage(
     messageId: string,
     patch: (message: MessageWithSender) => MessageWithSender,
 ) {
-    updateThreadData(queryClient, conversationId, (page, pageIndex) =>
-        pageIndex === 0
-            ? {
-                ...page,
-                messages: page.messages.map((message) =>
-                    message.id === messageId ? patch(message) : message,
-                ),
-            }
-            : page,
-    );
+    updateThreadData(queryClient, conversationId, (page) => ({
+        ...page,
+        messages: page.messages.map((message) =>
+            message.id === messageId ? patch(message) : message,
+        ),
+        pinnedMessages: page.pinnedMessages.map((message) =>
+            message.id === messageId ? patch(message) : message,
+        ),
+    }));
 }
 
 export function patchPinnedMessages(
@@ -261,14 +423,11 @@ export function hideThreadMessageForViewer(
     conversationId: string,
     messageId: string,
 ) {
-    updateThreadData(queryClient, conversationId, (page, pageIndex) =>
-        pageIndex === 0
-            ? {
-                ...page,
-                messages: page.messages.filter((message) => message.id !== messageId),
-            }
-            : page,
-    );
+    updateThreadData(queryClient, conversationId, (page) => ({
+        ...page,
+        messages: page.messages.filter((message) => message.id !== messageId),
+        pinnedMessages: page.pinnedMessages.filter((message) => message.id !== messageId),
+    }));
 }
 
 export function removeThreadMessage(
@@ -284,29 +443,76 @@ export function replaceThreadSnapshot(
     conversationId: string,
     snapshot: MessageThreadPageV2,
 ) {
+    const normalizedSnapshot: MessageThreadPageV2 = {
+        ...snapshot,
+        messages: mergeMessages([], snapshot.messages),
+    };
+    let committedConversation = normalizedSnapshot.conversation;
+
     queryClient.setQueryData<InfiniteData<MessageThreadPageV2>>(
         queryKeys.messages.v2.thread(conversationId),
         (current) => {
             if (!current) {
                 return {
-                    pages: [snapshot],
+                    pages: [normalizedSnapshot],
                     pageParams: [undefined],
                 };
             }
 
-            const [, ...remainingPages] = current.pages;
-            const [, ...remainingParams] = current.pageParams;
+            committedConversation = mergeConversationSnapshot(
+                current.pages[0]?.conversation,
+                normalizedSnapshot.conversation,
+                {
+                    pendingReadCommit: getPendingReadCommitState(queryClient, conversationId),
+                },
+            );
+            const snapshotWithConversation: MessageThreadPageV2 = {
+                ...normalizedSnapshot,
+                conversation: committedConversation,
+                capability: committedConversation.capability,
+            };
+            const newestSnapshotMessage = normalizedSnapshot.messages.at(-1) ?? null;
+            const newerCachedMessages = newestSnapshotMessage
+                ? current.pages
+                    .flatMap((page) => page.messages)
+                    .filter((message) => isMessageNewerThanBoundary(message, newestSnapshotMessage))
+                : [];
+            const mergedSnapshot: MessageThreadPageV2 = newerCachedMessages.length > 0
+                ? {
+                    ...snapshotWithConversation,
+                    messages: mergeMessages(normalizedSnapshot.messages, newerCachedMessages),
+                }
+                : snapshotWithConversation;
+            const oldestSnapshotMessage = mergedSnapshot.messages[0] ?? null;
+            if (!oldestSnapshotMessage) {
+                return {
+                    ...current,
+                    pages: [mergedSnapshot],
+                    pageParams: [undefined],
+                };
+            }
+
+            const nextPages: MessageThreadPageV2[] = [mergedSnapshot];
+            const nextPageParams: Array<string | undefined> = [undefined];
+            current.pages.slice(1).forEach((page, pageIndex) => {
+                const olderMessages = mergeMessages([], page.messages)
+                    .filter((message) => isMessageOlderThanBoundary(message, oldestSnapshotMessage));
+                if (olderMessages.length === 0) return;
+                nextPages.push({
+                    ...page,
+                    messages: olderMessages,
+                });
+                nextPageParams.push(current.pageParams[pageIndex + 1] as string | undefined);
+            });
+
             return {
                 ...current,
-                pages: [snapshot, ...remainingPages],
-                pageParams: [
-                    undefined,
-                    ...remainingParams,
-                ],
+                pages: nextPages,
+                pageParams: nextPageParams,
             };
         },
     );
-    upsertInboxConversation(queryClient, snapshot.conversation);
+    upsertInboxConversation(queryClient, committedConversation);
 }
 
 export function hasCachedThreadMessage(
