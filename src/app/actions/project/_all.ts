@@ -27,6 +27,7 @@ import type { Project } from '@/types/hub';
 import { logger } from '@/lib/logger';
 import { buildProjectOwnerPresentation } from '@/lib/privacy/presentation';
 import { resolvePrivacyRelationship } from '@/lib/privacy/resolver';
+import { emitTaskAssignedNotification } from '@/lib/notifications/emitters';
 import { queueCounterRefreshBestEffort } from '@/lib/workspace/counter-buffer';
 import {
     createSprintSchema,
@@ -3044,7 +3045,7 @@ export async function getProjectTaskDetailAction(projectId: string, taskId: stri
             },
             with: {
                 project: {
-                    columns: { key: true },
+                    columns: { key: true, slug: true },
                 },
                 sprint: {
                     columns: {
@@ -3517,7 +3518,7 @@ export async function createTaskAction(data: z.infer<typeof createTaskSchema>) {
             },
             with: {
                 project: {
-                    columns: { key: true },
+                    columns: { key: true, slug: true },
                 },
                 sprint: {
                     columns: {
@@ -3549,6 +3550,33 @@ export async function createTaskAction(data: z.infer<typeof createTaskSchema>) {
         // Note: We don't need to manually revalidate if we are using Realtime
         // But for fallback and initial load consistency:
         revalidatePath(`/projects/${validated.projectId}`);
+
+        if (validated.assigneeId && validated.assigneeId !== user.id) {
+            try {
+                await emitTaskAssignedNotification({
+                    recipientUserId: validated.assigneeId,
+                    actorUserId: user.id,
+                    actorName: (user.user_metadata?.full_name as string | undefined) ?? (user.user_metadata?.username as string | undefined) ?? null,
+                    actorAvatarUrl: (user.user_metadata?.avatar_url as string | undefined) ?? null,
+                    taskId: hydratedTask.id,
+                    taskTitle: hydratedTask.title,
+                    taskNumber: hydratedTask.taskNumber ?? null,
+                    projectId: validated.projectId,
+                    projectSlug: hydratedTask.project?.slug ?? null,
+                    projectKey: hydratedTask.project?.key ?? null,
+                    eventKey: hydratedTask.createdAt?.toISOString?.() ?? hydratedTask.updatedAt?.toISOString?.() ?? null,
+                });
+            } catch (notificationError) {
+                logger.warn("projects.task_assignment_notification_failed", {
+                    module: "projects",
+                    projectId: validated.projectId,
+                    taskId: hydratedTask.id,
+                    actorUserId: user.id,
+                    targetUserId: validated.assigneeId,
+                    error: notificationError instanceof Error ? notificationError.message : String(notificationError),
+                });
+            }
+        }
 
         return { success: true, task: normalizeTaskSurfaceRecord(hydratedTask) };
     } catch (error) {
