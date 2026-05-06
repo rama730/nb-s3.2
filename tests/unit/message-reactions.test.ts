@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
     buildReactionSummaryByMessage,
     normalizeMessageReactionSummary,
+    toPersistedReactionSummary,
     toggleMessageReactionSummary,
     withReactionSummaryMetadata,
 } from '@/lib/messages/reactions';
@@ -73,5 +74,18 @@ test('withReactionSummaryMetadata removes empty summaries and stores normalized 
     assert.deepEqual(
         withReactionSummaryMetadata(withSummary, []),
         { deliveryState: 'sent' },
+    );
+});
+
+test('toPersistedReactionSummary removes viewer-specific reaction state', () => {
+    assert.deepEqual(
+        toPersistedReactionSummary([
+            { emoji: '🔥', count: 2, viewerReacted: true },
+            { emoji: '👍', count: 1, viewerReacted: false },
+        ]),
+        [
+            { emoji: '🔥', count: 2, viewerReacted: false },
+            { emoji: '👍', count: 1, viewerReacted: false },
+        ],
     );
 });
