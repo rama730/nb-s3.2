@@ -4,12 +4,16 @@ import React, { useCallback, useEffect, useId, useMemo, useState } from 'react';
 import { format } from 'date-fns';
 import {
     AlertCircle,
+    BriefcaseBusiness,
     Check,
     CheckCheck,
+    ChevronDown,
     Clock3,
     Copy,
     CornerUpLeft,
+    ExternalLink,
     Flag,
+    Lock,
     MoreVertical,
     Pencil,
     Pin,
@@ -20,6 +24,7 @@ import {
     Trash2,
 } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
+import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { useAuth } from '@/hooks/useAuth';
 import type { MessageWithSender } from '@/app/actions/messaging';
@@ -63,10 +68,11 @@ import { ReactionQuickBar } from './ReactionQuickBar';
 import { ReactionPillRow } from './ReactionPillRow';
 import { LinkPreviewCard } from './LinkPreviewCard';
 import { ReportMessageDialog } from './ReportMessageDialog';
-import { useLinkPreview, extractFirstUrl } from '@/hooks/useLinkPreview';
+import { useLinkPreview, extractFirstUrl, type LinkPreview } from '@/hooks/useLinkPreview';
 import { MessageContextChipRowV2 } from './MessageContextChipRowV2';
 import { StructuredMessageCardV2 } from './StructuredMessageCardV2';
 import { useMessagesActions, useMessagingStructuredCatalog } from '@/hooks/useMessagesV2';
+import type { MessageLinkedWorkSummary } from '@/lib/messages/linked-work';
 import {
     Dialog,
     DialogContent,
@@ -81,12 +87,29 @@ import { useMessagesV2OutboxStore } from '@/stores/messagesV2OutboxStore';
 
 interface MessageBubbleV2Props {
     message: MessageWithSender;
+    linkedWork?: MessageLinkedWorkSummary[];
     showAvatar?: boolean;
+    surface?: 'page' | 'popup';
     onReply?: (message: MessageWithSender) => void;
     onTogglePin?: (messageId: string, pinned: boolean) => void;
     onFocusMessage?: (messageId: string, source?: 'reply' | 'pin' | 'external') => void;
+    onContentLoad?: () => void;
     isFocusedReplyTarget?: boolean;
     focusSource?: 'reply' | 'pin' | 'external' | null;
+}
+
+function createPendingLinkPreview(url: string): LinkPreview | null {
+    try {
+        return {
+            title: null,
+            description: null,
+            image: null,
+            domain: new URL(url).hostname,
+            url,
+        };
+    } catch {
+        return null;
+    }
 }
 
 function getApplicationStatusLabel(status: string | null) {
@@ -217,6 +240,41 @@ function arePrivateFollowUpsEqual(
     );
 }
 
+function areLinkedWorkEqual(left: readonly MessageLinkedWorkSummary[] | undefined, right: readonly MessageLinkedWorkSummary[] | undefined) {
+    const leftItems = left ?? [];
+    const rightItems = right ?? [];
+    if (leftItems.length !== rightItems.length) return false;
+    for (let index = 0; index < leftItems.length; index += 1) {
+        const current = leftItems[index];
+        const next = rightItems[index];
+        if (
+            current.id !== next.id
+            || current.label !== next.label
+            || (current.subtitle ?? null) !== (next.subtitle ?? null)
+            || current.href !== next.href
+            || current.status !== next.status
+            || current.visibility !== next.visibility
+            || (current.isPrivate ?? null) !== (next.isPrivate ?? null)
+            || (current.badge ?? null) !== (next.badge ?? null)
+            || current.updatedAt !== next.updatedAt
+        ) {
+            return false;
+        }
+    }
+    return true;
+}
+
+function getLinkedWorkDisplayLabel(link: MessageLinkedWorkSummary) {
+    if (link.targetType !== 'follow_up') return link.label;
+    const dueAt = typeof link.metadata?.dueAt === 'string' ? link.metadata.dueAt : null;
+    if (!dueAt) return link.label;
+
+    const dueDate = new Date(dueAt);
+    if (Number.isNaN(dueDate.getTime())) return link.label;
+
+    return `Follow-up ${format(dueDate, 'MMM d')}`;
+}
+
 function areAttachmentsEqual(left: ChatAttachmentV2[], right: ChatAttachmentV2[]) {
     if (left === right) return true;
     if (left.length !== right.length) return false;
@@ -242,14 +300,18 @@ function areAttachmentsEqual(left: ChatAttachmentV2[], right: ChatAttachmentV2[]
 
 export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
     message,
+    linkedWork = [],
     showAvatar = true,
+    surface = 'page',
     onReply,
     onTogglePin,
     onFocusMessage,
+    onContentLoad,
     isFocusedReplyTarget = false,
     focusSource = null,
 }: MessageBubbleV2Props) {
     const queryClient = useQueryClient();
+    const router = useRouter();
     const { user } = useAuth();
     const { resolveWorkflow, convertMessageToTask, convertMessageToFollowUp } = useMessagesActions();
     const isOwn = message.senderId === user?.id;
@@ -276,9 +338,11 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
     const [isReactionLoading, setIsReactionLoading] = useState(false);
     const [taskDialogOpen, setTaskDialogOpen] = useState(false);
     const [followUpDialogOpen, setFollowUpDialogOpen] = useState(false);
+    const [linkedWorkExpanded, setLinkedWorkExpanded] = useState(false);
     const [taskTitle, setTaskTitle] = useState('');
     const [taskDescription, setTaskDescription] = useState('');
     const [taskProjectId, setTaskProjectId] = useState<string>('');
+    const [taskAssigneeId, setTaskAssigneeId] = useState<string>('');
     const [taskPriority, setTaskPriority] = useState<'low' | 'medium' | 'high' | 'urgent'>('medium');
     const [taskDueDate, setTaskDueDate] = useState('');
     const [followUpNote, setFollowUpNote] = useState('');
@@ -287,6 +351,7 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
     const taskProjectSelectId = `${fieldIdBase}-task-project`;
     const taskTitleInputId = `${fieldIdBase}-task-title`;
     const taskDescriptionInputId = `${fieldIdBase}-task-description`;
+    const taskAssigneeSelectId = `${fieldIdBase}-task-assignee`;
     const taskPrioritySelectId = `${fieldIdBase}-task-priority`;
     const taskDueDateInputId = `${fieldIdBase}-task-due-date`;
     const followUpNoteInputId = `${fieldIdBase}-follow-up-note`;
@@ -300,9 +365,16 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
         undefined,
         taskDialogOpen || followUpDialogOpen,
     );
+    const visibleLinkedWork = linkedWorkExpanded ? linkedWork : linkedWork.slice(0, 2);
 
     const firstUrl = extractFirstUrl(message.content);
-    const { data: linkPreview } = useLinkPreview(isDeleted ? null : firstUrl);
+    const linkPreviewQuery = useLinkPreview(isDeleted ? null : firstUrl);
+    const linkPreview = linkPreviewQuery.data ?? null;
+    const pendingLinkPreview = useMemo(
+        () => (!linkPreview && firstUrl && linkPreviewQuery.isFetching ? createPendingLinkPreview(firstUrl) : null),
+        [firstUrl, linkPreview, linkPreviewQuery.isFetching],
+    );
+    const renderedLinkPreview = linkPreview ?? pendingLinkPreview;
 
     const attachments = useMemo<ChatAttachmentV2[]>(
         () => (message.attachments || []) as ChatAttachmentV2[],
@@ -310,8 +382,25 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
     );
     const canEditMessage = isOwn && !isDeleted && Boolean(message.content);
     const canReply = !isDeleted;
+    const isPopup = surface === 'popup';
     const replyPreviewBadge = message.replyTo ? getReplyPreviewBadge(message.replyTo) : null;
     const replyPreviewText = message.replyTo ? getReplyPreviewText(message.replyTo) : null;
+    const hasRichContent = Boolean(
+        structured
+        || message.replyTo
+        || isApplication
+        || privateFollowUp
+        || contextChips.length > 0
+        || linkedWork.length > 0
+        || attachments.length > 0
+        || renderedLinkPreview,
+    );
+
+    useEffect(() => {
+        if (linkPreview) {
+            onContentLoad?.();
+        }
+    }, [linkPreview, onContentLoad]);
 
     useEffect(() => {
         if (!isEditing) {
@@ -337,6 +426,7 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
         );
         setTaskDescription(structured?.summary || message.content?.trim() || '');
         setTaskProjectId(catalogQuery.data?.linkedProjectId || catalogQuery.data?.projects?.[0]?.id || '');
+        setTaskAssigneeId('');
         setTaskPriority('medium');
         setTaskDueDate('');
     }, [
@@ -356,7 +446,7 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
     }, [followUpDialogOpen, message.content, privateFollowUp?.dueAt, privateFollowUp?.note, structured?.summary]);
 
     const syncAfterMessageAction = useCallback(async () => {
-        await refreshConversationCache(queryClient, message.conversationId);
+        await refreshConversationCache(queryClient, message.conversationId, { includeUnread: true });
     }, [message.conversationId, queryClient]);
 
     const handleResolveWorkflow = useCallback(async (
@@ -393,6 +483,7 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
                 title: taskTitle.trim() || null,
                 description: taskDescription.trim() || null,
                 priority: taskPriority,
+                assigneeId: taskAssigneeId || null,
                 dueDate: taskDueDate ? new Date(taskDueDate).toISOString() : null,
             });
             toast.success('Task created from message');
@@ -400,7 +491,7 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
         } catch (error) {
             toast.error(error instanceof Error ? error.message : 'Failed to create task');
         }
-    }, [convertMessageToTask, message.id, taskDescription, taskDueDate, taskPriority, taskProjectId, taskTitle]);
+    }, [convertMessageToTask, message.id, taskAssigneeId, taskDescription, taskDueDate, taskPriority, taskProjectId, taskTitle]);
 
     const handleAddFollowUp = useCallback(async () => {
         if (!privateFollowUpsEnabled) {
@@ -583,10 +674,10 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
     return (
         <>
         <div
-            className={`flex w-full ${isOwn ? 'justify-end' : 'justify-start'}`}
+            className={`msg-bubble-lane flex w-full ${isOwn ? 'justify-end' : 'justify-start'}`}
             style={isOptimistic ? { animation: 'message-appear 250ms ease-out' } : undefined}
         >
-            <div className={`group flex max-w-full items-end gap-2 ${isOwn ? 'flex-row-reverse' : 'flex-row'}`}>
+            <div className={`group/message flex w-full min-w-0 items-end gap-2 ${isOwn ? 'flex-row-reverse' : 'flex-row'}`}>
                 {!isOwn && showAvatar ? (
                     <UserAvatar
                         identity={message.sender}
@@ -599,21 +690,30 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
                     <div className="w-8 shrink-0" />
                 ) : null}
 
-                <div className={`flex min-w-0 max-w-[78%] flex-col ${isOwn ? 'items-end' : 'items-start'}`}>
-                    <div className={`flex items-end gap-1 ${isOwn ? 'flex-row-reverse' : 'flex-row'}`}>
+                <div
+                    className={`msg-bubble-stack relative flex min-w-0 flex-col ${isOwn ? 'items-end' : 'items-start'}`}
+                    data-surface={isPopup ? 'popup' : 'page'}
+                    data-own={isOwn ? 'true' : 'false'}
+                >
                         <div
+                            data-pending={isOptimistic ? 'true' : undefined}
+                            data-rich={hasRichContent ? 'true' : undefined}
                             className={cn(
-                                'relative min-w-0 rounded-2xl px-3 py-2 shadow-sm transition-[transform,box-shadow,ring-color,background-color] duration-300 ease-out',
-                                isOwn
-                                    ? 'rounded-br-md bg-primary text-primary-foreground'
-                                    : 'rounded-bl-md border border-zinc-200 bg-white text-zinc-900 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-100',
+                                'msg-bubble-shell',
+                                isOwn ? 'msg-bubble-own' : 'msg-bubble-peer',
+                                showAvatar && (isOwn ? 'rounded-br-[var(--msg-tail-radius)]' : 'rounded-bl-[var(--msg-tail-radius)]'),
+                                !isOwn && 'border border-border/60',
+                                'transition-[transform,box-shadow,ring-color] duration-300 ease-out',
                                 isFocusedReplyTarget && (
                                     isOwn
                                         ? 'ring-2 ring-white/45 shadow-[0_16px_40px_-22px_rgba(59,130,246,0.9)]'
                                         : 'ring-2 ring-primary/45 shadow-[0_16px_40px_-22px_rgba(59,130,246,0.55)]'
                                 ),
                             )}
-                            style={isFocusedReplyTarget ? { animation: 'message-focus-pulse 1250ms cubic-bezier(0.22,1,0.36,1)' } : undefined}
+                            style={{
+                                boxShadow: isFocusedReplyTarget ? undefined : 'var(--msg-shadow)',
+                                ...(isFocusedReplyTarget ? { animation: 'message-focus-pulse 1250ms cubic-bezier(0.22,1,0.36,1)' } : {}),
+                            }}
                         >
                             {isFocusedReplyTarget ? (
                                 <>
@@ -748,6 +848,57 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
                                             compact
                                         />
                                     ) : null}
+                                    {linkedWork.length > 0 ? (
+                                        <div className="mb-2 flex min-w-0 max-w-full flex-wrap items-center gap-1.5 overflow-hidden">
+                                            {visibleLinkedWork.map((link) => {
+                                                const label = getLinkedWorkDisplayLabel(link);
+                                                return (
+                                                    <button
+                                                        key={link.id}
+                                                        type="button"
+                                                        disabled={!link.href || link.status === 'unavailable'}
+                                                        onClick={() => {
+                                                            if (!link.href || link.status === 'unavailable') {
+                                                                toast.info('Linked destination is unavailable');
+                                                                return;
+                                                            }
+                                                            router.push(link.href);
+                                                        }}
+                                                        className={cn(
+                                                            'inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-full border px-2 py-1 text-[11px] font-semibold transition-colors sm:max-w-[220px]',
+                                                            isOwn
+                                                                ? 'border-white/15 bg-white/10 text-white/90 hover:bg-white/15 disabled:text-white/45'
+                                                                : 'border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 disabled:border-zinc-200 disabled:bg-zinc-100 disabled:text-zinc-400 dark:border-blue-900/60 dark:bg-blue-950/40 dark:text-blue-200 dark:hover:bg-blue-950/65 dark:disabled:border-zinc-800 dark:disabled:bg-zinc-900',
+                                                        )}
+                                                        title={link.subtitle ?? label}
+                                                    >
+                                                        {link.isPrivate ? <Lock className="h-3 w-3 shrink-0" /> : <BriefcaseBusiness className="h-3 w-3 shrink-0" />}
+                                                        <span className="shrink-0 opacity-75">{link.badge}</span>
+                                                        <span className="truncate">{label}</span>
+                                                        {link.status !== 'active' && link.status !== 'pending' ? (
+                                                            <span className="shrink-0 rounded-full bg-current/10 px-1 uppercase opacity-80">
+                                                                {link.status}
+                                                            </span>
+                                                        ) : null}
+                                                        {link.href ? <ExternalLink className="h-3 w-3 shrink-0 opacity-60" /> : null}
+                                                    </button>
+                                                );
+                                            })}
+                                            {linkedWork.length > 2 ? (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setLinkedWorkExpanded((current) => !current)}
+                                                    className={cn(
+                                                        'inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-semibold',
+                                                        isOwn ? 'bg-white/10 text-white/80 hover:bg-white/15' : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700',
+                                                    )}
+                                                >
+                                                    {linkedWorkExpanded ? 'Show less' : `${linkedWork.length - 2} linked items`}
+                                                    <ChevronDown className={cn('h-3 w-3 transition-transform', linkedWorkExpanded && 'rotate-180')} />
+                                                </button>
+                                            ) : null}
+                                        </div>
+                                    ) : null}
                                     {message.content ? (
                                         <MessageTextContentV2
                                             content={message.content}
@@ -755,112 +906,37 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
                                             isApplication={isApplication}
                                         />
                                     ) : null}
-                                    {attachments.length > 0 ? <MessageAttachmentsV2 attachments={attachments} /> : null}
-                                    {linkPreview && <LinkPreviewCard preview={linkPreview} isOwn={isOwn} />}
+                                    {attachments.length > 0 ? (
+                                        <MessageAttachmentsV2
+                                            attachments={attachments}
+                                            onContentLoad={onContentLoad}
+                                        />
+                                    ) : null}
+                                    {renderedLinkPreview ? (
+                                        <LinkPreviewCard
+                                            preview={renderedLinkPreview}
+                                            isOwn={isOwn}
+                                            loading={!linkPreview}
+                                            onContentLoad={onContentLoad}
+                                        />
+                                    ) : null}
                                 </>
                             )}
 
-                            {showReactionBar && (
-                                <ReactionQuickBar
-                                    onReact={handleReaction}
-                                    onClose={() => setShowReactionBar(false)}
-                                />
-                            )}
                         </div>
 
-                        <button
-                            type="button"
-                            onClick={() => setShowReactionBar((prev) => !prev)}
-                            className="rounded-full p-1 text-zinc-400 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
-                            aria-label="Add reaction"
-                        >
-                            <SmilePlus className="h-4 w-4" />
-                        </button>
-
-                        <DropdownMenu modal={false}>
-                            <DropdownMenuTrigger asChild>
-                                <button
-                                    type="button"
-                                    className="rounded-full p-1 text-zinc-400 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
-                                    aria-label="Message actions"
-                                    disabled={isActionLoading}
-                                >
-                                    <MoreVertical className="h-4 w-4" />
-                                </button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align={isOwn ? 'end' : 'start'}>
-                                {canEditMessage ? (
-                                    <DropdownMenuItem onClick={() => setIsEditing(true)} disabled={isActionLoading}>
-                                        <Pencil className="mr-2 h-4 w-4" />
-                                        Edit
-                                    </DropdownMenuItem>
-                                ) : null}
-                                {onReply && canReply ? (
-                                    <DropdownMenuItem onClick={() => onReply(message)} disabled={isActionLoading}>
-                                        <CornerUpLeft className="mr-2 h-4 w-4" />
-                                        Reply
-                                    </DropdownMenuItem>
-                                ) : null}
-                                <DropdownMenuItem
-                                    onClick={async () => {
-                                        try {
-                                            await navigator.clipboard.writeText(message.content || '');
-                                            toast.success('Copied message');
-                                        } catch (error) {
-                                            console.error('[messages-v2] copy message failed', error);
-                                            toast.error('Failed to copy message');
-                                        }
-                                    }}
-                                >
-                                    <Copy className="mr-2 h-4 w-4" />
-                                    Copy
-                                </DropdownMenuItem>
-                                {onTogglePin ? (
-                                    <DropdownMenuItem onClick={() => onTogglePin(message.id, !isPinned)} disabled={isActionLoading}>
-                                        {isPinned ? <PinOff className="mr-2 h-4 w-4" /> : <Pin className="mr-2 h-4 w-4" />}
-                                        {isPinned ? 'Unpin' : 'Pin'}
-                                    </DropdownMenuItem>
-                                ) : null}
-                                <DropdownMenuItem onClick={() => setTaskDialogOpen(true)} disabled={isActionLoading}>
-                                    <PlusCircle className="mr-2 h-4 w-4" />
-                                    Convert to task
-                                </DropdownMenuItem>
-                                {privateFollowUpsEnabled ? (
-                                    <DropdownMenuItem onClick={() => setFollowUpDialogOpen(true)} disabled={isActionLoading}>
-                                        <Clock3 className="mr-2 h-4 w-4" />
-                                        Add follow-up
-                                    </DropdownMenuItem>
-                                ) : null}
-                                <DropdownMenuItem onClick={() => void handleDeleteForMe()} disabled={isActionLoading}>
-                                    <Trash2 className="mr-2 h-4 w-4" />
-                                    Delete for me
-                                </DropdownMenuItem>
-                                {!isOwn && (
-                                    <DropdownMenuItem onClick={() => setReportOpen(true)} className="text-red-600 dark:text-red-400">
-                                        <Flag className="mr-2 h-4 w-4" />
-                                        Report
-                                    </DropdownMenuItem>
-                                )}
-                                {isOwn ? (
-                                    <>
-                                        <DropdownMenuSeparator />
-                                        <DropdownMenuItem
-                                            onClick={() => void handleUnsendForEveryone()}
-                                            disabled={isActionLoading}
-                                            className="text-red-600 dark:text-red-400"
-                                        >
-                                            <Trash2 className="mr-2 h-4 w-4" />
-                                            Unsend for everyone
-                                        </DropdownMenuItem>
-                                    </>
-                                ) : null}
-                            </DropdownMenuContent>
-                        </DropdownMenu>
-                    </div>
+                    {showReactionBar && (
+                        <ReactionQuickBar
+                            align={isOwn ? 'end' : 'start'}
+                            onReact={handleReaction}
+                            onClose={() => setShowReactionBar(false)}
+                        />
+                    )}
 
                     {reactionSummary.length > 0 && (
                         <ReactionPillRow
                             reactions={reactionSummary}
+                            align={isOwn ? 'end' : 'start'}
                             onToggleReaction={handleReaction}
                             onShowDetail={() => {}}
                         />
@@ -902,14 +978,114 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
                         {message.editedAt ? <span>(edited)</span> : null}
                     </div>
                 </div>
+                <div
+                    className={cn(
+                        'msg-action-rail pointer-events-none relative z-10 flex items-center gap-0.5 opacity-0 transition-opacity focus-within:pointer-events-auto focus-within:opacity-100 group-hover/message:pointer-events-auto group-hover/message:opacity-100',
+                        isOwn ? 'flex-row-reverse justify-end' : 'justify-start',
+                    )}
+                >
+                    <button
+                        type="button"
+                        onClick={() => setShowReactionBar((prev) => !prev)}
+                        className="rounded-full bg-background/90 p-1 text-zinc-400 shadow-sm ring-1 ring-border/60 backdrop-blur transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:bg-zinc-950/90 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+                        aria-label="Add reaction"
+                    >
+                        <SmilePlus className="h-4 w-4" />
+                    </button>
+
+                    <DropdownMenu modal={false}>
+                        <DropdownMenuTrigger asChild>
+                            <button
+                                type="button"
+                                className="rounded-full bg-background/90 p-1 text-zinc-400 shadow-sm ring-1 ring-border/60 backdrop-blur transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:bg-zinc-950/90 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+                                aria-label="Message actions"
+                                disabled={isActionLoading}
+                            >
+                                <MoreVertical className="h-4 w-4" />
+                            </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align={isOwn ? 'end' : 'start'}>
+                            {canEditMessage ? (
+                                <DropdownMenuItem onClick={() => setIsEditing(true)} disabled={isActionLoading}>
+                                    <Pencil className="mr-2 h-4 w-4" />
+                                    Edit
+                                </DropdownMenuItem>
+                            ) : null}
+                            {onReply && canReply ? (
+                                <DropdownMenuItem onClick={() => onReply(message)} disabled={isActionLoading}>
+                                    <CornerUpLeft className="mr-2 h-4 w-4" />
+                                    Reply
+                                </DropdownMenuItem>
+                            ) : null}
+                            <DropdownMenuItem
+                                onClick={async () => {
+                                    try {
+                                        await navigator.clipboard.writeText(message.content || '');
+                                        toast.success('Copied message');
+                                    } catch (error) {
+                                        console.error('[messages-v2] copy message failed', error);
+                                        toast.error('Failed to copy message');
+                                    }
+                                }}
+                            >
+                                <Copy className="mr-2 h-4 w-4" />
+                                Copy
+                            </DropdownMenuItem>
+                            {onTogglePin ? (
+                                <DropdownMenuItem onClick={() => onTogglePin(message.id, !isPinned)} disabled={isActionLoading}>
+                                    {isPinned ? <PinOff className="mr-2 h-4 w-4" /> : <Pin className="mr-2 h-4 w-4" />}
+                                    {isPinned ? 'Unpin' : 'Pin'}
+                                </DropdownMenuItem>
+                            ) : null}
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem disabled className="text-[11px] font-semibold uppercase tracking-wide opacity-60">
+                                Create linked work
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => setTaskDialogOpen(true)} disabled={isActionLoading}>
+                                <PlusCircle className="mr-2 h-4 w-4" />
+                                Task from message
+                            </DropdownMenuItem>
+                            {privateFollowUpsEnabled ? (
+                                <DropdownMenuItem onClick={() => setFollowUpDialogOpen(true)} disabled={isActionLoading}>
+                                    <Clock3 className="mr-2 h-4 w-4" />
+                                    Private follow-up
+                                </DropdownMenuItem>
+                            ) : null}
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem onClick={() => void handleDeleteForMe()} disabled={isActionLoading}>
+                                <Trash2 className="mr-2 h-4 w-4" />
+                                Delete for me
+                            </DropdownMenuItem>
+                            {!isOwn && (
+                                <DropdownMenuItem onClick={() => setReportOpen(true)} className="text-red-600 dark:text-red-400">
+                                    <Flag className="mr-2 h-4 w-4" />
+                                    Report
+                                </DropdownMenuItem>
+                            )}
+                            {isOwn ? (
+                                <>
+                                    <DropdownMenuSeparator />
+                                    <DropdownMenuItem
+                                        onClick={() => void handleUnsendForEveryone()}
+                                        disabled={isActionLoading}
+                                        className="text-red-600 dark:text-red-400"
+                                    >
+                                        <Trash2 className="mr-2 h-4 w-4" />
+                                        Unsend for everyone
+                                    </DropdownMenuItem>
+                                </>
+                            ) : null}
+                        </DropdownMenuContent>
+                    </DropdownMenu>
+                </div>
             </div>
         </div>
         <Dialog open={taskDialogOpen} onOpenChange={setTaskDialogOpen}>
             <DialogContent className="sm:max-w-lg">
                 <DialogHeader>
-                    <DialogTitle>Convert message to task</DialogTitle>
+                    <DialogTitle>Create linked task</DialogTitle>
                     <DialogDescription>
-                        Create a task from this message and keep the conversation linked through a lightweight activity bridge.
+                        Create a task from this message. The message keeps a linked chip, and the task keeps the source context.
                     </DialogDescription>
                 </DialogHeader>
                 <div className="space-y-3">
@@ -945,6 +1121,22 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
                     </div>
                     <div className="grid gap-3 sm:grid-cols-2">
                         <div className="space-y-1.5">
+                            <label htmlFor={taskAssigneeSelectId} className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Assignee</label>
+                            <select
+                                id={taskAssigneeSelectId}
+                                value={taskAssigneeId}
+                                onChange={(event) => setTaskAssigneeId(event.target.value)}
+                                className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm outline-none focus:border-primary/30 focus:ring-2 focus:ring-primary/10 dark:border-zinc-800 dark:bg-zinc-950"
+                            >
+                                <option value="">Unassigned</option>
+                                {(catalogQuery.data?.profiles || []).map((profile) => (
+                                    <option key={profile.id} value={profile.id}>
+                                        {profile.label}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                        <div className="space-y-1.5">
                             <label htmlFor={taskPrioritySelectId} className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Priority</label>
                             <select
                                 id={taskPrioritySelectId}
@@ -958,6 +1150,8 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
                                 <option value="urgent">Urgent</option>
                             </select>
                         </div>
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2">
                         <div className="space-y-1.5">
                             <label htmlFor={taskDueDateInputId} className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Due date</label>
                             <Input id={taskDueDateInputId} type="datetime-local" value={taskDueDate} onChange={(event) => setTaskDueDate(event.target.value)} />
@@ -1055,11 +1249,14 @@ export function areMessageBubblePropsEqual(
         areStructuredMessagesEqual(prevStructured, nextStructured) &&
         areContextChipsEqual(prevContextChips, nextContextChips) &&
         arePrivateFollowUpsEqual(prevPrivateFollowUp, nextPrivateFollowUp) &&
+        areLinkedWorkEqual(prev.linkedWork, next.linkedWork) &&
         areAttachmentsEqual(prevAttachments, nextAttachments) &&
         prev.showAvatar === next.showAvatar &&
+        prev.surface === next.surface &&
         prev.onReply === next.onReply &&
         prev.onTogglePin === next.onTogglePin &&
         prev.onFocusMessage === next.onFocusMessage &&
+        prev.onContentLoad === next.onContentLoad &&
         prev.isFocusedReplyTarget === next.isFocusedReplyTarget &&
         prev.focusSource === next.focusSource
     );
