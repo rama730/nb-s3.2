@@ -29,12 +29,14 @@ import {
 import type { MessageWithSender, UploadedAttachment } from '@/app/actions/messaging';
 import { queryKeys } from '@/lib/query-keys';
 import {
+    clearPendingReadCommitState,
     patchInboxConversation,
     patchConversationLastMessageFromMessage,
     patchPinnedMessages,
     patchThreadMessage,
     patchThreadConversation,
     patchUnreadSummary,
+    setPendingReadCommitState,
     removeInboxConversation,
     replaceOptimisticThreadMessage,
     upsertInboxConversation,
@@ -42,9 +44,9 @@ import {
     upsertThreadMessage,
 } from '@/lib/messages/v2-cache';
 import { refreshUnreadCache } from '@/lib/messages/v2-refresh';
+import { isTemporaryMessageId, mergeMessageCollections } from '@/lib/messages/utils';
 import type { MessagesV2OutboxItem } from '@/stores/messagesV2OutboxStore';
 import { useMessagesV2OutboxStore } from '@/stores/messagesV2OutboxStore';
-import { mergeMessageCollections } from '@/lib/messages/utils';
 import { useAuth } from '@/hooks/useAuth';
 import {
     createPendingStructuredState,
@@ -339,41 +341,113 @@ export function useMessagesActions() {
     const queryClient = useQueryClient();
 
     const markRead = useMutation({
-        mutationFn: async (params: { conversationId: string; lastReadMessageId?: string }) =>
-            markConversationReadV2(params.conversationId, params.lastReadMessageId),
-        onSuccess: (_result, params) => {
+        mutationFn: async (params: { conversationId: string; lastReadMessageId?: string }) => {
+            const serverReadMessageId = isTemporaryMessageId(params.lastReadMessageId)
+                ? undefined
+                : params.lastReadMessageId;
+            const result = await markConversationReadV2(params.conversationId, serverReadMessageId);
+            if (!result.success) {
+                throw new Error(result.error || 'Failed to mark conversation read');
+            }
+            return result;
+        },
+        onMutate: (params) => {
             const currentThread = queryClient.getQueryData<{ pages: MessageThreadPageV2[] }>(
                 queryKeys.messages.v2.thread(params.conversationId),
             );
-            const unreadBefore = currentThread?.pages[0]?.conversation?.unreadCount ?? 0;
-
-            patchInboxConversation(queryClient, params.conversationId, (conversation) => ({
-                ...conversation,
-                unreadCount: 0,
-            }));
-            if (unreadBefore > 0) {
-                patchUnreadSummary(queryClient, (count) => Math.max(0, count - unreadBefore));
+            const currentConversation = currentThread?.pages[0]?.conversation ?? null;
+            const previousUnreadCount = currentConversation?.unreadCount ?? 0;
+            const previousLastReadAt = currentConversation?.lastReadAt ?? null;
+            const previousLastReadMessageId = currentConversation?.lastReadMessageId ?? null;
+            const optimisticReadMessage = params.lastReadMessageId && !isTemporaryMessageId(params.lastReadMessageId)
+                ? (currentThread?.pages
+                    .flatMap((page) => page.messages)
+                    .find((message) => message.id === params.lastReadMessageId) ?? null)
+                : currentConversation?.lastMessage ?? null;
+            const optimisticLastReadAt = optimisticReadMessage?.createdAt ?? previousLastReadAt;
+            const optimisticLastReadMessageId = optimisticReadMessage?.id ?? previousLastReadMessageId;
+            const requestId = `${params.conversationId}:${Date.now()}`;
+            setPendingReadCommitState(queryClient, params.conversationId, {
+                requestId,
+                requestedAtMs: Date.now(),
+                requestedMessageId: optimisticLastReadMessageId ?? params.lastReadMessageId ?? null,
+            });
+            const optimisticClearedCount = Math.max(0, previousUnreadCount);
+            if (optimisticClearedCount > 0) {
+                patchThreadConversation(queryClient, params.conversationId, (conversation) => ({
+                    ...conversation,
+                    unreadCount: 0,
+                    lastReadAt: optimisticLastReadAt,
+                    lastReadMessageId: optimisticLastReadMessageId,
+                }));
+                patchUnreadSummary(queryClient, (count) => Math.max(0, count - optimisticClearedCount));
             }
+            console.debug('[messages-v2] read_commit_requested', {
+                conversationId: params.conversationId,
+                requestId,
+                requestedWatermark: isTemporaryMessageId(params.lastReadMessageId)
+                    ? 'latest-server-message'
+                    : params.lastReadMessageId ?? 'latest-server-message',
+                optimisticClearedCount,
+            });
+            return {
+                previousUnreadCount,
+                previousLastReadAt,
+                previousLastReadMessageId,
+                requestId,
+                optimisticClearedCount,
+            };
+        },
+        onError: (_error, params, context) => {
+            clearPendingReadCommitState(queryClient, params.conversationId, context?.requestId);
+            const optimisticClearedCount = context?.optimisticClearedCount ?? 0;
+            if (optimisticClearedCount > 0) {
+                patchThreadConversation(queryClient, params.conversationId, (conversation) => ({
+                    ...conversation,
+                    unreadCount: context?.previousUnreadCount ?? optimisticClearedCount,
+                    lastReadAt: context?.previousLastReadAt ?? conversation.lastReadAt,
+                    lastReadMessageId: context?.previousLastReadMessageId ?? conversation.lastReadMessageId,
+                }));
+                patchUnreadSummary(queryClient, (count) => count + optimisticClearedCount);
+            }
+            console.warn('[messages-v2] read_commit_failed', {
+                conversationId: params.conversationId,
+                requestId: context?.requestId ?? null,
+            });
+        },
+        onSuccess: (result, params, context) => {
+            const previousUnreadCount = context?.previousUnreadCount ?? 0;
+            const optimisticClearedCount = context?.optimisticClearedCount ?? 0;
+            const nextUnreadCount = typeof result.unreadCount === 'number'
+                ? Math.max(0, result.unreadCount)
+                : 0;
+            clearPendingReadCommitState(queryClient, params.conversationId, context?.requestId);
+            console.debug('[messages-v2] read_commit_applied', {
+                conversationId: params.conversationId,
+                requestId: context?.requestId ?? null,
+                previousUnread: previousUnreadCount,
+                nextUnread: nextUnreadCount,
+                appliedWatermark: result.lastReadMessageId ?? 'latest-server-message',
+            });
 
-            queryClient.setQueryData<{ pages: MessageThreadPageV2[]; pageParams: Array<string | undefined> }>(
-                queryKeys.messages.v2.thread(params.conversationId),
-                (current) => {
-                    if (!current || current.pages.length === 0) return current;
-                    return {
-                        ...current,
-                        pages: current.pages.map((page, index) =>
-                            index === 0
-                                ? {
-                                    ...page,
-                                    conversation: page.conversation
-                                        ? { ...page.conversation, unreadCount: 0 }
-                                        : page.conversation,
-                                }
-                                : page,
-                        ),
-                    };
-                },
-            );
+            patchThreadConversation(queryClient, params.conversationId, (conversation) => ({
+                ...conversation,
+                unreadCount: nextUnreadCount,
+                lastReadAt: result.lastReadAt ?? conversation.lastReadAt,
+                lastReadMessageId: result.lastReadMessageId ?? conversation.lastReadMessageId,
+            }));
+            if (optimisticClearedCount > 0) {
+                if (nextUnreadCount > 0) {
+                    patchUnreadSummary(queryClient, (count) => count + nextUnreadCount);
+                }
+            } else if (nextUnreadCount > previousUnreadCount) {
+                patchUnreadSummary(queryClient, (count) => count + (nextUnreadCount - previousUnreadCount));
+            } else {
+                const clearedUnreadCount = Math.max(0, previousUnreadCount - nextUnreadCount);
+                if (clearedUnreadCount > 0) {
+                    patchUnreadSummary(queryClient, (count) => Math.max(0, count - clearedUnreadCount));
+                }
+            }
         },
     });
 
@@ -544,6 +618,12 @@ export function useMessagesActions() {
             return result;
         },
         onSuccess: (result) => {
+            if (result.conversationId) {
+                void queryClient.invalidateQueries({
+                    queryKey: ["chat-v2", "linked-work", result.conversationId],
+                    exact: false,
+                });
+            }
             if (result.bridgeMessage) {
                 upsertThreadMessage(queryClient, result.bridgeMessage.conversationId, result.bridgeMessage);
                 patchConversationLastMessageFromMessage(queryClient, result.bridgeMessage.conversationId, result.bridgeMessage);
@@ -629,6 +709,10 @@ export function useMessagesActions() {
             return result;
         },
         onSuccess: (_result, variables) => {
+            void queryClient.invalidateQueries({
+                queryKey: ["chat-v2", "linked-work", variables.conversationId],
+                exact: false,
+            });
             void injectMessageContext(variables.conversationId, variables.messageId);
         },
     });
