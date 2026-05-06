@@ -17,7 +17,8 @@
  *  • Role chip is the auto-inferred Deliverable / Reference / Working tag
  *    promoted from the header summary onto each row.
  *  • Primary action is the existing `OpenInIdeMenu` rendered with the
- *    new `variant="primary"` treatment so the chooser is unmissable.
+ *    new `variant="primary"` treatment so the "Open with" chooser is
+ *    unmissable.
  *  • Overflow menu mirrors the right-click context menu so keyboard +
  *    touch users have parity with mouse users.
  *
@@ -40,6 +41,7 @@ import {
   Link2Off,
   MoreHorizontal,
   RefreshCcw,
+  TriangleAlert,
 } from "lucide-react";
 
 import {
@@ -143,11 +145,16 @@ export interface TaskFileRowProps {
     node: ProjectNode,
     file: File,
   ) => Promise<{ success: boolean; error?: string }> | void;
+  onMarkNeedsReview?: (node: ProjectNode & { annotation?: string | null }) => void;
 
   /** Pass-through to OpenInIdeMenu. */
   onOpenInWorkspace?: (node: ProjectNode) => void;
   /** Right-click handler — keep the existing context menu for muscle memory. */
   onContextMenu?: (event: React.MouseEvent) => void;
+  /** Mark the file row that represents the current likely task output. */
+  isCurrentDeliverable?: boolean;
+  /** Number of task links referencing the same node. */
+  sharedLinkCount?: number;
 }
 
 export function TaskFileRow({
@@ -163,8 +170,11 @@ export function TaskFileRow({
   onShowHistory,
   onUnlink,
   onReplaceWithNewVersion,
+  onMarkNeedsReview,
   onOpenInWorkspace,
   onContextMenu,
+  isCurrentDeliverable = false,
+  sharedLinkCount = 0,
 }: TaskFileRowProps) {
   const isFolder = node.type === "folder";
   const replaceInputRef = useRef<HTMLInputElement>(null);
@@ -187,10 +197,8 @@ export function TaskFileRow({
   const handleRowActivate = useCallback(() => {
     if (isFolder) {
       onToggleExpanded?.(node);
-      return;
     }
-    onOpen?.(node);
-  }, [isFolder, node, onOpen, onToggleExpanded]);
+  }, [isFolder, node, onToggleExpanded]);
 
   const handleReplacePicked: React.ChangeEventHandler<HTMLInputElement> =
     useCallback(
@@ -237,7 +245,10 @@ export function TaskFileRow({
       <button
         type="button"
         onClick={handleRowActivate}
-        className="flex min-w-0 flex-1 items-center gap-2 text-left focus:outline-none"
+        className={cn(
+          "flex min-w-0 flex-1 items-center gap-2 text-left focus:outline-none",
+          !isFolder && "cursor-default",
+        )}
       >
         {/* Folder chevron (only folders) so users can tell at a glance */}
         {isFolder ? (
@@ -269,16 +280,23 @@ export function TaskFileRow({
           <span className="mt-0.5 block truncate text-[11px] text-zinc-500 dark:text-zinc-400">
             {isFolder
               ? "Folder"
-              : `${formatBytes(node.size)} · Updated ${formatRelative(node.updatedAt)}`}
+              : `${formatBytes(node.size)} · Updated ${formatRelative(node.updatedAt)}${sharedLinkCount > 1 ? ` · Shared with ${sharedLinkCount} tasks` : ""}`}
           </span>
         </span>
       </button>
+
+      {isCurrentDeliverable && !isFolder ? (
+        <span className="hidden h-6 flex-shrink-0 items-center rounded-full bg-emerald-50 px-2 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 ring-1 ring-emerald-200 sm:inline-flex dark:bg-emerald-500/10 dark:text-emerald-200 dark:ring-emerald-500/30">
+          Current output
+        </span>
+      ) : null}
 
       {/* Slot 3 — version chip. ALWAYS rendered for files (even v1) so the
           affordance is discoverable. Folders skip this slot. */}
       {!isFolder ? (
         <button
           type="button"
+          data-testid="task-file-row-version"
           onClick={(event) => {
             event.stopPropagation();
             onShowHistory?.(node);
@@ -325,7 +343,7 @@ export function TaskFileRow({
             data-testid="task-file-row-folder-open"
           >
             <FolderIcon className="h-3.5 w-3.5" />
-            {isExpanded ? "Hide" : "Open"}
+            {isExpanded ? "Hide" : "Browse"}
           </button>
         ) : (
           <OpenInIdeMenu
@@ -385,7 +403,7 @@ export function TaskFileRow({
                 <div className="flex flex-col">
                   <span>View version history</span>
                   <span className="text-[10px] text-zinc-500">
-                    Currently on v{version}
+                    Active task version is v{version}
                   </span>
                 </div>
               </DropdownMenuItem>
@@ -403,6 +421,23 @@ export function TaskFileRow({
                   <span>Replace with new version</span>
                   <span className="text-[10px] text-zinc-500">
                     Pick a file from disk to bump to v{version + 1}
+                  </span>
+                </div>
+              </DropdownMenuItem>
+            ) : null}
+            {!isFolder && canEdit && onMarkNeedsReview ? (
+              <DropdownMenuItem
+                onSelect={(event) => {
+                  event.preventDefault();
+                  onMarkNeedsReview(node);
+                }}
+                data-testid="task-file-row-needs-review"
+              >
+                <TriangleAlert className="mr-2 h-4 w-4" />
+                <div className="flex flex-col">
+                  <span>Mark needs review</span>
+                  <span className="text-[10px] text-zinc-500">
+                    Adds a task note and notifies participants
                   </span>
                 </div>
               </DropdownMenuItem>
