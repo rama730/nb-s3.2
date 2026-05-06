@@ -212,7 +212,9 @@ export function useTaskFileMutations(params: {
   }, [clearPendingWarnings, onAfterMutation, refreshAttachments]);
 
   const finalizeExistingLink = useCallback(async (nodeId: string, replaceNodeId?: string | null) => {
-    await linkNodeToTask(taskId, nodeId);
+    await linkNodeToTask(taskId, nodeId, replaceNodeId && replaceNodeId !== nodeId
+      ? { notificationKind: "task_file_replaced" }
+      : undefined);
     if (replaceNodeId && replaceNodeId !== nodeId && attachments.some((attachment) => attachment.id === replaceNodeId)) {
       await unlinkNodeFromTask(taskId, replaceNodeId);
     }
@@ -278,7 +280,9 @@ export function useTaskFileMutations(params: {
       updateStatus(job.id, { progress: 85 });
 
       if (options.linkToTask) {
-        await linkNodeToTask(taskId, createdNode.id);
+        await linkNodeToTask(taskId, createdNode.id, options.replaceNodeId && options.replaceNodeId !== createdNode.id
+          ? { notificationKind: "task_file_replaced" }
+          : undefined);
         if (options.replaceNodeId && options.replaceNodeId !== createdNode.id && attachments.some((attachment) => attachment.id === options.replaceNodeId)) {
           await unlinkNodeFromTask(taskId, options.replaceNodeId);
         }
