@@ -32,7 +32,7 @@ export function ProjectGroupsListV2({
     const hasMore = Boolean(pages[pages.length - 1]?.hasMore);
 
     const [searchQuery, setSearchQuery] = useState('');
-    const [sortBy, setSortBy] = useState<'recent' | 'alpha' | 'unread'>('recent');
+    const [sortBy, setSortBy] = useState<'recent' | 'alpha'>('recent');
     const sortedGroups = useMemo(() => {
         let result = groups;
         // Search filter
@@ -47,11 +47,6 @@ export function ProjectGroupsListV2({
         if (sortBy === 'alpha') {
             result = [...result].sort((left: ProjectGroupListItem, right: ProjectGroupListItem) =>
                 (left.projectTitle || '').localeCompare(right.projectTitle || ''),
-            );
-        } else if (sortBy === 'unread') {
-            result = [...result].sort(
-                (left: ProjectGroupListItem, right: ProjectGroupListItem) =>
-                    (right.unreadCount || 0) - (left.unreadCount || 0),
             );
         }
         return result;
@@ -78,7 +73,6 @@ export function ProjectGroupsListV2({
     const sortOptions: { key: typeof sortBy; label: string }[] = [
         { key: 'recent', label: 'Recent' },
         { key: 'alpha', label: 'A-Z' },
-        { key: 'unread', label: 'Unread' },
     ];
 
     return (
@@ -184,11 +178,6 @@ export function ProjectGroupsListV2({
                                                         <Folder className="h-5 w-5 text-white" />
                                                     )}
                                                 </div>
-                                                {group.unreadCount > 0 ? (
-                                                    <div className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1 text-xs font-bold text-white">
-                                                        {group.unreadCount > 9 ? '9+' : group.unreadCount}
-                                                    </div>
-                                                ) : null}
                                             </div>
 
                                             {/* Center: name, last message, members */}
