@@ -33,9 +33,11 @@ import {
   type TaskDiscussionThreadPage,
 } from "@/lib/projects/task-discussion";
 import { parseMentions } from "@/lib/projects/mention-tokens";
+import { emitTaskCommentReplyNotification } from "@/lib/notifications/emitters";
 import { enqueueTaskCommentMentionNotifications } from "@/lib/notifications/task-comment-mention";
 import { consumeRateLimit } from "@/lib/security/rate-limit";
 import { getViewerProfileContext } from "@/lib/server/viewer-context";
+import { logger } from "@/lib/logger";
 
 const DISCUSSION_PAGE_SIZE = 20;
 
@@ -484,6 +486,7 @@ export async function createTaskCommentAction(
       mode: "write",
     });
 
+    let parentCommentAuthorId: string | null = null;
     if (parentCommentId) {
       const parent = await assertCommentAccess({
         commentId: parentCommentId,
@@ -500,6 +503,7 @@ export async function createTaskCommentAction(
       if (parent.deletedAt) {
         return { success: false as const, error: "Cannot reply to a deleted comment" };
       }
+      parentCommentAuthorId = parent.userId;
     }
 
     // Mentions are stored inline as `@{userId|DisplayName}` tokens. We parse
@@ -510,6 +514,15 @@ export async function createTaskCommentAction(
     const parsedMentions = parseMentions(trimmedContent);
     const candidateMentionIds = parsedMentions.mentionIds;
     let validatedMentionIds: string[] = [];
+    const [projectRow] = await db
+      .select({
+        ownerId: projects.ownerId,
+        slug: projects.slug,
+        title: projects.title,
+      })
+      .from(projects)
+      .where(eq(projects.id, projectId))
+      .limit(1);
 
     if (candidateMentionIds.length > 0) {
       const memberRows = await db
@@ -522,14 +535,8 @@ export async function createTaskCommentAction(
           ),
         );
 
-      const [ownerRow] = await db
-        .select({ ownerId: projects.ownerId })
-        .from(projects)
-        .where(eq(projects.id, projectId))
-        .limit(1);
-
       const allowed = new Set<string>(memberRows.map((row) => row.userId));
-      if (ownerRow?.ownerId) allowed.add(ownerRow.ownerId);
+      if (projectRow?.ownerId) allowed.add(projectRow.ownerId);
 
       validatedMentionIds = candidateMentionIds.filter((id) => allowed.has(id));
     }
@@ -578,7 +585,10 @@ export async function createTaskCommentAction(
           recipientUserIds: validatedMentionIds,
           authorUserId: viewer.userId,
           authorDisplayName: viewer.profile?.fullName ?? viewer.profile?.username ?? null,
+          authorAvatarUrl: viewer.profile?.avatarUrl ?? null,
           projectId,
+          projectSlug: projectRow?.slug ?? null,
+          projectLabel: projectRow?.title ?? null,
           taskId,
           commentId: inserted.id,
           parentCommentId: parentCommentId ?? null,
@@ -586,7 +596,45 @@ export async function createTaskCommentAction(
           createdAt,
         });
       } catch (notifyError) {
-        console.error("Failed to enqueue mention notifications:", notifyError);
+        logger.warn("tasks.comment_mention_notification_failed", {
+          module: "notifications",
+          projectId,
+          taskId,
+          actorUserId: viewer.userId,
+          error: notifyError instanceof Error ? notifyError.message : String(notifyError),
+        });
+      }
+    }
+
+    if (
+      parentCommentId &&
+      parentCommentAuthorId &&
+      parentCommentAuthorId !== viewer.userId &&
+      !validatedMentionIds.includes(parentCommentAuthorId)
+    ) {
+      try {
+        await emitTaskCommentReplyNotification({
+          recipientUserId: parentCommentAuthorId,
+          actorUserId: viewer.userId,
+          actorName: viewer.profile?.fullName ?? viewer.profile?.username ?? null,
+          actorAvatarUrl: viewer.profile?.avatarUrl ?? null,
+          projectId,
+          projectSlug: projectRow?.slug ?? null,
+          taskId,
+          commentId: inserted.id,
+          parentCommentId,
+          createdAt,
+          previewText: parsedMentions.plainText,
+          projectLabel: projectRow?.title ?? null,
+        });
+      } catch (notifyError) {
+        logger.warn("tasks.comment_reply_notification_failed", {
+          module: "notifications",
+          projectId,
+          taskId,
+          actorUserId: viewer.userId,
+          error: notifyError instanceof Error ? notifyError.message : String(notifyError),
+        });
       }
     }
 
