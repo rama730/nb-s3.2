@@ -31,9 +31,13 @@ export const queryKeys = {
       capabilities: (conversationId: string | null, userId?: string | null) =>
         ["chat-v2", "capabilities", asNullable(conversationId), asNullable(userId)] as const,
       unread: () => ["chat-v2", "unread"] as const,
+      readCommitState: (conversationId: string | null | undefined) =>
+        ["chat-v2", "read-commit-state", asNullable(conversationId)] as const,
       search: (query: string) => ["chat-v2", "search", query] as const,
       structuredCatalog: (conversationId: string | null | undefined, userId?: string | null) =>
         ["chat-v2", "structured-catalog", asNullable(conversationId), asNullable(userId)] as const,
+      linkedWork: (conversationId: string | null | undefined, messageIds: readonly string[]) =>
+        ["chat-v2", "linked-work", asNullable(conversationId), messageIds.slice().sort().join(",")] as const,
       applications: (limit: number, offset: number) => ["chat-v2", "applications", limit, offset] as const,
       projectGroups: (limit: number, offset: number) => ["chat-v2", "project-groups", limit, offset] as const,
     },
@@ -79,5 +83,10 @@ export const queryKeys = {
     security: () => ["settings", "security"] as const,
     privacy: () => ["settings", "privacy"] as const,
     integrations: () => ["settings", "integrations"] as const,
+  },
+  notifications: {
+    root: () => ["notifications"] as const,
+    page: (limit: number) => ["notifications", "page", limit] as const,
+    unreadCount: () => ["notifications", "unread-count"] as const,
   },
 } as const;
