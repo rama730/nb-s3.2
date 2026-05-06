@@ -10,8 +10,12 @@ export type CacheEnvelope<T> = {
 
 let redisClient: Redis | null | undefined
 
+function hasRedisEnv() {
+    return Boolean(process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN)
+}
+
 function createRedisClient() {
-    if (!process.env.UPSTASH_REDIS_REST_URL || !process.env.UPSTASH_REDIS_REST_TOKEN) {
+    if (!hasRedisEnv()) {
         return null
     }
 
@@ -22,7 +26,8 @@ function createRedisClient() {
 }
 
 export function getRedisClient() {
-    if (redisClient !== undefined) return redisClient
+    if (redisClient) return redisClient
+    if (redisClient === null && !hasRedisEnv()) return redisClient
 
     try {
         redisClient = createRedisClient()
