@@ -20,6 +20,9 @@ export default async function MessagesPage({ searchParams }: { searchParams: Pro
     const initialConversationId = typeof resolvedParams.conversationId === 'string'
         ? resolvedParams.conversationId
         : null;
+    const initialMessageId = typeof resolvedParams.messageId === 'string'
+        ? resolvedParams.messageId
+        : null;
 
     return (
         <div
@@ -30,6 +33,7 @@ export default async function MessagesPage({ searchParams }: { searchParams: Pro
             <MessagesClientV2
                 targetUserId={targetUserId}
                 initialConversationId={initialConversationId}
+                initialMessageId={initialMessageId}
             />
         </div>
     );
