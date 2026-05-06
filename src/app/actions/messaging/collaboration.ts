@@ -7,6 +7,7 @@ import {
     conversationParticipants,
     conversations,
     messageWorkflowItems,
+    messageWorkLinks,
     messages,
     profiles,
     projectMembers,
@@ -30,13 +31,18 @@ import {
     withStructuredMessageMetadata,
 } from '@/lib/messages/structured';
 import { buildConversationParticipantPreview } from '@/lib/messages/preview-authority';
-import { createTaskAction } from '@/app/actions/project';
+import { emitTaskAssignedNotification, emitWorkflowAssignedNotification, emitWorkflowResolvedNotification } from '@/lib/notifications/emitters';
 import {
     isMessagingActivityBridgesEnabled,
     isMessagingPrivateFollowUpsEnabled,
     isMessagingStructuredActionsEnabled,
 } from '@/lib/features/messages';
 import { logger } from '@/lib/logger';
+import { buildMessageSourceHref, mapWorkflowStatusToLinkStatus, upsertMessageWorkLink } from '@/lib/messages/linked-work-server';
+import { mapMessageWorkLinkToSummary, type MessageLinkedWorkSummary } from '@/lib/messages/linked-work';
+import { getProjectAccessById } from '@/lib/data/project-access';
+import { queueCounterRefreshBestEffort } from '@/lib/workspace/counter-buffer';
+import { revalidatePath } from 'next/cache';
 
 type StructuredComposerKind =
     | 'project_invite'
@@ -109,6 +115,25 @@ function parseValidDate(input?: string | null) {
 
     const parsed = new Date(input);
     return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function formatDueDateKey(date: Date) {
+    return date.toISOString().slice(0, 10);
+}
+
+type MessageTaskPriority = 'low' | 'medium' | 'high' | 'urgent';
+
+const MESSAGE_TASK_PRIORITIES = new Set<MessageTaskPriority>(['low', 'medium', 'high', 'urgent']);
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function normalizeMessageTaskPriority(priority: unknown): MessageTaskPriority {
+    return typeof priority === 'string' && MESSAGE_TASK_PRIORITIES.has(priority as MessageTaskPriority)
+        ? priority as MessageTaskPriority
+        : 'medium';
+}
+
+function isUuid(value: string | null | undefined): value is string {
+    return Boolean(value && UUID_PATTERN.test(value));
 }
 
 async function getConversationParticipantProfile(conversationId: string, profileId: string) {
@@ -726,6 +751,30 @@ export async function sendStructuredMessageActionV2(params: {
                     })
                     .returning({ id: messageWorkflowItems.id });
                 workflowItemId = workflowRow?.id ?? null;
+                if (workflowRow?.id) {
+                    await upsertMessageWorkLink(tx, {
+                        sourceMessageId: messageRow.id,
+                        sourceConversationId: conversationId,
+                        targetType: 'workflow',
+                        targetId: workflowRow.id,
+                        targetProjectId: structured.entityRefs.projectId ?? null,
+                        visibility: 'shared',
+                        status: 'pending',
+                        ownerUserId: user.id,
+                        assigneeUserId: structured.entityRefs.profileId ?? null,
+                        createdBy: user.id,
+                        href: buildMessageSourceHref(conversationId, messageRow.id),
+                        metadata: {
+                            label: structured.title,
+                            subtitle: structured.summary,
+                            title: structured.title,
+                            workflowKind,
+                            workflowLabel: structured.title,
+                            projectId: structured.entityRefs.projectId ?? null,
+                            taskId: structured.entityRefs.taskId ?? null,
+                        },
+                    });
+                }
             }
 
             if (workflowItemId) {
@@ -744,10 +793,48 @@ export async function sendStructuredMessageActionV2(params: {
                     .where(eq(messages.id, messageRow.id));
             }
 
-            return messageRow.id;
+            return { messageId: messageRow.id, workflowItemId };
         });
 
-        const message = await hydrateSingleMessage(conversationId, result);
+        if (result.workflowItemId && structured.entityRefs.profileId) {
+            const [projectRow] = structured.entityRefs.projectId
+                ? await db
+                    .select({
+                        id: projects.id,
+                        slug: projects.slug,
+                        title: projects.title,
+                    })
+                    .from(projects)
+                    .where(eq(projects.id, structured.entityRefs.projectId))
+                    .limit(1)
+                : [null];
+
+            try {
+                await emitWorkflowAssignedNotification({
+                    recipientUserId: structured.entityRefs.profileId,
+                    actorUserId: user.id,
+                    actorName: (user.user_metadata?.full_name as string | undefined) ?? (user.user_metadata?.username as string | undefined) ?? null,
+                    actorAvatarUrl: (user.user_metadata?.avatar_url as string | undefined) ?? null,
+                    workflowItemId: result.workflowItemId,
+                    workflowKind: workflowKind ?? "follow_up",
+                    conversationId,
+                    projectId: structured.entityRefs.projectId ?? null,
+                    projectSlug: projectRow?.slug ?? null,
+                    projectTitle: projectRow?.title ?? null,
+                    taskId: structured.entityRefs.taskId ?? null,
+                });
+            } catch (notificationError) {
+                logger.warn("messages.workflow_assigned_notification_failed", {
+                    module: "messaging",
+                    conversationId,
+                    workflowItemId: result.workflowItemId,
+                    recipientUserId: structured.entityRefs.profileId,
+                    error: notificationError instanceof Error ? notificationError.message : String(notificationError),
+                });
+            }
+        }
+
+        const message = await hydrateSingleMessage(conversationId, result.messageId);
         return {
             success: Boolean(message),
             error: message ? undefined : 'Failed to send structured message',
@@ -871,6 +958,29 @@ export async function resolveMessageWorkflowActionV2(params: {
                 })
                 .where(eq(messageWorkflowItems.id, workflow.id));
 
+            await tx
+                .update(messageWorkLinks)
+                .set({
+                    status: mapWorkflowStatusToLinkStatus(nextStatus),
+                    updatedAt: resolvedAt,
+                    metadata: {
+                        ...((workflow.payload as Record<string, unknown>) || {}),
+                        projectId: workflow.projectId,
+                        taskId: workflow.taskId,
+                        label: currentStructured.title,
+                        subtitle: nextLabel,
+                        workflowKind: workflow.kind,
+                        workflowLabel: currentStructured.title,
+                        resolution: params.action,
+                        resolvedAt: resolvedAt.toISOString(),
+                    },
+                })
+                .where(and(
+                    eq(messageWorkLinks.targetType, 'workflow'),
+                    eq(messageWorkLinks.targetId, workflow.id),
+                    isNull(messageWorkLinks.deletedAt),
+                ));
+
             const nextStructured = {
                 ...currentStructured,
                 stateSnapshot: {
@@ -893,6 +1003,45 @@ export async function resolveMessageWorkflowActionV2(params: {
                 })
                 .where(eq(messages.id, workflow.messageId!));
         });
+
+        if (workflow.assigneeUserId === user.id && workflow.creatorId !== user.id) {
+            const [projectRow] = workflow.projectId
+                ? await db
+                    .select({
+                        id: projects.id,
+                        slug: projects.slug,
+                        title: projects.title,
+                    })
+                    .from(projects)
+                    .where(eq(projects.id, workflow.projectId))
+                    .limit(1)
+                : [null];
+
+            try {
+                await emitWorkflowResolvedNotification({
+                    recipientUserId: workflow.creatorId,
+                    actorUserId: user.id,
+                    actorName: (user.user_metadata?.full_name as string | undefined) ?? (user.user_metadata?.username as string | undefined) ?? null,
+                    actorAvatarUrl: (user.user_metadata?.avatar_url as string | undefined) ?? null,
+                    workflowItemId: workflow.id,
+                    workflowKind: workflow.kind,
+                    resolutionLabel: nextLabel,
+                    conversationId: workflow.conversationId,
+                    projectId: workflow.projectId ?? null,
+                    projectSlug: projectRow?.slug ?? null,
+                    projectTitle: projectRow?.title ?? null,
+                    taskId: workflow.taskId ?? null,
+                });
+            } catch (notificationError) {
+                logger.warn("messages.workflow_resolved_notification_failed", {
+                    module: "messaging",
+                    conversationId: workflow.conversationId,
+                    workflowItemId: workflow.id,
+                    recipientUserId: workflow.creatorId,
+                    error: notificationError instanceof Error ? notificationError.message : String(notificationError),
+                });
+            }
+        }
 
         await recomputeConversationPreviewsIfNeeded(workflow.conversationId, workflow.messageId);
         const bridgeMessage = bridgeConfig
@@ -930,7 +1079,7 @@ export async function convertMessageToTaskActionV2(params: {
     priority?: 'low' | 'medium' | 'high' | 'urgent';
     assigneeId?: string | null;
     dueDate?: string | null;
-}): Promise<{ success: boolean; error?: string; taskId?: string; bridgeMessage?: MessageWithSender | null }> {
+}): Promise<{ success: boolean; error?: string; conversationId?: string; taskId?: string; link?: MessageLinkedWorkSummary; bridgeMessage?: MessageWithSender | null }> {
     try {
         const user = await getAuthUser();
         if (!user) return { success: false, error: 'Not authenticated' };
@@ -966,18 +1115,160 @@ export async function convertMessageToTaskActionV2(params: {
             || messageRow.content?.trim()
             || 'Created from a message';
 
-        const taskResult = await createTaskAction({
-            projectId: params.projectId,
-            title: sourceTitle.slice(0, 120),
-            status: 'todo',
-            description: `${sourceSummary}\n\nSource conversation message: ${messageRow.id}`,
-            priority: params.priority || 'medium',
-            assigneeId: params.assigneeId || null,
-            dueDate: dueDate ? dueDate.toISOString() : null,
+        const taskTitle = sourceTitle.slice(0, 120).trim() || 'Follow-up task';
+        const taskDescription = `${sourceSummary}\n\nSource conversation message: ${messageRow.id}`;
+        const taskPriority = normalizeMessageTaskPriority(params.priority);
+        const taskAssigneeId = params.assigneeId || null;
+
+        if (!isUuid(params.projectId)) return { success: false, error: 'Invalid project id' };
+        if (taskAssigneeId && !isUuid(taskAssigneeId)) {
+            return { success: false, error: 'Invalid assignee id' };
+        }
+
+        const access = await getProjectAccessById(params.projectId, user.id);
+        if (!access.project) return { success: false, error: 'Project not found' };
+        if (!access.canWrite) {
+            return { success: false, error: 'You do not have permission to create tasks in this project' };
+        }
+
+        if (taskAssigneeId) {
+            const assigneeMember = await db.query.projectMembers.findFirst({
+                where: and(
+                    eq(projectMembers.projectId, params.projectId),
+                    eq(projectMembers.userId, taskAssigneeId),
+                ),
+                columns: { id: true, role: true },
+            });
+            if (!assigneeMember) {
+                return { success: false, error: 'Assignee must be a project member' };
+            }
+            if (assigneeMember.role === 'viewer') {
+                return { success: false, error: 'Viewer members cannot be assigned tasks' };
+            }
+        }
+
+        const sourcePreview = getMessagePreviewText({
+            content: messageRow.content,
+            type: structured?.kind || null,
+            metadata: messageRow.metadata as Record<string, unknown> | null,
         });
 
-        if (!taskResult.success || !taskResult.task) {
-            return { success: false, error: taskResult.error || 'Failed to create task' };
+        const taskResult = await db.transaction(async (tx) => {
+            const projectRows = await tx.execute<{
+                current_task_number: number | null;
+                slug: string | null;
+                title: string | null;
+                key: string | null;
+            }>(sql`
+                SELECT current_task_number, slug, title, "key" AS key
+                FROM ${projects}
+                WHERE id = ${params.projectId}
+                    AND deleted_at IS NULL
+                FOR UPDATE
+            `);
+            const targetProject = Array.from(projectRows)[0];
+            if (!targetProject) throw new Error('Project not found');
+
+            const nextTaskNumber = Number(targetProject.current_task_number || 0) + 1;
+            await tx
+                .update(projects)
+                .set({ currentTaskNumber: nextTaskNumber })
+                .where(eq(projects.id, params.projectId));
+
+            const [taskRow] = await tx
+                .insert(tasks)
+                .values({
+                    projectId: params.projectId,
+                    title: taskTitle,
+                    description: taskDescription,
+                    status: 'todo',
+                    priority: taskPriority,
+                    sprintId: null,
+                    assigneeId: taskAssigneeId,
+                    creatorId: user.id,
+                    dueDate,
+                    taskNumber: nextTaskNumber,
+                })
+                .returning({
+                    id: tasks.id,
+                    projectId: tasks.projectId,
+                    title: tasks.title,
+                    taskNumber: tasks.taskNumber,
+                    createdAt: tasks.createdAt,
+                    updatedAt: tasks.updatedAt,
+                });
+
+            if (!taskRow) throw new Error('Failed to create task');
+
+            const taskHref = targetProject.slug
+                ? `/projects/${encodeURIComponent(targetProject.slug)}?tab=tasks&drawerType=task&drawerId=${encodeURIComponent(taskRow.id)}&panelTab=details`
+                : `/projects/${encodeURIComponent(params.projectId)}?tab=tasks&drawerType=task&drawerId=${encodeURIComponent(taskRow.id)}&panelTab=details`;
+
+            const linkRow = await upsertMessageWorkLink(tx, {
+                sourceMessageId: messageRow.id,
+                sourceConversationId: messageRow.conversationId,
+                targetType: 'task',
+                targetId: taskRow.id,
+                targetProjectId: params.projectId,
+                visibility: 'shared',
+                status: 'active',
+                ownerUserId: user.id,
+                assigneeUserId: taskAssigneeId,
+                createdBy: user.id,
+                href: taskHref,
+                metadata: {
+                    label: taskRow.taskNumber ? `Task #${taskRow.taskNumber}` : 'Task',
+                    title: taskRow.title,
+                    subtitle: targetProject.title ?? null,
+                    taskNumber: taskRow.taskNumber ? `#${taskRow.taskNumber}` : null,
+                    projectTitle: targetProject.title ?? null,
+                    sourceMessageHref: buildMessageSourceHref(messageRow.conversationId, messageRow.id),
+                    sourcePreview,
+                },
+            });
+
+            return {
+                task: taskRow,
+                link: linkRow,
+                project: {
+                    id: params.projectId,
+                    slug: targetProject.slug ?? null,
+                    title: targetProject.title ?? null,
+                    key: targetProject.key ?? null,
+                },
+            };
+        });
+
+        await queueCounterRefreshBestEffort([taskAssigneeId]);
+        revalidatePath(`/projects/${params.projectId}`);
+
+        if (taskAssigneeId && taskAssigneeId !== user.id) {
+            try {
+                await emitTaskAssignedNotification({
+                    recipientUserId: taskAssigneeId,
+                    actorUserId: user.id,
+                    actorName: (user.user_metadata?.full_name as string | undefined) ?? (user.user_metadata?.username as string | undefined) ?? null,
+                    actorAvatarUrl: (user.user_metadata?.avatar_url as string | undefined) ?? null,
+                    taskId: taskResult.task.id,
+                    taskTitle: taskResult.task.title,
+                    taskNumber: taskResult.task.taskNumber ?? null,
+                    projectId: params.projectId,
+                    projectSlug: taskResult.project.slug,
+                    projectKey: taskResult.project.key,
+                    eventKey: taskResult.task.createdAt?.toISOString?.() ?? taskResult.task.updatedAt?.toISOString?.() ?? null,
+                });
+            } catch (notificationError) {
+                logger.warn('messages.collaboration.task_assignment_notification_failed', {
+                    module: 'messaging',
+                    conversationId: messageRow.conversationId,
+                    messageId: messageRow.id,
+                    projectId: params.projectId,
+                    taskId: taskResult.task.id,
+                    actorUserId: user.id,
+                    targetUserId: taskAssigneeId,
+                    error: notificationError instanceof Error ? notificationError.message : String(notificationError),
+                });
+            }
         }
 
         const [conversationProject] = await db
@@ -1008,10 +1299,18 @@ export async function convertMessageToTaskActionV2(params: {
 
         return {
             success: true,
+            conversationId: messageRow.conversationId,
             taskId: taskResult.task.id,
+            link: mapMessageWorkLinkToSummary(taskResult.link),
             bridgeMessage,
         };
     } catch (error) {
+        logger.error('messages.collaboration.convert_message_to_task_failed', {
+            module: 'messaging',
+            messageId: params.messageId,
+            projectId: params.projectId,
+            error: error instanceof Error ? error.message : String(error),
+        });
         return { success: false, error: error instanceof Error ? error.message : 'Failed to create task' };
     }
 }
@@ -1020,7 +1319,7 @@ export async function convertMessageToFollowUpActionV2(params: {
     messageId: string;
     note?: string | null;
     dueAt?: string | null;
-}): Promise<{ success: boolean; error?: string; workflowItemId?: string }> {
+}): Promise<{ success: boolean; error?: string; conversationId?: string; workflowItemId?: string; link?: MessageLinkedWorkSummary }> {
     try {
         const user = await getAuthUser();
         if (!user) return { success: false, error: 'Not authenticated' };
@@ -1049,30 +1348,63 @@ export async function convertMessageToFollowUpActionV2(params: {
         const structured = getStructuredMessageFromMetadata(
             messageRow.metadata as Record<string, unknown> | null,
         );
-        const [workflowRow] = await db
-            .insert(messageWorkflowItems)
-            .values({
-                messageId: messageRow.id,
-                conversationId: messageRow.conversationId,
-                kind: 'follow_up',
-                scope: 'private',
-                creatorId: user.id,
-                assigneeUserId: user.id,
-                status: 'pending',
-                payload: {
-                    note: params.note?.trim() || null,
-                    dueAt: params.dueAt || null,
-                    preview: getMessagePreviewText({
-                        content: messageRow.content,
-                        type: structured?.kind || null,
-                        metadata: messageRow.metadata as Record<string, unknown> | null,
-                    }),
-                },
-                dueAt,
-            })
-            .returning({ id: messageWorkflowItems.id });
+        const preview = getMessagePreviewText({
+            content: messageRow.content,
+            type: structured?.kind || null,
+            metadata: messageRow.metadata as Record<string, unknown> | null,
+        });
+        const result = await db.transaction(async (tx) => {
+            const [workflowRow] = await tx
+                .insert(messageWorkflowItems)
+                .values({
+                    messageId: messageRow.id,
+                    conversationId: messageRow.conversationId,
+                    kind: 'follow_up',
+                    scope: 'private',
+                    creatorId: user.id,
+                    assigneeUserId: user.id,
+                    status: 'pending',
+                    payload: {
+                        note: params.note?.trim() || null,
+                        dueAt: params.dueAt || null,
+                        preview,
+                    },
+                    dueAt,
+                })
+                .returning({ id: messageWorkflowItems.id });
 
-        return { success: true, workflowItemId: workflowRow?.id };
+            if (!workflowRow?.id) throw new Error('Failed to create follow-up');
+            const link = await upsertMessageWorkLink(tx, {
+                sourceMessageId: messageRow.id,
+                sourceConversationId: messageRow.conversationId,
+                targetType: 'follow_up',
+                targetId: workflowRow.id,
+                targetProjectId: null,
+                visibility: 'private',
+                status: 'pending',
+                ownerUserId: user.id,
+                assigneeUserId: user.id,
+                createdBy: user.id,
+                href: buildMessageSourceHref(messageRow.conversationId, messageRow.id),
+                metadata: {
+                    label: 'Follow-up',
+                    subtitle: params.note?.trim() || preview,
+                    note: params.note?.trim() || null,
+                    preview,
+                    dueAt: dueAt?.toISOString() ?? null,
+                    dueDate: dueAt ? formatDueDateKey(dueAt) : null,
+                },
+            });
+
+            return { workflowItemId: workflowRow.id, link };
+        });
+
+        return {
+            success: true,
+            conversationId: messageRow.conversationId,
+            workflowItemId: result.workflowItemId,
+            link: mapMessageWorkLinkToSummary(result.link),
+        };
     } catch (error) {
         return { success: false, error: error instanceof Error ? error.message : 'Failed to create follow-up' };
     }
