@@ -24,6 +24,7 @@ export function useDeliveryAcks(
     conversationId: string | null,
 ) {
     const bufferRef = useRef<Set<string>>(new Set());
+    const flushedRef = useRef<Set<string>>(new Set());
     const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const presenceRef = useRef<ReturnType<typeof subscribePresenceRoom> | null>(null);
 
@@ -58,6 +59,9 @@ export function useDeliveryAcks(
 
         try {
             await recordDeliveryReceipts(ids);
+            for (const id of ids) {
+                flushedRef.current.add(id);
+            }
         } catch {
             // Re-add failed IDs so they are retried on next flush
             for (const id of ids) {
@@ -68,8 +72,10 @@ export function useDeliveryAcks(
 
     // Start/stop the flush timer
     useEffect(() => {
-        if (!viewerId) return;
+        if (!viewerId || !conversationId) return;
 
+        bufferRef.current.clear();
+        flushedRef.current.clear();
         timerRef.current = setInterval(flush, FLUSH_INTERVAL_MS);
         return () => {
             if (timerRef.current) {
@@ -84,7 +90,7 @@ export function useDeliveryAcks(
                 void recordDeliveryReceipts(ids).catch(() => {});
             }
         };
-    }, [viewerId, flush]);
+    }, [conversationId, viewerId, flush]);
 
     /**
      * Acknowledge delivery for a batch of message IDs.
@@ -96,6 +102,7 @@ export function useDeliveryAcks(
             for (const msg of messageIds) {
                 // Skip own messages — only ack messages from others
                 if (msg.senderId === viewerId) continue;
+                if (flushedRef.current.has(msg.id) || bufferRef.current.has(msg.id)) continue;
                 bufferRef.current.add(msg.id);
             }
         },
