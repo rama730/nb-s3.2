@@ -36,6 +36,18 @@ const sql = postgres(DATABASE_URL, {
   ssl: "require",
 });
 
+const DEFAULT_NOTIFICATION_PREFERENCES = JSON.stringify({
+  messages: true,
+  mentions: true,
+  workflows: true,
+  projects: true,
+  tasks: true,
+  applications: true,
+  connections: true,
+  pausedUntil: null,
+  mutedScopes: [],
+});
+
 function resolveWorkspacePath(...parts: string[]) {
   return path.join(process.cwd(), ...parts);
 }
@@ -216,6 +228,55 @@ async function applyMigration(entry: JournalEntry) {
   `;
 }
 
+async function ensureLatestSchemaRepairs() {
+  const preferences = DEFAULT_NOTIFICATION_PREFERENCES.replace(/'/g, "''");
+
+  await sql.unsafe(`
+    DO $$
+    BEGIN
+      IF to_regclass('public.profiles') IS NOT NULL THEN
+        ALTER TABLE public."profiles"
+          ADD COLUMN IF NOT EXISTS "notification_preferences" jsonb DEFAULT '${preferences}'::jsonb;
+
+        UPDATE public."profiles"
+        SET "notification_preferences" = COALESCE("notification_preferences", '${preferences}'::jsonb);
+
+        UPDATE public."profiles"
+        SET "notification_preferences" =
+          jsonb_set(
+            jsonb_set(
+              "notification_preferences",
+              '{pausedUntil}',
+              COALESCE("notification_preferences"->'pausedUntil', 'null'::jsonb),
+              true
+            ),
+            '{mutedScopes}',
+            COALESCE("notification_preferences"->'mutedScopes', '[]'::jsonb),
+            true
+          )
+        WHERE "notification_preferences" IS NOT NULL;
+      END IF;
+
+      IF to_regclass('public.user_notifications') IS NOT NULL THEN
+        ALTER TABLE public."user_notifications"
+          ADD COLUMN IF NOT EXISTS "dismissed_at" timestamp with time zone;
+
+        DROP POLICY IF EXISTS "user_notifications_update_own" ON public."user_notifications";
+      END IF;
+    END $$;
+  `);
+
+  await sql.unsafe(`
+    DO $$
+    BEGIN
+      IF to_regclass('public.user_notifications') IS NOT NULL THEN
+        CREATE INDEX IF NOT EXISTS "user_notifications_user_dismissed_idx"
+          ON public."user_notifications" USING btree ("user_id", "dismissed_at");
+      END IF;
+    END $$;
+  `);
+}
+
 async function setupDatabase() {
   console.log("🚀 Starting database setup via Drizzle migrations...\n");
   const journal = await readJournal();
@@ -258,6 +319,9 @@ async function setupDatabase() {
     } else {
       console.log(`✅ Applied ${appliedCount} migration${appliedCount === 1 ? "" : "s"} from the journal.`);
     }
+
+    await ensureLatestSchemaRepairs();
+    console.log("✅ Verified latest idempotent schema repairs.");
   } finally {
     await releaseMigrationLock().catch(() => undefined);
     await sql.end();
