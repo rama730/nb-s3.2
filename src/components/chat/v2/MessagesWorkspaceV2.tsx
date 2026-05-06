@@ -2,10 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { MessageSquare, Moon, PenSquare, Search, WifiOff, X } from 'lucide-react';
+import { MessageSquare, Moon, PenSquare, Search, WifiOff } from 'lucide-react';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
+import { markConversationMessageNotificationsReadAction } from '@/app/actions/notifications';
 import { useChatTypingState } from '@/hooks/useChatTypingState';
+import { useAuth } from '@/hooks/useAuth';
 import { useDebounce } from '@/hooks/hub/useDebounce';
 import { useMessagesV2Realtime } from '@/hooks/useMessagesV2Realtime';
 import {
@@ -23,6 +26,8 @@ import { useMessagesV2UiStore } from '@/stores/messagesV2UiStore';
 import { cn } from '@/lib/utils';
 import { upsertThreadConversation } from '@/lib/messages/v2-cache';
 import { refreshConversationCache } from '@/lib/messages/v2-refresh';
+import { getEffectiveMessageAttentionUnreadCount } from '@/lib/messages/attention';
+import { isTemporaryMessageId } from '@/lib/messages/utils';
 import { queryKeys } from '@/lib/query-keys';
 import { ConversationHeaderV2 } from './ConversationHeaderV2';
 import { ConversationListV2 } from './ConversationListV2';
@@ -41,6 +46,7 @@ interface MessagesWorkspaceV2Props {
     mode: 'page' | 'popup';
     targetUserId?: string | null;
     initialConversationId?: string | null;
+    initialMessageId?: string | null;
 }
 
 interface ReplyContextJumpState {
@@ -59,15 +65,23 @@ export function MessagesWorkspaceV2({
     mode,
     targetUserId,
     initialConversationId,
+    initialMessageId,
 }: MessagesWorkspaceV2Props) {
     const compact = mode === 'popup';
     const router = useRouter();
     const queryClient = useQueryClient();
+    const { user } = useAuth();
     const activeTab = useMessagesV2UiStore((state) => state.activeTab);
     const setActiveTab = useMessagesV2UiStore((state) => state.setActiveTab);
     const selectedConversationId = useMessagesV2UiStore((state) => state.selectedConversationId);
     const setSelectedConversationId = useMessagesV2UiStore((state) => state.setSelectedConversationId);
+    const setHighlightedConversationId = useMessagesV2UiStore((state) => state.setHighlightedConversationId);
+    const activeMessageAttention = useMessagesV2UiStore((state) =>
+        selectedConversationId ? state.messageAttentionByConversation[selectedConversationId] ?? null : null,
+    );
+    const clearMessageAttentionSmooth = useMessagesV2UiStore((state) => state.clearMessageAttentionSmooth);
     const [focusMessageId, setFocusMessageId] = useState<string | null>(null);
+    const [urlMessageId, setUrlMessageId] = useState<string | null>(null);
     const [replyTarget, setReplyTarget] = useState<MessageWithSender | null>(null);
     const [replyContextJumpState, setReplyContextJumpState] = useState<ReplyContextJumpState | null>(null);
     const [threadScrollToLatestSignal, setThreadScrollToLatestSignal] = useState(0);
@@ -78,6 +92,16 @@ export function MessagesWorkspaceV2({
     const [newMessageOpen, setNewMessageOpen] = useState(false);
     const [isDragOver, setIsDragOver] = useState(false);
     const initialSelectionAppliedRef = useRef(false);
+    const lastReadCommitWatermarkRef = useRef<string | null>(null);
+    const pendingReadWatermarkRef = useRef<{ conversationId: string; messageId: string } | null>(null);
+    const readCommitInFlightRef = useRef(false);
+    const queuedReadCommitRef = useRef<{
+        conversationId: string;
+        messageId: string | null;
+        allowLatestFallback: boolean;
+        ignorePendingWatermark: boolean;
+    } | null>(null);
+    const commitVisibleThreadReadRef = useRef<(() => void) | null>(null);
     const composerAddFilesRef = useRef<((files: File[]) => void) | null>(null);
     const ensureConversation = useEnsureDirectConversation();
     const inbox = useInbox();
@@ -98,10 +122,19 @@ export function MessagesWorkspaceV2({
         true,
     );
 
+    const clearConversationAttention = useCallback((conversationId: string) => {
+        clearMessageAttentionSmooth(conversationId);
+        void markConversationMessageNotificationsReadAction(conversationId);
+    }, [clearMessageAttentionSmooth]);
+
     useEffect(() => {
         if (initialSelectionAppliedRef.current) return;
         if (initialConversationId) {
             setSelectedConversationId(initialConversationId);
+            if (initialMessageId) {
+                setFocusMessageId(initialMessageId);
+                setUrlMessageId(initialMessageId);
+            }
             initialSelectionAppliedRef.current = true;
             return;
         }
@@ -128,12 +161,12 @@ export function MessagesWorkspaceV2({
             return;
         }
         initialSelectionAppliedRef.current = true;
-    }, [ensureConversation, initialConversationId, mode, queryClient, router, setSelectedConversationId, targetUserId]);
+    }, [ensureConversation, initialConversationId, initialMessageId, mode, queryClient, router, setSelectedConversationId, targetUserId]);
 
     useEffect(() => {
-        if (mode !== 'page' || !selectedConversationId) return;
-        router.replace(`/messages?conversationId=${selectedConversationId}`);
-    }, [mode, router, selectedConversationId]);
+        if (mode !== 'page' || !selectedConversationId || !urlMessageId) return;
+        router.replace(`/messages?conversationId=${selectedConversationId}&messageId=${encodeURIComponent(urlMessageId)}`);
+    }, [mode, router, selectedConversationId, urlMessageId]);
 
     useEffect(() => {
         if (!replyContextJumpState) return;
@@ -146,16 +179,232 @@ export function MessagesWorkspaceV2({
     }, [replyContextJumpState]);
 
     useEffect(() => {
-        if (!selectedConversationId || !thread.messages.length) return;
-        const latestMessageId = thread.messages[thread.messages.length - 1]?.id;
-        if (!latestMessageId || !thread.conversation?.unreadCount) return;
-        void markRead.mutateAsync({
-            conversationId: selectedConversationId,
-            lastReadMessageId: latestMessageId,
-        }).catch((error) => {
-            console.warn('[messages-v2] markRead failed', error);
+        lastReadCommitWatermarkRef.current = null;
+        pendingReadWatermarkRef.current = null;
+        readCommitInFlightRef.current = false;
+        queuedReadCommitRef.current = null;
+    }, [selectedConversationId]);
+
+    const hasLoadedReadableMessage = useMemo(
+        () => thread.messages.some((message) => !message.deletedAt && !isTemporaryMessageId(message.id)),
+        [thread.messages],
+    );
+    const latestReadableMessageId = useMemo(() => {
+        for (let index = thread.messages.length - 1; index >= 0; index -= 1) {
+            const message = thread.messages[index];
+            if (!message.deletedAt && !isTemporaryMessageId(message.id)) {
+                return message.id;
+            }
+        }
+        return null;
+    }, [thread.messages]);
+    const selectedInboxConversation = useMemo(
+        () => selectedConversationId
+            ? inbox.conversations.find((conversation) => conversation.id === selectedConversationId) ?? null
+            : null,
+        [inbox.conversations, selectedConversationId],
+    );
+    const rawActiveUnreadCount = Math.max(
+        0,
+        Number(thread.conversation?.unreadCount ?? 0),
+        Number(selectedInboxConversation?.unreadCount ?? 0),
+    );
+    const effectiveActiveUnreadCount = Math.max(
+        getEffectiveMessageAttentionUnreadCount(thread.conversation, user?.id ?? null),
+        getEffectiveMessageAttentionUnreadCount(selectedInboxConversation, user?.id ?? null),
+    );
+    const hasActiveMessageAttention = Boolean(
+        activeMessageAttention?.hasNewMessages || activeMessageAttention?.clearing,
+    );
+    const shouldResolveActiveConversationRead = rawActiveUnreadCount > 0
+        || effectiveActiveUnreadCount > 0
+        || hasActiveMessageAttention;
+
+    const handleCommitThreadRead = useCallback((
+        messageId?: string | null,
+        options: { allowLatestFallback?: boolean; ignorePendingWatermark?: boolean } = {},
+    ) => {
+        const conversationId = selectedConversationId;
+        if (!conversationId || !shouldResolveActiveConversationRead) return;
+
+        const enqueueCommit = (
+            commitMessageId: string | null,
+            commitOptions: { allowLatestFallback: boolean; ignorePendingWatermark: boolean },
+        ) => {
+            const pending = commitOptions.ignorePendingWatermark ? null : pendingReadWatermarkRef.current;
+            const pendingMessageId = pending?.conversationId === conversationId
+                ? pending.messageId
+                : null;
+            const candidateMessageId = commitMessageId
+                ?? pendingMessageId
+                ?? null;
+            const explicitMessageId = !isTemporaryMessageId(candidateMessageId)
+                ? candidateMessageId
+                : commitOptions.allowLatestFallback
+                    ? latestReadableMessageId
+                    : null;
+            const serverMessageId = explicitMessageId
+                ?? (commitOptions.allowLatestFallback ? latestReadableMessageId : null);
+            if (!serverMessageId) return;
+
+            const watermark = `${conversationId}:${serverMessageId}`;
+            if (readCommitInFlightRef.current) {
+                if (
+                    lastReadCommitWatermarkRef.current === watermark
+                    || lastReadCommitWatermarkRef.current === `${conversationId}:${latestReadableMessageId ?? ''}`
+                ) {
+                    return;
+                }
+                queuedReadCommitRef.current = {
+                    conversationId,
+                    messageId: serverMessageId,
+                    allowLatestFallback: false,
+                    ignorePendingWatermark: commitOptions.ignorePendingWatermark,
+                };
+                console.debug('[messages-v2] read_commit_replaced_by_newer', {
+                    conversationId,
+                    requestedWatermark: serverMessageId,
+                });
+                return;
+            }
+
+            if (lastReadCommitWatermarkRef.current === watermark) return;
+            lastReadCommitWatermarkRef.current = watermark;
+
+            if (pending?.conversationId === conversationId && pending.messageId === serverMessageId) {
+                pendingReadWatermarkRef.current = null;
+            }
+
+            readCommitInFlightRef.current = true;
+            console.debug('[messages-v2] read_commit_requested', {
+                conversationId,
+                requestedWatermark: serverMessageId,
+            });
+            void markRead.mutateAsync({
+                conversationId,
+                lastReadMessageId: serverMessageId,
+            }).then((result) => {
+                if (result.unreadCount === 0) {
+                    clearConversationAttention(conversationId);
+                }
+            }).catch((error) => {
+                if (lastReadCommitWatermarkRef.current === watermark) {
+                    lastReadCommitWatermarkRef.current = null;
+                }
+                pendingReadWatermarkRef.current = { conversationId, messageId: serverMessageId };
+                console.warn('[messages-v2] markRead failed', error);
+            }).finally(() => {
+                readCommitInFlightRef.current = false;
+                const nextCommit = queuedReadCommitRef.current;
+                if (!nextCommit || nextCommit.conversationId !== conversationId) {
+                    queuedReadCommitRef.current = null;
+                    return;
+                }
+                queuedReadCommitRef.current = null;
+                enqueueCommit(nextCommit.messageId, {
+                    allowLatestFallback: nextCommit.allowLatestFallback,
+                    ignorePendingWatermark: nextCommit.ignorePendingWatermark,
+                });
+            });
+        };
+
+        enqueueCommit(messageId ?? null, {
+            allowLatestFallback: options.allowLatestFallback ?? true,
+            ignorePendingWatermark: options.ignorePendingWatermark ?? false,
         });
-    }, [markRead, selectedConversationId, thread.conversation?.unreadCount, thread.messages]);
+    }, [
+        markRead,
+        clearConversationAttention,
+        latestReadableMessageId,
+        selectedConversationId,
+        shouldResolveActiveConversationRead,
+    ]);
+
+    const handleCommitVisibleThreadRead = useCallback(() => {
+        const shouldCommitLatestServerWatermark =
+            hasLoadedReadableMessage;
+        handleCommitThreadRead(
+            null,
+            shouldCommitLatestServerWatermark ? { ignorePendingWatermark: true } : {},
+        );
+    }, [handleCommitThreadRead, hasLoadedReadableMessage]);
+
+    useEffect(() => {
+        if (
+            !selectedConversationId
+            || !shouldResolveActiveConversationRead
+            || !hasLoadedReadableMessage
+        ) {
+            return;
+        }
+
+        console.debug('[messages-v2] read_seen_detected', {
+            conversationId: selectedConversationId,
+            source: 'thread-open',
+        });
+        handleCommitThreadRead(null, { ignorePendingWatermark: true });
+    }, [
+        hasLoadedReadableMessage,
+        handleCommitThreadRead,
+        selectedConversationId,
+        shouldResolveActiveConversationRead,
+    ]);
+
+    const handleVisibleReadWatermark = useCallback((messageId: string) => {
+        if (!selectedConversationId || !shouldResolveActiveConversationRead) return;
+
+        pendingReadWatermarkRef.current = {
+            conversationId: selectedConversationId,
+            messageId,
+        };
+        console.debug('[messages-v2] read_seen_detected', {
+            conversationId: selectedConversationId,
+            source: 'visible-unread-row',
+            messageId,
+        });
+        handleCommitThreadRead(messageId, { allowLatestFallback: false });
+    }, [
+        handleCommitThreadRead,
+        selectedConversationId,
+        shouldResolveActiveConversationRead,
+    ]);
+
+    useEffect(() => {
+        commitVisibleThreadReadRef.current = handleCommitVisibleThreadRead;
+    }, [handleCommitVisibleThreadRead]);
+
+    useEffect(() => {
+        const commitPendingRead = () => {
+            commitVisibleThreadReadRef.current?.();
+        };
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === 'hidden') {
+                commitPendingRead();
+            }
+        };
+
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+        window.addEventListener('pagehide', commitPendingRead);
+        window.addEventListener('blur', commitPendingRead);
+        return () => {
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
+            window.removeEventListener('pagehide', commitPendingRead);
+            window.removeEventListener('blur', commitPendingRead);
+        };
+    }, []);
+
+    useEffect(() => () => {
+        commitVisibleThreadReadRef.current?.();
+    }, []);
+
+    const clearMessageFocus = useCallback(() => {
+        setFocusMessageId(null);
+        setUrlMessageId(null);
+        setReplyContextJumpState(null);
+        if (mode === 'page' && selectedConversationId) {
+            router.replace(`/messages?conversationId=${selectedConversationId}`);
+        }
+    }, [mode, router, selectedConversationId]);
 
     const activeConversation = thread.conversation;
     const otherParticipant = activeConversation?.participants[0];
@@ -170,9 +419,14 @@ export function MessagesWorkspaceV2({
     const showThreadSkeleton = isResolvingConversation || (Boolean(selectedConversationId) && thread.isLoading && !activeConversation);
 
     const handleSelectConversation = (conversationId: string) => {
+        if (conversationId !== selectedConversationId) {
+            handleCommitVisibleThreadRead();
+        }
         setSelectedConversationId(conversationId);
+        setHighlightedConversationId(null);
         setReplyTarget(null);
         setFocusMessageId(null);
+        setUrlMessageId(null);
         setReplyContextJumpState(null);
         if (mode === 'page') {
             router.replace(`/messages?conversationId=${conversationId}`);
@@ -180,9 +434,11 @@ export function MessagesWorkspaceV2({
     };
 
     const handleCloseConversation = () => {
+        handleCommitVisibleThreadRead();
         setSelectedConversationId(null);
         setReplyTarget(null);
         setFocusMessageId(null);
+        setUrlMessageId(null);
         setReplyContextJumpState(null);
         if (mode === 'page') {
             router.replace('/messages');
@@ -211,7 +467,6 @@ export function MessagesWorkspaceV2({
     }, mode === 'page');
 
     const searchResults = search.data ?? [];
-    const showSearchResults = mode === 'page' && searchOpen && debouncedSearch.length > 0;
 
     const handleReply = useCallback((message: MessageWithSender) => {
         setReplyTarget(message);
@@ -273,112 +528,51 @@ export function MessagesWorkspaceV2({
     return (
         <div className={cn('flex h-full min-h-0 flex-col overflow-hidden', shellClasses)}>
             {mode === 'page' ? (
-                <header className="border-b border-zinc-100 bg-white px-5 py-4 dark:border-zinc-800 dark:bg-zinc-950">
-                    <div className="flex items-center gap-4">
-                        <div className="flex min-w-0 items-center gap-3">
-                            <div className="flex h-11 w-11 items-center justify-center rounded-2xl app-accent-solid shadow-sm">
-                                <MessageSquare className="h-5 w-5" />
-                            </div>
-                            <div className="min-w-0">
-                                <h1 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">Messages</h1>
-                                <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                                    {!isOnline
-                                        ? 'You\u2019re offline'
-                                        : presenceHealth.status === 'unavailable'
-                                            ? 'Presence unavailable\u2026 typing and online updates are paused.'
-                                            : presenceHealth.status === 'degraded'
-                                                ? 'Presence reconnecting\u2026'
-                                        : realtime.isDegraded
-                                            ? 'Realtime reconnecting\u2026'
-                                            : 'Shared inbox for chats, project groups, and applications.'}
-                                </p>
-                            </div>
-                        </div>
-
-                        <div className="relative ml-auto flex w-full max-w-[640px] items-center gap-3">
-                            <button
-                                type="button"
-                                onClick={() => setNewMessageOpen(true)}
-                                className="inline-flex h-11 shrink-0 items-center gap-2 rounded-2xl border border-zinc-200 bg-white px-4 text-sm font-medium text-zinc-700 shadow-[0_1px_2px_rgba(15,23,42,0.03)] transition-colors hover:bg-zinc-50 hover:text-zinc-900 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-300 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
-                            >
-                                <PenSquare className="h-4 w-4" />
-                                New message
-                            </button>
-
-                            <button
-                                type="button"
-                                onClick={() => toggleDnd()}
-                                className={`inline-flex h-11 shrink-0 items-center gap-2 rounded-2xl border px-4 text-sm font-medium shadow-[0_1px_2px_rgba(15,23,42,0.03)] transition-colors ${
-                                    isDnd
-                                        ? 'border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-300'
-                                        : 'border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-300 dark:hover:bg-zinc-900'
-                                }`}
-                                aria-label={isDnd ? 'Turn off Do Not Disturb' : 'Turn on Do Not Disturb'}
-                            >
-                                <Moon className="h-4 w-4" />
-                                {isDnd ? 'DND On' : 'DND'}
-                            </button>
-
-                            <div className="relative flex-1 rounded-2xl border border-zinc-200/90 bg-white p-1 shadow-[0_1px_2px_rgba(15,23,42,0.03)] dark:border-zinc-800 dark:bg-zinc-950">
-                                <div className="relative rounded-[18px] bg-zinc-50 dark:bg-zinc-900">
-                                    <Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
-                                    <input
-                                        type="text"
-                                        value={globalSearch}
-                                        onChange={(event) => {
-                                            setGlobalSearch(event.target.value);
-                                            setSearchOpen(true);
-                                        }}
-                                        placeholder="Search messages…"
-                                        className="h-[44px] w-full rounded-[18px] border border-transparent bg-transparent pl-10 pr-10 text-sm text-zinc-700 outline-none transition-all placeholder:text-zinc-400 focus:border-primary/25 focus:bg-white focus:ring-2 focus:ring-primary/10 dark:text-zinc-200 dark:focus:bg-zinc-950"
-                                    />
-                                    {globalSearch ? (
-                                        <button
-                                            type="button"
-                                            onClick={() => {
-                                                setGlobalSearch('');
-                                                setSearchOpen(false);
-                                            }}
-                                            className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 transition-colors hover:text-zinc-700 dark:hover:text-zinc-200"
-                                            aria-label="Clear search"
-                                        >
-                                            <X className="h-4 w-4" />
-                                        </button>
-                                    ) : null}
-                                </div>
-                            </div>
-
-                            {showSearchResults ? (
-                                <div className="absolute right-0 top-full z-20 mt-2 max-h-[60vh] w-[360px] overflow-y-auto rounded-3xl border border-zinc-200 bg-white p-2 shadow-[0_18px_48px_rgba(15,23,42,0.14)] dark:border-zinc-800 dark:bg-zinc-950">
-                                    {search.isLoading ? (
-                                        <div className="px-4 py-3 text-sm text-zinc-500">Searching…</div>
-                                    ) : searchResults.length === 0 ? (
-                                        <div className="px-4 py-3 text-sm text-zinc-500">No messages found.</div>
-                                    ) : searchResults.map((result) => (
-                                        <button
-                                            key={`${result.conversationId}:${result.message.id}`}
-                                            type="button"
-                                            onClick={() => {
-                                                handleSelectConversation(result.conversationId);
-                                                setFocusMessageId(result.message.id);
-                                                setSearchOpen(false);
-                                                setGlobalSearch('');
-                                            }}
-                                            className="w-full rounded-2xl px-4 py-3 text-left transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-900"
-                                        >
-                                            <div className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
-                                                {result.conversation?.participants?.[0]?.fullName
-                                                    || result.conversation?.participants?.[0]?.username
-                                                    || 'Conversation'}
-                                            </div>
-                                            <div className="mt-1 truncate text-xs text-zinc-500 dark:text-zinc-400">
-                                                {formatMessagePreview(result.message)}
-                                            </div>
-                                        </button>
-                                    ))}
-                                </div>
-                            ) : null}
-                        </div>
+                <header className="flex h-14 items-center gap-3 border-b border-border/60 bg-card px-5">
+                    <h1 className="text-base font-semibold text-foreground">Messages</h1>
+                    <span className="ml-2 text-xs text-muted-foreground truncate">
+                        {!isOnline
+                            ? 'You\u2019re offline'
+                            : presenceHealth.status === 'unavailable'
+                                ? 'Presence unavailable'
+                                : presenceHealth.status === 'degraded'
+                                    ? 'Presence reconnecting…'
+                                    : realtime.isDegraded
+                                        ? 'Realtime reconnecting…'
+                                        : ''}
+                    </span>
+                    <div className="ml-auto flex items-center gap-2">
+                        <button
+                            type="button"
+                            onClick={() => setSearchOpen(true)}
+                            className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-border/70 bg-background text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                            aria-label="Search messages"
+                            title="Search messages (⌘K)"
+                        >
+                            <Search className="h-4 w-4" />
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => toggleDnd()}
+                            className={cn(
+                                'inline-flex h-9 w-9 items-center justify-center rounded-full border transition-colors',
+                                isDnd
+                                    ? 'border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-800/60 dark:bg-amber-950/50 dark:text-amber-300'
+                                    : 'border-border/70 bg-background text-muted-foreground hover:bg-muted hover:text-foreground',
+                            )}
+                            aria-label={isDnd ? 'Turn off Do Not Disturb' : 'Turn on Do Not Disturb'}
+                            title={isDnd ? 'Do Not Disturb on' : 'Do Not Disturb'}
+                        >
+                            <Moon className="h-4 w-4" />
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setNewMessageOpen(true)}
+                            className="inline-flex h-9 items-center gap-1.5 rounded-full app-accent-solid px-3.5 text-sm font-medium shadow-sm transition-transform hover:-translate-y-px"
+                        >
+                            <PenSquare className="h-4 w-4" />
+                            New
+                        </button>
                     </div>
                 </header>
             ) : null}
@@ -401,38 +595,38 @@ export function MessagesWorkspaceV2({
                 </div>
             ) : null}
 
-            {showTabsRail ? (
-                <div className={cn(
-                    'border-b border-zinc-100 bg-white dark:border-zinc-800 dark:bg-zinc-950',
-                    compact ? 'px-3 pb-3 pt-4' : 'px-5 py-3',
-                )}>
-                    <div className="inline-flex rounded-2xl border border-zinc-200 bg-zinc-50 p-1 dark:border-zinc-800 dark:bg-zinc-900">
-                        {INBOX_TABS.map((tab) => (
-                            <button
-                                key={tab.id}
-                                type="button"
-                                onClick={() => setActiveTab(tab.id)}
-                                data-testid={`messages-tab-${tab.id}`}
-                                className={cn(
-                                    'rounded-[14px] px-3.5 py-2 text-sm font-medium transition-colors',
-                                    activeTab === tab.id
-                                        ? 'app-accent-solid shadow-sm'
-                                        : 'text-zinc-500 hover:bg-white hover:text-zinc-900 dark:hover:bg-zinc-800 dark:hover:text-zinc-100',
-                                )}
-                            >
-                                {tab.label}
-                            </button>
-                        ))}
-                    </div>
-                </div>
-            ) : null}
-
             <div className="flex min-h-0 flex-1 overflow-hidden">
                 {showSidebar ? (
-                    <aside className={cn(
-                        'min-h-0 border-r border-zinc-100 bg-white dark:border-zinc-800 dark:bg-zinc-950',
-                        compact ? 'w-full' : 'min-w-[300px] w-[min(360px,31vw)]',
-                    )}>
+                    <aside
+                        className={cn(
+                            'flex min-h-0 flex-col border-r border-border/60 bg-card',
+                            compact ? 'w-full' : 'shrink-0',
+                        )}
+                        style={compact ? undefined : { width: 'var(--msg-rail-width, 360px)' }}
+                    >
+                        {showTabsRail ? (
+                            <div className={cn('shrink-0 border-b border-border/50 px-3 pb-2 pt-3')}>
+                                <div className="flex rounded-full border border-border/70 bg-muted/40 p-1">
+                                    {INBOX_TABS.map((tab) => (
+                                        <button
+                                            key={tab.id}
+                                            type="button"
+                                            onClick={() => setActiveTab(tab.id)}
+                                            data-testid={`messages-tab-${tab.id}`}
+                                            className={cn(
+                                                'flex-1 rounded-full px-3 py-1.5 text-xs font-semibold transition-colors',
+                                                activeTab === tab.id
+                                                    ? 'app-accent-solid shadow-sm'
+                                                    : 'text-muted-foreground hover:text-foreground',
+                                            )}
+                                        >
+                                            {tab.label}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        ) : null}
+                        <div className="min-h-0 flex-1 overflow-hidden">
                         {activeTab === 'chats' ? (
                             <ConversationListV2
                                 surface={mode}
@@ -458,6 +652,7 @@ export function MessagesWorkspaceV2({
                                 onSelectConversation={handleSelectConversation}
                             />
                         )}
+                        </div>
                     </aside>
                 ) : null}
 
@@ -486,7 +681,7 @@ export function MessagesWorkspaceV2({
                     {showThreadSkeleton ? (
                         <ThreadSkeletonV2 surface={mode} />
                     ) : activeConversation ? (
-                        <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-white dark:bg-zinc-950">
+                        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-white dark:bg-zinc-950">
                             <DropZoneOverlay visible={isDragOver} />
                             <ConversationHeaderV2
                                 conversation={activeConversation}
@@ -565,6 +760,8 @@ export function MessagesWorkspaceV2({
                                 onLoadMore={handleThreadLoadMore}
                                 onReply={handleReply}
                                 onTogglePin={handleTogglePin}
+                                onVisibleReadWatermark={handleVisibleReadWatermark}
+                                onClearFocusTarget={clearMessageFocus}
                                 onRequestMessageContext={async (messageId) => {
                                     const injected = await injectMessageContext(selectedConversationId!, messageId);
                                     if (injected) {
@@ -592,7 +789,12 @@ export function MessagesWorkspaceV2({
                                 surface={mode}
                                 replyTarget={replyTarget}
                                 sendTyping={sendTyping}
-                                onWillSend={() => setThreadScrollToLatestSignal((current) => current + 1)}
+                                onWillSend={() => {
+                                    clearMessageFocus();
+                                    clearConversationAttention(selectedConversationId!);
+                                    handleCommitThreadRead(null, { ignorePendingWatermark: true });
+                                    setThreadScrollToLatestSignal((current) => current + 1);
+                                }}
                                 onClearReply={() => setReplyTarget(null)}
                                 onAddFiles={(fn) => { composerAddFilesRef.current = fn; }}
                                 participants={conversationParticipants}
@@ -625,6 +827,73 @@ export function MessagesWorkspaceV2({
                     onClose={() => setNewMessageOpen(false)}
                     onConversationOpened={handleSelectConversation}
                 />
+            ) : null}
+
+            {mode === 'page' ? (
+                <Dialog
+                    open={searchOpen}
+                    onOpenChange={(open) => {
+                        setSearchOpen(open);
+                        if (!open) setGlobalSearch('');
+                    }}
+                >
+                    <DialogContent className="max-w-[640px] gap-0 p-0 overflow-hidden">
+                        <DialogHeader className="border-b border-border/60 px-4 py-3">
+                            <DialogTitle className="sr-only">Search messages</DialogTitle>
+                            <div className="flex items-center gap-2">
+                                <Search className="h-4 w-4 text-muted-foreground" />
+                                <input
+                                    autoFocus
+                                    type="text"
+                                    value={globalSearch}
+                                    onChange={(event) => setGlobalSearch(event.target.value)}
+                                    placeholder="Search messages, people, projects…"
+                                    className="h-10 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+                                />
+                                <kbd className="hidden rounded border border-border/60 bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground sm:inline-block">Esc</kbd>
+                            </div>
+                        </DialogHeader>
+                        <div className="max-h-[60vh] overflow-y-auto p-2">
+                            {debouncedSearch.length === 0 ? (
+                                <div className="px-4 py-6 text-center text-sm text-muted-foreground">
+                                    Start typing to search across your conversations.
+                                </div>
+                            ) : search.isLoading ? (
+                                <div className="px-4 py-6 text-center text-sm text-muted-foreground">Searching…</div>
+                            ) : searchResults.length === 0 ? (
+                                <div className="px-4 py-6 text-center text-sm text-muted-foreground">No matches.</div>
+                            ) : (
+                                searchResults.map((result) => {
+                                    const peer = result.conversation?.participants?.[0];
+                                    const title = peer?.fullName || peer?.username || 'Conversation';
+                                    return (
+                                        <button
+                                            key={`${result.conversationId}:${result.message.id}`}
+                                            type="button"
+                                            onClick={() => {
+                                                handleSelectConversation(result.conversationId);
+                                                setFocusMessageId(result.message.id);
+                                                setUrlMessageId(result.message.id);
+                                                setSearchOpen(false);
+                                                setGlobalSearch('');
+                                            }}
+                                            className="flex w-full items-start gap-3 rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-muted"
+                                        >
+                                            <div className="min-w-0 flex-1">
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <span className="truncate text-sm font-medium text-foreground">{title}</span>
+                                                </div>
+                                                <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
+                                                    {formatMessagePreview(result.message)}
+                                                </p>
+                                            </div>
+                                        </button>
+                                    );
+                                })
+                            )}
+                        </div>
+                    </DialogContent>
+                </Dialog>
             ) : null}
         </div>
     );
