@@ -88,10 +88,10 @@ test.describe("Task panel open-in-IDE smoke", () => {
     const menu = page.getByTestId("open-in-ide-menu");
     await expect(menu).toBeVisible({ timeout: 5000 });
 
-    // All four chooser options should be present (Workspace is conditional
-    // on the parent passing `onOpenInWorkspace`; the Files tab does so).
+    // All four chooser options should be present.
     await expect(menu.getByTestId("open-in-ide-cursor")).toBeVisible();
     await expect(menu.getByTestId("open-in-ide-vscode")).toBeVisible();
+    await expect(menu.getByTestId("open-in-ide-workspace")).toBeVisible();
     await expect(menu.getByTestId("open-in-ide-download")).toBeVisible();
 
     await menu.getByTestId("open-in-ide-cursor").click();
