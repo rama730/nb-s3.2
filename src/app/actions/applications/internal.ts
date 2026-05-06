@@ -30,6 +30,7 @@ import {
     resolveLifecycleStatus,
 } from '@/lib/applications/utils';
 import { isApplicationReviewerRole } from '@/lib/applications/authorization';
+import { emitApplicationDecisionNotification, emitApplicationReceivedNotification } from '@/lib/notifications/emitters';
 import type {
     ApplicationActionOptions,
     ApplicationActionResult,
@@ -1033,6 +1034,30 @@ export async function applyToRoleAction(
                         source: 'project',
                         applicationTraceId: traceId,
                     });
+                    try {
+                        await emitApplicationReceivedNotification({
+                            recipientUserId: project.ownerId,
+                            actorUserId: user.id,
+                            actorName: (user.user_metadata?.full_name as string | undefined) ?? (user.user_metadata?.username as string | undefined) ?? null,
+                            actorAvatarUrl: (user.user_metadata?.avatar_url as string | undefined) ?? null,
+                            applicationId: existingApp.id,
+                            projectId,
+                            projectSlug: project.slug ?? null,
+                            projectTitle: project.title ?? null,
+                            eventKey: traceId,
+                        });
+                    } catch (notificationError) {
+                        console.error('[applications] Failed to emit application received notification', {
+                            applicationId: existingApp.id,
+                            actorUserId: user.id,
+                            recipientUserId: project.ownerId,
+                            projectId,
+                            projectSlug: project.slug ?? null,
+                            projectTitle: project.title ?? null,
+                            traceId,
+                            error: notificationError instanceof Error ? notificationError.message : String(notificationError),
+                        });
+                    }
                     return toApplicationSuccess(traceId, {
                         applicationId: existingApp.id,
                         conversationId,
@@ -1093,6 +1118,30 @@ export async function applyToRoleAction(
                 source: 'project',
                 applicationTraceId: traceId,
             });
+            try {
+                await emitApplicationReceivedNotification({
+                    recipientUserId: project.ownerId,
+                    actorUserId: user.id,
+                    actorName: (user.user_metadata?.full_name as string | undefined) ?? (user.user_metadata?.username as string | undefined) ?? null,
+                    actorAvatarUrl: (user.user_metadata?.avatar_url as string | undefined) ?? null,
+                    applicationId: newApplicationId,
+                    projectId,
+                    projectSlug: project.slug ?? null,
+                    projectTitle: project.title ?? null,
+                    eventKey: traceId,
+                });
+            } catch (notificationError) {
+                console.error('[applications] Failed to emit application received notification', {
+                    applicationId: newApplicationId,
+                    actorUserId: user.id,
+                    recipientUserId: project.ownerId,
+                    projectId,
+                    projectSlug: project.slug ?? null,
+                    projectTitle: project.title ?? null,
+                    traceId,
+                    error: notificationError instanceof Error ? notificationError.message : String(notificationError),
+                });
+            }
 
             return toApplicationSuccess(traceId, {
                 applicationId: newApplicationId,
@@ -1281,6 +1330,28 @@ export async function acceptApplicationAction(
                 source: 'requests',
                 applicationTraceId: traceId,
             });
+            try {
+                await emitApplicationDecisionNotification({
+                    recipientUserId: application.applicantId,
+                    actorUserId: user.id,
+                    actorName: (user.user_metadata?.full_name as string | undefined) ?? (user.user_metadata?.username as string | undefined) ?? null,
+                    actorAvatarUrl: (user.user_metadata?.avatar_url as string | undefined) ?? null,
+                    applicationId,
+                    status: 'accepted',
+                    conversationId: application.conversationId ?? null,
+                    projectId: application.projectId,
+                    projectSlug: application.project?.slug ?? null,
+                    projectTitle: application.project?.title ?? null,
+                    eventKey: traceId,
+                });
+            } catch (notificationError) {
+                console.error('[applications] Failed to emit application decision notification', {
+                    applicationId,
+                    status: 'accepted',
+                    traceId,
+                    error: notificationError instanceof Error ? notificationError.message : String(notificationError),
+                });
+            }
 
             return toApplicationSuccess(traceId, { applicationId });
         });
@@ -1406,6 +1477,31 @@ export async function rejectApplicationAction(
                 source: 'requests',
                 applicationTraceId: traceId,
             });
+            try {
+                await emitApplicationDecisionNotification({
+                    recipientUserId: application.applicantId,
+                    actorUserId: user.id,
+                    actorName: (user.user_metadata?.full_name as string | undefined) ?? (user.user_metadata?.username as string | undefined) ?? null,
+                    actorAvatarUrl: (user.user_metadata?.avatar_url as string | undefined) ?? null,
+                    applicationId,
+                    status: 'rejected',
+                    conversationId: application.conversationId ?? null,
+                    projectId: application.projectId,
+                    projectSlug: application.project?.slug ?? null,
+                    projectTitle: application.project?.title ?? null,
+                    eventKey: traceId,
+                });
+            } catch (notificationError) {
+                console.error('[applications] Failed to emit application decision notification', {
+                    applicationId,
+                    status: 'rejected',
+                    actorUserId: user.id,
+                    recipientUserId: application.applicantId,
+                    eventKey: traceId,
+                    traceId,
+                    error: notificationError instanceof Error ? notificationError.message : String(notificationError),
+                });
+            }
 
             return toApplicationSuccess(traceId, { applicationId });
         });
@@ -1760,6 +1856,30 @@ export async function reopenApplicationAction(
             source: 'messages',
             applicationTraceId: traceId,
         });
+        try {
+            await emitApplicationDecisionNotification({
+                recipientUserId: application.applicantId,
+                actorUserId: user.id,
+                actorName: (user.user_metadata?.full_name as string | undefined) ?? (user.user_metadata?.username as string | undefined) ?? null,
+                actorAvatarUrl: (user.user_metadata?.avatar_url as string | undefined) ?? null,
+                applicationId,
+                status: 'reopened',
+                conversationId: application.conversationId ?? null,
+                projectId: application.projectId,
+                projectSlug: application.project?.slug ?? null,
+                projectTitle: application.project?.title ?? null,
+                eventKey: traceId,
+            });
+        } catch (notificationError) {
+            console.error('[applications] Failed to emit application decision notification', {
+                applicationId,
+                status: 'reopened',
+                actorUserId: user.id,
+                recipientUserId: application.applicantId,
+                traceId,
+                error: notificationError instanceof Error ? notificationError.message : String(notificationError),
+            });
+        }
 
         return toApplicationSuccess(traceId, { applicationId });
     } catch (error) {
