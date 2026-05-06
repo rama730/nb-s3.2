@@ -4,27 +4,28 @@ import { ChevronDown } from 'lucide-react';
 
 interface ScrollToBottomFabProps {
     visible: boolean;
-    unreadBelow: number;
+    showNewMessages?: boolean;
     onClick: () => void;
 }
 
-export function ScrollToBottomFab({ visible, unreadBelow, onClick }: ScrollToBottomFabProps) {
+export function ScrollToBottomFab({ visible, showNewMessages = false, onClick }: ScrollToBottomFabProps) {
     return (
         <button
             type="button"
             onClick={onClick}
             tabIndex={-1}
-            aria-label="Scroll to newest message"
-            className={`absolute bottom-20 right-4 z-20 flex h-10 w-10 items-center justify-center rounded-full border border-zinc-200 bg-white shadow-lg transition-all duration-200 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:bg-zinc-800 ${
+            aria-label={showNewMessages ? 'Jump to new messages' : 'Scroll to newest message'}
+            className={`absolute bottom-24 right-5 z-20 flex items-center justify-center gap-2 rounded-full border border-border/70 bg-card text-foreground transition-all duration-200 hover:bg-muted ${
+                showNewMessages ? 'h-10 px-3' : 'h-11 w-11'
+            } ${
                 visible ? 'scale-100 opacity-100' : 'pointer-events-none scale-75 opacity-0'
             }`}
+            style={{ boxShadow: 'var(--msg-shadow-lg, 0 12px 30px rgba(15,23,42,0.18))' }}
         >
-            <ChevronDown className="h-5 w-5 text-zinc-600 dark:text-zinc-300" />
-            {unreadBelow > 0 && (
-                <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
-                    {unreadBelow > 99 ? '99+' : unreadBelow}
-                </span>
-            )}
+            {showNewMessages ? (
+                <span className="pl-3 text-xs font-semibold">New messages</span>
+            ) : null}
+            <ChevronDown className="h-5 w-5" />
         </button>
     );
 }
