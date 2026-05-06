@@ -177,7 +177,6 @@ export function useMessageComposerActions({
             next: structuredDraft.next.trim() || null,
         };
 
-        beginSendAnimation();
         queueOutgoingMessage({
             clientMessageId,
             content: '',
@@ -185,6 +184,7 @@ export function useMessageComposerActions({
             contextChips,
             structuredAction: optimisticStructuredAction,
         });
+        beginSendAnimation();
         onClearReply();
         setPendingContextChips([]);
         clearStructuredDraft();
@@ -265,7 +265,6 @@ export function useMessageComposerActions({
         if (isSending) return;
 
         const clientMessageId = createClientMessageId();
-        beginSendAnimation();
         const contextChips = pendingContextChips;
 
         clearDraft(conversationId);
@@ -281,6 +280,7 @@ export function useMessageComposerActions({
             state: 'sending',
             contextChips,
         });
+        beginSendAnimation();
 
         try {
             const result = await sendConversationMessage.mutateAsync({
