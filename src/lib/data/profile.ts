@@ -19,6 +19,7 @@ import {
     trimDisplayText,
     trimOptionalDisplayText,
 } from '@/lib/profile/display'
+import { normalizeNotificationPreferences } from '@/lib/notifications/preferences'
 export { normalizeProfile } from '@/lib/utils/normalize-profile'
 import { normalizeProfile } from '@/lib/utils/normalize-profile'
 
@@ -55,7 +56,7 @@ function toBootstrapProfile(
         | 'workspaceDueTodayCount'
         | 'workspaceOverdueCount'
         | 'workspaceInProgressCount'
-    >
+    > & Partial<Pick<StandardProfile, 'notificationPreferences'>>
 ): StandardProfile {
     return {
         ...profile,
@@ -66,6 +67,7 @@ function toBootstrapProfile(
         openTo: profile.openTo ?? [],
         availabilityStatus: profile.availabilityStatus ?? 'available',
         socialLinks: profile.socialLinks ?? {},
+        notificationPreferences: normalizeNotificationPreferences(profile.notificationPreferences),
         experienceLevel: null,
         hoursPerWeek: null,
         genderIdentity: null,
