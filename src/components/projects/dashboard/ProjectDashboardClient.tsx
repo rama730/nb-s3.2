@@ -19,6 +19,7 @@ import { getProjectNodes } from "@/app/actions/files";
 import { queryKeys } from "@/lib/query-keys";
 import { logger } from "@/lib/logger";
 import type { SprintDetailPayload } from "@/lib/projects/sprint-detail";
+import type { TaskPanelTab } from "@/hooks/useTaskPanelResource";
 
 import { 
     DashboardTab, 
@@ -661,6 +662,19 @@ export default function ProjectDashboardClient({
 
     const filesSyncStatus = extendedProject?.syncStatus;
     const filesImportSourceType = extendedProject?.importSource?.type || null;
+    const initialTaskDrawerId = searchParams?.get("drawerType") === "task"
+        ? searchParams.get("drawerId")
+        : null;
+    const initialTaskPanelTabParam = searchParams?.get("panelTab");
+    const initialTaskPanelTab = (
+        initialTaskPanelTabParam === "details" ||
+        initialTaskPanelTabParam === "subtasks" ||
+        initialTaskPanelTabParam === "comments" ||
+        initialTaskPanelTabParam === "files" ||
+        initialTaskPanelTabParam === "activity"
+    )
+        ? initialTaskPanelTabParam as TaskPanelTab
+        : null;
     const initialOpenPath = searchParams?.get("path") || null;
     const initialOpenLineRaw = Number(searchParams?.get("line") || "");
     const initialOpenColumnRaw = Number(searchParams?.get("column") || "");
@@ -768,6 +782,8 @@ export default function ProjectDashboardClient({
                             totalCount={tasks.length}
                             members={allMembers}
                             sprints={sprints}
+                            initialOpenTaskId={initialTaskDrawerId}
+                            initialPanelTab={initialTaskPanelTab}
                         />
                     </TabErrorBoundary>
                 );
