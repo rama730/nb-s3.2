@@ -199,6 +199,7 @@ export function AuthProvider({
     const authEventVersionRef = useRef(0);
     const bootstrapHydrationPendingRef = useRef(Boolean(initialUser) && (!initialProfile || profileNeedsHydration(initialProfile)));
     const bootstrapSessionAttemptedRef = useRef(false);
+    const browserSessionBootstrapPendingRef = useRef(true);
     const router = useRouter();
 
     // Sync with Supabase Auth Listener
@@ -220,6 +221,7 @@ export function AuthProvider({
                 const eventVersion = ++authEventVersionRef.current;
                 if (cancelled) return;
                 if ((event === 'INITIAL_SESSION' || event === 'SIGNED_IN') && session) {
+                    browserSessionBootstrapPendingRef.current = false;
                     void syncBrowserSessionToServer(session).catch((error) => {
                         logger.warn('auth.session.sync_failed', {
                             event,
@@ -245,6 +247,7 @@ export function AuthProvider({
                         return;
                     }
 
+                    browserSessionBootstrapPendingRef.current = false;
                     runMonotonicUpdate(MONOTONIC_AUTH_KEY, eventVersion, () => {
                         setState(prev => ({
                             ...prev,
@@ -254,6 +257,9 @@ export function AuthProvider({
                         }));
                     });
                 } else if (event === 'INITIAL_SESSION' && !session) {
+                    if (initialUser || browserSessionBootstrapPendingRef.current) {
+                        return;
+                    }
                     runMonotonicUpdate(MONOTONIC_AUTH_KEY, eventVersion, () => {
                         activeUserIdRef.current = null;
                         setState({
@@ -264,6 +270,7 @@ export function AuthProvider({
                         });
                     });
                 } else if (event === 'SIGNED_OUT') {
+                    browserSessionBootstrapPendingRef.current = false;
                     void syncBrowserSessionToServer(null).catch((error) => {
                         logger.warn('auth.session.clear_failed', {
                             error: error instanceof Error ? error.message : String(error),
@@ -280,6 +287,7 @@ export function AuthProvider({
                     });
                     router.refresh();
                 } else if (event === 'USER_UPDATED' && session) {
+                    browserSessionBootstrapPendingRef.current = false;
                     void syncBrowserSessionToServer(session).catch((error) => {
                         logger.warn('auth.session.sync_failed', {
                             event,
@@ -300,6 +308,7 @@ export function AuthProvider({
                         }));
                     });
                 } else if (event === 'TOKEN_REFRESHED' && session) {
+                    browserSessionBootstrapPendingRef.current = false;
                     void syncBrowserSessionToServer(session).catch((error) => {
                         logger.warn('auth.session.sync_failed', {
                             event,
@@ -324,6 +333,7 @@ export function AuthProvider({
 
                 if (existingSession.session) {
                     const eventVersion = ++authEventVersionRef.current;
+                    browserSessionBootstrapPendingRef.current = false;
                     if (existingSession.session.user.id !== activeUserIdRef.current) {
                         const profile = await loadProfile(existingSession.session.user.id);
                         if (cancelled || eventVersion !== authEventVersionRef.current) return;
@@ -353,12 +363,18 @@ export function AuthProvider({
 
                 if (initialUser) {
                     const serverSession = await bootstrapBrowserSessionFromServer();
-                    if (!serverSession || cancelled) return;
+                    if (cancelled) return;
+                    if (!serverSession) {
+                        browserSessionBootstrapPendingRef.current = false;
+                        return;
+                    }
                     await supabase.auth.setSession(serverSession);
+                    browserSessionBootstrapPendingRef.current = false;
                     return;
                 }
 
                 const eventVersion = ++authEventVersionRef.current;
+                browserSessionBootstrapPendingRef.current = false;
                 runMonotonicUpdate(MONOTONIC_AUTH_KEY, eventVersion, () => {
                     activeUserIdRef.current = null;
                     setState({
@@ -372,6 +388,7 @@ export function AuthProvider({
                 logger.warn('auth.session.bootstrap_failed', {
                     error: error instanceof Error ? error.message : String(error),
                 });
+                browserSessionBootstrapPendingRef.current = false;
                 if (cancelled || initialUser) return;
                 const eventVersion = ++authEventVersionRef.current;
                 runMonotonicUpdate(MONOTONIC_AUTH_KEY, eventVersion, () => {
