@@ -5,26 +5,28 @@ import { CreateProjectInput } from '@/lib/validations/project';
 import {
     Lightbulb, Rocket, Code2, Users, GraduationCap, Briefcase,
     Palette, HeartHandshake, Gamepad2, Globe, ShoppingBag,
-    Wrench, BookOpen, Mic, Film
+    Wrench, BookOpen, Mic, Film,
+    type LucideIcon,
 } from 'lucide-react';
+import { PROJECT_TYPE_OPTIONS, type ProjectTypeId } from '@/lib/projects/project-create-options';
 
-const PROJECT_TYPES = [
-    { id: 'side_project', label: 'Side Project', icon: Lightbulb, description: 'Personal project or hobby' },
-    { id: 'startup', label: 'Startup', icon: Rocket, description: 'Building a business' },
-    { id: 'open_source', label: 'Open Source', icon: Code2, description: 'Community contribution' },
-    { id: 'learning', label: 'Learning Project', icon: GraduationCap, description: 'Skill development' },
-    { id: 'hackathon', label: 'Hackathon', icon: Users, description: 'Competition project' },
-    { id: 'freelance', label: 'Freelance/Client', icon: Briefcase, description: 'Client work' },
-    { id: 'creative', label: 'Creative/Art', icon: Palette, description: 'Art or design project' },
-    { id: 'nonprofit', label: 'Non-Profit', icon: HeartHandshake, description: 'Social impact' },
-    { id: 'game', label: 'Game Dev', icon: Gamepad2, description: 'Video game project' },
-    { id: 'web_app', label: 'Web App', icon: Globe, description: 'Web application' },
-    { id: 'ecommerce', label: 'E-Commerce', icon: ShoppingBag, description: 'Online store' },
-    { id: 'tool', label: 'Developer Tool', icon: Wrench, description: 'Dev tools & utilities' },
-    { id: 'content', label: 'Content/Blog', icon: BookOpen, description: 'Content platform' },
-    { id: 'podcast', label: 'Podcast/Audio', icon: Mic, description: 'Audio content' },
-    { id: 'video', label: 'Video/Media', icon: Film, description: 'Video content' },
-];
+const PROJECT_TYPE_ICONS = {
+    side_project: Lightbulb,
+    startup: Rocket,
+    open_source: Code2,
+    learning: GraduationCap,
+    hackathon: Users,
+    freelance: Briefcase,
+    creative: Palette,
+    nonprofit: HeartHandshake,
+    game: Gamepad2,
+    web_app: Globe,
+    ecommerce: ShoppingBag,
+    tool: Wrench,
+    content: BookOpen,
+    podcast: Mic,
+    video: Film,
+} satisfies Record<ProjectTypeId, LucideIcon>;
 
 export default function Phase1TypeSelection() {
     const { setValue, watch, formState: { errors } } = useFormContext<CreateProjectInput>();
@@ -42,8 +44,8 @@ export default function Phase1TypeSelection() {
             </div>
 
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
-                {PROJECT_TYPES.map((type) => {
-                    const Icon = type.icon;
+                {PROJECT_TYPE_OPTIONS.map((type) => {
+                    const Icon = PROJECT_TYPE_ICONS[type.id];
                     const isSelected = selectedType === type.id;
 
                     return (
