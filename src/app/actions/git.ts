@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { projects, projectNodes, projectNodeEvents } from "@/lib/db/schema";
 import { eq, and, isNull, gt, like, desc } from "drizzle-orm";
 import { consumeRateLimit } from "@/lib/security/rate-limit";
+import { getProjectAccessById } from "@/lib/data/project-access";
 import { inngest } from "@/inngest/client";
 import { randomUUID } from "crypto";
 import { parseGithubRepo } from "@/lib/github/repo-preview";
@@ -137,8 +138,8 @@ export async function getGitStatus(projectId: string) {
 
     if (!project) throw new Error("Project not found");
 
-    const isPublic = project.visibility === "public";
-    if (project.ownerId !== user.id && !isPublic) throw new Error("Forbidden");
+    const access = await getProjectAccessById(projectId, user.id);
+    if (!access.canRead) throw new Error("Forbidden");
 
     if (!project.githubRepoUrl) {
         return {
@@ -366,8 +367,8 @@ export async function getGitSyncHistory(
         .where(eq(projects.id, projectId))
         .limit(1);
     if (!project) throw new Error("Project not found");
-    const isPublic = project.visibility === "public";
-    if (project.ownerId !== user.id && !isPublic) throw new Error("Forbidden");
+    const access = await getProjectAccessById(projectId, user.id);
+    if (!access.canRead) throw new Error("Forbidden");
 
     const events = await db
         .select({
