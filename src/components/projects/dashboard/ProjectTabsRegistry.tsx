@@ -4,6 +4,7 @@ import dynamic from "next/dynamic";
 import { SkeletonTasks } from "@/components/projects/skeletons/SkeletonTasks";
 import { SkeletonFiles } from "@/components/projects/skeletons/SkeletonFiles";
 import { SkeletonSprints } from "@/components/projects/skeletons/SkeletonSprints";
+import { SkeletonSettings } from "@/components/projects/skeletons/SkeletonSettings";
 
 // Generic Skeleton for other tabs
 const TabSkeleton = () => (
@@ -44,5 +45,5 @@ export const SprintPlanning = dynamic(
 
 export const ProjectSettingsTab = dynamic(
     () => import("@/components/projects/tabs/ProjectSettingsTab"),
-    { loading: () => <TabSkeleton />, ssr: false }
+    { loading: () => <SkeletonSettings />, ssr: false }
 );
