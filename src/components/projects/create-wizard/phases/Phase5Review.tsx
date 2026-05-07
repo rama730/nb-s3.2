@@ -3,7 +3,7 @@
 import { useFormContext } from 'react-hook-form';
 import { CreateProjectInput } from '@/lib/validations/project';
 import { WizardContextType } from '../useCreateProjectWizard';
-import { Edit3, Globe, Lock, Link2, Users, Tag } from 'lucide-react';
+import { Edit3, Globe, Lock, Users, Tag } from 'lucide-react';
 
 interface Phase5ReviewProps {
     wizardContext: WizardContextType;
@@ -18,7 +18,6 @@ export default function Phase5Review({ wizardContext, goToPhase }: Phase5ReviewP
 
     const visibilityIcons = {
         public: Globe,
-        unlisted: Link2,
         private: Lock,
     };
     const VisibilityIcon = visibilityIcons[formData.visibility || 'public'];
