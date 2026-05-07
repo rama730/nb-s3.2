@@ -6,9 +6,9 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { motion, AnimatePresence } from "framer-motion";
 import { LifecycleEditor } from "@/components/projects/LifecycleEditor";
-import { 
-    Layout, FileText, Layers, Users, X, Sparkles, Plus, Trash2, 
-    Check, Globe, Lock, Info, ChevronRight, Hash, CheckCircle 
+import {
+    Layout, FileText, Layers, Users, X, Sparkles, Plus, Trash2,
+    Check, Globe, Lock, Info, ChevronRight, CheckCircle
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -28,7 +28,7 @@ const roleSchema = z.object({
 
 const projectSchema = z.object({
     status: z.enum(["draft", "active", "completed", "archived"]),
-    visibility: z.enum(["public", "private", "unlisted"]),
+    visibility: z.enum(["public", "private"]),
     title: z.string().min(1, "Title is required").max(100),
     shortDescription: z.string().max(200, "Tagline must be less than 200 characters").optional(),
     description: z.string().optional(),
@@ -108,12 +108,11 @@ function StatusSelector({ value, onChange }: { value: string; onChange: (val: st
 function VisibilitySelector({ value, onChange }: { value: string; onChange: (val: string) => void }) {
     const options = [
         { id: "public", label: "Public", desc: "Visible to everyone", icon: Globe },
-        { id: "unlisted", label: "Unlisted", desc: "Link access only", icon: Hash },
         { id: "private", label: "Private", desc: "Only members", icon: Lock },
     ];
 
     return (
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {options.map((opt) => {
                 const isSelected = value === opt.id;
                 return (
@@ -158,7 +157,7 @@ export default function EditProjectModal({ project, isOpen, onClose, onSaved }: 
         resolver: zodResolver(projectSchema),
         defaultValues: {
             status: project.status || "draft",
-            visibility: project.visibility || "public",
+            visibility: project.visibility === "private" ? "private" : "public",
             title: project.title || "",
             shortDescription: project.shortDescription || "",
             description: project.description || "",
