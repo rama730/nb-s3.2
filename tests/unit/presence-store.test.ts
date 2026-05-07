@@ -62,7 +62,7 @@ test('createPresenceStore rejects in-memory transport in production', () => {
             NODE_ENV: 'production',
             PRESENCE_STORE_MODE: 'memory',
         } as NodeJS.ProcessEnv,
-        redisClient: null,
+        redisClient: fakeRedisClient,
     }), /in-memory presence transport is not allowed/i)
 })
 
