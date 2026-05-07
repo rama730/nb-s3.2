@@ -4,6 +4,7 @@
  */
 
 import { createProfileImageUploadUrlAction, finalizeProfileImageUploadAction } from '@/app/actions/profile'
+import { uploadToSupabaseSignedUrl } from '@/lib/upload/supabase-signed-upload-client'
 
 /**
  * Compress and resize image to 400x400 JPEG
@@ -87,13 +88,10 @@ export async function uploadAvatarWithPreview(
             // Keep using preview URL (data URL) - works fine for onboarding
             return { success: true }
         }
-        const uploadResponse = await fetch(uploadSession.uploadUrl, {
-            method: 'PUT',
-            headers: { 'Content-Type': uploadSession.contentType },
-            body: compressedBlob,
-        })
-        if (!uploadResponse.ok) {
-            console.log('Storage upload skipped:', uploadResponse.status)
+        try {
+            await uploadToSupabaseSignedUrl(uploadSession, compressedBlob)
+        } catch (error) {
+            console.log('Storage upload skipped:', error)
             return { success: true }
         }
 
@@ -136,18 +134,12 @@ export async function uploadAvatar(
                 kind: 'avatar',
             })
             if (uploadSession.success) {
-                const uploadResponse = await fetch(uploadSession.uploadUrl, {
-                    method: 'PUT',
-                    headers: { 'Content-Type': uploadSession.contentType },
-                    body: compressedBlob,
+                await uploadToSupabaseSignedUrl(uploadSession, compressedBlob)
+                const finalized = await finalizeProfileImageUploadAction({
+                    uploadIntentId: uploadSession.uploadIntentId,
                 })
-                if (uploadResponse.ok) {
-                    const finalized = await finalizeProfileImageUploadAction({
-                        uploadIntentId: uploadSession.uploadIntentId,
-                    })
-                    if (finalized.success) {
-                        return { url: finalized.publicUrl, error: null }
-                    }
+                if (finalized.success) {
+                    return { url: finalized.publicUrl, error: null }
                 }
             }
         } catch (e) {
