@@ -164,6 +164,10 @@ export default function ProjectDashboardClient({
         };
     }, []);
 
+    const handleProjectSettingsUpdated = useCallback((_updates?: { coverImage?: string | null }) => {
+        refreshProjectData();
+    }, [refreshProjectData]);
+
     // Initial Onboarding Check (Workspace Bridge)
     useEffect(() => {
         const source = searchParams?.get('source');
@@ -260,7 +264,8 @@ export default function ProjectDashboardClient({
     const shouldLoadMembers =
         activeTab === "dashboard" ||
         activeTab === "tasks" ||
-        activeTab === "sprints";
+        activeTab === "sprints" ||
+        activeTab === "settings";
 
     const { 
         data: membersData, 
@@ -394,22 +399,26 @@ export default function ProjectDashboardClient({
     const handleShare = useCallback(async () => {
         const requestId = ++shareRequestRef.current;
         try {
+            const shareUrl = new URL(canonicalProjectHref, window.location.origin).toString();
+            const shareData: ShareData = {
+                title: project.title,
+                text: project.shortDescription || project.description || undefined,
+                url: shareUrl,
+            };
             if (typeof navigator !== "undefined" && typeof navigator.share === "function") {
-                await navigator.share({
-                    title: project.title,
-                    url: window.location.href,
-                });
+                await navigator.share(shareData);
                 if (!isMountedRef.current || requestId !== shareRequestRef.current) return;
                 toast.success("Share sheet opened");
                 logger.metric("project.detail.share.result", {
                     projectId: project.id,
                     mode: "native-share",
                     success: true,
+                    kind: "url",
                 });
                 return;
             }
             if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-                await navigator.clipboard.writeText(window.location.href);
+                await navigator.clipboard.writeText(shareUrl);
                 if (!isMountedRef.current || requestId !== shareRequestRef.current) return;
                 toast.success("Link copied to clipboard");
                 logger.metric("project.detail.share.result", {
@@ -432,7 +441,7 @@ export default function ProjectDashboardClient({
                 message,
             });
         }
-    }, [project.id, project.title]);
+    }, [canonicalProjectHref, project.description, project.id, project.shortDescription, project.title]);
 
     const handleFollow = useCallback(async () => {
         if (followLoading || followInFlightRef.current) return;
@@ -805,8 +814,10 @@ export default function ProjectDashboardClient({
                         <ProjectSettingsTab
                             projectId={project.id}
                             project={project}
-                            onProjectUpdated={() => refreshProjectData()}
+                            onProjectUpdated={handleProjectSettingsUpdated}
                             isProjectOwner={isOwner}
+                            members={allMembers}
+                            loadingMembers={loadingMembers}
                         />
                     </TabErrorBoundary>
                 );
