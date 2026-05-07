@@ -2,6 +2,7 @@
 
 import { db } from "@/lib/db";
 import { projectMembers, projectNodeEvents, projectNodeLocks, projectNodes, projects, tasks } from "@/lib/db/schema";
+import { computeProjectReadAccess } from "@/lib/data/project-access";
 import { eq, and, isNull, sql, ne, gt, type SQL } from "drizzle-orm";
 import { isWithParent } from "./_constants";
 
@@ -13,6 +14,7 @@ async function getProjectAccess(projectId: string, userId: string | null) {
             id: projects.id,
             ownerId: projects.ownerId,
             visibility: projects.visibility,
+            status: projects.status,
             importSource: projects.importSource,
             syncStatus: projects.syncStatus,
         })
@@ -23,12 +25,21 @@ async function getProjectAccess(projectId: string, userId: string | null) {
     const project = rows[0];
     if (!project) throw new Error("Project not found");
 
-    const isPublic = project.visibility === 'public';
     if (!userId) {
-        return { project, canRead: isPublic, canWrite: false };
+        return {
+            project,
+            canRead: computeProjectReadAccess(project.visibility, project.status, false, false),
+            canWrite: false,
+        };
     }
 
-    if (project.ownerId === userId) return { project, canRead: true, canWrite: true };
+    if (project.ownerId === userId) {
+        return {
+            project,
+            canRead: computeProjectReadAccess(project.visibility, project.status, true, false),
+            canWrite: true,
+        };
+    }
 
     const member = await db
         .select({ id: projectMembers.id, role: projectMembers.role })
@@ -39,10 +50,18 @@ async function getProjectAccess(projectId: string, userId: string | null) {
     if (member.length > 0) {
         const role = member[0]?.role;
         const canWrite = role !== 'viewer';
-        return { project, canRead: true, canWrite };
+        return {
+            project,
+            canRead: computeProjectReadAccess(project.visibility, project.status, false, true),
+            canWrite,
+        };
     }
 
-    return { project, canRead: isPublic, canWrite: false };
+    return {
+        project,
+        canRead: computeProjectReadAccess(project.visibility, project.status, false, false),
+        canWrite: false,
+    };
 }
 
 export async function assertProjectAccess(projectId: string, userId: string) {
