@@ -3,6 +3,9 @@ export type ProjectDetailMetadataSource = {
   title?: string | null;
   shortDescription?: string | null;
   description?: string | null;
+  coverImage?: string | null;
+  coverImageWidth?: number | null;
+  coverImageHeight?: number | null;
 };
 
 const PROJECT_UUID_REGEX =
@@ -39,11 +42,24 @@ export function buildProjectDetailMetadataInput(
     project?.shortDescription?.trim()
     || project?.description?.trim()
     || `Explore ${resolvedTitle} on Edge.`;
+  const projectImage = project?.coverImage?.trim() || null;
+  const imageWidth = projectImage ? normalizeImageDimension(project?.coverImageWidth, 1200) : 1200;
+  const imageHeight = projectImage ? normalizeImageDimension(project?.coverImageHeight, 630) : 630;
 
   return {
     title: `${resolvedTitle} | Edge`,
     description,
     path: `/projects/${encodeURIComponent(canonicalSlug)}`,
-    image: `/api/og/project/${encodeURIComponent(canonicalSlug)}`,
+    image: projectImage || `/api/og/project/${encodeURIComponent(canonicalSlug)}`,
+    imageAlt: `${resolvedTitle} project image`,
+    imageWidth,
+    imageHeight,
+    twitterCard: "summary_large_image" as const,
   };
+}
+
+function normalizeImageDimension(value: number | null | undefined, fallback: number) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.round(value)
+    : fallback;
 }
