@@ -5,11 +5,11 @@ import { projects, projectFollows, projectOpenRoles, roleApplications, conversat
 import { eq, and, or, sql, inArray, isNotNull, isNull, desc } from 'drizzle-orm';
 import { createClient, createAdminClient } from '@/lib/supabase/server';
 import { redis } from '@/lib/redis';
-import { revalidatePath, unstable_cache } from 'next/cache';
+import { revalidatePath, revalidateTag, unstable_cache } from 'next/cache';
 import { cookies } from 'next/headers';
 import { CreateProjectInput } from '@/lib/validations/project';
 import { z } from 'zod';
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { generateSlug } from '@/lib/utils/slug';
 import { generateProjectKey } from '@/lib/project-key';
 import { computeProjectReadAccess, computeProjectWriteAccess, getProjectAccessById, type ProjectAccess } from '@/lib/data/project-access';
@@ -18,8 +18,14 @@ import { clearSealedGithubTokenFromImportSource, sanitizeGitErrorMessage, sealGi
 import { fetchRepoMeta, parseGithubRepo } from '@/lib/github/repo-preview';
 import { buildGithubImportEventId, resolveGithubRepoAccess } from '@/lib/github/auth-resolver';
 import { buildProjectImportEventId } from '@/lib/import/idempotency';
+import { isProjectVisibility, type ProjectVisibility } from '@/lib/projects/project-visibility';
 import { consumeRateLimit } from '@/lib/security/rate-limit';
 import { runInFlightDeduped } from '@/lib/async/inflight-dedupe';
+import { createUploadIntent, finalizeUploadIntent } from '@/lib/upload/upload-intents';
+import {
+    normalizeAndValidateFileSize,
+    normalizeAndValidateMimeType,
+} from '@/lib/upload/security';
 // Queue Imports
 import { inngest } from '@/inngest/client';
 import { getLifecycleStagesForProjectType } from '@/lib/projects/lifecycle-templates';
@@ -70,6 +76,156 @@ const isMissingColumn = (error: unknown, column: string) => {
 
 const isMissingCounterColumn = (error: unknown, column: string) => isMissingColumn(error, column);
 
+const PROJECT_COVER_UPLOAD_BUCKET = 'avatars';
+const PROJECT_COVER_UPLOAD_MAX_FILE_BYTES = 2 * 1024 * 1024;
+const ALLOWED_PROJECT_COVER_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
+const PROJECT_IMAGE_STORAGE_FOLDERS = ['project-images', 'project-covers'] as const;
+const PUBLIC_PROJECT_DETAIL_SHELL_CACHE_TAG = 'public-project-detail-shell';
+const PUBLIC_PROJECT_DETAIL_METADATA_CACHE_TAG = 'public-project-detail-metadata';
+
+function resolveProjectVisibilityForCreate(value: unknown): ProjectVisibility {
+    if (value === undefined || value === null || value === "") return 'public';
+    if (isProjectVisibility(value)) return value;
+    throw new Error('Invalid project visibility.');
+}
+
+function projectCoverExtensionFromMimeType(mimeType: string): string {
+    switch (mimeType) {
+        case 'image/jpeg':
+            return 'jpg';
+        case 'image/png':
+            return 'png';
+        case 'image/webp':
+            return 'webp';
+        case 'image/gif':
+            return 'gif';
+        default:
+            return 'bin';
+    }
+}
+
+async function assertProjectOwnerForSettings(projectId: string, userId: string) {
+    const [project] = await db
+        .select({ id: projects.id, slug: projects.slug, ownerId: projects.ownerId, coverImage: projects.coverImage })
+        .from(projects)
+        .where(eq(projects.id, projectId))
+        .limit(1);
+
+    if (!project) throw new Error('Project not found');
+    if (project.ownerId !== userId) throw new Error('Unauthorized');
+    return project;
+}
+
+function projectCoverStorageKeyFromPublicUrl(value: string | null | undefined, userId: string, projectId: string) {
+    if (!value) return null;
+
+    let pathname = "";
+    try {
+        pathname = decodeURIComponent(new URL(value).pathname);
+    } catch {
+        return null;
+    }
+
+    const markers = [
+        `/object/public/${PROJECT_COVER_UPLOAD_BUCKET}/`,
+        `/render/image/public/${PROJECT_COVER_UPLOAD_BUCKET}/`,
+    ];
+    const marker = markers.find((candidate) => pathname.includes(candidate));
+    if (!marker) return null;
+
+    const storageKey = pathname.slice(pathname.indexOf(marker) + marker.length).replace(/^\/+/, "");
+    const expectedPrefixes = PROJECT_IMAGE_STORAGE_FOLDERS.map((folder) => `${userId}/${folder}/${projectId}/`);
+    return expectedPrefixes.some((prefix) => storageKey.startsWith(prefix)) ? storageKey : null;
+}
+
+async function cleanupProjectCoverImages(params: {
+    userId: string;
+    projectId: string;
+    keepStorageKey?: string | null;
+    previousCoverImage?: string | null;
+}) {
+    try {
+        const admin = await createAdminClient();
+        const folders = PROJECT_IMAGE_STORAGE_FOLDERS.map((folder) => `${params.userId}/${folder}/${params.projectId}`);
+        const staleKeys = new Set<string>();
+        const previousKey = projectCoverStorageKeyFromPublicUrl(
+            params.previousCoverImage,
+            params.userId,
+            params.projectId,
+        );
+        if (previousKey && previousKey !== params.keepStorageKey) {
+            staleKeys.add(previousKey);
+        }
+
+        const pageSize = 100;
+        for (const folder of folders) {
+            let offset = 0;
+            while (true) {
+                const { data: existingObjects, error: listError } = await admin.storage
+                    .from(PROJECT_COVER_UPLOAD_BUCKET)
+                    .list(folder, { limit: pageSize, offset });
+
+                if (listError) {
+                    logger.warn('project.cover_cleanup_list_failed', {
+                        module: 'projects',
+                        projectId: params.projectId,
+                        userId: params.userId,
+                        folder,
+                        error: listError.message,
+                    });
+                    break;
+                }
+
+                if (!existingObjects || existingObjects.length === 0) {
+                    break;
+                }
+
+                for (const object of existingObjects) {
+                    if (!object.name) continue;
+                    const key = `${folder}/${object.name}`;
+                    if (key !== params.keepStorageKey) {
+                        staleKeys.add(key);
+                    }
+                }
+
+                if (existingObjects.length < pageSize) {
+                    break;
+                }
+                offset += pageSize;
+            }
+        }
+
+        if (staleKeys.size === 0) {
+            return { removed: 0 };
+        }
+
+        const { data: removed, error: removeError } = await admin.storage
+            .from(PROJECT_COVER_UPLOAD_BUCKET)
+            .remove(Array.from(staleKeys));
+
+        if (removeError) {
+            logger.error('project.cover_cleanup_failed', {
+                module: 'projects',
+                projectId: params.projectId,
+                userId: params.userId,
+                count: staleKeys.size,
+                error: removeError.message,
+            });
+            return { removed: 0, error: removeError.message };
+        }
+
+        return { removed: removed?.length ?? staleKeys.size };
+    } catch (error) {
+        logger.error('project.cover_cleanup_unexpected_failed', {
+            module: 'projects',
+            projectId: params.projectId,
+            userId: params.userId,
+            error: error instanceof Error ? error.message : String(error),
+        });
+        return { removed: 0, error: 'Cleanup failed' };
+    }
+}
+
 let sprintDescriptionColumnSupport: boolean | null = null;
 
 async function hasProjectSprintDescriptionColumn() {
@@ -99,6 +255,9 @@ async function hasProjectSprintDescriptionColumn() {
 const revalidateProjectPaths = async (projectId: string) => {
     revalidatePath(`/projects/${projectId}`);
     revalidatePath('/hub');
+    // Next.js 16's cache API requires an explicit cache-life profile for tag revalidation.
+    revalidateTag(PUBLIC_PROJECT_DETAIL_SHELL_CACHE_TAG, 'max');
+    revalidateTag(PUBLIC_PROJECT_DETAIL_METADATA_CACHE_TAG, 'max');
     try {
         const [project] = await db
             .select({ slug: projects.slug })
@@ -657,8 +816,8 @@ async function fetchProjectDetailShellData(projectId: string, ownerId: string, i
 const getPublicProjectDetailShellData = unstable_cache(
     async (projectId: string, ownerId: string, includeFollowersCount: boolean) =>
         fetchProjectDetailShellData(projectId, ownerId, includeFollowersCount, null),
-    ['public-project-detail-shell'],
-    { revalidate: 60 }
+    [PUBLIC_PROJECT_DETAIL_SHELL_CACHE_TAG],
+    { revalidate: 60, tags: [PUBLIC_PROJECT_DETAIL_SHELL_CACHE_TAG] }
 );
 
 const getPublicProjectDetailMetadata = unstable_cache(
@@ -679,8 +838,8 @@ const getPublicProjectDetailMetadata = unstable_cache(
             coverImage: project.coverImage || null,
         };
     },
-    ['public-project-detail-metadata'],
-    { revalidate: 60 }
+    [PUBLIC_PROJECT_DETAIL_METADATA_CACHE_TAG],
+    { revalidate: 60, tags: [PUBLIC_PROJECT_DETAIL_METADATA_CACHE_TAG] }
 );
 
 export async function readProjectDetailMetadata(input: {
@@ -820,8 +979,7 @@ export async function readProjectDetailShell(input: {
 
                 const shouldUseCachedShell =
                     !actorUserId &&
-                    (project.visibility === 'public' || project.visibility === 'unlisted') &&
-                    project.status !== 'draft';
+                    computeProjectReadAccess(project.visibility, project.status, false, false);
                 const includeFollowersCount = project.followersCount == null;
                 const shell = shouldUseCachedShell
                     ? await getPublicProjectDetailShellData(project.id, project.ownerId, includeFollowersCount)
@@ -1128,6 +1286,7 @@ export async function createProjectAction(input: CreateProjectInput & { slug?: s
             };
         }
         const normalizedImportSourceWithLeadFocus = withLeadFocusMetadata(normalizedImportSource, input.creator_role);
+        const visibility = resolveProjectVisibilityForCreate(input.visibility);
 
         let finalSlug = input.slug || generateSlug(input.title);
         // Initial Key Generation
@@ -1153,7 +1312,7 @@ export async function createProjectAction(input: CreateProjectInput & { slug?: s
                     category: input.project_type || null,
                     tags: input.tags || [],
                     skills: input.technologies_used || [],
-                    visibility: (input.visibility as 'public' | 'private' | 'unlisted') || 'public',
+                    visibility,
                     status: mapStatus(input.status),
                     lookingForCollaborators: true,
                     lifecycleStages: (input.lifecycle_stages && input.lifecycle_stages.length > 0)
@@ -1390,8 +1549,19 @@ export async function updateProject(projectId: string, data: any) {
 
         if (raw.title !== undefined) updateValues.title = raw.title;
         if (raw.description !== undefined) updateValues.description = raw.description;
-        if (raw.visibility !== undefined) updateValues.visibility = raw.visibility;
+        if (raw.visibility !== undefined) {
+            if (!isProjectVisibility(raw.visibility)) {
+                throw new Error('Invalid project visibility.');
+            }
+            updateValues.visibility = raw.visibility;
+        }
         if (raw.status !== undefined) updateValues.status = raw.status;
+        const nextCoverImage = raw.coverImage !== undefined
+            ? raw.coverImage
+            : raw.cover_image !== undefined
+                ? raw.cover_image
+                : undefined;
+        if (nextCoverImage !== undefined) updateValues.coverImage = nextCoverImage;
 
         // Tagline
         if (raw.shortDescription !== undefined) updateValues.shortDescription = raw.shortDescription;
@@ -1496,12 +1666,235 @@ export async function updateProject(projectId: string, data: any) {
             }
         }
 
-        return { success: true, slug: project.slug, id: project.id };
-    }).then(({ success, slug, id }) => {
+        return {
+            success: true,
+            slug: project.slug,
+            id: project.id,
+            previousCoverImage: project.coverImage,
+            nextCoverImage,
+        };
+    }).then(async ({ success, slug, id, previousCoverImage, nextCoverImage }) => {
+        if (nextCoverImage !== undefined && previousCoverImage !== nextCoverImage) {
+            await cleanupProjectCoverImages({
+                userId: user.id,
+                projectId: id,
+                keepStorageKey: projectCoverStorageKeyFromPublicUrl(nextCoverImage, user.id, id),
+                previousCoverImage,
+            });
+        }
         revalidatePath(`/projects/${slug}`);
         revalidatePath(`/projects/${id}`);
         return { success };
     });
+}
+
+export async function createProjectCoverImageUploadUrlAction(input: {
+    projectId: string;
+    mimeType: string;
+    sizeBytes: number;
+}): Promise<
+    | {
+        success: true;
+        uploadUrl: string;
+        uploadIntentId: string;
+        storagePath: string;
+        contentType: string;
+        bucket: string;
+        uploadToken: string;
+    }
+    | { success: false; error: string }
+> {
+    try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+            return { success: false, error: 'Unauthorized' };
+        }
+
+        const { allowed } = await consumeRateLimit(
+            `upload:project-image:user:${user.id}`,
+            10,
+            60 * 60,
+        );
+        if (!allowed) {
+            return { success: false, error: 'Too many project image upload attempts. Please try again later.' };
+        }
+
+        await assertProjectOwnerForSettings(input.projectId, user.id);
+        const normalizedMimeType = normalizeAndValidateMimeType(input.mimeType);
+        if (!ALLOWED_PROJECT_COVER_MIME_TYPES.has(normalizedMimeType)) {
+            return { success: false, error: 'Unsupported image type. Use JPG, PNG, WebP, or GIF.' };
+        }
+        const expectedSize = normalizeAndValidateFileSize(
+            input.sizeBytes,
+            PROJECT_COVER_UPLOAD_MAX_FILE_BYTES,
+            'Project image',
+        );
+        const extension = projectCoverExtensionFromMimeType(normalizedMimeType);
+        const storagePath = `${user.id}/project-images/${input.projectId}/${Date.now()}-${randomUUID()}.${extension}`;
+        const intent = await createUploadIntent({
+            userId: user.id,
+            projectId: input.projectId,
+            bucket: PROJECT_COVER_UPLOAD_BUCKET,
+            storageKey: storagePath,
+            scope: 'profile_image',
+            kind: 'banner',
+            expectedMimeType: normalizedMimeType,
+            expectedSize,
+            metadata: {
+                kind: 'project_image',
+                projectId: input.projectId,
+            },
+        });
+
+        const admin = await createAdminClient();
+        const { data, error } = await admin.storage
+            .from(PROJECT_COVER_UPLOAD_BUCKET)
+            .createSignedUploadUrl(storagePath, { upsert: false });
+        if (error || !data?.signedUrl || !data?.token) {
+            logger.error('project.cover_upload_url_failed', {
+                module: 'projects',
+                projectId: input.projectId,
+                userId: user.id,
+                error: error?.message || 'Missing signed URL token',
+            });
+            return { success: false, error: 'Failed to prepare project image upload.' };
+        }
+
+        return {
+            success: true,
+            uploadUrl: data.signedUrl,
+            uploadIntentId: intent.id,
+            storagePath,
+            contentType: normalizedMimeType,
+            bucket: PROJECT_COVER_UPLOAD_BUCKET,
+            uploadToken: data.token,
+        };
+    } catch (error) {
+        logger.error('project.cover_upload_url_failed', {
+            module: 'projects',
+            projectId: input.projectId,
+            error: error instanceof Error ? error.message : String(error),
+        });
+        return { success: false, error: 'Failed to prepare project image upload.' };
+    }
+}
+
+export async function finalizeProjectCoverImageUploadAction(input: {
+    projectId: string;
+    uploadIntentId: string;
+}): Promise<
+    | { success: true; publicUrl: string; storagePath: string; uploadIntentId: string; removedPreviousImages: number }
+    | { success: false; error: string }
+> {
+    try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+            return { success: false, error: 'Unauthorized' };
+        }
+
+        const project = await assertProjectOwnerForSettings(input.projectId, user.id);
+        const intent = await finalizeUploadIntent({
+            intentId: input.uploadIntentId,
+            bucket: PROJECT_COVER_UPLOAD_BUCKET,
+            userId: user.id,
+            projectId: input.projectId,
+            expectedScope: 'profile_image',
+            expectedKind: 'banner',
+        });
+        const admin = await createAdminClient();
+        const { data: { publicUrl } } = admin.storage
+            .from(PROJECT_COVER_UPLOAD_BUCKET)
+            .getPublicUrl(intent.storageKey);
+
+        const [updated] = await db
+            .update(projects)
+            .set({
+                coverImage: publicUrl,
+                updatedAt: new Date(),
+            })
+            .where(and(eq(projects.id, input.projectId), eq(projects.ownerId, user.id)))
+            .returning({ id: projects.id });
+
+        if (!updated) {
+            return { success: false, error: 'Failed to publish project image.' };
+        }
+
+        const cleanup = await cleanupProjectCoverImages({
+            userId: user.id,
+            projectId: input.projectId,
+            keepStorageKey: intent.storageKey,
+            previousCoverImage: project.coverImage,
+        });
+
+        await revalidateProjectPaths(input.projectId);
+
+        return {
+            success: true,
+            publicUrl,
+            storagePath: intent.storageKey,
+            uploadIntentId: intent.id,
+            removedPreviousImages: cleanup.removed,
+        };
+    } catch (error) {
+        logger.error('project.cover_upload_finalize_failed', {
+            module: 'projects',
+            projectId: input.projectId,
+            uploadIntentId: input.uploadIntentId,
+            error: error instanceof Error ? error.message : String(error),
+        });
+        return { success: false, error: 'Failed to finalize project image upload.' };
+    }
+}
+
+export async function clearProjectCoverImageAction(projectId: string): Promise<
+    | { success: true; removedPreviousImages: number }
+    | { success: false; error: string }
+> {
+    try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+            return { success: false, error: 'Unauthorized' };
+        }
+
+        const project = await assertProjectOwnerForSettings(projectId, user.id);
+        if (!project.coverImage) {
+            return { success: true, removedPreviousImages: 0 };
+        }
+
+        const [updated] = await db
+            .update(projects)
+            .set({
+                coverImage: null,
+                updatedAt: new Date(),
+            })
+            .where(and(eq(projects.id, projectId), eq(projects.ownerId, user.id)))
+            .returning({ id: projects.id });
+
+        if (!updated) {
+            return { success: false, error: 'Failed to clear project image.' };
+        }
+
+        const cleanup = await cleanupProjectCoverImages({
+            userId: user.id,
+            projectId,
+            keepStorageKey: null,
+            previousCoverImage: project.coverImage,
+        });
+
+        await revalidateProjectPaths(projectId);
+
+        return { success: true, removedPreviousImages: cleanup.removed };
+    } catch (error) {
+        logger.error('project.cover_clear_failed', {
+            module: 'projects',
+            projectId,
+            error: error instanceof Error ? error.message : String(error),
+        });
+        return { success: false, error: 'Failed to clear project image.' };
+    }
 }
 
 type ProjectSettingsErrorCode =
@@ -1523,16 +1916,14 @@ type ProjectDangerZonePreflightResult =
             openRolesCount: number;
             pendingApplicationsCount: number;
             activeTasksCount: number;
-            canFinalize: boolean;
             canArchive: boolean;
             canDelete: boolean;
-            finalizeBlockers: string[];
         };
     }
     | { success: false; message: string; errorCode: ProjectSettingsErrorCode };
 
 const projectSettingsPatchSchema = z.object({
-    visibility: z.enum(['public', 'private', 'unlisted']).optional(),
+    visibility: z.enum(['public', 'private']).optional(),
     lookingForCollaborators: z.boolean().optional(),
     maxCollaborators: z.string().trim().max(32).nullable().optional(),
 });
@@ -1561,7 +1952,7 @@ async function loadOwnedProjectForSettings(projectId: string, userId: string) {
 export async function updateProjectSettingsAction(
     projectId: string,
     patch: {
-        visibility?: 'public' | 'private' | 'unlisted';
+        visibility?: 'public' | 'private';
         lookingForCollaborators?: boolean;
         maxCollaborators?: string | null;
     }
@@ -1660,13 +2051,6 @@ export async function getProjectDangerZonePreflightAction(
         const activeTasksCount = Number(activeTasksRow[0]?.count ?? 0);
         const openRolesCount = Number(openRolesRow[0]?.count ?? 0);
         const pendingApplicationsCount = Number(pendingAppsRow[0]?.count ?? 0);
-        const finalizeBlockers: string[] = [];
-        if (activeTasksCount > 0) {
-            finalizeBlockers.push(`There are ${activeTasksCount} non-completed tasks.`);
-        }
-        if (pendingApplicationsCount > 0) {
-            finalizeBlockers.push(`There are ${pendingApplicationsCount} pending applications.`);
-        }
 
         return {
             success: true,
@@ -1675,10 +2059,8 @@ export async function getProjectDangerZonePreflightAction(
                 openRolesCount,
                 pendingApplicationsCount,
                 activeTasksCount,
-                canFinalize: status !== 'completed' && status !== 'archived' && finalizeBlockers.length === 0,
                 canArchive: status !== 'archived',
                 canDelete: true,
-                finalizeBlockers,
             },
         };
     } catch (error) {
@@ -2191,7 +2573,7 @@ export async function fetchProjectTasksAction(
         return await runInFlightDeduped(
             `project:tasks:${projectId}:${actorId ?? 'anon'}:${safeLimit}:${cursorCreatedAtKey}:${cursorIdKey}:${normalizedScope}`,
             async () => {
-                // Enforce read access server-side (public/unlisted or member/owner).
+                // Enforce read access server-side through the canonical project access policy.
                 await assertProjectReadAccess(projectId, actorId);
 
                 const projectTasks = await db.query.tasks.findMany({
