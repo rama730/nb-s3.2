@@ -7,6 +7,10 @@ type RouteMetadataOptions = {
   description: string;
   path: string;
   image?: string | null;
+  imageAlt?: string;
+  imageWidth?: number;
+  imageHeight?: number;
+  twitterCard?: "summary" | "summary_large_image";
 };
 
 function normalizeRoutePath(path: string): string {
@@ -14,9 +18,20 @@ function normalizeRoutePath(path: string): string {
   return path.startsWith("/") ? path : `/${path}`;
 }
 
-function resolveRouteImage(image?: string | null) {
-  if (!image || !image.trim()) return [DEFAULT_ROUTE_OG_IMAGE];
-  return [image];
+function resolveRouteImage({
+  image,
+  alt,
+  width,
+  height,
+}: {
+  image?: string | null;
+  alt?: string;
+  width?: number;
+  height?: number;
+}) {
+  const url = image?.trim() || DEFAULT_ROUTE_OG_IMAGE;
+  if (!width || !height) return [{ url, alt }];
+  return [{ url, width, height, alt }];
 }
 
 export function buildRouteMetadata({
@@ -24,9 +39,18 @@ export function buildRouteMetadata({
   description,
   path,
   image,
+  imageAlt,
+  imageWidth,
+  imageHeight,
+  twitterCard = "summary_large_image",
 }: RouteMetadataOptions): Metadata {
   const canonicalPath = normalizeRoutePath(path);
-  const images = resolveRouteImage(image);
+  const images = resolveRouteImage({
+    image,
+    alt: imageAlt ?? title,
+    width: imageWidth,
+    height: imageHeight,
+  });
 
   return {
     title,
@@ -42,7 +66,7 @@ export function buildRouteMetadata({
       images,
     },
     twitter: {
-      card: "summary_large_image",
+      card: twitterCard,
       title,
       description,
       images,
