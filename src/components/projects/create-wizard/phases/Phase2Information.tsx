@@ -3,9 +3,7 @@ import { CreateProjectInput } from '@/lib/validations/project';
 import { useState } from 'react';
 import { X, Plus } from 'lucide-react';
 import { LifecycleEditor } from '@/components/projects/LifecycleEditor';
-
-const POPULAR_TAGS = ['AI/ML', 'Web3', 'SaaS', 'Mobile', 'API', 'Fintech', 'EdTech', 'HealthTech', 'E-commerce', 'DevTools'];
-const POPULAR_TECH = ['React', 'Next.js', 'TypeScript', 'Node.js', 'Python', 'PostgreSQL', 'Tailwind', 'Supabase', 'Prisma', 'GraphQL'];
+import { POPULAR_PROJECT_TAGS, POPULAR_PROJECT_TECH } from '@/lib/projects/project-create-options';
 
 export default function Phase2Information() {
     const { register, setValue, watch, formState: { errors } } = useFormContext<CreateProjectInput>();
@@ -142,7 +140,7 @@ export default function Phase2Information() {
                     </button>
                 </div>
                 <div className="flex flex-wrap gap-1 mt-2">
-                    {POPULAR_TAGS.filter(t => !tags.includes(t)).slice(0, 5).map((tag) => (
+                    {POPULAR_PROJECT_TAGS.filter(t => !tags.includes(t)).slice(0, 5).map((tag) => (
                         <button
                             key={tag}
                             type="button"
@@ -192,7 +190,7 @@ export default function Phase2Information() {
                     </button>
                 </div>
                 <div className="flex flex-wrap gap-1 mt-2">
-                    {POPULAR_TECH.filter(t => !technologies.includes(t)).slice(0, 5).map((tech) => (
+                    {POPULAR_PROJECT_TECH.filter(t => !technologies.includes(t)).slice(0, 5).map((tech) => (
                         <button
                             key={tech}
                             type="button"
