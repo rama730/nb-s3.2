@@ -1,8 +1,14 @@
 import { db } from "@/lib/db";
 import { projects, projectMembers } from "@/lib/db/schema";
+import {
+    isProjectPubliclyReadableVisibility,
+    type ProjectVisibilityInput,
+} from "@/lib/projects/project-visibility";
 import { and, eq, isNull } from "drizzle-orm";
 
-type Visibility = "public" | "private" | "unlisted" | string | null | undefined;
+// `projects.visibility` has a database default but is not declared NOT NULL,
+// so DB-selected values must remain nullable-safe and fail closed downstream.
+type Visibility = ProjectVisibilityInput | null | undefined;
 type Status = "draft" | "active" | "completed" | "archived" | string | null | undefined;
 type MemberRole = "owner" | "admin" | "member" | "viewer" | null;
 
@@ -21,16 +27,20 @@ export type ProjectAccess = {
     canWrite: boolean;
 };
 
-export function computeProjectReadAccess(visibility: Visibility, status: Status, isOwner: boolean, isMember: boolean) {
-    if (isOwner || isMember) return true;
+export function computeProjectReadAccess(
+    visibility: Visibility,
+    status: Status,
+    isOwner: boolean,
+    isMember: boolean,
+): boolean {
+    if (Boolean(isOwner) || Boolean(isMember)) return true;
 
-    const normalizedVisibility = visibility || "private";
-    const normalizedStatus = status || "draft";
-    const isPublic = normalizedVisibility === "public" || normalizedVisibility === "unlisted";
+    const normalizedStatus = typeof status === "string" && status.trim().length > 0 ? status : "draft";
+    const isPublic = isProjectPubliclyReadableVisibility(visibility);
     const isDraft = normalizedStatus === "draft";
 
     if (isDraft) return false;
-    return isPublic;
+    return Boolean(isPublic);
 }
 
 export function computeProjectWriteAccess(isOwner: boolean, memberRole: MemberRole) {
