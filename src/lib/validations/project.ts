@@ -68,7 +68,10 @@ export const createProjectSchema = z.object({
     project_type: z.string().min(1, 'Project type is required'),
     custom_project_type: z.string().optional(),
     status: z.enum(['draft', 'open', 'active', 'completed', 'archived']).default('open'),
-    visibility: z.enum(['public', 'private', 'unlisted']).default('public'),
+    visibility: z.preprocess(
+        (value) => value === 'unlisted' ? 'public' : value,
+        z.enum(['public', 'private']).default('public'),
+    ),
     tags: z.array(z.string()).default([]),
     technologies_used: z.array(z.string()).default([]),
     lifecycle_stages: z.array(z.string()).default([]),
