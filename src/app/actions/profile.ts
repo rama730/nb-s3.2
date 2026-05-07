@@ -97,7 +97,15 @@ export async function createProfileImageUploadUrlAction(input: {
     sizeBytes: number
     kind?: 'avatar' | 'banner'
 }): Promise<
-    | { success: true; uploadUrl: string; uploadIntentId: string; storagePath: string; contentType: string }
+    | {
+        success: true
+        uploadUrl: string
+        uploadIntentId: string
+        storagePath: string
+        contentType: string
+        bucket: string
+        uploadToken: string
+    }
     | { success: false; error: string; errorCode: ProfileImageUploadErrorCode }
 > {
     const supabase = await createClient()
@@ -158,7 +166,7 @@ export async function createProfileImageUploadUrlAction(input: {
         metadata: { kind: input.kind === 'banner' ? 'banner' : 'avatar' },
     })
     const { data, error } = await admin.storage.from('avatars').createSignedUploadUrl(storagePath, { upsert: false })
-    if (error || !data?.signedUrl) {
+    if (error || !data?.signedUrl || !data?.token) {
         return {
             success: false,
             error: 'Failed to create upload URL',
@@ -172,6 +180,8 @@ export async function createProfileImageUploadUrlAction(input: {
         uploadIntentId: intent.id,
         storagePath,
         contentType: normalizedMimeType,
+        bucket: 'avatars',
+        uploadToken: data.token,
     }
 }
 
