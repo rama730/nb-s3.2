@@ -11,6 +11,7 @@ import { createProfileImageUploadUrlAction, finalizeProfileImageUploadAction, up
 import { useAuth } from "@/lib/hooks/use-auth";
 import { useQueryClient } from "@tanstack/react-query";
 import { queryKeys } from "@/lib/query-keys";
+import { uploadToSupabaseSignedUrl } from "@/lib/upload/supabase-signed-upload-client";
 
 interface ProfileFormProps {
     initialData: {
@@ -63,14 +64,11 @@ export function ProfileForm({ initialData, onOptimisticUpdate }: ProfileFormProp
                 throw new Error(uploadSession.error || "Failed to prepare avatar upload");
             }
 
-            const uploadResponse = await fetch(uploadSession.uploadUrl, {
-                method: "PUT",
-                headers: { "Content-Type": uploadSession.contentType },
-                body: file,
-            });
-            if (!uploadResponse.ok) {
-                throw new Error(`Failed to upload avatar (${uploadResponse.status})`);
+            const uploadResult = await uploadToSupabaseSignedUrl(uploadSession, file);
+            if (!uploadResult.path && !uploadResult.fullPath) {
+                throw new Error("Avatar upload completed without a storage path.");
             }
+
             const finalized = await finalizeProfileImageUploadAction({
                 uploadIntentId: uploadSession.uploadIntentId,
             });
