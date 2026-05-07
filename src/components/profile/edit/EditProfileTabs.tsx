@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils";
 import { sanitizeUsernameInput } from "@/lib/validations/username";
 import { useUsernameAvailability } from "@/hooks/useUsernameAvailability";
 import { PROFILE_LIMITS } from "@/lib/validations/profile";
+import { uploadToSupabaseSignedUrl } from "@/lib/upload/supabase-signed-upload-client";
 
 export type EditProfileSection = "general" | "experience" | "education" | "skills" | "social";
 
@@ -65,14 +66,7 @@ export function EditProfileTabs({
                 throw new Error(uploadSession.error || "Failed to prepare image upload");
             }
 
-            const uploadResponse = await fetch(uploadSession.uploadUrl, {
-                method: "PUT",
-                headers: { "Content-Type": uploadSession.contentType },
-                body: file,
-            });
-            if (!uploadResponse.ok) {
-                throw new Error(`Failed to upload image (${uploadResponse.status})`);
-            }
+            await uploadToSupabaseSignedUrl(uploadSession, file);
 
             const finalized = await finalizeProfileImageUploadAction({
                 uploadIntentId: uploadSession.uploadIntentId,
