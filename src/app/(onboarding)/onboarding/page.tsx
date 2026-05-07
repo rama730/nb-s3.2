@@ -23,6 +23,7 @@ import {
 } from '@/app/actions/onboarding'
 import { createProfileImageUploadUrlAction, finalizeProfileImageUploadAction } from '@/app/actions/profile'
 import { useAuth } from '@/lib/hooks/use-auth'
+import { uploadToSupabaseSignedUrl } from '@/lib/upload/supabase-signed-upload-client'
 import { validateUsername } from '@/lib/validations/username'
 import {
     ONBOARDING_AVAILABILITY_VALUES,
@@ -698,15 +699,7 @@ export default function OnboardingPage() {
                     throw new Error(uploadSession.error || 'Failed to prepare avatar upload')
                 }
 
-                const uploadResponse = await fetch(uploadSession.uploadUrl, {
-                    method: 'PUT',
-                    headers: { 'Content-Type': uploadSession.contentType },
-                    body: compressedBlob,
-                })
-
-                if (!uploadResponse.ok) {
-                    throw new Error(`Avatar upload failed (${uploadResponse.status})`)
-                }
+                await uploadToSupabaseSignedUrl(uploadSession, compressedBlob)
 
                 const finalized = await finalizeProfileImageUploadAction({
                     uploadIntentId: uploadSession.uploadIntentId,
