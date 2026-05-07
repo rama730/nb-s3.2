@@ -85,11 +85,13 @@ export default function ProjectLayout({
     }, []);
 
     const isFilesTab = activeTab === "files";
+    const isSettingsTab = activeTab === "settings";
+    const isContainedWorkspaceTab = isFilesTab || isSettingsTab;
 
     return (
         <div className={cn(
             "bg-zinc-50 dark:bg-zinc-950",
-            isFilesTab ? "h-screen overflow-hidden flex flex-col" : "min-h-screen"
+            isContainedWorkspaceTab ? "h-full min-h-0 overflow-hidden flex flex-col" : "min-h-screen"
         )}>
             {/* Top Row: Context & Actions (NOT sticky; scrolls away) */}
             <div className="bg-white/80 dark:bg-zinc-950/80 backdrop-blur-md shrink-0">
@@ -201,10 +203,10 @@ export default function ProjectLayout({
             {/* Bottom Row: Navigation Tabs (sticky) */}
             <div className={cn(
                 "z-30 bg-white dark:bg-zinc-950 border-b border-zinc-200 dark:border-zinc-800 transition-shadow duration-300 ease-in-out shrink-0",
-                isFilesTab ? "relative" : "sticky",
-                isScrolled && !isFilesTab && "shadow-sm"
+                isContainedWorkspaceTab ? "relative" : "sticky",
+                isScrolled && !isContainedWorkspaceTab && "shadow-sm"
             )}
-                style={isFilesTab ? undefined : { top: 0 }}
+                style={isContainedWorkspaceTab ? undefined : { top: 0 }}
             >
                 <div className="max-w-7xl mx-auto">
                     <div className="flex items-center px-4 overflow-x-auto scrollbar-hide -mb-px">
@@ -248,10 +250,12 @@ export default function ProjectLayout({
             <section
                 aria-label="Project detail content"
                 className={cn(
-                isFilesTab 
-                    ? "flex-1 w-full h-full overflow-hidden flex flex-col" 
-                    : "max-w-7xl mx-auto p-4 sm:p-6 lg:p-8"
-            )}
+                    isFilesTab
+                        ? "flex-1 min-h-0 w-full overflow-hidden flex flex-col"
+                        : isSettingsTab
+                            ? "flex-1 min-h-0 w-full overflow-y-auto overflow-x-hidden app-scroll app-scroll-y app-scroll-gutter"
+                            : "max-w-7xl mx-auto p-4 sm:p-6 lg:p-8"
+                )}
             >
                 {children}
             </section>
