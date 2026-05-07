@@ -2,7 +2,7 @@
 
 import { useFormContext } from 'react-hook-form';
 import { CreateProjectInput } from '@/lib/validations/project';
-import { Globe, Lock, Link2 } from 'lucide-react';
+import { Globe, Lock } from 'lucide-react';
 
 const DEFAULT_TERMS = {
     ip_agreement: 'discuss' as const,
@@ -36,10 +36,9 @@ export default function Phase4Settings() {
                     Control who can see and discover your project
                 </p>
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     {[
                         { id: 'public', label: 'Public', icon: Globe, description: 'Anyone can find and view' },
-                        { id: 'unlisted', label: 'Unlisted', icon: Link2, description: 'Only people with the link' },
                         { id: 'private', label: 'Private', icon: Lock, description: 'Only team members' },
                     ].map((opt) => {
                         const Icon = opt.icon;
@@ -49,7 +48,7 @@ export default function Phase4Settings() {
                             <button
                                 key={opt.id}
                                 type="button"
-                                onClick={() => setValue('visibility', opt.id as 'public' | 'private' | 'unlisted')}
+                                onClick={() => setValue('visibility', opt.id as 'public' | 'private')}
                                 className={`flex flex-col items-start p-4 rounded-xl border-2 transition-all ${isSelected
                                         ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/20'
                                         : 'border-zinc-200 dark:border-zinc-700 hover:border-zinc-300 dark:hover:border-zinc-600'
