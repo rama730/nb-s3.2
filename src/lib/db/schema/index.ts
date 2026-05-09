@@ -352,6 +352,8 @@ export const projects = pgTable('projects', {
     solutionStatement: text('solution_statement'),
     shortDescription: text('short_description'),
     coverImage: text('cover_image'),
+    coverImageBucket: text('cover_image_bucket'),
+    coverImageKey: text('cover_image_key'),
     category: text('category'),
     viewCount: integer('view_count').default(0),
     followersCount: integer('followers_count').default(0).notNull(),
