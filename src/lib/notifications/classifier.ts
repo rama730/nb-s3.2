@@ -13,6 +13,8 @@ const J1_KIND_LIST: readonly NotificationKind[] = [
     "workflow_assigned",
     "task_file_needs_review",
     "connection_request_received",
+    "project_member_removed",
+    "project_ownership_transferred",
 ];
 
 const J1_KINDS: ReadonlySet<NotificationKind> = new Set(J1_KIND_LIST);
