@@ -42,6 +42,7 @@ export type ApplicationStatusResult = {
     canReapply?: boolean;
     waitTime?: string;
     updatedAt?: Date;
+    membershipEnded?: boolean;
 };
 
 export interface ApplicationRequestHistoryItem {
