@@ -530,3 +530,120 @@ export async function emitTaskFileNotification(params: {
     }));
     await emitNotificationWrites(writes, executor);
 }
+
+export async function emitProjectRoleChangedNotification(params: {
+    recipientUserId: string | null | undefined;
+    actorUserId: string;
+    actorName: string | null;
+    actorAvatarUrl?: string | null;
+    projectId: string;
+    projectSlug?: string | null;
+    projectTitle?: string | null;
+    previousRole?: string | null;
+    nextRole: string;
+    eventKey?: string | null;
+}, executor?: EmitExecutor) {
+    if (!params.recipientUserId) return;
+    await writeCreate({
+        recipientUserId: params.recipientUserId,
+        actorUserId: params.actorUserId,
+        category: "projects",
+        kind: "project_role_changed",
+        importance: importanceForKind("project_role_changed"),
+        title: `${params.actorName || "Someone"} updated your project role`,
+        body: params.projectTitle ? `${params.projectTitle}: ${params.nextRole}` : `New role: ${params.nextRole}`,
+        href: `/projects/${encodeURIComponent(params.projectSlug || params.projectId)}?tab=settings`,
+        entityRefs: {
+            projectId: params.projectId,
+            projectSlug: params.projectSlug ?? null,
+            targetUserId: params.recipientUserId,
+            previousRole: params.previousRole ?? null,
+            nextRole: params.nextRole,
+        },
+        preview: buildPreview({
+            actorName: params.actorName,
+            actorAvatarUrl: params.actorAvatarUrl,
+            contextLabel: params.projectTitle ?? "Project",
+            contextKind: "project",
+            secondaryText: `Role changed to ${params.nextRole}`,
+        }),
+        dedupeKey: `project:${params.projectId}:role:${params.recipientUserId}:${params.eventKey ?? params.nextRole}`,
+    }, executor);
+}
+
+export async function emitProjectMemberRemovedNotification(params: {
+    recipientUserId: string | null | undefined;
+    actorUserId: string;
+    actorName: string | null;
+    actorAvatarUrl?: string | null;
+    projectId: string;
+    projectSlug?: string | null;
+    projectTitle?: string | null;
+    eventKey?: string | null;
+}, executor?: EmitExecutor) {
+    if (!params.recipientUserId) return;
+    await writeCreate({
+        recipientUserId: params.recipientUserId,
+        actorUserId: params.actorUserId,
+        category: "projects",
+        kind: "project_member_removed",
+        importance: importanceForKind("project_member_removed"),
+        title: `${params.actorName || "Someone"} removed you from a project`,
+        body: params.projectTitle ?? "Project access removed",
+        href: params.projectSlug || params.projectId
+            ? `/projects/${encodeURIComponent(params.projectSlug || params.projectId)}`
+            : null,
+        entityRefs: {
+            projectId: params.projectId,
+            projectSlug: params.projectSlug ?? null,
+            targetUserId: params.recipientUserId,
+        },
+        preview: buildPreview({
+            actorName: params.actorName,
+            actorAvatarUrl: params.actorAvatarUrl,
+            contextLabel: params.projectTitle ?? "Project",
+            contextKind: "project",
+            secondaryText: "Removed from project",
+        }),
+        dedupeKey: `project:${params.projectId}:removed:${params.recipientUserId}:${params.eventKey ?? "latest"}`,
+    }, executor);
+}
+
+export async function emitProjectOwnershipTransferredNotification(params: {
+    recipientUserId: string | null | undefined;
+    actorUserId: string;
+    actorName: string | null;
+    actorAvatarUrl?: string | null;
+    projectId: string;
+    projectSlug?: string | null;
+    projectTitle?: string | null;
+    previousOwnerId: string;
+    newOwnerId: string;
+    eventKey?: string | null;
+}, executor?: EmitExecutor) {
+    if (!params.recipientUserId) return;
+    const isNewOwner = params.recipientUserId === params.newOwnerId;
+    await writeCreate({
+        recipientUserId: params.recipientUserId,
+        actorUserId: params.actorUserId,
+        category: "projects",
+        kind: "project_ownership_transferred",
+        importance: importanceForKind("project_ownership_transferred"),
+        title: isNewOwner ? "Project ownership transferred to you" : "Project ownership transferred",
+        body: params.projectTitle ?? "Project ownership changed",
+        href: `/projects/${encodeURIComponent(params.projectSlug || params.projectId)}?tab=settings`,
+        entityRefs: {
+            projectId: params.projectId,
+            projectSlug: params.projectSlug ?? null,
+            targetUserId: params.recipientUserId,
+        },
+        preview: buildPreview({
+            actorName: params.actorName,
+            actorAvatarUrl: params.actorAvatarUrl,
+            contextLabel: params.projectTitle ?? "Project",
+            contextKind: "project",
+            secondaryText: isNewOwner ? "You are now the owner" : "You are now a co-leader",
+        }),
+        dedupeKey: `project:${params.projectId}:ownership:${params.recipientUserId}:${params.eventKey ?? "latest"}`,
+    }, executor);
+}
