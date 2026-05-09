@@ -12,7 +12,10 @@ export type NotificationKind =
     | "task_comment_reply"
     | "task_file_version"
     | "task_file_replaced"
-    | "task_file_needs_review";
+    | "task_file_needs_review"
+    | "project_role_changed"
+    | "project_member_removed"
+    | "project_ownership_transferred";
 
 export type NotificationImportance = "important" | "more";
 
@@ -76,6 +79,9 @@ export type NotificationEntityRefs = {
     connectionId?: string | null;
     fileId?: string | null;
     parentCommentId?: string | null;
+    targetUserId?: string | null;
+    previousRole?: string | null;
+    nextRole?: string | null;
     status?: string | null;
     createdAt?: string | null;
 };
