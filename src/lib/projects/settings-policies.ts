@@ -36,6 +36,59 @@ export type ProjectSettingsMember = {
     avatarUrl?: string | null;
     membershipRole?: "owner" | "admin" | "member" | "viewer" | string | null;
     projectRoleTitle?: string | null;
+    joinedAt?: string | null;
+    responsibilityCounts?: ProjectMemberResponsibilityCounts | null;
+};
+
+export type ProjectMemberRole = "owner" | "admin" | "member" | "viewer";
+
+export type ProjectMemberCapability =
+    | "transfer_ownership"
+    | "archive_project"
+    | "delete_project"
+    | "manage_settings"
+    | "manage_collaborators"
+    | "manage_roles_applications"
+    | "manage_tasks"
+    | "manage_files"
+    | "review_applications"
+    | "assign_tasks"
+    | "create_tasks"
+    | "upload_files"
+    | "comment";
+
+export type ProjectMemberEligibility = "mention" | "assign" | "review";
+
+export type ProjectMemberResponsibilityCounts = {
+    activeAssignedTasks: number;
+    activeCreatedTasks: number;
+    fileReviews: number;
+    acceptedApplications: number;
+    projectGroupParticipant: boolean;
+};
+
+export type ProjectPersonReferenceState =
+    | "active_member"
+    | "owner"
+    | "co_leader"
+    | "viewer"
+    | "pending_invite"
+    | "former_member"
+    | "lost_access"
+    | "deactivated_user"
+    | "unknown_user"
+    | "external_user";
+
+export type ProjectPersonReference = {
+    id: string | null;
+    displayName: string;
+    avatarUrl: string | null;
+    roleLabel: string;
+    subtext: string | null;
+    state: ProjectPersonReferenceState;
+    isAssignable: boolean;
+    isMentionable: boolean;
+    canOpenProfile: boolean;
 };
 
 export type ProjectSettingsPreflightInput = {
@@ -46,6 +99,209 @@ export type ProjectSettingsPreflightInput = {
     canArchive?: boolean | null;
     canDelete?: boolean | null;
 };
+
+export type ProjectAccessImpactInput = {
+    visibility?: unknown;
+    membersCount?: number | null;
+    followersCount?: number | null;
+    openRolesCount?: number | null;
+    pendingApplicationsCount?: number | null;
+    activeTasksCount?: number | null;
+};
+
+export type ProjectAccessTransitionInput = ProjectAccessImpactInput & {
+    previousVisibility?: unknown;
+    nextVisibility?: unknown;
+    hasManagedProjectImage?: boolean | null;
+};
+
+export type ProjectMemberRemovalPreflightInput = {
+    member?: ProjectSettingsMember | null;
+    visibility?: unknown;
+    activeAssignedTasks?: number | null;
+    activeCreatedTasks?: number | null;
+    fileReviews?: number | null;
+    acceptedApplications?: number | null;
+    projectGroupParticipant?: boolean | null;
+};
+
+export const PROJECT_MEMBER_ROLE_LABELS: Record<ProjectMemberRole, string> = {
+    owner: "Owner",
+    admin: "Co-leader",
+    member: "Member",
+    viewer: "Viewer",
+};
+
+export const PROJECT_MEMBER_ROLE_DESCRIPTIONS: Record<ProjectMemberRole, string> = {
+    owner: "Single accountable owner with transfer, archive, delete, and all settings permissions.",
+    admin: "Co-leader with collaborator, role/application, task, file, and workflow management.",
+    member: "Contributor who can participate in project work by policy.",
+    viewer: "Read-focused participant without task assignment or edit rights.",
+};
+
+export const PROJECT_MEMBER_ROLE_CAPABILITIES: Record<ProjectMemberRole, ProjectMemberCapability[]> = {
+    owner: [
+        "transfer_ownership",
+        "archive_project",
+        "delete_project",
+        "manage_settings",
+        "manage_collaborators",
+        "manage_roles_applications",
+        "manage_tasks",
+        "manage_files",
+        "review_applications",
+        "assign_tasks",
+        "create_tasks",
+        "upload_files",
+        "comment",
+    ],
+    admin: [
+        "manage_collaborators",
+        "manage_roles_applications",
+        "manage_tasks",
+        "manage_files",
+        "review_applications",
+        "assign_tasks",
+        "create_tasks",
+        "upload_files",
+        "comment",
+    ],
+    member: ["assign_tasks", "create_tasks", "upload_files", "comment"],
+    viewer: ["comment"],
+};
+
+export function normalizeProjectMemberRole(value: unknown, fallback: ProjectMemberRole = "member"): ProjectMemberRole {
+    return value === "owner" || value === "admin" || value === "member" || value === "viewer"
+        ? value
+        : fallback;
+}
+
+export function getProjectMemberRoleLabel(role: unknown) {
+    return PROJECT_MEMBER_ROLE_LABELS[normalizeProjectMemberRole(role)] ?? "Member";
+}
+
+export function projectMemberCan(role: unknown, capability: ProjectMemberCapability) {
+    return PROJECT_MEMBER_ROLE_CAPABILITIES[normalizeProjectMemberRole(role)].includes(capability);
+}
+
+export function isAssignableProjectMember(role: unknown) {
+    const normalized = normalizeProjectMemberRole(role);
+    return normalized !== "viewer";
+}
+
+export function isEligibleProjectMember(role: unknown, eligibility: ProjectMemberEligibility) {
+    const normalized = normalizeProjectMemberRole(role);
+    if (eligibility === "mention") return true;
+    if (eligibility === "assign" || eligibility === "review") return normalized !== "viewer";
+    return false;
+}
+
+export function buildProjectPersonReference(input: {
+    person?: {
+        id?: string | null;
+        fullName?: string | null;
+        username?: string | null;
+        avatarUrl?: string | null;
+    } | null;
+    membershipRole?: unknown;
+    isActiveMember?: boolean;
+    isPendingInvite?: boolean;
+    hasLostAccess?: boolean;
+    isDeactivated?: boolean;
+    isExternal?: boolean;
+}): ProjectPersonReference {
+    const person = input.person ?? null;
+    const id = person?.id?.trim() || null;
+    const displayName = person?.fullName?.trim() || person?.username?.trim() || (id ? "Project member" : "User unavailable");
+    const avatarUrl = person?.avatarUrl?.trim() || null;
+    const role = normalizeProjectMemberRole(input.membershipRole, "member");
+    const isActiveMember = Boolean(input.isActiveMember);
+
+    if (input.isDeactivated) {
+        return {
+            id,
+            displayName,
+            avatarUrl,
+            roleLabel: "Unavailable",
+            subtext: "Account unavailable",
+            state: "deactivated_user",
+            isAssignable: false,
+            isMentionable: false,
+            canOpenProfile: false,
+        };
+    }
+    if (!id) {
+        return {
+            id: null,
+            displayName,
+            avatarUrl: null,
+            roleLabel: "Unavailable",
+            subtext: "User unavailable",
+            state: "unknown_user",
+            isAssignable: false,
+            isMentionable: false,
+            canOpenProfile: false,
+        };
+    }
+    if (input.isPendingInvite) {
+        return {
+            id,
+            displayName,
+            avatarUrl,
+            roleLabel: "Pending",
+            subtext: "Invite pending",
+            state: "pending_invite",
+            isAssignable: false,
+            isMentionable: false,
+            canOpenProfile: true,
+        };
+    }
+    if (input.hasLostAccess) {
+        return {
+            id,
+            displayName,
+            avatarUrl,
+            roleLabel: "No access",
+            subtext: "No longer has project access",
+            state: "lost_access",
+            isAssignable: false,
+            isMentionable: false,
+            canOpenProfile: true,
+        };
+    }
+    if (!isActiveMember) {
+        return {
+            id,
+            displayName,
+            avatarUrl,
+            roleLabel: "Former collaborator",
+            subtext: "Removed from project",
+            state: input.isExternal ? "external_user" : "former_member",
+            isAssignable: false,
+            isMentionable: false,
+            canOpenProfile: true,
+        };
+    }
+
+    const state: ProjectPersonReferenceState =
+        role === "owner" ? "owner" : role === "admin" ? "co_leader" : role === "viewer" ? "viewer" : "active_member";
+    return {
+        id,
+        displayName,
+        avatarUrl,
+        roleLabel: PROJECT_MEMBER_ROLE_LABELS[role],
+        subtext: role === "admin" ? "Co-leader" : role === "viewer" ? "Viewer" : null,
+        state,
+        isAssignable: isAssignableProjectMember(role),
+        isMentionable: true,
+        canOpenProfile: true,
+    };
+}
+
+function formatCount(count: number | null | undefined, singular: string, plural = `${singular}s`) {
+    const value = Math.max(0, Math.trunc(Number(count ?? 0)));
+    return `${value} ${value === 1 ? singular : plural}`;
+}
 
 export const PROJECT_SETTINGS_SECTIONS: ProjectSettingsSectionDefinition[] = [
     {
@@ -192,35 +448,238 @@ export function buildProjectAccessPolicy(project: { visibility?: unknown } | nul
     };
 }
 
+export function buildProjectAccessImpact(input: ProjectAccessImpactInput | null | undefined) {
+    const visibility = normalizeProjectVisibility(input?.visibility);
+    const membersCount = Math.max(0, Math.trunc(Number(input?.membersCount ?? 0)));
+    const followersCount = Math.max(0, Math.trunc(Number(input?.followersCount ?? 0)));
+    const openRolesCount = Math.max(0, Math.trunc(Number(input?.openRolesCount ?? 0)));
+    const pendingApplicationsCount = Math.max(0, Math.trunc(Number(input?.pendingApplicationsCount ?? 0)));
+    const activeTasksCount = Math.max(0, Math.trunc(Number(input?.activeTasksCount ?? 0)));
+
+    const metrics = [
+        { label: "Approved members", value: membersCount, detail: "Keep access in both Public and Private." },
+        { label: "Followers", value: followersCount, detail: visibility === "private" ? "Lose public discovery and update visibility unless they are members." : "Can discover public project updates." },
+        { label: "Open roles", value: openRolesCount, detail: visibility === "private" ? "Hidden from public application intake." : "Visible in public application intake." },
+        { label: "Pending applications", value: pendingApplicationsCount, detail: "Keep their own application/conversation context where available." },
+        { label: "Active tasks", value: activeTasksCount, detail: "Remain member-only work surfaces when private." },
+    ];
+
+    const transitionChecklist = visibility === "private"
+        ? [
+            "Hide the project from Hub discovery, public search, and public profile project cards.",
+            "Return safe unavailable metadata for anonymous shared links.",
+            "Keep owner and approved member access unchanged.",
+            "Keep pending applicant context limited to their own application or conversation.",
+            "Keep files, tasks, README, Updates, and notifications behind member-safe access checks.",
+        ]
+        : [
+            "Restore Hub discovery, public search, and public profile project cards.",
+            "Allow shared links to show project title, description, and project image metadata.",
+            "Keep write access role-based; Public does not grant edit rights.",
+            "Allow open roles and applications to be discovered publicly.",
+            "Keep files/tasks governed by their own member-safe controls where required.",
+        ];
+
+    const summary = visibility === "private"
+        ? [
+            `${formatCount(membersCount, "member")} keep project access.`,
+            `${formatCount(followersCount, "follower")} lose public discovery unless already members.`,
+            `${formatCount(openRolesCount, "open role")} are hidden from public intake.`,
+        ]
+        : [
+            `${formatCount(followersCount, "follower")} can discover public updates.`,
+            `${formatCount(openRolesCount, "open role")} can appear in public intake.`,
+            `${formatCount(membersCount, "member")} keep their existing roles.`,
+        ];
+
+    return {
+        visibility,
+        metrics,
+        transitionChecklist,
+        summary,
+        pendingApplicationsCount,
+        activeTasksCount,
+    };
+}
+
+export function buildProjectAccessTransitionPolicy(input: ProjectAccessTransitionInput | null | undefined) {
+    const previousVisibility = normalizeProjectVisibility(input?.previousVisibility);
+    const nextVisibility = normalizeProjectVisibility(input?.nextVisibility ?? input?.visibility);
+    const impact = buildProjectAccessImpact({ ...input, visibility: nextVisibility });
+    const direction = `${previousVisibility}_to_${nextVisibility}` as const;
+    const hasManagedProjectImage = Boolean(input?.hasManagedProjectImage);
+
+    const requiresConfirmation = previousVisibility !== nextVisibility;
+    const riskLabel = nextVisibility === "private"
+        ? "Private conversion"
+        : nextVisibility === "public"
+            ? "Public conversion"
+            : "No visibility change";
+
+    const irreversibleNotes = nextVisibility === "private"
+        ? [
+            "Anonymous project metadata is replaced with safe unavailable copy.",
+            hasManagedProjectImage
+                ? "The project image is served only through the visibility-aware project image route."
+                : "Legacy public image URLs are hidden from public metadata.",
+            "Existing external social previews may stay cached outside this app.",
+        ]
+        : [
+            "Project title, description, and image route become public share metadata.",
+            "Open roles and application intake become discoverable again.",
+            "Followers can discover public updates again.",
+        ];
+
+    return {
+        previousVisibility,
+        nextVisibility,
+        direction,
+        requiresConfirmation,
+        riskLabel,
+        confirmationSummary: impact.summary,
+        metrics: impact.metrics,
+        transitionChecklist: impact.transitionChecklist,
+        irreversibleNotes,
+    };
+}
+
 export function buildProjectRolePolicy(input: {
     isOwner: boolean;
+    actorRole?: ProjectMemberRole | null;
     ownerId?: string | null;
     members?: ProjectSettingsMember[];
 }) {
     const members = input.members ?? [];
-    const transferCandidates = members.filter((member) => {
+    const normalizedMembers = members.map((member) => ({
+        ...member,
+        membershipRole: member.id === input.ownerId
+            ? "owner"
+            : normalizeProjectMemberRole(member.membershipRole, "member"),
+    }));
+    const transferCandidates = normalizedMembers.filter((member) => {
         if (!member?.id) return false;
         if (member.id === input.ownerId) return false;
         return member.membershipRole !== "owner";
     });
 
-    const roleCounts = members.reduce<Record<string, number>>((acc, member) => {
-        const role = member.membershipRole || (member.id === input.ownerId ? "owner" : "member");
+    const roleCounts = normalizedMembers.reduce<Record<ProjectMemberRole, number>>((acc, member) => {
+        const role = normalizeProjectMemberRole(member.membershipRole, member.id === input.ownerId ? "owner" : "member");
         acc[role] = (acc[role] ?? 0) + 1;
         return acc;
-    }, {});
+    }, { owner: 0, admin: 0, member: 0, viewer: 0 });
+
+    const owner = normalizedMembers.find((member) => member.id === input.ownerId || member.membershipRole === "owner") ?? null;
+    const coLeaders = normalizedMembers.filter((member) => member.membershipRole === "admin");
+    const contributors = normalizedMembers.filter((member) => member.membershipRole === "member");
+    const viewers = normalizedMembers.filter((member) => member.membershipRole === "viewer");
+
+    const actorRole = input.isOwner ? "owner" : normalizeProjectMemberRole(input.actorRole, "member");
 
     return {
-        canManage: input.isOwner,
-        members,
+        canManage: input.isOwner || actorRole === "admin",
+        actorRole,
+        members: normalizedMembers,
+        owner,
+        coLeaders,
+        contributors,
+        viewers,
         transferCandidates,
         roleCounts,
+        roleLabels: PROJECT_MEMBER_ROLE_LABELS,
+        capabilityMatrix: PROJECT_MEMBER_ROLE_CAPABILITIES,
         affectedAreas: [
             "Task assignment and ownership routing",
             "Project Files and task Files permissions",
             "Application review and collaborator controls",
             "Danger-zone permissions and audit history",
         ],
+    };
+}
+
+export function buildProjectMemberMutationPolicy(input: {
+    actorIsOwner: boolean;
+    actorRole?: ProjectMemberRole | null;
+    ownerId?: string | null;
+    targetUserId?: string | null;
+    targetRole?: unknown;
+    nextRole?: unknown;
+}) {
+    const actorRole = input.actorIsOwner ? "owner" : normalizeProjectMemberRole(input.actorRole, "member");
+    const targetRole = normalizeProjectMemberRole(input.targetRole, input.targetUserId === input.ownerId ? "owner" : "member");
+    const nextRole = input.nextRole === undefined ? null : normalizeProjectMemberRole(input.nextRole, "member");
+    const isSelfOwnerTarget = Boolean(input.ownerId && input.targetUserId && input.ownerId === input.targetUserId);
+    const ownerCanManageTarget = Boolean(input.actorIsOwner && input.targetUserId && !isSelfOwnerTarget && targetRole !== "owner");
+    const coLeaderCanManageTarget = Boolean(
+        !input.actorIsOwner &&
+        actorRole === "admin" &&
+        input.targetUserId &&
+        !isSelfOwnerTarget &&
+        (targetRole === "member" || targetRole === "viewer") &&
+        (!nextRole || nextRole === "member" || nextRole === "viewer"),
+    );
+    const canManageTarget = ownerCanManageTarget || coLeaderCanManageTarget;
+    return {
+        actorRole,
+        targetRole,
+        canPromoteToCoLeader: ownerCanManageTarget && targetRole !== "admin",
+        canChangeRole: canManageTarget,
+        canRemove: canManageTarget,
+        canTransferOwnership: Boolean(input.actorIsOwner && input.targetUserId && !isSelfOwnerTarget),
+        blockedReason: !input.actorIsOwner && actorRole !== "admin"
+            ? "Only the project owner or a Co-leader can manage collaborators."
+            : isSelfOwnerTarget || targetRole === "owner"
+                ? "Ownership changes must use the transfer ownership flow."
+                : actorRole === "admin" && (targetRole === "admin" || nextRole === "admin")
+                    ? "Co-leaders can manage members and viewers, but not other Co-leaders."
+                : null,
+    };
+}
+
+export function buildProjectMemberRemovalPreflight(input: ProjectMemberRemovalPreflightInput | null | undefined) {
+    const member = input?.member ?? null;
+    const activeAssignedTasks = Math.max(0, Math.trunc(Number(input?.activeAssignedTasks ?? 0)));
+    const activeCreatedTasks = Math.max(0, Math.trunc(Number(input?.activeCreatedTasks ?? 0)));
+    const fileReviews = Math.max(0, Math.trunc(Number(input?.fileReviews ?? 0)));
+    const acceptedApplications = Math.max(0, Math.trunc(Number(input?.acceptedApplications ?? 0)));
+    const projectGroupParticipant = Boolean(input?.projectGroupParticipant);
+    const visibility = normalizeProjectVisibility(input?.visibility);
+    const displayName = member ? getProjectMemberDisplayName(member) : "This member";
+    const affectedAreas = [
+        activeAssignedTasks > 0
+            ? `${formatCount(activeAssignedTasks, "active assigned task")} will keep ${displayName} as historical assignee and show Needs reassignment.`
+            : "No active assigned tasks.",
+        activeCreatedTasks > 0
+            ? `${formatCount(activeCreatedTasks, "active created task")} keep their creator history.`
+            : "No active created tasks.",
+        fileReviews > 0
+            ? `${formatCount(fileReviews, "file review")} keep historical context.`
+            : "No active file review markers.",
+        acceptedApplications > 0
+            ? `${formatCount(acceptedApplications, "accepted role")} may update role capacity after removal.`
+            : "No accepted role capacity impact found.",
+        projectGroupParticipant
+            ? "Project group conversation access will be removed."
+            : "No project group conversation participant row found.",
+        visibility === "private"
+            ? "Private project access is revoked immediately."
+            : "Public project pages may remain visible, but member-only controls are revoked.",
+    ];
+    const warnings = affectedAreas.filter((item) => !item.startsWith("No "));
+
+    return {
+        displayName,
+        activeAssignedTasks,
+        activeCreatedTasks,
+        fileReviews,
+        acceptedApplications,
+        projectGroupParticipant,
+        visibility,
+        warnings,
+        affectedAreas,
+        defaultMode: "preserve_history" as const,
+        summary: warnings.length > 0
+            ? `${displayName} can be removed safely, but ${warnings.length} affected area${warnings.length === 1 ? "" : "s"} should be reviewed.`
+            : `${displayName} can be removed with no active responsibility blockers.`,
     };
 }
 
