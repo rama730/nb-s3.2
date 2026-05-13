@@ -40,6 +40,8 @@ import type {
     ApplicationActionErrorCode,
 } from './types';
 import { refreshWorkspaceCountersForUsers } from '@/lib/workspace/profile-counters';
+import { addProjectMemberInternal } from '@/lib/projects/collaborator-lifecycle';
+import { computeProjectReadAccess } from '@/lib/data/project-access';
 
 // ============================================================================
 // TYPES
@@ -872,13 +874,24 @@ export async function getApplicationStatusAction(projectId: string): Promise<App
             };
         }
 
+        const activeMembership = application.status === 'accepted'
+            ? await db.query.projectMembers.findFirst({
+                where: and(
+                    eq(projectMembers.projectId, projectId),
+                    eq(projectMembers.userId, user.id),
+                ),
+                columns: { id: true },
+            })
+            : null;
+
         return {
             status: application.status as 'pending' | 'accepted',
             roleId: application.roleId,
             roleTitle,
             decisionReason,
             lifecycleStatus,
-            updatedAt: application.updatedAt
+            updatedAt: application.updatedAt,
+            membershipEnded: application.status === 'accepted' && !activeMembership,
         };
     } catch (error) {
         console.error('Failed to get application status:', error);
@@ -926,7 +939,7 @@ export async function applyToRoleAction(
             const [project, role, existingMember, existingApp] = await Promise.all([
                 db.query.projects.findFirst({
                     where: eq(projects.id, projectId),
-                    columns: { id: true, ownerId: true, slug: true, title: true }
+                    columns: { id: true, ownerId: true, slug: true, title: true, visibility: true, status: true }
                 }),
                 db.query.projectOpenRoles.findFirst({
                     where: and(
@@ -965,6 +978,15 @@ export async function applyToRoleAction(
             }
             if (existingMember) {
                 return toApplicationFailure(traceId, 'ALREADY_MEMBER', 'You are already a team member');
+            }
+            const canReadProject = computeProjectReadAccess(
+                project.visibility,
+                project.status,
+                project.ownerId === user.id,
+                Boolean(existingMember),
+            );
+            if (!canReadProject && (!existingApp || existingApp.status === 'rejected')) {
+                return toApplicationFailure(traceId, 'FORBIDDEN', 'This project is private.');
             }
 
             const roleTitleText = role?.title || role?.role || 'Unknown Role';
@@ -1240,55 +1262,19 @@ export async function acceptApplicationAction(
                         eq(projectMembers.projectId, application.projectId),
                         eq(projectMembers.userId, application.applicantId)
                     ),
-                    columns: { id: true }
+                    columns: { id: true, role: true }
                 });
 
-                if (!existingMember) {
-                    const roleCapacity = await tx
-                        .select({
-                            id: projectOpenRoles.id,
-                            filled: projectOpenRoles.filled,
-                            count: projectOpenRoles.count,
-                        })
-                        .from(projectOpenRoles)
-                        .where(eq(projectOpenRoles.id, application.roleId))
-                        .for('update')
-                        .limit(1);
-
-                    const role = roleCapacity[0];
-                    if (!role || role.filled >= role.count) {
-                        throw new Error('Role is full');
-                    }
-
-                    await tx.insert(projectMembers)
-                        .values({
-                            projectId: application.projectId,
-                            userId: application.applicantId,
-                            role: 'member'
-                        });
-
-                    await tx.update(projectOpenRoles)
-                        .set({
-                            filled: sql`${projectOpenRoles.filled} + 1`,
-                            updatedAt: new Date()
-                        })
-                        .where(eq(projectOpenRoles.id, application.roleId));
-                }
-
-                const projectConversationId = await ensureProjectGroupConversationIdInternal(
-                    tx,
-                    application.projectId,
-                    application.project.ownerId
-                );
-                await tx
-                    .insert(conversationParticipants)
-                    .values([
-                        { conversationId: projectConversationId, userId: application.project.ownerId },
-                        { conversationId: projectConversationId, userId: application.applicantId },
-                    ])
-                    .onConflictDoNothing({
-                        target: [conversationParticipants.conversationId, conversationParticipants.userId],
-                    });
+                await addProjectMemberInternal(tx, {
+                    projectId: application.projectId,
+                    userId: application.applicantId,
+                    role: 'member',
+                    actorId: user.id,
+                    source: 'application_accept',
+                    applicationId,
+                    roleId: application.roleId,
+                    incrementRoleCapacity: !existingMember || existingMember.role === 'viewer',
+                });
 
                 await ensureAcceptedConnectionInternal(tx, user.id, application.applicantId);
 

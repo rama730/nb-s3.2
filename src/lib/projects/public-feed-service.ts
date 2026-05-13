@@ -1,10 +1,11 @@
-import { and, desc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm'
+import { and, desc, eq, inArray, isNull, lt, ne, or, sql } from 'drizzle-orm'
 
 import { db } from '@/lib/db'
 import { isMissingRelationError } from '@/lib/db/errors'
 import { profiles, projectOpenRoles, projects } from '@/lib/db/schema'
 import { logger } from '@/lib/logger'
-import { getCacheEnvelope, cacheStaleableData, isCacheStale } from '@/lib/redis'
+import { getCacheEnvelope, cacheStaleableData, isCacheStale, redis } from '@/lib/redis'
+import { clearHubSnapshotCache } from '@/lib/hub/snapshot-cache'
 import {
     buildPublicProjectsCacheKey,
     encodePublicProjectsCursor,
@@ -16,6 +17,7 @@ export const PUBLIC_PROJECTS_FEED_DEFAULT_LIMIT = 24
 export const PUBLIC_PROJECTS_FEED_MAX_LIMIT = 100
 export const PUBLIC_PROJECTS_FEED_FRESH_TTL_SECONDS = 60
 export const PUBLIC_PROJECTS_FEED_STALE_TTL_SECONDS = 300
+const PUBLIC_PROJECTS_FEED_CACHE_PREFIX = 'projects:public:v4:'
 
 type PublicProjectRow = {
     id: string
@@ -141,8 +143,9 @@ export async function queryAndCachePublicProjectsFeed(limit: number, cursor: Pub
         .innerJoin(profiles, eq(projects.ownerId, profiles.id))
         .where(
             and(
-                eq(projects.visibility, 'public'),
+                or(eq(projects.visibility, 'public'), eq(projects.visibility, 'unlisted')),
                 isNull(projects.deletedAt),
+                ne(projects.status, 'draft'),
                 cursor
                     ? or(
                         lt(projects.createdAt, new Date(cursor.createdAt)),
@@ -216,6 +219,36 @@ export async function queryAndCachePublicProjectsFeed(limit: number, cursor: Pub
     )
 
     return payload
+}
+
+export async function invalidatePublicProjectsFeedCache(projectId?: string | null) {
+    let redisDeleted = 0
+    const localSnapshotsCleared = clearHubSnapshotCache()
+
+    if (redis) {
+        try {
+            let cursor = '0'
+            do {
+                const [nextCursor, keys] = await redis.scan(cursor, {
+                    match: `${PUBLIC_PROJECTS_FEED_CACHE_PREFIX}*`,
+                    count: 100,
+                })
+                cursor = String(nextCursor)
+                if (keys.length > 0) {
+                    await redis.del(...keys)
+                    redisDeleted += keys.length
+                }
+            } while (cursor !== '0')
+        } catch (error) {
+            logger.warn('public-feed.cache_invalidation_failed', {
+                module: 'public-feed-service',
+                projectId: projectId ?? null,
+                error: error instanceof Error ? error.message : String(error),
+            })
+        }
+    }
+
+    return { redisDeleted, localSnapshotsCleared }
 }
 
 export async function getPublicProjectsFeedPage(limit: number, cursor: PublicProjectsCursor | null): Promise<PublicProjectsFeedPage> {

@@ -16,6 +16,7 @@ interface ProjectLayoutProps {
     children: React.ReactNode;
     project: Project;
     isOwner: boolean;
+    canManageSettings?: boolean;
     activeTab: string;
     onTabChange: (tabId: string) => void;
     followersCount?: number;
@@ -41,6 +42,7 @@ const TABS = [
 
 export default function ProjectLayout({
     children, project, isOwner, activeTab, onTabChange,
+    canManageSettings,
     followersCount,
     viewCount,
 
@@ -211,7 +213,7 @@ export default function ProjectLayout({
                 <div className="max-w-7xl mx-auto">
                     <div className="flex items-center px-4 overflow-x-auto scrollbar-hide -mb-px">
                         {TABS.map((tab) => {
-                            if (tab.ownerOnly && !isOwner) return null;
+                            if (tab.ownerOnly && !(canManageSettings ?? isOwner)) return null;
                             const isActive = activeTab === tab.id;
                             return (
                                 <button

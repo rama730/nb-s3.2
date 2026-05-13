@@ -30,6 +30,7 @@ import {
 import { db } from "@/lib/db";
 import { profiles, projectMembers, projects } from "@/lib/db/schema";
 import { getProjectAccessById } from "@/lib/data/project-access";
+import { isProjectMemberEligibleFor } from "@/lib/projects/collaborator-lifecycle";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -45,7 +46,10 @@ export interface ProjectMemberSearchResult {
     fullName: string | null;
     avatarUrl: string | null;
     role: "owner" | "admin" | "member" | "viewer";
+    eligible: boolean;
 }
+
+type ProjectMemberSearchEligibility = "mention" | "assign" | "review";
 
 function normalizeQuery(raw: string | null): string {
     if (!raw) return "";
@@ -58,6 +62,10 @@ function normalizeQuery(raw: string | null): string {
     return escaped.length <= MAX_QUERY_LENGTH
         ? escaped
         : escaped.slice(0, MAX_QUERY_LENGTH);
+}
+
+function normalizeEligibility(raw: string | null): ProjectMemberSearchEligibility {
+    return raw === "assign" || raw === "review" ? raw : "mention";
 }
 
 export async function GET(
@@ -86,12 +94,13 @@ export async function GET(
     if (!access.project) {
         return jsonError("Project not found", 404, "NOT_FOUND");
     }
-    if (!access.canRead) {
+    if (!access.isOwner && !access.isMember) {
         return jsonError("Forbidden", 403, "FORBIDDEN");
     }
 
     const rawQuery = request.nextUrl.searchParams.get("q");
     const query = normalizeQuery(rawQuery);
+    const eligibility = normalizeEligibility(request.nextUrl.searchParams.get("eligibility"));
     const likePattern = query.length > 0 ? `%${query}%` : null;
 
     // The member roster consists of (a) the project owner and (b) the rows in
@@ -151,6 +160,7 @@ export async function GET(
 
     for (const row of ownerRows) {
         if (!row?.id || seen.has(row.id)) continue;
+        if (!isProjectMemberEligibleFor("owner", eligibility)) continue;
         seen.add(row.id);
         results.push({
             id: row.id,
@@ -158,18 +168,22 @@ export async function GET(
             fullName: row.fullName,
             avatarUrl: row.avatarUrl,
             role: "owner",
+            eligible: true,
         });
     }
 
     for (const row of memberRows) {
         if (!row?.id || seen.has(row.id)) continue;
+        const role = (row.role ?? "member") as ProjectMemberSearchResult["role"];
+        if (!isProjectMemberEligibleFor(role, eligibility)) continue;
         seen.add(row.id);
         results.push({
             id: row.id,
             username: row.username,
             fullName: row.fullName,
             avatarUrl: row.avatarUrl,
-            role: (row.role ?? "member") as ProjectMemberSearchResult["role"],
+            role,
+            eligible: true,
         });
         if (results.length >= MAX_RESULTS) break;
     }

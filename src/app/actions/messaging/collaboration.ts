@@ -40,8 +40,12 @@ import {
 import { logger } from '@/lib/logger';
 import { buildMessageSourceHref, mapWorkflowStatusToLinkStatus, upsertMessageWorkLink } from '@/lib/messages/linked-work-server';
 import { mapMessageWorkLinkToSummary, type MessageLinkedWorkSummary } from '@/lib/messages/linked-work';
-import { getProjectAccessById } from '@/lib/data/project-access';
 import { queueCounterRefreshBestEffort } from '@/lib/workspace/counter-buffer';
+import {
+    addProjectMemberInternal,
+    isProjectMemberEligibleFor,
+    requireProjectCapability,
+} from '@/lib/projects/collaborator-lifecycle';
 import { revalidatePath } from 'next/cache';
 
 type StructuredComposerKind =
@@ -932,16 +936,14 @@ export async function resolveMessageWorkflowActionV2(params: {
 
         await db.transaction(async (tx) => {
             if (workflow.kind === 'project_invite' && params.action === 'accept' && workflow.projectId && workflow.assigneeUserId) {
-                await tx
-                    .insert(projectMembers)
-                    .values({
-                        projectId: workflow.projectId,
-                        userId: workflow.assigneeUserId,
-                        role: 'member',
-                    })
-                    .onConflictDoNothing({
-                        target: [projectMembers.projectId, projectMembers.userId],
-                    });
+                await addProjectMemberInternal(tx, {
+                    projectId: workflow.projectId,
+                    userId: workflow.assigneeUserId,
+                    role: 'member',
+                    actorId: user.id,
+                    source: 'project_invite',
+                    syncGroupConversation: true,
+                });
             }
 
             await tx
@@ -1125,13 +1127,19 @@ export async function convertMessageToTaskActionV2(params: {
             return { success: false, error: 'Invalid assignee id' };
         }
 
-        const access = await getProjectAccessById(params.projectId, user.id);
-        if (!access.project) return { success: false, error: 'Project not found' };
-        if (!access.canWrite) {
-            return { success: false, error: 'You do not have permission to create tasks in this project' };
+        try {
+            await requireProjectCapability(params.projectId, user.id, 'create_tasks');
+        } catch (error) {
+            const message = error instanceof Error ? error.message : '';
+            return { success: false, error: message === 'Project not found' ? message : 'You do not have permission to create tasks in this project' };
         }
 
         if (taskAssigneeId) {
+            try {
+                await requireProjectCapability(params.projectId, user.id, 'assign_tasks');
+            } catch {
+                return { success: false, error: 'You do not have permission to assign tasks in this project' };
+            }
             const assigneeMember = await db.query.projectMembers.findFirst({
                 where: and(
                     eq(projectMembers.projectId, params.projectId),
@@ -1142,8 +1150,8 @@ export async function convertMessageToTaskActionV2(params: {
             if (!assigneeMember) {
                 return { success: false, error: 'Assignee must be a project member' };
             }
-            if (assigneeMember.role === 'viewer') {
-                return { success: false, error: 'Viewer members cannot be assigned tasks' };
+            if (!isProjectMemberEligibleFor(assigneeMember.role, 'assign')) {
+                return { success: false, error: 'Assignee must be an assignable project member' };
             }
         }
 

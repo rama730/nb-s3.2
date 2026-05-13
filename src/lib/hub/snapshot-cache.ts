@@ -54,3 +54,9 @@ export async function getHubSnapshotCached<T>(
     pruneIfNeeded();
     return { value: computed, cacheHit: false };
 }
+
+export function clearHubSnapshotCache() {
+    const cleared = snapshotCache.size;
+    snapshotCache.clear();
+    return cleared;
+}

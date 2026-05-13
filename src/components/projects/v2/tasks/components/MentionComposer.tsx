@@ -324,6 +324,7 @@ export function MentionComposer({
                     window.location.origin,
                 );
                 if (query) url.searchParams.set("q", query);
+                url.searchParams.set("eligibility", "mention");
                 const response = await fetch(url.toString(), {
                     method: "GET",
                     credentials: "same-origin",

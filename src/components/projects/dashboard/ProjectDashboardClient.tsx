@@ -20,6 +20,7 @@ import { queryKeys } from "@/lib/query-keys";
 import { logger } from "@/lib/logger";
 import type { SprintDetailPayload } from "@/lib/projects/sprint-detail";
 import type { TaskPanelTab } from "@/hooks/useTaskPanelResource";
+import { normalizeProjectMemberRole, type ProjectMemberRole } from "@/lib/projects/settings-policies";
 
 import { 
     DashboardTab, 
@@ -188,6 +189,7 @@ export default function ProjectDashboardClient({
         lifecycleStatus?: 'none' | 'pending' | 'accepted' | 'rejected' | 'withdrawn' | 'role_filled';
         canReapply?: boolean;
         waitTime?: string;
+        membershipEnded?: boolean;
     }>({ status: 'none' });
 
     // Optimistic State for Project Journey
@@ -290,6 +292,13 @@ export default function ProjectDashboardClient({
         }
         return list;
     }, [membersData, collaboratorUsers, project, extendedProject]);
+    const currentProjectRole = useMemo<ProjectMemberRole | null>(() => {
+        if (isOwner) return "owner";
+        if (!currentUserId) return null;
+        const member = allMembers.find((item: any) => item?.id === currentUserId);
+        return member ? normalizeProjectMemberRole((member as any).membershipRole, "member") : null;
+    }, [allMembers, currentUserId, isOwner]);
+    const canManageProjectSettings = isOwner || currentProjectRole === "admin";
 
     // Current members
     const members = useMemo(() => {
@@ -808,7 +817,7 @@ export default function ProjectDashboardClient({
                 return null;
 
             case "settings":
-                if (!isOwner) return null;
+                if (!canManageProjectSettings) return null;
                 return (
                     <TabErrorBoundary tabName="Settings">
                         <ProjectSettingsTab
@@ -816,6 +825,7 @@ export default function ProjectDashboardClient({
                             project={project}
                             onProjectUpdated={handleProjectSettingsUpdated}
                             isProjectOwner={isOwner}
+                            actorRole={currentProjectRole}
                             members={allMembers}
                             loadingMembers={loadingMembers}
                         />
@@ -840,6 +850,7 @@ export default function ProjectDashboardClient({
             <ProjectLayout
                 project={projectWithLiveStats}
                 isOwner={isOwner}
+                canManageSettings={canManageProjectSettings}
                 activeTab={activeTab}
                 onTabChange={handleTabChange}
                 followersCount={followersCount}
@@ -862,6 +873,7 @@ export default function ProjectDashboardClient({
                             roleTitle={applicationStatus.roleTitle}
                             canReapply={applicationStatus.canReapply}
                             waitTime={applicationStatus.waitTime}
+                            membershipEnded={applicationStatus.membershipEnded}
                             onApply={() => setIsApplyModalOpen(true)}
                             isOwner={isOwner}
                             isMember={isMember}

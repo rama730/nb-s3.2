@@ -23,6 +23,7 @@ import {
 } from "@/lib/projects/task-workflow";
 import { cn } from "@/lib/utils";
 import type { TaskPanelSubtask } from "@/hooks/useTaskPanelResource";
+import { buildProjectPersonReference } from "@/lib/projects/settings-policies";
 
 interface DetailsTabProps {
   task: TaskSurfaceRecord;
@@ -96,6 +97,8 @@ export default function DetailsTab({
     () =>
       members
         .map((member) => {
+          const membershipRole = String(member?.membershipRole ?? member?.role ?? "").toLowerCase();
+          if (membershipRole === "viewer") return null;
           const identity = normalizeTaskSurfacePerson(member?.user ?? member);
           const id = member?.user_id || member?.id || identity?.id;
           if (!id) return null;
@@ -104,6 +107,15 @@ export default function DetailsTab({
         .filter(Boolean) as { id: string; identity: ReturnType<typeof normalizeTaskSurfacePerson> }[],
     [members],
   );
+  const availableMemberIds = useMemo(() => new Set(availableMembers.map((member) => member.id)), [availableMembers]);
+  const currentAssigneeUnavailable = Boolean(task.assigneeId && !availableMemberIds.has(task.assigneeId));
+  const currentAssigneeReference = task.assignee
+    ? buildProjectPersonReference({
+      person: task.assignee,
+      isActiveMember: !currentAssigneeUnavailable,
+    })
+    : null;
+  const currentAssigneeLabel = currentAssigneeReference?.displayName || task.assignee?.fullName || "Removed collaborator";
 
   const createdAtLabel =
     task.createdAt && Number.isFinite(Date.parse(task.createdAt))
@@ -454,12 +466,22 @@ export default function DetailsTab({
               className="w-full rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800/50 dark:text-zinc-100"
             >
               <option value="">Unassigned</option>
+              {currentAssigneeUnavailable && task.assigneeId ? (
+                <option value={task.assigneeId} disabled>
+                  {currentAssigneeLabel} (removed from project)
+                </option>
+              ) : null}
               {availableMembers.map((member) => (
                 <option key={member.id} value={member.id}>
                   {member.identity?.fullName || "Unknown"}
                 </option>
               ))}
             </select>
+            {currentAssigneeUnavailable ? (
+              <p className="text-xs text-amber-600 dark:text-amber-300">
+                Removed from project · Needs reassignment
+              </p>
+            ) : null}
           </div>
 
           <div className="space-y-1.5">

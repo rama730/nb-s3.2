@@ -53,6 +53,8 @@ CREATE TABLE "projects" (
 	"description" text,
 	"short_description" text,
 	"cover_image" text,
+	"cover_image_bucket" text,
+	"cover_image_key" text,
 	"category" text,
 	"tags" jsonb DEFAULT '[]'::jsonb,
 	"skills" jsonb DEFAULT '[]'::jsonb,

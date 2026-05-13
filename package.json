@@ -150,6 +150,7 @@
     "drizzle-kit": "^0.31.9",
     "eslint": "^9.39.4",
     "eslint-config-next": "^16.2.2",
+    "fast-check": "^4.7.0",
     "playwright": "^1.58.2",
     "pyright": "^1.1.400",
     "tailwindcss": "^4",

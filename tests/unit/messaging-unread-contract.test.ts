@@ -101,7 +101,7 @@ test('messages workspace commits one concrete loaded read watermark on open', ()
     const source = readProjectFile('src/components/chat/v2/MessagesWorkspaceV2.tsx');
 
     assert.match(source, /const hasLoadedReadableMessage = useMemo/);
-    assert.match(source, /thread\.messages\.some\(\(message\) => !message\.deletedAt\)/);
+    assert.match(source, /thread\.messages\.some\(\(message\) => !message\.deletedAt && !isTemporaryMessageId\(message\.id\)\)/);
     assert.match(source, /const latestReadableMessageId = useMemo/);
     assert.match(source, /commitOptions\.allowLatestFallback[\s\S]*\? latestReadableMessageId : null/);
     assert.doesNotMatch(source, /latest-server-message/);
@@ -109,7 +109,7 @@ test('messages workspace commits one concrete loaded read watermark on open', ()
     assert.match(source, /queuedReadCommitRef/);
     assert.match(source, /read_commit_replaced_by_newer/);
     assert.match(source, /read_seen_detected/);
-    assert.match(source, /lastReadMessageId: explicitMessageId/);
+    assert.match(source, /lastReadMessageId: serverMessageId/);
     assert.match(source, /ignorePendingWatermark/);
     assert.match(source, /handleCommitThreadRead\(null, \{ ignorePendingWatermark: true \}\)/);
     assert.match(source, /const shouldCommitLatestServerWatermark =/);

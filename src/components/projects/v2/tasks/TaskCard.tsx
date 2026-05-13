@@ -11,6 +11,7 @@ import { normalizeTaskSurfaceRecord, type TaskSurfaceRecord } from "@/lib/projec
 interface TaskCardProps {
     task: TaskSurfaceRecord;
     onClick?: (task: TaskSurfaceRecord) => void;
+    activeAssignableMemberIds?: Set<string>;
 }
 
 import TaskStatusBadge from "./badges/TaskStatusBadge";
@@ -22,8 +23,15 @@ export type Task = TaskSurfaceRecord;
 export const TaskCard = memo(function TaskCard({
     task,
     onClick,
+    activeAssignableMemberIds,
 }: TaskCardProps) {
     const taskRecord = normalizeTaskSurfaceRecord(task);
+    const assigneeRemoved = Boolean(
+        taskRecord.assigneeId &&
+        taskRecord.assignee &&
+        activeAssignableMemberIds &&
+        !activeAssignableMemberIds.has(taskRecord.assigneeId),
+    );
 
     return (
         <div
@@ -60,6 +68,11 @@ export const TaskCard = memo(function TaskCard({
                             {taskRecord.storyPoints} pts
                         </span>
                     )}
+                    {assigneeRemoved ? (
+                        <span className="px-2 py-0.5 rounded-md text-[10px] font-bold border border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200">
+                            Needs reassignment
+                        </span>
+                    ) : null}
                 </div>
 
                 {/* Footer: ID & Meta */}
@@ -92,6 +105,7 @@ export const TaskCard = memo(function TaskCard({
                                 size={20}
                                 className="h-5 w-5"
                                 fallbackClassName="text-[9px]"
+                                title={assigneeRemoved ? "Removed from project" : undefined}
                             />
                         ) : (
                             <div className="w-5 h-5 rounded-full bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center border border-dashed border-zinc-300 dark:border-zinc-700" title="Unassigned">

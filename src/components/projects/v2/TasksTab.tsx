@@ -87,6 +87,12 @@ export default function TasksTab({
         return normalizeSprintOptions(sprintSource);
     }, [hasFetchedProjectSprints, projectSprintsData, sprints]);
     const sprintById = useMemo(() => new Map(sprintOptions.map((sprint) => [sprint.id, sprint])), [sprintOptions]);
+    const activeAssignableMemberIds = useMemo(() => new Set(
+        members
+            .filter((member) => String(member?.membershipRole ?? member?.role ?? "").toLowerCase() !== "viewer")
+            .map((member) => String(member?.id ?? member?.userId ?? member?.user_id ?? member?.user?.id ?? ""))
+            .filter(Boolean),
+    ), [members]);
     // Local State
     const [viewMode, setViewMode] = useState<'board' | 'list'>('board');
     const [scope, setScope] = useState<'all' | 'backlog' | 'sprint'>('all');
@@ -403,6 +409,7 @@ export default function TasksTab({
                     fetchNextPage={fetchNextPage}
                     hasNextPage={hasNextPage}
                     isFetchingNextPage={isFetchingNextPage}
+                    activeAssignableMemberIds={activeAssignableMemberIds}
                 />
             ) : (
                 <TasksTable
@@ -411,6 +418,7 @@ export default function TasksTab({
                     fetchNextPage={fetchNextPage}
                     hasNextPage={hasNextPage}
                     isFetchingNextPage={isFetchingNextPage}
+                    activeAssignableMemberIds={activeAssignableMemberIds}
                 />
             )}
 

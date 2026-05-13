@@ -2,7 +2,7 @@
 
 import { db } from '@/lib/db';
 import { projects, projectFollows, projectOpenRoles, roleApplications, conversations, conversationParticipants, messages, projectNodes, projectNodeEvents, projectMembers, profiles, tasks, projectSprints, taskNodeLinks, taskSubtasks, taskComments, tags, projectTags, skills, projectSkills } from '@/lib/db/schema';
-import { eq, and, or, sql, inArray, isNotNull, isNull, desc } from 'drizzle-orm';
+import { eq, and, or, sql, inArray, isNotNull, isNull, desc, ilike } from 'drizzle-orm';
 import { createClient, createAdminClient } from '@/lib/supabase/server';
 import { redis } from '@/lib/redis';
 import { revalidatePath, revalidateTag, unstable_cache } from 'next/cache';
@@ -18,7 +18,7 @@ import { clearSealedGithubTokenFromImportSource, sanitizeGitErrorMessage, sealGi
 import { fetchRepoMeta, parseGithubRepo } from '@/lib/github/repo-preview';
 import { buildGithubImportEventId, resolveGithubRepoAccess } from '@/lib/github/auth-resolver';
 import { buildProjectImportEventId } from '@/lib/import/idempotency';
-import { isProjectVisibility, type ProjectVisibility } from '@/lib/projects/project-visibility';
+import { isProjectVisibility, normalizeProjectVisibility, type ProjectVisibility } from '@/lib/projects/project-visibility';
 import { consumeRateLimit } from '@/lib/security/rate-limit';
 import { runInFlightDeduped } from '@/lib/async/inflight-dedupe';
 import { createUploadIntent, finalizeUploadIntent } from '@/lib/upload/upload-intents';
@@ -33,7 +33,19 @@ import type { Project } from '@/types/hub';
 import { logger } from '@/lib/logger';
 import { buildProjectOwnerPresentation } from '@/lib/privacy/presentation';
 import { resolvePrivacyRelationship } from '@/lib/privacy/resolver';
-import { emitTaskAssignedNotification } from '@/lib/notifications/emitters';
+import {
+    emitProjectMemberRemovedNotification,
+    emitProjectRoleChangedNotification,
+    emitTaskAssignedNotification,
+} from '@/lib/notifications/emitters';
+import {
+    canProjectRoleManageTarget,
+    changeProjectMemberRoleInternal,
+    isProjectMemberEligibleFor,
+    readProjectMemberRemovalImpact,
+    removeProjectMemberInternal,
+    requireProjectCapability,
+} from '@/lib/projects/collaborator-lifecycle';
 import { queueCounterRefreshBestEffort } from '@/lib/workspace/counter-buffer';
 import {
     createSprintSchema,
@@ -64,6 +76,8 @@ import { recordSprintMetric } from '@/lib/projects/sprint-observability';
 import { buildTaskActivityItems } from '@/lib/projects/task-activity';
 import { normalizeTaskSurfaceRecord } from '@/lib/projects/task-presentation';
 import { taskPriorityEnum, taskStatusEnum } from '@/lib/validations/task';
+import { invalidatePublicProjectsFeedCache } from '@/lib/projects/public-feed-service';
+import { buildProjectAccessTransitionPolicy } from '@/lib/projects/settings-policies';
 
 const isMissingColumn = (error: unknown, column: string) => {
     const msg = error instanceof Error ? error.message : String(error);
@@ -76,12 +90,20 @@ const isMissingColumn = (error: unknown, column: string) => {
 
 const isMissingCounterColumn = (error: unknown, column: string) => isMissingColumn(error, column);
 
-const PROJECT_COVER_UPLOAD_BUCKET = 'avatars';
+const PROJECT_COVER_UPLOAD_BUCKET = 'project-files';
+const LEGACY_PROJECT_COVER_UPLOAD_BUCKET = 'avatars';
 const PROJECT_COVER_UPLOAD_MAX_FILE_BYTES = 2 * 1024 * 1024;
 const ALLOWED_PROJECT_COVER_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
 const PROJECT_IMAGE_STORAGE_FOLDERS = ['project-images', 'project-covers'] as const;
+const PROJECT_IMAGE_PROXY_ROUTE_PREFIX = '/api/v1/projects';
 const PUBLIC_PROJECT_DETAIL_SHELL_CACHE_TAG = 'public-project-detail-shell';
 const PUBLIC_PROJECT_DETAIL_METADATA_CACHE_TAG = 'public-project-detail-metadata';
+
+type AccessTransitionPreview = {
+    followers: Array<{ id: string; username: string | null; fullName: string | null; avatarUrl: string | null }>;
+    openRoles: Array<{ id: string; title: string | null; role: string | null }>;
+    pendingApplications: Array<{ id: string; applicantId: string; applicantName: string | null; roleTitle: string | null; roleName: string | null }>;
+};
 
 function resolveProjectVisibilityForCreate(value: unknown): ProjectVisibility {
     if (value === undefined || value === null || value === "") return 'public';
@@ -106,7 +128,14 @@ function projectCoverExtensionFromMimeType(mimeType: string): string {
 
 async function assertProjectOwnerForSettings(projectId: string, userId: string) {
     const [project] = await db
-        .select({ id: projects.id, slug: projects.slug, ownerId: projects.ownerId, coverImage: projects.coverImage })
+        .select({
+            id: projects.id,
+            slug: projects.slug,
+            ownerId: projects.ownerId,
+            coverImage: projects.coverImage,
+            coverImageBucket: projects.coverImageBucket,
+            coverImageKey: projects.coverImageKey,
+        })
         .from(projects)
         .where(eq(projects.id, projectId))
         .limit(1);
@@ -116,7 +145,16 @@ async function assertProjectOwnerForSettings(projectId: string, userId: string) 
     return project;
 }
 
-function projectCoverStorageKeyFromPublicUrl(value: string | null | undefined, userId: string, projectId: string) {
+function buildProjectImageRoute(projectId: string) {
+    return `${PROJECT_IMAGE_PROXY_ROUTE_PREFIX}/${projectId}/image`;
+}
+
+function projectCoverStorageKeyFromPublicUrl(
+    value: string | null | undefined,
+    userId: string,
+    projectId: string,
+    bucket = PROJECT_COVER_UPLOAD_BUCKET,
+) {
     if (!value) return null;
 
     let pathname = "";
@@ -127,14 +165,15 @@ function projectCoverStorageKeyFromPublicUrl(value: string | null | undefined, u
     }
 
     const markers = [
-        `/object/public/${PROJECT_COVER_UPLOAD_BUCKET}/`,
-        `/render/image/public/${PROJECT_COVER_UPLOAD_BUCKET}/`,
+        `/object/public/${bucket}/`,
+        `/render/image/public/${bucket}/`,
     ];
     const marker = markers.find((candidate) => pathname.includes(candidate));
     if (!marker) return null;
 
     const storageKey = pathname.slice(pathname.indexOf(marker) + marker.length).replace(/^\/+/, "");
     const expectedPrefixes = PROJECT_IMAGE_STORAGE_FOLDERS.map((folder) => `${userId}/${folder}/${projectId}/`);
+    expectedPrefixes.push(`projects/${projectId}/project-images/`);
     return expectedPrefixes.some((prefix) => storageKey.startsWith(prefix)) ? storageKey : null;
 }
 
@@ -142,79 +181,103 @@ async function cleanupProjectCoverImages(params: {
     userId: string;
     projectId: string;
     keepStorageKey?: string | null;
+    keepBucket?: string | null;
+    previousBucket?: string | null;
+    previousStorageKey?: string | null;
     previousCoverImage?: string | null;
 }) {
     try {
         const admin = await createAdminClient();
-        const folders = PROJECT_IMAGE_STORAGE_FOLDERS.map((folder) => `${params.userId}/${folder}/${params.projectId}`);
-        const staleKeys = new Set<string>();
-        const previousKey = projectCoverStorageKeyFromPublicUrl(
-            params.previousCoverImage,
-            params.userId,
-            params.projectId,
+        const keepBucket = params.keepBucket ?? PROJECT_COVER_UPLOAD_BUCKET;
+        const staleKeysByBucket = new Map<string, Set<string>>();
+        const addStale = (bucket: string, key: string | null | undefined) => {
+            if (!key || (bucket === keepBucket && key === params.keepStorageKey)) return;
+            const existing = staleKeysByBucket.get(bucket) ?? new Set<string>();
+            existing.add(key);
+            staleKeysByBucket.set(bucket, existing);
+        };
+
+        addStale(params.previousBucket ?? PROJECT_COVER_UPLOAD_BUCKET, params.previousStorageKey);
+        addStale(
+            PROJECT_COVER_UPLOAD_BUCKET,
+            projectCoverStorageKeyFromPublicUrl(params.previousCoverImage, params.userId, params.projectId, PROJECT_COVER_UPLOAD_BUCKET),
         );
-        if (previousKey && previousKey !== params.keepStorageKey) {
-            staleKeys.add(previousKey);
-        }
+        addStale(
+            LEGACY_PROJECT_COVER_UPLOAD_BUCKET,
+            projectCoverStorageKeyFromPublicUrl(params.previousCoverImage, params.userId, params.projectId, LEGACY_PROJECT_COVER_UPLOAD_BUCKET),
+        );
+
+        const foldersByBucket = new Map<string, string[]>([
+            [PROJECT_COVER_UPLOAD_BUCKET, [`projects/${params.projectId}/project-images/${params.userId}`]],
+            [LEGACY_PROJECT_COVER_UPLOAD_BUCKET, PROJECT_IMAGE_STORAGE_FOLDERS.map((folder) => `${params.userId}/${folder}/${params.projectId}`)],
+        ]);
 
         const pageSize = 100;
-        for (const folder of folders) {
-            let offset = 0;
-            while (true) {
-                const { data: existingObjects, error: listError } = await admin.storage
-                    .from(PROJECT_COVER_UPLOAD_BUCKET)
-                    .list(folder, { limit: pageSize, offset });
+        for (const [bucket, folders] of foldersByBucket) {
+            for (const folder of folders) {
+                let offset = 0;
+                while (true) {
+                    const { data: existingObjects, error: listError } = await admin.storage
+                        .from(bucket)
+                        .list(folder, { limit: pageSize, offset });
 
-                if (listError) {
-                    logger.warn('project.cover_cleanup_list_failed', {
-                        module: 'projects',
-                        projectId: params.projectId,
-                        userId: params.userId,
-                        folder,
-                        error: listError.message,
-                    });
-                    break;
-                }
-
-                if (!existingObjects || existingObjects.length === 0) {
-                    break;
-                }
-
-                for (const object of existingObjects) {
-                    if (!object.name) continue;
-                    const key = `${folder}/${object.name}`;
-                    if (key !== params.keepStorageKey) {
-                        staleKeys.add(key);
+                    if (listError) {
+                        logger.warn('project.cover_cleanup_list_failed', {
+                            module: 'projects',
+                            projectId: params.projectId,
+                            userId: params.userId,
+                            bucket,
+                            folder,
+                            error: listError.message,
+                        });
+                        break;
                     }
-                }
 
-                if (existingObjects.length < pageSize) {
-                    break;
+                    if (!existingObjects || existingObjects.length === 0) {
+                        break;
+                    }
+
+                    for (const object of existingObjects) {
+                        if (!object.name) continue;
+                        addStale(bucket, `${folder}/${object.name}`);
+                    }
+
+                    if (existingObjects.length < pageSize) {
+                        break;
+                    }
+                    offset += pageSize;
                 }
-                offset += pageSize;
             }
         }
 
-        if (staleKeys.size === 0) {
+        let staleCount = 0;
+        for (const keys of staleKeysByBucket.values()) staleCount += keys.size;
+        if (staleCount === 0) {
             return { removed: 0 };
         }
 
-        const { data: removed, error: removeError } = await admin.storage
-            .from(PROJECT_COVER_UPLOAD_BUCKET)
-            .remove(Array.from(staleKeys));
+        let removedCount = 0;
+        for (const [bucket, keys] of staleKeysByBucket) {
+            if (keys.size === 0) continue;
+            const { data: removed, error: removeError } = await admin.storage
+                .from(bucket)
+                .remove(Array.from(keys));
 
-        if (removeError) {
-            logger.error('project.cover_cleanup_failed', {
-                module: 'projects',
-                projectId: params.projectId,
-                userId: params.userId,
-                count: staleKeys.size,
-                error: removeError.message,
-            });
-            return { removed: 0, error: removeError.message };
+            if (removeError) {
+                logger.error('project.cover_cleanup_failed', {
+                    module: 'projects',
+                    projectId: params.projectId,
+                    userId: params.userId,
+                    bucket,
+                    count: keys.size,
+                    error: removeError.message,
+                });
+                continue;
+            }
+            removedCount += removed?.length ?? keys.size;
         }
 
-        return { removed: removed?.length ?? staleKeys.size };
+        return { removed: removedCount };
     } catch (error) {
         logger.error('project.cover_cleanup_unexpected_failed', {
             module: 'projects',
@@ -224,6 +287,73 @@ async function cleanupProjectCoverImages(params: {
         });
         return { removed: 0, error: 'Cleanup failed' };
     }
+}
+
+async function migrateLegacyProjectImageToManagedStorage(params: {
+    projectId: string;
+    userId: string;
+    coverImage: string | null;
+    coverImageBucket?: string | null;
+    coverImageKey?: string | null;
+}) {
+    if (params.coverImageBucket && params.coverImageKey) {
+        return {
+            bucket: params.coverImageBucket,
+            key: params.coverImageKey,
+            url: buildProjectImageRoute(params.projectId),
+            migrated: false,
+        };
+    }
+
+    const legacyKey =
+        projectCoverStorageKeyFromPublicUrl(params.coverImage, params.userId, params.projectId, LEGACY_PROJECT_COVER_UPLOAD_BUCKET)
+        ?? projectCoverStorageKeyFromPublicUrl(params.coverImage, params.userId, params.projectId, PROJECT_COVER_UPLOAD_BUCKET);
+    const legacyBucket = projectCoverStorageKeyFromPublicUrl(params.coverImage, params.userId, params.projectId, LEGACY_PROJECT_COVER_UPLOAD_BUCKET)
+        ? LEGACY_PROJECT_COVER_UPLOAD_BUCKET
+        : legacyKey
+            ? PROJECT_COVER_UPLOAD_BUCKET
+            : null;
+    if (!legacyKey || !legacyBucket) return null;
+
+    const extension = legacyKey.split('.').pop()?.toLowerCase() || 'bin';
+    const nextKey = `projects/${params.projectId}/project-images/${params.userId}/${Date.now()}-${randomUUID()}.${extension}`;
+    const admin = await createAdminClient();
+    const { data: file, error: downloadError } = await admin.storage.from(legacyBucket).download(legacyKey);
+    if (downloadError || !file) {
+        logger.warn('project.cover_migration_download_failed', {
+            module: 'projects',
+            projectId: params.projectId,
+            userId: params.userId,
+            bucket: legacyBucket,
+            error: downloadError?.message || 'Missing file',
+        });
+        return null;
+    }
+
+    const { error: uploadError } = await admin.storage
+        .from(PROJECT_COVER_UPLOAD_BUCKET)
+        .upload(nextKey, file, {
+            upsert: false,
+            contentType: file.type || undefined,
+        });
+    if (uploadError) {
+        logger.warn('project.cover_migration_upload_failed', {
+            module: 'projects',
+            projectId: params.projectId,
+            userId: params.userId,
+            error: uploadError.message,
+        });
+        return null;
+    }
+
+    return {
+        bucket: PROJECT_COVER_UPLOAD_BUCKET,
+        key: nextKey,
+        url: buildProjectImageRoute(params.projectId),
+        migrated: true,
+        previousBucket: legacyBucket,
+        previousKey: legacyKey,
+    };
 }
 
 let sprintDescriptionColumnSupport: boolean | null = null;
@@ -271,6 +401,40 @@ const revalidateProjectPaths = async (projectId: string) => {
         // Ignore slug revalidation errors on legacy schemas.
     }
 };
+
+export async function invalidateProjectPublicCaches(projectId: string) {
+    const feed = await invalidatePublicProjectsFeedCache(projectId);
+    revalidatePath('/hub');
+    revalidateTag(PUBLIC_PROJECT_DETAIL_SHELL_CACHE_TAG, 'max');
+    revalidateTag(PUBLIC_PROJECT_DETAIL_METADATA_CACHE_TAG, 'max');
+    return feed;
+}
+
+function buildAccessConfirmationToken(input: {
+    projectId: string;
+    previousVisibility: ProjectVisibility;
+    nextVisibility: ProjectVisibility;
+    membersCount: number;
+    followersCount: number;
+    openRolesCount: number;
+    pendingApplicationsCount: number;
+    activeTasksCount: number;
+    hasManagedProjectImage: boolean;
+}) {
+    return createHash('sha256')
+        .update([
+            input.projectId,
+            input.previousVisibility,
+            input.nextVisibility,
+            input.membersCount,
+            input.followersCount,
+            input.openRolesCount,
+            input.pendingApplicationsCount,
+            input.activeTasksCount,
+            input.hasManagedProjectImage ? 'image:managed' : 'image:none-or-legacy',
+        ].join(':'))
+        .digest('hex');
+}
 
 async function lockProjectUserPair(tx: any, projectId: string, userId: string) {
     await tx.execute(sql`
@@ -1550,10 +1714,7 @@ export async function updateProject(projectId: string, data: any) {
         if (raw.title !== undefined) updateValues.title = raw.title;
         if (raw.description !== undefined) updateValues.description = raw.description;
         if (raw.visibility !== undefined) {
-            if (!isProjectVisibility(raw.visibility)) {
-                throw new Error('Invalid project visibility.');
-            }
-            updateValues.visibility = raw.visibility;
+            throw new Error('Project visibility must be changed from Access settings.');
         }
         if (raw.status !== undefined) updateValues.status = raw.status;
         const nextCoverImage = raw.coverImage !== undefined
@@ -1561,7 +1722,13 @@ export async function updateProject(projectId: string, data: any) {
             : raw.cover_image !== undefined
                 ? raw.cover_image
                 : undefined;
-        if (nextCoverImage !== undefined) updateValues.coverImage = nextCoverImage;
+        if (nextCoverImage !== undefined) {
+            updateValues.coverImage = nextCoverImage;
+            if (nextCoverImage === null) {
+                updateValues.coverImageBucket = null;
+                updateValues.coverImageKey = null;
+            }
+        }
 
         // Tagline
         if (raw.shortDescription !== undefined) updateValues.shortDescription = raw.shortDescription;
@@ -1684,6 +1851,7 @@ export async function updateProject(projectId: string, data: any) {
         }
         revalidatePath(`/projects/${slug}`);
         revalidatePath(`/projects/${id}`);
+        await invalidateProjectPublicCaches(id);
         return { success };
     });
 }
@@ -1731,7 +1899,7 @@ export async function createProjectCoverImageUploadUrlAction(input: {
             'Project image',
         );
         const extension = projectCoverExtensionFromMimeType(normalizedMimeType);
-        const storagePath = `${user.id}/project-images/${input.projectId}/${Date.now()}-${randomUUID()}.${extension}`;
+        const storagePath = `projects/${input.projectId}/project-images/${user.id}/${Date.now()}-${randomUUID()}.${extension}`;
         const intent = await createUploadIntent({
             userId: user.id,
             projectId: input.projectId,
@@ -1803,15 +1971,14 @@ export async function finalizeProjectCoverImageUploadAction(input: {
             expectedScope: 'profile_image',
             expectedKind: 'banner',
         });
-        const admin = await createAdminClient();
-        const { data: { publicUrl } } = admin.storage
-            .from(PROJECT_COVER_UPLOAD_BUCKET)
-            .getPublicUrl(intent.storageKey);
+        const imageUrl = buildProjectImageRoute(input.projectId);
 
         const [updated] = await db
             .update(projects)
             .set({
-                coverImage: publicUrl,
+                coverImage: imageUrl,
+                coverImageBucket: PROJECT_COVER_UPLOAD_BUCKET,
+                coverImageKey: intent.storageKey,
                 updatedAt: new Date(),
             })
             .where(and(eq(projects.id, input.projectId), eq(projects.ownerId, user.id)))
@@ -1825,14 +1992,18 @@ export async function finalizeProjectCoverImageUploadAction(input: {
             userId: user.id,
             projectId: input.projectId,
             keepStorageKey: intent.storageKey,
+            keepBucket: PROJECT_COVER_UPLOAD_BUCKET,
+            previousBucket: project.coverImageBucket,
+            previousStorageKey: project.coverImageKey,
             previousCoverImage: project.coverImage,
         });
 
         await revalidateProjectPaths(input.projectId);
+        await invalidateProjectPublicCaches(input.projectId);
 
         return {
             success: true,
-            publicUrl,
+            publicUrl: imageUrl,
             storagePath: intent.storageKey,
             uploadIntentId: intent.id,
             removedPreviousImages: cleanup.removed,
@@ -1868,6 +2039,8 @@ export async function clearProjectCoverImageAction(projectId: string): Promise<
             .update(projects)
             .set({
                 coverImage: null,
+                coverImageBucket: null,
+                coverImageKey: null,
                 updatedAt: new Date(),
             })
             .where(and(eq(projects.id, projectId), eq(projects.ownerId, user.id)))
@@ -1881,10 +2054,14 @@ export async function clearProjectCoverImageAction(projectId: string): Promise<
             userId: user.id,
             projectId,
             keepStorageKey: null,
+            keepBucket: null,
+            previousBucket: project.coverImageBucket,
+            previousStorageKey: project.coverImageKey,
             previousCoverImage: project.coverImage,
         });
 
         await revalidateProjectPaths(projectId);
+        await invalidateProjectPublicCaches(projectId);
 
         return { success: true, removedPreviousImages: cleanup.removed };
     } catch (error) {
@@ -1922,6 +2099,125 @@ type ProjectDangerZonePreflightResult =
     }
     | { success: false; message: string; errorCode: ProjectSettingsErrorCode };
 
+type ProjectAccessImpactResult =
+    | {
+        success: true;
+        data: {
+            membersCount: number;
+            followersCount: number;
+            openRolesCount: number;
+            pendingApplicationsCount: number;
+            activeTasksCount: number;
+        };
+    }
+    | { success: false; message: string; errorCode: ProjectSettingsErrorCode };
+
+type ProjectAccessTransitionPreflightResult =
+    | {
+        success: true;
+        data: {
+            previousVisibility: ProjectVisibility;
+            nextVisibility: ProjectVisibility;
+            confirmationToken: string;
+            policy: ReturnType<typeof buildProjectAccessTransitionPolicy>;
+            counts: {
+                membersCount: number;
+                followersCount: number;
+                openRolesCount: number;
+                pendingApplicationsCount: number;
+                activeTasksCount: number;
+            };
+            previews: AccessTransitionPreview;
+        };
+    }
+    | { success: false; message: string; errorCode: ProjectSettingsErrorCode };
+
+type ProjectSettingsAuditResult =
+    | {
+        success: true;
+        data: Array<{
+            id: string;
+            type: string;
+            createdAt: string;
+            actorName: string | null;
+            metadata: Record<string, unknown>;
+        }>;
+    }
+    | { success: false; message: string; errorCode: ProjectSettingsErrorCode };
+
+type ProjectCollaboratorRole = 'owner' | 'admin' | 'member' | 'viewer';
+
+type ProjectCollaboratorSettingsResult =
+    | {
+        success: true;
+        data: {
+            members: Array<{
+                id: string;
+                username: string | null;
+                fullName: string | null;
+                avatarUrl: string | null;
+                membershipRole: ProjectCollaboratorRole;
+                projectRoleTitle: string | null;
+                joinedAt: string | null;
+                responsibilityCounts: {
+                    activeAssignedTasks: number;
+                    activeCreatedTasks: number;
+                    fileReviews: number;
+                    acceptedApplications: number;
+                    projectGroupParticipant: boolean;
+                };
+            }>;
+            roleCounts: Record<ProjectCollaboratorRole, number>;
+            hasMore: boolean;
+            nextCursor: string | null;
+        };
+    }
+    | { success: false; message: string; errorCode: ProjectSettingsErrorCode };
+
+type ProjectCollaboratorSettingsOptions = {
+    limit?: number;
+    cursor?: string | null;
+    query?: string | null;
+    roleFilter?: ProjectCollaboratorRole | 'all' | null;
+};
+
+type ProjectMemberRemovalPreflightResult =
+    | {
+        success: true;
+        data: {
+            member: {
+                id: string;
+                username: string | null;
+                fullName: string | null;
+                avatarUrl: string | null;
+                membershipRole: ProjectCollaboratorRole;
+                projectRoleTitle: string | null;
+            };
+            activeAssignedTasks: number;
+            activeCreatedTasks: number;
+            fileReviews: number;
+            acceptedApplications: number;
+            projectGroupParticipant: boolean;
+            visibility: ProjectVisibility;
+            activeAssignedTaskItems: Array<{ id: string; title: string; taskNumber: number | null; status: string | null }>;
+            activeCreatedTaskItems: Array<{ id: string; title: string; taskNumber: number | null; status: string | null }>;
+            fileReviewItems: Array<{ id: string; taskId: string; taskTitle: string | null; nodeName: string | null; annotation: string | null }>;
+            acceptedApplicationItems: Array<{ id: string; roleId: string; roleTitle: string | null; roleName: string | null }>;
+            reassignmentCandidates: Array<{
+                id: string;
+                username: string | null;
+                fullName: string | null;
+                avatarUrl: string | null;
+                membershipRole: ProjectCollaboratorRole;
+            }>;
+        };
+    }
+    | { success: false; message: string; errorCode: ProjectSettingsErrorCode };
+
+type ProjectMemberMutationResult =
+    | { success: true; message: string }
+    | { success: false; message: string; errorCode: ProjectSettingsErrorCode | 'INVALID_ROLE' | 'OWNER_TARGET' | 'NOT_A_MEMBER' };
+
 const projectSettingsPatchSchema = z.object({
     visibility: z.enum(['public', 'private']).optional(),
     lookingForCollaborators: z.boolean().optional(),
@@ -1935,6 +2231,10 @@ async function loadOwnedProjectForSettings(projectId: string, userId: string) {
             ownerId: projects.ownerId,
             slug: projects.slug,
             status: projects.status,
+            visibility: projects.visibility,
+            coverImage: projects.coverImage,
+            coverImageBucket: projects.coverImageBucket,
+            coverImageKey: projects.coverImageKey,
         })
         .from(projects)
         .where(eq(projects.id, projectId))
@@ -1973,11 +2273,18 @@ export async function updateProjectSettingsAction(
         if (!owned.ok) return { success: false, errorCode: owned.errorCode, message: owned.message };
 
         const data = parsed.data;
+        if (data.visibility !== undefined) {
+            return {
+                success: false,
+                errorCode: 'INVALID_INPUT',
+                message: 'Project visibility must be changed from Access settings.',
+            };
+        }
+
         const updateValues: Partial<typeof projects.$inferInsert> & { updatedAt: Date } = {
             updatedAt: new Date(),
         };
 
-        if (data.visibility !== undefined) updateValues.visibility = data.visibility;
         if (data.lookingForCollaborators !== undefined) {
             updateValues.lookingForCollaborators = data.lookingForCollaborators;
         }
@@ -1990,13 +2297,19 @@ export async function updateProjectSettingsAction(
             return { success: true, message: 'No settings changes to save.' };
         }
 
-        await db.update(projects).set(updateValues).where(eq(projects.id, projectId));
+        const previousVisibility = normalizeProjectVisibility(owned.project.visibility);
+
+        await db.transaction(async (tx) => {
+            await tx.update(projects).set(updateValues).where(eq(projects.id, projectId));
+        });
         await revalidateProjectPaths(projectId);
 
         logger.metric('project.settings.update.result', {
             projectId,
             userId: user.id,
             result: 'success',
+            visibilityChanged: false,
+            nextVisibility: previousVisibility,
         });
 
         return { success: true, message: 'Project settings updated.' };
@@ -2008,6 +2321,889 @@ export async function updateProjectSettingsAction(
             errorCode: 'INTERNAL_ERROR',
         });
         return { success: false, errorCode: 'INTERNAL_ERROR', message: 'Failed to update project settings.' };
+    }
+}
+
+async function readProjectAccessImpactCounts(projectId: string) {
+    const [membersRow, followersRow, openRolesRow, pendingAppsRow, activeTasksRow] = await Promise.all([
+        db
+            .select({ count: sql<number>`count(*)::int` })
+            .from(projectMembers)
+            .where(eq(projectMembers.projectId, projectId))
+            .limit(1),
+        db
+            .select({ count: sql<number>`count(*)::int` })
+            .from(projectFollows)
+            .where(eq(projectFollows.projectId, projectId))
+            .limit(1),
+        db
+            .select({ count: sql<number>`count(*)::int` })
+            .from(projectOpenRoles)
+            .where(eq(projectOpenRoles.projectId, projectId))
+            .limit(1),
+        db
+            .select({ count: sql<number>`count(*)::int` })
+            .from(roleApplications)
+            .where(and(eq(roleApplications.projectId, projectId), eq(roleApplications.status, 'pending')))
+            .limit(1),
+        db
+            .select({ count: sql<number>`count(*)::int` })
+            .from(tasks)
+            .where(and(eq(tasks.projectId, projectId), isNull(tasks.deletedAt), sql`${tasks.status} <> 'done'`))
+            .limit(1),
+    ]);
+
+    return {
+        membersCount: Number(membersRow[0]?.count ?? 0),
+        followersCount: Number(followersRow[0]?.count ?? 0),
+        openRolesCount: Number(openRolesRow[0]?.count ?? 0),
+        pendingApplicationsCount: Number(pendingAppsRow[0]?.count ?? 0),
+        activeTasksCount: Number(activeTasksRow[0]?.count ?? 0),
+    };
+}
+
+async function readProjectAccessTransitionPreviews(projectId: string): Promise<AccessTransitionPreview> {
+    const [followers, openRoles, pendingApplications] = await Promise.all([
+        db
+            .select({
+                id: profiles.id,
+                username: profiles.username,
+                fullName: profiles.fullName,
+                avatarUrl: profiles.avatarUrl,
+            })
+            .from(projectFollows)
+            .innerJoin(profiles, eq(profiles.id, projectFollows.userId))
+            .where(eq(projectFollows.projectId, projectId))
+            .orderBy(desc(projectFollows.createdAt))
+            .limit(6),
+        db
+            .select({
+                id: projectOpenRoles.id,
+                title: projectOpenRoles.title,
+                role: projectOpenRoles.role,
+            })
+            .from(projectOpenRoles)
+            .where(eq(projectOpenRoles.projectId, projectId))
+            .orderBy(desc(projectOpenRoles.createdAt))
+            .limit(6),
+        db
+            .select({
+                id: roleApplications.id,
+                applicantId: roleApplications.applicantId,
+                applicantName: sql<string | null>`coalesce(${profiles.fullName}, ${profiles.username})`,
+                roleTitle: projectOpenRoles.title,
+                roleName: projectOpenRoles.role,
+            })
+            .from(roleApplications)
+            .leftJoin(profiles, eq(profiles.id, roleApplications.applicantId))
+            .leftJoin(projectOpenRoles, eq(projectOpenRoles.id, roleApplications.roleId))
+            .where(and(eq(roleApplications.projectId, projectId), eq(roleApplications.status, 'pending')))
+            .orderBy(desc(roleApplications.updatedAt))
+            .limit(6),
+    ]);
+
+    return { followers, openRoles, pendingApplications };
+}
+
+function buildAccessPreflightPayload(params: {
+    projectId: string;
+    previousVisibility: ProjectVisibility;
+    nextVisibility: ProjectVisibility;
+    hasManagedProjectImage: boolean;
+    counts: Awaited<ReturnType<typeof readProjectAccessImpactCounts>>;
+    previews: AccessTransitionPreview;
+}) {
+    const policy = buildProjectAccessTransitionPolicy({
+        previousVisibility: params.previousVisibility,
+        nextVisibility: params.nextVisibility,
+        hasManagedProjectImage: params.hasManagedProjectImage,
+        ...params.counts,
+    });
+    const confirmationToken = buildAccessConfirmationToken({
+        projectId: params.projectId,
+        previousVisibility: params.previousVisibility,
+        nextVisibility: params.nextVisibility,
+        hasManagedProjectImage: params.hasManagedProjectImage,
+        ...params.counts,
+    });
+
+    return {
+        previousVisibility: params.previousVisibility,
+        nextVisibility: params.nextVisibility,
+        confirmationToken,
+        policy,
+        counts: params.counts,
+        previews: params.previews,
+    };
+}
+
+export async function getProjectAccessTransitionPreflightAction(
+    projectId: string,
+    nextVisibility: ProjectVisibility,
+): Promise<ProjectAccessTransitionPreflightResult> {
+    try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+            return { success: false, errorCode: 'UNAUTHORIZED', message: 'You must be signed in.' };
+        }
+        if (!isProjectVisibility(nextVisibility)) {
+            return { success: false, errorCode: 'INVALID_INPUT', message: 'Choose Public or Private.' };
+        }
+
+        const owned = await loadOwnedProjectForSettings(projectId, user.id);
+        if (!owned.ok) return { success: false, errorCode: owned.errorCode, message: owned.message };
+
+        const [counts, previews] = await Promise.all([
+            readProjectAccessImpactCounts(projectId),
+            readProjectAccessTransitionPreviews(projectId),
+        ]);
+
+        return {
+            success: true,
+            data: buildAccessPreflightPayload({
+                projectId,
+                previousVisibility: normalizeProjectVisibility(owned.project.visibility),
+                nextVisibility,
+                hasManagedProjectImage: Boolean(owned.project.coverImageBucket && owned.project.coverImageKey),
+                counts,
+                previews,
+            }),
+        };
+    } catch (error) {
+        logger.error('project.access_preflight_failed', {
+            module: 'projects',
+            projectId,
+            error: error instanceof Error ? error.message : String(error),
+        });
+        return { success: false, errorCode: 'INTERNAL_ERROR', message: 'Failed to prepare access transition.' };
+    }
+}
+
+export async function updateProjectVisibilityAction(
+    projectId: string,
+    nextVisibility: ProjectVisibility,
+    confirmationToken: string,
+): Promise<ProjectSettingsMutationResult> {
+    try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+            return { success: false, errorCode: 'UNAUTHORIZED', message: 'You must be signed in.' };
+        }
+        if (!isProjectVisibility(nextVisibility)) {
+            return { success: false, errorCode: 'INVALID_INPUT', message: 'Choose Public or Private.' };
+        }
+
+        const owned = await loadOwnedProjectForSettings(projectId, user.id);
+        if (!owned.ok) return { success: false, errorCode: owned.errorCode, message: owned.message };
+
+        const previousVisibility = normalizeProjectVisibility(owned.project.visibility);
+        if (previousVisibility === nextVisibility) {
+            return { success: true, message: `Project is already ${nextVisibility}.` };
+        }
+
+        const [counts, previews] = await Promise.all([
+            readProjectAccessImpactCounts(projectId),
+            readProjectAccessTransitionPreviews(projectId),
+        ]);
+        const preflight = buildAccessPreflightPayload({
+            projectId,
+            previousVisibility,
+            nextVisibility,
+            hasManagedProjectImage: Boolean(owned.project.coverImageBucket && owned.project.coverImageKey),
+            counts,
+            previews,
+        });
+
+        if (!confirmationToken || confirmationToken !== preflight.confirmationToken) {
+            return { success: false, errorCode: 'INVALID_INPUT', message: 'Access confirmation expired. Review the impact and try again.' };
+        }
+
+        const imageMigration = nextVisibility === 'private'
+            ? await migrateLegacyProjectImageToManagedStorage({
+                projectId,
+                userId: user.id,
+                coverImage: owned.project.coverImage,
+                coverImageBucket: owned.project.coverImageBucket,
+                coverImageKey: owned.project.coverImageKey,
+            })
+            : null;
+
+        await db.transaction(async (tx) => {
+            await tx
+                .update(projects)
+                .set({
+                    visibility: nextVisibility,
+                    ...(imageMigration
+                        ? {
+                            coverImage: imageMigration.url,
+                            coverImageBucket: imageMigration.bucket,
+                            coverImageKey: imageMigration.key,
+                        }
+                        : {}),
+                    updatedAt: new Date(),
+                })
+                .where(and(eq(projects.id, projectId), eq(projects.ownerId, user.id)));
+
+            await tx.insert(projectNodeEvents).values({
+                projectId,
+                actorId: user.id,
+                nodeId: null,
+                type: 'project_settings.visibility_changed',
+                metadata: {
+                    previousVisibility,
+                    nextVisibility,
+                    source: 'project_settings_access',
+                    confirmationSummary: preflight.policy.confirmationSummary,
+                    affectedCounts: counts,
+                    previewIds: {
+                        followers: previews.followers.map((row) => row.id),
+                        openRoles: previews.openRoles.map((row) => row.id),
+                        pendingApplications: previews.pendingApplications.map((row) => row.id),
+                    },
+                    imagePrivacyAction: imageMigration?.migrated ? 'migrated_to_private_route' : imageMigration ? 'managed_private_route_confirmed' : 'none',
+                },
+                createdAt: new Date(),
+            });
+        });
+
+        if (imageMigration?.migrated) {
+            await cleanupProjectCoverImages({
+                userId: user.id,
+                projectId,
+                keepStorageKey: imageMigration.key,
+                keepBucket: imageMigration.bucket,
+                previousBucket: imageMigration.previousBucket,
+                previousStorageKey: imageMigration.previousKey,
+                previousCoverImage: owned.project.coverImage,
+            });
+        }
+
+        await revalidateProjectPaths(projectId);
+        await invalidateProjectPublicCaches(projectId);
+
+        logger.metric('project.access_visibility.update', {
+            projectId,
+            userId: user.id,
+            previousVisibility,
+            nextVisibility,
+            result: 'success',
+        });
+
+        return { success: true, message: `Project is now ${nextVisibility}.` };
+    } catch (error) {
+        logger.error('project.access_visibility_failed', {
+            module: 'projects',
+            projectId,
+            nextVisibility,
+            error: error instanceof Error ? error.message : String(error),
+        });
+        return { success: false, errorCode: 'INTERNAL_ERROR', message: 'Failed to update project visibility.' };
+    }
+}
+
+export async function getProjectAccessImpactAction(projectId: string): Promise<ProjectAccessImpactResult> {
+    try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+            return { success: false, errorCode: 'UNAUTHORIZED', message: 'You must be signed in.' };
+        }
+
+        const owned = await loadOwnedProjectForSettings(projectId, user.id);
+        if (!owned.ok) return { success: false, errorCode: owned.errorCode, message: owned.message };
+
+        return {
+            success: true,
+            data: await readProjectAccessImpactCounts(projectId),
+        };
+    } catch (error) {
+        console.error('Failed to load project access impact:', error);
+        return { success: false, errorCode: 'INTERNAL_ERROR', message: 'Failed to load access impact.' };
+    }
+}
+
+export async function getProjectSettingsAuditAction(projectId: string): Promise<ProjectSettingsAuditResult> {
+    try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+            return { success: false, errorCode: 'UNAUTHORIZED', message: 'You must be signed in.' };
+        }
+
+        const owned = await loadOwnedProjectForSettings(projectId, user.id);
+        if (!owned.ok) return { success: false, errorCode: owned.errorCode, message: owned.message };
+
+        const rows = await db
+            .select({
+                id: projectNodeEvents.id,
+                type: projectNodeEvents.type,
+                createdAt: projectNodeEvents.createdAt,
+                metadata: projectNodeEvents.metadata,
+                username: profiles.username,
+                fullName: profiles.fullName,
+            })
+            .from(projectNodeEvents)
+            .leftJoin(profiles, eq(projectNodeEvents.actorId, profiles.id))
+            .where(and(
+                eq(projectNodeEvents.projectId, projectId),
+                isNull(projectNodeEvents.nodeId),
+                or(
+                    sql`${projectNodeEvents.type} LIKE 'project_settings.%'`,
+                    sql`${projectNodeEvents.type} LIKE 'project_member.%'`,
+                ),
+            ))
+            .orderBy(desc(projectNodeEvents.createdAt))
+            .limit(12);
+
+        return {
+            success: true,
+            data: rows.map((row) => ({
+                id: row.id,
+                type: row.type,
+                createdAt: row.createdAt.toISOString(),
+                actorName: row.fullName || row.username || null,
+                metadata: (row.metadata as Record<string, unknown> | null) ?? {},
+            })),
+        };
+    } catch (error) {
+        console.error('Failed to load project settings audit:', error);
+        return { success: false, errorCode: 'INTERNAL_ERROR', message: 'Failed to load settings audit.' };
+    }
+}
+
+function normalizeCollaboratorRole(value: unknown, fallback: ProjectCollaboratorRole = 'member'): ProjectCollaboratorRole {
+    return value === 'owner' || value === 'admin' || value === 'member' || value === 'viewer' ? value : fallback;
+}
+
+function collaboratorRoleLabel(role: ProjectCollaboratorRole) {
+    if (role === 'admin') return 'Co-leader';
+    return role.slice(0, 1).toUpperCase() + role.slice(1);
+}
+
+async function readProjectCollaboratorResponsibilityCounts(projectId: string, memberIds: string[], conversationId?: string | null) {
+    const initial = new Map<string, {
+        activeAssignedTasks: number;
+        activeCreatedTasks: number;
+        fileReviews: number;
+        acceptedApplications: number;
+        projectGroupParticipant: boolean;
+    }>();
+    for (const memberId of memberIds) {
+        initial.set(memberId, {
+            activeAssignedTasks: 0,
+            activeCreatedTasks: 0,
+            fileReviews: 0,
+            acceptedApplications: 0,
+            projectGroupParticipant: false,
+        });
+    }
+    if (memberIds.length === 0) return initial;
+
+    const [assignedRows, createdRows, fileReviewRows, acceptedRows, participantRows] = await Promise.all([
+        db
+            .select({ userId: tasks.assigneeId, count: sql<number>`count(*)::int` })
+            .from(tasks)
+            .where(and(
+                eq(tasks.projectId, projectId),
+                isNull(tasks.deletedAt),
+                sql`${tasks.status} <> 'done'`,
+                inArray(tasks.assigneeId, memberIds),
+            ))
+            .groupBy(tasks.assigneeId),
+        db
+            .select({ userId: tasks.creatorId, count: sql<number>`count(*)::int` })
+            .from(tasks)
+            .where(and(
+                eq(tasks.projectId, projectId),
+                isNull(tasks.deletedAt),
+                sql`${tasks.status} <> 'done'`,
+                inArray(tasks.creatorId, memberIds),
+            ))
+            .groupBy(tasks.creatorId),
+        db
+            .select({ userId: taskNodeLinks.createdBy, count: sql<number>`count(*)::int` })
+            .from(taskNodeLinks)
+            .innerJoin(tasks, eq(taskNodeLinks.taskId, tasks.id))
+            .innerJoin(projectNodes, eq(taskNodeLinks.nodeId, projectNodes.id))
+            .where(and(
+                eq(tasks.projectId, projectId),
+                isNull(tasks.deletedAt),
+                isNull(projectNodes.deletedAt),
+                inArray(taskNodeLinks.createdBy, memberIds),
+                sql`lower(coalesce(${taskNodeLinks.annotation}, '')) like '%review%'`,
+            ))
+            .groupBy(taskNodeLinks.createdBy),
+        db
+            .select({ userId: roleApplications.applicantId, count: sql<number>`count(*)::int` })
+            .from(roleApplications)
+            .where(and(
+                eq(roleApplications.projectId, projectId),
+                eq(roleApplications.status, 'accepted'),
+                inArray(roleApplications.applicantId, memberIds),
+            ))
+            .groupBy(roleApplications.applicantId),
+        conversationId
+            ? db
+                .select({ userId: conversationParticipants.userId })
+                .from(conversationParticipants)
+                .where(and(
+                    eq(conversationParticipants.conversationId, conversationId),
+                    inArray(conversationParticipants.userId, memberIds),
+                ))
+            : Promise.resolve([]),
+    ]);
+
+    const patchCount = (userId: string | null, key: 'activeAssignedTasks' | 'activeCreatedTasks' | 'fileReviews' | 'acceptedApplications', count: number) => {
+        if (!userId) return;
+        const current = initial.get(userId);
+        if (current) current[key] = Number(count ?? 0);
+    };
+    for (const row of assignedRows) patchCount(row.userId, 'activeAssignedTasks', row.count);
+    for (const row of createdRows) patchCount(row.userId, 'activeCreatedTasks', row.count);
+    for (const row of fileReviewRows) patchCount(row.userId, 'fileReviews', row.count);
+    for (const row of acceptedRows) patchCount(row.userId, 'acceptedApplications', row.count);
+    for (const row of participantRows) {
+        const current = initial.get(row.userId);
+        if (current) current.projectGroupParticipant = true;
+    }
+    return initial;
+}
+
+async function readAcceptedRoleTitles(projectId: string, memberIds: string[]) {
+    if (memberIds.length === 0) return new Map<string, string>();
+    const rows = await db
+        .select({
+            applicantId: roleApplications.applicantId,
+            roleTitle: projectOpenRoles.title,
+            roleName: projectOpenRoles.role,
+        })
+        .from(roleApplications)
+        .leftJoin(projectOpenRoles, eq(projectOpenRoles.id, roleApplications.roleId))
+        .where(and(
+            eq(roleApplications.projectId, projectId),
+            eq(roleApplications.status, 'accepted'),
+            inArray(roleApplications.applicantId, memberIds),
+        ))
+        .orderBy(desc(roleApplications.updatedAt));
+
+    const roleByUser = new Map<string, string>();
+    for (const row of rows) {
+        if (roleByUser.has(row.applicantId)) continue;
+        const label = row.roleTitle || row.roleName || '';
+        if (label) roleByUser.set(row.applicantId, label);
+    }
+    return roleByUser;
+}
+
+export async function getProjectCollaboratorSettingsAction(
+    projectId: string,
+    optionsOrLimit: ProjectCollaboratorSettingsOptions | number = 40,
+    legacyCursor?: string,
+): Promise<ProjectCollaboratorSettingsResult> {
+    try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return { success: false, errorCode: 'UNAUTHORIZED', message: 'You must be signed in.' };
+
+        const capability = await requireProjectCapability(projectId, user.id, 'manage_collaborators');
+        const owned = {
+            ok: true as const,
+            project: {
+                id: capability.project.id,
+                ownerId: capability.project.ownerId,
+            },
+        };
+
+        const options = typeof optionsOrLimit === 'number'
+            ? { limit: optionsOrLimit, cursor: legacyCursor }
+            : optionsOrLimit;
+        const roleFilter = options.roleFilter && options.roleFilter !== 'all' ? options.roleFilter : null;
+        const query = options.query?.trim() ?? '';
+        const safeLimit = Math.min(Math.max(options.limit ?? 40, 1), 80);
+        const whereConditions: any[] = [eq(projectMembers.projectId, projectId)];
+        if (roleFilter) {
+            if (roleFilter === 'owner') {
+                whereConditions.push(eq(projectMembers.userId, owned.project.ownerId));
+            } else {
+                whereConditions.push(eq(projectMembers.role, roleFilter));
+                whereConditions.push(sql`${projectMembers.userId} <> ${owned.project.ownerId}`);
+            }
+        }
+        if (query) {
+            const likePattern = `%${query.replace(/[%_\\]/g, (ch) => `\\${ch}`)}%`;
+            whereConditions.push(or(
+                ilike(profiles.fullName, likePattern),
+                ilike(profiles.username, likePattern),
+            ));
+        }
+        if (options.cursor) {
+            try {
+                const decoded = Buffer.from(options.cursor, 'base64').toString('utf-8');
+                const [joinedAt, memberId] = decoded.split(':::');
+                if (joinedAt && memberId) {
+                    whereConditions.push(sql`(${projectMembers.joinedAt}, ${projectMembers.id}) < (${new Date(joinedAt)}, ${memberId})`);
+                }
+            } catch {
+                // Ignore invalid cursors and return the first page.
+            }
+        }
+
+        const [projectRow] = await db
+            .select({ conversationId: projects.conversationId })
+            .from(projects)
+            .where(eq(projects.id, projectId))
+            .limit(1);
+
+        const rows = await db
+            .select({
+                memberId: projectMembers.id,
+                userId: projectMembers.userId,
+                role: projectMembers.role,
+                joinedAt: projectMembers.joinedAt,
+                username: profiles.username,
+                fullName: profiles.fullName,
+                avatarUrl: profiles.avatarUrl,
+            })
+            .from(projectMembers)
+            .leftJoin(profiles, eq(profiles.id, projectMembers.userId))
+            .where(and(...whereConditions))
+            .orderBy(desc(projectMembers.joinedAt), desc(projectMembers.id))
+            .limit(safeLimit + 1);
+        const hasMore = rows.length > safeLimit;
+        let slice = rows.slice(0, safeLimit);
+        if (
+            !options.cursor &&
+            (!roleFilter || roleFilter === 'owner') &&
+            !slice.some((row) => row.userId === owned.project.ownerId)
+        ) {
+            const [ownerProfile] = await db
+                .select({
+                    id: profiles.id,
+                    username: profiles.username,
+                    fullName: profiles.fullName,
+                    avatarUrl: profiles.avatarUrl,
+                })
+                .from(profiles)
+                .where(eq(profiles.id, owned.project.ownerId))
+                .limit(1);
+            const matchesQuery = !query || [
+                ownerProfile?.fullName,
+                ownerProfile?.username,
+            ].filter(Boolean).some((value) => String(value).toLowerCase().includes(query.toLowerCase()));
+            if (ownerProfile?.id && matchesQuery) {
+                slice = [
+                    {
+                        memberId: `owner:${ownerProfile.id}`,
+                        userId: ownerProfile.id,
+                        role: 'owner' as ProjectCollaboratorRole,
+                        joinedAt: new Date(0),
+                        username: ownerProfile.username,
+                        fullName: ownerProfile.fullName,
+                        avatarUrl: ownerProfile.avatarUrl,
+                    },
+                    ...slice,
+                ].slice(0, safeLimit);
+            }
+        }
+        const last = slice[slice.length - 1];
+        const nextCursor = hasMore && last
+            ? Buffer.from(`${last.joinedAt.toISOString()}:::${last.memberId}`).toString('base64')
+            : null;
+
+        const memberIds = slice.map((row) => row.userId);
+        const [roleTitleByUser, responsibilityByUser, roleCountRows] = await Promise.all([
+            readAcceptedRoleTitles(projectId, memberIds),
+            readProjectCollaboratorResponsibilityCounts(projectId, memberIds, projectRow?.conversationId ?? null),
+            db
+                .select({ userId: projectMembers.userId, role: projectMembers.role })
+                .from(projectMembers)
+                .where(eq(projectMembers.projectId, projectId)),
+        ]);
+        const roleCounts: Record<ProjectCollaboratorRole, number> = { owner: 0, admin: 0, member: 0, viewer: 0 };
+        let ownerCounted = false;
+        for (const row of roleCountRows) {
+            const role = normalizeCollaboratorRole(row.role, row.userId === owned.project.ownerId ? 'owner' : 'member');
+            if (row.userId === owned.project.ownerId || role === 'owner') ownerCounted = true;
+            roleCounts[role] = (roleCounts[role] ?? 0) + 1;
+        }
+        if (!ownerCounted) roleCounts.owner = 1;
+
+        return {
+            success: true,
+            data: {
+                members: slice
+                    .filter((row) => row.userId)
+                    .map((row) => ({
+                        id: row.userId,
+                        username: row.username ?? null,
+                        fullName: row.fullName ?? null,
+                        avatarUrl: row.avatarUrl ?? null,
+                        membershipRole: normalizeCollaboratorRole(row.role, row.userId === owned.project.ownerId ? 'owner' : 'member'),
+                        projectRoleTitle: roleTitleByUser.get(row.userId) ?? null,
+                        joinedAt: row.joinedAt?.toISOString?.() ?? null,
+                        responsibilityCounts: responsibilityByUser.get(row.userId) ?? {
+                            activeAssignedTasks: 0,
+                            activeCreatedTasks: 0,
+                            fileReviews: 0,
+                            acceptedApplications: 0,
+                            projectGroupParticipant: false,
+                        },
+                    })),
+                roleCounts,
+                hasMore,
+                nextCursor,
+            },
+        };
+    } catch (error) {
+        console.error('Failed to load project collaborator settings:', error);
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.includes('Project not found')) {
+            return { success: false, errorCode: 'NOT_FOUND', message: 'Project not found.' };
+        }
+        if (message.includes('permission')) {
+            return { success: false, errorCode: 'FORBIDDEN', message: 'You do not have permission to manage collaborators.' };
+        }
+        return { success: false, errorCode: 'INTERNAL_ERROR', message: 'Failed to load collaborators.' };
+    }
+}
+
+export async function updateProjectMemberRoleAction(
+    projectId: string,
+    memberUserId: string,
+    nextRole: 'admin' | 'member' | 'viewer',
+): Promise<ProjectMemberMutationResult> {
+    try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return { success: false, errorCode: 'UNAUTHORIZED', message: 'You must be signed in.' };
+        if (!['admin', 'member', 'viewer'].includes(nextRole)) {
+            return { success: false, errorCode: 'INVALID_ROLE', message: 'Invalid collaborator role.' };
+        }
+
+        const result = await db.transaction(async (tx) => {
+            try {
+                const lifecycle = await changeProjectMemberRoleInternal(tx, {
+                    projectId,
+                    actorId: user.id,
+                    targetUserId: memberUserId,
+                    nextRole,
+                });
+                return { ok: true as const, lifecycle };
+            } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                if (message.includes('Project not found')) {
+                    return { ok: false as const, errorCode: 'NOT_FOUND' as const, message: 'Project not found.' };
+                }
+                if (message.includes('permission')) {
+                    return { ok: false as const, errorCode: 'FORBIDDEN' as const, message };
+                }
+                return { ok: false as const, errorCode: 'INTERNAL_ERROR' as const, message: 'Failed to update collaborator role.' };
+            }
+        });
+
+        if (!result.ok) {
+            return { success: false, errorCode: result.errorCode, message: result.message };
+        }
+        await revalidateProjectPaths(projectId);
+        if (result.lifecycle.changed) {
+            try {
+                await emitProjectRoleChangedNotification({
+                    recipientUserId: memberUserId,
+                    actorUserId: user.id,
+                    actorName: (user.user_metadata?.full_name as string | undefined) ?? (user.user_metadata?.username as string | undefined) ?? null,
+                    actorAvatarUrl: (user.user_metadata?.avatar_url as string | undefined) ?? null,
+                    projectId,
+                    projectSlug: result.lifecycle.project.slug,
+                    projectTitle: result.lifecycle.project.title,
+                    previousRole: result.lifecycle.previousRole ? collaboratorRoleLabel(result.lifecycle.previousRole) : null,
+                    nextRole: collaboratorRoleLabel(result.lifecycle.nextRole ?? nextRole),
+                    eventKey: result.lifecycle.eventId ?? `${result.lifecycle.previousRole}:${result.lifecycle.nextRole}`,
+                });
+            } catch (notificationError) {
+                logger.error('project.member_role_notification_failed', {
+                    module: 'project',
+                    projectId,
+                    actorUserId: user.id,
+                    targetUserId: memberUserId,
+                    error: notificationError instanceof Error ? notificationError.message : String(notificationError),
+                });
+            }
+        }
+
+        return {
+            success: true,
+            message: result.lifecycle.changed
+                ? `Updated collaborator role to ${collaboratorRoleLabel(result.lifecycle.nextRole ?? nextRole)}.`
+                : 'Collaborator already has that role.',
+        };
+    } catch (error) {
+        console.error('Failed to update project member role:', error);
+        return { success: false, errorCode: 'INTERNAL_ERROR', message: 'Failed to update collaborator role.' };
+    }
+}
+
+export async function getProjectMemberRemovalPreflightAction(
+    projectId: string,
+    memberUserId: string,
+): Promise<ProjectMemberRemovalPreflightResult> {
+    try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return { success: false, errorCode: 'UNAUTHORIZED', message: 'You must be signed in.' };
+        const capability = await requireProjectCapability(projectId, user.id, 'manage_collaborators');
+        if (memberUserId === capability.project.ownerId) {
+            return { success: false, errorCode: 'FORBIDDEN', message: 'Use transfer ownership before removing the owner.' };
+        }
+
+        const [memberRow] = await db
+            .select({
+                id: profiles.id,
+                username: profiles.username,
+                fullName: profiles.fullName,
+                avatarUrl: profiles.avatarUrl,
+                role: projectMembers.role,
+            })
+            .from(projectMembers)
+            .leftJoin(profiles, eq(profiles.id, projectMembers.userId))
+            .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, memberUserId)))
+            .limit(1);
+        if (!memberRow?.id) {
+            return { success: false, errorCode: 'NOT_FOUND', message: 'This user is no longer a project member.' };
+        }
+        const actorRole = capability.role;
+        const targetRole = normalizeCollaboratorRole(memberRow.role, memberUserId === capability.project.ownerId ? 'owner' : 'member');
+        if (!canProjectRoleManageTarget({ actorRole, targetRole })) {
+            return { success: false, errorCode: 'FORBIDDEN', message: 'You do not have permission to remove this collaborator.' };
+        }
+        const roleTitleByUser = await readAcceptedRoleTitles(projectId, [memberUserId]);
+        const [projectRow] = await db
+            .select({ conversationId: projects.conversationId, visibility: projects.visibility })
+            .from(projects)
+            .where(eq(projects.id, projectId))
+            .limit(1);
+        const counts = (await readProjectCollaboratorResponsibilityCounts(projectId, [memberUserId], projectRow?.conversationId ?? null)).get(memberUserId);
+        const impact = await readProjectMemberRemovalImpact(db, projectId, memberUserId);
+
+        return {
+            success: true,
+            data: {
+                member: {
+                    id: memberRow.id,
+                    username: memberRow.username,
+                    fullName: memberRow.fullName,
+                    avatarUrl: memberRow.avatarUrl,
+                    membershipRole: normalizeCollaboratorRole(memberRow.role),
+                    projectRoleTitle: roleTitleByUser.get(memberUserId) ?? null,
+                },
+                activeAssignedTasks: counts?.activeAssignedTasks ?? 0,
+                activeCreatedTasks: counts?.activeCreatedTasks ?? 0,
+                fileReviews: counts?.fileReviews ?? 0,
+                acceptedApplications: counts?.acceptedApplications ?? 0,
+                projectGroupParticipant: counts?.projectGroupParticipant ?? false,
+                visibility: normalizeProjectVisibility(projectRow?.visibility),
+                activeAssignedTaskItems: impact.assignedTasks,
+                activeCreatedTaskItems: impact.createdTasks,
+                fileReviewItems: impact.fileReviews,
+                acceptedApplicationItems: impact.acceptedApplications.map((application) => ({
+                    ...application,
+                    roleTitle: application.roleTitle ?? null,
+                    roleName: application.roleName ?? null,
+                })),
+                reassignmentCandidates: impact.reassignmentCandidates.map((candidate) => ({
+                    id: candidate.id,
+                    username: candidate.username,
+                    fullName: candidate.fullName,
+                    avatarUrl: candidate.avatarUrl,
+                    membershipRole: normalizeCollaboratorRole(candidate.role, candidate.id === capability.project.ownerId ? 'owner' : 'member'),
+                })),
+            },
+        };
+    } catch (error) {
+        console.error('Failed to load member removal preflight:', error);
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.includes('Project not found')) {
+            return { success: false, errorCode: 'NOT_FOUND', message: 'Project not found.' };
+        }
+        if (message.includes('permission')) {
+            return { success: false, errorCode: 'FORBIDDEN', message: 'You do not have permission to remove this collaborator.' };
+        }
+        return { success: false, errorCode: 'INTERNAL_ERROR', message: 'Failed to load removal preflight.' };
+    }
+}
+
+const removeProjectMemberSchema = z.object({
+    mode: z.enum(['preserve_history', 'unassign_active_tasks', 'reassign_active_tasks']).default('preserve_history'),
+    reassignToUserId: z.string().uuid().nullable().optional(),
+});
+
+export async function removeProjectMemberAction(
+    projectId: string,
+    memberUserId: string,
+    options?: { mode?: 'preserve_history' | 'unassign_active_tasks' | 'reassign_active_tasks'; reassignToUserId?: string | null },
+): Promise<ProjectMemberMutationResult> {
+    try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return { success: false, errorCode: 'UNAUTHORIZED', message: 'You must be signed in.' };
+        const parsed = removeProjectMemberSchema.safeParse(options ?? {});
+        if (!parsed.success) return { success: false, errorCode: 'INVALID_INPUT', message: 'Invalid removal options.' };
+
+        const txResult = await db.transaction(async (tx) => {
+            try {
+                const lifecycle = await removeProjectMemberInternal(tx, {
+                    projectId,
+                    actorId: user.id,
+                    targetUserId: memberUserId,
+                    mode: parsed.data.mode,
+                    reassignToUserId: parsed.data.reassignToUserId ?? null,
+                });
+                return { ok: true as const, lifecycle };
+            } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                if (message.includes('Project not found')) {
+                    return { ok: false as const, errorCode: 'NOT_FOUND' as const, message: 'Project not found.' };
+                }
+                if (message.includes('permission') || message.includes('owner')) {
+                    return { ok: false as const, errorCode: 'FORBIDDEN' as const, message };
+                }
+                if (message.includes('Replacement') || message.includes('valid replacement')) {
+                    return { ok: false as const, errorCode: 'INVALID_INPUT' as const, message };
+                }
+                return { ok: false as const, errorCode: 'INTERNAL_ERROR' as const, message: 'Failed to remove collaborator.' };
+            }
+        });
+
+        if (!txResult.ok) {
+            return { success: false, errorCode: txResult.errorCode, message: txResult.message };
+        }
+        await revalidateProjectPaths(projectId);
+        await queueCounterRefreshBestEffort([memberUserId]);
+        try {
+            await emitProjectMemberRemovedNotification({
+                recipientUserId: memberUserId,
+                actorUserId: user.id,
+                actorName: (user.user_metadata?.full_name as string | undefined) ?? (user.user_metadata?.username as string | undefined) ?? null,
+                actorAvatarUrl: (user.user_metadata?.avatar_url as string | undefined) ?? null,
+                projectId,
+                projectSlug: txResult.lifecycle.project.slug,
+                projectTitle: txResult.lifecycle.project.title,
+                eventKey: txResult.lifecycle.eventId ?? `${txResult.lifecycle.previousRole}:removed`,
+            });
+        } catch (notificationError) {
+            logger.error('project.member_removed_notification_failed', {
+                module: 'project',
+                projectId,
+                actorUserId: user.id,
+                targetUserId: memberUserId,
+                error: notificationError instanceof Error ? notificationError.message : String(notificationError),
+            });
+        }
+        return { success: true, message: 'Collaborator removed. Historical references were preserved.' };
+    } catch (error) {
+        console.error('Failed to remove project member:', error);
+        return { success: false, errorCode: 'INTERNAL_ERROR', message: 'Failed to remove collaborator.' };
     }
 }
 
@@ -2314,6 +3510,10 @@ export async function toggleProjectFollowAction(projectId: string, shouldFollow:
         if (!followRate.allowed) {
             return { success: false, error: 'Too many follow actions. Please wait and try again.' };
         }
+        const access = await getProjectAccessById(projectId, user.id);
+        if (!access.project || !access.canRead) {
+            return { success: false, error: 'Project not found or private.' };
+        }
 
         const followersCount = await db.transaction(async (tx) => {
             await lockProjectUserPair(tx, projectId, user.id);
@@ -2403,6 +3603,10 @@ export async function incrementProjectViewAction(projectId: string): Promise<{ s
         const viewerKey = user?.id
             ? `user:${user.id}`
             : `anon:${createHash('sha256').update(anonymousViewerSeed).digest('hex').slice(0, 16)}`;
+        const access = await getProjectAccessById(projectId, user?.id ?? null);
+        if (!access.project || !access.canRead) {
+            return { success: false, error: "Project not found" };
+        }
         const rateLimit = await consumeRateLimit(`project:view:${projectId}:${viewerKey}`, 1, 60 * 30);
         if (!rateLimit.allowed) {
             const [current] = await db
@@ -3780,16 +4984,13 @@ export async function createTaskAction(data: z.infer<typeof createTaskSchema>) {
 
 
         const validated = createTaskSchema.parse(data);
-        const access = await getProjectAccessById(validated.projectId, user.id);
-        if (!access.project) throw new Error("Project not found");
-        if (!access.canWrite) {
-            throw new Error("You do not have permission to create tasks in this project");
-        }
-        if (validated.sprintId && !access.isOwner) {
-            throw new Error("Only the project owner can assign new tasks to a sprint");
+        await requireProjectCapability(validated.projectId, user.id, "create_tasks");
+        if (validated.sprintId) {
+            await requireProjectCapability(validated.projectId, user.id, "manage_tasks");
         }
 
         if (validated.assigneeId) {
+            await requireProjectCapability(validated.projectId, user.id, "assign_tasks");
             const assigneeMember = await db.query.projectMembers.findFirst({
                 where: and(
                     eq(projectMembers.projectId, validated.projectId),
@@ -3800,8 +5001,8 @@ export async function createTaskAction(data: z.infer<typeof createTaskSchema>) {
             if (!assigneeMember) {
                 throw new Error("Assignee must be a project member");
             }
-            if (assigneeMember.role === 'viewer') {
-                throw new Error("Viewer members cannot be assigned tasks");
+            if (!isProjectMemberEligibleFor(assigneeMember.role, "assign")) {
+                throw new Error("Assignee must be an assignable project member");
             }
         }
 

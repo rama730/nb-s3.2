@@ -4,8 +4,8 @@ import { desc, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { taskSubtasks, tasks } from "@/lib/db/schema";
-import { getProjectAccessById } from "@/lib/data/project-access";
 import { createClient } from "@/lib/supabase/server";
+import { requireProjectCapability } from "@/lib/projects/collaborator-lifecycle";
 
 async function assertTaskWriteAccess(taskId: string, projectId: string, userId: string) {
     const task = await db.query.tasks.findFirst({
@@ -15,8 +15,7 @@ async function assertTaskWriteAccess(taskId: string, projectId: string, userId: 
     if (!task) throw new Error("Task not found");
     if (task.projectId !== projectId) throw new Error("Task does not belong to this project");
 
-    const access = await getProjectAccessById(projectId, userId);
-    if (!access.project || !access.canWrite) throw new Error("Forbidden");
+    await requireProjectCapability(projectId, userId, "create_tasks");
 }
 
 async function assertSubtaskWriteAccess(subtaskId: string, projectId: string, userId: string) {
@@ -33,8 +32,7 @@ async function assertSubtaskWriteAccess(subtaskId: string, projectId: string, us
     if (!subtask?.task?.projectId) throw new Error("Subtask not found");
     if (subtask.task.projectId !== projectId) throw new Error("Subtask does not belong to this project");
 
-    const access = await getProjectAccessById(projectId, userId);
-    if (!access.project || !access.canWrite) throw new Error("Forbidden");
+    await requireProjectCapability(projectId, userId, "create_tasks");
 }
 
 /**

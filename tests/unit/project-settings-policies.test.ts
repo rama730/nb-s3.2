@@ -1,9 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+    buildProjectAccessImpact,
     buildProjectAccessPolicy,
+    buildProjectMemberMutationPolicy,
+    buildProjectMemberRemovalPreflight,
+    buildProjectPersonReference,
     buildProjectRolePolicy,
     buildProjectSettingsPreflight,
+    getProjectMemberRoleLabel,
+    isEligibleProjectMember,
+    isAssignableProjectMember,
     getVisibleProjectSettingsSections,
     normalizeProjectVisibility,
 } from "../../src/lib/projects/settings-policies";
@@ -54,6 +61,25 @@ test("project visibility helper keeps private closed and treats legacy unlisted 
     assert.equal(isProjectVisibility("unlisted"), false);
 });
 
+test("project access impact explains counts and transition checklist", () => {
+    const privateImpact = buildProjectAccessImpact({
+        visibility: "private",
+        membersCount: 2,
+        followersCount: 3,
+        openRolesCount: 1,
+        pendingApplicationsCount: 4,
+        activeTasksCount: 5,
+    });
+
+    assert.equal(privateImpact.visibility, "private");
+    assert.ok(privateImpact.summary.some((line) => line.includes("3 followers")));
+    assert.ok(privateImpact.metrics.some((metric) => metric.label === "Pending applications" && metric.value === 4));
+    assert.ok(privateImpact.transitionChecklist.some((item) => item.includes("safe unavailable metadata")));
+
+    const publicImpact = buildProjectAccessImpact({ visibility: "public", openRolesCount: 2 });
+    assert.ok(publicImpact.transitionChecklist.some((item) => item.includes("Restore Hub discovery")));
+});
+
 test("project role policy excludes the current owner from transfer candidates", () => {
     const policy = buildProjectRolePolicy({
         isOwner: true,
@@ -69,6 +95,91 @@ test("project role policy excludes the current owner from transfer candidates", 
     assert.equal(policy.roleCounts.owner, 1);
     assert.equal(policy.roleCounts.member, 1);
     assert.equal(policy.roleCounts.admin, 1);
+    assert.equal(policy.roleLabels.admin, "Co-leader");
+    assert.equal(policy.coLeaders[0]?.id, "admin-1");
+});
+
+test("project member mutation policy protects the true owner and permits lower-role changes", () => {
+    const ownerTarget = buildProjectMemberMutationPolicy({
+        actorIsOwner: true,
+        ownerId: "owner-1",
+        targetUserId: "owner-1",
+        targetRole: "owner",
+    });
+    assert.equal(ownerTarget.canRemove, false);
+    assert.equal(ownerTarget.canChangeRole, false);
+    assert.match(ownerTarget.blockedReason ?? "", /transfer ownership/i);
+
+    const memberTarget = buildProjectMemberMutationPolicy({
+        actorIsOwner: true,
+        ownerId: "owner-1",
+        targetUserId: "member-1",
+        targetRole: "member",
+    });
+    assert.equal(memberTarget.canPromoteToCoLeader, true);
+    assert.equal(memberTarget.canRemove, true);
+    assert.equal(memberTarget.canTransferOwnership, true);
+
+    const nonOwnerActor = buildProjectMemberMutationPolicy({
+        actorIsOwner: false,
+        ownerId: "owner-1",
+        targetUserId: "member-1",
+        targetRole: "member",
+    });
+    assert.equal(nonOwnerActor.canRemove, false);
+    assert.match(nonOwnerActor.blockedReason ?? "", /only the project owner/i);
+
+    const coLeaderCanManageMember = buildProjectMemberMutationPolicy({
+        actorIsOwner: false,
+        actorRole: "admin",
+        ownerId: "owner-1",
+        targetUserId: "member-1",
+        targetRole: "member",
+        nextRole: "viewer",
+    });
+    assert.equal(coLeaderCanManageMember.canChangeRole, true);
+    assert.equal(coLeaderCanManageMember.canRemove, true);
+
+    const coLeaderCannotPromoteAdmin = buildProjectMemberMutationPolicy({
+        actorIsOwner: false,
+        actorRole: "admin",
+        ownerId: "owner-1",
+        targetUserId: "member-1",
+        targetRole: "member",
+        nextRole: "admin",
+    });
+    assert.equal(coLeaderCannotPromoteAdmin.canChangeRole, false);
+    assert.match(coLeaderCannotPromoteAdmin.blockedReason ?? "", /Co-leaders can manage members and viewers/i);
+});
+
+test("project person resolver and removal preflight preserve former-member semantics", () => {
+    assert.equal(getProjectMemberRoleLabel("admin"), "Co-leader");
+    assert.equal(isAssignableProjectMember("viewer"), false);
+    assert.equal(isEligibleProjectMember("viewer", "mention"), true);
+    assert.equal(isEligibleProjectMember("viewer", "assign"), false);
+    assert.equal(isEligibleProjectMember("admin", "review"), true);
+
+    const former = buildProjectPersonReference({
+        person: { id: "member-1", fullName: "Removed Person" },
+        membershipRole: "member",
+        isActiveMember: false,
+    });
+    assert.equal(former.state, "former_member");
+    assert.equal(former.subtext, "Removed from project");
+    assert.equal(former.isAssignable, false);
+
+    const preflight = buildProjectMemberRemovalPreflight({
+        member: { id: "member-1", fullName: "Removed Person", membershipRole: "member" },
+        visibility: "private",
+        activeAssignedTasks: 2,
+        activeCreatedTasks: 1,
+        fileReviews: 3,
+        acceptedApplications: 1,
+        projectGroupParticipant: true,
+    });
+    assert.equal(preflight.defaultMode, "preserve_history");
+    assert.ok(preflight.warnings.some((warning) => warning.includes("Needs reassignment")));
+    assert.ok(preflight.affectedAreas.some((area) => area.includes("Private project access is revoked")));
 });
 
 test("project danger preflight removes finalize and keeps archive/delete policy", () => {

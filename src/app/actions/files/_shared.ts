@@ -5,6 +5,8 @@ import { projectMembers, projectNodeEvents, projectNodeLocks, projectNodes, proj
 import { computeProjectReadAccess } from "@/lib/data/project-access";
 import { eq, and, isNull, sql, ne, gt, type SQL } from "drizzle-orm";
 import { isWithParent } from "./_constants";
+import { requireProjectCapability } from "@/lib/projects/collaborator-lifecycle";
+import { projectMemberCan } from "@/lib/projects/settings-policies";
 
 type DbTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -76,8 +78,9 @@ export async function assertProjectReadAccess(projectId: string, userId: string 
 
 export async function assertProjectWriteAccess(projectId: string, userId: string) {
     const access = await getProjectAccess(projectId, userId);
-    if (!access.canWrite) throw new Error("Forbidden");
-    return access;
+    if (!access.project) throw new Error("Forbidden");
+    await requireProjectCapability(projectId, userId, "upload_files");
+    return { ...access, canWrite: true };
 }
 
 /**
@@ -131,7 +134,7 @@ export async function assertProjectWriteAccessTx(
     if (!member) {
         throw new Error("Forbidden");
     }
-    if ((member.role ?? "").toLowerCase() === "viewer") {
+    if (!projectMemberCan(member.role, "upload_files")) {
         throw new Error("Forbidden");
     }
 

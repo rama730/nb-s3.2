@@ -439,7 +439,7 @@ export async function getProfileDetails(username?: string, options: ProfileDetai
         ? eq(projects.ownerId, profileData.id)
         : and(
             eq(projects.ownerId, profileData.id),
-            eq(projects.visibility, 'public'),
+            or(eq(projects.visibility, 'public'), eq(projects.visibility, 'unlisted')),
             ne(projects.status, 'draft')
         );
 

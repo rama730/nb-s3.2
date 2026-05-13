@@ -65,6 +65,8 @@ export default function CreateTaskModal({
         () =>
             members
                 .map((member) => {
+                    const membershipRole = String(member?.membershipRole ?? member?.role ?? "").toLowerCase();
+                    if (membershipRole === "viewer") return null;
                     const identity = normalizeTaskSurfacePerson(member?.user ?? member);
                     const id = member?.id ?? member?.userId ?? member?.user_id;
                     if (!id || !identity?.fullName) return null;

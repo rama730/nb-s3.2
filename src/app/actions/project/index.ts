@@ -15,10 +15,18 @@ export {
     clearProjectCoverImageAction,
     createProjectCoverImageUploadUrlAction,
     finalizeProjectCoverImageUploadAction,
+    getProjectAccessImpactAction,
+    getProjectAccessTransitionPreflightAction,
+    getProjectCollaboratorSettingsAction,
     getProjectDangerZonePreflightAction,
+    getProjectMemberRemovalPreflightAction,
+    getProjectSettingsAuditAction,
     archiveProjectAction,
     finalizeProjectAction,
+    removeProjectMemberAction,
     retryGithubImportAction,
+    updateProjectMemberRoleAction,
+    updateProjectVisibilityAction,
 
     // Members & Social
     ensureProjectGroupExists,

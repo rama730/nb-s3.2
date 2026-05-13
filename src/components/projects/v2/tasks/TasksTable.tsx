@@ -10,6 +10,7 @@ import { normalizeTaskSurfaceRecord } from "@/lib/projects/task-presentation";
 import { cn } from "@/lib/utils";
 import TaskPriorityBadge from "./badges/TaskPriorityBadge";
 import TaskStatusBadge from "./badges/TaskStatusBadge";
+import { buildProjectPersonReference } from "@/lib/projects/settings-policies";
 
 interface TasksTableProps {
     tasks: Task[];
@@ -17,6 +18,7 @@ interface TasksTableProps {
     fetchNextPage: () => void;
     hasNextPage: boolean;
     isFetchingNextPage: boolean;
+    activeAssignableMemberIds?: Set<string>;
 }
 
 export default function TasksTable({
@@ -24,7 +26,8 @@ export default function TasksTable({
     onTaskClick,
     fetchNextPage,
     hasNextPage,
-    isFetchingNextPage
+    isFetchingNextPage,
+    activeAssignableMemberIds,
 }: TasksTableProps) {
     return (
         <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 h-[600px] overflow-hidden flex flex-col shadow-sm">
@@ -47,6 +50,18 @@ export default function TasksTable({
                 )}
                 itemContent={(index, task) => {
                     const taskRecord = normalizeTaskSurfaceRecord(task);
+                    const assigneeRemoved = Boolean(
+                        taskRecord.assigneeId &&
+                        taskRecord.assignee &&
+                        activeAssignableMemberIds &&
+                        !activeAssignableMemberIds.has(taskRecord.assigneeId),
+                    );
+                    const assigneeReference = taskRecord.assignee
+                        ? buildProjectPersonReference({
+                            person: taskRecord.assignee,
+                            isActiveMember: !assigneeRemoved,
+                        })
+                        : null;
 
                     return <>
                         <td className="px-4 py-3 border-b border-zinc-100 dark:border-zinc-800/50">
@@ -84,16 +99,21 @@ export default function TasksTable({
                                 <div className="flex items-center gap-2">
                                     <UserAvatar
                                         identity={{
-                                            fullName: taskRecord.assignee.fullName,
-                                            avatarUrl: taskRecord.assignee.avatarUrl,
+                                            fullName: assigneeReference?.displayName ?? taskRecord.assignee.fullName,
+                                            avatarUrl: assigneeReference?.avatarUrl ?? taskRecord.assignee.avatarUrl,
                                         }}
                                         size={20}
                                         className="h-5 w-5"
                                         fallbackClassName="text-[9px]"
                                     />
                                     <span className="text-sm text-zinc-600 dark:text-zinc-400 truncate max-w-[100px]">
-                                        {taskRecord.assignee.fullName}
+                                        {assigneeReference?.displayName ?? taskRecord.assignee.fullName}
                                     </span>
+                                    {assigneeRemoved ? (
+                                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700 dark:bg-amber-950/40 dark:text-amber-200">
+                                            Removed from project
+                                        </span>
+                                    ) : null}
                                 </div>
                             ) : (
                                 <span className="text-xs text-zinc-400 italic">Unassigned</span>

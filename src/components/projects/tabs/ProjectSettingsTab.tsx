@@ -16,11 +16,15 @@ import {
     KeyRound,
     Loader2,
     Lock,
+    RefreshCw,
     Route,
+    Search,
     Settings,
     Shield,
+    ShieldCheck,
     Trash2,
     UserCog,
+    UserMinus,
     Users,
     Workflow,
     Plus,
@@ -32,13 +36,21 @@ import { Button } from "@/components/ui/button";
 import { transferProjectOwnership } from "@/app/actions/account";
 import {
     archiveProjectAction,
+    clearProjectCoverImageAction,
     createProjectCoverImageUploadUrlAction,
     deleteProject,
     finalizeProjectCoverImageUploadAction,
+    getProjectAccessImpactAction,
+    getProjectAccessTransitionPreflightAction,
+    getProjectCollaboratorSettingsAction,
     getProjectDangerZonePreflightAction,
+    getProjectMemberRemovalPreflightAction,
+    getProjectSettingsAuditAction,
+    removeProjectMemberAction,
     updateProject,
     updateProjectLifecycleAction,
-    updateProjectSettingsAction,
+    updateProjectMemberRoleAction,
+    updateProjectVisibilityAction,
 } from "@/app/actions/project";
 import LifecycleEditor from "@/components/projects/settings/LifecycleEditor";
 import { cn } from "@/lib/utils";
@@ -50,14 +62,21 @@ import {
     PROJECT_TYPE_OPTIONS,
 } from "@/lib/projects/project-create-options";
 import {
+    buildProjectAccessImpact,
     buildProjectAccessPolicy,
+    buildProjectAccessTransitionPolicy,
     buildProjectFilePolicy,
+    buildProjectMemberMutationPolicy,
+    buildProjectMemberRemovalPreflight,
+    buildProjectPersonReference,
     buildProjectNotificationPolicy,
     buildProjectRolePolicy,
     buildProjectSettingsPreflight,
     getProjectMemberDisplayName,
+    getProjectMemberRoleLabel,
     getVisibleProjectSettingsSections,
     normalizeProjectVisibility,
+    type ProjectMemberRole,
     type ProjectSettingsMember,
     type ProjectSettingsSectionId,
     type ProjectSettingsVisibility,
@@ -70,6 +89,7 @@ interface ProjectSettingsTabProps {
     project: any;
     onProjectUpdated: (updates?: { coverImage?: string | null }) => void;
     isProjectOwner: boolean;
+    actorRole?: ProjectMemberRole | null;
     members?: ProjectSettingsMember[];
     loadingMembers?: boolean;
 }
@@ -86,6 +106,7 @@ type ConfirmAction = {
     description: string;
     confirmLabel: string;
     variant: "default" | "destructive";
+    content?: React.ReactNode;
     action: () => Promise<ConfirmActionResult>;
 };
 
@@ -97,6 +118,62 @@ type DangerPreflight = {
     canArchive: boolean;
     canDelete: boolean;
 };
+
+type AccessImpact = {
+    membersCount: number;
+    followersCount: number;
+    openRolesCount: number;
+    pendingApplicationsCount: number;
+    activeTasksCount: number;
+};
+
+type AccessTransitionPreflightData = {
+    previousVisibility: ProjectSettingsVisibility;
+    nextVisibility: ProjectSettingsVisibility;
+    confirmationToken: string;
+    policy: ReturnType<typeof buildProjectAccessTransitionPolicy>;
+    counts: AccessImpact;
+    previews: {
+        followers: Array<{ id: string; username: string | null; fullName: string | null; avatarUrl: string | null }>;
+        openRoles: Array<{ id: string; title: string | null; role: string | null }>;
+        pendingApplications: Array<{ id: string; applicantId: string; applicantName: string | null; roleTitle: string | null; roleName: string | null }>;
+    };
+};
+
+type SettingsAuditEvent = {
+    id: string;
+    type: string;
+    createdAt: string;
+    actorName: string | null;
+    metadata: Record<string, unknown>;
+};
+
+type CollaboratorSettingsData = {
+    members: ProjectSettingsMember[];
+    roleCounts: Record<ProjectMemberRole, number>;
+    hasMore: boolean;
+    nextCursor: string | null;
+};
+
+type RemovalPreflightData = {
+    member: ProjectSettingsMember;
+    activeAssignedTasks: number;
+    activeCreatedTasks: number;
+    fileReviews: number;
+    acceptedApplications: number;
+    projectGroupParticipant: boolean;
+    visibility: ProjectSettingsVisibility;
+    activeAssignedTaskItems?: Array<{ id: string; title: string; taskNumber: number | null; status: string | null }>;
+    activeCreatedTaskItems?: Array<{ id: string; title: string; taskNumber: number | null; status: string | null }>;
+    fileReviewItems?: Array<{ id: string; taskId: string; taskTitle: string | null; nodeName: string | null; annotation: string | null }>;
+    acceptedApplicationItems?: Array<{ id: string; roleId: string; roleTitle: string | null; roleName: string | null }>;
+    reassignmentCandidates?: ProjectSettingsMember[];
+};
+type CollaboratorFilter = "all" | "admin" | "member" | "viewer";
+type RemovalMode = "preserve_history" | "unassign_active_tasks" | "reassign_active_tasks";
+type RemovalTaskPreview = { id: string; title: string; taskNumber: number | null; status: string | null };
+type RemovalFileReviewPreview = { id: string; taskId: string; taskTitle: string | null; nodeName: string | null; annotation: string | null };
+type RemovalApplicationPreview = { id: string; roleId: string; roleTitle: string | null; roleName: string | null };
 
 type CoverDraft = {
     file: File;
@@ -231,6 +308,101 @@ function fillProjectImageDraft(draft: CoverDraft) {
     });
 }
 
+function formatTaskPreviewLabel(task: RemovalTaskPreview) {
+    const number = typeof task.taskNumber === "number" ? `#${task.taskNumber}` : "Task";
+    return `${number} · ${task.title}`;
+}
+
+function RemovalImpactDetails({ preflight }: { preflight: RemovalPreflightData }) {
+    const sections: Array<{
+        key: string;
+        label: string;
+        count: number;
+        items: React.ReactNode[];
+        empty: string;
+    }> = [
+        {
+            key: "assigned",
+            label: "Active assigned tasks",
+            count: preflight.activeAssignedTasks,
+            items: (preflight.activeAssignedTaskItems ?? []).map((task) => (
+                <li key={task.id} className="rounded-xl bg-white/70 px-3 py-2 dark:bg-zinc-950/60">
+                    <span className="block font-medium text-zinc-800 dark:text-zinc-100">{formatTaskPreviewLabel(task)}</span>
+                    <span className="text-[11px] text-zinc-500">{task.status ?? "active"} · will need reassignment if history is preserved</span>
+                </li>
+            )),
+            empty: "No active assigned tasks.",
+        },
+        {
+            key: "created",
+            label: "Created active tasks",
+            count: preflight.activeCreatedTasks,
+            items: (preflight.activeCreatedTaskItems ?? []).map((task) => (
+                <li key={task.id} className="rounded-xl bg-white/70 px-3 py-2 dark:bg-zinc-950/60">
+                    <span className="block font-medium text-zinc-800 dark:text-zinc-100">{formatTaskPreviewLabel(task)}</span>
+                    <span className="text-[11px] text-zinc-500">{task.status ?? "active"} · creator history stays visible</span>
+                </li>
+            )),
+            empty: "No active tasks created by this member.",
+        },
+        {
+            key: "reviews",
+            label: "File review responsibilities",
+            count: preflight.fileReviews,
+            items: (preflight.fileReviewItems ?? []).map((review) => (
+                <li key={review.id} className="rounded-xl bg-white/70 px-3 py-2 dark:bg-zinc-950/60">
+                    <span className="block font-medium text-zinc-800 dark:text-zinc-100">
+                        {review.nodeName ?? "Linked file"} · {review.taskTitle ?? "Task"}
+                    </span>
+                    <span className="text-[11px] text-zinc-500">{review.annotation ?? "Needs review"}</span>
+                </li>
+            )),
+            empty: "No file review responsibilities found.",
+        },
+        {
+            key: "applications",
+            label: "Accepted application history",
+            count: preflight.acceptedApplications,
+            items: (preflight.acceptedApplicationItems ?? []).map((application) => (
+                <li key={application.id} className="rounded-xl bg-white/70 px-3 py-2 dark:bg-zinc-950/60">
+                    <span className="block font-medium text-zinc-800 dark:text-zinc-100">
+                        {application.roleTitle ?? application.roleName ?? "Accepted role"}
+                    </span>
+                    <span className="text-[11px] text-zinc-500">Will show Accepted · Membership ended</span>
+                </li>
+            )),
+            empty: "No accepted application history found.",
+        },
+    ];
+
+    return (
+        <details className="rounded-2xl border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-zinc-900/40">
+            <summary className="cursor-pointer text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
+                Exact affected records
+            </summary>
+            <div className="mt-3 space-y-3">
+                {sections.map((section) => (
+                    <div key={section.key}>
+                        <p className="text-xs font-semibold text-zinc-800 dark:text-zinc-100">
+                            {section.label} <span className="text-zinc-400">({section.count})</span>
+                        </p>
+                        {section.items.length > 0 ? (
+                            <ul className="mt-2 space-y-1.5 text-xs">{section.items}</ul>
+                        ) : (
+                            <p className="mt-1 text-xs text-zinc-500">{section.empty}</p>
+                        )}
+                        {section.count > section.items.length ? (
+                            <p className="mt-1 text-[11px] text-zinc-500">
+                                Showing the first {section.items.length}; the action still applies to all {section.count}.
+                            </p>
+                        ) : null}
+                    </div>
+                ))}
+            </div>
+        </details>
+    );
+}
+
 function captureScrollSnapshot(): ScrollSnapshot {
     const routeRoot = typeof document === "undefined"
         ? null
@@ -324,12 +496,18 @@ export default function ProjectSettingsTab({
     project,
     onProjectUpdated,
     isProjectOwner,
+    actorRole,
     members = [],
     loadingMembers = false,
 }: ProjectSettingsTabProps) {
     const router = useRouter();
-    const sections = useMemo(() => getVisibleProjectSettingsSections(), []);
-    const [activeSection, setActiveSection] = useState<ProjectSettingsSectionId>("general");
+    const actorProjectRole = isProjectOwner ? "owner" : actorRole ?? "member";
+    const canManageSettings = isProjectOwner || actorProjectRole === "admin";
+    const sections = useMemo(() => {
+        const visible = getVisibleProjectSettingsSections();
+        return isProjectOwner ? visible : visible.filter((section) => section.id === "collaborators");
+    }, [isProjectOwner]);
+    const [activeSection, setActiveSection] = useState<ProjectSettingsSectionId>(isProjectOwner ? "general" : "collaborators");
     const [advancedOpen, setAdvancedOpen] = useState<Partial<Record<ProjectSettingsSectionId, boolean>>>({});
     const [savingSettings, setSavingSettings] = useState(false);
     const [uploadingCoverImage, setUploadingCoverImage] = useState(false);
@@ -339,7 +517,23 @@ export default function ProjectSettingsTab({
     const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
     const [dangerPreflight, setDangerPreflight] = useState<DangerPreflight | null>(null);
     const [dangerPreflightLoading, setDangerPreflightLoading] = useState(false);
+    const [accessImpact, setAccessImpact] = useState<AccessImpact | null>(null);
+    const [accessImpactLoading, setAccessImpactLoading] = useState(false);
+    const [settingsAuditEvents, setSettingsAuditEvents] = useState<SettingsAuditEvent[]>([]);
+    const [settingsAuditLoading, setSettingsAuditLoading] = useState(false);
     const [transferOwnerId, setTransferOwnerId] = useState("");
+    const [collaboratorData, setCollaboratorData] = useState<CollaboratorSettingsData | null>(null);
+    const [collaboratorLoading, setCollaboratorLoading] = useState(false);
+    const [collaboratorRefreshing, setCollaboratorRefreshing] = useState(false);
+    const [collaboratorLoadingMore, setCollaboratorLoadingMore] = useState(false);
+    const [collaboratorFilter, setCollaboratorFilter] = useState<CollaboratorFilter>("all");
+    const [collaboratorSearch, setCollaboratorSearch] = useState("");
+    const [removalMode, setRemovalMode] = useState<RemovalMode>("preserve_history");
+    const [removalReassignToUserId, setRemovalReassignToUserId] = useState("");
+    const [removalPreflightDialog, setRemovalPreflightDialog] = useState<RemovalPreflightData | null>(null);
+    const removalModeRef = useRef<RemovalMode>("preserve_history");
+    const removalReassignToUserIdRef = useRef("");
+    const collaboratorDataRef = useRef<CollaboratorSettingsData | null>(null);
 
     const initialSettings = useMemo(() => resetSettingsFromProject(project), [project]);
     const initialIdentity = useMemo(() => resetIdentityFromProject(project), [project]);
@@ -362,6 +556,18 @@ export default function ProjectSettingsTab({
     }, [initialSettings]);
 
     useEffect(() => {
+        collaboratorDataRef.current = collaboratorData;
+    }, [collaboratorData]);
+
+    useEffect(() => {
+        removalModeRef.current = removalMode;
+    }, [removalMode]);
+
+    useEffect(() => {
+        removalReassignToUserIdRef.current = removalReassignToUserId;
+    }, [removalReassignToUserId]);
+
+    useEffect(() => {
         setProjectTitle(initialIdentity.title);
         setShortDescription(initialIdentity.shortDescription);
         setDescription(initialIdentity.description);
@@ -371,6 +577,11 @@ export default function ProjectSettingsTab({
         setSkills(initialIdentity.skills);
         setCoverImage(initialIdentity.coverImage);
     }, [initialIdentity]);
+
+    useEffect(() => {
+        if (sections.some((section) => section.id === activeSection)) return;
+        setActiveSection(sections[0]?.id ?? "collaborators");
+    }, [activeSection, sections]);
 
     useEffect(() => {
         return () => {
@@ -399,10 +610,25 @@ export default function ProjectSettingsTab({
 
     const ownerId = projectOwnerId(project);
     const accessPolicy = useMemo(() => buildProjectAccessPolicy({ visibility }), [visibility]);
-    const rolePolicy = useMemo(
-        () => buildProjectRolePolicy({ isOwner: isProjectOwner, ownerId, members }),
-        [isProjectOwner, members, ownerId],
+    const accessImpactPolicy = useMemo(
+        () => buildProjectAccessImpact({
+            visibility,
+            membersCount: accessImpact?.membersCount ?? members.length,
+            followersCount: accessImpact?.followersCount ?? project?.followersCount ?? project?.followers_count ?? 0,
+            openRolesCount: accessImpact?.openRolesCount ?? project?.openRoles?.length ?? project?.open_roles?.length ?? 0,
+            pendingApplicationsCount: accessImpact?.pendingApplicationsCount ?? 0,
+            activeTasksCount: accessImpact?.activeTasksCount ?? 0,
+        }),
+        [accessImpact, members.length, project?.followersCount, project?.followers_count, project?.openRoles?.length, project?.open_roles?.length, visibility],
     );
+    const collaboratorMembers = collaboratorData?.members ?? members;
+    const rolePolicy = useMemo(
+        () => buildProjectRolePolicy({ isOwner: isProjectOwner, actorRole: actorProjectRole, ownerId, members: collaboratorMembers }),
+        [actorProjectRole, collaboratorMembers, isProjectOwner, ownerId],
+    );
+    const filteredCollaborators = useMemo(() => {
+        return rolePolicy.members.filter((member) => projectMemberRole(member, ownerId) !== "owner");
+    }, [ownerId, rolePolicy.members]);
     const notificationPolicy = useMemo(() => buildProjectNotificationPolicy(), []);
     const filePolicy = useMemo(() => buildProjectFilePolicy(), []);
     const preflightPolicy = useMemo(() => buildProjectSettingsPreflight(dangerPreflight), [dangerPreflight]);
@@ -442,15 +668,114 @@ export default function ProjectSettingsTab({
         }
     }, [projectId]);
 
+    const loadAccessImpact = useCallback(async () => {
+        setAccessImpactLoading(true);
+        try {
+            const result = await getProjectAccessImpactAction(projectId);
+            if (!result.success) {
+                setAccessImpact(null);
+                toast.error(result.message);
+                return;
+            }
+            setAccessImpact(result.data);
+        } catch (error) {
+            console.error("Failed to load access impact", error);
+            setAccessImpact(null);
+            toast.error("Failed to load access impact.");
+        } finally {
+            setAccessImpactLoading(false);
+        }
+    }, [projectId]);
+
+    const loadSettingsAudit = useCallback(async () => {
+        setSettingsAuditLoading(true);
+        try {
+            const result = await getProjectSettingsAuditAction(projectId);
+            if (!result.success) {
+                setSettingsAuditEvents([]);
+                toast.error(result.message);
+                return;
+            }
+            setSettingsAuditEvents(result.data);
+        } catch (error) {
+            console.error("Failed to load settings audit", error);
+            setSettingsAuditEvents([]);
+            toast.error("Failed to load settings audit.");
+        } finally {
+            setSettingsAuditLoading(false);
+        }
+    }, [projectId]);
+
+    const loadCollaborators = useCallback(async (mode: "initial" | "refresh" | "more" = "initial") => {
+        const cursor = mode === "more" ? collaboratorDataRef.current?.nextCursor ?? undefined : undefined;
+        if (mode === "refresh") {
+            setCollaboratorRefreshing(true);
+        } else if (mode === "more") {
+            if (!cursor) return;
+            setCollaboratorLoadingMore(true);
+        } else {
+            setCollaboratorLoading(true);
+        }
+        try {
+            const result = await getProjectCollaboratorSettingsAction(projectId, {
+                limit: 40,
+                cursor,
+                query: collaboratorSearch,
+                roleFilter: collaboratorFilter,
+            });
+            if (!result.success) {
+                setCollaboratorData(null);
+                toast.error(result.message);
+                return;
+            }
+            setCollaboratorData((current) => {
+                if (mode !== "more" || !current) return result.data;
+                const existingIds = new Set(current.members.map((member) => member.id));
+                return {
+                    ...result.data,
+                    members: [
+                        ...current.members,
+                        ...result.data.members.filter((member) => !existingIds.has(member.id)),
+                    ],
+                    roleCounts: result.data.roleCounts,
+                };
+            });
+        } catch (error) {
+            console.error("Failed to load collaborators", error);
+            setCollaboratorData(null);
+            toast.error("Failed to load collaborators.");
+        } finally {
+            setCollaboratorLoading(false);
+            setCollaboratorRefreshing(false);
+            setCollaboratorLoadingMore(false);
+        }
+    }, [collaboratorFilter, collaboratorSearch, projectId]);
+
     useEffect(() => {
         if (activeSection !== "danger") return;
         void loadDangerPreflight();
     }, [activeSection, loadDangerPreflight]);
 
-    const saveAccessSettings = useCallback(async () => {
-        const result = await updateProjectSettingsAction(projectId, {
-            visibility,
-        });
+    useEffect(() => {
+        if (activeSection !== "access") return;
+        void loadAccessImpact();
+    }, [activeSection, loadAccessImpact]);
+
+    useEffect(() => {
+        if (activeSection !== "security-audit") return;
+        void loadSettingsAudit();
+    }, [activeSection, loadSettingsAudit]);
+
+    useEffect(() => {
+        if (activeSection !== "collaborators") return;
+        const timer = window.setTimeout(() => {
+            void loadCollaborators("initial");
+        }, collaboratorData ? 180 : 0);
+        return () => window.clearTimeout(timer);
+    }, [activeSection, collaboratorFilter, collaboratorSearch, loadCollaborators]);
+
+    const saveAccessSettings = useCallback(async (confirmationToken: string) => {
+        const result = await updateProjectVisibilityAction(projectId, visibility, confirmationToken);
         if (!result.success) {
             return { success: false, message: result.message };
         }
@@ -458,34 +783,33 @@ export default function ProjectSettingsTab({
     }, [projectId, visibility]);
 
     const handleSaveAccess = useCallback(async () => {
-        if (visibility === "private" && initialSettings.visibility !== "private") {
-            setConfirmAction({
-                title: "Make project private",
-                description: "Only the owner and approved members will be able to open the project. Discovery, public search, public share metadata, follower update surfaces, files, tasks, applications, README, and Updates will become member-only where applicable.",
-                confirmLabel: "Make private",
-                variant: "destructive",
-                action: saveAccessSettings,
-            });
-            return;
-        }
+        if (!accessDirty) return;
 
         setSavingSettings(true);
         try {
-            const result = await saveAccessSettings();
-            if (!result.success) {
-                toast.error(result.message);
+            const preflightResult = await getProjectAccessTransitionPreflightAction(projectId, visibility);
+            if (!preflightResult.success) {
+                toast.error(preflightResult.message);
                 return;
             }
-            toast.success(result.message);
-            onProjectUpdated();
-            router.refresh();
+            const preflight: AccessTransitionPreflightData = preflightResult.data;
+            const isPrivateTransition = preflight.nextVisibility === "private";
+            setConfirmAction({
+                title: isPrivateTransition ? "Make project private" : "Make project public",
+                description: preflight.policy.confirmationSummary.join(" "),
+                confirmLabel: isPrivateTransition ? "Make private" : "Make public",
+                variant: isPrivateTransition ? "destructive" : "default",
+                content: <AccessTransitionDetails preflight={preflight} />,
+                action: () => saveAccessSettings(preflight.confirmationToken),
+            });
+            return;
         } catch (error) {
-            console.error("Failed to save project settings", error);
-            toast.error("Failed to save settings.");
+            console.error("Failed to prepare access transition", error);
+            toast.error("Failed to prepare access transition.");
         } finally {
             setSavingSettings(false);
         }
-    }, [initialSettings.visibility, onProjectUpdated, router, saveAccessSettings, visibility]);
+    }, [accessDirty, projectId, saveAccessSettings, visibility]);
 
     const handleSaveGeneral = useCallback(async () => {
         const trimmedTitle = projectTitle.trim();
@@ -582,7 +906,7 @@ export default function ProjectSettingsTab({
                     lookingForCollaborators: Boolean(project?.lookingForCollaborators),
                     maxCollaborators: project?.maxCollaborators ?? null,
                 },
-                members: members.map((member) => ({
+                members: collaboratorMembers.map((member) => ({
                     id: member.id,
                     displayName: getProjectMemberDisplayName(member),
                     membershipRole: projectMemberRole(member, ownerId),
@@ -605,7 +929,7 @@ export default function ProjectSettingsTab({
         } finally {
             setLoadingExport(false);
         }
-    }, [members, ownerId, project, projectId]);
+    }, [collaboratorMembers, ownerId, project, projectId]);
 
     const handleCoverImageUpload = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
         restoreFilePickerScroll();
@@ -764,9 +1088,9 @@ export default function ProjectSettingsTab({
         }
         setUploadingCoverImage(true);
         try {
-            const result = await updateProject(projectId, { coverImage: null });
+            const result = await clearProjectCoverImageAction(projectId);
             if (!result?.success) {
-                throw new Error("Failed to remove project avatar");
+                throw new Error(result.error || "Failed to remove project avatar");
             }
             setCoverImage("");
             toast.success("Project avatar removed.");
@@ -791,10 +1115,14 @@ export default function ProjectSettingsTab({
             }
             toast.success(result.message);
             if (result.refresh) {
+                void loadAccessImpact();
+                void loadCollaborators("refresh");
+                void loadSettingsAudit();
                 onProjectUpdated();
                 router.refresh();
             }
             setConfirmAction(null);
+            setRemovalPreflightDialog(null);
             if (result.redirectTo) {
                 router.push(result.redirectTo);
             }
@@ -804,7 +1132,7 @@ export default function ProjectSettingsTab({
         } finally {
             setConfirmLoading(false);
         }
-    }, [confirmAction, onProjectUpdated, router]);
+    }, [confirmAction, loadAccessImpact, loadCollaborators, loadSettingsAudit, onProjectUpdated, router]);
 
     const prepareArchive = useCallback(() => {
         if (!dangerPreflight) {
@@ -831,12 +1159,7 @@ export default function ProjectSettingsTab({
         });
     }, [dangerPreflight, loadDangerPreflight, projectId]);
 
-    const prepareTransfer = useCallback(() => {
-        const candidate = rolePolicy.transferCandidates.find((member) => member.id === transferOwnerId);
-        if (!candidate) {
-            toast.error("Choose a member before transferring ownership.");
-            return;
-        }
+    const prepareTransferToMember = useCallback((candidate: ProjectSettingsMember) => {
         setConfirmAction({
             title: "Transfer project ownership",
             description: `${getProjectMemberDisplayName(candidate)} will become the project owner. You will be demoted to admin and lose owner-only danger-zone permissions.`,
@@ -857,7 +1180,159 @@ export default function ProjectSettingsTab({
                 };
             },
         });
-    }, [projectId, rolePolicy.transferCandidates, transferOwnerId]);
+    }, [projectId]);
+
+    const prepareTransfer = useCallback(() => {
+        const candidate = rolePolicy.transferCandidates.find((member) => member.id === transferOwnerId);
+        if (!candidate) {
+            toast.error("Choose a member before transferring ownership.");
+            return;
+        }
+        prepareTransferToMember(candidate);
+    }, [prepareTransferToMember, rolePolicy.transferCandidates, transferOwnerId]);
+
+    const prepareRoleChange = useCallback((member: ProjectSettingsMember, nextRole: Exclude<ProjectMemberRole, "owner">) => {
+        const currentRole = projectMemberRole(member, ownerId);
+        if (currentRole === nextRole) {
+            toast.info(`${getProjectMemberDisplayName(member)} is already ${getProjectMemberRoleLabel(nextRole)}.`);
+            return;
+        }
+        const policy = buildProjectMemberMutationPolicy({
+            actorIsOwner: isProjectOwner,
+            actorRole: actorProjectRole,
+            ownerId,
+            targetUserId: member.id,
+            targetRole: currentRole,
+            nextRole,
+        });
+        if (!policy.canChangeRole) {
+            toast.error(policy.blockedReason ?? "This member role cannot be changed.");
+            return;
+        }
+        setConfirmAction({
+            title: `Change role to ${getProjectMemberRoleLabel(nextRole)}`,
+            description: `${getProjectMemberDisplayName(member)} will move from ${getProjectMemberRoleLabel(currentRole as ProjectMemberRole)} to ${getProjectMemberRoleLabel(nextRole)}. This updates collaborator permissions, task/file access, application review affordances, notifications, and project audit history.`,
+            confirmLabel: "Change role",
+            variant: nextRole === "viewer" ? "destructive" : "default",
+            action: async () => {
+                const result = await updateProjectMemberRoleAction(projectId, member.id, nextRole);
+                if (!result.success) {
+                    return { success: false, message: result.message };
+                }
+                return { success: true, message: result.message, refresh: true };
+            },
+        });
+    }, [actorProjectRole, isProjectOwner, ownerId, projectId]);
+
+    const prepareRemoveMember = useCallback(async (member: ProjectSettingsMember) => {
+        const currentRole = projectMemberRole(member, ownerId);
+        const policy = buildProjectMemberMutationPolicy({
+            actorIsOwner: isProjectOwner,
+            actorRole: actorProjectRole,
+            ownerId,
+            targetUserId: member.id,
+            targetRole: currentRole,
+        });
+        if (!policy.canRemove) {
+            toast.error(policy.blockedReason ?? "This member cannot be removed.");
+            return;
+        }
+
+        try {
+            const result = await getProjectMemberRemovalPreflightAction(projectId, member.id);
+            if (!result.success) {
+                toast.error(result.message);
+                return;
+            }
+            const preflight: RemovalPreflightData = result.data;
+            const policyPreview = buildProjectMemberRemovalPreflight(preflight);
+            setRemovalMode(policyPreview.defaultMode);
+            setRemovalReassignToUserId(preflight.reassignmentCandidates?.[0]?.id ?? "");
+            setRemovalPreflightDialog(preflight);
+            setConfirmAction({
+                title: `Remove ${policyPreview.displayName}`,
+                description: `${policyPreview.summary} Choose how active task assignments should be handled before removing access.`,
+                confirmLabel: "Remove member",
+                variant: "destructive",
+                content: (
+                    <div className="space-y-4 text-sm">
+                        <div className="rounded-2xl border border-red-200 bg-red-50 p-3 text-red-900 dark:border-red-900/60 dark:bg-red-950/20 dark:text-red-100">
+                            <p className="font-semibold">Access removal impact</p>
+                            <ul className="mt-2 space-y-1 text-xs leading-5">
+                                {policyPreview.affectedAreas.map((area) => (
+                                    <li key={area}>{area}</li>
+                                ))}
+                            </ul>
+                        </div>
+
+                        <RemovalImpactDetails preflight={preflight} />
+
+                        <fieldset className="space-y-2">
+                            <legend className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-400">Removal mode</legend>
+                            {([
+                                ["preserve_history", "Preserve history", "Keep active assignments in place and label them Removed from project · Needs reassignment."],
+                                ["unassign_active_tasks", "Unassign active tasks", "Clear this member from active task assignee fields while preserving creator/comment/file history."],
+                                ["reassign_active_tasks", "Reassign active tasks", "Move active assigned tasks to another eligible active collaborator."],
+                            ] as const).map(([mode, label, detail]) => (
+                                <label key={mode} className="flex cursor-pointer gap-3 rounded-2xl border border-zinc-200 p-3 dark:border-zinc-800">
+                                    <input
+                                        type="radio"
+                                        name="project-member-removal-mode"
+                                        value={mode}
+                                        checked={removalMode === mode}
+                                        onChange={() => setRemovalMode(mode)}
+                                        className="mt-1"
+                                    />
+                                    <span>
+                                        <span className="block font-semibold text-zinc-950 dark:text-zinc-50">{label}</span>
+                                        <span className="mt-0.5 block text-xs leading-5 text-zinc-500">{detail}</span>
+                                    </span>
+                                </label>
+                            ))}
+                        </fieldset>
+
+                        {removalMode === "reassign_active_tasks" ? (
+                            <label className="block">
+                                <span className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-400">Replacement assignee</span>
+                                <select
+                                    value={removalReassignToUserId}
+                                    onChange={(event) => setRemovalReassignToUserId(event.target.value)}
+                                    className="mt-2 h-10 w-full rounded-xl border border-zinc-200 bg-white px-3 text-sm outline-none focus:border-blue-500 dark:border-zinc-800 dark:bg-zinc-950"
+                                >
+                                    {(preflight.reassignmentCandidates ?? []).map((candidate) => (
+                                        <option key={candidate.id} value={candidate.id}>
+                                            {getProjectMemberDisplayName(candidate)} · {getProjectMemberRoleLabel(candidate.membershipRole)}
+                                        </option>
+                                    ))}
+                                </select>
+                                {(preflight.reassignmentCandidates ?? []).length === 0 ? (
+                                    <span className="mt-2 block text-xs text-red-500">No eligible replacement assignee is available.</span>
+                                ) : null}
+                            </label>
+                        ) : null}
+                    </div>
+                ),
+                action: async () => {
+                    const nextMode = removalModeRef.current;
+                    const reassignToUserId = removalReassignToUserIdRef.current || null;
+                    if (nextMode === "reassign_active_tasks" && !reassignToUserId) {
+                        return { success: false, message: "Choose a replacement assignee." };
+                    }
+                    const removeResult = await removeProjectMemberAction(projectId, member.id, {
+                        mode: nextMode,
+                        reassignToUserId: nextMode === "reassign_active_tasks" ? reassignToUserId : null,
+                    });
+                    if (!removeResult.success) {
+                        return { success: false, message: removeResult.message };
+                    }
+                    return { success: true, message: removeResult.message, refresh: true };
+                },
+            });
+        } catch (error) {
+            console.error("Failed to load member removal preflight", error);
+            toast.error("Failed to load removal impact.");
+        }
+    }, [actorProjectRole, isProjectOwner, ownerId, projectId]);
 
     const prepareDelete = useCallback(() => {
         if (!dangerPreflight) {
@@ -894,15 +1369,15 @@ export default function ProjectSettingsTab({
         }));
     }, []);
 
-    if (!isProjectOwner) {
+    if (!canManageSettings) {
         return (
             <div className="mx-auto flex max-w-xl flex-col items-center justify-center rounded-3xl border border-zinc-200 bg-white px-8 py-16 text-center shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
                 <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-zinc-100 dark:bg-zinc-900">
                     <Lock className="h-8 w-8 text-zinc-400" />
                 </div>
-                <h3 className="text-lg font-semibold text-zinc-950 dark:text-zinc-50">Settings are owner-only</h3>
+                <h3 className="text-lg font-semibold text-zinc-950 dark:text-zinc-50">Settings require collaborator management access</h3>
                 <p className="mt-2 text-sm leading-6 text-zinc-500">
-                    Project settings can change discovery, permissions, files, notifications, and destructive lifecycle actions. Ask the owner for access if you need to change them.
+                    Owners can manage every setting. Co-leaders can manage member and viewer lifecycle. Ask the owner for access if you need to change collaborators.
                 </p>
             </div>
         );
@@ -910,6 +1385,67 @@ export default function ProjectSettingsTab({
 
     const coverImageUrl = coverImage.trim();
     const coverInputId = `project-image-${projectId}`;
+    const removalDialogContent = removalPreflightDialog ? (() => {
+        const policyPreview = buildProjectMemberRemovalPreflight(removalPreflightDialog);
+        return (
+            <div className="space-y-4 text-sm">
+                <div className="rounded-2xl border border-red-200 bg-red-50 p-3 text-red-900 dark:border-red-900/60 dark:bg-red-950/20 dark:text-red-100">
+                    <p className="font-semibold">Access removal impact</p>
+                    <ul className="mt-2 space-y-1 text-xs leading-5">
+                        {policyPreview.affectedAreas.map((area) => (
+                            <li key={area}>{area}</li>
+                        ))}
+                    </ul>
+                </div>
+
+                <RemovalImpactDetails preflight={removalPreflightDialog} />
+
+                <fieldset className="space-y-2">
+                    <legend className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-400">Removal mode</legend>
+                    {([
+                        ["preserve_history", "Preserve history", "Keep active assignments in place and label them Removed from project · Needs reassignment."],
+                        ["unassign_active_tasks", "Unassign active tasks", "Clear this member from active task assignee fields while preserving creator/comment/file history."],
+                        ["reassign_active_tasks", "Reassign active tasks", "Move active assigned tasks to another eligible active collaborator."],
+                    ] as const).map(([mode, label, detail]) => (
+                        <label key={mode} className="flex cursor-pointer gap-3 rounded-2xl border border-zinc-200 p-3 dark:border-zinc-800">
+                            <input
+                                type="radio"
+                                name="project-member-removal-mode"
+                                value={mode}
+                                checked={removalMode === mode}
+                                onChange={() => setRemovalMode(mode)}
+                                className="mt-1"
+                            />
+                            <span>
+                                <span className="block font-semibold text-zinc-950 dark:text-zinc-50">{label}</span>
+                                <span className="mt-0.5 block text-xs leading-5 text-zinc-500">{detail}</span>
+                            </span>
+                        </label>
+                    ))}
+                </fieldset>
+
+                {removalMode === "reassign_active_tasks" ? (
+                    <label className="block">
+                        <span className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-400">Replacement assignee</span>
+                        <select
+                            value={removalReassignToUserId}
+                            onChange={(event) => setRemovalReassignToUserId(event.target.value)}
+                            className="mt-2 h-10 w-full rounded-xl border border-zinc-200 bg-white px-3 text-sm outline-none focus:border-blue-500 dark:border-zinc-800 dark:bg-zinc-950"
+                        >
+                            {(removalPreflightDialog.reassignmentCandidates ?? []).map((candidate) => (
+                                <option key={candidate.id} value={candidate.id}>
+                                    {getProjectMemberDisplayName(candidate)} · {getProjectMemberRoleLabel(candidate.membershipRole)}
+                                </option>
+                            ))}
+                        </select>
+                        {(removalPreflightDialog.reassignmentCandidates ?? []).length === 0 ? (
+                            <span className="mt-2 block text-xs text-red-500">No eligible replacement assignee is available.</span>
+                        ) : null}
+                    </label>
+                ) : null}
+            </div>
+        );
+    })() : confirmAction?.content;
 
     return (
         <div className="mx-auto grid w-full max-w-7xl gap-6 p-4 sm:p-6 lg:p-8 xl:grid-cols-[280px_minmax(0,1fr)]">
@@ -918,7 +1454,9 @@ export default function ProjectSettingsTab({
                     <p className="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-400">Project settings</p>
                     <h2 className="mt-2 text-xl font-semibold text-zinc-950 dark:text-zinc-50">Control center</h2>
                     <p className="mt-2 text-sm leading-5 text-zinc-500">
-                        Owner-only settings with one canonical policy path across the app.
+                        {isProjectOwner
+                            ? "Owner settings with one canonical policy path across the app."
+                            : "Co-leader collaborator controls with owner-only settings hidden."}
                     </p>
                 </div>
                 <nav className="mt-2 space-y-1">
@@ -1266,6 +1804,25 @@ export default function ProjectSettingsTab({
                             <AffectedAreas items={accessPolicy.affectedAreas} />
                         </SettingsCard>
 
+                        <SettingsCard
+                            title="Access impact"
+                            description="Live counts help owners understand who and what is affected before saving a visibility change."
+                        >
+                            <AccessImpactGrid items={accessImpactPolicy.metrics} isLoading={accessImpactLoading} />
+                            {accessImpactPolicy.summary.length > 0 && (
+                                <div className="mt-4 rounded-2xl border border-blue-100 bg-blue-50/70 p-3 text-sm text-blue-900 dark:border-blue-900/50 dark:bg-blue-950/20 dark:text-blue-100">
+                                    {accessImpactPolicy.summary.join(" ")}
+                                </div>
+                            )}
+                        </SettingsCard>
+
+                        <SettingsCard
+                            title={visibility === "private" ? "Private transition checklist" : "Public transition checklist"}
+                            description="This is the exact save pipeline we expect after the visibility setting changes."
+                        >
+                            <PolicyList items={accessImpactPolicy.transitionChecklist} />
+                        </SettingsCard>
+
                         <AdvancedDisclosure
                             open={Boolean(advancedOpen.access)}
                             onToggle={() => toggleAdvanced("access")}
@@ -1285,30 +1842,154 @@ export default function ProjectSettingsTab({
                 {activeSection === "collaborators" && (
                     <div className="space-y-5">
                         <SummaryCard
-                            title="Collaborator policy"
-                            description="Members are shown through the same project member data used by dashboard, tasks, and files. Role mutations stay guarded by owner checks."
+                            title="Collaborator control center"
+                            description="Manage the single project owner, Co-leaders, members, viewers, and safe removal without rewriting project history."
                             icon={Users}
                             meta={[
-                                ["Members loaded", loadingMembers ? "Loading..." : String(rolePolicy.members.length)],
+                                ["Members loaded", collaboratorLoading || loadingMembers ? "Loading..." : String(rolePolicy.members.length)],
+                                ["Co-leaders", String(rolePolicy.roleCounts.admin)],
                                 ["Transfer candidates", String(rolePolicy.transferCandidates.length)],
                             ]}
                         />
 
-                        <SettingsCard title="Members" description="Current project members and effective roles. Role editing/removal should continue through the canonical member-management flow.">
-                            {loadingMembers ? (
+                        <SettingsCard title="Role summary" description="Stored roles stay canonical; Co-leader is the product label for admin permissions.">
+                            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                                {([
+                                    ["Owner", rolePolicy.roleCounts.owner, "One true owner controls transfer, archive, and delete."],
+                                    ["Co-leaders", rolePolicy.roleCounts.admin, "Can manage day-to-day project work without danger-zone access."],
+                                    ["Members", rolePolicy.roleCounts.member, "Can contribute according to project permissions."],
+                                    ["Viewers", rolePolicy.roleCounts.viewer, "Read-focused access; not assignable to tasks."],
+                                ] as const).map(([label, value, detail]) => (
+                                    <div key={label} className="rounded-2xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-800 dark:bg-zinc-900/60">
+                                        <p className="text-2xl font-semibold text-zinc-950 dark:text-zinc-50">{value}</p>
+                                        <p className="mt-1 text-sm font-semibold text-zinc-800 dark:text-zinc-100">{label}</p>
+                                        <p className="mt-2 text-xs leading-5 text-zinc-500 dark:text-zinc-400">{detail}</p>
+                                    </div>
+                                ))}
+                            </div>
+                        </SettingsCard>
+
+                        <SettingsCard title="Leadership" description="The owner is unique. Co-leaders are elevated admins, not additional owners.">
+                            <div className="grid gap-3 lg:grid-cols-2">
+                                {rolePolicy.owner ? (
+                                    <CollaboratorCard
+                                        member={rolePolicy.owner}
+                                        ownerId={ownerId}
+                                        isProjectOwner={isProjectOwner}
+                                        actorRole={actorProjectRole}
+                                        onRoleChange={prepareRoleChange}
+                                        onRemove={prepareRemoveMember}
+                                        onTransfer={prepareTransferToMember}
+                                    />
+                                ) : (
+                                    <p className="rounded-2xl border border-dashed border-zinc-200 p-4 text-sm text-zinc-500 dark:border-zinc-800">Owner record is unavailable.</p>
+                                )}
+                                {rolePolicy.coLeaders.length > 0 ? (
+                                    rolePolicy.coLeaders.map((member) => (
+                                        <CollaboratorCard
+                                            key={member.id}
+                                            member={member}
+                                            ownerId={ownerId}
+                                            isProjectOwner={isProjectOwner}
+                                            actorRole={actorProjectRole}
+                                            onRoleChange={prepareRoleChange}
+                                            onRemove={prepareRemoveMember}
+                                            onTransfer={prepareTransferToMember}
+                                        />
+                                    ))
+                                ) : (
+                                    <div className="rounded-2xl border border-dashed border-zinc-200 p-4 text-sm text-zinc-500 dark:border-zinc-800">
+                                        No Co-leaders yet. Promote a trusted member when they need to manage tasks, files, roles, and workflow without receiving destructive owner permissions.
+                                    </div>
+                                )}
+                            </div>
+                        </SettingsCard>
+
+                        <SettingsCard title="Members" description="Search, filter, promote, demote, transfer ownership, or remove members through the canonical collaborator actions.">
+                            <div className="mb-4 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                                <div className="relative min-w-0 flex-1">
+                                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+                                    <input
+                                        value={collaboratorSearch}
+                                        onChange={(event) => setCollaboratorSearch(event.target.value)}
+                                        placeholder="Search collaborators..."
+                                        aria-label="Search collaborators"
+                                        className="h-10 w-full rounded-xl border border-zinc-200 bg-white pl-9 pr-3 text-sm outline-none transition focus:border-blue-500 dark:border-zinc-800 dark:bg-zinc-950"
+                                    />
+                                </div>
+                                <div className="flex flex-wrap gap-2">
+                                    {([
+                                        ["all", "All"],
+                                        ["admin", "Co-leaders"],
+                                        ["member", "Members"],
+                                        ["viewer", "Viewers"],
+                                    ] as const).map(([id, label]) => (
+                                        <button
+                                            key={id}
+                                            type="button"
+                                            aria-pressed={collaboratorFilter === id}
+                                            onClick={() => setCollaboratorFilter(id)}
+                                            className={cn(
+                                                "rounded-full px-3 py-1.5 text-xs font-semibold transition",
+                                                collaboratorFilter === id
+                                                    ? "bg-blue-600 text-white"
+                                                    : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800",
+                                            )}
+                                        >
+                                            {label}
+                                        </button>
+                                    ))}
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => void loadCollaborators("refresh")}
+                                        disabled={collaboratorRefreshing}
+                                        className="gap-2"
+                                    >
+                                        <RefreshCw className={cn("h-3.5 w-3.5", collaboratorRefreshing && "animate-spin")} />
+                                        Refresh
+                                    </Button>
+                                </div>
+                            </div>
+
+                            {collaboratorLoading || loadingMembers ? (
                                 <div className="flex items-center gap-2 text-sm text-zinc-500">
                                     <Loader2 className="h-4 w-4 animate-spin" />
                                     Loading members...
                                 </div>
-                            ) : rolePolicy.members.length === 0 ? (
+                            ) : filteredCollaborators.length === 0 ? (
                                 <p className="text-sm text-zinc-500">No members loaded yet.</p>
                             ) : (
-                                <div className="divide-y divide-zinc-100 dark:divide-zinc-900">
-                                    {rolePolicy.members.slice(0, 8).map((member) => (
-                                        <MemberRow key={member.id} member={member} role={projectMemberRole(member, ownerId)} />
+                                <div className="grid gap-3 lg:grid-cols-2">
+                                    {filteredCollaborators.map((member) => (
+                                        <CollaboratorCard
+                                            key={member.id}
+                                            member={member}
+                                            ownerId={ownerId}
+                                            isProjectOwner={isProjectOwner}
+                                            actorRole={actorProjectRole}
+                                            onRoleChange={prepareRoleChange}
+                                            onRemove={prepareRemoveMember}
+                                            onTransfer={prepareTransferToMember}
+                                        />
                                     ))}
                                 </div>
                             )}
+                            {collaboratorData?.hasMore ? (
+                                <div className="mt-4 flex justify-center">
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        onClick={() => void loadCollaborators("more")}
+                                        disabled={collaboratorLoadingMore}
+                                        className="gap-2"
+                                    >
+                                        {collaboratorLoadingMore ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                                        Load more collaborators
+                                    </Button>
+                                </div>
+                            ) : null}
                         </SettingsCard>
 
                         <AdvancedDisclosure
@@ -1464,6 +2145,12 @@ export default function ProjectSettingsTab({
                                 ]}
                             />
                         </SettingsCard>
+                        <SettingsCard
+                            title="Recent settings audit"
+                            description="Owner-visible history for access-sensitive settings changes. File activity remains in the Files workspace."
+                        >
+                            <SettingsAuditTimeline events={settingsAuditEvents} isLoading={settingsAuditLoading} />
+                        </SettingsCard>
                     </div>
                 )}
 
@@ -1586,7 +2273,10 @@ export default function ProjectSettingsTab({
             <ConfirmDialog
                 open={Boolean(confirmAction)}
                 onOpenChange={(open) => {
-                    if (!open && !confirmLoading) setConfirmAction(null);
+                    if (!open && !confirmLoading) {
+                        setConfirmAction(null);
+                        setRemovalPreflightDialog(null);
+                    }
                 }}
                 title={confirmAction?.title ?? ""}
                 description={confirmAction?.description}
@@ -1595,7 +2285,9 @@ export default function ProjectSettingsTab({
                 loading={confirmLoading}
                 autoCloseOnConfirm={false}
                 onConfirm={runConfirmAction}
-            />
+            >
+                {removalDialogContent}
+            </ConfirmDialog>
         </div>
     );
 }
@@ -1948,22 +2640,163 @@ function ChipEditor({
     );
 }
 
-function MemberRow({ member, role }: { member: ProjectSettingsMember; role: string }) {
+function formatJoinedAt(value?: string | null) {
+    if (!value) return "Joined date unavailable";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "Joined date unavailable";
+    return `Joined ${new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(date)}`;
+}
+
+function responsibilityHints(member: ProjectSettingsMember) {
+    const counts = member.responsibilityCounts;
+    if (!counts) return [];
+    return [
+        counts.activeAssignedTasks > 0 ? `${counts.activeAssignedTasks} active assigned` : null,
+        counts.activeCreatedTasks > 0 ? `${counts.activeCreatedTasks} created active` : null,
+        counts.fileReviews > 0 ? `${counts.fileReviews} file review` : null,
+        counts.acceptedApplications > 0 ? `${counts.acceptedApplications} accepted role` : null,
+        counts.projectGroupParticipant ? "Project group" : null,
+    ].filter((item): item is string => Boolean(item));
+}
+
+function CollaboratorCard({
+    member,
+    ownerId,
+    isProjectOwner,
+    actorRole,
+    onRoleChange,
+    onRemove,
+    onTransfer,
+}: {
+    member: ProjectSettingsMember;
+    ownerId: string | null;
+    isProjectOwner: boolean;
+    actorRole: ProjectMemberRole;
+    onRoleChange: (member: ProjectSettingsMember, role: Exclude<ProjectMemberRole, "owner">) => void;
+    onRemove: (member: ProjectSettingsMember) => void | Promise<void>;
+    onTransfer: (member: ProjectSettingsMember) => void;
+}) {
+    const role = projectMemberRole(member, ownerId) as ProjectMemberRole;
+    const reference = buildProjectPersonReference({
+        person: {
+            id: member.id,
+            fullName: getProjectMemberDisplayName(member),
+            username: member.username ?? null,
+            avatarUrl: member.avatarUrl ?? null,
+        },
+        membershipRole: role,
+        isActiveMember: true,
+    });
+    const mutationPolicy = buildProjectMemberMutationPolicy({
+        actorIsOwner: isProjectOwner,
+        actorRole,
+        ownerId,
+        targetUserId: member.id,
+        targetRole: role,
+    });
+    const hints = responsibilityHints(member);
+    const roleOptions: Array<Exclude<ProjectMemberRole, "owner">> = ["admin", "member", "viewer"];
+
     return (
-        <div className="flex items-center justify-between gap-4 py-3">
-            <div className="flex min-w-0 items-center gap-3">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-zinc-100 text-sm font-semibold text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300">
-                    {getProjectMemberDisplayName(member).slice(0, 1).toUpperCase()}
+        <article className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+            <div className="flex items-start gap-3">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-zinc-100 text-sm font-semibold text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300">
+                    {reference.avatarUrl ? (
+                        <img src={reference.avatarUrl} alt="" className="h-full w-full object-cover" />
+                    ) : (
+                        reference.displayName.slice(0, 1).toUpperCase()
+                    )}
                 </div>
-                <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold text-zinc-950 dark:text-zinc-50">{getProjectMemberDisplayName(member)}</p>
-                    <p className="truncate text-xs text-zinc-500">{member.projectRoleTitle || member.username || member.id}</p>
+                <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                        <p className="truncate text-sm font-semibold text-zinc-950 dark:text-zinc-50">{reference.displayName}</p>
+                        <span className={cn(
+                            "rounded-full px-2 py-0.5 text-[11px] font-semibold",
+                            role === "owner"
+                                ? "bg-amber-100 text-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
+                                : role === "admin"
+                                    ? "bg-blue-100 text-blue-800 dark:bg-blue-950/40 dark:text-blue-200"
+                                    : role === "viewer"
+                                        ? "bg-zinc-100 text-zinc-500 dark:bg-zinc-900 dark:text-zinc-300"
+                                        : "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-200",
+                        )}>
+                            {reference.roleLabel}
+                        </span>
+                        {!reference.isAssignable ? (
+                            <span className="rounded-full bg-orange-100 px-2 py-0.5 text-[11px] font-semibold text-orange-800 dark:bg-orange-950/40 dark:text-orange-200">
+                                Not assignable
+                            </span>
+                        ) : null}
+                    </div>
+                    <p className="mt-1 truncate text-xs text-zinc-500">
+                        {member.projectRoleTitle || member.username || member.id}
+                    </p>
+                    <p className="mt-1 text-xs text-zinc-400">{formatJoinedAt(member.joinedAt)}</p>
                 </div>
             </div>
-            <span className="shrink-0 rounded-full border border-zinc-200 px-2.5 py-1 text-xs font-semibold text-zinc-600 dark:border-zinc-800 dark:text-zinc-300">
-                {formatRole(role)}
-            </span>
-        </div>
+
+            {hints.length > 0 ? (
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                    {hints.map((hint) => (
+                        <span key={hint} className="rounded-full bg-zinc-100 px-2 py-1 text-[11px] font-medium text-zinc-500 dark:bg-zinc-900 dark:text-zinc-400">
+                            {hint}
+                        </span>
+                    ))}
+                </div>
+            ) : null}
+
+            <details className="group mt-4">
+                <summary className="inline-flex cursor-pointer list-none items-center gap-2 rounded-xl border border-zinc-200 px-3 py-2 text-xs font-semibold text-zinc-700 transition hover:bg-zinc-50 dark:border-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-900">
+                    Actions
+                    <ChevronDown className="h-3.5 w-3.5 transition group-open:rotate-180" />
+                </summary>
+                <div className="mt-2 grid gap-2 rounded-2xl border border-zinc-200 bg-zinc-50 p-2 dark:border-zinc-800 dark:bg-zinc-900/60">
+                    {role !== "owner" ? roleOptions.map((option) => {
+                        const optionPolicy = buildProjectMemberMutationPolicy({
+                            actorIsOwner: isProjectOwner,
+                            actorRole,
+                            ownerId,
+                            targetUserId: member.id,
+                            targetRole: role,
+                            nextRole: option,
+                        });
+                        return (
+                            <Button
+                                key={option}
+                                type="button"
+                                variant={role === option ? "default" : "outline"}
+                                size="sm"
+                                disabled={!optionPolicy.canChangeRole || role === option}
+                                onClick={() => onRoleChange(member, option)}
+                                className="justify-start"
+                            >
+                                {option === "admin" ? <ShieldCheck className="h-3.5 w-3.5" /> : null}
+                                Change role to {getProjectMemberRoleLabel(option)}
+                            </Button>
+                        );
+                    }) : (
+                        <Button type="button" variant="outline" size="sm" disabled className="justify-start">
+                            <Crown className="h-3.5 w-3.5" />
+                            True owner
+                        </Button>
+                    )}
+
+                    {mutationPolicy.canTransferOwnership ? (
+                        <Button type="button" variant="outline" size="sm" onClick={() => onTransfer(member)} className="justify-start">
+                            <Crown className="h-3.5 w-3.5" />
+                            Transfer ownership
+                        </Button>
+                    ) : null}
+
+                    {mutationPolicy.canRemove ? (
+                        <Button type="button" variant="outline" size="sm" onClick={() => void onRemove(member)} className="justify-start text-red-600 hover:text-red-700 dark:text-red-300">
+                            <UserMinus className="h-3.5 w-3.5" />
+                            Remove member
+                        </Button>
+                    ) : null}
+                </div>
+            </details>
+        </article>
     );
 }
 
@@ -2040,6 +2873,206 @@ function AccessMatrix({
             </div>
         </div>
     );
+}
+
+function AccessImpactGrid({
+    items,
+    isLoading,
+}: {
+    items: Array<{ label: string; value: number; detail: string }>;
+    isLoading: boolean;
+}) {
+    if (isLoading) {
+        return (
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                {Array.from({ length: 5 }).map((_, index) => (
+                    <div key={index} className="h-24 animate-pulse rounded-2xl border border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900/60" />
+                ))}
+            </div>
+        );
+    }
+
+    return (
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {items.map((item) => (
+                <div key={item.label} className="rounded-2xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+                    <p className="text-2xl font-semibold text-zinc-950 dark:text-zinc-50">{item.value}</p>
+                    <p className="mt-1 text-sm font-semibold text-zinc-800 dark:text-zinc-100">{item.label}</p>
+                    <p className="mt-2 text-xs leading-5 text-zinc-500 dark:text-zinc-400">{item.detail}</p>
+                </div>
+            ))}
+        </div>
+    );
+}
+
+function AccessTransitionDetails({ preflight }: { preflight: AccessTransitionPreflightData }) {
+    const previewRows = [
+        {
+            label: "Followers",
+            items: preflight.previews.followers.map((follower) => follower.fullName || follower.username || "Follower"),
+            fallback: "No follower previews are affected.",
+        },
+        {
+            label: "Open roles",
+            items: preflight.previews.openRoles.map((role) => role.title || role.role || "Open role"),
+            fallback: "No open role previews are affected.",
+        },
+        {
+            label: "Pending applications",
+            items: preflight.previews.pendingApplications.map((application) => {
+                const roleLabel = application.roleTitle || application.roleName || "role";
+                return `${application.applicantName || "Applicant"} · ${roleLabel}`;
+            }),
+            fallback: "No pending application previews are affected.",
+        },
+    ];
+
+    return (
+        <div className="space-y-4 text-sm">
+            <div className="rounded-2xl border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-zinc-900/70">
+                <p className="font-semibold text-zinc-950 dark:text-zinc-50">Affected counts</p>
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                    {[
+                        ["Members", preflight.counts.membersCount],
+                        ["Followers", preflight.counts.followersCount],
+                        ["Open roles", preflight.counts.openRolesCount],
+                        ["Pending applications", preflight.counts.pendingApplicationsCount],
+                        ["Active tasks", preflight.counts.activeTasksCount],
+                    ].map(([label, value]) => (
+                        <div key={label} className="rounded-xl bg-white px-3 py-2 text-xs dark:bg-zinc-950">
+                            <span className="font-semibold text-zinc-900 dark:text-zinc-100">{value}</span>
+                            <span className="ml-2 text-zinc-500">{label}</span>
+                        </div>
+                    ))}
+                </div>
+            </div>
+
+            <div className="space-y-2">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-400">Transition checklist</p>
+                <PolicyList items={preflight.policy.transitionChecklist} />
+            </div>
+
+            {preflight.policy.irreversibleNotes.length > 0 ? (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/20 dark:text-amber-100">
+                    <p className="font-semibold">Important notes</p>
+                    <ul className="mt-2 space-y-1 text-xs leading-5">
+                        {preflight.policy.irreversibleNotes.map((note) => (
+                            <li key={note}>{note}</li>
+                        ))}
+                    </ul>
+                </div>
+            ) : null}
+
+            <div className="grid gap-3">
+                {previewRows.map((row) => (
+                    <div key={row.label} className="rounded-2xl border border-zinc-200 p-3 dark:border-zinc-800">
+                        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-400">{row.label}</p>
+                        {row.items.length > 0 ? (
+                            <div className="mt-2 flex flex-wrap gap-2">
+                                {row.items.map((item, index) => (
+                                    <span key={`${row.label}-${index}-${item}`} className="rounded-full bg-zinc-100 px-2.5 py-1 text-xs text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300">
+                                        {item}
+                                    </span>
+                                ))}
+                            </div>
+                        ) : (
+                            <p className="mt-2 text-xs text-zinc-500">{row.fallback}</p>
+                        )}
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+}
+
+function SettingsAuditTimeline({
+    events,
+    isLoading,
+}: {
+    events: SettingsAuditEvent[];
+    isLoading: boolean;
+}) {
+    if (isLoading) {
+        return (
+            <div className="space-y-3">
+                {Array.from({ length: 3 }).map((_, index) => (
+                    <div key={index} className="h-16 animate-pulse rounded-2xl bg-zinc-50 dark:bg-zinc-900/70" />
+                ))}
+            </div>
+        );
+    }
+
+    if (events.length === 0) {
+        return (
+            <div className="rounded-2xl border border-dashed border-zinc-200 p-4 text-sm text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
+                No settings audit events have been recorded yet.
+            </div>
+        );
+    }
+
+    return (
+        <div className="divide-y divide-zinc-100 overflow-hidden rounded-2xl border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
+            {events.map((event) => (
+                <div key={event.id} className="flex flex-col gap-1 bg-white px-4 py-3 text-sm dark:bg-zinc-950 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                        <p className="font-semibold text-zinc-900 dark:text-zinc-100">{formatSettingsAuditEvent(event)}</p>
+                        <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                            {event.actorName || "System"} · {formatAuditDate(event.createdAt)}
+                        </p>
+                    </div>
+                    <span className="rounded-full bg-zinc-100 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500 dark:bg-zinc-900 dark:text-zinc-400">
+                        Audit
+                    </span>
+                </div>
+            ))}
+        </div>
+    );
+}
+
+function formatSettingsAuditEvent(event: SettingsAuditEvent) {
+    const targetName = typeof event.metadata.targetDisplayName === "string"
+        ? event.metadata.targetDisplayName
+        : typeof (event.metadata.targetSnapshot as { fullName?: unknown; username?: unknown } | undefined)?.fullName === "string"
+            ? String((event.metadata.targetSnapshot as { fullName?: unknown }).fullName)
+            : typeof (event.metadata.targetSnapshot as { username?: unknown } | undefined)?.username === "string"
+                ? String((event.metadata.targetSnapshot as { username?: unknown }).username)
+                : "Member";
+    if (event.type === "project_settings.visibility_changed") {
+        const previous = typeof event.metadata.previousVisibility === "string" ? event.metadata.previousVisibility : "unknown";
+        const next = typeof event.metadata.nextVisibility === "string" ? event.metadata.nextVisibility : "unknown";
+        return `Visibility changed from ${previous} to ${next}`;
+    }
+    if (event.type === "project_member.role_changed") {
+        const previous = typeof event.metadata.previousRole === "string" ? event.metadata.previousRole : "unknown";
+        const next = typeof event.metadata.nextRole === "string" ? event.metadata.nextRole : "unknown";
+        return `${targetName} changed from ${getProjectMemberRoleLabel(previous)} to ${getProjectMemberRoleLabel(next)}`;
+    }
+    if (event.type === "project_member.removed") {
+        const previous = typeof event.metadata.previousRole === "string" ? event.metadata.previousRole : "unknown";
+        return `${targetName} removed from ${getProjectMemberRoleLabel(previous)}`;
+    }
+    if (event.type === "project_member.ownership_transferred") {
+        const previousOwner = (event.metadata.previousOwnerSnapshot as { fullName?: string | null; username?: string | null } | null)?.fullName
+            || (event.metadata.previousOwnerSnapshot as { username?: string | null } | null)?.username
+            || "Previous owner";
+        const newOwner = (event.metadata.newOwnerSnapshot as { fullName?: string | null; username?: string | null } | null)?.fullName
+            || (event.metadata.newOwnerSnapshot as { username?: string | null } | null)?.username
+            || "New owner";
+        return `Ownership transferred from ${previousOwner} to ${newOwner}`;
+    }
+    return event.type.replace(/^project_settings\./, "").replace(/_/g, " ");
+}
+
+function formatAuditDate(value: string) {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "Unknown time";
+    return new Intl.DateTimeFormat("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+    }).format(date);
 }
 
 function PolicyList({ items }: { items: string[] }) {

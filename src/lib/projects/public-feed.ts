@@ -68,7 +68,7 @@ export function decodePublicProjectsCursor(cursor: string | null | undefined): P
 
 export function buildPublicProjectsCacheKey(limit: number, cursor: PublicProjectsCursor | null) {
     const suffix = cursor ? `${cursor.createdAt}:${cursor.id}` : 'origin'
-    return `projects:public:v3:limit:${limit}:cursor:${suffix}`
+    return `projects:public:v4:limit:${limit}:cursor:${suffix}`
 }
 
 function normalizeProjectStatus(status: string | null): Project['status'] {

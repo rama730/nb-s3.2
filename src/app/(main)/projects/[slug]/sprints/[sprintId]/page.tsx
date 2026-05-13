@@ -6,7 +6,7 @@ import { readProjectDetailMetadata, readProjectDetailShell, readProjectSprintDet
 import { isHardeningDomainEnabled } from "@/lib/features/hardening";
 import { getViewerAuthContext } from "@/lib/server/viewer-context";
 import { buildRouteMetadata } from "@/lib/metadata/route-metadata";
-import { buildProjectDetailMetadataInput, getProjectTitleFromSlug } from "@/lib/projects/project-detail-metadata";
+import { buildProjectDetailMetadataInput } from "@/lib/projects/project-detail-metadata";
 
 export async function generateMetadata({
   params,
@@ -14,12 +14,11 @@ export async function generateMetadata({
   params: Promise<{ slug: string; sprintId: string }>;
 }): Promise<Metadata> {
   const { slug, sprintId } = await params;
-  const fallbackTitle = getProjectTitleFromSlug(slug);
   const result = await readProjectDetailMetadata({ slugOrId: slug, actorUserId: null });
   if (!result.success) {
     return buildRouteMetadata({
-      title: `${fallbackTitle} Sprint | Edge`,
-      description: `Explore sprint work inside ${fallbackTitle} on Edge.`,
+      title: "Project unavailable | Edge",
+      description: "This sprint belongs to a private or unavailable project.",
       path: `/projects/${encodeURIComponent(slug)}/sprints/${encodeURIComponent(sprintId)}`,
     });
   }

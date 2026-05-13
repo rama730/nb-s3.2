@@ -8,7 +8,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { LifecycleEditor } from "@/components/projects/LifecycleEditor";
 import {
     Layout, FileText, Layers, Users, X, Sparkles, Plus, Trash2,
-    Check, Globe, Lock, Info, ChevronRight, CheckCircle
+    Check, Info, ChevronRight, CheckCircle
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -28,7 +28,6 @@ const roleSchema = z.object({
 
 const projectSchema = z.object({
     status: z.enum(["draft", "active", "completed", "archived"]),
-    visibility: z.enum(["public", "private"]),
     title: z.string().min(1, "Title is required").max(100),
     shortDescription: z.string().max(200, "Tagline must be less than 200 characters").optional(),
     description: z.string().optional(),
@@ -105,45 +104,6 @@ function StatusSelector({ value, onChange }: { value: string; onChange: (val: st
     );
 }
 
-function VisibilitySelector({ value, onChange }: { value: string; onChange: (val: string) => void }) {
-    const options = [
-        { id: "public", label: "Public", desc: "Visible to everyone", icon: Globe },
-        { id: "private", label: "Private", desc: "Only members", icon: Lock },
-    ];
-
-    return (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {options.map((opt) => {
-                const isSelected = value === opt.id;
-                return (
-                    <button
-                        key={opt.id}
-                        type="button"
-                        onClick={() => onChange(opt.id)}
-                        className={cn(
-                            "flex flex-col gap-2 p-3 rounded-xl border-2 transition-all text-left",
-                            isSelected
-                                ? "border-indigo-600 bg-indigo-50/10 dark:bg-indigo-900/10"
-                                : "border-zinc-200 dark:border-zinc-800 hover:border-zinc-300 dark:hover:border-zinc-700"
-                        )}
-                    >
-                        <div className={cn(
-                            "p-1.5 rounded-lg w-fit",
-                            isSelected ? "bg-indigo-100 text-indigo-600 dark:bg-indigo-900/30" : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800"
-                        )}>
-                            <opt.icon className="w-4 h-4" />
-                        </div>
-                        <div>
-                            <span className="block text-sm font-semibold text-zinc-900 dark:text-zinc-100">{opt.label}</span>
-                            <span className="text-xs text-zinc-500 dark:text-zinc-400">{opt.desc}</span>
-                        </div>
-                    </button>
-                );
-            })}
-        </div>
-    );
-}
-
 // --- Main Component ---
 
 export default function EditProjectModal({ project, isOpen, onClose, onSaved }: EditProjectModalProps) {
@@ -157,7 +117,6 @@ export default function EditProjectModal({ project, isOpen, onClose, onSaved }: 
         resolver: zodResolver(projectSchema),
         defaultValues: {
             status: project.status || "draft",
-            visibility: project.visibility === "private" ? "private" : "public",
             title: project.title || "",
             shortDescription: project.shortDescription || "",
             description: project.description || "",
@@ -322,17 +281,6 @@ export default function EditProjectModal({ project, isOpen, onClose, onSaved }: 
                                                         <div>
                                                             <label className="block text-sm font-medium mb-3 text-zinc-900 dark:text-zinc-100">Project Status</label>
                                                             <StatusSelector value={field.value} onChange={field.onChange} />
-                                                        </div>
-                                                    )}
-                                                />
-                                                <div className="w-full h-px bg-zinc-200 dark:bg-zinc-800" />
-                                                <Controller
-                                                    control={control}
-                                                    name="visibility"
-                                                    render={({ field }) => (
-                                                        <div>
-                                                            <label className="block text-sm font-medium mb-3 text-zinc-900 dark:text-zinc-100">Visibility</label>
-                                                            <VisibilitySelector value={field.value} onChange={field.onChange} />
                                                         </div>
                                                     )}
                                                 />

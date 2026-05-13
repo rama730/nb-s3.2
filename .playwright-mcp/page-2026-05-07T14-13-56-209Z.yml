@@ -1,0 +1,75 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - banner [ref=e3]:
+      - generic [ref=e4]:
+        - link "Navigate to home" [ref=e7] [cursor=pointer]:
+          - /url: /
+          - img [ref=e11]
+          - generic [ref=e14]: NB
+        - navigation "Main navigation" [ref=e15]:
+          - link "Hub" [ref=e16] [cursor=pointer]:
+            - /url: /hub
+            - img [ref=e17]
+            - generic [ref=e22]: Hub
+          - link "Connections" [ref=e23] [cursor=pointer]:
+            - /url: /people
+            - img [ref=e24]
+            - generic [ref=e29]: Connections
+          - link "Messages" [ref=e30] [cursor=pointer]:
+            - /url: /messages
+            - img [ref=e31]
+            - generic [ref=e33]: Messages
+          - link "Settings" [ref=e34] [cursor=pointer]:
+            - /url: /settings
+            - img [ref=e35]
+            - generic [ref=e38]: Settings
+        - generic [ref=e39]:
+          - button "Theme (loading)" [disabled]
+    - main [ref=e43]:
+      - generic [ref=e45]:
+        - generic [ref=e48]:
+          - generic [ref=e49]:
+            - link "Hub" [ref=e50] [cursor=pointer]:
+              - /url: /hub
+              - img [ref=e51]
+              - text: Hub
+            - generic [ref=e53]:
+              - heading "Network for builders" [level=1] [ref=e54]
+              - generic [ref=e55]:
+                - generic [ref=e56]: Created by
+                - link "Ramanayudu CH" [ref=e57] [cursor=pointer]:
+                  - /url: /u/ramanayudu_ch
+              - generic "Active Project" [ref=e58]
+            - generic [ref=e60]:
+              - generic "Total Views" [ref=e61]:
+                - img [ref=e62]
+                - generic [ref=e65]: "62"
+              - generic "Followers" [ref=e66]:
+                - img [ref=e67]
+                - generic [ref=e72]: "2"
+          - generic [ref=e73]:
+            - button "Follow" [ref=e74] [cursor=pointer]:
+              - img [ref=e75]
+              - generic [ref=e78]: Follow
+            - button "Share Project" [ref=e80] [cursor=pointer]:
+              - img [ref=e81]
+        - generic [ref=e89]:
+          - button "Dashboard" [disabled] [ref=e90]:
+            - img [ref=e91]
+            - text: Dashboard
+          - button "Sprints" [disabled] [ref=e96]:
+            - img [ref=e97]
+            - text: Sprints
+          - button "Tasks" [disabled] [ref=e100]:
+            - img [ref=e101]
+            - text: Tasks
+          - button "Analytics" [disabled] [ref=e104]:
+            - img [ref=e105]
+            - text: Analytics
+          - button "Files" [disabled] [ref=e107]:
+            - img [ref=e108]
+            - text: Files
+        - region "Project detail content" [ref=e110]
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=e116] [cursor=pointer]:
+    - img [ref=e117]

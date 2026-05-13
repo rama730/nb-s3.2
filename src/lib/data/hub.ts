@@ -1,5 +1,5 @@
 import { cache } from 'react';
-import { and, asc, desc, eq, ilike, inArray, isNull, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, ilike, inArray, isNull, ne, or, sql, type SQL } from 'drizzle-orm';
 import { FILTER_VIEWS, SORT_OPTIONS, type FilterView } from '@/constants/hub';
 import { db } from '@/lib/db';
 import { profiles, projectFollows, projectMembers, projectOpenRoles, projects } from '@/lib/db/schema';
@@ -250,7 +250,9 @@ const buildBaseConditions = (
     const conditions: SQL<unknown>[] = [isNull(projects.deletedAt)];
 
     if (view !== FILTER_VIEWS.MY_PROJECTS || !viewerId) {
-        conditions.push(eq(projects.visibility, 'public'));
+        const publicVisibility = or(eq(projects.visibility, 'public'), eq(projects.visibility, 'unlisted'));
+        if (publicVisibility) conditions.push(publicVisibility);
+        conditions.push(ne(projects.status, 'draft'));
     }
 
     if (view === FILTER_VIEWS.FOLLOWING && viewerId) {

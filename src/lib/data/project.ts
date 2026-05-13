@@ -1,6 +1,6 @@
 import { db } from '@/lib/db';
 import { projects, projectFollows, projectOpenRoles, profiles, projectMembers } from '@/lib/db/schema';
-import { eq, desc, sql, and, isNull } from 'drizzle-orm';
+import { eq, desc, sql, and, isNull, ne, or } from 'drizzle-orm';
 import { cache } from 'react';
 
 // Removing cache for debug
@@ -109,7 +109,11 @@ export const getPopularProjectIds = cache(async (limit: number = 20) => {
     const data = await db
         .select({ id: projects.id })
         .from(projects)
-        .where(and(eq(projects.visibility, 'public'), isNull(projects.deletedAt)))
+        .where(and(
+            or(eq(projects.visibility, 'public'), eq(projects.visibility, 'unlisted')),
+            ne(projects.status, 'draft'),
+            isNull(projects.deletedAt),
+        ))
         .orderBy(desc(projects.viewCount))
         .limit(limit);
 

@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import {
@@ -455,6 +455,67 @@ export async function readProjectMemberRemovalImpact(
     };
 }
 
+async function readProjectMemberRemovalImpactCounts(
+    executor: ProjectCollaboratorExecutor,
+    projectId: string,
+    memberUserId: string,
+) {
+    const [assignedTasks, createdTasks, fileReviews, acceptedApplications, projectRow] = await Promise.all([
+        executor
+            .select({ count: sql<number>`count(*)::int` })
+            .from(tasks)
+            .where(and(eq(tasks.projectId, projectId), eq(tasks.assigneeId, memberUserId), isNull(tasks.deletedAt), sql`${tasks.status} <> 'done'`))
+            .limit(1),
+        executor
+            .select({ count: sql<number>`count(*)::int` })
+            .from(tasks)
+            .where(and(eq(tasks.projectId, projectId), eq(tasks.creatorId, memberUserId), isNull(tasks.deletedAt), sql`${tasks.status} <> 'done'`))
+            .limit(1),
+        executor
+            .select({ count: sql<number>`count(*)::int` })
+            .from(taskNodeLinks)
+            .innerJoin(tasks, eq(taskNodeLinks.taskId, tasks.id))
+            .innerJoin(projectNodes, eq(taskNodeLinks.nodeId, projectNodes.id))
+            .where(and(
+                eq(tasks.projectId, projectId),
+                isNull(tasks.deletedAt),
+                isNull(projectNodes.deletedAt),
+                eq(taskNodeLinks.createdBy, memberUserId),
+                sql`lower(coalesce(${taskNodeLinks.annotation}, '')) like '%review%'`,
+            ))
+            .limit(1),
+        executor
+            .select({ count: sql<number>`count(*)::int` })
+            .from(roleApplications)
+            .where(and(eq(roleApplications.projectId, projectId), eq(roleApplications.applicantId, memberUserId), eq(roleApplications.status, "accepted")))
+            .limit(1),
+        executor
+            .select({ conversationId: projects.conversationId })
+            .from(projects)
+            .where(eq(projects.id, projectId))
+            .limit(1),
+    ]);
+
+    const participantRows = projectRow[0]?.conversationId
+        ? await executor
+            .select({ userId: conversationParticipants.userId })
+            .from(conversationParticipants)
+            .where(and(
+                eq(conversationParticipants.conversationId, projectRow[0].conversationId),
+                eq(conversationParticipants.userId, memberUserId),
+            ))
+            .limit(1)
+        : [];
+
+    return {
+        activeAssignedTasks: Number(assignedTasks[0]?.count ?? 0),
+        activeCreatedTasks: Number(createdTasks[0]?.count ?? 0),
+        fileReviews: Number(fileReviews[0]?.count ?? 0),
+        acceptedApplications: Number(acceptedApplications[0]?.count ?? 0),
+        projectGroupParticipant: participantRows.length > 0,
+    };
+}
+
 export async function removeProjectMemberInternal(
     executor: ProjectCollaboratorExecutor,
     params: {
@@ -474,6 +535,7 @@ export async function removeProjectMemberInternal(
     }
     const target = await readProfileSnapshot(executor, params.targetUserId);
     const impact = await readProjectMemberRemovalImpact(executor, params.projectId, params.targetUserId);
+    const impactCounts = await readProjectMemberRemovalImpactCounts(executor, params.projectId, params.targetUserId);
 
     if (params.mode === "unassign_active_tasks") {
         await executor
@@ -503,12 +565,17 @@ export async function removeProjectMemberInternal(
         .delete(projectMembers)
         .where(and(eq(projectMembers.projectId, params.projectId), eq(projectMembers.userId, params.targetUserId)));
 
-    for (const application of impact.acceptedApplications) {
-        if (!application.roleId) continue;
+    const [capacityApplication] = await executor
+        .select({ roleId: roleApplications.roleId })
+        .from(roleApplications)
+        .where(and(eq(roleApplications.projectId, params.projectId), eq(roleApplications.applicantId, params.targetUserId), eq(roleApplications.status, "accepted")))
+        .orderBy(desc(roleApplications.updatedAt))
+        .limit(1);
+    if (capacityApplication?.roleId) {
         await executor
             .update(projectOpenRoles)
             .set({ filled: sql`greatest(${projectOpenRoles.filled} - 1, 0)`, updatedAt: new Date() })
-            .where(eq(projectOpenRoles.id, application.roleId));
+            .where(eq(projectOpenRoles.id, capacityApplication.roleId));
     }
 
     const [event] = await executor.insert(projectNodeEvents).values({
@@ -524,11 +591,11 @@ export async function removeProjectMemberInternal(
             reassignToUserId: params.reassignToUserId ?? null,
             targetDisplayName: displayNameForSnapshot(target),
             affectedCounts: {
-                activeAssignedTasks: impact.assignedTasks.length,
-                activeCreatedTasks: impact.createdTasks.length,
-                fileReviews: impact.fileReviews.length,
-                acceptedApplications: impact.acceptedApplications.length,
-                projectGroupParticipant: impact.projectGroupParticipant,
+                activeAssignedTasks: impactCounts.activeAssignedTasks,
+                activeCreatedTasks: impactCounts.activeCreatedTasks,
+                fileReviews: impactCounts.fileReviews,
+                acceptedApplications: impactCounts.acceptedApplications,
+                projectGroupParticipant: impactCounts.projectGroupParticipant,
             },
         },
         createdAt: new Date(),

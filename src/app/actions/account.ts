@@ -11,7 +11,8 @@ import {
     collections,
     accountDeletions,
     profileAuditEvents,
-    projectFollows
+    projectFollows,
+    projectNodeEvents,
 } from "@/lib/db/schema";
 import { createClient } from '@/lib/supabase/server';
 import { isAdminUser } from '@/lib/security/admin';
@@ -23,6 +24,7 @@ import { randomBytes } from 'crypto';
 import { createSignedJobRequestToken } from '@/lib/security/job-request';
 import { consumeRateLimit } from '@/lib/security/rate-limit';
 import { resolveSecurityStepUp } from '@/lib/security/step-up';
+import { emitProjectOwnershipTransferredNotification } from '@/lib/notifications/emitters';
 
 const UUID_RE =
     /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
@@ -405,8 +407,8 @@ export async function transferProjectOwnership(
             // SEC-C4: `FOR UPDATE` locks the project row for the duration of
             // the transaction so a second caller (e.g. a parallel transfer or
             // a soft-delete) cannot race the owner check.
-            const lockedRows = await tx.execute<{ owner_id: string }>(sql`
-                SELECT owner_id FROM ${projects} WHERE id = ${projectId} FOR UPDATE
+            const lockedRows = await tx.execute<{ owner_id: string; title: string | null; slug: string | null }>(sql`
+                SELECT owner_id, title, slug FROM ${projects} WHERE id = ${projectId} FOR UPDATE
             `);
             const lockedProject = Array.from(lockedRows)[0];
 
@@ -498,7 +500,39 @@ export async function transferProjectOwnership(
                 },
             ]);
 
-            return { ok: true as const };
+            const profileRows = await tx
+                .select({
+                    id: profiles.id,
+                    username: profiles.username,
+                    fullName: profiles.fullName,
+                    avatarUrl: profiles.avatarUrl,
+                })
+                .from(profiles)
+                .where(inArray(profiles.id, [user.id, newOwnerId]));
+            const profileById = new Map(profileRows.map((profile) => [profile.id, profile]));
+
+            const [projectEvent] = await tx.insert(projectNodeEvents).values({
+                projectId,
+                nodeId: null,
+                actorId: user.id,
+                type: 'project_member.ownership_transferred',
+                metadata: {
+                    previousOwnerId: user.id,
+                    newOwnerId,
+                    previousOwnerSnapshot: profileById.get(user.id) ?? null,
+                    newOwnerSnapshot: profileById.get(newOwnerId) ?? null,
+                    previousOwnerNextRole: 'admin',
+                    stepUpMethod: stepUp.payload?.method ?? null,
+                    at: now.toISOString(),
+                },
+            }).returning({ id: projectNodeEvents.id });
+
+            return {
+                ok: true as const,
+                projectTitle: lockedProject.title,
+                projectSlug: lockedProject.slug,
+                projectEventId: projectEvent?.id ?? null,
+            };
         });
 
         if (!transferResult.ok) {
@@ -518,6 +552,43 @@ export async function transferProjectOwnership(
             previousOwnerId: user.id,
             newOwnerId,
         });
+
+        try {
+            await Promise.all([
+                emitProjectOwnershipTransferredNotification({
+                    recipientUserId: user.id,
+                    actorUserId: user.id,
+                    actorName: (user.user_metadata?.full_name as string | undefined) ?? (user.user_metadata?.username as string | undefined) ?? null,
+                    actorAvatarUrl: (user.user_metadata?.avatar_url as string | undefined) ?? null,
+                    projectId,
+                    projectSlug: transferResult.projectSlug,
+                    projectTitle: transferResult.projectTitle,
+                    previousOwnerId: user.id,
+                    newOwnerId,
+                    eventKey: transferResult.projectEventId ?? `${projectId}:${user.id}:${newOwnerId}`,
+                }),
+                emitProjectOwnershipTransferredNotification({
+                    recipientUserId: newOwnerId,
+                    actorUserId: user.id,
+                    actorName: (user.user_metadata?.full_name as string | undefined) ?? (user.user_metadata?.username as string | undefined) ?? null,
+                    actorAvatarUrl: (user.user_metadata?.avatar_url as string | undefined) ?? null,
+                    projectId,
+                    projectSlug: transferResult.projectSlug,
+                    projectTitle: transferResult.projectTitle,
+                    previousOwnerId: user.id,
+                    newOwnerId,
+                    eventKey: transferResult.projectEventId ?? `${projectId}:${user.id}:${newOwnerId}`,
+                }),
+            ]);
+        } catch (notificationError) {
+            logger.warn('account.transfer-ownership.notification_failed', {
+                module: 'account',
+                projectId,
+                previousOwnerId: user.id,
+                newOwnerId,
+                error: notificationError instanceof Error ? notificationError.message : String(notificationError),
+            });
+        }
 
         return { success: true };
     } catch (error) {

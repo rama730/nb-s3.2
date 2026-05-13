@@ -23,6 +23,9 @@ const KIND_REASON: Record<NotificationKind, NotificationReason> = {
     task_file_version: "file",
     task_file_replaced: "file",
     task_file_needs_review: "file",
+    project_role_changed: "update",
+    project_member_removed: "update",
+    project_ownership_transferred: "update",
 };
 
 export const REASON_LABELS: Record<NotificationReason, string> = {
@@ -66,6 +69,9 @@ const AGGREGATE_NOUNS: Record<NotificationKind, { singular: string; plural: stri
     task_file_version: { singular: "version", plural: "versions" },
     task_file_replaced: { singular: "replacement", plural: "replacements" },
     task_file_needs_review: { singular: "review", plural: "reviews" },
+    project_role_changed: { singular: "role change", plural: "role changes" },
+    project_member_removed: { singular: "membership update", plural: "membership updates" },
+    project_ownership_transferred: { singular: "ownership transfer", plural: "ownership transfers" },
 };
 
 export function getAggregateLabel(kind: NotificationKind, count: number): string | null {

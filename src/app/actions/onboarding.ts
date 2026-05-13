@@ -31,6 +31,7 @@ import { normalizeUsername, sanitizeUsernameInput, validateUsername } from '@/li
 import { and, eq, inArray, isNotNull, sql } from 'drizzle-orm'
 import { headers } from 'next/headers'
 import { getTrustedHeadersIp } from '@/lib/security/request-ip'
+import type { User } from '@supabase/supabase-js'
 
 const ONBOARDING_COMPLETE_LIMIT = 10
 const ONBOARDING_COMPLETE_WINDOW_SECONDS = 60
@@ -394,6 +395,94 @@ function buildProfileOnboardingValues(params: {
     }
 }
 
+function readAuthMetadataString(metadata: User['user_metadata'], key: string): string | null {
+    const value = metadata?.[key]
+    return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+function buildProfileShellName(userEmail: string, metadata: User['user_metadata']): string | null {
+    return (
+        readAuthMetadataString(metadata, 'full_name') ||
+        readAuthMetadataString(metadata, 'name') ||
+        userEmail.split('@')[0]?.replace(/[._-]+/g, ' ').trim() ||
+        null
+    )
+}
+
+async function ensureOnboardingProfileShell(params: {
+    userId: string
+    userEmail: string | null | undefined
+    metadata: User['user_metadata']
+}): Promise<{ success: true } | { success: false; error: OnboardingError }> {
+    const existing = await db.query.profiles.findFirst({
+        where: eq(profiles.id, params.userId),
+        columns: { id: true },
+    })
+    if (existing) return { success: true }
+
+    const userEmail = params.userEmail?.trim()
+    if (!userEmail) {
+        return {
+            success: false,
+            error: onboardingError('INVALID_INPUT', 'Account email is missing. Please re-authenticate.'),
+        }
+    }
+
+    try {
+        const inserted = await db
+            .insert(profiles)
+            .values({
+                id: params.userId,
+                email: userEmail,
+                fullName: buildProfileShellName(userEmail, params.metadata),
+                avatarUrl: readAuthMetadataString(params.metadata, 'avatar_url'),
+                updatedAt: new Date(),
+            })
+            .onConflictDoNothing()
+            .returning({ id: profiles.id })
+
+        if (inserted.length > 0) return { success: true }
+
+        const recovered = await db.query.profiles.findFirst({
+            where: eq(profiles.id, params.userId),
+            columns: { id: true },
+        })
+        if (recovered) return { success: true }
+
+        return {
+            success: false,
+            error: onboardingError('DB_ERROR', 'Unable to prepare your account profile', true),
+        }
+    } catch (error) {
+        console.error('Error preparing onboarding profile shell:', error)
+        return {
+            success: false,
+            error: onboardingError('DB_ERROR', 'Unable to prepare your account profile', true),
+        }
+    }
+}
+
+async function writeOnboardingEventBestEffort(params: {
+    userId: string
+    eventType: string
+    step: number | null
+    metadata?: Record<string, unknown>
+    context: string
+}): Promise<boolean> {
+    try {
+        await db.insert(onboardingEvents).values({
+            userId: params.userId,
+            eventType: params.eventType,
+            step: typeof params.step === 'number' ? clampStep(params.step) : null,
+            metadata: sanitizeTelemetryMetadata(params.metadata),
+        })
+        return true
+    } catch (error) {
+        console.error(`Error tracking onboarding event (${params.context}):`, error)
+        return false
+    }
+}
+
 function generateCandidateUsernames(fullName: string): string[] {
     return generateDeterministicUsernameCandidates(fullName)
 }
@@ -561,6 +650,20 @@ export async function completeOnboarding(
             return { success: false, error: error.message, errorDetails: error }
         }
 
+        if (!user.email) {
+            const error = onboardingError('INVALID_INPUT', 'Account email is missing. Please re-authenticate.')
+            return { success: false, error: error.message, errorDetails: error }
+        }
+        const userEmail = user.email
+        const shell = await ensureOnboardingProfileShell({
+            userId: user.id,
+            userEmail,
+            metadata: user.user_metadata,
+        })
+        if (!shell.success) {
+            return { success: false, error: shell.error.message, errorDetails: shell.error }
+        }
+
         const idempotencyKey =
             parseIdempotencyKey(data.idempotencyKey) ||
             `fallback:${user.id}:${payload.username}`
@@ -605,19 +708,6 @@ export async function completeOnboarding(
                 errorDetails: availability.error,
             }
         }
-
-        if (!user.email) {
-            const error = onboardingError('INVALID_INPUT', 'Account email is missing. Please re-authenticate.')
-            if (submissionId) {
-                await finalizeOnboardingSubmission({
-                    submissionId,
-                    status: 'failed',
-                    response: { success: false, error },
-                })
-            }
-            return { success: false, error: error.message, errorDetails: error }
-        }
-        const userEmail = user.email
 
         const avatarUrl = payload.avatarUrl || user.user_metadata?.avatar_url || null
         const profileValues = buildProfileOnboardingValues({
@@ -698,29 +788,28 @@ export async function completeOnboarding(
             await tx
                 .delete(onboardingDrafts)
                 .where(eq(onboardingDrafts.userId, user.id))
+        })
 
-            await tx
-                .insert(onboardingEvents)
-                .values({
-                    userId: user.id,
-                    eventType: 'submit_profile_saved',
-                    step: ONBOARDING_STEP_MAX,
-                    metadata: {
-                        visibility: payload.visibility,
-                        availabilityStatus: payload.availabilityStatus,
-                        messagePrivacy: payload.messagePrivacy,
-                        hasHeadline: Boolean(payload.headline),
-                        hasBio: Boolean(payload.bio),
-                        hasPronouns: Boolean(payload.pronouns),
-                        hasGenderIdentity: Boolean(payload.genderIdentity),
-                        hasExperienceLevel: Boolean(payload.experienceLevel),
-                        hasHoursPerWeek: Boolean(payload.hoursPerWeek),
-                        socialLinksCount: Object.keys(payload.socialLinks || {}).length,
-                        openToCount: payload.openTo.length,
-                        skillsCount: payload.skills.length,
-                        interestsCount: payload.interests.length,
-                    },
-                })
+        await writeOnboardingEventBestEffort({
+            userId: user.id,
+            eventType: 'submit_profile_saved',
+            step: ONBOARDING_STEP_MAX,
+            context: 'submit_profile_saved',
+            metadata: {
+                visibility: payload.visibility,
+                availabilityStatus: payload.availabilityStatus,
+                messagePrivacy: payload.messagePrivacy,
+                hasHeadline: Boolean(payload.headline),
+                hasBio: Boolean(payload.bio),
+                hasPronouns: Boolean(payload.pronouns),
+                hasGenderIdentity: Boolean(payload.genderIdentity),
+                hasExperienceLevel: Boolean(payload.experienceLevel),
+                hasHoursPerWeek: Boolean(payload.hoursPerWeek),
+                socialLinksCount: Object.keys(payload.socialLinks || {}).length,
+                openToCount: payload.openTo.length,
+                skillsCount: payload.skills.length,
+                interestsCount: payload.interests.length,
+            },
         })
 
         const metadataSynced = await syncOnboardingClaims({
@@ -731,10 +820,11 @@ export async function completeOnboarding(
             emailVerified: true,
         })
 
-        await db.insert(onboardingEvents).values({
+        await writeOnboardingEventBestEffort({
             userId: user.id,
             eventType: metadataSynced ? 'submit_success' : 'submit_success_needs_claim_sync',
             step: ONBOARDING_STEP_MAX,
+            context: 'submit_success',
             metadata: {
                 needsMetadataSync: !metadataSynced,
             },
@@ -880,6 +970,14 @@ export async function saveOnboardingDraft(input: {
         if (!user) {
             const details = onboardingError('NOT_AUTHENTICATED', 'Not authenticated')
             return { success: false, error: details.message, errorDetails: details }
+        }
+        const shell = await ensureOnboardingProfileShell({
+            userId: user.id,
+            userEmail: user.email,
+            metadata: user.user_metadata,
+        })
+        if (!shell.success) {
+            return { success: false, error: shell.error.message, errorDetails: shell.error }
         }
 
         const safeStep = clampStep(input.step)
@@ -1053,14 +1151,21 @@ export async function trackOnboardingEvent(input: {
         const parsed = onboardingEventInputSchema.safeParse(input)
         if (!parsed.success) return { success: false }
         const payload = parsed.data
+        const shell = await ensureOnboardingProfileShell({
+            userId: user.id,
+            userEmail: user.email,
+            metadata: user.user_metadata,
+        })
+        if (!shell.success) return { success: false }
 
-        await db.insert(onboardingEvents).values({
+        const tracked = await writeOnboardingEventBestEffort({
             userId: user.id,
             eventType: payload.eventType,
             step: typeof payload.step === 'number' ? clampStep(payload.step) : null,
+            context: 'client_event',
             metadata: sanitizeTelemetryMetadata(payload.metadata),
         })
-        return { success: true }
+        return { success: tracked }
     } catch (error) {
         console.error('Error tracking onboarding event:', error)
         return { success: false }

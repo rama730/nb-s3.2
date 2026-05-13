@@ -38,6 +38,7 @@ import { enqueueTaskCommentMentionNotifications } from "@/lib/notifications/task
 import { consumeRateLimit } from "@/lib/security/rate-limit";
 import { getViewerProfileContext } from "@/lib/server/viewer-context";
 import { logger } from "@/lib/logger";
+import { requireProjectCapability } from "@/lib/projects/collaborator-lifecycle";
 
 const DISCUSSION_PAGE_SIZE = 20;
 
@@ -121,8 +122,8 @@ async function assertTaskAccess(params: {
   if (params.mode === "read" && !access.canRead) {
     throw new Error("Forbidden");
   }
-  if (params.mode === "write" && !access.canWrite) {
-    throw new Error("Forbidden");
+  if (params.mode === "write") {
+    await requireProjectCapability(params.projectId, params.userId, "comment");
   }
 
   return taskRow;

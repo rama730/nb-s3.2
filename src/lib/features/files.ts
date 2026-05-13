@@ -1,4 +1,9 @@
-import { hardeningFeatureFlags, isHardeningDomainEnabled } from "@/lib/features/hardening";
+import {
+  hardeningFeatureFlags,
+  hardeningRolloutPercents,
+  isHardeningDomainEnabled,
+  resolveFlagWithRollout,
+} from "@/lib/features/hardening";
 
 const asEnabledDefault = (value: string | undefined) =>
   value === "0" || value === "false" ? false : true;
@@ -63,4 +68,35 @@ export function isFilesHardeningEnabled(userId?: string | null): boolean {
       : filesFeatureFlags.hardeningV1;
   if (!enabled) return false;
   return isHardeningDomainEnabled("filesV1", userId);
+}
+
+const asEnabledOff = (value: string | undefined) =>
+  value === "1" || value === "true" ? true : false;
+
+/**
+ * Files Tab V3 feature flag (GitHub-style redesign).
+ *
+ * Defaults **off**. Enables the GitHub-inspired `FilesTabRoot` entry point in
+ * `ProjectFilesWorkspace.tsx`. When disabled, the legacy `WorkspaceShell`
+ * remains rendered.
+ *
+ * Resolution:
+ * - `NEXT_PUBLIC_FILES_TAB_V3` env override turns the flag on when set to
+ *   `"1"` or `"true"`; any other value (including undefined) falls through to
+ *   `hardeningFeatureFlags.hardeningFilesV3`, which defaults to off.
+ * - When enabled, the `filesV3` hardening domain rollout percent
+ *   (`NEXT_PUBLIC_HARDENING_FILES_V3_ROLLOUT_PERCENT`, default 100) gates the
+ *   user into the cohort via the shared `fnv1a`-based `userId` hash.
+ */
+export function isFilesTabV3Enabled(userId?: string | null): boolean {
+  const explicit = process.env.NEXT_PUBLIC_FILES_TAB_V3;
+  const enabled =
+    explicit !== undefined
+      ? asEnabledOff(explicit)
+      : hardeningFeatureFlags.hardeningFilesV3;
+  return resolveFlagWithRollout(
+    enabled,
+    hardeningRolloutPercents.filesV3,
+    userId ?? null,
+  );
 }

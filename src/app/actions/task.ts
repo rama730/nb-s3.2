@@ -10,6 +10,7 @@ import { consumeRateLimit } from "@/lib/security/rate-limit";
 import { queueCounterRefreshBestEffort } from "@/lib/workspace/counter-buffer";
 import { getTaskFileWarnings } from "@/lib/projects/task-file-intelligence";
 import { logger } from "@/lib/logger";
+import { isProjectMemberEligibleFor, requireProjectCapability } from "@/lib/projects/collaborator-lifecycle";
 
 type MutableTaskField = "title" | "description" | "priority" | "sprintId" | "dueDate";
 
@@ -316,6 +317,7 @@ export async function assignTaskAction(
         if (authError || !user) {
             return { success: false, error: "Unauthorized" };
         }
+        await requireProjectCapability(projectId, user.id, "assign_tasks");
 
         const result = await db.transaction(async (tx) => {
             const locked = await lockTaskForWrite(tx, taskId, user.id);
@@ -334,8 +336,8 @@ export async function assignTaskAction(
                 if (!isProjectMember) {
                     throw new Error("Assignee must be a project member");
                 }
-                if (isProjectMember.role === "viewer") {
-                    throw new Error("Viewer members cannot be assigned tasks");
+                if (!isProjectMemberEligibleFor(isProjectMember.role, "assign")) {
+                    throw new Error("Assignee must be an assignable project member");
                 }
             }
 

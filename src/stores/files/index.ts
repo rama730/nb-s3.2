@@ -51,26 +51,26 @@ export const useFilesWorkspaceStore = create<FilesWorkspaceState>()(
       ...createUiSlice(set, get, api),
     }),
     {
-      name: "files-workspace-v2",
+      name: "files-workspace-v3",
       partialize: (state) => ({
         byProjectId: Object.fromEntries(
           Object.entries(state.byProjectId).map(([projectId, ws]: [string, ProjectWorkspaceState]) => [
             projectId,
+            // Files tab v3 persist shape (Req 15.19, Req 21.7; design § Migration Note).
+            // Persist ONLY the fields listed below. Any legacy key from a
+            // `files-workspace-v2` blob is ignored by the updated merge function,
+            // which overlays the persisted partial onto a fresh `defaultWorkspace()`.
             {
-              explorerMode: ws.explorerMode,
-              viewMode: ws.viewMode,
-              viewModeByExplorerMode: ws.viewModeByExplorerMode,
+              currentLocationId: ws.currentLocationId,
               expandedFolderIds: ws.expandedFolderIds,
-              sort: ws.sort,
-              foldersFirst: ws.foldersFirst,
               favorites: ws.favorites,
               recents: ws.recents,
-              savedViews: ws.savedViews,
-              splitEnabled: ws.splitEnabled,
-              splitRatio: ws.splitRatio,
-              panes: ws.panes,
-              pinnedByTabId: ws.pinnedByTabId,
-              prefs: ws.prefs,
+              sort: ws.sort,
+              foldersFirst: ws.foldersFirst,
+              ui: {
+                sidebarCollapsed: ws.ui.sidebarCollapsed,
+                quickOpenOpen: ws.ui.quickOpenOpen,
+              },
             } as Partial<ProjectWorkspaceState>,
           ])
         ),
@@ -90,9 +90,29 @@ export const useFilesWorkspaceStore = create<FilesWorkspaceState>()(
         const mergedByProjectId: Record<string, ProjectWorkspaceState> = { ...currentState.byProjectId };
 
         for (const [projectId, persistedProjectState] of Object.entries(persisted.byProjectId)) {
+          const fresh = defaultWorkspace();
+          const partial = (persistedProjectState ?? {}) as Partial<ProjectWorkspaceState> & {
+            ui?: Partial<ProjectWorkspaceState["ui"]>;
+          };
+          // Merge `ui` separately so we only accept the two persisted ui keys
+          // and keep every other default ui value untouched.
+          const mergedUi = partial.ui
+            ? {
+                ...fresh.ui,
+                sidebarCollapsed:
+                  typeof partial.ui.sidebarCollapsed === "boolean"
+                    ? partial.ui.sidebarCollapsed
+                    : fresh.ui.sidebarCollapsed,
+                quickOpenOpen:
+                  typeof partial.ui.quickOpenOpen === "boolean"
+                    ? partial.ui.quickOpenOpen
+                    : fresh.ui.quickOpenOpen,
+              }
+            : fresh.ui;
           mergedByProjectId[projectId] = {
-            ...defaultWorkspace(),
-            ...(persistedProjectState as Partial<ProjectWorkspaceState>),
+            ...fresh,
+            ...partial,
+            ui: mergedUi,
           };
         }
 

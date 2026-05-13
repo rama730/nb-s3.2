@@ -11,6 +11,7 @@ interface ApplicationStatusBannerProps {
     roleTitle?: string;
     canReapply?: boolean;
     waitTime?: string;
+    membershipEnded?: boolean;
     onApply?: () => void;
     isOwner?: boolean;
     isMember?: boolean;
@@ -23,6 +24,7 @@ export default function ApplicationStatusBanner({
     roleTitle,
     canReapply,
     waitTime,
+    membershipEnded,
     onApply,
     isOwner,
     isMember,
@@ -79,16 +81,16 @@ export default function ApplicationStatusBanner({
     // Accepted
     if (status === "accepted") {
         return (
-            <div className="flex items-center gap-3 p-4 rounded-xl bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800">
-                <div className="w-10 h-10 rounded-full bg-emerald-100 dark:bg-emerald-900/50 flex items-center justify-center">
-                    <CheckCircle2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+            <div className={`flex items-center gap-3 rounded-xl border p-4 ${membershipEnded ? "border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-900/20" : "border-emerald-200 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-900/20"}`}>
+                <div className={`flex h-10 w-10 items-center justify-center rounded-full ${membershipEnded ? "bg-amber-100 dark:bg-amber-900/50" : "bg-emerald-100 dark:bg-emerald-900/50"}`}>
+                    <CheckCircle2 className={`h-5 w-5 ${membershipEnded ? "text-amber-600 dark:text-amber-400" : "text-emerald-600 dark:text-emerald-400"}`} />
                 </div>
                 <div>
                     <p className="font-medium text-zinc-900 dark:text-zinc-100">
-                        You are a Team Member!
+                        {membershipEnded ? "Accepted · Membership ended" : "You are a Team Member!"}
                     </p>
                     <p className="text-sm text-zinc-500">
-                        Role: <span className="font-medium">{roleTitle}</span>
+                        {membershipEnded ? "Your accepted application remains in history, but active project access has ended." : <>Role: <span className="font-medium">{roleTitle}</span></>}
                     </p>
                 </div>
             </div>

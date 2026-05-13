@@ -519,13 +519,6 @@
       "when": 1776879800000,
       "tag": "0072_user_notifications",
       "breakpoints": true
-    },
-    {
-      "idx": 74,
-      "version": "7",
-      "when": 1776966200000,
-      "tag": "0073_project_image_access_metadata",
-      "breakpoints": true
     }
   ]
 }

@@ -7,6 +7,7 @@ import { profileHref } from "@/lib/routing/identifiers";
 import DashboardCard from "./DashboardCard";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { AvatarGroup, AvatarGroupTooltip } from "@/components/animate-ui/components/animate/avatar-group";
+import { buildProjectPersonReference } from "@/lib/projects/settings-policies";
 
 /* ── Typed project shape consumed by TeamCard ────────────────── */
 
@@ -98,33 +99,44 @@ const TeamCard = memo(function TeamCard({
 
     const rawLeadFocus = project?.importSource?.metadata?.leadFocus;
     const leadFocus = typeof rawLeadFocus === "string" ? rawLeadFocus.trim() : "";
-    const ownerRoleLabel = leadFocus ? `LEAD / ${leadFocus}` : "LEAD";
-    const ownerName = project?.owner?.displayName || project?.owner?.fullName || project?.owner?.username || "Creator";
 
     const avatars = useMemo<AvatarEntry[]>(() => {
         const ownerEntry: AvatarEntry[] = project?.owner?.id
-            ? [{
-                id: project.owner.id,
-                src: project.owner.avatarUrl,
-                fallback: toInitials(ownerName),
-                name: ownerName,
-                role: shortenRoleLabel(ownerRoleLabel),
-                username: project.owner.username,
-            }]
+            ? (() => {
+                const reference = buildProjectPersonReference({
+                    person: project.owner,
+                    membershipRole: "owner",
+                    isActiveMember: true,
+                });
+                return [{
+                    id: project.owner.id,
+                    src: reference.avatarUrl,
+                    fallback: toInitials(reference.displayName),
+                    name: reference.displayName,
+                    role: shortenRoleLabel(leadFocus ? `${reference.roleLabel} / ${leadFocus}` : reference.roleLabel),
+                    username: project.owner.username,
+                }];
+            })()
             : [];
 
         const collaborators: AvatarEntry[] = (members || [])
             .filter((m) => m?.id && m.id !== project?.owner?.id)
             .map((member) => {
-                const roleLabel = member.projectRoleTitle || member.membershipRole || "Team Member";
-                const fullName = member.fullName || member.username || "Member";
+                const reference = buildProjectPersonReference({
+                    person: member,
+                    membershipRole: member.membershipRole,
+                    isActiveMember: true,
+                });
+                const roleLabel = member.projectRoleTitle
+                    ? `${member.projectRoleTitle} · ${reference.roleLabel}`
+                    : reference.roleLabel;
                 const joinedAtMs = member.joinedAt ? new Date(member.joinedAt).getTime() : undefined;
 
                 return {
                     id: member.id,
-                    src: member.avatarUrl,
-                    fallback: toInitials(fullName),
-                    name: fullName,
+                    src: reference.avatarUrl,
+                    fallback: toInitials(reference.displayName),
+                    name: reference.displayName,
                     role: shortenRoleLabel(roleLabel),
                     username: member.username,
                     sortDateMs: Number.isFinite(joinedAtMs) ? joinedAtMs : undefined,
@@ -140,7 +152,7 @@ const TeamCard = memo(function TeamCard({
             });
 
         return [...ownerEntry, ...collaborators];
-    }, [members, ownerName, ownerRoleLabel, project]);
+    }, [leadFocus, members, project]);
 
     const MAX_VISIBLE = 6;
     const visibleAvatars = avatars.slice(0, MAX_VISIBLE);

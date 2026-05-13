@@ -1,10 +1,22 @@
 "use client";
 
 import React from "react";
+import dynamic from "next/dynamic";
 import type { ProjectNode } from "@/lib/db/schema";
 import { CreateDialog, DeleteDialog, MoveDialog, RenameDialog } from "./ExplorerBatchOps";
 import { ExplorerQuickOpen } from "./ExplorerQuickOpen";
-import { ExplorerCommandPalette } from "./ExplorerCommandPalette";
+
+// Dynamic-import the command palette so V3 consumers (which always pass
+// `commandPalette.open === false`) do not pull it into the static import
+// graph. Task 11.3's forbidden-imports audit flagged this static edge
+// when V3 reused `ExplorerDialogsHost` verbatim — converting the edge to
+// `next/dynamic` severs the graph edge while keeping the legacy
+// `WorkspaceShell` code path fully functional (Req 15.11, Req 16.3).
+// `ssr: false` mirrors the other file-tab dynamic imports.
+const ExplorerCommandPalette = dynamic(
+  () => import("./ExplorerCommandPalette").then((m) => m.ExplorerCommandPalette),
+  { ssr: false },
+);
 
 interface ExplorerDialogsHostProps {
   canEdit: boolean;
@@ -131,24 +143,26 @@ export const ExplorerDialogsHost = React.memo(function ExplorerDialogsHost({
         nestedDialogOverlayClassName={nestedDialogOverlayClassName}
       />
 
-      <ExplorerCommandPalette
-        commandPalette={commandPalette}
-        setCommandPalette={setCommandPalette}
-        canEdit={canEdit}
-        selectedNode={selectedNode}
-        storeSelectedNodeIds={storeSelectedNodeIds}
-        nodesById={nodesById}
-        openCreate={openCreate}
-        openRename={openRename}
-        openMove={openMove}
-        openDelete={openDelete}
-        handleSelect={handleSelect}
-        toggleFavorite={toggleFavorite}
-        getNodePath={getNodePath}
-        projectId={projectId}
-        nestedDialogClassName={nestedDialogClassName}
-        nestedDialogOverlayClassName={nestedDialogOverlayClassName}
-      />
+      {commandPalette.open ? (
+        <ExplorerCommandPalette
+          commandPalette={commandPalette}
+          setCommandPalette={setCommandPalette}
+          canEdit={canEdit}
+          selectedNode={selectedNode}
+          storeSelectedNodeIds={storeSelectedNodeIds}
+          nodesById={nodesById}
+          openCreate={openCreate}
+          openRename={openRename}
+          openMove={openMove}
+          openDelete={openDelete}
+          handleSelect={handleSelect}
+          toggleFavorite={toggleFavorite}
+          getNodePath={getNodePath}
+          projectId={projectId}
+          nestedDialogClassName={nestedDialogClassName}
+          nestedDialogOverlayClassName={nestedDialogOverlayClassName}
+        />
+      ) : null}
     </>
   );
 });

@@ -11,6 +11,7 @@ interface KanbanBoardProps {
     fetchNextPage: () => void;
     hasNextPage: boolean;
     isFetchingNextPage: boolean;
+    activeAssignableMemberIds?: Set<string>;
 }
 
 export default function KanbanBoard({
@@ -18,7 +19,8 @@ export default function KanbanBoard({
     onTaskClick,
     fetchNextPage,
     hasNextPage,
-    isFetchingNextPage
+    isFetchingNextPage,
+    activeAssignableMemberIds,
 }: KanbanBoardProps) {
     const DEFAULT_VISIBLE = 20;
     const STEP = 20;
@@ -87,6 +89,7 @@ export default function KanbanBoard({
                                     <TaskCard
                                         task={task}
                                         onClick={onTaskClick}
+                                        activeAssignableMemberIds={activeAssignableMemberIds}
                                     />
                                     </div>
                                 ))}

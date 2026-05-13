@@ -24,11 +24,16 @@ const ALL_KINDS: readonly NotificationKind[] = [
   "task_file_version",
   "task_file_replaced",
   "task_file_needs_review",
+  "project_role_changed",
+  "project_member_removed",
+  "project_ownership_transferred",
 ];
 
-test("J1 kind list is exactly the five action-required kinds from plan §293", () => {
+test("J1 kind list is exactly the action-required collaborator/task kinds", () => {
   assert.deepEqual([...J1_NOTIFICATION_KINDS].sort(), [
     "connection_request_received",
+    "project_member_removed",
+    "project_ownership_transferred",
     "task_assigned",
     "task_comment_mention",
     "task_file_needs_review",
@@ -49,6 +54,8 @@ test("importanceForKind mirrors J1/J2 split — J1 kinds are 'important', J2 are
   assert.equal(importanceForKind("workflow_assigned"), "important");
   assert.equal(importanceForKind("task_file_needs_review"), "important");
   assert.equal(importanceForKind("connection_request_received"), "important");
+  assert.equal(importanceForKind("project_member_removed"), "important");
+  assert.equal(importanceForKind("project_ownership_transferred"), "important");
 
   assert.equal(importanceForKind("message_burst"), "more");
   assert.equal(importanceForKind("workflow_resolved"), "more");
@@ -59,6 +66,7 @@ test("importanceForKind mirrors J1/J2 split — J1 kinds are 'important', J2 are
   assert.equal(importanceForKind("task_comment_reply"), "more");
   assert.equal(importanceForKind("task_file_version"), "more");
   assert.equal(importanceForKind("task_file_replaced"), "more");
+  assert.equal(importanceForKind("project_role_changed"), "more");
 });
 
 test("isActionRequiredKind is true only for J1", () => {

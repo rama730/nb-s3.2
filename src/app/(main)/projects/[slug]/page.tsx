@@ -5,16 +5,15 @@ import { readProjectDetailMetadata, readProjectDetailShell, readProjectSprintDet
 import { isHardeningDomainEnabled } from '@/lib/features/hardening';
 import { getViewerAuthContext } from '@/lib/server/viewer-context';
 import { buildRouteMetadata } from '@/lib/metadata/route-metadata';
-import { buildProjectDetailMetadataInput, getProjectTitleFromSlug } from '@/lib/projects/project-detail-metadata';
+import { buildProjectDetailMetadataInput } from '@/lib/projects/project-detail-metadata';
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
     const { slug } = await params;
-    const fallbackTitle = getProjectTitleFromSlug(slug);
     const result = await readProjectDetailMetadata({ slugOrId: slug, actorUserId: null });
     if (!result.success) {
         return buildRouteMetadata({
-            title: `${fallbackTitle} | Edge`,
-            description: `Explore ${fallbackTitle} on Edge.`,
+            title: "Project unavailable | Edge",
+            description: "This project is private or unavailable.",
             path: `/projects/${encodeURIComponent(slug)}`,
         });
     }

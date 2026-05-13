@@ -161,6 +161,13 @@ export type ProjectWorkspaceState = {
   selectedNodeId: string | null;
   selectedNodeIds: string[];
   selectedFolderId: string | null;
+  /**
+   * The single navigation source of truth for the Files tab v3.
+   * Coexists with `selectedNodeId` / `selectedFolderId`, which remain the
+   * observable selection shape used by the Tasks tab (see Req 21.7).
+   * `null` means "at project root folder".
+   */
+  currentLocationId: string | null;
   expandedFolderIds: Record<string, boolean>;
   searchQuery: string;
   sort: ExplorerSort;
@@ -270,6 +277,17 @@ export type FilesWorkspaceState = {
   /** FW8: Remove tabs whose nodeId no longer exists in nodesById */
   pruneGhostTabs: (projectId: string) => void;
 
+  /**
+   * Files tab v3 navigation write path.
+   *
+   * Atomically (a) sets `currentLocationId`, (b) bumps `selectionVersion`,
+   * and (c) ensures every ancestor of `nodeId` is in `expandedFolderIds`.
+   *
+   * Does NOT touch `selectedNodeId` / `selectedFolderId`, which remain the
+   * Tasks tab's selection surface (Req 21.7).
+   */
+  setCurrentLocation: (projectId: string, nodeId: string | null) => void;
+
   // explorer cleanup
   /** FW9: Remove expandedFolderIds entries whose node no longer exists */
   pruneDeadExpanded: (projectId: string) => void;
@@ -373,6 +391,7 @@ export function defaultWorkspace(): ProjectWorkspaceState {
     selectedNodeId: null,
     selectedNodeIds: [],
     selectedFolderId: null,
+    currentLocationId: null,
     expandedFolderIds: {},
     searchQuery: "",
     sort: "name",

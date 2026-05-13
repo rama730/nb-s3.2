@@ -19,8 +19,8 @@ test('bulk notification actions handle missing timestamps without throwing', () 
     assert.doesNotMatch(actions, /seenAt:\s*seenAt\.toISOString\(\)/);
 
     assert.match(hook, /if \(!result\.success\) \{/);
-    assert.match(hook, /return result\.readAt \?\? null/);
-    assert.match(hook, /if \(readAt\) \{[\s\S]*markAllNotificationsReadInInfiniteData\(existing, readAt\)/);
+    assert.match(hook, /readAt:\s*result\.readAt \?\? null/);
+    assert.match(hook, /if \(result\.readAt\) \{[\s\S]*markAllNotificationsReadInInfiniteData\(existing, result\.readAt!\)/);
 });
 
 test('message notifications are delivered inline when no transaction executor is supplied', () => {
