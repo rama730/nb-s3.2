@@ -144,6 +144,73 @@ export function toggleMessageReactionSummary(
     );
 }
 
+export interface MessageReactionDetail {
+    userId: string;
+    username: string;
+    avatarUrl: string | null;
+    emoji: string;
+    createdAt: Date;
+}
+
+export interface GroupedReactionDetail {
+    emoji: string;
+    users: Omit<MessageReactionDetail, 'emoji'>[];
+}
+
+type ReactionDetailRow = {
+    userId: string;
+    username: string;
+    avatarUrl: string | null;
+    emoji: string;
+    createdAt: Date | string;
+};
+
+/**
+ * Aggregates per-user reaction data from `message_reactions` rows (with joined profile info)
+ * into a grouped structure suitable for the reaction detail sheet — grouped by emoji,
+ * with the list of users who reacted with each emoji.
+ */
+export function buildReactionDetails(
+    rows: ReadonlyArray<ReactionDetailRow>,
+): GroupedReactionDetail[] {
+    const grouped = new Map<string, Omit<MessageReactionDetail, 'emoji'>[]>();
+
+    for (const row of rows) {
+        const emoji = row.emoji.trim();
+        if (!emoji || !row.userId) continue;
+
+        let users = grouped.get(emoji);
+        if (!users) {
+            users = [];
+            grouped.set(emoji, users);
+        }
+
+        // Avoid duplicate entries for the same user + emoji
+        if (users.some((u) => u.userId === row.userId)) continue;
+
+        users.push({
+            userId: row.userId,
+            username: row.username,
+            avatarUrl: row.avatarUrl,
+            createdAt: row.createdAt instanceof Date ? row.createdAt : new Date(row.createdAt),
+        });
+    }
+
+    // Sort groups by number of users descending, then emoji alphabetically
+    return Array.from(grouped.entries())
+        .sort(([emojiA, usersA], [emojiB, usersB]) => {
+            if (usersA.length !== usersB.length) return usersB.length - usersA.length;
+            return emojiA.localeCompare(emojiB);
+        })
+        .map(([emoji, users]) => ({
+            emoji,
+            // Sort users by createdAt ascending (earliest reactors first)
+            users: users.sort(
+                (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+            ),
+        }));
+}
+
 export function withReactionSummaryMetadata(
     metadata: Record<string, unknown> | null | undefined,
     reactionSummary: ReadonlyArray<MessageReactionSummary>,
