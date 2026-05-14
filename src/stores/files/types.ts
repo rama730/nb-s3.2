@@ -230,8 +230,6 @@ export type FilesWorkspaceState = {
   setFoldersFirst: (projectId: string, foldersFirst: boolean) => void;
   addRecent: (projectId: string, nodeId: string) => void;
   toggleFavorite: (projectId: string, nodeId: string) => void;
-  saveCurrentView: (projectId: string, name: string) => void;
-  applySavedView: (projectId: string, viewId: string) => void;
   deleteSavedView: (projectId: string, viewId: string) => void;
 
   // cache actions
@@ -253,6 +251,7 @@ export type FilesWorkspaceState = {
   setFolderMeta: (projectId: string, folderId: string | null, meta: { nextCursor: string | null; hasMore: boolean }) => void;
   removeNodeFromCaches: (projectId: string, nodeId: string) => void;
   setTaskLinkCounts: (projectId: string, counts: Record<string, number>) => void;
+  patchNodeVersion: (projectId: string, nodeId: string, currentVersion: number) => void;
   setNodes: (projectId: string, nodes: ProjectNode[]) => void;
   hydrateFromIdb: (
     projectId: string,
@@ -266,7 +265,6 @@ export type FilesWorkspaceState = {
   // workspace actions
   setSplitEnabled: (projectId: string, enabled: boolean) => void;
   setSplitRatio: (projectId: string, ratio: number) => void;
-  openTab: (projectId: string, paneId: WorkspacePane["id"], nodeId: string) => void;
   closeTab: (projectId: string, paneId: WorkspacePane["id"], nodeId: string) => void;
   pinTab: (projectId: string, paneId: WorkspacePane["id"], nodeId: string, pinned: boolean) => void;
   closeOtherTabs: (projectId: string, paneId: WorkspacePane["id"], keepNodeId: string) => void;
@@ -295,7 +293,6 @@ export type FilesWorkspaceState = {
   // editor prefs
   setPrefs: (projectId: string, prefs: Partial<EditorPreferences>) => void;
   setActiveFileSymbols: (projectId: string, symbols: EditorSymbol[]) => void;
-  requestScrollTo: (projectId: string, nodeId: string, line: number) => void;
   clearScrollRequest: (projectId: string) => void;
 
   // locks
@@ -306,7 +303,6 @@ export type FilesWorkspaceState = {
 
   // git actions
   setGitRepo: (projectId: string, repoUrl: string, branch: string) => void;
-  setGitSyncStatus: (projectId: string, inProgress: boolean) => void;
   setGitBranch: (projectId: string, branch: string) => void;
   setGitChangedFiles: (projectId: string, files: GitState["changedFiles"]) => void;
   setGitCommitMessage: (projectId: string, message: string) => void;

@@ -1,8 +1,8 @@
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { profiles, projectNodes, projects, tasks, taskNodeLinks } from "@/lib/db/schema";
-import { emitTaskFileNotification } from "@/lib/notifications/emitters";
+import { emitFileVersionAddedNotification, emitTaskFileNotification } from "@/lib/notifications/emitters";
 import { logger } from "@/lib/logger";
 
 export async function notifyTaskParticipantsForFileEvent(params: {
@@ -68,6 +68,137 @@ export async function notifyTaskParticipantsForFileEvent(params: {
             projectId: params.projectId,
             nodeId: params.nodeId,
             kind: params.kind,
+            error: error instanceof Error ? error.message : String(error),
+        });
+    }
+}
+
+/**
+ * Notify relevant users when a new file version is created.
+ *
+ * Branching logic:
+ * - If the node has one or more task_node_links → emit existing `task_file_replaced`
+ *   notification with its existing audience logic (task participants).
+ * - If the node has zero task_node_links → emit `file_version_added` to:
+ *   favoriters (requires server-side favorites — currently skipped as favorites
+ *   are client-side only) + last 5 distinct editors of the node + participants
+ *   of any linked tasks (empty when zero links).
+ */
+export async function notifyForFileVersionCreated(params: {
+    actorUserId: string;
+    projectId: string;
+    nodeId: string;
+    version: number;
+}) {
+    try {
+        // Fetch actor profile, node info, and task link count in parallel
+        const [actor, node, linkedTasks] = await Promise.all([
+            db.query.profiles.findFirst({
+                where: eq(profiles.id, params.actorUserId),
+                columns: { fullName: true, username: true, avatarUrl: true },
+            }),
+            db.query.projectNodes.findFirst({
+                where: and(
+                    eq(projectNodes.id, params.nodeId),
+                    eq(projectNodes.projectId, params.projectId),
+                    isNull(projectNodes.deletedAt),
+                ),
+                columns: { id: true, name: true, projectId: true },
+            }),
+            db
+                .select({
+                    taskId: tasks.id,
+                    taskTitle: tasks.title,
+                    taskNumber: tasks.taskNumber,
+                    assigneeId: tasks.assigneeId,
+                    creatorId: tasks.creatorId,
+                    projectId: projects.id,
+                    projectSlug: projects.slug,
+                    projectKey: projects.key,
+                })
+                .from(taskNodeLinks)
+                .innerJoin(tasks, eq(taskNodeLinks.taskId, tasks.id))
+                .innerJoin(projects, eq(tasks.projectId, projects.id))
+                .where(and(
+                    eq(taskNodeLinks.nodeId, params.nodeId),
+                    eq(tasks.projectId, params.projectId),
+                    isNull(tasks.deletedAt),
+                )),
+        ]);
+
+        if (!node) return;
+
+        if (linkedTasks.length > 0) {
+            // Node has task links → emit existing task_file_replaced notification unchanged
+            await Promise.all(linkedTasks.map((task) => {
+                const recipients = Array.from(
+                    new Set([task.assigneeId, task.creatorId].filter(Boolean) as string[]),
+                ).filter((recipientUserId) => recipientUserId !== params.actorUserId);
+                if (recipients.length === 0) return Promise.resolve();
+                return emitTaskFileNotification({
+                    recipients,
+                    actorUserId: params.actorUserId,
+                    actorName: actor?.fullName || actor?.username || null,
+                    actorAvatarUrl: actor?.avatarUrl ?? null,
+                    kind: "task_file_replaced",
+                    taskId: task.taskId,
+                    taskTitle: task.taskTitle,
+                    projectId: task.projectId,
+                    projectSlug: task.projectSlug ?? null,
+                    projectKey: task.projectKey ?? null,
+                    taskNumber: task.taskNumber ?? null,
+                    fileId: node.id,
+                    fileName: node.name,
+                    version: params.version,
+                });
+            }));
+        } else {
+            // Node has zero task links → emit file_version_added notification
+            // Audience: favoriters (client-side only, not available server-side)
+            //         + last 5 distinct editors
+            //         + linked-task participants (empty since zero links)
+
+            // Get last 5 distinct editors from file_versions (by uploadedBy, most recent first)
+            const recentEditorRows = await db.execute<{ uploaded_by: string }>(sql`
+                SELECT DISTINCT ON (uploaded_by) uploaded_by
+                FROM file_versions
+                WHERE node_id = ${params.nodeId}
+                  AND uploaded_by IS NOT NULL
+                  AND uploaded_by != ${params.actorUserId}
+                ORDER BY uploaded_by, uploaded_at DESC
+                LIMIT 5
+            `);
+
+            const recipients = Array.from(recentEditorRows)
+                .map((row) => row.uploaded_by)
+                .filter((id): id is string => id != null);
+
+            if (recipients.length === 0) return;
+
+            // Get project slug for the notification href
+            const project = await db.query.projects.findFirst({
+                where: eq(projects.id, params.projectId),
+                columns: { slug: true },
+            });
+
+            await emitFileVersionAddedNotification({
+                recipients,
+                actorUserId: params.actorUserId,
+                actorName: actor?.fullName || actor?.username || null,
+                actorAvatarUrl: actor?.avatarUrl ?? null,
+                projectId: params.projectId,
+                projectSlug: project?.slug ?? null,
+                fileId: node.id,
+                fileName: node.name,
+                version: params.version,
+            });
+        }
+    } catch (error) {
+        logger.warn("notifications.file_version_created_emit_failed", {
+            module: "notifications",
+            projectId: params.projectId,
+            nodeId: params.nodeId,
+            version: params.version,
             error: error instanceof Error ? error.message : String(error),
         });
     }

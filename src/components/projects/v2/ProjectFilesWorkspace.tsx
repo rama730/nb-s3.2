@@ -1,10 +1,10 @@
-// Files-tab entry point — post-rollout (Task 13.4 deletion sweep complete).
+// Files-tab entry point — post-rollout (V2 cleanup complete).
 //
-// The legacy `WorkspaceShell` branch has been removed; `ProjectFilesWorkspace`
-// always mounts `FilesTabRoot`. Legacy V2-only props (`initialOpenLine`,
-// `initialOpenColumn`, `initialFileNodes`, `importSourceType`) are accepted
-// for source-compat with the existing `ProjectTabsRegistry` callsite but
-// dropped on the way through (`adaptToV3Props`).
+// `ProjectFilesWorkspace` always mounts `FilesTabRoot`. Legacy V2-only
+// props (`initialOpenLine`, `initialOpenColumn`, `initialFileNodes`,
+// `importSourceType`) are accepted for source-compat with the existing
+// `ProjectTabsRegistry` callsite but dropped on the way through
+// (`adaptToV3Props`).
 //
 // `adaptToV3Props` and the V3 prop type stay exported because
 // `tests/unit/files-tab/entry-gating.test.ts` exercises the adapter

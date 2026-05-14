@@ -106,6 +106,17 @@ export type SprintFileTimelineEntity = {
   lastEventType: string | null;
   lastEventAt: string | null;
   lastEventBy: string | null;
+  versionEvents?: SprintFileVersionEvent[];
+};
+
+export type SprintFileVersionEvent = {
+  id: string;
+  nodeId: string;
+  versionNumber: number;
+  createdAt: string;
+  createdBy: string | null;
+  createdByName: string | null;
+  comment: string | null;
 };
 
 export type SprintTimelineRow =
@@ -127,6 +138,14 @@ export type SprintTimelineRow =
       occurredAt: string | null;
       task: Pick<SprintTaskTimelineEntity, "id" | "title" | "taskNumber" | "status" | "priority">;
       file: SprintFileTimelineEntity;
+    }
+  | {
+      id: string;
+      kind: "file_version";
+      occurredAt: string | null;
+      task: Pick<SprintTaskTimelineEntity, "id" | "title" | "taskNumber" | "status" | "priority">;
+      file: Pick<SprintFileTimelineEntity, "id" | "nodeId" | "nodeName" | "nodePath" | "nodeType">;
+      versionEvent: SprintFileVersionEvent;
     }
   | {
       id: string;
@@ -391,7 +410,7 @@ export function filterSprintTimelineRows(rows: SprintTimelineRow[], filter: Spri
 
   return rows.filter((row) => {
     if (row.kind === "kickoff" || row.kind === "closeout") return true;
-    if (filter === "files") return row.kind === "file";
+    if (filter === "files") return row.kind === "file" || row.kind === "file_version";
     if (filter === "work") return row.kind === "task";
     if (filter === "blocked") return row.kind === "task" && row.task.status === "blocked";
     if (filter === "completed") return row.kind === "task" && row.task.status === "done";

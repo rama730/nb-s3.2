@@ -21,6 +21,7 @@ import { queryKeys } from "@/lib/query-keys";
 import { removeTaskFromProjectTaskCaches } from "@/lib/projects/task-cache";
 import { formatTaskId } from "@/lib/project-key";
 import { cn } from "@/lib/utils";
+import { logger } from "@/lib/logger";
 import { normalizeTaskSurfaceRecord, type TaskSurfaceRecord } from "@/lib/projects/task-presentation";
 import { useTaskPanelResource, type TaskPanelTab } from "@/hooks/useTaskPanelResource";
 
@@ -306,9 +307,18 @@ export default function TaskDetailPanel({
                     file,
                     options,
                   );
-                  return result.success
-                    ? { success: true }
-                    : { success: false, error: result.error };
+                  if (result.success) {
+                    // Emit telemetry (Req 16.3) — version replaced from task panel
+                    logger.metric("files_tab.version_replaced", {
+                      module: "files-tab",
+                      source: "task_panel",
+                      projectId,
+                      nodeId,
+                      newVersion: result.version?.version,
+                    });
+                    return { success: true };
+                  }
+                  return { success: false, error: result.error };
                 }}
               />
             </div>

@@ -18,7 +18,6 @@ function gcClosedTabs(ws: FilesWorkspaceState["byProjectId"][string], projectId:
 export interface WorkspaceSlice {
   setSplitEnabled: (projectId: string, enabled: boolean) => void;
   setSplitRatio: (projectId: string, ratio: number) => void;
-  openTab: (projectId: string, paneId: WorkspacePane["id"], nodeId: string) => void;
   closeTab: (projectId: string, paneId: WorkspacePane["id"], nodeId: string) => void;
   pinTab: (projectId: string, paneId: WorkspacePane["id"], nodeId: string, pinned: boolean) => void;
   closeOtherTabs: (projectId: string, paneId: WorkspacePane["id"], keepNodeId: string) => void;
@@ -59,28 +58,6 @@ export const createWorkspaceSlice: StateCreator<FilesWorkspaceState, [], [], Wor
         byProjectId: {
           ...state.byProjectId,
           [projectId]: { ...ws, splitRatio: clamped },
-        },
-      };
-    }),
-
-  openTab: (projectId, paneId, nodeId) =>
-    set((state) => {
-      const ws = state.byProjectId[projectId] ?? defaultWorkspace();
-      const pane = ws.panes[paneId];
-      const openTabIds = pane.openTabIds.includes(nodeId)
-        ? pane.openTabIds
-        : [...pane.openTabIds, nodeId];
-      return {
-        byProjectId: {
-          ...state.byProjectId,
-          [projectId]: {
-            ...ws,
-            tabsVersion: ws.tabsVersion + 1,
-            panes: {
-              ...ws.panes,
-              [paneId]: { ...pane, openTabIds, activeTabId: nodeId },
-            },
-          },
         },
       };
     }),

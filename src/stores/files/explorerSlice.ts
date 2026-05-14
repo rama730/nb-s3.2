@@ -4,7 +4,6 @@ import type {
   ExplorerMode,
   FilesViewMode,
   ExplorerSort,
-  SavedExplorerView,
 } from "./types";
 import { defaultWorkspace } from "./types";
 
@@ -19,8 +18,6 @@ export interface ExplorerSlice {
   setFoldersFirst: (projectId: string, foldersFirst: boolean) => void;
   addRecent: (projectId: string, nodeId: string) => void;
   toggleFavorite: (projectId: string, nodeId: string) => void;
-  saveCurrentView: (projectId: string, name: string) => void;
-  applySavedView: (projectId: string, viewId: string) => void;
   deleteSavedView: (projectId: string, viewId: string) => void;
   /** FW9: Remove expandedFolderIds entries whose node no longer exists */
   pruneDeadExpanded: (projectId: string) => void;
@@ -181,76 +178,6 @@ export const createExplorerSlice: StateCreator<FilesWorkspaceState, [], [], Expl
         byProjectId: {
           ...state.byProjectId,
           [projectId]: { ...ws, favorites: next },
-        },
-      };
-    }),
-
-  saveCurrentView: (projectId, name) =>
-    set((state) => {
-      const ws = state.byProjectId[projectId] ?? defaultWorkspace();
-      const cleanName = (name || "").trim();
-      if (!cleanName) return state;
-
-      const now = Date.now();
-      const config: SavedExplorerView["config"] = {
-        explorerMode: ws.explorerMode,
-        viewMode: ws.viewMode,
-        sort: ws.sort,
-        foldersFirst: ws.foldersFirst,
-        selectedFolderId: ws.selectedFolderId ?? null,
-      };
-
-      const existing = ws.savedViews.find(
-        (view) => view.name.toLowerCase() === cleanName.toLowerCase()
-      );
-      const nextViews = existing
-        ? ws.savedViews.map((view) =>
-          view.id === existing.id
-            ? { ...view, name: cleanName, config, createdAt: now }
-            : view
-        )
-        : [
-          {
-            id: `${now}-${Math.random().toString(36).slice(2, 8)}`,
-            name: cleanName,
-            createdAt: now,
-            config,
-          },
-          ...ws.savedViews,
-        ];
-
-      return {
-        byProjectId: {
-          ...state.byProjectId,
-          [projectId]: {
-            ...ws,
-            savedViews: nextViews.slice(0, 20),
-          },
-        },
-      };
-    }),
-
-  applySavedView: (projectId, viewId) =>
-    set((state) => {
-      const ws = state.byProjectId[projectId] ?? defaultWorkspace();
-      const view = ws.savedViews.find((entry) => entry.id === viewId);
-      if (!view) return state;
-      return {
-        byProjectId: {
-          ...state.byProjectId,
-          [projectId]: {
-            ...ws,
-            explorerMode: view.config.explorerMode,
-            viewMode: view.config.viewMode,
-            viewModeByExplorerMode: {
-              ...ws.viewModeByExplorerMode,
-              [view.config.explorerMode]: view.config.viewMode,
-            },
-            sort: view.config.sort,
-            foldersFirst: view.config.foldersFirst,
-            selectedFolderId: view.config.selectedFolderId,
-            searchQuery: view.config.explorerMode === "search" ? ws.searchQuery : "",
-          },
         },
       };
     }),

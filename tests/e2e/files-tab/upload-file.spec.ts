@@ -35,15 +35,15 @@
  *              justification.
  *
  * Preconditions (Req 21.7 coexistence):
- *   - `NEXT_PUBLIC_FILES_TAB_V3=1` must be set when the Next.js server is
- *     started so `ProjectFilesWorkspace` mounts `FilesTabRoot` instead of
- *     `WorkspaceShell`. When the flag is not present, each spec records
- *     `not_applicable` with a justification and exits cleanly.
+ *   - `ProjectFilesWorkspace` always mounts `FilesTabRoot` (the V3 surface
+ *     is unconditional post-rollout). When the V3 surface does not appear,
+ *     each spec records `not_applicable` with a justification and exits
+ *     cleanly.
  *
  * Fallbacks:
  *   - No E2E credentials          → `test.skip` (no audit entry, matches
  *                                    sibling specs).
- *   - V3 UI not rendered (flag off) → record `not_applicable`.
+ *   - V3 UI not rendered           → record `not_applicable`.
  *   - `filechooser` event never fires (Playwright harness cannot intercept
  *     the synthetic `<input type="file">` click) → record `not_applicable`
  *     with justification.
@@ -74,13 +74,6 @@ const AREA_TREE_DROP = "drag-and-drop upload onto Sidebar_Tree folders";
 const AREA_LIST_DROP = "drag-and-drop upload onto File_List folder rows";
 
 const ROOT_FOLDER_NAME = "workspace";
-
-// NEXT_PUBLIC_FILES_TAB_V3 is a public-env flag that the bundler inlines
-// when the dev/prod server starts. We set it here too so that any
-// server-side invocation of `isFilesTabV3Enabled` during the test run
-// picks it up when the runner reuses its process env for `webServer`.
-// The authoritative gate lives in `src/lib/features/files.ts`.
-process.env.NEXT_PUBLIC_FILES_TAB_V3 = process.env.NEXT_PUBLIC_FILES_TAB_V3 ?? "1";
 
 // ─── Test bodies ────────────────────────────────────────────────────
 
@@ -122,9 +115,7 @@ test.describe("Files tab V3 — file upload (Task 12.2)", () => {
         await recordOnce(
           "not_applicable",
           "V3 Files Tab root (data-testid='files-tab-root') was not rendered — " +
-            "`NEXT_PUBLIC_FILES_TAB_V3` is not enabled on the E2E server, so " +
-            "`ProjectFilesWorkspace` mounted the legacy `WorkspaceShell` and the " +
-            "V3 single-file upload flow cannot be exercised.",
+            "the V3 single-file upload flow cannot be exercised.",
         );
         await monitor.assertNoViolations();
         monitor.detach();
@@ -232,9 +223,7 @@ test.describe("Files tab V3 — file upload (Task 12.2)", () => {
         await recordOnce(
           "not_applicable",
           "V3 Files Tab root (data-testid='files-tab-root') was not rendered — " +
-            "`NEXT_PUBLIC_FILES_TAB_V3` is not enabled on the E2E server, so " +
-            "`ProjectFilesWorkspace` mounted the legacy `WorkspaceShell` and the " +
-            "V3 sidebar drag-and-drop upload flow cannot be exercised.",
+            "the V3 sidebar drag-and-drop upload flow cannot be exercised.",
         );
         await monitor.assertNoViolations();
         monitor.detach();
@@ -321,9 +310,7 @@ test.describe("Files tab V3 — file upload (Task 12.2)", () => {
         await recordOnce(
           "not_applicable",
           "V3 Files Tab root (data-testid='files-tab-root') was not rendered — " +
-            "`NEXT_PUBLIC_FILES_TAB_V3` is not enabled on the E2E server, so " +
-            "`ProjectFilesWorkspace` mounted the legacy `WorkspaceShell` and the " +
-            "V3 File_List drag-and-drop upload flow cannot be exercised.",
+            "the V3 File_List drag-and-drop upload flow cannot be exercised.",
         );
         await monitor.assertNoViolations();
         monitor.detach();

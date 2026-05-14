@@ -8,11 +8,10 @@ import {
 } from "lucide-react";
 
 import type { ProjectNode } from "@/lib/db/schema";
-import { getProjectNodes, getProjectRecentNodes } from "@/app/actions/files";
 import { getTaskLinkCounts } from "@/app/actions/files/links";
 import { TaskFilesExplorer } from "@/components/projects/v2/tasks/components/TaskFilesExplorer";
 import { TaskFilesActionMenu } from "@/components/projects/v2/tasks/components/TaskFilesActionMenu";
-import { TaskFileAttachPickerDialog } from "@/components/projects/v2/tasks/components/TaskFileAttachPickerDialog";
+import { SingleAttachmentPicker } from "@/components/projects/v2/files-tab/picker/SingleAttachmentPicker";
 import { TaskFileDecisionDialog } from "@/components/projects/v2/tasks/components/TaskFileDecisionDialog";
 import { TaskFileUploadQueueList } from "@/components/projects/v2/tasks/components/TaskFileUploadQueueList";
 import { TaskFilesEmptyState } from "@/components/projects/v2/tasks/components/TaskFilesEmptyState";
@@ -97,10 +96,6 @@ type ReuploadPrompt = {
   confidence: "changed" | "unknown";
 };
 
-type PickerState =
-  | { open: false }
-  | { open: true; query: string; loading: boolean; results: ProjectNode[]; suggestions: ProjectNode[] };
-
 export default function FilesTab({
   projectId,
   projectSlug,
@@ -132,8 +127,6 @@ export default function FilesTab({
    *  carry `webkitdirectory` at render time; you can't toggle it on the
    *  same hidden input used for plain files without re-mounting. */
   const folderInputRef = useRef<HTMLInputElement>(null);
-  const pickerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [picker, setPicker] = useState<PickerState>({ open: false });
   const [linkCounts, setLinkCounts] = useState<Record<string, number>>({});
   const [resolutionError, setResolutionError] = useState<string | null>(null);
   const [isResolving, setIsResolving] = useState(false);
@@ -142,51 +135,8 @@ export default function FilesTab({
   const [isDragActive, setIsDragActive] = useState(false);
   const [isProcessingDrop, setIsProcessingDrop] = useState(false);
   const [showWarningDetails, setShowWarningDetails] = useState(false);
+  const [v3PickerOpen, setV3PickerOpen] = useState(false);
   const dragCounterRef = useRef(0);
-
-  const openPicker = useCallback(async () => {
-    setPicker({ open: true, query: "", loading: true, results: [], suggestions: [] });
-    try {
-      const recent = await getProjectRecentNodes(projectId, 5);
-      setPicker((current) =>
-        current.open ? { ...current, loading: false, suggestions: recent } : current,
-      );
-    } catch {
-      setPicker((current) => (current.open ? { ...current, loading: false } : current));
-    }
-  }, [projectId]);
-
-  const closePicker = useCallback(() => {
-    setPicker({ open: false });
-  }, []);
-
-  const runPickerSearch = useCallback(
-    async (query: string) => {
-      if (!query) {
-        setPicker((current) => (current.open ? { ...current, query, results: [] } : current));
-        return;
-      }
-
-      setPicker((current) => (current.open ? { ...current, query, loading: true } : current));
-      try {
-        const result = await getProjectNodes(projectId, null, query);
-        const nodes = Array.isArray(result) ? result : result.nodes;
-        const validNodes = (nodes || []).filter((node) => node.type === "file" || node.type === "folder");
-        setPicker((current) =>
-          current.open ? { ...current, loading: false, results: validNodes } : current,
-        );
-      } catch {
-        setPicker((current) => (current.open ? { ...current, loading: false, results: [] } : current));
-      }
-    },
-    [projectId],
-  );
-
-  useEffect(() => {
-    return () => {
-      if (pickerTimerRef.current) clearTimeout(pickerTimerRef.current);
-    };
-  }, []);
 
   /**
    * Decide what to do with files dropped onto the tab: for each file,
@@ -523,7 +473,7 @@ export default function FilesTab({
             disabled={isUploading}
             onPickFiles={() => fileInputRef.current?.click()}
             onPickFolder={onUploadFolders ? () => folderInputRef.current?.click() : undefined}
-            onPickExisting={() => void openPicker()}
+            onPickExisting={() => setV3PickerOpen(true)}
           />
         </div>
       </div>
@@ -569,7 +519,7 @@ export default function FilesTab({
             onPickFolder={
               onUploadFolders ? () => folderInputRef.current?.click() : undefined
             }
-            onPickExisting={openPicker}
+            onPickExisting={() => setV3PickerOpen(true)}
           />
         ) : (
           <TaskFilesExplorer
@@ -611,28 +561,12 @@ export default function FilesTab({
         )}
       </div>
 
-      <TaskFileAttachPickerDialog
-        open={picker.open}
-        query={picker.open ? picker.query : ""}
-        loading={picker.open ? picker.loading : false}
-        results={picker.open ? picker.results : []}
-        suggestions={picker.open ? picker.suggestions : []}
-        attachments={attachments}
-        canEdit={canEdit}
-        onQueryChange={(query) => {
-          setPicker((current) => (current.open ? { ...current, query } : current));
-          if (pickerTimerRef.current) clearTimeout(pickerTimerRef.current);
-          pickerTimerRef.current = setTimeout(() => {
-            void runPickerSearch(query.trim());
-          }, 180);
-        }}
-        onAttach={async (node) => {
-          const result = await onAttachExisting(node);
-          if (result.success) closePicker();
-        }}
-        onOpenChange={(open) => {
-          if (!open) closePicker();
-        }}
+      <SingleAttachmentPicker
+        projectId={projectId}
+        taskId={taskId}
+        isOpen={v3PickerOpen}
+        onClose={() => setV3PickerOpen(false)}
+        existingAttachments={attachments}
       />
 
       {pendingResolution ? (

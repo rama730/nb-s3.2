@@ -29,8 +29,6 @@ const EDIT_BTN_TESTID = "files-tab-file-actions-edit";
 
 const V3_DETECT_TIMEOUT_MS = 15_000;
 
-process.env.NEXT_PUBLIC_FILES_TAB_V3 = process.env.NEXT_PUBLIC_FILES_TAB_V3 ?? "1";
-
 const VIEWER_EMAIL = process.env.E2E_VIEWER_EMAIL ?? "";
 const VIEWER_PASSWORD = process.env.E2E_VIEWER_PASSWORD ?? "";
 const HAS_VIEWER_CREDENTIALS = VIEWER_EMAIL.length > 0 && VIEWER_PASSWORD.length > 0;
@@ -65,8 +63,7 @@ async function openFilesTabV3(
     return {
       ready: false,
       reason:
-        `V3 surface not rendered within ${V3_DETECT_TIMEOUT_MS}ms; ` +
-        `NEXT_PUBLIC_FILES_TAB_V3 likely unset on the E2E server.`,
+        `V3 surface not rendered within ${V3_DETECT_TIMEOUT_MS}ms.`,
     };
   }
   return { ready: true };

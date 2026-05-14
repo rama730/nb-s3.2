@@ -22,6 +22,7 @@ type ActiveResourceBinding = {
 export type ActiveResourceType =
     | 'conversation'
     | 'profile'
+    | 'project_files'
     | 'task'
     | 'task_comments'
     | 'task_counts'

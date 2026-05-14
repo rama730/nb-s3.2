@@ -23,14 +23,14 @@
  *              affordance exposes the hidden intermediate segments.
  *
  * Preconditions (Req 21.7 coexistence):
- *   - `NEXT_PUBLIC_FILES_TAB_V3=1` must be set so `ProjectFilesWorkspace`
- *     mounts `FilesTabRoot`. When the V3 surface does not mount within
- *     the detection window the scenario records `not_applicable` with a
- *     non-empty justification (Req 18.3).
+ *   - `ProjectFilesWorkspace` always mounts `FilesTabRoot` (the V3 surface
+ *     is unconditional post-rollout). When the V3 surface does not mount
+ *     within the detection window the scenario records `not_applicable`
+ *     with a non-empty justification (Req 18.3).
  *
  * Fallbacks:
  *   - No E2E credentials → `test.skip` (no audit entry, matches siblings).
- *   - V3 UI not rendered (flag off) → record `not_applicable`.
+ *   - V3 UI not rendered → record `not_applicable`.
  *   - Fewer than two nested folders under root (intermediate click) →
  *     record `not_applicable`.
  *   - Cannot construct / discover a 7+-deep chain for the ellipsis sub-test
@@ -70,11 +70,6 @@ const V3_DETECT_TIMEOUT_MS = 15_000;
 // ancestor chain, so we need an ancestor chain of ≥ 6 real folders to
 // reach 7 segments and trip the ellipsis.
 const MIN_DEPTH_FOR_ELLIPSIS = 6;
-
-// Mirror the sibling specs: default the public env flag on so that any
-// server-side resolution of `isFilesTabV3Enabled` picks it up when the
-// webServer reuses its process env.
-process.env.NEXT_PUBLIC_FILES_TAB_V3 = process.env.NEXT_PUBLIC_FILES_TAB_V3 ?? "1";
 
 // ─── Audit bookkeeping ───────────────────────────────────────────────
 
@@ -137,8 +132,7 @@ async function openFilesTabV3(
       ready: false,
       reason:
         `Files tab v3 surface (data-testid="${V3_ROOT_TESTID}") did not appear ` +
-        `within ${V3_DETECT_TIMEOUT_MS}ms for project "${PROJECT_SLUG}". ` +
-        `NEXT_PUBLIC_FILES_TAB_V3 is likely unset in the E2E server environment.`,
+        `within ${V3_DETECT_TIMEOUT_MS}ms for project "${PROJECT_SLUG}".`,
     };
   }
 

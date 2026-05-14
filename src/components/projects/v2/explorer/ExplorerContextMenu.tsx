@@ -161,6 +161,7 @@ export function useTreeContext(options: {
 
   return useMemo(
     (): FileTreeItemContext => ({
+      projectId,
       nodesById,
       selectedNodeId: selectedNodeId ?? null,
       selectedNodeIds: effectiveSelectedNodeIds,

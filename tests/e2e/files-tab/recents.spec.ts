@@ -13,11 +13,10 @@
  *              `files-recent-open:{projectId}` localStorage key.
  *
  * Preconditions (Req 21.7 coexistence):
- *   - `NEXT_PUBLIC_FILES_TAB_V3=1` must be set so `ProjectFilesWorkspace`
- *     mounts `FilesTabRoot` instead of the legacy `WorkspaceShell`. When
- *     the V3 surface (`data-testid="files-tab-root"`) does not appear,
- *     each scenario records `not_applicable` with a non-empty
- *     justification (Req 18.3).
+ *   - `ProjectFilesWorkspace` always mounts `FilesTabRoot` (the V3 surface
+ *     is unconditional post-rollout). When the V3 surface
+ *     (`data-testid="files-tab-root"`) does not appear, each scenario
+ *     records `not_applicable` with a non-empty justification (Req 18.3).
  *
  * Fallbacks:
  *   - No E2E credentials → `test.skip` (no audit entry).
@@ -46,12 +45,6 @@ const ROW_TESTID = "files-tab-folder-list-row";
 const RECENTS_KEY_PREFIX = "files-recent-open:";
 const RECENTS_CAP = 50;
 const V3_DETECT_TIMEOUT_MS = 15_000;
-
-// Ensure the public-env override propagates to both the webServer child
-// process (when Playwright spawns the dev server) and any in-test
-// resolution that shares the runner's env. The authoritative gate still
-// lives in `src/lib/features/files.ts`.
-process.env.NEXT_PUBLIC_FILES_TAB_V3 = process.env.NEXT_PUBLIC_FILES_TAB_V3 ?? "1";
 
 // ─── Shared helpers ─────────────────────────────────────────────────
 
@@ -108,8 +101,7 @@ async function openFilesTab(
             ready: false,
             reason:
                 `Files tab v3 surface (data-testid="${V3_ROOT_TESTID}") did not appear ` +
-                `within ${V3_DETECT_TIMEOUT_MS}ms for project "${slug}". ` +
-                `NEXT_PUBLIC_FILES_TAB_V3 is likely unset in the E2E server environment.`,
+                `within ${V3_DETECT_TIMEOUT_MS}ms for project "${slug}".`,
         };
     }
     return { ready: true };

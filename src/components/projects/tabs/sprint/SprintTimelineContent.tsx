@@ -280,6 +280,45 @@ function FileEntry({
   );
 }
 
+function FileVersionEntry({
+  row,
+  projectSlug,
+  isLast,
+}: {
+  row: Extract<SprintTimelineRow, { kind: "file_version" }>;
+  projectSlug: string;
+  isLast: boolean;
+}) {
+  const workspaceHref = buildFilesWorkspaceHref(projectSlug, row.file.nodePath);
+  return (
+    <div className="relative ml-6 border-l border-dashed border-zinc-200 pl-9 dark:border-zinc-800">
+      {!isLast ? <div className="absolute left-[13px] top-7 bottom-[-2.5rem] w-px bg-zinc-200 dark:bg-zinc-800" /> : null}
+      <TimelineNode className="border-zinc-100 text-zinc-400 dark:border-zinc-800/60 dark:text-zinc-500">
+        <ArrowUpRight className="h-3.5 w-3.5" />
+      </TimelineNode>
+      <article className="space-y-1.5">
+        <p className="text-xs font-medium tracking-wide text-zinc-400 dark:text-zinc-500">{formatTimelineStamp(row.occurredAt)}</p>
+        <div className="space-y-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-medium text-zinc-700 dark:text-zinc-300">
+              {row.file.nodeName} — v{row.versionEvent.versionNumber}
+            </span>
+            <TimelineTag className="border-zinc-100 bg-zinc-50 text-zinc-500 dark:border-zinc-800/60 dark:bg-zinc-900/40 dark:text-zinc-400">
+              Version added
+            </TimelineTag>
+          </div>
+          {row.versionEvent.comment ? (
+            <p className="text-xs leading-5 text-zinc-500 dark:text-zinc-400">{row.versionEvent.comment}</p>
+          ) : null}
+          {row.versionEvent.createdByName ? (
+            <p className="text-xs text-zinc-400 dark:text-zinc-500">by {row.versionEvent.createdByName}</p>
+          ) : null}
+        </div>
+      </article>
+    </div>
+  );
+}
+
 function TaskEntry({
   row,
   onOpenDrawer,
@@ -434,6 +473,15 @@ function ChronologicalTimeline({
         />
       );
     }
+    if (row.kind === "file_version") {
+      return (
+        <FileVersionEntry
+          row={row}
+          projectSlug={projectSlug}
+          isLast={isLast}
+        />
+      );
+    }
     return (
       <TaskEntry
         row={row}
@@ -481,27 +529,44 @@ function GroupedTimeline({
       {kickoff ? <KickoffEntry row={kickoff} isLast={groups.length === 0 && !closeout} /> : null}
       {groups.map((group, index) => {
         const isLastTask = index === groups.length - 1 && !closeout;
+        const hasFileContent = group.fileRows.length > 0 || group.fileVersionRows.length > 0;
         return (
           <div key={group.taskRow.id} className="space-y-5">
             <TaskEntry
               row={group.taskRow}
               onOpenDrawer={onOpenDrawer}
               onPrefetchDrawer={onPrefetchDrawer}
-              isLast={isLastTask && group.fileRows.length === 0}
+              isLast={isLastTask && !hasFileContent}
             />
-            {group.fileRows.length > 0 ? (
+            {hasFileContent ? (
               <div className="space-y-6">
-                {group.fileRows.map((fileRow, fileIndex) => (
-                  <FileEntry
-                    key={fileRow.id}
-                    row={fileRow}
-                    projectSlug={projectSlug}
-                    onOpenDrawer={onOpenDrawer}
-                    onPrefetchDrawer={onPrefetchDrawer}
-                    isLast={index === groups.length - 1 && fileIndex === group.fileRows.length - 1 && !closeout}
-                    nested
-                  />
-                ))}
+                {group.fileRows.map((fileRow, fileIndex) => {
+                  // Find version sub-rows that belong to this file
+                  const fileVersionSubRows = group.fileVersionRows.filter(
+                    (vr) => vr.file.nodeId === fileRow.file.nodeId,
+                  );
+                  const isLastFile = index === groups.length - 1 && fileIndex === group.fileRows.length - 1 && !closeout;
+                  return (
+                    <React.Fragment key={fileRow.id}>
+                      <FileEntry
+                        row={fileRow}
+                        projectSlug={projectSlug}
+                        onOpenDrawer={onOpenDrawer}
+                        onPrefetchDrawer={onPrefetchDrawer}
+                        isLast={isLastFile && fileVersionSubRows.length === 0}
+                        nested
+                      />
+                      {fileVersionSubRows.map((versionRow, versionIndex) => (
+                        <FileVersionEntry
+                          key={versionRow.id}
+                          row={versionRow}
+                          projectSlug={projectSlug}
+                          isLast={isLastFile && versionIndex === fileVersionSubRows.length - 1}
+                        />
+                      ))}
+                    </React.Fragment>
+                  );
+                })}
               </div>
             ) : null}
           </div>
@@ -536,7 +601,7 @@ export function SprintTimelineContent({
   const hasContent =
     viewModel.mode === "grouped"
       ? viewModel.groups.length > 0
-      : viewModel.rows.some((row) => row.kind === "task" || row.kind === "file");
+      : viewModel.rows.some((row) => row.kind === "task" || row.kind === "file" || row.kind === "file_version");
 
   return (
     <div className="space-y-8 px-8 py-7">

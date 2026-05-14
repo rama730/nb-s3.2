@@ -70,6 +70,9 @@ import React, {
 
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 import { useToast } from "@/components/ui-custom/Toast";
+import { createClient } from "@/lib/supabase/client";
+import { subscribeProjectFilesChannel } from "@/lib/realtime/project-files-channel";
+import { getTaskLinkCounts } from "@/app/actions/files/links";
 
 import { useExplorerBoot } from "../explorer/useExplorerBoot";
 
@@ -274,7 +277,42 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
     },
   });
 
-  // ── 8. Quick Open state + ⌘P / Ctrl+P toggle (Req 9.1) ────────────
+  // ── 8. Project_Channel realtime subscription (Req 3.1, 3.2) ────────
+  //
+  // Lazy-mount a single project-scoped realtime channel when the Files tab
+  // is active. The channel multiplexes `task_node_links` and `file_versions`
+  // bindings. On unmount (or navigation away), we unsubscribe to free the
+  // channel budget.
+  const setTaskLinkCounts = useFilesWorkspaceStore((s) => s.setTaskLinkCounts);
+  const patchNodeVersion = useFilesWorkspaceStore((s) => s.patchNodeVersion);
+
+  useEffect(() => {
+    if (!isActive) return;
+
+    const supabase = createClient();
+
+    const channel = subscribeProjectFilesChannel(supabase, {
+      projectId,
+      onTaskLinkChange: (event) => {
+        // Re-fetch the count for the affected node so the store has the
+        // authoritative value. For DELETE events where the link is removed,
+        // the count may drop to zero — `setTaskLinkCounts` handles that by
+        // removing the TaskLinkChip (Req 3.7).
+        void getTaskLinkCounts(projectId, [event.nodeId]).then((counts) => {
+          setTaskLinkCounts(projectId, counts);
+        });
+      },
+      onFileVersionChange: (event) => {
+        patchNodeVersion(projectId, event.nodeId, event.newVersion);
+      },
+    });
+
+    return () => {
+      channel.unsubscribe();
+    };
+  }, [projectId, isActive, setTaskLinkCounts, patchNodeVersion]);
+
+  // ── 9. Quick Open state + ⌘P / Ctrl+P toggle (Req 9.1) ────────────
   const [quickOpenOpen, setQuickOpenOpen] = useState(false);
   const [quickOpenQuery, setQuickOpenQuery] = useState("");
 
@@ -313,7 +351,7 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [handleQuickOpenChange]);
 
-  // ── 9. Render ─────────────────────────────────────────────────────
+  // ── 10. Render ─────────────────────────────────────────────────────
   return (
     <FilesTabBootContext.Provider value={bootContextValue}>
       <FilesTabRoleProvider role={role} canEdit={canEdit}>

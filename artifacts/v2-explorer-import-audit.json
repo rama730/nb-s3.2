@@ -1,0 +1,100 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-05-14T13:08:17.478Z",
+  "task": "11.1",
+  "description": "Import-graph audit confirming zero external callers for V2 explorer modules scheduled for deletion",
+  "requirements": [
+    "20.1",
+    "20.2",
+    "20.3"
+  ],
+  "scannedFiles": 797,
+  "totalExternalCallers": 0,
+  "modules": [
+    {
+      "name": "ExplorerShell",
+      "externalCallerCount": 0,
+      "callers": [],
+      "safeToDelete": true
+    },
+    {
+      "name": "FileExplorer",
+      "externalCallerCount": 0,
+      "callers": [],
+      "safeToDelete": true
+    },
+    {
+      "name": "MultiFileDiffDialog",
+      "externalCallerCount": 0,
+      "callers": [],
+      "safeToDelete": true
+    },
+    {
+      "name": "MultiSelectActionsBar",
+      "externalCallerCount": 0,
+      "callers": [],
+      "safeToDelete": true
+    },
+    {
+      "name": "OutlinePanel",
+      "externalCallerCount": 0,
+      "callers": [],
+      "safeToDelete": true
+    },
+    {
+      "name": "SourceControlPanel",
+      "externalCallerCount": 0,
+      "callers": [],
+      "safeToDelete": true
+    },
+    {
+      "name": "ExplorerCommandPalette",
+      "externalCallerCount": 0,
+      "callers": [],
+      "safeToDelete": true
+    },
+    {
+      "name": "ExplorerInsightsHost",
+      "externalCallerCount": 0,
+      "callers": [],
+      "safeToDelete": true
+    },
+    {
+      "name": "ExplorerOperationsHost",
+      "externalCallerCount": 0,
+      "callers": [],
+      "safeToDelete": true
+    },
+    {
+      "name": "ExplorerSearch",
+      "externalCallerCount": 0,
+      "callers": [],
+      "safeToDelete": true
+    },
+    {
+      "name": "ExplorerToolbarHost",
+      "externalCallerCount": 0,
+      "callers": [],
+      "safeToDelete": true
+    },
+    {
+      "name": "ExplorerBatchOps",
+      "externalCallerCount": 0,
+      "callers": [],
+      "safeToDelete": true
+    },
+    {
+      "name": "ExplorerQuickOpen",
+      "externalCallerCount": 0,
+      "callers": [],
+      "safeToDelete": true
+    },
+    {
+      "name": "FileGridItem",
+      "externalCallerCount": 0,
+      "callers": [],
+      "safeToDelete": true
+    }
+  ],
+  "verdict": "ALL_CLEAR — all 14 V2 explorer modules have zero external callers and are safe to delete"
+}

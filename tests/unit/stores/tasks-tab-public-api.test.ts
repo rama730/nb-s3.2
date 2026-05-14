@@ -27,12 +27,12 @@
 //                     toggleExpanded
 //       helpers:      filesParentKey
 //
-//     src/components/projects/v2/tasks/components/TaskAttachmentPicker.tsx
+//     src/components/projects/v2/files-tab/picker/MultiAttachmentPicker.tsx (V3 — replaced TaskAttachmentPicker)
+//       Uses V3AttachmentPicker which reads from filesWorkspaceStore
 //       getState() path:  byProjectId[projectId].nodesById
-//       (also mounts `FileExplorer` → `ExplorerShell` below)
 //
-//   Transitively via `<FileExplorer>` (= `ExplorerShell`), reached from
-//   TaskAttachmentPicker:
+//   Transitively via `V3AttachmentPicker` (navigate-only tree), reached from
+//   MultiAttachmentPicker:
 //     src/components/projects/v2/explorer/ExplorerShell.tsx
 //       state reads:  nodesById, childrenByParentId, loadedChildren,
 //                     expandedFolderIds, folderMeta, treeVersion,

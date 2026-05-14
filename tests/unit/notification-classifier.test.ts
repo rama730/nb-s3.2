@@ -24,6 +24,7 @@ const ALL_KINDS: readonly NotificationKind[] = [
   "task_file_version",
   "task_file_replaced",
   "task_file_needs_review",
+  "file_version_added",
   "project_role_changed",
   "project_member_removed",
   "project_ownership_transferred",

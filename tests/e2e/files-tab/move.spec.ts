@@ -10,16 +10,14 @@
  *              of its descendants → error toast; no mutation.
  *
  * Preconditions (Req 21.7 coexistence):
- *   - `NEXT_PUBLIC_FILES_TAB_V3=1` must be set when the Next.js dev server
- *     is started so `ProjectFilesWorkspace` mounts `FilesTabRoot` instead of
- *     the legacy `WorkspaceShell`. The public-env override is resolved at
- *     request time by `isFilesTabV3Enabled` in `src/lib/features/files.ts`.
- *     When the flag is not present the spec records `not_applicable` with a
+ *   - `ProjectFilesWorkspace` always mounts `FilesTabRoot` (the V3 surface
+ *     is unconditional post-rollout). When the V3 surface does not appear
+ *     within the detection window the spec records `not_applicable` with a
  *     justification and exits cleanly (Req 18.3).
  *
  * Fallbacks:
  *   - No E2E credentials → `test.skip` (no audit entry).
- *   - V3 UI not rendered (flag off) → record `not_applicable`.
+ *   - V3 UI not rendered → record `not_applicable`.
  *   - Playwright browser unavailable is handled at the Playwright layer; if
  *     the worker cannot start, no entry is emitted (matches the contract
  *     "Fallback to `not_applicable` with justification if browser not
@@ -35,13 +33,6 @@ const fixtureProjectSlug =
   process.env.E2E_FILES_PROJECT_SLUG || "e2e-files-workspace-controls";
 const filesTabUrl = `/projects/${fixtureProjectSlug}?tab=files`;
 const AREA = "move";
-
-// NEXT_PUBLIC_FILES_TAB_V3 is a public-env flag that the bundler inlines
-// when the dev/prod server starts. We set it here as well so that any
-// server-side invocation of `isFilesTabV3Enabled` during the test run
-// picks it up when the E2E runner reuses its process env (webServer).
-// The authoritative gate lives in `src/lib/features/files.ts`.
-process.env.NEXT_PUBLIC_FILES_TAB_V3 = process.env.NEXT_PUBLIC_FILES_TAB_V3 ?? "1";
 
 test.describe("Files tab V3 — move", () => {
   test.skip(!hasE2ECredentials, "E2E_USER_EMAIL and E2E_USER_PASSWORD are required.");
@@ -93,7 +84,7 @@ test.describe("Files tab V3 — move", () => {
         await recordOnce(
           "not_applicable",
           v2Visible
-            ? "NEXT_PUBLIC_FILES_TAB_V3 is not enabled on the E2E server; ProjectFilesWorkspace mounted the legacy WorkspaceShell instead of FilesTabRoot, so the V3 move flow cannot be exercised."
+            ? "V3 FilesTabRoot was not rendered; the environment may still be serving a stale build."
             : "Files tab did not render either V3 FilesTabRoot or V2 WorkspaceShell within 15s; environment is not in a state where the move flow can be verified.",
         );
         await monitor.assertNoViolations();

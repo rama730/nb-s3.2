@@ -6,7 +6,6 @@ import { FILES_RUNTIME_BUDGETS, clampNumber } from "@/lib/files/runtime-budgets"
 export interface EditorSlice {
   setPrefs: (projectId: string, prefs: Partial<EditorPreferences>) => void;
   setActiveFileSymbols: (projectId: string, symbols: EditorSymbol[]) => void;
-  requestScrollTo: (projectId: string, nodeId: string, line: number) => void;
   clearScrollRequest: (projectId: string) => void;
 }
 
@@ -47,17 +46,6 @@ export const createEditorSlice: StateCreator<FilesWorkspaceState, [], [], Editor
         byProjectId: {
           ...state.byProjectId,
           [projectId]: { ...ws, activeFileSymbols: symbols },
-        },
-      };
-    }),
-
-  requestScrollTo: (projectId, nodeId, line) =>
-    set((state) => {
-      const ws = state.byProjectId[projectId] ?? defaultWorkspace();
-      return {
-        byProjectId: {
-          ...state.byProjectId,
-          [projectId]: { ...ws, requestedScrollPosition: { nodeId, line } },
         },
       };
     }),

@@ -136,7 +136,6 @@ export const useFilesActions = () =>
       markChildrenLoaded: s.markChildrenLoaded,
       toggleExpanded: s.toggleExpanded,
       setSelectedNode: s.setSelectedNode,
-      openTab: s.openTab,
       closeTab: s.closeTab,
       setActiveTab: s.setActiveTab,
     }))

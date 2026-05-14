@@ -8,7 +8,7 @@ import { Calendar, ChevronDown, Paperclip, Plus, Trash2, User, X, Zap } from "lu
 import { cn } from "@/lib/utils";
 import type { ProjectNode } from "@/lib/db/schema";
 import { useReducedMotionPreference } from "@/components/providers/theme-provider";
-import TaskAttachmentPicker from "./components/TaskAttachmentPicker";
+import { MultiAttachmentPicker } from "../files-tab/picker/MultiAttachmentPicker";
 import { buildTaskEditorDraft, taskEditorDraftSchema, type TaskEditorDraft, type TaskEditorSubtaskDraft } from "@/lib/projects/task-draft";
 import { normalizeSprintOptions, normalizeTaskSurfacePerson } from "@/lib/projects/task-presentation";
 import { TASK_PRIORITY_VALUES, TASK_WORKFLOW_STATUSES, getTaskPriorityPresentation, getTaskStatusPresentation } from "@/lib/projects/task-workflow";
@@ -438,13 +438,13 @@ export default function CreateTaskModal({
                 </div>
             </motion.div>
 
-            <TaskAttachmentPicker
+            <MultiAttachmentPicker
                 isOpen={isFilePickerOpen}
                 onClose={() => setIsFilePickerOpen(false)}
                 projectId={projectId}
                 projectName={projectName}
-                attachments={attachments}
-                setAttachments={setAttachments}
+                initialAttachments={attachments}
+                onConfirm={setAttachments}
             />
         </div>
     );

@@ -34,7 +34,7 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { PanelLeftClose } from "lucide-react";
 
 import type { ProjectNode } from "@/lib/db/schema";
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
@@ -523,6 +523,8 @@ export function FilesTabSidebar({
   if (sidebarCollapsed) {
     // Collapsed: width 0, no border. A floating expand control sits in
     // its own element so users can re-open the sidebar (Req 2.4–2.5).
+    // NOTE: The visible Sidebar_Reopen_Control now lives in FilesTabMain
+    // (Req 18.1–18.6). This aside retains zero width for layout purposes.
     return (
       <aside
         data-testid="files-tab-sidebar"
@@ -530,21 +532,7 @@ export function FilesTabSidebar({
         aria-label="File sidebar"
         style={{ width: 0 }}
         className="shrink-0 overflow-hidden"
-      >
-        <button
-          type="button"
-          onClick={() => toggleSidebar(projectId)}
-          aria-label={collapsedToggleLabel}
-          title={collapsedToggleLabel}
-          data-testid="files-tab-sidebar-expand"
-          // Positioned absolutely within the Files tab main column via
-          // `FilesTabMain` — keep it reachable even though the aside has
-          // zero width.
-          className="sr-only"
-        >
-          <PanelLeftOpen className="w-4 h-4" />
-        </button>
-      </aside>
+      />
     );
   }
 

@@ -33,6 +33,7 @@ import type { ProjectNode } from "@/lib/db/schema";
 import { cn } from "@/lib/utils";
 
 import { FileIcon } from "../../explorer/FileIcons";
+import { TaskLinkPopover } from "../TaskLinkPopover";
 import { VersionPill } from "../VersionPill";
 import { formatBytes, formatRelativeTime } from "./format";
 import { FOLDER_LIST_GRID_TEMPLATE, FOLDER_LIST_ROW_HEIGHT_PX } from "./layout";
@@ -60,6 +61,8 @@ export interface FolderListRowProps {
   gitChange?: GitChangeStatus | null;
   /** Feature-flag gate for git change badges (Req 12.1). */
   gitIntegrationEnabled: boolean;
+  /** Number of tasks linked to this node (from store taskLinkCounts). Req 7.1. */
+  taskLinkCount?: number;
   /** Row click handler. Receives the node id. */
   onNavigate: (nodeId: string) => void;
   /** Favorite star click handler. Receives the node id. */
@@ -161,12 +164,13 @@ function GitChangeBadge({
 // ─── Row component ───────────────────────────────────────────────────
 
 export const FolderListRow = React.memo(function FolderListRow({
-  projectId: _projectId,
+  projectId,
   node,
   canEdit,
   isFavorite,
   gitChange,
   gitIntegrationEnabled,
+  taskLinkCount,
   onNavigate,
   onToggleFavorite,
   onContextMenu,
@@ -336,6 +340,13 @@ export const FolderListRow = React.memo(function FolderListRow({
           </button>
         ) : null}
         {showGitBadge ? <GitChangeBadge status={gitChange!} /> : null}
+        {(taskLinkCount ?? 0) > 0 ? (
+          <TaskLinkPopover
+            projectId={projectId}
+            nodeId={node.id}
+            count={taskLinkCount!}
+          />
+        ) : null}
       </div>
 
       {/* Last updated */}
@@ -382,6 +393,7 @@ function arePropsEqual(
     prev.isFavorite === next.isFavorite &&
     prev.gitChange === next.gitChange &&
     prev.gitIntegrationEnabled === next.gitIntegrationEnabled &&
+    prev.taskLinkCount === next.taskLinkCount &&
     prev.onNavigate === next.onNavigate &&
     prev.onToggleFavorite === next.onToggleFavorite &&
     prev.onContextMenu === next.onContextMenu &&

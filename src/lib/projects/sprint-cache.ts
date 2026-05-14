@@ -142,19 +142,21 @@ function toTimestamp(value: string | null | undefined) {
 }
 
 function compareActivityRows(
-  left: Extract<SprintTimelineRow, { kind: "task" | "file" }>,
-  right: Extract<SprintTimelineRow, { kind: "task" | "file" }>,
+  left: Extract<SprintTimelineRow, { kind: "task" | "file" | "file_version" }>,
+  right: Extract<SprintTimelineRow, { kind: "task" | "file" | "file_version" }>,
 ) {
   const leftAt = toTimestamp(left.occurredAt);
   const rightAt = toTimestamp(right.occurredAt);
   if (leftAt !== rightAt) return leftAt - rightAt;
 
   if (left.task.id === right.task.id && left.kind !== right.kind) {
-    return left.kind === "task" ? -1 : 1;
+    const kindOrder = { task: 0, file: 1, file_version: 2 };
+    return kindOrder[left.kind] - kindOrder[right.kind];
   }
 
   if (left.kind !== right.kind) {
-    return left.kind === "task" ? -1 : 1;
+    const kindOrder = { task: 0, file: 1, file_version: 2 };
+    return kindOrder[left.kind] - kindOrder[right.kind];
   }
 
   return left.id.localeCompare(right.id);
@@ -163,26 +165,58 @@ function compareActivityRows(
 function buildFileRowsForTask(
   task: SprintTaskMutationRecord,
   timelineTask: SprintTaskTimelineEntity,
-): Extract<SprintTimelineRow, { kind: "file" }>[] {
+): Extract<SprintTimelineRow, { kind: "file" | "file_version" }>[] {
   const linkedFiles = [...(task.linkedFiles ?? [])].sort((left, right) => {
     const byLinkedAt = toTimestamp(left.linkedAt ?? left.lastEventAt) - toTimestamp(right.linkedAt ?? right.lastEventAt);
     if (byLinkedAt !== 0) return byLinkedAt;
     return left.id.localeCompare(right.id);
   });
 
-  return linkedFiles.map((file) => ({
-    id: `${timelineTask.id}:${file.id}`,
-    kind: "file",
-    occurredAt: file.linkedAt ?? file.lastEventAt ?? timelineTask.activityAt ?? timelineTask.createdAt ?? null,
-    task: {
-      id: timelineTask.id,
-      title: timelineTask.title,
-      taskNumber: timelineTask.taskNumber,
-      status: timelineTask.status,
-      priority: timelineTask.priority,
-    },
-    file,
-  }));
+  const result: Extract<SprintTimelineRow, { kind: "file" | "file_version" }>[] = [];
+
+  for (const file of linkedFiles) {
+    result.push({
+      id: `${timelineTask.id}:${file.id}`,
+      kind: "file",
+      occurredAt: file.linkedAt ?? file.lastEventAt ?? timelineTask.activityAt ?? timelineTask.createdAt ?? null,
+      task: {
+        id: timelineTask.id,
+        title: timelineTask.title,
+        taskNumber: timelineTask.taskNumber,
+        status: timelineTask.status,
+        priority: timelineTask.priority,
+      },
+      file,
+    });
+
+    // Render version events as inline sub-rows beneath the linked file row
+    if (file.versionEvents && file.versionEvents.length > 0) {
+      for (const versionEvent of file.versionEvents) {
+        result.push({
+          id: `${timelineTask.id}:${file.id}:v${versionEvent.versionNumber}`,
+          kind: "file_version",
+          occurredAt: versionEvent.createdAt,
+          task: {
+            id: timelineTask.id,
+            title: timelineTask.title,
+            taskNumber: timelineTask.taskNumber,
+            status: timelineTask.status,
+            priority: timelineTask.priority,
+          },
+          file: {
+            id: file.id,
+            nodeId: file.nodeId,
+            nodeName: file.nodeName,
+            nodePath: file.nodePath,
+            nodeType: file.nodeType,
+          },
+          versionEvent,
+        });
+      }
+    }
+  }
+
+  return result;
 }
 
 function patchRows(
@@ -194,7 +228,7 @@ function patchRows(
 ) {
   const kickoffRows = rows.filter((row): row is Extract<SprintTimelineRow, { kind: "kickoff" }> => row.kind === "kickoff");
   const closeoutRows = rows.filter((row): row is Extract<SprintTimelineRow, { kind: "closeout" }> => row.kind === "closeout");
-  let activityRows = rows.filter((row): row is Extract<SprintTimelineRow, { kind: "task" | "file" }> => row.kind === "task" || row.kind === "file");
+  let activityRows = rows.filter((row): row is Extract<SprintTimelineRow, { kind: "task" | "file" | "file_version" }> => row.kind === "task" || row.kind === "file" || row.kind === "file_version");
 
   const shouldRemoveBeforeTask =
     !!beforeTask &&
@@ -229,7 +263,7 @@ function patchRows(
         activityRows.push(...buildFileRowsForTask(afterTask, timelineTask));
       } else {
         activityRows = activityRows.map((row) => {
-          if (row.kind === "file" && row.task.id === afterTask.id) {
+          if ((row.kind === "file" || row.kind === "file_version") && row.task.id === afterTask.id) {
             return {
               ...row,
               task: {

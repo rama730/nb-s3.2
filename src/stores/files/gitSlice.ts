@@ -4,7 +4,6 @@ import { defaultWorkspace, DEFAULT_GIT_STATE } from "./types";
 
 export interface GitSlice {
   setGitRepo: (projectId: string, repoUrl: string, branch: string) => void;
-  setGitSyncStatus: (projectId: string, inProgress: boolean) => void;
   setGitBranch: (projectId: string, branch: string) => void;
   setGitChangedFiles: (projectId: string, files: GitState["changedFiles"]) => void;
   setGitCommitMessage: (projectId: string, message: string) => void;
@@ -24,20 +23,6 @@ export const createGitSlice: StateCreator<FilesWorkspaceState, [], [], GitSlice>
           [projectId]: {
             ...ws,
             git: { ...ws.git, repoUrl, branch },
-          },
-        },
-      };
-    }),
-
-  setGitSyncStatus: (projectId, inProgress) =>
-    set((state) => {
-      const ws = state.byProjectId[projectId] ?? defaultWorkspace();
-      return {
-        byProjectId: {
-          ...state.byProjectId,
-          [projectId]: {
-            ...ws,
-            git: { ...ws.git, syncInProgress: inProgress },
           },
         },
       };

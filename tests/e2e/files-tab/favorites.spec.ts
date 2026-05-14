@@ -12,7 +12,7 @@
 // non-empty justification per Req 18.3.
 //
 // Running:
-//   NEXT_PUBLIC_FILES_TAB_V3=1 pnpm test:e2e tests/e2e/files-tab/favorites.spec.ts
+//   pnpm test:e2e tests/e2e/files-tab/favorites.spec.ts
 //
 // The spec reuses the seeded `e2e-files-workspace-controls` fixture as
 // "project A" and `e2e-hub-pagination-alpha` as the scoping control
@@ -70,7 +70,7 @@ async function openFilesTab(
     } catch {
         return {
             ready: false,
-            reason: `Files tab v3 surface (data-testid="${V3_ROOT_TESTID}") did not appear within ${V3_DETECT_TIMEOUT_MS}ms for project "${projectSlug}". NEXT_PUBLIC_FILES_TAB_V3 is likely unset in this environment.`,
+            reason: `Files tab v3 surface (data-testid="${V3_ROOT_TESTID}") did not appear within ${V3_DETECT_TIMEOUT_MS}ms for project "${projectSlug}".`,
         };
     }
     return { ready: true };

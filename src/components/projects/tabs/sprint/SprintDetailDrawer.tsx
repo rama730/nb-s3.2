@@ -9,6 +9,7 @@ import { ExternalLink, Paperclip, X } from "lucide-react";
 import { getProjectTaskDetailAction } from "@/app/actions/project";
 import { getNodeActivity, getNodeLinkedTasks, getNodeMetadataBatch } from "@/app/actions/files";
 import { UserAvatar } from "@/components/ui/UserAvatar";
+import { VersionPill } from "@/components/projects/v2/files-tab/VersionPill";
 import { recordSprintMetric } from "@/lib/projects/sprint-observability";
 import {
   SPRINT_TASK_STATUS_PRESENTATION,
@@ -304,6 +305,7 @@ export function SprintDetailDrawer({
                   <span className="rounded-full border px-2 py-1 text-[11px] font-medium text-zinc-500 dark:text-zinc-400">
                     {file.node.mimeType || "Unknown type"}
                   </span>
+                  <VersionPill v={file.node.currentVersion} />
                 </div>
                 <h3 className="text-lg font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">{file.node.name}</h3>
                 <p className="text-sm leading-6 text-zinc-500 dark:text-zinc-400">

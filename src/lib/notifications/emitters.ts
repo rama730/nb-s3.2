@@ -531,6 +531,50 @@ export async function emitTaskFileNotification(params: {
     await emitNotificationWrites(writes, executor);
 }
 
+export async function emitFileVersionAddedNotification(params: {
+    recipients: string[];
+    actorUserId: string;
+    actorName: string | null;
+    actorAvatarUrl?: string | null;
+    projectId: string;
+    projectSlug?: string | null;
+    fileId: string;
+    fileName: string;
+    version: number;
+}, executor?: EmitExecutor) {
+    const uniqueRecipients = Array.from(new Set(params.recipients.filter(Boolean)))
+        .filter((recipientUserId) => recipientUserId !== params.actorUserId);
+    if (uniqueRecipients.length === 0) return;
+
+    const writes = uniqueRecipients.map((recipientUserId) => ({
+        operation: "create" as const,
+        input: {
+            recipientUserId,
+            actorUserId: params.actorUserId,
+            category: "projects" as const,
+            kind: "file_version_added" as const,
+            importance: importanceForKind("file_version_added"),
+            title: `${params.actorName || "Someone"} added a new version`,
+            body: `${params.fileName} v${params.version}`,
+            href: `/projects/${encodeURIComponent(params.projectSlug || params.projectId)}?tab=files&fileId=${encodeURIComponent(params.fileId)}`,
+            entityRefs: {
+                projectId: params.projectId,
+                projectSlug: params.projectSlug ?? null,
+                fileId: params.fileId,
+            },
+            preview: buildPreview({
+                actorName: params.actorName,
+                actorAvatarUrl: params.actorAvatarUrl,
+                contextLabel: "File update",
+                contextKind: "file",
+                secondaryText: `${params.fileName} v${params.version}`,
+            }),
+            dedupeKey: `file:${params.fileId}:version_added:${recipientUserId}:${params.version}`,
+        },
+    }));
+    await emitNotificationWrites(writes, executor);
+}
+
 export async function emitProjectRoleChangedNotification(params: {
     recipientUserId: string | null | undefined;
     actorUserId: string;

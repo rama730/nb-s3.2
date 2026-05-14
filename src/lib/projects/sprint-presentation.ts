@@ -17,6 +17,7 @@ import {
 export type SprintGroupedTimelineItem = {
   taskRow: Extract<SprintTimelineRow, { kind: "task" }>;
   fileRows: Extract<SprintTimelineRow, { kind: "file" }>[];
+  fileVersionRows: Extract<SprintTimelineRow, { kind: "file_version" }>[];
 };
 
 export type SprintTimelineViewModel =
@@ -87,7 +88,7 @@ function getFileRowsForFilter(
 ): SprintTimelineRow[] {
   return rows.filter((row) => {
     if (row.kind === "kickoff" || row.kind === "closeout") return true;
-    if (row.kind !== "file") return false;
+    if (row.kind !== "file" && row.kind !== "file_version") return false;
     if (filter === "blocked") return row.task.status === "blocked";
     if (filter === "completed") return row.task.status === "done";
     return true;
@@ -274,12 +275,18 @@ export function buildSprintTimelineViewModel(input: {
     const kickoff = input.rows.find((row): row is Extract<SprintTimelineRow, { kind: "kickoff" }> => row.kind === "kickoff");
     const closeout = [...input.rows].reverse().find((row): row is Extract<SprintTimelineRow, { kind: "closeout" }> => row.kind === "closeout");
     const filesByTaskId = new Map<string, Extract<SprintTimelineRow, { kind: "file" }>[]>();
+    const fileVersionsByTaskId = new Map<string, Extract<SprintTimelineRow, { kind: "file_version" }>[]>();
 
     for (const row of input.rows) {
-      if (row.kind !== "file") continue;
-      const current = filesByTaskId.get(row.task.id) ?? [];
-      current.push(row);
-      filesByTaskId.set(row.task.id, current);
+      if (row.kind === "file") {
+        const current = filesByTaskId.get(row.task.id) ?? [];
+        current.push(row);
+        filesByTaskId.set(row.task.id, current);
+      } else if (row.kind === "file_version") {
+        const current = fileVersionsByTaskId.get(row.task.id) ?? [];
+        current.push(row);
+        fileVersionsByTaskId.set(row.task.id, current);
+      }
     }
 
     const groups = input.rows
@@ -293,6 +300,7 @@ export function buildSprintTimelineViewModel(input: {
       .map((taskRow) => ({
         taskRow,
         fileRows: filesByTaskId.get(taskRow.task.id) ?? [],
+        fileVersionRows: fileVersionsByTaskId.get(taskRow.task.id) ?? [],
       }));
 
     return {
@@ -307,7 +315,7 @@ export function buildSprintTimelineViewModel(input: {
 
   const chronologicalRows = input.rows.filter((row) => {
     if (row.kind === "kickoff" || row.kind === "closeout") return true;
-    if (normalizedFilter === "files") return row.kind === "file";
+    if (normalizedFilter === "files") return row.kind === "file" || row.kind === "file_version";
     if (normalizedFilter === "work") return row.kind === "task";
     if (normalizedFilter === "blocked") return row.kind === "task" && row.task.status === "blocked";
     if (normalizedFilter === "completed") return row.kind === "task" && row.task.status === "done";

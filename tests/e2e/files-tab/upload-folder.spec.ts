@@ -16,14 +16,14 @@
  *              `not_applicable` (Req 18.3).
  *
  * Preconditions (Req 21.7 coexistence):
- *   - `NEXT_PUBLIC_FILES_TAB_V3=1` must be set when the Next.js server is
- *     started so `ProjectFilesWorkspace` mounts `FilesTabRoot`. When the
- *     flag is not present the spec records `not_applicable` with a
- *     justification and exits cleanly (Req 18.3).
+ *   - `ProjectFilesWorkspace` always mounts `FilesTabRoot` (the V3 surface
+ *     is unconditional post-rollout). When the V3 surface does not appear,
+ *     the spec records `not_applicable` with a justification and exits
+ *     cleanly (Req 18.3).
  *
  * Fallbacks:
  *   - No E2E credentials → `test.skip` (no audit entry, matches sibling specs).
- *   - V3 UI not rendered (flag off) → record `not_applicable`.
+ *   - V3 UI not rendered → record `not_applicable`.
  *   - `filechooser` event never fires (Playwright harness unable to capture
  *     the synthetic `<input webkitdirectory>` click) → record
  *     `not_applicable` with justification; sibling specs document the same
@@ -39,11 +39,6 @@ const fixtureProjectSlug =
     process.env.E2E_FILES_PROJECT_SLUG || "e2e-files-workspace-controls";
 const filesTabUrl = `/projects/${fixtureProjectSlug}?tab=files`;
 const AREA = "folder upload";
-
-// Mirror move.spec.ts: default the public env flag on so `isFilesTabV3Enabled`
-// reads "1" when the E2E runner reuses its process env to start the web server.
-// The authoritative gate lives in `src/lib/features/files.ts`.
-process.env.NEXT_PUBLIC_FILES_TAB_V3 = process.env.NEXT_PUBLIC_FILES_TAB_V3 ?? "1";
 
 /** Synthetic "folder" payload. `FileChooser.setFiles` accepts arbitrary file
  *  names — `openFolderUpload` in `useExplorerMutations.ts` only reads each
@@ -123,7 +118,7 @@ test.describe("Files tab V3 — folder upload", () => {
                 await recordOnce(
                     "not_applicable",
                     v2Visible
-                        ? "NEXT_PUBLIC_FILES_TAB_V3 is not enabled on the E2E server; ProjectFilesWorkspace mounted the legacy WorkspaceShell, so the V3 folder-upload flow cannot be exercised."
+                        ? "V3 FilesTabRoot was not rendered; the environment may still be serving a stale build."
                         : "Files tab did not render either V3 FilesTabRoot or V2 WorkspaceShell within 15s; environment is not in a state where the folder-upload flow can be verified.",
                 );
                 await monitor.assertNoViolations();

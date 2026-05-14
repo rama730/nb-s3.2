@@ -47,6 +47,7 @@ export interface FilesSlice {
   setFolderMeta: (projectId: string, folderId: string | null, meta: { nextCursor: string | null; hasMore: boolean }) => void;
   removeNodeFromCaches: (projectId: string, nodeId: string) => void;
   setTaskLinkCounts: (projectId: string, counts: Record<string, number>) => void;
+  patchNodeVersion: (projectId: string, nodeId: string, currentVersion: number) => void;
   setNodes: (projectId: string, nodes: ProjectNode[]) => void;
   setFileState: (projectId: string, nodeId: string, state: Partial<FileState>) => void;
   hydrateFromIdb: (
@@ -375,6 +376,27 @@ export const createFilesSlice: StateCreator<FilesWorkspaceState, [], [], FilesSl
           [projectId]: {
             ...ws,
             taskLinkCounts: { ...ws.taskLinkCounts, ...counts },
+          },
+        },
+      };
+    }),
+
+  patchNodeVersion: (projectId, nodeId, currentVersion) =>
+    set((state) => {
+      const ws = state.byProjectId[projectId];
+      if (!ws) return state;
+      const node = ws.nodesById[nodeId];
+      if (!node) return state;
+      return {
+        byProjectId: {
+          ...state.byProjectId,
+          [projectId]: {
+            ...ws,
+            nodesById: {
+              ...ws.nodesById,
+              [nodeId]: { ...node, currentVersion },
+            },
+            treeVersion: ws.treeVersion + 1,
           },
         },
       };

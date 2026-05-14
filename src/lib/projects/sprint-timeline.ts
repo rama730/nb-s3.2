@@ -16,13 +16,13 @@ function toTimestamp(value: string | null | undefined) {
   return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
 }
 
-function getActivityTaskId(row: Extract<SprintTimelineRow, { kind: "task" | "file" }>) {
+function getActivityTaskId(row: Extract<SprintTimelineRow, { kind: "task" | "file" | "file_version" }>) {
   return row.kind === "task" ? row.task.id : row.task.id;
 }
 
 function compareActivityRows(
-  left: Extract<SprintTimelineRow, { kind: "task" | "file" }>,
-  right: Extract<SprintTimelineRow, { kind: "task" | "file" }>,
+  left: Extract<SprintTimelineRow, { kind: "task" | "file" | "file_version" }>,
+  right: Extract<SprintTimelineRow, { kind: "task" | "file" | "file_version" }>,
 ) {
   const leftAt = toTimestamp(left.occurredAt);
   const rightAt = toTimestamp(right.occurredAt);
@@ -31,11 +31,14 @@ function compareActivityRows(
   const leftTaskId = getActivityTaskId(left);
   const rightTaskId = getActivityTaskId(right);
   if (leftTaskId === rightTaskId && left.kind !== right.kind) {
-    return left.kind === "task" ? -1 : 1;
+    // task rows come before file rows, file rows come before file_version rows
+    const kindOrder = { task: 0, file: 1, file_version: 2 };
+    return kindOrder[left.kind] - kindOrder[right.kind];
   }
 
   if (left.kind !== right.kind) {
-    return left.kind === "task" ? -1 : 1;
+    const kindOrder = { task: 0, file: 1, file_version: 2 };
+    return kindOrder[left.kind] - kindOrder[right.kind];
   }
 
   return left.id.localeCompare(right.id);
@@ -56,7 +59,7 @@ export function buildSprintTimeline(input: {
   });
 
   const rows: SprintTimelineRow[] = [];
-  const activityRows: Extract<SprintTimelineRow, { kind: "task" | "file" }>[] = [];
+  const activityRows: Extract<SprintTimelineRow, { kind: "task" | "file" | "file_version" }>[] = [];
 
   if (input.includeKickoff ?? true) {
     rows.push({
@@ -96,6 +99,32 @@ export function buildSprintTimeline(input: {
         },
         file,
       });
+
+      // Render version events as inline sub-rows beneath the linked file row
+      if (file.versionEvents && file.versionEvents.length > 0) {
+        for (const versionEvent of file.versionEvents) {
+          activityRows.push({
+            id: `${task.id}:${file.id}:v${versionEvent.versionNumber}`,
+            kind: "file_version",
+            occurredAt: versionEvent.createdAt,
+            task: {
+              id: task.id,
+              title: task.title,
+              taskNumber: task.taskNumber,
+              status: task.status,
+              priority: task.priority,
+            },
+            file: {
+              id: file.id,
+              nodeId: file.nodeId,
+              nodeName: file.nodeName,
+              nodePath: file.nodePath,
+              nodeType: file.nodeType,
+            },
+            versionEvent,
+          });
+        }
+      }
     }
   }
 

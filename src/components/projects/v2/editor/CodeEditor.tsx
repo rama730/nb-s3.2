@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import type { Extension } from "@codemirror/state";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { search, searchKeymap } from "@codemirror/search";
+import { useTheme } from "@/components/providers/theme-provider";
 import type { EditorSymbol } from "@/stores/files/types";
 
 type ThemeMode = "dark" | "light";
@@ -15,7 +16,8 @@ export interface CodeEditorProps {
   filename: string;
   value: string;
   onChange: (value: string) => void;
-  theme: ThemeMode;
+  /** Optional explicit theme override. When omitted, reads from the app theme provider. */
+  theme?: ThemeMode;
   isActive?: boolean;
   readOnly?: boolean;
   lineNumbers?: boolean;
@@ -72,7 +74,7 @@ export default function CodeEditor({
   filename,
   value,
   onChange,
-  theme,
+  theme: themeProp,
   isActive = true,
   readOnly = false,
   lineNumbers = true,
@@ -89,6 +91,10 @@ export default function CodeEditor({
   const [langExtension, setLangExtension] = useState<Extension | null>(null);
   const [isEditorReady, setIsEditorReady] = useState(false);
   const minimapSupported = false;
+
+  // Read from the app theme provider; use explicit prop as override if provided.
+  const { resolvedTheme } = useTheme();
+  const theme: ThemeMode = themeProp ?? resolvedTheme;
 
   const dispatchCursorMoved = useCallback(
     (view: EditorView, targetTabId?: string) => {

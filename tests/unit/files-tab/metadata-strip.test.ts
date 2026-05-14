@@ -519,3 +519,142 @@ describe("FileView — 0-byte media placeholder (Req 5.6) — source-level contr
     assert.match(FILE_VIEW_SRC, /label:\s*"audio"/);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────
+// Task 7.3: "Replace…" button in FileActionsBar (Req 11.1–11.6, 24.1)
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Render `FileActionsBar` with `projectId` and `nodeId` so the Replace
+ * button can appear (it requires both to be truthy + canEdit).
+ */
+function renderFileActionsBarWithNode(role: Role): string {
+  const canEdit = role !== "Role_Viewer";
+  return renderToStaticMarkup(
+    React.createElement(FilesTabRoleProvider, {
+      role,
+      canEdit,
+      children: React.createElement(FileActionsBar, {
+        onRaw: () => {},
+        onEdit: () => {},
+        onDownload: () => {},
+        projectId: "proj-test-123",
+        nodeId: "node-test-456",
+      }),
+    }),
+  );
+}
+
+describe("FileActionsBar — Replace… button (Req 11.1, 11.2, 24.1)", () => {
+  it("hides the Replace button when role is Role_Viewer (Req 11.2, 24.1)", () => {
+    const html = renderFileActionsBarWithNode("Role_Viewer");
+    assert.doesNotMatch(
+      html,
+      /data-testid="files-tab-file-actions-replace"/,
+      "Role_Viewer must not see the Replace button (Req 11.2, 24.1)",
+    );
+  });
+
+  it("shows the Replace button for Role_Owner (Req 11.1)", () => {
+    const html = renderFileActionsBarWithNode("Role_Owner");
+    assert.match(
+      html,
+      /data-testid="files-tab-file-actions-replace"/,
+      "Role_Owner must see the Replace button (Req 11.1)",
+    );
+    // Verify the button text
+    assert.match(html, /Replace…/);
+  });
+
+  it("shows the Replace button for Role_Member (Req 11.1)", () => {
+    const html = renderFileActionsBarWithNode("Role_Member");
+    assert.match(
+      html,
+      /data-testid="files-tab-file-actions-replace"/,
+      "Role_Member must see the Replace button (Req 11.1)",
+    );
+  });
+
+  it("does NOT show Replace button when projectId or nodeId is missing", () => {
+    // Without projectId/nodeId, canReplace is false regardless of role.
+    const html = renderFileActionsBar("Role_Owner");
+    assert.doesNotMatch(
+      html,
+      /data-testid="files-tab-file-actions-replace"/,
+      "Replace button requires both projectId and nodeId",
+    );
+  });
+
+  it("renders a hidden file input for native file picker (Req 11.3)", () => {
+    const html = renderFileActionsBarWithNode("Role_Owner");
+    assert.match(
+      html,
+      /data-testid="files-tab-file-actions-replace-input"/,
+      "Must render a hidden file input for native file picker (Req 11.3)",
+    );
+    // The input must be hidden (class="hidden") and type="file"
+    assert.match(html, /type="file"[^>]*class="hidden"/);
+  });
+
+  it("Replace button has accessible label (Req 11.1)", () => {
+    const html = renderFileActionsBarWithNode("Role_Owner");
+    assert.match(
+      html,
+      /aria-label="Replace file with new version"/,
+      "Replace button must have an accessible label",
+    );
+  });
+});
+
+describe("FileActionsBar — Replace… source-level contracts (Req 11.4–11.6, 5.2, 16.3)", () => {
+  const FILE_ACTIONS_BAR_SRC = readFileSync(
+    path.resolve(
+      __dirname,
+      "../../../src/components/projects/v2/files-tab/file/FileActionsBar.tsx",
+    ),
+    "utf8",
+  );
+
+  it("calls useFileVersions.saveAsNewVersion on file selection (Req 11.4)", () => {
+    assert.match(
+      FILE_ACTIONS_BAR_SRC,
+      /saveAsNewVersion\(file\)/,
+      "Must call saveAsNewVersion with the selected file (Req 11.4)",
+    );
+  });
+
+  it("handles lock conflict by setting lockConflict state (Req 11.5, 5.2)", () => {
+    assert.match(
+      FILE_ACTIONS_BAR_SRC,
+      /setLockConflict\(result\.lockConflict\)/,
+      "Must set lockConflict state on lock conflict error (Req 11.5)",
+    );
+    // Verify the lock indicator renders the display name
+    assert.match(
+      FILE_ACTIONS_BAR_SRC,
+      /Locked by \{lockConflict\.lockedBy\.displayName\}/,
+      "Must display 'Locked by {displayName}' indicator (Req 5.2)",
+    );
+  });
+
+  it("disables Replace button when lock conflict is active (Req 11.5)", () => {
+    assert.match(
+      FILE_ACTIONS_BAR_SRC,
+      /disabled=\{isReplacing \|\| lockConflict !== null\}/,
+      "Replace button must be disabled during replacement or lock conflict (Req 11.5)",
+    );
+  });
+
+  it("emits files_tab.version_replaced telemetry with source: files_tab (Req 16.3)", () => {
+    assert.match(
+      FILE_ACTIONS_BAR_SRC,
+      /logger\.metric\("files_tab\.version_replaced"/,
+      "Must emit files_tab.version_replaced telemetry (Req 16.3)",
+    );
+    assert.match(
+      FILE_ACTIONS_BAR_SRC,
+      /source:\s*"files_tab"/,
+      "Telemetry must include source: 'files_tab' (Req 16.3)",
+    );
+  });
+});

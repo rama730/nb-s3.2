@@ -35,7 +35,11 @@ const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 export type IdeKind = "cursor" | "vscode" | "workspace";
 
 export type OpenFileSession = {
-  /** Stable primary key: `${nodeId}::${filename}` so reopening replaces. */
+  /**
+   * Primary key.
+   * - New format (v2): `${nodeId}` — one session per node.
+   * - Legacy format (v1): `${nodeId}::${filename}` — kept for migration reads.
+   */
   id: string;
   nodeId: string;
   taskId: string;
@@ -53,7 +57,13 @@ function isIdbAvailable(): boolean {
   return typeof indexedDB !== "undefined";
 }
 
-function sessionKey(nodeId: string, filename: string): string {
+/** New key format (v2): just the nodeId. */
+export function sessionKey(nodeId: string): string {
+  return nodeId;
+}
+
+/** Legacy key format (v1) for migration reads. */
+export function legacySessionKey(nodeId: string, filename: string): string {
   return `${nodeId}::${filename}`;
 }
 
@@ -106,7 +116,7 @@ export async function recordOpenSession(
   session: Omit<OpenFileSession, "id" | "openedAt"> & { openedAt?: number },
 ): Promise<OpenFileSession | null> {
   const payload: OpenFileSession = {
-    id: sessionKey(session.nodeId, session.filename),
+    id: sessionKey(session.nodeId),
     nodeId: session.nodeId,
     taskId: session.taskId,
     projectId: session.projectId,
@@ -117,6 +127,13 @@ export async function recordOpenSession(
     openedAt: session.openedAt ?? Date.now(),
   };
   const written = await withStore("readwrite", async (store) => {
+    // Remove any legacy-keyed session for the same node to avoid duplicates.
+    const legacyKey = legacySessionKey(session.nodeId, session.filename);
+    try {
+      await requestToPromise(store.delete(legacyKey));
+    } catch {
+      // Ignore — legacy key may not exist.
+    }
     await requestToPromise(store.put(payload));
     return payload;
   });
@@ -124,9 +141,12 @@ export async function recordOpenSession(
 }
 
 /**
- * Look up a session by the filename a dropped file carries. If multiple
- * sessions share the filename (distinct node IDs), we prefer the most
- * recent one — the common case where a user opened the same filename from
+ * Look up a session by the filename a dropped file carries. Works with both
+ * new key format (`${nodeId}`) and legacy key format (`${nodeId}::${filename}`)
+ * since it queries via the `filename` index rather than the primary key.
+ *
+ * If multiple sessions share the filename (distinct node IDs), we prefer the
+ * most recent one — the common case where a user opened the same filename from
  * two different tasks in sequence.
  */
 export async function findSessionByFilename(
@@ -150,6 +170,13 @@ export async function findSessionByNodeId(
 ): Promise<OpenFileSession | null> {
   return (
     (await withStore("readonly", async (store) => {
+      // Try new key format first: direct lookup by nodeId.
+      const direct = await requestToPromise(
+        store.get(nodeId) as IDBRequest<OpenFileSession | undefined>,
+      );
+      if (direct) return direct;
+
+      // Fall back to legacy key format: scan for keys matching `${nodeId}::*`.
       const all = await requestToPromise(store.getAll() as IDBRequest<OpenFileSession[]>);
       if (!all) return null;
       const forNode = all.filter((s) => s.nodeId === nodeId);

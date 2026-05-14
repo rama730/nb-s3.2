@@ -1,9 +1,6 @@
 const asEnabledDefault = (value: string | undefined) =>
   value === "0" || value === "false" ? false : true;
 
-const asEnabledOff = (value: string | undefined) =>
-  value === "1" || value === "true" ? true : false;
-
 const asRolloutPercent = (value: string | undefined, fallback: number = 100) => {
   if (value === undefined || value === null || value.trim() === "") return fallback;
   const parsed = Number(value);
@@ -47,7 +44,6 @@ export const hardeningFeatureFlags = {
   hardeningPeopleV1: asEnabledDefault(process.env.NEXT_PUBLIC_HARDENING_PEOPLE_V1),
   hardeningProfileV1: asEnabledDefault(process.env.NEXT_PUBLIC_HARDENING_PROFILE_V1),
   hardeningSecurityV1: asEnabledDefault(process.env.NEXT_PUBLIC_HARDENING_SECURITY_V1),
-  hardeningFilesV3: asEnabledOff(process.env.NEXT_PUBLIC_HARDENING_FILES_V3),
 } as const;
 
 export const hardeningRolloutPercents = {
@@ -59,7 +55,6 @@ export const hardeningRolloutPercents = {
   peopleV1: asRolloutPercent(process.env.NEXT_PUBLIC_HARDENING_PEOPLE_V1_ROLLOUT_PERCENT, 100),
   profileV1: asRolloutPercent(process.env.NEXT_PUBLIC_HARDENING_PROFILE_V1_ROLLOUT_PERCENT, 100),
   securityV1: asRolloutPercent(process.env.NEXT_PUBLIC_HARDENING_SECURITY_V1_ROLLOUT_PERCENT, 100),
-  filesV3: asRolloutPercent(process.env.NEXT_PUBLIC_HARDENING_FILES_V3_ROLLOUT_PERCENT, 100),
 } as const;
 
 export type HardeningDomain =
@@ -70,8 +65,7 @@ export type HardeningDomain =
   | "messagesV1"
   | "peopleV1"
   | "profileV1"
-  | "securityV1"
-  | "filesV3";
+  | "securityV1";
 
 const hardeningDomainMap: Record<HardeningDomain, { enabled: boolean; rolloutPercent: number }> = {
   shellV1: {
@@ -105,10 +99,6 @@ const hardeningDomainMap: Record<HardeningDomain, { enabled: boolean; rolloutPer
   securityV1: {
     enabled: hardeningFeatureFlags.hardeningSecurityV1,
     rolloutPercent: hardeningRolloutPercents.securityV1,
-  },
-  filesV3: {
-    enabled: hardeningFeatureFlags.hardeningFilesV3,
-    rolloutPercent: hardeningRolloutPercents.filesV3,
   },
 };
 

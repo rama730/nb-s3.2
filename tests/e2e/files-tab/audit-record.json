@@ -4,13 +4,13 @@
     "result": "not_applicable",
     "timestamp": "2026-05-10T17:58:50.056Z",
     "testerId": "e2e-runner",
-    "justification": "V3 Files Tab root (data-testid='files-tab-root') was not rendered — `NEXT_PUBLIC_FILES_TAB_V3` is off, so the legacy WorkspaceShell is active and the V3 delete flow cannot be exercised."
+    "justification": "V3 Files Tab root (data-testid='files-tab-root') was not rendered — the V3 delete flow cannot be exercised."
   },
   {
     "area": "permanent delete",
     "result": "not_applicable",
     "timestamp": "2026-05-10T17:59:29.708Z",
     "testerId": "e2e-runner",
-    "justification": "V3 Files Tab root (data-testid='files-tab-root') was not rendered — `NEXT_PUBLIC_FILES_TAB_V3` is off, so the legacy WorkspaceShell is active and the V3 permanent-delete flow cannot be exercised."
+    "justification": "V3 Files Tab root (data-testid='files-tab-root') was not rendered — the V3 permanent-delete flow cannot be exercised."
   }
 ]

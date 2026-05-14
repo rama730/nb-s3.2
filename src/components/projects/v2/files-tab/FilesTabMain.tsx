@@ -42,7 +42,7 @@
 "use client";
 
 import * as React from "react";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, PanelLeftOpen } from "lucide-react";
 
 import type { ProjectNode } from "@/lib/db/schema";
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
@@ -94,6 +94,12 @@ export function FilesTabMain({
   const { canEdit } = useFilesTabRole();
   const location = useCurrentLocation(projectId);
 
+  // ── Sidebar collapsed state (Req 18.1–18.6) ──────────────────────
+  const sidebarCollapsed = useFilesWorkspaceStore(
+    (s) => s.byProjectId[projectId]?.ui?.sidebarCollapsed ?? false,
+  );
+  const toggleSidebar = useFilesWorkspaceStore((s) => s.toggleSidebar);
+
   // Read the raw `currentLocationId` + `nodesById` so we can detect the
   // Req 1.8 "id set but unresolved" case independently of
   // `useCurrentLocation` (which masks it as `{ type: "root" }` to keep
@@ -137,8 +143,22 @@ export function FilesTabMain({
   return (
     <div
       data-testid="files-tab-main"
-      className="flex-1 flex flex-col min-w-0 h-full"
+      className="flex-1 flex flex-col min-w-0 h-full relative"
     >
+      {/* Sidebar_Reopen_Control — Req 18.1–18.6 */}
+      {sidebarCollapsed && (
+        <button
+          type="button"
+          onClick={() => toggleSidebar(projectId)}
+          aria-label="Show sidebar"
+          title="Show sidebar"
+          data-testid="files-tab-sidebar-expand"
+          className="absolute left-0 top-1/2 -translate-y-1/2 z-10 flex items-center justify-center rounded-r-md border border-l-0 border-zinc-200 bg-white text-zinc-500 shadow-sm hover:bg-zinc-50 hover:text-zinc-900 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100 transition-colors"
+          style={{ width: 44, height: 44 }}
+        >
+          <PanelLeftOpen className="w-4 h-4" />
+        </button>
+      )}
       <BreadcrumbBar projectId={projectId} location={location} />
       {unresolved ? (
         <LocationNotFound />

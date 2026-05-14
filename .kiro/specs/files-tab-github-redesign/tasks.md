@@ -439,7 +439,7 @@ graph LR
     - After each delete run `npm run typecheck && npm run lint`
     - _Requirements: Req 15.1–15.18, Req 16.1–16.3; design § Removal Plan_
 
-  - [-] 13.5 Drop legacy store slice methods
+  - [ ] 13.5 Drop legacy store slice methods
     - `workspaceSlice.ts`: remove `setSplitEnabled`, `setSplitRatio`, `pinTab`, `closeOtherTabs`, `closeTabsToRight`, `openTab`, `closeTab`, `setActiveTab`, `reorderTabs`, `moveTabToPane`, `pruneGhostTabs`
     - `uiSlice.ts`: remove `toggleBottomPanel`, `setBottomPanelTab`, `setBottomPanelHeight`, `setLastExecutionOutput`, `setLastExecutionSettingsHref`, `setStdinInputText`, `setProblems`, `clearProblems`, `applyQuickFix`, `pushCommandToHistory`, `setSidebarWidth`, `toggleZenMode`, `setSearchReplaceOpen`, `setCommandPaletteOpen`, `setOutputFilterMode`
     - `explorerSlice.ts`: remove `saveCurrentView`, `applySavedView`, `deleteSavedView`

@@ -8,8 +8,10 @@ import {
     Plus,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { TaskLinkPopover } from "../files-tab/TaskLinkPopover";
 
 export interface FileTreeItemContext {
+    projectId: string;
     nodesById: Record<string, ProjectNode>;
     selectedNodeId: string | null;
     selectedNodeIds: string[]; // For multi-select
@@ -205,17 +207,11 @@ export function FileTreeItem({
                     </span>
                   ) : null}
                   {linkCount > 0 ? (
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        context.onTaskLinksClick(node);
-                      }}
-                      className="text-[9px] px-1 rounded-sm bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 flex-shrink-0 font-mono hover:bg-blue-200 dark:hover:bg-blue-800/50 transition-colors"
-                      title="View linked tasks"
-                    >
-                      {linkCount}
-                    </button>
+                    <TaskLinkPopover
+                      projectId={context.projectId}
+                      nodeId={node.id}
+                      count={linkCount}
+                    />
                   ) : null}
                 </div>
             }

@@ -45,6 +45,7 @@ import dynamic from "next/dynamic";
 
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui-custom/Toast";
+import { useTheme } from "@/components/providers/theme-provider";
 import type { ProjectNode } from "@/lib/db/schema";
 import { createClient as createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
@@ -66,6 +67,12 @@ const CodeMirrorEditor = dynamic(
     ssr: false,
     loading: () => <EditorLoading />,
   },
+);
+
+// Lazy-load the dark theme extension alongside the editor to avoid
+// shipping it in the initial chunk.
+const oneDarkPromise = import("@codemirror/theme-one-dark").then(
+  (mod) => mod.oneDark,
 );
 
 // ---------------------------------------------------------------------------
@@ -115,6 +122,7 @@ export function TextViewer({
   onDirtyChange,
 }: TextViewerProps): React.JSX.Element {
   const { showToast } = useToast();
+  const { resolvedTheme } = useTheme();
   const upsertNodes = useFilesWorkspaceStore((s) => s.upsertNodes);
 
   type LoadStatus = "loading" | "ready" | "error";
@@ -126,6 +134,24 @@ export function TextViewer({
   const [savedContent, setSavedContent] = React.useState<string>("");
   const [content, setContent] = React.useState<string>("");
   const [isSaving, setIsSaving] = React.useState(false);
+
+  // ── Dark theme extension (lazy-loaded) ─────────────────────────────
+  // Loaded asynchronously to keep the initial chunk lean. The resolved
+  // value is cached in state so the editor re-renders with the correct
+  // theme within 500ms of a runtime theme change (Req 19.4).
+  const [oneDarkTheme, setOneDarkTheme] = React.useState<
+    import("@codemirror/state").Extension | null
+  >(null);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    void oneDarkPromise.then((ext) => {
+      if (!cancelled) setOneDarkTheme(ext);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // ── Fetch-on-demand ────────────────────────────────────────────────
   // Per task: no per-tab dirty-buffer store. We fetch the content every
@@ -314,6 +340,11 @@ export function TextViewer({
           onChange={(next) => setContent(next)}
           editable={canEdit}
           readOnly={!canEdit}
+          theme={
+            resolvedTheme === "dark"
+              ? oneDarkTheme ?? "dark"
+              : "light"
+          }
           height="100%"
           width="100%"
           className="h-full"

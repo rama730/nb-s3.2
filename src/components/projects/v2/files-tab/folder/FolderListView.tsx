@@ -133,6 +133,10 @@ export function FolderListView({
       s.byProjectId[projectId]?.git?.changedFiles ?? EMPTY_GIT_CHANGED_FILES,
   );
 
+  const taskLinkCounts = useFilesWorkspaceStore(
+    (s) => s.byProjectId[projectId]?.taskLinkCounts || EMPTY_OBJECT,
+  ) as Record<string, number>;
+
   const upsertNodes = useFilesWorkspaceStore((s) => s.upsertNodes);
   const setChildren = useFilesWorkspaceStore((s) => s.setChildren);
   const setSelectedNode = useFilesWorkspaceStore((s) => s.setSelectedNode);
@@ -321,6 +325,7 @@ export function FolderListView({
                   isFavorite={!!favorites[node.id]}
                   gitChange={gitChange}
                   gitIntegrationEnabled={gitIntegrationEnabled}
+                  taskLinkCount={taskLinkCounts[node.id] ?? 0}
                   onNavigate={navigateTo}
                   onToggleFavorite={handleToggleFavorite}
                   onContextMenu={handleContextMenu}

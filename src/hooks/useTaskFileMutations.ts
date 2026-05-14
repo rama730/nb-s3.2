@@ -11,10 +11,8 @@ import {
   unlinkNodeFromTask,
 } from "@/app/actions/files";
 import { getProjectNodes } from "@/app/actions/files/nodes";
-import { replaceNodeWithNewVersion } from "@/app/actions/files/versions";
 import { getUploadPresignedUrl } from "@/app/actions/upload";
 import { buildProjectFileKey } from "@/lib/storage/project-file-key";
-import { computeContentHash } from "@/lib/files/content-hash";
 import type { DroppedFolder } from "@/lib/files/folder-drop";
 import { topLevelChildNames } from "@/lib/files/folder-drop";
 import {
@@ -22,6 +20,7 @@ import {
   type TaskFileIntentResolution,
   type TaskFileResolutionChoice,
 } from "@/lib/projects/task-file-intelligence";
+import { saveFileAsNewVersion } from "@/hooks/useFileVersions";
 
 export type TaskFileUploadStatus = {
   id: string;
@@ -310,6 +309,10 @@ export function useTaskFileMutations(params: {
    * `uploadNewNode`, this never creates a sibling node; it appends to
    * `file_versions` and bumps `project_nodes.current_version` atomically.
    *
+   * Delegates the core upload+replace logic to `saveFileAsNewVersion` from
+   * `useFileVersions`, preserving task-bound behavior (upload queue tracking,
+   * progress updates, notifications, and post-mutation callbacks).
+   *
    * Returns the mutated ProjectNode on success.
    */
   const saveAsNewVersion = useCallback(
@@ -332,56 +335,18 @@ export function useTaskFileMutations(params: {
         },
       ]);
 
-      let storagePath: string | null = null;
-      try {
-        const fileExt = extOf(file.name);
-        const opaque = Math.random().toString(36).slice(2);
-        storagePath = buildProjectFileKey(
-          projectId,
-          `${opaque}${fileExt ? `.${fileExt}` : ""}`,
-        );
-        const contentType = file.type || "application/octet-stream";
+      updateStatus(jobId, { progress: 15 });
 
-        updateStatus(jobId, { progress: 15 });
+      // Delegate core upload+replace logic to useFileVersions utility
+      const result = await saveFileAsNewVersion({
+        projectId,
+        nodeId,
+        file,
+        comment: options?.comment,
+        supabase,
+      });
 
-        // Hash in parallel with the presigned-URL fetch — by the time the
-        // PUT starts we'll have both. computeContentHash may return a
-        // "prefix" result for > 4 MiB; we only forward "full" hashes to
-        // the server to avoid polluting `file_versions.content_hash` with
-        // non-SHA256 values.
-        const [uploadSession, hashResult] = await Promise.all([
-          getUploadPresignedUrl(storagePath, contentType, file.size),
-          computeContentHash(file).catch(() => null),
-        ]);
-        if ("error" in uploadSession) {
-          throw new Error(uploadSession.error || "Failed to prepare upload");
-        }
-
-        const uploadResponse = await fetch(uploadSession.url, {
-          method: "PUT",
-          headers: { "Content-Type": contentType },
-          body: file,
-        });
-        if (!uploadResponse.ok) {
-          throw new Error(`Upload failed (${uploadResponse.status})`);
-        }
-
-        updateStatus(jobId, { progress: 70 });
-
-        const contentHash =
-          hashResult && hashResult.kind === "full" ? hashResult.hashHex : null;
-
-        const result = await replaceNodeWithNewVersion({
-          projectId,
-          nodeId,
-          s3Key: storagePath,
-          size: file.size,
-          mimeType: contentType,
-          contentHash,
-          uploadIntentId: uploadSession.uploadIntentId,
-          comment: options?.comment ?? null,
-        });
-
+      if (result.success) {
         updateStatus(jobId, { progress: 100, status: "success", error: undefined });
         await runAfterSuccess();
 
@@ -393,24 +358,14 @@ export function useTaskFileMutations(params: {
         }, 3000);
 
         return { success: true as const, node: result.node, version: result.version };
-      } catch (error) {
-        // Best-effort orphan cleanup: replaceNodeWithNewVersion throws
-        // BEFORE updating project_nodes if anything goes wrong, so the
-        // just-uploaded blob is orphaned. Delete it. No-op if the blob
-        // never made it to S3.
-        if (storagePath) {
-          await supabase.storage
-            .from("project-files")
-            .remove([storagePath])
-            .catch(() => null);
-        }
-        const message = error instanceof Error ? error.message : "Upload failed";
+      } else {
+        const message = result.error;
         updateStatus(jobId, { status: "error", error: message });
         notifyError(message);
         return { success: false as const, error: message };
       }
     },
-    [canEdit, notifyError, projectId, runAfterSuccess, supabase.storage, updateStatus],
+    [canEdit, notifyError, projectId, runAfterSuccess, supabase, updateStatus],
   );
 
   const queuePendingResolution = useCallback((payload: TaskFilePendingResolution) => {

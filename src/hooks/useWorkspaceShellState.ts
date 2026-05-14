@@ -75,7 +75,6 @@ export function useWorkspaceShellState(projectId: string) {
         setPrefs: s.setPrefs,
         setViewMode: s.setViewMode,
         setSelectedNode: s.setSelectedNode,
-        requestScrollTo: s.requestScrollTo,
         toggleExpanded: s.toggleExpanded,
         removeNodeFromCaches: s.removeNodeFromCaches,
         setFileState: s.setFileState,

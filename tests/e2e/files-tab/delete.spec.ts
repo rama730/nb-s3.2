@@ -7,11 +7,8 @@
  *                            flow mandated by Req 7.5.
  *
  * Behaviour contract (design.md § Migration and Rollout, § Open Question 3):
- *   - The V3 Files Tab is gated behind `filesTabV3Enabled` / the
- *     `NEXT_PUBLIC_FILES_TAB_V3` env override. When the flag is off (the
- *     default in `.env.local`), `ProjectFilesWorkspace` falls through to
- *     `WorkspaceShell` and the V3 surface (`data-testid="files-tab-root"`)
- *     is never rendered.
+ *   - `ProjectFilesWorkspace` always mounts `FilesTabRoot` (the V3 surface
+ *     is unconditional post-rollout).
  *   - Q3 ("Trash → remove trash surface from Files tab") removed the in-tab
  *     trash browser. As a result, V3 does not currently ship a
  *     "Delete permanently" affordance inside the Files Tab; that affordance
@@ -23,7 +20,7 @@
  *
  * Fallbacks:
  *   - No `E2E_USER_EMAIL` / `E2E_USER_PASSWORD`           → not_applicable
- *   - V3 root not rendered (flag off)                     → not_applicable
+ *   - V3 root not rendered                                → not_applicable
  *   - Unexpected Playwright / browser launch failure      → fail (caught at
  *                                                            test level)
  *
@@ -188,8 +185,7 @@ test.describe("Files Tab V3 — delete flows (Task 12.5)", () => {
             result: "not_applicable",
             justification:
               "V3 Files Tab root (data-testid='files-tab-root') was not rendered — " +
-              "`NEXT_PUBLIC_FILES_TAB_V3` is off, so the legacy WorkspaceShell is active " +
-              "and the V3 delete flow cannot be exercised.",
+              "the V3 delete flow cannot be exercised.",
           };
         }
 
@@ -273,8 +269,7 @@ test.describe("Files Tab V3 — delete flows (Task 12.5)", () => {
             result: "not_applicable",
             justification:
               "V3 Files Tab root (data-testid='files-tab-root') was not rendered — " +
-              "`NEXT_PUBLIC_FILES_TAB_V3` is off, so the legacy WorkspaceShell is active " +
-              "and the V3 permanent-delete flow cannot be exercised.",
+              "the V3 permanent-delete flow cannot be exercised.",
           };
         }
 

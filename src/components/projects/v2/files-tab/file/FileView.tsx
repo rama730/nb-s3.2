@@ -48,23 +48,31 @@ import {
   AlertTriangle,
   FileQuestion,
   ImageOff,
+  Upload,
   VideoOff,
   VolumeOff,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ComponentErrorBoundary } from "@/components/ui/ComponentErrorBoundary";
 import { useToast } from "@/components/ui-custom/Toast";
 import { getProjectFileSignedUrl } from "@/app/actions/files/content";
 import { getProjectFileContent } from "@/app/actions/files";
+import { listFileVersions } from "@/app/actions/files/versions";
 import type { ProjectNode } from "@/lib/db/schema";
+import { computeContentHash } from "@/lib/files/content-hash";
 import { cn } from "@/lib/utils";
+import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
+import { useFileVersions } from "@/hooks/useFileVersions";
 
 import { fileKind, type FileKind } from "../../utils/fileKind";
 import { formatBytes } from "../folder/format";
 import AssetPreview from "../../preview/AssetPreview";
 import MarkdownPreview from "../../preview/MarkdownPreview";
 
+import { FileVersionHistoryPanel } from "./FileVersionHistoryPanel";
+import { LinkedTasksPanel } from "./LinkedTasksPanel";
 import { MetadataStrip, type MetadataStripNode } from "./MetadataStrip";
 import { TextViewer, type TextViewerMode } from "./TextViewer";
 import { isAssetKind, isEmptyMedia, isMarkdownNode } from "./previewPicker";
@@ -117,12 +125,149 @@ export function FileView({
 }: FileViewProps): React.JSX.Element {
   const { showToast } = useToast();
 
+  // ── Task link count from store (Req 7.1, 7.4) ──────────────────────
+  const taskLinkCount = useFilesWorkspaceStore(
+    (s) => s.byProjectId[projectId]?.taskLinkCounts?.[node.id] ?? 0,
+  );
+
   const kind = React.useMemo<FileKind>(() => fileKind(node), [node]);
   const isMd = React.useMemo(() => isMarkdownNode(node), [node]);
   const emptyMedia = React.useMemo(() => isEmptyMedia(node, kind), [node, kind]);
   const textLike = kind === "text" || isMd;
 
   const [mode, setMode] = React.useState<FileViewMode>("view");
+
+  // ── LinkedTasksPanel toggle state (Req 8.1, 8.6) ───────────────────
+  const [isLinkedTasksPanelOpen, setIsLinkedTasksPanelOpen] =
+    React.useState(false);
+  const onToggleLinkedTasks = React.useCallback(() => {
+    setIsLinkedTasksPanelOpen((prev) => !prev);
+  }, []);
+
+  // ── FileVersionHistoryPanel toggle state (Req 10.1, 10.2, 10.3) ────
+  const [isVersionHistoryPanelOpen, setIsVersionHistoryPanelOpen] =
+    React.useState(false);
+  const onToggleVersionHistory = React.useCallback(() => {
+    setIsVersionHistoryPanelOpen((prev) => !prev);
+  }, []);
+
+  // ── Drop-zone state (Req 12.1–12.5, 24.4) ─────────────────────────
+  const [isDragActive, setIsDragActive] = React.useState(false);
+  const [isDropProcessing, setIsDropProcessing] = React.useState(false);
+  const [hashMatchPromptFile, setHashMatchPromptFile] =
+    React.useState<File | null>(null);
+  const dragCounterRef = React.useRef(0);
+  const { saveAsNewVersion } = useFileVersions(projectId, node.id);
+
+  const handleDragEnter = React.useCallback(
+    (event: React.DragEvent<HTMLDivElement>) => {
+      // Req 24.4: Role_Viewer — no drop-zone, no drops accepted
+      if (!canEdit) return;
+      if (!event.dataTransfer.types.includes("Files")) return;
+      event.preventDefault();
+      dragCounterRef.current += 1;
+      setIsDragActive(true);
+    },
+    [canEdit],
+  );
+
+  const handleDragOver = React.useCallback(
+    (event: React.DragEvent<HTMLDivElement>) => {
+      if (!canEdit) return;
+      if (!event.dataTransfer.types.includes("Files")) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "copy";
+    },
+    [canEdit],
+  );
+
+  const handleDragLeave = React.useCallback(() => {
+    dragCounterRef.current = Math.max(0, dragCounterRef.current - 1);
+    if (dragCounterRef.current === 0) {
+      setIsDragActive(false);
+    }
+  }, []);
+
+  const handleDrop = React.useCallback(
+    (event: React.DragEvent<HTMLDivElement>) => {
+      // Req 24.4: Role_Viewer — no drops accepted
+      if (!canEdit) return;
+      event.preventDefault();
+      event.stopPropagation();
+      dragCounterRef.current = 0;
+      setIsDragActive(false);
+
+      const files = Array.from(event.dataTransfer.files || []);
+
+      // Req 12.5: Multi-file drop → ignore and show toast
+      if (files.length > 1) {
+        showToast("Only single-file drops accepted", "error");
+        return;
+      }
+
+      if (files.length === 0) return;
+
+      const droppedFile = files[0];
+
+      // Req 12.3, 12.4: Hash-check and re-upload prompt
+      void (async () => {
+        setIsDropProcessing(true);
+        try {
+          // Compute hash of the dropped file
+          const hashResult = await computeContentHash(droppedFile).catch(
+            () => null,
+          );
+
+          // Fetch the current version's content hash for comparison
+          const versions = await listFileVersions(projectId, node.id);
+          const currentVersionRow = versions[0]; // sorted desc by version
+
+          if (
+            hashResult?.kind === "full" &&
+            currentVersionRow?.contentHash &&
+            hashResult.hashHex === currentVersionRow.contentHash
+          ) {
+            // Req 12.4: Hash matches — prompt "File is identical — re-upload anyway?"
+            setHashMatchPromptFile(droppedFile);
+            setIsDropProcessing(false);
+            return;
+          }
+
+          // Hash differs or unknown — proceed with upload
+          const result = await saveAsNewVersion(droppedFile);
+          if (result.success) {
+            showToast(`Saved as version ${result.version.version}`, "success");
+          } else {
+            showToast(result.error || "Failed to save new version", "error");
+          }
+        } catch (err) {
+          const message =
+            err instanceof Error ? err.message : "Drop failed";
+          showToast(message, "error");
+        } finally {
+          setIsDropProcessing(false);
+        }
+      })();
+    },
+    [canEdit, projectId, node.id, saveAsNewVersion, showToast],
+  );
+
+  const handleHashMatchConfirm = React.useCallback(async () => {
+    if (!hashMatchPromptFile) return;
+    const file = hashMatchPromptFile;
+    setHashMatchPromptFile(null);
+    setIsDropProcessing(true);
+    try {
+      const result = await saveAsNewVersion(file);
+      if (result.success) {
+        showToast(`Saved as version ${result.version.version}`, "success");
+      } else {
+        showToast(result.error || "Failed to save new version", "error");
+      }
+    } finally {
+      setIsDropProcessing(false);
+    }
+  }, [hashMatchPromptFile, saveAsNewVersion, showToast]);
 
   // Signed URL for asset / markdown / binary previews and for the
   // Download + Raw-on-binary actions. Fetched lazily and cached at the
@@ -278,15 +423,55 @@ export function FileView({
       data-node-id={node.id}
       data-file-kind={kind}
       data-mode={mode}
-      className="flex h-full min-h-0 w-full flex-col"
+      className={cn(
+        "relative flex h-full min-h-0 w-full flex-col",
+        isDragActive &&
+          "ring-2 ring-indigo-400 ring-offset-2 ring-offset-white dark:ring-offset-zinc-900",
+      )}
+      onDragEnter={canEdit ? handleDragEnter : undefined}
+      onDragOver={canEdit ? handleDragOver : undefined}
+      onDragLeave={canEdit ? handleDragLeave : undefined}
+      onDrop={canEdit ? handleDrop : undefined}
     >
+      {/* Drop-zone overlay — Req 12.1: visible only for Role_Owner/Role_Member */}
+      {isDragActive && canEdit && (
+        <div
+          data-testid="files-tab-file-view-drop-zone"
+          className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-lg border-2 border-dashed border-indigo-400 bg-indigo-50/80 dark:bg-indigo-500/10"
+        >
+          <div className="flex flex-col items-center gap-2 text-sm font-medium text-indigo-800 dark:text-indigo-200">
+            <Upload className="h-8 w-8" aria-hidden="true" />
+            <span>Drop to save as new version</span>
+          </div>
+        </div>
+      )}
+
+      {/* Hash-match confirmation dialog — Req 12.4 */}
+      <ConfirmDialog
+        open={hashMatchPromptFile !== null}
+        onOpenChange={(open) => {
+          if (!open) setHashMatchPromptFile(null);
+        }}
+        title="File is identical"
+        description="File is identical — re-upload anyway?"
+        confirmLabel="Re-upload"
+        cancelLabel="Cancel"
+        onConfirm={handleHashMatchConfirm}
+      />
+
       <MetadataStrip
         node={node as MetadataStripNode}
         canEdit={canEdit}
         signedUrl={signedUrl}
+        projectId={projectId}
+        taskLinkCount={taskLinkCount}
         onRaw={onRaw}
         onEdit={onEdit}
         onDownload={onDownload}
+        onToggleLinkedTasks={onToggleLinkedTasks}
+        isLinkedTasksPanelOpen={isLinkedTasksPanelOpen}
+        onToggleVersionHistory={onToggleVersionHistory}
+        isVersionHistoryPanelOpen={isVersionHistoryPanelOpen}
       />
 
       <div className="flex min-h-0 flex-1 flex-col">
@@ -295,22 +480,65 @@ export function FileView({
             an error indicator in the preview region. The boundary resets
             naturally on any node.id change because the parent remounts this
             whole subtree (see module header). */}
-        <ComponentErrorBoundary fallbackMessage="Failed to load preview">
-          {renderPreviewRegion({
-            node,
-            kind,
-            isMd,
-            emptyMedia,
-            textLike,
-            canEdit,
-            mode,
-            signedUrl,
-            signedUrlError,
-            mdContent,
-            mdError,
-            projectId,
-          })}
-        </ComponentErrorBoundary>
+        <div className="flex min-h-0 flex-1">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <ComponentErrorBoundary fallbackMessage="Failed to load preview">
+              {renderPreviewRegion({
+                node,
+                kind,
+                isMd,
+                emptyMedia,
+                textLike,
+                canEdit,
+                mode,
+                signedUrl,
+                signedUrlError,
+                mdContent,
+                mdError,
+                projectId,
+              })}
+            </ComponentErrorBoundary>
+          </div>
+
+          {/* LinkedTasksPanel — collapsible right-side drawer (Req 8.1, 8.6) */}
+          {isLinkedTasksPanelOpen && (
+            <div className="w-80 shrink-0 border-l border-zinc-200 dark:border-zinc-800">
+              <LinkedTasksPanel
+                projectId={projectId}
+                nodeId={node.id}
+                canEdit={canEdit}
+                onOpenTask={(taskId) => {
+                  // Open task panel with initialTab="files" (Req 8.3).
+                  // The task panel opening mechanism is handled by the parent
+                  // context or router — for now we dispatch a custom event
+                  // that the task panel listens for.
+                  window.dispatchEvent(
+                    new CustomEvent("open-task-panel", {
+                      detail: { taskId, initialTab: "files" },
+                    }),
+                  );
+                }}
+              />
+            </div>
+          )}
+
+          {/* FileVersionHistoryPanel — collapsible right-side drawer (Req 10.1, 10.2, 10.3) */}
+          {isVersionHistoryPanelOpen && (
+            <div
+              className="w-80 shrink-0 border-l border-zinc-200 dark:border-zinc-800"
+              data-testid="files-tab-version-history-drawer"
+            >
+              <FileVersionHistoryPanel
+                projectId={projectId}
+                nodeId={node.id}
+                nodeName={node.name}
+                canEdit={canEdit}
+                currentVersion={node.currentVersion ?? 1}
+                isDeleted={node.deletedAt != null}
+              />
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

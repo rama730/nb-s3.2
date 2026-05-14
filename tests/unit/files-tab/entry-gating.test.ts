@@ -141,11 +141,8 @@ describe("ProjectFilesWorkspace — post-rollout source contract", () => {
         );
     });
 
-    it("does NOT import `isFilesTabV3Enabled` (the flag is deleted in Task 13.6 / consolidated here)", () => {
-        // After the deletion sweep the entry no longer needs the gate; it
-        // always renders FilesTabRoot. The flag itself may still exist
-        // for the ramp window, but the entry point is no longer a
-        // consumer.
+    it("does NOT import `isFilesTabV3Enabled` (the flag has been deleted)", () => {
+        // The entry point always renders FilesTabRoot unconditionally.
         assert.doesNotMatch(
             ENTRY_SRC,
             /isFilesTabV3Enabled/,

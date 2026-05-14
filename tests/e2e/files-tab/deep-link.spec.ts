@@ -31,8 +31,6 @@ const NOT_FOUND_TESTID = "files-tab-main-location-not-found";
 
 const V3_DETECT_TIMEOUT_MS = 15_000;
 
-process.env.NEXT_PUBLIC_FILES_TAB_V3 = process.env.NEXT_PUBLIC_FILES_TAB_V3 ?? "1";
-
 type ScenarioOutcome =
   | { result: "pass" }
   | { result: "not_applicable"; justification: string };

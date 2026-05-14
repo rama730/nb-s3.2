@@ -1,8 +1,8 @@
 "use server";
 
 import { db } from "@/lib/db";
-import { fileVersions, projectNodes, type FileVersion } from "@/lib/db/schema";
-import { and, desc, eq } from "drizzle-orm";
+import { fileVersions, profiles, projectNodeLocks, projectNodes, type FileVersion } from "@/lib/db/schema";
+import { and, desc, eq, gt } from "drizzle-orm";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { consumeRateLimit } from "@/lib/security/rate-limit";
@@ -19,7 +19,7 @@ import {
   PROJECT_UPLOAD_MAX_FILE_BYTES,
 } from "@/lib/upload/security";
 import { finalizeUploadIntent } from "@/lib/upload/upload-intents";
-import { notifyTaskParticipantsForFileEvent } from "@/lib/notifications/task-file";
+import { notifyForFileVersionCreated } from "@/lib/notifications/task-file";
 import {
   assertProjectReadAccess,
   assertProjectWriteAccess,
@@ -108,6 +108,18 @@ export async function getVersionSignedUrl(
 }
 
 /**
+ * Structured error returned when a lock conflict prevents a version write.
+ */
+export interface LockConflictError {
+  error: "lock_conflict";
+  lockedBy: { userId: string; displayName: string; lockedAt: string };
+}
+
+export type ReplaceNodeResult =
+  | { node: typeof projectNodes.$inferSelect; version: FileVersion }
+  | LockConflictError;
+
+/**
  * Append a new version to an existing file node.
  *
  * Flow
@@ -134,7 +146,7 @@ export async function replaceNodeWithNewVersion(input: {
   contentHash: string | null;
   uploadIntentId?: string;
   comment?: string | null;
-}): Promise<{ node: typeof projectNodes.$inferSelect; version: FileVersion }> {
+}): Promise<ReplaceNodeResult> {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error("Unauthorized");
@@ -175,7 +187,37 @@ export async function replaceNodeWithNewVersion(input: {
 
   const result = await db.transaction(async (tx) => {
     await assertProjectWriteAccessTx(tx, input.projectId, user.id);
-    await assertNodeNotLockedByAnotherUser(input.projectId, input.nodeId, user.id, tx);
+
+    // Lock check: query project_node_locks joined with profiles to get displayName
+    const now = new Date();
+    const lockRows = await tx
+      .select({
+        lockedBy: projectNodeLocks.lockedBy,
+        acquiredAt: projectNodeLocks.acquiredAt,
+        displayName: profiles.fullName,
+      })
+      .from(projectNodeLocks)
+      .innerJoin(profiles, eq(profiles.id, projectNodeLocks.lockedBy))
+      .where(
+        and(
+          eq(projectNodeLocks.projectId, input.projectId),
+          eq(projectNodeLocks.nodeId, input.nodeId),
+          gt(projectNodeLocks.expiresAt, now),
+        )
+      )
+      .limit(1);
+
+    const activeLock = lockRows[0];
+    if (activeLock && activeLock.lockedBy !== user.id) {
+      return {
+        error: "lock_conflict" as const,
+        lockedBy: {
+          userId: activeLock.lockedBy,
+          displayName: activeLock.displayName ?? "Unknown User",
+          lockedAt: activeLock.acquiredAt.toISOString(),
+        },
+      };
+    }
 
     const current = await tx.query.projectNodes.findFirst({
       where: and(
@@ -223,6 +265,12 @@ export async function replaceNodeWithNewVersion(input: {
     return { node: updatedNode, version: versionRow };
   });
 
+  // If the transaction returned a lock conflict, return it immediately
+  // without recording events or sending notifications.
+  if ("error" in result) {
+    return result;
+  }
+
   await recordNodeEvent(input.projectId, user.id, input.nodeId, "replace_file_version", {
     version: result.version.version,
     size: normalizedSize,
@@ -230,11 +278,10 @@ export async function replaceNodeWithNewVersion(input: {
     hash: normalizedHash,
   });
   try {
-    await notifyTaskParticipantsForFileEvent({
+    await notifyForFileVersionCreated({
       actorUserId: user.id,
       projectId: input.projectId,
       nodeId: input.nodeId,
-      kind: "task_file_version",
       version: result.version.version,
     });
   } catch (error) {

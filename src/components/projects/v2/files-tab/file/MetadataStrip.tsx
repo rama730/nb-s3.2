@@ -32,8 +32,11 @@ import * as React from "react";
 
 import type { ProjectNode } from "@/lib/db/schema";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { History } from "lucide-react";
 
 import { formatBytes } from "../folder/format";
+import { TaskLinkPopover } from "../TaskLinkPopover";
 import { VersionPill } from "../VersionPill";
 import { FileActionsBar } from "./FileActionsBar";
 
@@ -215,12 +218,24 @@ export interface MetadataStripProps {
   canEdit: boolean;
   /** Optional signed URL for the file blob — used by the media side effects. */
   signedUrl?: string | null;
+  /** Project ID — passed to FileActionsBar for "Attach to task…" (Req 9.1). */
+  projectId?: string;
+  /** Number of tasks linked to this node (from store taskLinkCounts). Req 7.1. */
+  taskLinkCount?: number;
   /** Raw toggle handler (Req 5.2). */
   onRaw: () => void;
   /** Edit mode handler (Req 5.8). */
   onEdit: () => void;
   /** Download handler. */
   onDownload: () => void;
+  /** Callback to toggle the LinkedTasksPanel open/closed (Req 8.1). */
+  onToggleLinkedTasks?: () => void;
+  /** Whether the LinkedTasksPanel is currently open (Req 8.1). */
+  isLinkedTasksPanelOpen?: boolean;
+  /** Callback to toggle the FileVersionHistoryPanel open/closed (Req 10.1, 10.2). */
+  onToggleVersionHistory?: () => void;
+  /** Whether the FileVersionHistoryPanel is currently open (Req 10.2). */
+  isVersionHistoryPanelOpen?: boolean;
   className?: string;
 }
 
@@ -233,9 +248,15 @@ export function MetadataStrip({
   node,
   canEdit,
   signedUrl,
+  projectId,
+  taskLinkCount,
   onRaw,
   onEdit,
   onDownload,
+  onToggleLinkedTasks,
+  isLinkedTasksPanelOpen,
+  onToggleVersionHistory,
+  isVersionHistoryPanelOpen,
   className,
 }: MetadataStripProps): React.JSX.Element {
   // Dev-only invariant assertion. When this fires, the parent forgot to
@@ -291,6 +312,24 @@ export function MetadataStrip({
             </span>
           </>
         ) : null}
+        {onToggleVersionHistory && (
+          <>
+            {!showVersionPill && <Separator />}
+            <Button
+              type="button"
+              variant={isVersionHistoryPanelOpen ? "secondary" : "ghost"}
+              size="sm"
+              onClick={onToggleVersionHistory}
+              aria-pressed={isVersionHistoryPanelOpen}
+              aria-label="View history"
+              data-testid="files-tab-metadata-view-history"
+              className="h-5 px-1.5 text-[10px]"
+            >
+              <History className="mr-0.5 h-3 w-3" aria-hidden="true" />
+              View history
+            </Button>
+          </>
+        )}
         <Separator />
         {isoTimestamp === MISSING ? (
           <span data-field="updated-at">{MISSING}</span>
@@ -309,12 +348,26 @@ export function MetadataStrip({
         </span>
         <Separator />
         <span data-field="mime-type">{mimeLabel(node)}</span>
+        {projectId && (taskLinkCount ?? 0) > 0 ? (
+          <>
+            <Separator />
+            <TaskLinkPopover
+              projectId={projectId}
+              nodeId={node.id}
+              count={taskLinkCount!}
+            />
+          </>
+        ) : null}
       </div>
 
       <FileActionsBar
         onRaw={onRaw}
         onEdit={onEdit}
         onDownload={onDownload}
+        onToggleLinkedTasks={onToggleLinkedTasks}
+        isLinkedTasksPanelOpen={isLinkedTasksPanelOpen}
+        projectId={projectId}
+        nodeId={node.id}
       />
     </div>
   );

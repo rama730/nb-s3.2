@@ -35,8 +35,6 @@ const SAVE_BTN_TESTID = "files-tab-text-viewer-save";
 
 const V3_DETECT_TIMEOUT_MS = 15_000;
 
-process.env.NEXT_PUBLIC_FILES_TAB_V3 = process.env.NEXT_PUBLIC_FILES_TAB_V3 ?? "1";
-
 type ScenarioOutcome =
   | { result: "pass" }
   | { result: "not_applicable"; justification: string };
@@ -73,8 +71,7 @@ async function openFilesTabV3(
     return {
       ready: false,
       reason:
-        `V3 surface not rendered within ${V3_DETECT_TIMEOUT_MS}ms — ` +
-        `NEXT_PUBLIC_FILES_TAB_V3 likely unset on the E2E server.`,
+        `V3 surface not rendered within ${V3_DETECT_TIMEOUT_MS}ms.`,
     };
   }
   return { ready: true };

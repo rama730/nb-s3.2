@@ -18,15 +18,14 @@
  *               version pill even when file rows do.
  *
  * Preconditions (Req 21.7 coexistence):
- *   - `NEXT_PUBLIC_FILES_TAB_V3=1` must be set when the Next.js server
- *     is started so `ProjectFilesWorkspace` mounts `FilesTabRoot`. When
- *     the flag is off (V3 root not rendered) the spec records
- *     `not_applicable` with a non-empty justification (Req 18.3) and
- *     exits cleanly.
+ *   - `ProjectFilesWorkspace` always mounts `FilesTabRoot` (the V3 surface
+ *     is unconditional post-rollout). When the V3 root is not rendered the
+ *     spec records `not_applicable` with a non-empty justification
+ *     (Req 18.3) and exits cleanly.
  *
  * Fallbacks:
  *   - No `E2E_USER_EMAIL` / `E2E_USER_PASSWORD`  → `test.skip` (no audit entry).
- *   - V3 UI not rendered (flag off)              → record `not_applicable`.
+ *   - V3 UI not rendered                         → record `not_applicable`.
  *   - No fixture file with `currentVersion > 1`  → record `not_applicable`;
  *                                                  the spec does not create
  *                                                  versions itself because
@@ -57,12 +56,6 @@ const FOLDER_LIST_VIEW_TESTID = "files-tab-folder-list-view";
 
 const V3_DETECT_TIMEOUT_MS = 15_000;
 const AREA = "version pill display";
-
-// Propagate the public env flag to the webServer child process (when
-// Playwright spawns the dev server) and to any in-runner code path that
-// reuses the runner env. The authoritative gate lives in
-// `src/lib/features/files.ts`.
-process.env.NEXT_PUBLIC_FILES_TAB_V3 = process.env.NEXT_PUBLIC_FILES_TAB_V3 ?? "1";
 
 // ─── Scenario bookkeeping ────────────────────────────────────────────
 
@@ -127,8 +120,7 @@ async function openFilesTab(
             ready: false,
             reason:
                 `Files tab v3 surface (data-testid="${V3_ROOT_TESTID}") did not appear ` +
-                `within ${V3_DETECT_TIMEOUT_MS}ms for project "${slug}". ` +
-                `NEXT_PUBLIC_FILES_TAB_V3 is likely unset in the E2E server environment.`,
+                `within ${V3_DETECT_TIMEOUT_MS}ms for project "${slug}".`,
         };
     }
     return { ready: true };

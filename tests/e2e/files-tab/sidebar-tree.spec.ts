@@ -12,7 +12,7 @@
  * audit entry.
  *
  * Preconditions:
- *   - NEXT_PUBLIC_FILES_TAB_V3=1 must be live in the dev server.
+ *   - The V3 surface is unconditional post-rollout.
  *
  * Fallbacks: not_applicable + justification when V3 isn't mounted, when
  * the seeded fixture lacks a folder/file row, or when the running browser
@@ -35,8 +35,6 @@ const SIDEBAR_EXPAND_TESTID = "files-tab-sidebar-expand";
 const SIDEBAR_SEARCH_TESTID = "files-tab-sidebar-search";
 
 const V3_DETECT_TIMEOUT_MS = 15_000;
-
-process.env.NEXT_PUBLIC_FILES_TAB_V3 = process.env.NEXT_PUBLIC_FILES_TAB_V3 ?? "1";
 
 type ScenarioOutcome =
   | { result: "pass" }
@@ -77,8 +75,7 @@ async function openFilesTabV3(
       ready: false,
       reason:
         `Files tab v3 surface (data-testid="${V3_ROOT_TESTID}") did not appear within ` +
-        `${V3_DETECT_TIMEOUT_MS}ms for project "${PROJECT_SLUG}". ` +
-        `NEXT_PUBLIC_FILES_TAB_V3 is likely unset on the E2E server.`,
+        `${V3_DETECT_TIMEOUT_MS}ms for project "${PROJECT_SLUG}".`,
     };
   }
 
