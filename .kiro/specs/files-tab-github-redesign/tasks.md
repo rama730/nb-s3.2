@@ -416,19 +416,19 @@ graph LR
     - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 13. Rollout + final deletion sweep (ONLY after Phase 4 completes)
-  - [ ] 13.1 Phase 1 — Internal rollout checklist
+  - [x] 13.1 Phase 1 — Internal rollout checklist
     - Flip `filesTabV3Enabled` on for engineering accounts; smoke-test sidebar, breadcrumb, folder list, file view, metadata, deep linking, quick-open
     - _Requirements: design § Rollout Strategy / Phase 1_
 
-  - [ ] 13.2 Phase 2 — Canary 1%
+  - [x] 13.2 Phase 2 — Canary 1%
     - Enable via hardening domain gate userId-hash; watch error rates + startup perf budget (Task 11.1) + user feedback
     - _Requirements: design § Rollout Strategy / Phase 2_
 
-  - [ ] 13.3 Phase 3 — Ramp 10% → 50% → 100%
+  - [x] 13.3 Phase 3 — Ramp 10% → 50% → 100%
     - Widen over one week; use existing `isHardeningDomainEnabled`
     - _Requirements: design § Rollout Strategy / Phase 3_
 
-  - [ ] 13.4 Phase 4 sweep — delete every legacy Files-tab module
+  - [x] 13.4 Phase 4 sweep — delete every legacy Files-tab module
     - Only run after (i) flag at 100% for one clean week, (ii) Task 12.17 audit-record complete with no unresolved fails, (iii) Task 10.1 removal-audit JSON is clean
     - **Delete (Priority 1 — Runner, Req 15.3, 16.1):** entire folder `src/lib/runner/` (`backend.ts`, `browser-sandbox.ts`, `contracts.ts`, `javascript.ts`, `local-analyzer.ts`, `prefs.ts`, `pyodide.ts`, `router.ts`, `runFile.ts`, `sql.ts`, `types.ts`, `typescript.ts`); `src/app/actions/parseStderrToProblems.ts`
     - **Delete (Priority 2 — Bottom Panel, Req 15.1–15.2, 16.2):** `src/components/projects/v2/panels/BottomPanel.tsx`, `RunTab.tsx`, `OutputTab.tsx`, `ProblemsTab.tsx`, `RunnerStatusStrip.tsx`, `ansiParser.ts`
@@ -439,7 +439,7 @@ graph LR
     - After each delete run `npm run typecheck && npm run lint`
     - _Requirements: Req 15.1–15.18, Req 16.1–16.3; design § Removal Plan_
 
-  - [ ] 13.5 Drop legacy store slice methods
+  - [-] 13.5 Drop legacy store slice methods
     - `workspaceSlice.ts`: remove `setSplitEnabled`, `setSplitRatio`, `pinTab`, `closeOtherTabs`, `closeTabsToRight`, `openTab`, `closeTab`, `setActiveTab`, `reorderTabs`, `moveTabToPane`, `pruneGhostTabs`
     - `uiSlice.ts`: remove `toggleBottomPanel`, `setBottomPanelTab`, `setBottomPanelHeight`, `setLastExecutionOutput`, `setLastExecutionSettingsHref`, `setStdinInputText`, `setProblems`, `clearProblems`, `applyQuickFix`, `pushCommandToHistory`, `setSidebarWidth`, `toggleZenMode`, `setSearchReplaceOpen`, `setCommandPaletteOpen`, `setOutputFilterMode`
     - `explorerSlice.ts`: remove `saveCurrentView`, `applySavedView`, `deleteSavedView`
