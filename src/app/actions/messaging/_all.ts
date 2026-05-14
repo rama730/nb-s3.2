@@ -1033,6 +1033,11 @@ function compareReadWatermark(
     if (leftEpoch !== rightEpoch) {
         return leftEpoch - rightEpoch;
     }
+    if (left.id && right.id && left.id !== right.id) {
+        return left.id.localeCompare(right.id);
+    }
+    if (left.id && !right.id) return 1;
+    if (!left.id && right.id) return -1;
     return 0;
 }
 
@@ -1043,6 +1048,33 @@ function shouldAdvanceReadWatermark(
     if (!next) return !current.createdAt;
     if (!current.createdAt) return true;
     return compareReadWatermark(next, current) > 0;
+}
+
+function buildUnreadAfterReadWatermarkPredicate(
+    lastReadMessageId: string | null | undefined,
+    lastReadAt: Date | null | undefined,
+) {
+    if (lastReadMessageId) {
+        const fallbackReadAt = (lastReadAt ?? new Date(0)).toISOString();
+        const watermarkCreatedAt = sql`COALESCE(
+            (SELECT created_at FROM ${messages} WHERE id = ${lastReadMessageId}),
+            CAST(${fallbackReadAt} AS timestamptz)
+        )`;
+
+        return sql`(
+            ${messages.createdAt} > ${watermarkCreatedAt}
+            OR (
+                ${messages.createdAt} = ${watermarkCreatedAt}
+                AND ${messages.id} > ${lastReadMessageId}
+            )
+        )`;
+    }
+
+    if (lastReadAt) {
+        return gt(messages.createdAt, lastReadAt);
+    }
+
+    return null;
 }
 
 async function reconcileConversationUnreadCounts(
@@ -1079,9 +1111,11 @@ async function reconcileConversationUnreadCounts(
                   AND h.user_id = ${participant.userId}
             )`,
         ];
-        if (participant.lastReadAt) {
-            predicates.push(gt(messages.createdAt, participant.lastReadAt));
-        }
+        const unreadAfterWatermark = buildUnreadAfterReadWatermarkPredicate(
+            participant.lastReadMessageId,
+            participant.lastReadAt,
+        );
+        if (unreadAfterWatermark) predicates.push(unreadAfterWatermark);
 
         const [row] = await db
             .select({ count: sql<number>`COUNT(*)::int` })
@@ -1448,6 +1482,7 @@ export async function getConversations(
                 WHERE cp.user_id = ${user.id}
                 AND cp.archived_at IS NULL
                 AND c.type != 'project_group'
+                AND cp.last_message_id IS NOT NULL
                 ${cursorAt ? sql`
                     AND (
                         COALESCE(cp.last_message_at, c.updated_at) < ${cursorAt.toISOString()}
@@ -2501,9 +2536,11 @@ export async function markConversationAsRead(
                       AND h.user_id = ${user.id}
                 )`,
             ];
-            if (nextLastReadAt) {
-                predicates.push(gt(messages.createdAt, nextLastReadAt));
-            }
+            const unreadAfterWatermark = buildUnreadAfterReadWatermarkPredicate(
+                nextLastReadMessageId,
+                nextLastReadAt,
+            );
+            if (unreadAfterWatermark) predicates.push(unreadAfterWatermark);
 
             const [row] = await tx
                 .select({ count: sql<number>`COUNT(*)::int` })
