@@ -1,0 +1,179 @@
+/*
+ * Onboarding Design Tokens
+ *
+ * Spacing, typography, border-radius, and shadow tokens for the onboarding flow.
+ * All color values reference existing CSS custom properties — no hardcoded colors.
+ */
+
+:root {
+  /* ─── Spacing Scale ─── */
+  --onb-space-xs: 4px;
+  --onb-space-sm: 8px;
+  --onb-space-md: 16px;
+  --onb-space-lg: 24px;
+  --onb-space-xl: 32px;
+  --onb-space-2xl: 48px;
+
+  /* ─── Typography Scale ─── */
+  --onb-font-size-step-title: 1.5rem; /* 24px */
+  --onb-font-weight-step-title: 600;
+  --onb-line-height-step-title: 1.3;
+
+  --onb-font-size-subtitle: 0.875rem; /* 14px */
+  --onb-font-weight-subtitle: 400;
+  --onb-line-height-subtitle: 1.5;
+
+  --onb-font-size-section-heading: 1rem; /* 16px */
+  --onb-font-weight-section-heading: 500;
+  --onb-line-height-section-heading: 1.4;
+
+  --onb-font-size-field-label: 0.875rem; /* 14px */
+  --onb-font-weight-field-label: 500;
+  --onb-line-height-field-label: 1.4;
+
+  --onb-font-size-field-hint: 0.75rem; /* 12px */
+  --onb-font-weight-field-hint: 400;
+  --onb-line-height-field-hint: 1.5;
+
+  --onb-font-size-chip: 0.8125rem; /* 13px */
+  --onb-font-weight-chip: 450;
+  --onb-line-height-chip: 1;
+
+  --onb-font-size-button: 0.875rem; /* 14px */
+  --onb-font-weight-button: 500;
+  --onb-line-height-button: 1;
+
+  /* ─── Border Radius ─── */
+  --onb-radius-card: var(--radius-xl); /* 14px — content card */
+  --onb-radius-input: var(--radius-md); /* 8px — input fields */
+  --onb-radius-chip: 9999px; /* full round — chips/tags */
+  --onb-radius-avatar: 9999px; /* circle — avatar */
+  --onb-radius-pill: var(--radius-lg); /* 10px — section nav pills */
+  --onb-radius-radio-card: var(--radius-lg); /* 10px — radio cards */
+
+  /* ─── Shadows ─── */
+  --onb-shadow-card: 0 1px 3px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(0, 0, 0, 0.03);
+  --onb-shadow-hover-radio: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+/* ─── Input Field Interaction States ─── */
+/*
+ * .onb-input — Unified input styling for all onboarding form inputs.
+ * Provides consistent default, focus, error, and disabled states.
+ *
+ * Default: 1px border (border token), background fill
+ * Focus: 2px ring offset using ring token
+ * Error: 1.5px destructive border, destructive/5 background
+ * Disabled: border at 50% opacity, muted background
+ *
+ * Validates: Requirements 17.1, 17.2, 17.3, 17.4
+ */
+
+.onb-input {
+  /* Default state (Req 17.1): 1px border, background fill */
+  border-width: 1px;
+  border-color: hsl(var(--border));
+  background-color: hsl(var(--background));
+  border-radius: var(--onb-radius-input);
+  outline: none;
+  transition: border-color 150ms ease, background-color 150ms ease, box-shadow 150ms ease;
+}
+
+/* Focus state (Req 17.2): 2px ring offset using ring token */
+.onb-input:focus-visible {
+  border-color: hsl(var(--ring));
+  box-shadow: 0 0 0 2px hsl(var(--background)), 0 0 0 4px hsl(var(--ring));
+}
+
+/* Error state (Req 17.3): 1.5px destructive border, destructive/5 background */
+.onb-input[aria-invalid="true"],
+.onb-input.onb-input--error {
+  border-width: 1.5px;
+  border-color: hsl(var(--destructive));
+  background-color: hsl(var(--destructive) / 0.05);
+}
+
+/* Disabled state (Req 17.4): border at 50% opacity, muted background */
+.onb-input:disabled {
+  border-color: hsl(var(--border) / 0.5);
+  background-color: hsl(var(--muted));
+  pointer-events: none;
+  cursor: not-allowed;
+  opacity: 1; /* Don't dim the whole element — only border opacity changes */
+}
+
+/* ─── Onboarding Stepper Animations ─── */
+
+/* Pulse animation for current step ring (2s infinite, opacity 0.2 → 0.4) */
+@keyframes pulse-step {
+  0%, 100% {
+    opacity: 0.2;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+.animate-pulse-step {
+  animation: pulse-step 2s ease-in-out infinite;
+}
+
+/* Completed step circle fill animation (scale 0 → 1, 200ms ease) */
+@keyframes stepper-fill {
+  0% {
+    transform: scale(0);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.animate-stepper-fill {
+  animation: stepper-fill 200ms ease forwards;
+  will-change: transform;
+}
+
+/* Checkmark scale-in with spring-like overshoot (150ms) */
+@keyframes stepper-check {
+  0% {
+    transform: scale(0);
+  }
+  70% {
+    transform: scale(1.2);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.animate-stepper-check {
+  animation: stepper-check 150ms ease forwards;
+  will-change: transform;
+}
+
+/* Line segment fill animation (scaleY 0 → 1, 300ms ease) */
+@keyframes stepper-line-fill {
+  0% {
+    transform: scaleY(0);
+  }
+  100% {
+    transform: scaleY(1);
+  }
+}
+
+.animate-stepper-line-fill {
+  animation: stepper-line-fill 300ms ease forwards;
+  transform-origin: top;
+  will-change: transform;
+}
+
+/* ─── Reduced Motion ─── */
+@media (prefers-reduced-motion: reduce) {
+  .animate-pulse-step,
+  .animate-stepper-fill,
+  .animate-stepper-check,
+  .animate-stepper-line-fill {
+    animation: none;
+    transform: none;
+  }
+}
