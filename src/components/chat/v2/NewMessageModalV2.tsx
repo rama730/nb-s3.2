@@ -156,7 +156,25 @@ export function NewMessageModalV2({
                 toast.error('Failed to open conversation');
                 return;
             }
-            upsertInboxConversation(queryClient, result.conversation!);
+            // For draft conversations, seed the thread cache so the UI renders correctly
+            if (result.conversationId.startsWith('draft:') && result.conversation) {
+                queryClient.setQueryData(
+                    ['chat-v2', 'thread', result.conversationId],
+                    {
+                        pages: [{
+                            conversation: result.conversation,
+                            capability: result.conversation.capability,
+                            messages: [],
+                            pinnedMessages: [],
+                            hasMore: false,
+                            nextCursor: null,
+                        }],
+                        pageParams: [undefined],
+                    },
+                );
+            } else if (result.conversation) {
+                upsertInboxConversation(queryClient, result.conversation!);
+            }
             onConversationOpened(result.conversationId);
             onClose();
         } catch (error) {
