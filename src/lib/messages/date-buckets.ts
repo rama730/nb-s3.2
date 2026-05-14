@@ -71,7 +71,7 @@ export function formatMessageCalendarLabel(
     if (key === 'unknown') return 'Unknown date';
 
     const today = getMessageCalendarDay(options.now ?? new Date(), options.timeZone);
-    const yesterdayDate = today.date;
+    const yesterdayDate = new Date(today.date);
     yesterdayDate.setDate(yesterdayDate.getDate() - 1);
     const yesterday = getMessageCalendarDay(yesterdayDate, options.timeZone);
 
