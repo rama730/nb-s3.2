@@ -107,11 +107,11 @@ export default function UsernameInput({ value, onChange, fullName, disabled, onS
     return (
         <div className="space-y-2">
             <Label htmlFor="username" className="text-sm font-medium">
-                Username <span className="text-red-500">*</span>
+                Username <span className="text-destructive">*</span>
             </Label>
 
             <div className="relative">
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 dark:text-zinc-400 text-sm">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">
                     @
                 </span>
                 <Input
@@ -122,17 +122,17 @@ export default function UsernameInput({ value, onChange, fullName, disabled, onS
                     disabled={disabled}
                     placeholder="yourname"
                     className={cn(
-                        "pl-8 pr-10 h-11 transition-all duration-200",
-                        status === 'valid' && 'border-green-500 ring-1 ring-green-500/20',
-                        status === 'invalid' && 'border-red-500 ring-1 ring-red-500/20'
+                        "pl-8 pr-10 transition-all duration-200 onb-input",
+                        status === 'valid' && 'border-chart-2 ring-1 ring-chart-2/20',
+                        status === 'invalid' && 'border-destructive ring-1 ring-destructive/20'
                     )}
                     maxLength={20}
                 />
                 <div className="absolute right-3 top-1/2 -translate-y-1/2">
-                    {status === 'checking' && <Loader2 className="w-4 h-4 text-zinc-400 animate-spin" />}
-                    {status === 'valid' && <Check className="w-4 h-4 text-green-500" />}
-                    {status === 'invalid' && <X className="w-4 h-4 text-red-500" />}
-                    {status === 'error' && <X className="w-4 h-4 text-amber-500" />}
+                    {status === 'checking' && <Loader2 className="w-4 h-4 text-muted-foreground animate-spin" />}
+                    {status === 'valid' && <Check className="w-4 h-4 text-chart-2" />}
+                    {status === 'invalid' && <X className="w-4 h-4 text-destructive" />}
+                    {status === 'error' && <X className="w-4 h-4 text-chart-5" />}
                 </div>
             </div>
 
@@ -140,10 +140,10 @@ export default function UsernameInput({ value, onChange, fullName, disabled, onS
             {message && (
                 <p className={cn(
                     "text-sm",
-                    status === 'checking' && 'text-zinc-500 dark:text-zinc-400',
-                    status === 'valid' && 'text-green-600 dark:text-green-400',
-                    status === 'invalid' && 'text-red-600 dark:text-red-400',
-                    status === 'error' && 'text-amber-600 dark:text-amber-400'
+                    status === 'checking' && 'text-muted-foreground',
+                    status === 'valid' && 'text-chart-2',
+                    status === 'invalid' && 'text-destructive',
+                    status === 'error' && 'text-chart-5'
                 )}>
                     {message}
                 </p>
@@ -152,14 +152,14 @@ export default function UsernameInput({ value, onChange, fullName, disabled, onS
             {/* Suggestions */}
             {showSuggestions && suggestions.length > 0 && (
                 <div className="space-y-2">
-                    <p className="text-xs text-zinc-500">Suggestions:</p>
+                    <p className="text-xs text-muted-foreground">Suggestions:</p>
                     <div className="flex flex-wrap gap-2">
                         {suggestions.map((suggestion) => (
                             <button
                                 key={suggestion}
                                 type="button"
                                 onClick={() => selectSuggestion(suggestion)}
-                                className="px-3 py-1.5 text-sm rounded-lg bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 hover:bg-blue-100 dark:hover:bg-blue-900/30 hover:text-blue-700 dark:hover:text-blue-300 transition-colors"
+                                className="px-3 py-1.5 text-sm rounded-lg bg-muted text-foreground hover:bg-primary/10 hover:text-primary transition-colors min-h-[44px] sm:min-h-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                             >
                                 @{suggestion}
                             </button>
@@ -169,7 +169,7 @@ export default function UsernameInput({ value, onChange, fullName, disabled, onS
             )}
 
             {/* Character count */}
-            <p className="text-xs text-zinc-400">
+            <p className="text-xs text-muted-foreground">
                 {value.length}/20 characters
             </p>
         </div>
