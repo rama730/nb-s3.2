@@ -5,6 +5,10 @@
 // creation.
 //
 // Requirements: 6.5
+//
+// Fix: Cancel/Confirm buttons are now rendered INSIDE the picker modal
+// (as a footer), not as a separate fixed-position element floating at
+// the bottom-right of the viewport.
 
 "use client";
 
@@ -67,7 +71,7 @@ export function MultiAttachmentPicker({
     onClose();
   }, [onClose]);
 
-  // Keyboard: Enter to confirm when picker is open
+  // Keyboard: Cmd/Ctrl+Enter to confirm when picker is open
   useEffect(() => {
     if (!isOpen) return;
     const handler = (e: KeyboardEvent) => {
@@ -83,23 +87,15 @@ export function MultiAttachmentPicker({
   if (!isOpen) return null;
 
   return (
-    <>
-      {/* Render V3AttachmentPicker — it manages its own backdrop at z-50 */}
-      <V3AttachmentPicker
-        projectId={projectId}
-        projectName={projectName}
-        isOpen={true}
-        onClose={handleCancel}
-        initialSelection={initialAttachments}
-        onSelectionChange={handleSelectionChange}
-      />
-
-      {/* Confirm/Cancel footer — rendered above the picker's z-index */}
-      <div
-        className="fixed bottom-0 left-0 right-0 z-[60] flex items-center justify-end gap-2 px-6 py-3 pointer-events-none"
-        data-testid="multi-attachment-picker"
-      >
-        <div className="pointer-events-auto flex items-center gap-2 rounded-xl border border-zinc-200 bg-white/95 px-4 py-2.5 shadow-lg backdrop-blur dark:border-zinc-700 dark:bg-zinc-900/95">
+    <V3AttachmentPicker
+      projectId={projectId}
+      projectName={projectName}
+      isOpen={true}
+      onClose={handleCancel}
+      initialSelection={initialAttachments}
+      onSelectionChange={handleSelectionChange}
+      footer={
+        <div className="flex items-center justify-end gap-2">
           <button
             type="button"
             onClick={handleCancel}
@@ -117,8 +113,8 @@ export function MultiAttachmentPicker({
             Confirm{pendingSelection.length > 0 ? ` (${pendingSelection.length})` : ""}
           </button>
         </div>
-      </div>
-    </>
+      }
+    />
   );
 }
 
