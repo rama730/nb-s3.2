@@ -7,6 +7,7 @@ import {
     buildMessageThreadItems,
     buildMessageThreadModel,
 } from '@/lib/messages/thread-items';
+import { getMessageCalendarDay } from '@/lib/messages/date-buckets';
 
 function message(
     id: string,
@@ -105,7 +106,7 @@ test('thread unread divider count clamps to visible unread candidates', () => {
     assert.equal(divider?.count, 2);
 });
 
-test('thread dates are grouped as virtualizer headers instead of scrollable rows', () => {
+test('thread dates render as keyed rows in the scrollable model', () => {
     const model = buildMessageThreadModel({
         conversationId: 'conversation-1',
         viewerId: 'viewer-1',
@@ -121,7 +122,14 @@ test('thread dates are grouped as virtualizer headers instead of scrollable rows
     assert.equal(model.groups.length, 2);
     assert.equal(model.groups[0].items[0].id, 'apr-26-1');
     assert.equal(model.groups[1].items[0].id, 'apr-27-1');
-    assert.equal(model.items.length, 3);
+    assert.deepEqual(
+        model.items
+            .filter((item) => item.type === 'date')
+            .map((item) => item.dateKey),
+        ['2026-04-26', '2026-04-27'],
+    );
+    assert.equal(model.items.length, 6);
+    assert.equal(model.items.at(-1)?.type, 'bottom-sentinel');
     assert.equal(model.items.some((item) => item.type === 'unread-divider'), false);
 });
 
@@ -168,6 +176,46 @@ test('latest same-day messages stay in the newest group after historical pages',
         [['apr-25-history'], ['apr-27-history'], ['apr-30-peer', 'apr-30-own-ok']],
     );
     assert.equal(model.groups.at(-1)?.items.at(-1)?.id, 'apr-30-own-ok');
+});
+
+test('date rows stay attached to their first message after mixed stale and latest pages', () => {
+    const model = buildMessageThreadModel({
+        conversationId: 'conversation-1',
+        viewerId: 'viewer-1',
+        viewerUnreadCount: 0,
+        messages: [
+            message('may-15-latest', 'peer-1', { createdAt: '2026-05-15T05:14:55.661Z' }),
+            message('may-02-history', 'peer-1', { createdAt: '2026-05-02T16:36:00.000Z' }),
+            message('may-01-history', 'viewer-1', { createdAt: '2026-05-01T12:08:00.000Z' }),
+        ],
+    });
+
+    assert.deepEqual(
+        model.messages.map((entry) => entry.id),
+        ['may-01-history', 'may-02-history', 'may-15-latest'],
+    );
+    assert.deepEqual(
+        model.items.map((item) => item.id),
+        [
+            'date-header-2026-05-01',
+            'may-01-history',
+            'date-header-2026-05-02',
+            'may-02-history',
+            'date-header-2026-05-15',
+            'may-15-latest',
+            'bottom-sentinel-conversation-1',
+        ],
+    );
+
+    for (let index = 0; index < model.items.length; index += 1) {
+        const item = model.items[index];
+        if (item.type !== 'date') continue;
+        const nextItem = model.items[index + 1];
+        assert.equal(nextItem?.type, 'message');
+        if (nextItem?.type === 'message') {
+            assert.equal(getMessageCalendarDay(nextItem.message.createdAt).key, item.dateKey);
+        }
+    }
 });
 
 test('peer avatars are assigned to the tail of each sender run', () => {
