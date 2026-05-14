@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { GroupedVirtuoso } from 'react-virtuoso';
+import { Virtuoso } from 'react-virtuoso';
 import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import type { MessageWithSender } from '@/app/actions/messaging';
@@ -56,6 +56,18 @@ interface MessageThreadV2Props {
 const EMPTY_PINNED_MESSAGES: MessageWithSender[] = [];
 const EMPTY_TYPING_USERS: TypingUser[] = [];
 const OLDER_MESSAGES_PRELOAD_THRESHOLD = 6;
+
+function messageOrderTime(message: MessageWithSender) {
+    const value = message.createdAt instanceof Date ? message.createdAt : new Date(message.createdAt);
+    const time = value.getTime();
+    return Number.isFinite(time) ? time : 0;
+}
+
+function compareMessageOrder(left: MessageWithSender, right: MessageWithSender) {
+    const timeDelta = messageOrderTime(left) - messageOrderTime(right);
+    if (timeDelta !== 0) return timeDelta;
+    return left.id.localeCompare(right.id);
+}
 
 export function MessageThreadV2({
     conversationId,
@@ -147,9 +159,6 @@ export function MessageThreadV2({
     }, [conversationId]);
 
     const items = threadModel.items;
-    const groups = threadModel.groups;
-    const groupCounts = threadModel.groupCounts;
-    const groupHeaderIndexes = threadModel.groupHeaderIndexes;
     const unreadMessageIdSet = useMemo(
         () => new Set(canonicalUnreadModel.unreadMessageIds),
         [canonicalUnreadModel.unreadMessageIds],
@@ -248,32 +257,27 @@ export function MessageThreadV2({
         hasFocusTarget,
     });
 
-    const groupHeaderKeyByVirtualIndex = useMemo(() => {
-        const keyMap = new Map<number, string>();
-        groupHeaderIndexes.forEach((headerIndex, groupIndex) => {
-            const group = groups[groupIndex];
-            if (!group) return;
-            keyMap.set(firstItemIndex + headerIndex, `group-${group.id}`);
-        });
-        return keyMap;
-    }, [firstItemIndex, groupHeaderIndexes, groups]);
-
     // When older messages are prepended, decrement firstItemIndex by the
-    // rendered item delta so grouped headers and unread dividers stay anchored.
+    // rendered flat-row delta so Virtuoso keeps the viewport anchored.
     const initialLatestAnchorConversationRef = useRef<string | null>(null);
     const previousItemsLengthRef = useRef(items.length);
-    const previousFirstMessageIdRef = useRef<string | null>(orderedMessages[0]?.id ?? null);
+    const previousFirstMessageRef = useRef<MessageWithSender | null>(orderedMessages[0] ?? null);
     useEffect(() => {
         const previousLength = previousItemsLengthRef.current;
-        const previousFirstId = previousFirstMessageIdRef.current;
+        const previousFirstMessage = previousFirstMessageRef.current;
         const nextLength = items.length;
-        const nextFirstId = orderedMessages[0]?.id ?? null;
+        const nextFirstMessage = orderedMessages[0] ?? null;
         previousItemsLengthRef.current = nextLength;
-        previousFirstMessageIdRef.current = nextFirstId;
+        previousFirstMessageRef.current = nextFirstMessage;
 
         if (previousLength === 0 || nextLength <= previousLength) return;
-        // Prepend detected if first message id changed AND rendered item count grew.
-        if (previousFirstId && nextFirstId && previousFirstId !== nextFirstId) {
+        const loadedOlderMessages = Boolean(
+            previousFirstMessage
+            && nextFirstMessage
+            && previousFirstMessage.id !== nextFirstMessage.id
+            && compareMessageOrder(nextFirstMessage, previousFirstMessage) < 0,
+        );
+        if (loadedOlderMessages) {
             decrementFirstItemIndex(nextLength - previousLength);
             if (!hasFocusTarget && followBottom) {
                 scrollToLatest('auto', 3);
@@ -537,11 +541,10 @@ export function MessageThreadV2({
                         </div>
                     ) : null}
                     <div className="min-h-0 flex-1 overflow-hidden">
-                        <GroupedVirtuoso
+                        <Virtuoso
                             ref={virtuosoRef}
                             style={{ height: '100%', overscrollBehavior: 'contain', overflowX: 'hidden' }}
                             data={items}
-                            groupCounts={groupCounts}
                             firstItemIndex={firstItemIndex}
                             alignToBottom
                             initialTopMostItemIndex={
@@ -551,7 +554,7 @@ export function MessageThreadV2({
                             }
                             atBottomThreshold={120}
                             increaseViewportBy={isPopup ? { top: 80, bottom: 80 } : { top: 80, bottom: 80 }}
-                            computeItemKey={(index, item) => groupHeaderKeyByVirtualIndex.get(index) ?? item?.id ?? `message-thread-item-${index}`}
+                            computeItemKey={(index, item) => item?.id ?? `message-thread-item-${index}`}
                             atBottomStateChange={handleAtBottomChange}
                             startReached={() => {
                                 requestOlderMessages();
@@ -592,19 +595,14 @@ export function MessageThreadV2({
                                     isFetchingMore ? (
                                         <OlderMessagesLoader />
                                     ) : null,
-                                Footer: () => (
-                                    <div
-                                        aria-hidden="true"
-                                        className={typingUsers.length > 0 ? 'h-14' : 'h-5'}
-                                    />
-                                ),
                             }}
-                            groupContent={(groupIndex) => {
-                                const group = groups[groupIndex];
-                                if (!group) return null;
-                                return <ThreadDateGroupHeader label={formatMessageCalendarLabel(group.dateKey)} />;
-                            }}
-                            itemContent={(_, __, item) => {
+                            itemContent={(_, item) => {
+                                if (item.type === 'date') {
+                                    return <ThreadDateGroupHeader label={formatMessageCalendarLabel(item.dateKey)} />;
+                                }
+                                if (item.type === 'bottom-sentinel') {
+                                    return <ThreadBottomSentinel typingVisible={typingUsers.length > 0} />;
+                                }
                                 if (item.type !== 'message') return null;
                                 return (
                                     <div
@@ -717,6 +715,15 @@ function ThreadDateGroupHeader({ label }: { label: string }) {
         <div className="msg-date-group-header flex justify-center px-4 py-2">
             <span className="msg-date-pill shadow-sm">{label}</span>
         </div>
+    );
+}
+
+function ThreadBottomSentinel({ typingVisible }: { typingVisible: boolean }) {
+    return (
+        <div
+            aria-hidden="true"
+            className={typingVisible ? 'h-14' : 'h-5'}
+        />
     );
 }
 
