@@ -61,6 +61,33 @@ const INBOX_TABS = [
     { id: 'projects', label: 'Project Groups' },
 ] as const;
 
+type ConversationLastMessageSnapshot = {
+    id?: string | null;
+    createdAt?: Date | string | null;
+} | null | undefined;
+
+function lastMessageEpoch(value: ConversationLastMessageSnapshot) {
+    if (!value?.createdAt) return 0;
+    const epoch = value.createdAt instanceof Date
+        ? value.createdAt.getTime()
+        : new Date(value.createdAt).getTime();
+    return Number.isFinite(epoch) ? epoch : 0;
+}
+
+function pickNewestLastMessage(
+    left: ConversationLastMessageSnapshot,
+    right: ConversationLastMessageSnapshot,
+) {
+    if (!left?.id) return right?.id ? right : null;
+    if (!right?.id) return left;
+    const leftEpoch = lastMessageEpoch(left);
+    const rightEpoch = lastMessageEpoch(right);
+    if (rightEpoch !== leftEpoch) {
+        return rightEpoch > leftEpoch ? right : left;
+    }
+    return String(right.id).localeCompare(String(left.id)) > 0 ? right : left;
+}
+
 export function MessagesWorkspaceV2({
     mode,
     targetUserId,
@@ -91,7 +118,9 @@ export function MessagesWorkspaceV2({
     const [searchOpen, setSearchOpen] = useState(false);
     const [newMessageOpen, setNewMessageOpen] = useState(false);
     const [isDragOver, setIsDragOver] = useState(false);
+    const [isRefreshingLatestThread, setIsRefreshingLatestThread] = useState(false);
     const initialSelectionAppliedRef = useRef(false);
+    const latestThreadSyncKeyRef = useRef<string | null>(null);
     const lastReadCommitWatermarkRef = useRef<string | null>(null);
     const pendingReadWatermarkRef = useRef<{ conversationId: string; messageId: string } | null>(null);
     const readCommitInFlightRef = useRef(false);
@@ -148,7 +177,26 @@ export function MessagesWorkspaceV2({
                     }
                     setSelectedConversationId(result.conversationId);
                     if (result.conversation) {
-                        upsertThreadConversation(queryClient, result.conversation);
+                        // For draft conversations, seed the thread cache with a synthetic page
+                        // so the UI can render the conversation header and composer
+                        if (result.conversationId.startsWith('draft:')) {
+                            queryClient.setQueryData(
+                                queryKeys.messages.v2.thread(result.conversationId),
+                                {
+                                    pages: [{
+                                        conversation: result.conversation,
+                                        capability: result.conversation.capability,
+                                        messages: [],
+                                        pinnedMessages: [],
+                                        hasMore: false,
+                                        nextCursor: null,
+                                    }],
+                                    pageParams: [undefined],
+                                },
+                            );
+                        } else {
+                            upsertThreadConversation(queryClient, result.conversation);
+                        }
                     }
                     if (mode === 'page') {
                         router.replace(`/messages?conversationId=${result.conversationId}`);
@@ -183,6 +231,8 @@ export function MessagesWorkspaceV2({
         pendingReadWatermarkRef.current = null;
         readCommitInFlightRef.current = false;
         queuedReadCommitRef.current = null;
+        latestThreadSyncKeyRef.current = null;
+        setIsRefreshingLatestThread(false);
     }, [selectedConversationId]);
 
     const hasLoadedReadableMessage = useMemo(
@@ -204,6 +254,26 @@ export function MessagesWorkspaceV2({
             : null,
         [inbox.conversations, selectedConversationId],
     );
+    const authoritativeLatestMessage = useMemo(
+        () => pickNewestLastMessage(
+            thread.conversation?.lastMessage ?? null,
+            selectedInboxConversation?.lastMessage ?? null,
+        ),
+        [selectedInboxConversation?.lastMessage, thread.conversation?.lastMessage],
+    );
+    const authoritativeLatestMessageId = authoritativeLatestMessage?.id ?? null;
+    const hasLoadedAuthoritativeLatest = useMemo(
+        () => !authoritativeLatestMessageId
+            || thread.messages.some((message) => message.id === authoritativeLatestMessageId),
+        [authoritativeLatestMessageId, thread.messages],
+    );
+    const hasThreadLatestGap = Boolean(
+        selectedConversationId
+        && authoritativeLatestMessageId
+        && !hasLoadedAuthoritativeLatest
+        && !focusMessageId
+        && !replyContextJumpState,
+    );
     const rawActiveUnreadCount = Math.max(
         0,
         Number(thread.conversation?.unreadCount ?? 0),
@@ -219,6 +289,55 @@ export function MessagesWorkspaceV2({
     const shouldResolveActiveConversationRead = rawActiveUnreadCount > 0
         || effectiveActiveUnreadCount > 0
         || hasActiveMessageAttention;
+
+    useEffect(() => {
+        if (
+            !selectedConversationId
+            || selectedConversationId.startsWith('draft:')
+            || !authoritativeLatestMessageId
+            || hasLoadedAuthoritativeLatest
+            || focusMessageId
+            || replyContextJumpState
+        ) {
+            if (hasLoadedAuthoritativeLatest) {
+                latestThreadSyncKeyRef.current = null;
+                setIsRefreshingLatestThread(false);
+            }
+            return;
+        }
+
+        const syncKey = `${selectedConversationId}:${authoritativeLatestMessageId}`;
+        if (latestThreadSyncKeyRef.current === syncKey) return;
+
+        latestThreadSyncKeyRef.current = syncKey;
+        setIsRefreshingLatestThread(true);
+        void refreshConversationCache(queryClient, selectedConversationId, { includeUnread: true })
+            .then((refreshed) => {
+                if (!refreshed) {
+                    console.warn('[messages-v2] latest_thread_sync_unavailable', {
+                        conversationId: selectedConversationId,
+                        latestMessageId: authoritativeLatestMessageId,
+                    });
+                }
+            })
+            .catch((error) => {
+                console.warn('[messages-v2] latest_thread_sync_failed', {
+                    conversationId: selectedConversationId,
+                    latestMessageId: authoritativeLatestMessageId,
+                    error,
+                });
+            })
+            .finally(() => {
+                setIsRefreshingLatestThread(false);
+            });
+    }, [
+        authoritativeLatestMessageId,
+        focusMessageId,
+        hasLoadedAuthoritativeLatest,
+        queryClient,
+        replyContextJumpState,
+        selectedConversationId,
+    ]);
 
     const handleCommitThreadRead = useCallback((
         messageId?: string | null,
@@ -322,18 +441,19 @@ export function MessagesWorkspaceV2({
 
     const handleCommitVisibleThreadRead = useCallback(() => {
         const shouldCommitLatestServerWatermark =
-            hasLoadedReadableMessage;
+            hasLoadedReadableMessage && hasLoadedAuthoritativeLatest;
         handleCommitThreadRead(
             null,
             shouldCommitLatestServerWatermark ? { ignorePendingWatermark: true } : {},
         );
-    }, [handleCommitThreadRead, hasLoadedReadableMessage]);
+    }, [handleCommitThreadRead, hasLoadedAuthoritativeLatest, hasLoadedReadableMessage]);
 
     useEffect(() => {
         if (
             !selectedConversationId
             || !shouldResolveActiveConversationRead
             || !hasLoadedReadableMessage
+            || !hasLoadedAuthoritativeLatest
         ) {
             return;
         }
@@ -344,6 +464,7 @@ export function MessagesWorkspaceV2({
         });
         handleCommitThreadRead(null, { ignorePendingWatermark: true });
     }, [
+        hasLoadedAuthoritativeLatest,
         hasLoadedReadableMessage,
         handleCommitThreadRead,
         selectedConversationId,
@@ -416,7 +537,10 @@ export function MessagesWorkspaceV2({
         && inbox.isLoading
         && inbox.conversations.length === 0
         && !isResolvingConversation;
-    const showThreadSkeleton = isResolvingConversation || (Boolean(selectedConversationId) && thread.isLoading && !activeConversation);
+    const showThreadSkeleton = isResolvingConversation
+        || (Boolean(selectedConversationId) && thread.isLoading && !activeConversation)
+        || hasThreadLatestGap
+        || isRefreshingLatestThread;
 
     const handleSelectConversation = (conversationId: string) => {
         if (conversationId !== selectedConversationId) {
