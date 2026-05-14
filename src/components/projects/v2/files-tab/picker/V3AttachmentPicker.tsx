@@ -24,6 +24,7 @@ import { useShallow } from "zustand/react/shallow";
 import type { ProjectNode } from "@/lib/db/schema";
 import { logger } from "@/lib/logger";
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
+import { getProjectTreeFlat } from "@/app/actions/files/nodes";
 
 import {
   buildNodePathMap,
@@ -46,6 +47,8 @@ export interface V3AttachmentPickerProps {
   onClose: () => void;
   initialSelection?: ProjectNode[];
   onSelectionChange?: (nodes: ProjectNode[]) => void;
+  /** Optional footer content rendered below the pinned tray (e.g., Confirm/Cancel buttons). */
+  footer?: React.ReactNode;
 }
 
 // ─── Component ───────────────────────────────────────────────────────
@@ -57,6 +60,7 @@ export function V3AttachmentPicker({
   onClose,
   initialSelection,
   onSelectionChange,
+  footer,
 }: V3AttachmentPickerProps): React.JSX.Element | null {
   // ── Selection state ─────────────────────────────────────────────────
   const [selectedNodes, setSelectedNodes] = useState<ProjectNode[]>(
@@ -101,6 +105,58 @@ export function V3AttachmentPicker({
     );
 
   const toggleExpanded = useFilesWorkspaceStore((s) => s.toggleExpanded);
+
+  // ── Self-boot: fetch nodes if store is empty (picker opened from Tasks tab) ──
+  const ensureProjectWorkspace = useFilesWorkspaceStore((s) => s.ensureProjectWorkspace);
+  const upsertNodes = useFilesWorkspaceStore((s) => s.upsertNodes);
+  const setChildren = useFilesWorkspaceStore((s) => s.setChildren);
+  const markChildrenLoaded = useFilesWorkspaceStore((s) => s.markChildrenLoaded);
+  const [isBootLoading, setIsBootLoading] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    // Ensure workspace entry exists
+    ensureProjectWorkspace(projectId);
+
+    // If the store already has nodes for this project, skip fetching
+    const ws = useFilesWorkspaceStore.getState().byProjectId[projectId];
+    if (ws && Object.keys(ws.nodesById).length > 0) return;
+
+    // Store is empty — fetch the full tree so the picker has data
+    let cancelled = false;
+    setIsBootLoading(true);
+
+    void (async () => {
+      try {
+        const { nodes, isComplete } = await getProjectTreeFlat(projectId);
+        if (cancelled || nodes.length === 0) return;
+
+        upsertNodes(projectId, nodes);
+
+        // Build childrenByParentId from the flat tree
+        const grouped: Record<string, string[]> = {};
+        for (const node of nodes) {
+          const parentKey = node.parentId ?? "__root__";
+          if (!grouped[parentKey]) grouped[parentKey] = [];
+          grouped[parentKey].push(node.id);
+        }
+
+        for (const [key, childIds] of Object.entries(grouped)) {
+          const pid = key === "__root__" ? null : key;
+          setChildren(projectId, pid, Array.from(new Set(childIds)));
+          markChildrenLoaded(projectId, pid);
+        }
+      } catch (err) {
+        // Silently fail — picker will show "No files available"
+        console.warn("[V3AttachmentPicker] Failed to boot file tree:", err);
+      } finally {
+        if (!cancelled) setIsBootLoading(false);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [isOpen, projectId, ensureProjectWorkspace, upsertNodes, setChildren, markChildrenLoaded]);
 
   // ── Telemetry: emit picker_opened on mount (Req 16.1) ──────────────
   const telemetryFiredRef = useRef(false);
@@ -186,29 +242,34 @@ export function V3AttachmentPicker({
     [selectedNodes],
   );
 
+  // Notify parent of selection changes via effect (avoids setState-during-render)
+  const selectionChangeRef = useRef(onSelectionChange);
+  selectionChangeRef.current = onSelectionChange;
+  const prevSelectionRef = useRef(selectedNodes);
+  useEffect(() => {
+    if (prevSelectionRef.current !== selectedNodes) {
+      prevSelectionRef.current = selectedNodes;
+      selectionChangeRef.current?.(selectedNodes);
+    }
+  }, [selectedNodes]);
+
   const toggleSelection = useCallback(
     (node: ProjectNode) => {
       setSelectedNodes((prev) => {
         const exists = prev.some((n) => n.id === node.id);
-        const next = exists
+        return exists
           ? prev.filter((n) => n.id !== node.id)
           : [...prev, node];
-        onSelectionChange?.(next);
-        return next;
       });
     },
-    [onSelectionChange],
+    [],
   );
 
   const removeFromSelection = useCallback(
     (nodeId: string) => {
-      setSelectedNodes((prev) => {
-        const next = prev.filter((n) => n.id !== nodeId);
-        onSelectionChange?.(next);
-        return next;
-      });
+      setSelectedNodes((prev) => prev.filter((n) => n.id !== nodeId));
     },
-    [onSelectionChange],
+    [],
   );
 
   // ── Tree node click (navigate-only: expand folders, select files) ──
@@ -275,18 +336,24 @@ export function V3AttachmentPicker({
           {/* Left pane: navigate-only tree */}
           <div className="w-64 shrink-0 border-r border-zinc-200 dark:border-zinc-800 flex flex-col overflow-hidden">
             <div className="flex-1 min-h-0 overflow-auto">
-              <PickerTree
-                nodesById={nodesById as Record<string, ProjectNode>}
-                childrenByParentId={
-                  childrenByParentId as Record<string, string[]>
-                }
-                expandedFolderIds={
-                  expandedFolderIds as Record<string, boolean>
-                }
-                visibleIds={visibleIdsFromSearch}
-                selectedNodeIds={selectedNodeIds}
-                onNodeClick={handleTreeNodeClick}
-              />
+              {isBootLoading ? (
+                <div className="px-3 py-4 text-xs text-zinc-500 text-center">
+                  Loading files…
+                </div>
+              ) : (
+                <PickerTree
+                  nodesById={nodesById as Record<string, ProjectNode>}
+                  childrenByParentId={
+                    childrenByParentId as Record<string, string[]>
+                  }
+                  expandedFolderIds={
+                    expandedFolderIds as Record<string, boolean>
+                  }
+                  visibleIds={visibleIdsFromSearch}
+                  selectedNodeIds={selectedNodeIds}
+                  onNodeClick={handleTreeNodeClick}
+                />
+              )}
             </div>
           </div>
 
@@ -313,7 +380,12 @@ export function V3AttachmentPicker({
               className="flex-1 min-h-0 overflow-auto"
               data-testid="v3-attachment-picker-results"
             >
-              {showRecents && results.length === 0 ? (
+              {isBootLoading ? (
+                <div className="px-4 py-6 text-center text-sm text-zinc-500">
+                  <Clock className="w-5 h-5 mx-auto mb-2 text-zinc-400 animate-pulse" />
+                  Loading files…
+                </div>
+              ) : showRecents && results.length === 0 ? (
                 <div className="px-4 py-6 text-center text-sm text-zinc-500">
                   <Clock className="w-5 h-5 mx-auto mb-2 text-zinc-400" />
                   No recent files
@@ -412,6 +484,16 @@ export function V3AttachmentPicker({
             </div>
           )}
         </div>
+
+        {/* Footer: optional confirm/cancel buttons (rendered inside the modal) */}
+        {footer && (
+          <div
+            className="shrink-0 border-t border-zinc-200 dark:border-zinc-800 px-4 py-3"
+            data-testid="v3-attachment-picker-footer"
+          >
+            {footer}
+          </div>
+        )}
       </div>
     </div>
   );
