@@ -93,7 +93,9 @@ export function ConversationListV2({
     const [activeFilter, setActiveFilter] = useState<'all' | 'groups'>('all');
 
     const filteredConversations = useMemo(() => {
-        let result = conversations;
+        // Client-side safety net: exclude conversations without a last message
+        // Guards against race conditions where server filter hasn't applied yet
+        let result = conversations.filter((conversation) => conversation.lastMessage != null);
         // Search filter
         const normalized = debouncedSearch.trim().toLowerCase();
         if (normalized) {
