@@ -1,3 +1,4 @@
+import '@/styles/onboarding-tokens.css';
 import { AuthRouteProviders } from '@/components/providers/AuthRouteProviders';
 
 export default function OnboardingLayout({
