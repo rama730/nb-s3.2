@@ -75,15 +75,24 @@ async function resolveConversationId(params: {
     conversationId?: string | null;
     targetUserId?: string | null;
 }) {
-    if (params.conversationId) {
-        return params.conversationId;
+    let conversationId = params.conversationId ?? null;
+    let targetUserId = params.targetUserId ?? null;
+
+    // Handle draft conversation IDs — extract targetUserId and create the real conversation
+    if (conversationId && conversationId.startsWith('draft:')) {
+        targetUserId = targetUserId || conversationId.slice('draft:'.length);
+        conversationId = null;
     }
 
-    if (!params.targetUserId) {
+    if (conversationId) {
+        return conversationId;
+    }
+
+    if (!targetUserId) {
         throw new Error('Missing conversation target');
     }
 
-    const ensured = await getOrCreateDMConversation(params.targetUserId);
+    const ensured = await getOrCreateDMConversation(targetUserId);
     if (!ensured.success || !ensured.conversationId) {
         throw new Error(ensured.error || 'Failed to open conversation');
     }
