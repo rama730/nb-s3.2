@@ -5,13 +5,18 @@ import { useRouter } from 'next/navigation'
 import { useQueryClient } from '@tanstack/react-query'
 import { createClient } from '@/lib/supabase/client'
 import { queryKeys } from '@/lib/query-keys'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import UsernameInput from '@/components/onboarding/UsernameInput'
+
+import { OnboardingLayout } from '@/components/onboarding/OnboardingLayout'
+import { OnboardingSidebar } from '@/components/onboarding/OnboardingSidebar'
+import { MobileProgressBar } from '@/components/onboarding/MobileProgressBar'
+import { StepHeader } from '@/components/onboarding/StepHeader'
+import { StepFooter } from '@/components/onboarding/StepFooter'
+import { StepTransition } from '@/components/onboarding/StepTransition'
+import { Step1Identity } from '@/components/onboarding/steps/Step1Identity'
+import Step2Details from '@/components/onboarding/steps/Step2Details'
+import Step3Skills from '@/components/onboarding/steps/Step3Skills'
+import { Step4Privacy } from '@/components/onboarding/steps/Step4Privacy'
+import { STEP_UI_CONFIG } from '@/lib/onboarding/step-ui-config'
 import type { UsernameAvailabilityStatus } from '@/hooks/useUsernameAvailability'
 import {
     clearOnboardingDraft,
@@ -51,19 +56,7 @@ import {
 import { type OnboardingEventInput } from '@/lib/onboarding/events'
 import { compressAvatarOffMainThread } from '@/lib/services/avatar-worker-client'
 import {
-    ArrowLeft,
-    ArrowRight,
-    Check,
-    Clock3,
     Loader2,
-    Camera,
-    MapPin,
-    Globe,
-    Briefcase,
-    Shield,
-    User,
-    Users,
-    Sparkles
 } from 'lucide-react'
 
 // Skill suggestions
@@ -81,52 +74,7 @@ const INTEREST_SUGGESTIONS = [
     'Climate Tech', 'Social Impact', 'Creative Tools', 'Developer Tools', 'DevOps'
 ]
 
-const OPEN_TO_SUGGESTIONS = [
-    'Full-time roles',
-    'Part-time roles',
-    'Freelance projects',
-    'Open source collaboration',
-    'Mentorship',
-    'Hackathons',
-    'Co-founder opportunities',
-]
 
-const EXPERIENCE_LEVEL_OPTIONS = [
-    { value: 'student', label: 'Student' },
-    { value: 'junior', label: 'Junior' },
-    { value: 'mid', label: 'Mid-level' },
-    { value: 'senior', label: 'Senior' },
-    { value: 'lead', label: 'Lead' },
-    { value: 'founder', label: 'Founder' },
-] as const
-
-const HOURS_PER_WEEK_OPTIONS = [
-    { value: 'lt_5', label: '<5 hrs/week' },
-    { value: 'h_5_10', label: '5-10 hrs/week' },
-    { value: 'h_10_20', label: '10-20 hrs/week' },
-    { value: 'h_20_40', label: '20-40 hrs/week' },
-    { value: 'h_40_plus', label: '40+ hrs/week' },
-] as const
-
-const GENDER_OPTIONS = [
-    { value: 'male', label: 'Male' },
-    { value: 'female', label: 'Female' },
-    { value: 'non_binary', label: 'Non-binary' },
-    { value: 'other', label: 'Other' },
-    { value: 'prefer_not_to_say', label: 'Prefer not to say' },
-] as const
-
-const AVAILABILITY_OPTIONS = [
-    { value: 'available', label: 'Available', desc: 'Open for new opportunities' },
-    { value: 'busy', label: 'Busy', desc: 'Limited availability right now' },
-    { value: 'focusing', label: 'Focusing', desc: 'Heads-down on current work' },
-    { value: 'offline', label: 'Offline', desc: 'Not actively looking' },
-] as const
-
-const MESSAGE_PRIVACY_OPTIONS = [
-    { value: 'everyone', label: 'Everyone', desc: 'Allow messages from all users' },
-    { value: 'connections', label: 'Connections only', desc: 'Allow messages only from connections' },
-] as const
 
 type OnboardingSocialLinksState = Record<OnboardingSocialLinkKey, string>
 
@@ -353,13 +301,13 @@ export default function OnboardingPage() {
     const queryClient = useQueryClient()
     const { refreshProfile } = useAuth()
     const [step, setStep] = useState(1)
+    const [transitionDirection, setTransitionDirection] = useState<'forward' | 'backward' | 'section'>('forward')
     const [usernameStatus, setUsernameStatus] = useState<UsernameAvailabilityStatus>('idle')
     const [step2Section, setStep2Section] = useState<OnboardingStep2SectionId>(ONBOARDING_STEP2_SECTIONS[0].id)
     const [isLoading, setIsLoading] = useState(false)
     const [isInitializing, setIsInitializing] = useState(true)
     const [isUploadingAvatar, setIsUploadingAvatar] = useState(false)
     const [isDetectingLocation, setIsDetectingLocation] = useState(false)
-    const fileInputRef = useRef<HTMLInputElement>(null)
     const draftHydratedRef = useRef(false)
     const initialDraftSyncRef = useRef(false)
     const draftVersionRef = useRef<number>(0)
@@ -726,6 +674,7 @@ export default function OnboardingPage() {
             const currentIndex = ONBOARDING_STEP2_SECTIONS.findIndex((item) => item.id === step2Section)
             if (currentIndex >= 0 && currentIndex < ONBOARDING_STEP2_SECTIONS.length - 1) {
                 renderStartedAtRef.current = performance.now()
+                setTransitionDirection('section')
                 setStep2Section(ONBOARDING_STEP2_SECTIONS[currentIndex + 1].id)
                 return
             }
@@ -750,6 +699,7 @@ export default function OnboardingPage() {
             if (step === 1) {
                 setStep2Section(ONBOARDING_STEP2_SECTIONS[0].id)
             }
+            setTransitionDirection('forward')
             setStep(step + 1)
         }
     }
@@ -759,6 +709,7 @@ export default function OnboardingPage() {
             const currentIndex = ONBOARDING_STEP2_SECTIONS.findIndex((item) => item.id === step2Section)
             if (currentIndex > 0) {
                 renderStartedAtRef.current = performance.now()
+                setTransitionDirection('section')
                 setStep2Section(ONBOARDING_STEP2_SECTIONS[currentIndex - 1].id)
                 return
             }
@@ -778,6 +729,7 @@ export default function OnboardingPage() {
             if (step === 3) {
                 setStep2Section(ONBOARDING_STEP2_SECTIONS[ONBOARDING_STEP2_SECTIONS.length - 1].id)
             }
+            setTransitionDirection('backward')
             setStep(step - 1)
         }
     }
@@ -988,707 +940,191 @@ export default function OnboardingPage() {
 
     const selectedSkills = useMemo(() => new Set(data.skills), [data.skills])
     const selectedInterests = useMemo(() => new Set(data.interests), [data.interests])
-    const selectedOpenTo = useMemo(() => new Set(data.openTo), [data.openTo])
     const filledSocialLinks = useMemo(
         () => Object.entries(data.socialLinks).filter(([, value]) => Boolean(value)),
         [data.socialLinks]
     )
 
-    const step2Sections = useMemo(() => ONBOARDING_STEP2_SECTIONS.map((section) => {
-        const done =
-            section.id === 'identity'
-                ? Boolean(data.genderIdentity || data.pronouns)
-                : section.id === 'work'
-                    ? Boolean(data.experienceLevel || data.hoursPerWeek || data.openTo.length > 0)
-                    : section.id === 'profile'
-                        ? Boolean(data.headline || data.bio || data.location || data.website)
-                        : filledSocialLinks.length > 0
-        return { ...section, done }
-    }), [data, filledSocialLinks.length])
+    const completedSteps = useMemo(() => {
+        const set = new Set<number>()
+        for (let i = 1; i < step; i++) {
+            set.add(i)
+        }
+        return set
+    }, [step])
+
+    const sidebarStepLabels = useMemo(() =>
+        STEP_UI_CONFIG.map((cfg) => ({ title: cfg.sidebarLabel, subtitle: cfg.subtitle })),
+        []
+    )
+
+    const mobileStepLabels = useMemo(() =>
+        STEP_UI_CONFIG.map((cfg) => cfg.sidebarLabel),
+        []
+    )
+
+    const currentStepConfig = STEP_UI_CONFIG[step - 1]
 
     if (isInitializing) {
         return (
-            <div className="min-h-screen bg-gradient-to-br from-background via-background to-muted/30 flex items-center justify-center">
-                <Loader2 className="w-8 h-8 animate-spin text-primary" />
-            </div>
+            <OnboardingLayout currentStep={1} totalSteps={TOTAL_STEPS}>
+                <div className="flex items-center justify-center min-h-[50vh]">
+                    <Loader2 className="w-8 h-8 animate-spin text-primary" />
+                </div>
+            </OnboardingLayout>
         )
     }
 
     return (
-        <div className="min-h-screen bg-gradient-to-br from-background via-background to-muted/30 p-4 py-8">
-            <div className="max-w-2xl mx-auto space-y-6">
-                {/* Progress */}
-                <div className="space-y-2">
-                    <div className="flex justify-between text-sm text-muted-foreground">
-                        <span>Step {step} of {TOTAL_STEPS}</span>
-                        <span>{Math.round((step / TOTAL_STEPS) * 100)}% complete</span>
-                    </div>
-                    <div className="flex gap-2">
-                        {Array.from({ length: TOTAL_STEPS }).map((_, i) => (
-                            <div
-                                key={i}
-                                className={`h-2 flex-1 rounded-full transition-colors ${i < step ? 'bg-primary' : 'bg-muted'
-                                    }`}
-                            />
-                        ))}
-                    </div>
-                </div>
-
-                {/* Step 1: Basic Info with Social Pre-fill */}
-                {step === 1 && (
-                    <Card className="border-0 shadow-xl">
-                        <CardHeader className="text-center pb-2">
-                            <div className="mx-auto w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center mb-4">
-                                <User className="w-6 h-6 text-primary" />
-                            </div>
-                            <CardTitle className="text-2xl">
-                                {data.fullName ? `Welcome, ${data.fullName.split(' ')[0]}! 👋` : "Let's get started"}
-                            </CardTitle>
-                            <CardDescription>
-                                Choose your unique username
-                            </CardDescription>
-                        </CardHeader>
-                        <CardContent className="space-y-6 pt-6">
-                            {/* Avatar - Pre-filled from social */}
-                            <div className="flex flex-col items-center gap-4">
-                                <Avatar className="w-24 h-24 ring-4 ring-primary/10">
-                                    <AvatarImage src={data.avatarUrl} />
-                                    <AvatarFallback className="text-2xl bg-gradient-to-br from-blue-500 to-purple-500 text-white">
-                                        {data.fullName.slice(0, 2).toUpperCase() || 'U'}
-                                    </AvatarFallback>
-                                </Avatar>
-                                <input
-                                    type="file"
-                                    ref={fileInputRef}
-                                    onChange={handleAvatarChange}
-                                    accept="image/*"
-                                    className="hidden"
-                                />
-                                <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={() => fileInputRef.current?.click()}
-                                    disabled={isUploadingAvatar}
-                                >
-                                    {isUploadingAvatar ? (
-                                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                                    ) : (
-                                        <Camera className="w-4 h-4 mr-2" />
-                                    )}
-                                    {isUploadingAvatar ? 'Uploading...' : 'Change photo'}
-                                </Button>
-                            </div>
-
-                            <div className="space-y-4">
-                                {/* Full Name - Pre-filled from social */}
-                                <div className="space-y-2">
-                                    <Label htmlFor="fullName">Full Name <span className="text-red-500">*</span></Label>
-                                    <Input
-                                        id="fullName"
-                                        placeholder="John Doe"
-                                        value={data.fullName}
-                                        onChange={(e) => updateData({ fullName: e.target.value })}
-                                        className="h-11"
-                                    />
-                                    {data.avatarUrl && (
-                                        <p className="text-xs text-green-600 dark:text-green-400">
-                                            ✓ Pre-filled from your account
-                                        </p>
-                                    )}
-                                </div>
-
-                                {/* Username with real-time check */}
-                                <UsernameInput
-                                    value={data.username}
-                                    onChange={(username) => updateData({ username })}
-                                    fullName={data.fullName}
-                                    onStatusChange={setUsernameStatus}
-                                />
-                            </div>
-                        </CardContent>
-                    </Card>
+        <OnboardingLayout
+            currentStep={step}
+            totalSteps={TOTAL_STEPS}
+            sidebar={
+                <OnboardingSidebar
+                    currentStep={step}
+                    totalSteps={TOTAL_STEPS}
+                    stepLabels={sidebarStepLabels}
+                    completedSteps={completedSteps}
+                />
+            }
+            mobileProgress={
+                <MobileProgressBar
+                    currentStep={step}
+                    totalSteps={TOTAL_STEPS}
+                    stepLabels={mobileStepLabels}
+                />
+            }
+        >
+            <StepTransition step={step} direction={transitionDirection}>
+                {/* Render StepHeader for steps 1 and 2 (steps 3 and 4 include their own) */}
+                {(step === 1 || step === 2) && (
+                    <StepHeader
+                        title={currentStepConfig.title}
+                        subtitle={currentStepConfig.subtitle}
+                    />
                 )}
 
-                {/* Step 2: Identity, Availability, and Professional Info */}
+                {/* Step 1: Identity */}
+                {step === 1 && (
+                    <Step1Identity
+                        fullName={data.fullName}
+                        username={data.username}
+                        avatarUrl={data.avatarUrl}
+                        isUploadingAvatar={isUploadingAvatar}
+                        onFullNameChange={(value) => updateData({ fullName: value })}
+                        onUsernameChange={(username) => updateData({ username })}
+                        onAvatarChange={handleAvatarChange}
+                        onUsernameStatusChange={setUsernameStatus}
+                    />
+                )}
+
+
+                {/* Step 2: Profile Details with SectionNav */}
                 {step === 2 && (
-                    <Card className="border-0 shadow-xl">
-                        <CardHeader className="text-center pb-2">
-                            <div className="mx-auto w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center mb-4">
-                                <Briefcase className="w-6 h-6 text-primary" />
-                            </div>
-                            <CardTitle className="text-2xl">Profile details</CardTitle>
-                            <CardDescription>
-                                Add the details we use for matching and outreach preferences
-                            </CardDescription>
-                        </CardHeader>
-                        <CardContent className="space-y-6 pt-6">
-                            <div className="sticky top-2 z-10 rounded-lg border bg-background/95 backdrop-blur p-3 space-y-3">
-                                <div className="flex flex-wrap gap-2">
-                                    {step2Sections.map((section) => (
-                                        <div
-                                            key={section.id}
-                                            className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs ${section.done
-                                                ? 'bg-primary/10 text-primary'
-                                                : 'bg-muted text-muted-foreground'
-                                                }`}
-                                        >
-                                            {section.done ? <Check className="w-3 h-3" /> : null}
-                                            {section.label}
-                                        </div>
-                                    ))}
-                                </div>
-                                <Tabs
-                                    value={step2Section}
-                                    onValueChange={(nextValue) => {
-                                        const nextSection = ONBOARDING_STEP2_SECTIONS.find((item) => item.id === nextValue)
-                                        if (!nextSection) return
-                                        renderStartedAtRef.current = performance.now()
-                                        markInteraction('toggle')
-                                        setStep2Section(nextSection.id)
-                                    }}
-                                >
-                                    <TabsList className="w-full h-auto flex-wrap">
-                                        {step2Sections.map((section) => (
-                                            <TabsTrigger key={section.id} value={section.id} className="h-8">
-                                                {section.label}
-                                            </TabsTrigger>
-                                        ))}
-                                    </TabsList>
-                                </Tabs>
-                            </div>
-
-                            {step2Section === 'identity' && (
-                                <div className="space-y-6">
-                                    <fieldset className="space-y-3">
-                                        <legend className="text-base font-medium">Gender (optional)</legend>
-                                        <div className="flex flex-wrap gap-2">
-                                            {GENDER_OPTIONS.map((option) => (
-                                                <label
-                                                    key={option.value}
-                                                    className={`inline-flex items-center rounded-full border px-3 py-1.5 text-sm cursor-pointer transition-colors ${data.genderIdentity === option.value ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background hover:border-primary/50'}`}
-                                                >
-                                                    <input
-                                                        type="radio"
-                                                        name="genderIdentity"
-                                                        value={option.value}
-                                                        checked={data.genderIdentity === option.value}
-                                                        onChange={() => updateData({ genderIdentity: option.value }, 'toggle')}
-                                                        className="sr-only"
-                                                    />
-                                                    {option.label}
-                                                </label>
-                                            ))}
-                                        </div>
-                                        <p className="text-xs text-muted-foreground">
-                                            Optional. This helps personalize your profile and recommendations.
-                                        </p>
-                                    </fieldset>
-
-                                    <div className="space-y-2">
-                                        <Label htmlFor="pronouns">Pronouns (optional)</Label>
-                                        <Input
-                                            id="pronouns"
-                                            placeholder="e.g. he/him, she/her, they/them"
-                                            value={data.pronouns}
-                                            onChange={(e) => updateData({ pronouns: e.target.value }, 'input')}
-                                            className="h-11"
-                                        />
-                                        <div className="flex items-center justify-between">
-                                            <p className="text-xs text-muted-foreground">Optional. You can skip and edit later in settings.</p>
-                                            <Button
-                                                type="button"
-                                                variant="ghost"
-                                                size="sm"
-                                                className="h-7 px-2 text-xs"
-                                                onClick={() => updateData({ genderIdentity: '', pronouns: '' }, 'toggle')}
-                                            >
-                                                Skip for now
-                                            </Button>
-                                        </div>
-                                    </div>
-                                </div>
-                            )}
-
-                            {step2Section === 'work' && (
-                                <div className="space-y-6">
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                        <div className="space-y-2">
-                                            <Label htmlFor="experienceLevel">Experience level</Label>
-                                            <select
-                                                id="experienceLevel"
-                                                value={data.experienceLevel}
-                                                onChange={(e) => updateData({ experienceLevel: e.target.value as OnboardingData['experienceLevel'] }, 'toggle')}
-                                                className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm"
-                                            >
-                                                <option value="">Select experience level</option>
-                                                {EXPERIENCE_LEVEL_OPTIONS.map((option) => (
-                                                    <option key={option.value} value={option.value}>
-                                                        {option.label}
-                                                    </option>
-                                                ))}
-                                            </select>
-                                        </div>
-
-                                        <div className="space-y-2">
-                                            <Label htmlFor="hoursPerWeek">Availability per week</Label>
-                                            <select
-                                                id="hoursPerWeek"
-                                                value={data.hoursPerWeek}
-                                                onChange={(e) => updateData({ hoursPerWeek: e.target.value as OnboardingData['hoursPerWeek'] }, 'toggle')}
-                                                className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm"
-                                            >
-                                                <option value="">Select weekly commitment</option>
-                                                {HOURS_PER_WEEK_OPTIONS.map((option) => (
-                                                    <option key={option.value} value={option.value}>
-                                                        {option.label}
-                                                    </option>
-                                                ))}
-                                            </select>
-                                        </div>
-                                    </div>
-
-                                    <fieldset className="space-y-3">
-                                        <legend className="text-base font-medium">Open to</legend>
-                                        <div className="flex flex-wrap gap-2">
-                                            {OPEN_TO_SUGGESTIONS.map((option) => (
-                                                <label key={option} className={`inline-flex items-center rounded-full border px-3 py-1.5 text-sm cursor-pointer transition-colors ${selectedOpenTo.has(option) ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background hover:border-primary/50'}`}>
-                                                    <input
-                                                        type="checkbox"
-                                                        checked={selectedOpenTo.has(option)}
-                                                        onChange={() => toggleOpenTo(option)}
-                                                        className="sr-only"
-                                                    />
-                                                    {option}
-                                                </label>
-                                            ))}
-                                        </div>
-                                        {ONBOARDING_FEATURE_FLAGS.enableCustomOpenTo && (
-                                            <div className="space-y-2">
-                                                <div className="flex gap-2">
-                                                    <div className="relative flex-1">
-                                                        <Input
-                                                            value={customOpenTo}
-                                                            onChange={(e) => {
-                                                                setCustomOpenTo(e.target.value)
-                                                                setCustomOpenToError(null)
-                                                            }}
-                                                            placeholder="Add custom preference (max 32 chars)"
-                                                            maxLength={32}
-                                                            className="h-10 pr-12"
-                                                        />
-                                                        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground select-none">
-                                                            {customOpenTo.length}/32
-                                                        </span>
-                                                    </div>
-                                                    <Button type="button" variant="outline" onClick={addCustomOpenTo}>
-                                                        Add
-                                                    </Button>
-                                                </div>
-                                            </div>
-                                        )}
-                                        {customOpenToError && (
-                                            <p className="text-xs text-destructive">{customOpenToError}</p>
-                                        )}
-                                        <p className="text-xs text-muted-foreground">
-                                            Matching example: users selecting “Mentorship” will see mentor-request opportunities first.
-                                        </p>
-                                    </fieldset>
-
-                                    <fieldset className="space-y-3">
-                                        <legend className="text-base font-medium flex items-center gap-2">
-                                            <Clock3 className="w-4 h-4 text-muted-foreground" />
-                                            Current availability
-                                        </legend>
-                                        <div className="space-y-2">
-                                            {AVAILABILITY_OPTIONS.map((option) => (
-                                                <label
-                                                    key={option.value}
-                                                    className={`block p-3 rounded-lg border cursor-pointer transition-all ${data.availabilityStatus === option.value ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50'}`}
-                                                >
-                                                    <input
-                                                        type="radio"
-                                                        name="availabilityStatus"
-                                                        value={option.value}
-                                                        checked={data.availabilityStatus === option.value}
-                                                        onChange={() => updateData({ availabilityStatus: option.value }, 'toggle')}
-                                                        className="sr-only"
-                                                    />
-                                                    <div className="flex items-center justify-between">
-                                                        <div>
-                                                            <p className="font-medium">{option.label}</p>
-                                                            <p className="text-sm text-muted-foreground">{option.desc}</p>
-                                                        </div>
-                                                        {data.availabilityStatus === option.value && (
-                                                            <Check className="w-4 h-4 text-primary" />
-                                                        )}
-                                                    </div>
-                                                </label>
-                                            ))}
-                                        </div>
-                                        <p className="text-xs text-muted-foreground">
-                                            Availability affects outreach urgency and recommendation timing.
-                                        </p>
-                                    </fieldset>
-                                </div>
-                            )}
-
-                            {step2Section === 'profile' && (
-                                <div className="space-y-4">
-                                    <div className="space-y-2">
-                                        <Label htmlFor="headline">Headline</Label>
-                                        <Input
-                                            id="headline"
-                                            placeholder="e.g. Full Stack Developer | Open Source Enthusiast"
-                                            value={data.headline}
-                                            onChange={(e) => updateData({ headline: e.target.value }, 'input')}
-                                            className="h-11"
-                                        />
-                                    </div>
-
-                                    <div className="space-y-2">
-                                        <Label htmlFor="bio">Bio</Label>
-                                        <textarea
-                                            id="bio"
-                                            placeholder="Tell us about yourself, your experience, and what you're passionate about..."
-                                            value={data.bio}
-                                            onChange={(e) => updateData({ bio: e.target.value }, 'input')}
-                                            className="w-full min-h-[120px] px-3 py-2 rounded-md border border-input bg-background text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                                            maxLength={500}
-                                        />
-                                        <p className="text-xs text-muted-foreground text-right">{data.bio.length}/500</p>
-                                    </div>
-
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                        <div className="space-y-2">
-                                            <div className="flex items-center justify-between">
-                                                <Label htmlFor="location">Location</Label>
-                                                <button
-                                                    type="button"
-                                                    onClick={async () => {
-                                                        setIsDetectingLocation(true)
-                                                        setError(null)
-                                                        try {
-                                                            const { detectLocation } = await import('@/lib/services/location-service')
-                                                            const { location, error: locError } = await detectLocation()
-                                                            if (location) {
-                                                                updateData({ location: location.formatted }, 'input')
-                                                            } else if (locError) {
-                                                                setError(locError)
-                                                            }
-                                                        } catch {
-                                                            setError('Failed to detect location')
-                                                        } finally {
-                                                            setIsDetectingLocation(false)
-                                                        }
-                                                    }}
-                                                    disabled={isDetectingLocation}
-                                                    className="text-xs text-primary hover:text-primary/80 flex items-center gap-1 disabled:opacity-50"
-                                                >
-                                                    {isDetectingLocation ? <Loader2 className="w-3 h-3 animate-spin" /> : <MapPin className="w-3 h-3" />}
-                                                    {isDetectingLocation ? 'Detecting...' : 'Use my location'}
-                                                </button>
-                                            </div>
-                                            <div className="relative">
-                                                <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                                                <Input
-                                                    id="location"
-                                                    placeholder="San Francisco, CA"
-                                                    value={data.location}
-                                                    onChange={(e) => updateData({ location: e.target.value }, 'input')}
-                                                    className="h-11 pl-10"
-                                                />
-                                            </div>
-                                        </div>
-
-                                        <div className="space-y-2">
-                                            <Label htmlFor="website">Website</Label>
-                                            <div className="relative">
-                                                <Globe className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                                                <Input
-                                                    id="website"
-                                                    placeholder="https://yoursite.com"
-                                                    value={data.website}
-                                                    onChange={(e) => updateData({ website: e.target.value }, 'input')}
-                                                    className="h-11 pl-10"
-                                                />
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            )}
-
-                            {step2Section === 'social' && (
-                                <div className="space-y-3">
-                                    <div className="flex items-center gap-2">
-                                        <Users className="w-4 h-4 text-muted-foreground" />
-                                        <Label className="text-base">Social links (optional)</Label>
-                                    </div>
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                        <div className="space-y-2">
-                                            <Label htmlFor="githubLink">GitHub URL</Label>
-                                            <Input
-                                                id="githubLink"
-                                                placeholder="github.com/your-handle"
-                                                value={data.socialLinks.github}
-                                                onChange={(e) => updateSocialLink('github', e.target.value)}
-                                                className="h-11"
-                                            />
-                                        </div>
-                                        <div className="space-y-2">
-                                            <Label htmlFor="linkedinLink">LinkedIn URL</Label>
-                                            <Input
-                                                id="linkedinLink"
-                                                placeholder="linkedin.com/in/your-handle"
-                                                value={data.socialLinks.linkedin}
-                                                onChange={(e) => updateSocialLink('linkedin', e.target.value)}
-                                                className="h-11"
-                                            />
-                                        </div>
-                                        <div className="space-y-2">
-                                            <Label htmlFor="xLink">X URL</Label>
-                                            <Input
-                                                id="xLink"
-                                                placeholder="x.com/your-handle"
-                                                value={data.socialLinks.x}
-                                                onChange={(e) => updateSocialLink('x', e.target.value)}
-                                                className="h-11"
-                                            />
-                                        </div>
-                                        <div className="space-y-2">
-                                            <Label htmlFor="portfolioLink">Portfolio URL</Label>
-                                            <Input
-                                                id="portfolioLink"
-                                                placeholder="https://yourportfolio.com"
-                                                value={data.socialLinks.portfolio}
-                                                onChange={(e) => updateSocialLink('portfolio', e.target.value)}
-                                                className="h-11"
-                                            />
-                                        </div>
-                                    </div>
-                                    <p className="text-xs text-muted-foreground">
-                                        Example: adding GitHub improves technical match ranking for engineering roles.
-                                    </p>
-                                </div>
-                            )}
-                        </CardContent>
-                    </Card>
+                    <Step2Details
+                        step2Section={step2Section}
+                        onSectionChange={(sectionId) => {
+                            const nextSection = ONBOARDING_STEP2_SECTIONS.find((item) => item.id === sectionId)
+                            if (!nextSection) return
+                            renderStartedAtRef.current = performance.now()
+                            markInteraction('toggle')
+                            setTransitionDirection('section')
+                            setStep2Section(nextSection.id)
+                        }}
+                        genderIdentity={data.genderIdentity}
+                        pronouns={data.pronouns}
+                        onGenderChange={(value) => updateData({ genderIdentity: value }, 'toggle')}
+                        onPronounsChange={(value) => updateData({ pronouns: value }, 'input')}
+                        experienceLevel={data.experienceLevel}
+                        hoursPerWeek={data.hoursPerWeek}
+                        openTo={data.openTo}
+                        availabilityStatus={data.availabilityStatus}
+                        onExperienceLevelChange={(value) => updateData({ experienceLevel: value }, 'toggle')}
+                        onHoursPerWeekChange={(value) => updateData({ hoursPerWeek: value }, 'toggle')}
+                        onToggleOpenTo={toggleOpenTo}
+                        onAvailabilityChange={(value) => updateData({ availabilityStatus: value }, 'toggle')}
+                        customOpenTo={customOpenTo}
+                        customOpenToError={customOpenToError}
+                        onCustomOpenToChange={(value) => {
+                            setCustomOpenTo(value)
+                            setCustomOpenToError(null)
+                        }}
+                        onAddCustomOpenTo={addCustomOpenTo}
+                        enableCustomOpenTo={ONBOARDING_FEATURE_FLAGS.enableCustomOpenTo}
+                        headline={data.headline}
+                        bio={data.bio}
+                        location={data.location}
+                        website={data.website}
+                        onHeadlineChange={(value) => updateData({ headline: value }, 'input')}
+                        onBioChange={(value) => updateData({ bio: value }, 'input')}
+                        onLocationChange={(value) => updateData({ location: value }, 'input')}
+                        onWebsiteChange={(value) => updateData({ website: value }, 'input')}
+                        isDetectingLocation={isDetectingLocation}
+                        onDetectLocation={async () => {
+                            setIsDetectingLocation(true)
+                            setError(null)
+                            try {
+                                const { detectLocation } = await import('@/lib/services/location-service')
+                                const { location, error: locError } = await detectLocation()
+                                if (location) {
+                                    updateData({ location: location.formatted }, 'input')
+                                } else if (locError) {
+                                    setError(locError)
+                                }
+                            } catch {
+                                setError('Failed to detect location')
+                            } finally {
+                                setIsDetectingLocation(false)
+                            }
+                        }}
+                        socialLinks={data.socialLinks}
+                        onSocialLinkChange={updateSocialLink}
+                    />
                 )}
 
                 {/* Step 3: Skills & Interests */}
                 {step === 3 && (
-                    <Card className="border-0 shadow-xl">
-                        <CardHeader className="text-center pb-2">
-                            <div className="mx-auto w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center mb-4">
-                                <Sparkles className="w-6 h-6 text-primary" />
-                            </div>
-                            <CardTitle className="text-2xl">Skills & Interests</CardTitle>
-                            <CardDescription>
-                                Select at least one skill to help us match you with relevant projects
-                            </CardDescription>
-                        </CardHeader>
-                        <CardContent className="space-y-6 pt-6">
-                            <div className="space-y-4">
-                                <div>
-                                    <Label className="text-base">Skills <span className="text-red-500">*</span></Label>
-                                    <p className="text-sm text-muted-foreground mb-3">
-                                        Select the skills you&apos;re proficient in
-                                    </p>
-                                    <div className="flex flex-wrap gap-2">
-                                        {SKILL_SUGGESTIONS.map((skill) => (
-                                            <label
-                                                key={skill}
-                                                className={`inline-flex items-center rounded-full border px-3 py-1.5 text-sm cursor-pointer transition-colors ${selectedSkills.has(skill) ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background hover:border-primary/50'}`}
-                                            >
-                                                <input
-                                                    type="checkbox"
-                                                    checked={selectedSkills.has(skill)}
-                                                    onChange={() => toggleSkill(skill)}
-                                                    className="sr-only"
-                                                />
-                                                {selectedSkills.has(skill) && <Check className="w-3 h-3 mr-1" />}
-                                                {skill}
-                                            </label>
-                                        ))}
-                                    </div>
-                                </div>
-
-                                <div>
-                                    <Label className="text-base">Interests</Label>
-                                    <p className="text-sm text-muted-foreground mb-3">
-                                        What areas are you interested in?
-                                    </p>
-                                    <div className="flex flex-wrap gap-2">
-                                        {INTEREST_SUGGESTIONS.map((interest) => (
-                                            <label
-                                                key={interest}
-                                                className={`inline-flex items-center rounded-full border px-3 py-1.5 text-sm cursor-pointer transition-colors ${selectedInterests.has(interest) ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background hover:border-primary/50'}`}
-                                            >
-                                                <input
-                                                    type="checkbox"
-                                                    checked={selectedInterests.has(interest)}
-                                                    onChange={() => toggleInterest(interest)}
-                                                    className="sr-only"
-                                                />
-                                                {selectedInterests.has(interest) && <Check className="w-3 h-3 mr-1" />}
-                                                {interest}
-                                            </label>
-                                        ))}
-                                    </div>
-                                </div>
-                            </div>
-                        </CardContent>
-                    </Card>
+                    <Step3Skills
+                        skillOptions={SKILL_SUGGESTIONS.map((s) => ({ value: s, label: s }))}
+                        interestOptions={INTEREST_SUGGESTIONS.map((i) => ({ value: i, label: i }))}
+                        selectedSkills={selectedSkills}
+                        selectedInterests={selectedInterests}
+                        onToggleSkill={toggleSkill}
+                        onToggleInterest={toggleInterest}
+                    />
                 )}
 
-                {/* Step 4: Privacy */}
+                {/* Step 4: Privacy & Review */}
                 {step === 4 && (
-                    <Card className="border-0 shadow-xl">
-                        <CardHeader className="text-center pb-2">
-                            <div className="mx-auto w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center mb-4">
-                                <Shield className="w-6 h-6 text-primary" />
-                            </div>
-                            <CardTitle className="text-2xl">Privacy and messaging</CardTitle>
-                            <CardDescription>
-                                Set profile visibility and who can message you
-                            </CardDescription>
-                        </CardHeader>
-                        <CardContent className="space-y-6 pt-6">
-                            <fieldset className="space-y-3">
-                                <legend className="text-base font-medium">Who can view your profile?</legend>
-                                {[
-                                    { value: 'public', label: 'Public', desc: 'Anyone can view your profile' },
-                                    { value: 'connections', label: 'Connections Only', desc: 'Only your connections can view your profile' },
-                                    { value: 'private', label: 'Private', desc: 'Only you can view your profile' }
-                                ].map((option) => (
-                                    <label
-                                        key={option.value}
-                                        className={`block p-4 rounded-lg border-2 cursor-pointer transition-all ${data.visibility === option.value
-                                            ? 'border-primary bg-primary/5'
-                                            : 'border-border hover:border-primary/50'
-                                            }`}
-                                    >
-                                        <input
-                                            type="radio"
-                                            name="visibility"
-                                            value={option.value}
-                                            checked={data.visibility === option.value}
-                                            onChange={() => updateData({ visibility: option.value as OnboardingData['visibility'] }, 'toggle')}
-                                            className="sr-only"
-                                        />
-                                        <div className="flex items-center justify-between">
-                                            <div>
-                                                <p className="font-medium">{option.label}</p>
-                                                <p className="text-sm text-muted-foreground">{option.desc}</p>
-                                            </div>
-                                            {data.visibility === option.value && (
-                                                <div className="w-5 h-5 rounded-full bg-primary flex items-center justify-center">
-                                                    <Check className="w-3 h-3 text-primary-foreground" />
-                                                </div>
-                                            )}
-                                        </div>
-                                    </label>
-                                ))}
-                            </fieldset>
-
-                            <fieldset className="space-y-3">
-                                <legend className="text-base font-medium">Who can message you?</legend>
-                                {MESSAGE_PRIVACY_OPTIONS.map((option) => (
-                                    <label
-                                        key={option.value}
-                                        className={`block p-4 rounded-lg border-2 cursor-pointer transition-all ${data.messagePrivacy === option.value
-                                            ? 'border-primary bg-primary/5'
-                                            : 'border-border hover:border-primary/50'
-                                            }`}
-                                    >
-                                        <input
-                                            type="radio"
-                                            name="messagePrivacy"
-                                            value={option.value}
-                                            checked={data.messagePrivacy === option.value}
-                                            onChange={() => updateData({ messagePrivacy: option.value }, 'toggle')}
-                                            className="sr-only"
-                                        />
-                                        <div className="flex items-center justify-between">
-                                            <div>
-                                                <p className="font-medium">{option.label}</p>
-                                                <p className="text-sm text-muted-foreground">{option.desc}</p>
-                                            </div>
-                                            {data.messagePrivacy === option.value && (
-                                                <div className="w-5 h-5 rounded-full bg-primary flex items-center justify-center">
-                                                    <Check className="w-3 h-3 text-primary-foreground" />
-                                                </div>
-                                            )}
-                                        </div>
-                                    </label>
-                                ))}
-                                <p className="text-xs text-muted-foreground">
-                                    Message privacy controls DM access and reduces unwanted outreach. Example: choosing “Connections only” blocks cold DMs.
-                                </p>
-                            </fieldset>
-
-                            <div className="rounded-lg border bg-muted/20 p-4 space-y-3">
-                                <p className="text-sm font-medium">Review before submit</p>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
-                                    <p><span className="text-muted-foreground">Visibility:</span> {data.visibility}</p>
-                                    <p><span className="text-muted-foreground">Messages:</span> {data.messagePrivacy}</p>
-                                    <p><span className="text-muted-foreground">Availability:</span> {data.availabilityStatus}</p>
-                                    <p><span className="text-muted-foreground">Skills:</span> {data.skills.length}</p>
-                                    <p><span className="text-muted-foreground">Open to:</span> {data.openTo.length}</p>
-                                    <p><span className="text-muted-foreground">Social links:</span> {filledSocialLinks.length}</p>
-                                </div>
-                            </div>
-
-                            {error && (
-                                <div className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
-                                    {error}
-                                </div>
-                            )}
-                        </CardContent>
-                    </Card>
+                    <Step4Privacy
+                        visibility={data.visibility}
+                        messagePrivacy={data.messagePrivacy}
+                        onVisibilityChange={(value) => updateData({ visibility: value }, 'toggle')}
+                        onMessagePrivacyChange={(value) => updateData({ messagePrivacy: value }, 'toggle')}
+                        summaryItems={[
+                            { label: '@' + data.username, value: data.fullName },
+                            { label: 'Visibility', value: data.visibility },
+                            { label: 'Messages', value: data.messagePrivacy },
+                            { label: 'Availability', value: data.availabilityStatus },
+                            { label: 'Skills', value: `${data.skills.length} selected` },
+                            { label: 'Open to', value: `${data.openTo.length} preferences` },
+                            { label: 'Social links', value: `${filledSocialLinks.length} connected` },
+                        ]}
+                        error={error}
+                    />
                 )}
+            </StepTransition>
 
-                {/* Navigation */}
-                <div className="flex justify-between">
-                    <Button
-                        variant="ghost"
-                        onClick={prevStep}
-                        disabled={step === 1}
-                        className="gap-2"
-                    >
-                        <ArrowLeft className="w-4 h-4" />
-                        Back
-                    </Button>
-
-                    {step < TOTAL_STEPS ? (
-                        <Button
-                            onClick={nextStep}
-                            disabled={!canProceed()}
-                            className="gap-2"
-                        >
-                            Continue
-                            <ArrowRight className="w-4 h-4" />
-                        </Button>
-                    ) : (
-                        <Button
-                            onClick={handleSubmit}
-                            disabled={isLoading}
-                            className="gap-2"
-                        >
-                            {isLoading ? (
-                                <>
-                                    <Loader2 className="w-4 h-4 animate-spin" />
-                                    Setting up...
-                                </>
-                            ) : (
-                                <>
-                                    Complete Setup
-                                    <Check className="w-4 h-4" />
-                                </>
-                            )}
-                        </Button>
-                    )}
-                </div>
-            </div>
-        </div>
+            {/* Step Footer Navigation */}
+            <StepFooter
+                step={step}
+                totalSteps={TOTAL_STEPS}
+                canProceed={canProceed()}
+                isLoading={isLoading}
+                onBack={prevStep}
+                onNext={nextStep}
+                onSubmit={handleSubmit}
+            />
+        </OnboardingLayout>
     )
 }
