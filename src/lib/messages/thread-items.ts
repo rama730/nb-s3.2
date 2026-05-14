@@ -3,8 +3,10 @@ import { getMessageCalendarDay } from '@/lib/messages/date-buckets';
 import { mergeMessages } from '@/lib/messages/utils';
 
 export type MessageThreadItem =
+    | { type: 'date'; id: string; dateKey: string; date: Date }
     | { type: 'message'; id: string; message: MessageWithSender; showAvatar: boolean }
-    | { type: 'unread-divider'; id: string; count: number };
+    | { type: 'unread-divider'; id: string; count: number }
+    | { type: 'bottom-sentinel'; id: string };
 
 export interface MessageThreadGroup {
     id: string;
@@ -125,7 +127,16 @@ export function buildMessageThreadModel({
         }),
     }));
 
-    const items = decoratedGroups.flatMap((group) => group.items);
+    const items: MessageThreadItem[] = decoratedGroups.flatMap((group) => [
+        {
+            type: 'date' as const,
+            id: `date-header-${group.dateKey}`,
+            dateKey: group.dateKey,
+            date: group.date,
+        },
+        ...group.items,
+    ]);
+    items.push({ type: 'bottom-sentinel', id: `bottom-sentinel-${conversationId}` });
     const groupCounts = decoratedGroups.map((group) => group.items.length);
     const groupIndexByDataIndex = decoratedGroups.flatMap((group, groupIndex) =>
         group.items.map(() => groupIndex),
