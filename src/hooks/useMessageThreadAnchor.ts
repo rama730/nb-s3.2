@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { GroupedVirtuosoHandle } from 'react-virtuoso';
+import type { VirtuosoHandle } from 'react-virtuoso';
 import type { MessageWithSender } from '@/app/actions/messaging';
 
 export type MessageThreadAnchorMode = 'latest' | 'manual' | 'focused';
@@ -164,7 +164,7 @@ export function useMessageThreadAnchor({
     bottomIndex,
     hasFocusTarget,
 }: UseMessageThreadAnchorOptions) {
-    const virtuosoRef = useRef<GroupedVirtuosoHandle | null>(null);
+    const virtuosoRef = useRef<VirtuosoHandle | null>(null);
     const [firstItemIndex, setFirstItemIndex] = useState(START_INDEX);
     const [anchorState, setAnchorState] = useState(() => createMessageThreadAnchorState(hasFocusTarget));
     const anchorStateRef = useRef(anchorState);
