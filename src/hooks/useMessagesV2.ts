@@ -56,6 +56,12 @@ import {
     withMessageContextChipsMetadata,
     withStructuredMessageMetadata,
 } from '@/lib/messages/structured';
+import { toggleReactionV2 } from '@/app/actions/messaging/reactions-v2';
+import {
+    normalizeMessageReactionSummary,
+    toggleMessageReactionSummary,
+    withReactionSummaryMetadata,
+} from '@/lib/messages/reactions';
 
 const EMPTY_OUTBOX_ITEMS: MessagesV2OutboxItem[] = [];
 
@@ -150,7 +156,7 @@ export function useConversationThread(conversationId: string | null, limit: numb
     const query = useInfiniteQuery({
         queryKey: queryKeys.messages.v2.thread(conversationId),
         initialPageParam: undefined as string | undefined,
-        enabled: Boolean(conversationId),
+        enabled: Boolean(conversationId) && !conversationId?.startsWith('draft:'),
         queryFn: async ({ pageParam }) => {
             if (!conversationId) throw new Error('Missing conversation');
             const result = await getConversationThreadPageV2(conversationId, pageParam, limit);
@@ -161,6 +167,9 @@ export function useConversationThread(conversationId: string | null, limit: numb
         },
         getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
         staleTime: 15_000,
+        refetchOnMount: 'always',
+        refetchOnReconnect: true,
+        refetchOnWindowFocus: true,
     });
 
     const normalizedPages = useMemo(
@@ -339,6 +348,7 @@ export function useEnsureDirectConversation() {
 
 export function useMessagesActions() {
     const queryClient = useQueryClient();
+    const { user } = useAuth();
 
     const markRead = useMutation({
         mutationFn: async (params: { conversationId: string; lastReadMessageId?: string }) => {
@@ -519,6 +529,21 @@ export function useMessagesActions() {
             }
             return result;
         },
+        onMutate: (params) => {
+            const conversationId = params.conversationId;
+            if (!conversationId || conversationId.startsWith('draft:')) return;
+
+            const optimisticMessage = {
+                id: params.clientMessageId ? `temp-${params.clientMessageId}` : `temp-${Date.now()}`,
+                content: params.content,
+                senderId: user?.id ?? null,
+                createdAt: new Date(),
+                type: (params.attachments?.[0]?.type || 'text') as MessageWithSender['type'],
+                metadata: null,
+            };
+
+            patchConversationLastMessageFromMessage(queryClient, conversationId, optimisticMessage);
+        },
         onSuccess: (result, variables) => {
             if (result.conversation) {
                 upsertThreadConversation(queryClient, result.conversation);
@@ -526,18 +551,33 @@ export function useMessagesActions() {
 
             if (result.message && result.conversationId) {
                 const clientMessageId = result.message.clientMessageId ?? variables.clientMessageId;
+                // If the input was a draft conversation, try to replace the optimistic message
+                // in the real conversation's thread (the server created it)
+                const inputConversationId = variables.conversationId ?? null;
+                const targetConversationId = result.conversationId;
+
                 if (clientMessageId) {
                     replaceOptimisticThreadMessage(
                         queryClient,
-                        result.conversationId,
+                        targetConversationId,
                         clientMessageId,
                         result.message,
                         result.conversation ?? null,
                     );
+                    // Also try to replace in the draft thread cache if it was a draft
+                    if (inputConversationId && inputConversationId.startsWith('draft:') && inputConversationId !== targetConversationId) {
+                        replaceOptimisticThreadMessage(
+                            queryClient,
+                            inputConversationId,
+                            clientMessageId,
+                            result.message,
+                            result.conversation ?? null,
+                        );
+                    }
                 } else {
                     upsertThreadMessage(
                         queryClient,
-                        result.conversationId,
+                        targetConversationId,
                         result.message,
                         result.conversation ?? null,
                     );
@@ -729,6 +769,67 @@ export function useMessagesActions() {
         pinMessage,
         injectMessageContext,
     };
+}
+
+export function useToggleReaction(conversationId: string | null) {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: async (params: { messageId: string; emoji: string }) => {
+            const result = await toggleReactionV2(params.messageId, params.emoji);
+            if (!result.success) {
+                throw new Error(result.error || 'Failed to toggle reaction');
+            }
+            return result;
+        },
+        onMutate: (params) => {
+            if (!conversationId) return;
+
+            // Get the current message from the thread cache
+            const currentThread = queryClient.getQueryData<{ pages: MessageThreadPageV2[] }>(
+                queryKeys.messages.v2.thread(conversationId),
+            );
+            const currentMessage = currentThread?.pages
+                .flatMap((page) => page.messages)
+                .find((message) => message.id === params.messageId) ?? null;
+
+            if (!currentMessage) return;
+
+            // Save previous state for rollback
+            const previousMessage = { ...currentMessage };
+
+            // Apply optimistic reaction toggle via patchThreadMessage
+            const currentReactions = normalizeMessageReactionSummary(
+                (currentMessage.metadata as Record<string, unknown> | null)?.reactionSummary as unknown[],
+            );
+            const nextReactions = toggleMessageReactionSummary(currentReactions, params.emoji);
+
+            patchThreadMessage(queryClient, conversationId, params.messageId, (message) => ({
+                ...message,
+                metadata: withReactionSummaryMetadata(
+                    message.metadata as Record<string, unknown> | null,
+                    nextReactions,
+                ),
+            }));
+
+            return { previousMessage };
+        },
+        onError: (_error, params, context) => {
+            if (!conversationId || !context?.previousMessage) return;
+
+            // Rollback: restore previous message state
+            patchThreadMessage(queryClient, conversationId, params.messageId, () => context.previousMessage);
+        },
+        onSettled: () => {
+            // Optionally invalidate to sync with server state
+            if (conversationId) {
+                void queryClient.invalidateQueries({
+                    queryKey: queryKeys.messages.v2.thread(conversationId),
+                    exact: false,
+                });
+            }
+        },
+    });
 }
 
 export type { InboxConversationV2 };
