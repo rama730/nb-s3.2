@@ -105,7 +105,8 @@ test('message thread opens at the rendered latest item', () => {
     const thread = readProjectFile('src/components/chat/v2/MessageThreadV2.tsx');
     const anchor = readProjectFile('src/hooks/useMessageThreadAnchor.ts');
 
-    assert.match(thread, /GroupedVirtuoso/);
+    assert.match(thread, /<Virtuoso/);
+    assert.doesNotMatch(thread, /GroupedVirtuoso/);
     assert.match(thread, /initialTopMostItemIndex=/);
     assert.match(thread, /index:\s*'LAST'/);
     assert.match(thread, /scrollToLatest\('auto',\s*6\)/);
@@ -119,7 +120,7 @@ test('message thread opens at the rendered latest item', () => {
     assert.doesNotMatch(thread, /followOutput=/);
 });
 
-test('scrolling date headers are virtualizer-owned and loading has a separate row', () => {
+test('scrolling date headers are keyed rows and loading has a separate row', () => {
     const thread = readProjectFile('src/components/chat/v2/MessageThreadV2.tsx');
     const items = readProjectFile('src/lib/messages/thread-items.ts');
     const css = readProjectFile('src/app/globals.css');
@@ -127,13 +128,17 @@ test('scrolling date headers are virtualizer-owned and loading has a separate ro
     assert.match(thread, /OLDER_MESSAGES_PRELOAD_THRESHOLD = 6/);
     assert.match(thread, /startDataIndex <= OLDER_MESSAGES_PRELOAD_THRESHOLD/);
     assert.match(thread, /olderMessagesRequestInFlightRef/);
-    assert.match(thread, /groupCounts=\{groupCounts\}/);
-    assert.match(thread, /groupContent=\{\(groupIndex\) =>/);
+    assert.match(thread, /item\.type === 'date'/);
+    assert.match(thread, /item\.type === 'bottom-sentinel'/);
     assert.match(thread, /ThreadDateGroupHeader/);
-    assert.match(thread, /groupHeaderKeyByVirtualIndex\.get\(index\) \?\? item\?\.id/);
-    assert.match(thread, /keyMap\.set\(firstItemIndex \+ headerIndex, `group-\$\{group\.id\}`\)/);
+    assert.match(thread, /ThreadBottomSentinel/);
+    assert.match(thread, /computeItemKey=\{\(index, item\) => item\?\.id/);
     assert.match(items, /buildMessageThreadModel/);
     assert.match(items, /buildMessageThreadGroupHeaderIndexes/);
+    assert.match(items, /type: 'date'/);
+    assert.match(items, /type: 'bottom-sentinel'/);
+    assert.doesNotMatch(thread, /groupContent=/);
+    assert.doesNotMatch(thread, /groupHeaderKeyByVirtualIndex/);
     assert.doesNotMatch(thread, /setStickyDate/);
     assert.doesNotMatch(thread, /StickyDateHeader/);
     assert.match(thread, /Header:\s*\(\) =>[\s\S]*<OlderMessagesLoader \/>/);
