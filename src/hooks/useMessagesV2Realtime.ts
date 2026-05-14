@@ -519,6 +519,10 @@ export function useMessagesV2Realtime(
 
         if (options?.syncThread) {
             upsertThreadConversation(queryClient, result.conversation);
+            const latestMessageId = result.conversation.lastMessage?.id ?? null;
+            if (latestMessageId && !hasCachedThreadMessage(queryClient, conversationId, latestMessageId)) {
+                scheduleThreadRefresh(conversationId);
+            }
             queryClient.setQueriesData(
                 { queryKey: ['chat-v2', 'capabilities', conversationId] as const },
                 () => result.conversation?.capability,
@@ -767,7 +771,7 @@ export function useMessagesV2Realtime(
     ]);
 
     useEffect(() => {
-        if (!realtimeEnabled || !activeConversationId || !realtimeToken) {
+        if (!realtimeEnabled || !activeConversationId || !realtimeToken || activeConversationId.startsWith('draft:')) {
             activeThreadConnectionTokenRef.current += 1;
             setActiveThreadConnected(true);
             return;
@@ -876,6 +880,33 @@ export function useMessagesV2Realtime(
                             scheduleUnreadRefresh();
                         },
                     },
+                    // Subscribe to INSERT/DELETE on message_reactions for
+                    // real-time reaction sync from other users. The table
+                    // lacks a conversation_id column so we filter client-side
+                    // using hasCachedThreadMessage. Own reactions are handled
+                    // optimistically by useToggleReaction and skipped here.
+                    {
+                        event: 'INSERT',
+                        table: 'message_reactions',
+                        handler: (payload) => {
+                            const reactionUserId = getPayloadStringField(payload, 'new', 'user_id');
+                            if (!reactionUserId || reactionUserId === userId) return;
+                            const messageId = getPayloadStringField(payload, 'new', 'message_id');
+                            if (!messageId || !hasCachedThreadMessage(queryClient, activeConversationId, messageId)) return;
+                            void refreshMessageReactionSummary(activeConversationId, messageId);
+                        },
+                    },
+                    {
+                        event: 'DELETE',
+                        table: 'message_reactions',
+                        handler: (payload) => {
+                            const reactionUserId = getPayloadStringField(payload, 'old', 'user_id');
+                            if (!reactionUserId || reactionUserId === userId) return;
+                            const messageId = getPayloadStringField(payload, 'old', 'message_id');
+                            if (!messageId || !hasCachedThreadMessage(queryClient, activeConversationId, messageId)) return;
+                            void refreshMessageReactionSummary(activeConversationId, messageId);
+                        },
+                    },
                     // Wave 1: listen for per-message delivery + read receipts
                     // so the sender's tick advances live (✓ → ✓✓ → blue ✓✓).
                     {
@@ -961,7 +992,7 @@ export function useMessagesV2Realtime(
     // above provides durability (idempotent re-application is safe since
     // applyReceiptPatch never downgrades state).
     useEffect(() => {
-        if (!realtimeEnabled || !activeConversationId || !userId) return;
+        if (!realtimeEnabled || !activeConversationId || !userId || activeConversationId.startsWith('draft:')) return;
 
         const subscription = subscribePresenceRoom({
             roomType: 'conversation',
