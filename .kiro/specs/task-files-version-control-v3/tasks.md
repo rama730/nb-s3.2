@@ -255,7 +255,7 @@ Key decisions:
 - [x] 10. Checkpoint — Sprint/Telemetry verified
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 11. Thread 5 — V2 Cleanup (depends on ALL prior threads)
+- [x] 11. Thread 5 — V2 Cleanup (depends on ALL prior threads)
   - [x] 11.1 Confirm zero import references to V2 explorer modules
     - Run import-graph audit for: `ExplorerShell`, `FileExplorer.tsx`, `MultiFileDiffDialog`, `MultiSelectActionsBar`, `OutlinePanel`, `SourceControlPanel`, `ExplorerCommandPalette`, `ExplorerInsightsHost`, `ExplorerOperationsHost`, `ExplorerSearch`, `ExplorerToolbarHost`, `ExplorerBatchOps`, `ExplorerQuickOpen`, `FileGridItem`
     - Migrate any remaining callers to V3 equivalents before deletion
@@ -283,15 +283,15 @@ Key decisions:
     - Resolve any residual references found
     - _Requirements: 22.3, 22.4_
 
-  - [-] 11.6 Create final checkpoint commit
+  - [x] 11.6 Create final checkpoint commit
     - Commit all cleanup changes after verification
     - _Requirements: 22.5_
 
-- [ ] 12. Final checkpoint — Cleanup verified
+- [x] 12. Final checkpoint — Cleanup verified
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 13. Property-Based Tests (numRuns=100)
-  - [ ] 13.1 Write property test — Picker Selection Round-Trip (Property 1)
+- [x] 13. Property-Based Tests (numRuns=100)
+  - [x] 13.1 Write property test — Picker Selection Round-Trip (Property 1)
     - File: `tests/unit/files-tab/properties/picker-selection-roundtrip.test.ts`
     - **Property 1: Picker Selection Round-Trip**
     - **Validates: Requirements 6.5**
@@ -299,7 +299,7 @@ Key decisions:
     - Invariant: `confirm(select(nodes)) |> reopen |> getChips == nodes`
     - `fc.assert(..., { numRuns: 100 })`
 
-  - [ ] 13.2 Write property test — Reverse-Link Consistency (Property 2)
+  - [x] 13.2 Write property test — Reverse-Link Consistency (Property 2)
     - File: `tests/unit/files-tab/properties/reverse-link-consistency.test.ts`
     - **Property 2: Reverse-Link Consistency**
     - **Validates: Requirements 7.5, 2.9**
@@ -307,7 +307,7 @@ Key decisions:
     - Invariant: `TaskLinkChip.count == useTaskLinks(projectId, nodeId).tasks.length`
     - `fc.assert(..., { numRuns: 100 })`
 
-  - [ ] 13.3 Write property test — Version Count Invariant (Property 3)
+  - [x] 13.3 Write property test — Version Count Invariant (Property 3)
     - File: `tests/unit/files-tab/properties/version-count-invariant.test.ts`
     - **Property 3: Version Count Invariant**
     - **Validates: Requirements 1.7**
@@ -315,7 +315,7 @@ Key decisions:
     - Invariant: `listVersions(projectId, nodeId).length >= node.currentVersion`
     - `fc.assert(..., { numRuns: 100 })`
 
-  - [ ] 13.4 Write property test — Restore Monotonicity (Property 4)
+  - [x] 13.4 Write property test — Restore Monotonicity (Property 4)
     - File: `tests/unit/files-tab/properties/restore-monotonicity.test.ts`
     - **Property 4: Restore Monotonicity**
     - **Validates: Requirements 10.6**
@@ -323,7 +323,7 @@ Key decisions:
     - Invariant: `restoreVersion(v) => node.currentVersion' > node.currentVersion`
     - `fc.assert(..., { numRuns: 100 })`
 
-  - [ ] 13.5 Write property test — TaskLinkCounts Realtime Convergence (Property 5)
+  - [x] 13.5 Write property test — TaskLinkCounts Realtime Convergence (Property 5)
     - File: `tests/unit/files-tab/properties/task-link-counts-convergence.test.ts`
     - **Property 5: TaskLinkCounts Realtime Convergence**
     - **Validates: Requirements 3.4**
@@ -331,7 +331,7 @@ Key decisions:
     - Invariant: `eventually(store.taskLinkCounts[nodeId] == server.getTaskLinkCounts(nodeId))`
     - `fc.assert(..., { numRuns: 100 })`
 
-  - [ ] 13.6 Write property test — IDB Session Key Round-Trip (Property 6)
+  - [x] 13.6 Write property test — IDB Session Key Round-Trip (Property 6)
     - File: `tests/unit/files-tab/properties/idb-session-key-roundtrip.test.ts`
     - **Property 6: IDB Session Key Round-Trip**
     - **Validates: Requirements 13.4**
@@ -339,86 +339,86 @@ Key decisions:
     - Invariant: `write(nodeId, session) |> findSessionByNodeId(nodeId) == session`
     - `fc.assert(..., { numRuns: 100 })`
 
-- [ ] 14. E2E Tests (each calls `recordAudit`)
-  - [ ] 14.1 E2E — V3 picker: create-task with multi-select
+- [x] 14. E2E Tests (each calls `recordAudit`)
+  - [x] 14.1 E2E — V3 picker: create-task with multi-select
     - File: `tests/e2e/files-tab/picker-multi-select.spec.ts`
     - Open CreateTaskModal, use MultiAttachmentPicker to select multiple files, confirm, verify attachments
     - Call `recordAudit("picker-multi-select", result)`
     - _Requirements: 6.5, 25.1_
 
-  - [ ] 14.2 E2E — V3 picker: in-panel attach
+  - [x] 14.2 E2E — V3 picker: in-panel attach
     - File: `tests/e2e/files-tab/picker-in-panel.spec.ts`
     - Open task detail, use SingleAttachmentPicker to attach file, verify link created
     - Call `recordAudit("picker-in-panel", result)`
     - _Requirements: 6.6, 25.1_
 
-  - [ ] 14.3 E2E — V3 picker: search → attach → recents
+  - [x] 14.3 E2E — V3 picker: search → attach → recents
     - File: `tests/e2e/files-tab/picker-search-recents.spec.ts`
     - Open picker, search for file, attach, reopen picker, verify file appears in recents
     - Call `recordAudit("picker-search-recents", result)`
     - _Requirements: 6.2, 25.1_
 
-  - [ ] 14.4 E2E — TaskLinkChip: link file → chip appears → click → popover
+  - [x] 14.4 E2E — TaskLinkChip: link file → chip appears → click → popover
     - File: `tests/e2e/files-tab/task-link-chip.spec.ts`
     - Link a file to a task, navigate to Files tab, verify chip appears, click chip, verify popover
     - Call `recordAudit("task-link-chip", result)`
     - _Requirements: 7.1, 7.3, 25.1_
 
-  - [ ] 14.5 E2E — LinkedTasksPanel: open → list tasks → click task → panel opens
+  - [x] 14.5 E2E — LinkedTasksPanel: open → list tasks → click task → panel opens
     - File: `tests/e2e/files-tab/linked-tasks-panel.spec.ts`
     - Open file with linked tasks, toggle LinkedTasksPanel, verify task list, click task row, verify task panel opens
     - Call `recordAudit("linked-tasks-panel", result)`
     - _Requirements: 8.1, 8.2, 8.3, 25.1_
 
-  - [ ] 14.6 E2E — Version replace from Files tab → pill updates → history shows new version
+  - [x] 14.6 E2E — Version replace from Files tab → pill updates → history shows new version
     - File: `tests/e2e/files-tab/version-replace.spec.ts`
     - Open file, click Replace, select file, verify version pill updates, open history, verify new version row
     - Call `recordAudit("version-replace", result)`
     - _Requirements: 11.4, 11.6, 25.1_
 
-  - [ ] 14.7 E2E — Version restore from Files tab → new version row → pill updates
+  - [x] 14.7 E2E — Version restore from Files tab → new version row → pill updates
     - File: `tests/e2e/files-tab/version-restore.spec.ts`
     - Open file history, click Restore on historical version, verify new version row created, verify pill updates
     - Call `recordAudit("version-restore", result)`
     - _Requirements: 10.6, 25.1_
 
-  - [ ] 14.8 E2E — Drop-zone: single file drop → version bump
+  - [x] 14.8 E2E — Drop-zone: single file drop → version bump
     - File: `tests/e2e/files-tab/drop-zone-single.spec.ts`
     - Open file, drag single file onto FileView, verify version bumps
     - Call `recordAudit("drop-zone-single", result)`
     - _Requirements: 12.3, 25.1_
 
-  - [ ] 14.9 E2E — Drop-zone: multi-file drop → toast rejection
+  - [x] 14.9 E2E — Drop-zone: multi-file drop → toast rejection
     - File: `tests/e2e/files-tab/drop-zone-multi.spec.ts`
     - Open file, drag multiple files onto FileView, verify toast "Only single-file drops accepted"
     - Call `recordAudit("drop-zone-multi", result)`
     - _Requirements: 12.5, 25.1_
 
-  - [ ] 14.10 E2E — Viewer role: no Replace/Attach/Restore visible
+  - [x] 14.10 E2E — Viewer role: no Replace/Attach/Restore visible
     - File: `tests/e2e/files-tab/viewer-role-gates.spec.ts`
     - Log in as Viewer, navigate to file, verify Replace/Attach/Restore buttons are not rendered
     - Call `recordAudit("viewer-role-gates", result)`
     - _Requirements: 24.1, 24.2, 24.3, 24.4, 25.1_
 
-  - [ ] 14.11 E2E — Sidebar reopen: collapse → reopen control visible → click → sidebar returns
+  - [x] 14.11 E2E — Sidebar reopen: collapse → reopen control visible → click → sidebar returns
     - File: `tests/e2e/files-tab/sidebar-reopen.spec.ts`
     - Collapse sidebar, verify reopen control appears, click it, verify sidebar expands to 280px
     - Call `recordAudit("sidebar-reopen", result)`
     - _Requirements: 18.1, 18.3, 18.5, 25.1_
 
-  - [ ] 14.12 E2E — Editor theme: dark mode → editor uses dark theme
+  - [x] 14.12 E2E — Editor theme: dark mode → editor uses dark theme
     - File: `tests/e2e/files-tab/editor-theme.spec.ts`
     - Set app to dark mode, open text file in edit mode, verify editor has dark background
     - Call `recordAudit("editor-theme", result)`
     - _Requirements: 19.2, 25.1_
 
-  - [ ] 14.13 E2E — Sprint timeline: version event renders as sub-row
+  - [x] 14.13 E2E — Sprint timeline: version event renders as sub-row
     - File: `tests/e2e/files-tab/sprint-timeline-version.spec.ts`
     - Create version for file linked to sprint task, navigate to sprint timeline, verify sub-row renders
     - Call `recordAudit("sprint-timeline-version", result)`
     - _Requirements: 15.1, 15.2, 25.1_
 
-- [ ] 15. Final checkpoint — All tests pass
+- [x] 15. Final checkpoint — All tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes
