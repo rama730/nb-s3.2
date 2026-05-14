@@ -9,6 +9,7 @@ import {
     conversations,
     messageHiddenForUsers,
     messages,
+    profiles,
     projectMembers,
     projects,
     roleApplications,
@@ -574,18 +575,46 @@ export async function ensureDirectConversationV2(
         const user = await getAuthUser();
         if (!user) return { success: false, error: 'Not authenticated' };
 
-        const ensured = await getOrCreateDMConversation(targetUserId);
-        if (!ensured.success || !ensured.conversationId) {
-            return { success: false, error: ensured.error || 'Failed to open conversation' };
+        // Fetch target user's profile info for the draft conversation
+        const [targetProfile] = await db
+            .select({
+                id: profiles.id,
+                username: profiles.username,
+                fullName: profiles.fullName,
+                avatarUrl: profiles.avatarUrl,
+            })
+            .from(profiles)
+            .where(eq(profiles.id, targetUserId))
+            .limit(1);
+
+        if (!targetProfile) {
+            return { success: false, error: 'User not found' };
         }
 
-        const hydrated = await getConversationSummarySourceV2(user.id, ensured.conversationId);
-        if (!hydrated) {
-            return { success: false, error: 'Failed to hydrate conversation' };
-        }
+        // Return a draft conversation object without creating a database record.
+        // The actual DB record is created in sendConversationMessageV2 when the
+        // first message is sent.
+        const draftId = `draft:${targetUserId}`;
+        const draftConversation: ConversationWithDetails = {
+            id: draftId,
+            type: 'dm',
+            updatedAt: new Date(),
+            lifecycleState: 'draft',
+            participants: [{
+                id: targetProfile.id,
+                username: targetProfile.username,
+                fullName: targetProfile.fullName,
+                avatarUrl: targetProfile.avatarUrl,
+            }],
+            lastMessage: null,
+            unreadCount: 0,
+            lastReadAt: null,
+            lastReadMessageId: null,
+        };
 
-        const [conversation] = await hydrateConversationSummariesV2(user.id, [hydrated]);
-        return { success: true, conversationId: ensured.conversationId, conversation };
+        // Hydrate with capabilities using getConversationSummarySourceV2 pattern
+        const [conversation] = await hydrateConversationSummariesV2(user.id, [draftConversation]);
+        return { success: true, conversationId: draftId, conversation };
     } catch (error) {
         console.error('Error ensuring direct conversation v2:', error);
         return { success: false, error: 'Failed to open conversation' };
@@ -613,11 +642,20 @@ export async function sendConversationMessageV2(params: {
         if (!user) return { success: false, error: 'Not authenticated' };
 
         let conversationId = params.conversationId ?? null;
+        let targetUserId = params.targetUserId ?? null;
+
+        // Handle draft conversation IDs — extract targetUserId and create the real conversation
+        if (conversationId && conversationId.startsWith('draft:')) {
+            targetUserId = targetUserId || conversationId.slice('draft:'.length);
+            conversationId = null;
+        }
+
         if (!conversationId) {
-            if (!params.targetUserId) {
+            if (!targetUserId) {
                 return { success: false, error: 'Missing conversation target' };
             }
-            const ensured = await ensureDirectConversationV2(params.targetUserId);
+            // Create the actual database conversation on first message send
+            const ensured = await getOrCreateDMConversation(targetUserId);
             if (!ensured.success || !ensured.conversationId) {
                 return { success: false, error: ensured.error || 'Failed to open conversation' };
             }
