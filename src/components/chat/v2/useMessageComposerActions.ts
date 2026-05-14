@@ -21,6 +21,7 @@ import {
     useMessagesV2OutboxStore,
 } from '@/stores/messagesV2OutboxStore';
 import type { MessageContextChip } from '@/lib/messages/structured';
+import { useMessagesV2UiStore } from '@/stores/messagesV2UiStore';
 import type {
     ApplicationWorkflowAction,
     PendingAttachment,
@@ -83,6 +84,7 @@ export function useMessageComposerActions({
     const upsertOutboxItem = useMessagesV2OutboxStore((state) => state.upsertItem);
     const removeOutboxItem = useMessagesV2OutboxStore((state) => state.removeItem);
     const markOutboxItem = useMessagesV2OutboxStore((state) => state.markItem);
+    const setSelectedConversationId = useMessagesV2UiStore((state) => state.setSelectedConversationId);
     const [isSending, setIsSending] = useState(false);
     const [requestLoading, setRequestLoading] = useState(false);
     const [applicationActionLoading, setApplicationActionLoading] = useState<ApplicationWorkflowAction | null>(null);
@@ -216,6 +218,10 @@ export function useMessageComposerActions({
             if (result.conversation) {
                 upsertThreadConversation(queryClient, result.conversation);
             }
+            // Transition from draft to real conversation after first message send
+            if (conversationId.startsWith('draft:') && result.conversationId && result.conversationId !== conversationId) {
+                setSelectedConversationId(result.conversationId);
+            }
         } catch (error) {
             markOutboxItem(clientMessageId, {
                 state: 'queued',
@@ -243,6 +249,7 @@ export function useMessageComposerActions({
         queueOutgoingMessage,
         removeOutboxItem,
         sendStructuredMessage,
+        setSelectedConversationId,
         setPendingContextChips,
         structuredDraft,
         targetUserId,
@@ -297,6 +304,10 @@ export function useMessageComposerActions({
             if (result.conversation) {
                 upsertThreadConversation(queryClient, result.conversation);
             }
+            // Transition from draft to real conversation after first message send
+            if (conversationId.startsWith('draft:') && result.conversationId && result.conversationId !== conversationId) {
+                setSelectedConversationId(result.conversationId);
+            }
         } catch (error) {
             markOutboxItem(clientMessageId, {
                 state: 'queued',
@@ -326,6 +337,7 @@ export function useMessageComposerActions({
         removeOutboxItem,
         replyTarget?.id,
         sendConversationMessage,
+        setSelectedConversationId,
         setPendingContextChips,
         targetUserId,
     ]);
