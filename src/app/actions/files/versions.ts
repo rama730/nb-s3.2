@@ -20,8 +20,11 @@ import {
 } from "@/lib/upload/security";
 import { finalizeUploadIntent } from "@/lib/upload/upload-intents";
 import { notifyForFileVersionCreated } from "@/lib/notifications/task-file";
+import { enqueueProjectNotificationEvent } from "@/lib/notifications/project-events";
 import {
-  assertProjectReadAccess,
+  assertProjectFileReadAccess,
+  assertProjectUploadAccess,
+  assertProjectUploadAccessTx,
   assertProjectWriteAccess,
   assertProjectWriteAccessTx,
   assertNodeNotLockedByAnotherUser,
@@ -36,13 +39,32 @@ import {
  * `project_nodes.current_version` in the same transaction as the insert into
  * `file_versions`, so the two stay consistent.
  *
- * Every action re-verifies write access against the project *inside* the
- * transaction via `assertProjectWriteAccessTx` (row-locks the project and
- * the caller's membership row) to close the TOCTOU window between check
- * and mutation — same pattern used everywhere else in files/mutations.ts.
+ * Upload-like actions re-verify upload access inside the transaction
+ * (`assertProjectUploadAccessTx`) so per-member file-intake toggles cannot be
+ * bypassed between signed upload creation and version replacement.
  */
 
 const LIST_VERSIONS_MAX = 200;
+
+function actorNotificationSnapshot(user: { user_metadata?: Record<string, unknown> | null }) {
+  return {
+    actorName: (user.user_metadata?.full_name as string | undefined) ?? (user.user_metadata?.username as string | undefined) ?? null,
+    actorAvatarUrl: (user.user_metadata?.avatar_url as string | undefined) ?? null,
+  };
+}
+
+async function enqueueProjectFileVersionNotification(input: Parameters<typeof enqueueProjectNotificationEvent>[0]) {
+  try {
+    await enqueueProjectNotificationEvent(input);
+  } catch (error) {
+    logger.warn("files.project_policy_notification_failed", {
+      module: "files",
+      projectId: input.projectId,
+      eventKey: input.eventKey,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
 
 export async function listFileVersions(
   projectId: string,
@@ -51,7 +73,7 @@ export async function listFileVersions(
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   const actorId = user?.id ?? null;
-  await assertProjectReadAccess(projectId, actorId);
+  await assertProjectFileReadAccess(projectId, actorId);
 
   // Confirm the node belongs to the project (defense-in-depth on top of RLS).
   const node = await db.query.projectNodes.findFirst({
@@ -83,7 +105,7 @@ export async function getVersionSignedUrl(
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   const actorId = user?.id ?? null;
-  await assertProjectReadAccess(projectId, actorId);
+  await assertProjectFileReadAccess(projectId, actorId);
   const clampedTtl = Math.max(30, Math.min(3600, ttlSeconds));
 
   const version_row = await db.query.fileVersions.findFirst({
@@ -152,7 +174,7 @@ export async function replaceNodeWithNewVersion(input: {
   if (!user) throw new Error("Unauthorized");
   const { allowed } = await consumeRateLimit(`files-versions:${user.id}`, 30, 60);
   if (!allowed) throw new Error("Rate limit exceeded");
-  await assertProjectWriteAccess(input.projectId, user.id);
+  await assertProjectUploadAccess(input.projectId, user.id);
 
   const finalizedIntent = await finalizeUploadIntent({
     intentId: input.uploadIntentId,
@@ -186,7 +208,7 @@ export async function replaceNodeWithNewVersion(input: {
   const normalizedComment = input.comment?.trim() ? input.comment.trim().slice(0, 500) : null;
 
   const result = await db.transaction(async (tx) => {
-    await assertProjectWriteAccessTx(tx, input.projectId, user.id);
+    await assertProjectUploadAccessTx(tx, input.projectId, user.id);
 
     // Lock check: query project_node_locks joined with profiles to get displayName
     const now = new Date();
@@ -294,6 +316,19 @@ export async function replaceNodeWithNewVersion(input: {
       error: error instanceof Error ? error.message : String(error),
     });
   }
+  await enqueueProjectFileVersionNotification({
+    projectId: input.projectId,
+    actorUserId: user.id,
+    ...actorNotificationSnapshot(user),
+    eventKey: "files.version_added",
+    title: `New file version added`,
+    body: `Version ${result.version.version} was added to a project file.`,
+    sourceEventId: `${input.nodeId}:version:${result.version.version}`,
+    entityRefs: {
+      projectId: input.projectId,
+      fileId: input.nodeId,
+    },
+  });
   revalidatePath(`/projects/${input.projectId}`);
   return result;
 }
