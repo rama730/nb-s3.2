@@ -24,7 +24,7 @@ import { randomBytes } from 'crypto';
 import { createSignedJobRequestToken } from '@/lib/security/job-request';
 import { consumeRateLimit } from '@/lib/security/rate-limit';
 import { resolveSecurityStepUp } from '@/lib/security/step-up';
-import { emitProjectOwnershipTransferredNotification } from '@/lib/notifications/emitters';
+import { enqueueProjectNotificationEvent } from '@/lib/notifications/project-events';
 
 const UUID_RE =
     /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
@@ -553,31 +553,64 @@ export async function transferProjectOwnership(
             newOwnerId,
         });
 
+        const actorName = (user.user_metadata?.full_name as string | undefined)
+            ?? (user.user_metadata?.username as string | undefined)
+            ?? null;
+        const actorAvatarUrl = (user.user_metadata?.avatar_url as string | undefined) ?? null;
+        const sourceEventId = transferResult.projectEventId ?? `${projectId}:${user.id}:${newOwnerId}`;
+
         try {
             await Promise.all([
-                emitProjectOwnershipTransferredNotification({
-                    recipientUserId: user.id,
-                    actorUserId: user.id,
-                    actorName: (user.user_metadata?.full_name as string | undefined) ?? (user.user_metadata?.username as string | undefined) ?? null,
-                    actorAvatarUrl: (user.user_metadata?.avatar_url as string | undefined) ?? null,
+                enqueueProjectNotificationEvent({
                     projectId,
-                    projectSlug: transferResult.projectSlug,
-                    projectTitle: transferResult.projectTitle,
-                    previousOwnerId: user.id,
-                    newOwnerId,
-                    eventKey: transferResult.projectEventId ?? `${projectId}:${user.id}:${newOwnerId}`,
+                    actorUserId: user.id,
+                    actorName,
+                    actorAvatarUrl,
+                    eventKey: "members.ownership_transferred",
+                    affectedMemberId: user.id,
+                    directRecipientIds: [user.id],
+                    includeActorRecipient: true,
+                    title: "Project ownership transferred",
+                    body: transferResult.projectTitle ?? "Project ownership changed",
+                    href: `/projects/${encodeURIComponent(transferResult.projectSlug || projectId)}?tab=settings`,
+                    entityRefs: {
+                        projectId,
+                        projectSlug: transferResult.projectSlug ?? null,
+                        targetUserId: user.id,
+                    },
+                    preview: {
+                        actorName,
+                        actorAvatarUrl,
+                        contextLabel: transferResult.projectTitle ?? "Project",
+                        contextKind: "project",
+                        secondaryText: "You are now a co-leader",
+                    },
+                    sourceEventId,
                 }),
-                emitProjectOwnershipTransferredNotification({
-                    recipientUserId: newOwnerId,
-                    actorUserId: user.id,
-                    actorName: (user.user_metadata?.full_name as string | undefined) ?? (user.user_metadata?.username as string | undefined) ?? null,
-                    actorAvatarUrl: (user.user_metadata?.avatar_url as string | undefined) ?? null,
+                enqueueProjectNotificationEvent({
                     projectId,
-                    projectSlug: transferResult.projectSlug,
-                    projectTitle: transferResult.projectTitle,
-                    previousOwnerId: user.id,
-                    newOwnerId,
-                    eventKey: transferResult.projectEventId ?? `${projectId}:${user.id}:${newOwnerId}`,
+                    actorUserId: user.id,
+                    actorName,
+                    actorAvatarUrl,
+                    eventKey: "members.ownership_transferred",
+                    affectedMemberId: newOwnerId,
+                    directRecipientIds: [newOwnerId],
+                    title: "Project ownership transferred to you",
+                    body: transferResult.projectTitle ?? "Project ownership changed",
+                    href: `/projects/${encodeURIComponent(transferResult.projectSlug || projectId)}?tab=settings`,
+                    entityRefs: {
+                        projectId,
+                        projectSlug: transferResult.projectSlug ?? null,
+                        targetUserId: newOwnerId,
+                    },
+                    preview: {
+                        actorName,
+                        actorAvatarUrl,
+                        contextLabel: transferResult.projectTitle ?? "Project",
+                        contextKind: "project",
+                        secondaryText: "You are now the owner",
+                    },
+                    sourceEventId,
                 }),
             ]);
         } catch (notificationError) {
