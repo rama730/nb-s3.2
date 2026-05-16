@@ -34,10 +34,17 @@ import { logger } from '@/lib/logger';
 import { buildProjectOwnerPresentation } from '@/lib/privacy/presentation';
 import { resolvePrivacyRelationship } from '@/lib/privacy/resolver';
 import {
-    emitProjectMemberRemovedNotification,
-    emitProjectRoleChangedNotification,
-    emitTaskAssignedNotification,
-} from '@/lib/notifications/emitters';
+    enqueueProjectNotificationEvent,
+} from '@/lib/notifications/project-events';
+import {
+    buildDefaultProjectNotificationPolicy,
+    normalizeProjectMemberNotificationOverrides,
+    normalizeProjectNotificationPolicy,
+    summarizeProjectNotificationPolicy,
+    type ProjectMemberNotificationOverrides,
+    type ProjectNotificationPolicy,
+    type ProjectNotificationPreset,
+} from '@/lib/notifications/project-policy';
 import {
     canProjectRoleManageTarget,
     changeProjectMemberRoleInternal,
@@ -77,7 +84,13 @@ import { buildTaskActivityItems } from '@/lib/projects/task-activity';
 import { normalizeTaskSurfaceRecord } from '@/lib/projects/task-presentation';
 import { taskPriorityEnum, taskStatusEnum } from '@/lib/validations/task';
 import { invalidatePublicProjectsFeedCache } from '@/lib/projects/public-feed-service';
-import { buildProjectAccessTransitionPolicy } from '@/lib/projects/settings-policies';
+import {
+    buildProjectAccessTransitionPolicy,
+    canProjectMemberUploadFiles,
+    isProjectTabVisibleToViewer,
+    normalizeProjectPublicTabVisibility,
+    type ProjectPublicTabVisibility,
+} from '@/lib/projects/settings-policies';
 
 const isMissingColumn = (error: unknown, column: string) => {
     const msg = error instanceof Error ? error.message : String(error);
@@ -636,6 +649,13 @@ const projectDetailProjectSchema = z.object({
     tags: z.array(z.string()),
     skills: z.array(z.string()),
     visibility: z.string(),
+    publicTabVisibility: z.object({
+        dashboard: z.boolean(),
+        files: z.boolean(),
+        sprints: z.boolean(),
+        tasks: z.boolean(),
+        analytics: z.boolean(),
+    }),
     lookingForCollaborators: z.boolean(),
     maxCollaborators: z.string().nullable(),
     status: z.enum(['draft', 'active', 'completed', 'archived']),
@@ -736,6 +756,7 @@ async function resolveProjectDetailTarget(slugOrId: string) {
             tags: projects.tags,
             skills: projects.skills,
             visibility: projects.visibility,
+            publicTabVisibility: projects.publicTabVisibility,
             lookingForCollaborators: projects.lookingForCollaborators,
             maxCollaborators: projects.maxCollaborators,
             status: projects.status,
@@ -1195,6 +1216,7 @@ export async function readProjectDetailShell(input: {
                     tags: Array.isArray(project.tags) ? project.tags : [],
                     skills: Array.isArray(project.skills) ? project.skills : [],
                     visibility: project.visibility || 'private',
+                    publicTabVisibility: normalizeProjectPublicTabVisibility(project.publicTabVisibility),
                     lookingForCollaborators: !!project.lookingForCollaborators,
                     maxCollaborators: project.maxCollaborators || null,
                     status: normalizedStatus,
@@ -1803,10 +1825,15 @@ export async function updateProject(projectId: string, data: any) {
             }
         }
 
+        let openRoles;
+
         // Update Roles
         if (roles && Array.isArray(roles)) {
             if (deletedRoleIds?.length > 0) {
-                await tx.delete(projectOpenRoles).where(inArray(projectOpenRoles.id, deletedRoleIds));
+                await tx.delete(projectOpenRoles).where(and(
+                    eq(projectOpenRoles.projectId, projectId),
+                    inArray(projectOpenRoles.id, deletedRoleIds),
+                ));
             }
 
             for (const role of roles) {
@@ -1819,7 +1846,10 @@ export async function updateProject(projectId: string, data: any) {
                             skills: role.skills || [],
                             updatedAt: new Date(),
                         })
-                        .where(eq(projectOpenRoles.id, role.id));
+                        .where(and(
+                            eq(projectOpenRoles.projectId, projectId),
+                            eq(projectOpenRoles.id, role.id),
+                        ));
                 } else {
                     await tx.insert(projectOpenRoles)
                         .values({
@@ -1831,6 +1861,23 @@ export async function updateProject(projectId: string, data: any) {
                         });
                 }
             }
+
+            openRoles = await tx
+                .select({
+                    id: projectOpenRoles.id,
+                    projectId: projectOpenRoles.projectId,
+                    role: projectOpenRoles.role,
+                    title: projectOpenRoles.title,
+                    description: projectOpenRoles.description,
+                    count: projectOpenRoles.count,
+                    filled: projectOpenRoles.filled,
+                    skills: projectOpenRoles.skills,
+                    createdAt: projectOpenRoles.createdAt,
+                    updatedAt: projectOpenRoles.updatedAt,
+                })
+                .from(projectOpenRoles)
+                .where(eq(projectOpenRoles.projectId, projectId))
+                .orderBy(desc(projectOpenRoles.updatedAt), desc(projectOpenRoles.createdAt));
         }
 
         return {
@@ -1839,8 +1886,9 @@ export async function updateProject(projectId: string, data: any) {
             id: project.id,
             previousCoverImage: project.coverImage,
             nextCoverImage,
+            openRoles,
         };
-    }).then(async ({ success, slug, id, previousCoverImage, nextCoverImage }) => {
+    }).then(async ({ success, slug, id, previousCoverImage, nextCoverImage, openRoles }) => {
         if (nextCoverImage !== undefined && previousCoverImage !== nextCoverImage) {
             await cleanupProjectCoverImages({
                 userId: user.id,
@@ -1852,7 +1900,31 @@ export async function updateProject(projectId: string, data: any) {
         revalidatePath(`/projects/${slug}`);
         revalidatePath(`/projects/${id}`);
         await invalidateProjectPublicCaches(id);
-        return { success };
+        if (Array.isArray(data?.roles)) {
+            const createdCount = data.roles.filter((role: { id?: unknown }) => !role.id).length;
+            const updatedCount = data.roles.length - createdCount;
+            const deletedCount = Array.isArray(data.deletedRoleIds) ? data.deletedRoleIds.length : 0;
+            const eventKey = createdCount > 0 && updatedCount === 0 && deletedCount === 0
+                ? 'roles.created'
+                : deletedCount > 0
+                    ? 'roles.closed'
+                    : 'roles.updated';
+            await enqueueProjectNotificationBestEffort({
+                projectId: id,
+                actorUserId: user.id,
+                ...actorNotificationSnapshot(user),
+                eventKey,
+                title: 'Project roles updated',
+                body: `${createdCount} created · ${updatedCount} updated · ${deletedCount} removed.`,
+                sourceEventId: `${id}:roles:${Date.now()}`,
+                entityRefs: { projectId: id },
+            }, {
+                createdCount,
+                updatedCount,
+                deletedCount,
+            });
+        }
+        return openRoles === undefined ? { success } : { success, openRoles };
     });
 }
 
@@ -2132,6 +2204,40 @@ type ProjectAccessTransitionPreflightResult =
     }
     | { success: false; message: string; errorCode: ProjectSettingsErrorCode };
 
+type ProjectPublicTabVisibilityResult =
+    | {
+        success: true;
+        message: string;
+        data: ProjectPublicTabVisibility;
+    }
+    | { success: false; message: string; errorCode: ProjectSettingsErrorCode };
+
+type ProjectFileWorkspaceSettingsResult =
+    | {
+        success: true;
+        data: {
+            members: Array<{
+                id: string;
+                username: string | null;
+                fullName: string | null;
+                avatarUrl: string | null;
+                membershipRole: ProjectCollaboratorRole;
+                projectRoleTitle: string | null;
+                joinedAt: string | null;
+                fileUploadEnabled: boolean;
+                uploadPermissionLocked: boolean;
+                uploadPermissionLabel: string;
+            }>;
+            summary: {
+                alwaysAllowedCount: number;
+                enabledMemberCount: number;
+                disabledMemberCount: number;
+                viewerCount: number;
+            };
+        };
+    }
+    | { success: false; message: string; errorCode: ProjectSettingsErrorCode };
+
 type ProjectSettingsAuditResult =
     | {
         success: true;
@@ -2159,6 +2265,7 @@ type ProjectCollaboratorSettingsResult =
                 membershipRole: ProjectCollaboratorRole;
                 projectRoleTitle: string | null;
                 joinedAt: string | null;
+                fileUploadEnabled: boolean;
                 responsibilityCounts: {
                     activeAssignedTasks: number;
                     activeCreatedTasks: number;
@@ -2218,17 +2325,69 @@ type ProjectMemberMutationResult =
     | { success: true; message: string }
     | { success: false; message: string; errorCode: ProjectSettingsErrorCode | 'INVALID_ROLE' | 'OWNER_TARGET' | 'NOT_A_MEMBER' };
 
+type ProjectNotificationSettingsResult =
+    | {
+        success: true;
+        data: {
+            policy: ProjectNotificationPolicy;
+            summary: ReturnType<typeof summarizeProjectNotificationPolicy>;
+        };
+    }
+    | { success: false; message: string; errorCode: ProjectSettingsErrorCode };
+
+type ProjectMemberNotificationSettingsResult =
+    | {
+        success: true;
+        data: {
+            member: {
+                id: string;
+                username: string | null;
+                fullName: string | null;
+                avatarUrl: string | null;
+                membershipRole: ProjectCollaboratorRole;
+            };
+            canEdit: boolean;
+            overrides: ProjectMemberNotificationOverrides;
+        };
+    }
+    | { success: false; message: string; errorCode: ProjectSettingsErrorCode };
+
 const projectSettingsPatchSchema = z.object({
     visibility: z.enum(['public', 'private']).optional(),
     lookingForCollaborators: z.boolean().optional(),
     maxCollaborators: z.string().trim().max(32).nullable().optional(),
 });
 
+function actorNotificationSnapshot(user: { user_metadata?: Record<string, unknown> | null }) {
+    return {
+        actorName: (user.user_metadata?.full_name as string | undefined) ?? (user.user_metadata?.username as string | undefined) ?? null,
+        actorAvatarUrl: (user.user_metadata?.avatar_url as string | undefined) ?? null,
+    };
+}
+
+async function enqueueProjectNotificationBestEffort(
+    input: Parameters<typeof enqueueProjectNotificationEvent>[0],
+    logContext: Record<string, unknown>,
+) {
+    try {
+        await enqueueProjectNotificationEvent(input);
+    } catch (notificationError) {
+        logger.warn('project.notification_policy_enqueue_failed', {
+            module: 'projects',
+            eventKey: input.eventKey,
+            projectId: input.projectId,
+            ...logContext,
+            error: notificationError instanceof Error ? notificationError.message : String(notificationError),
+        });
+    }
+}
+
 async function loadOwnedProjectForSettings(projectId: string, userId: string) {
     const [project] = await db
         .select({
             id: projects.id,
             ownerId: projects.ownerId,
+            title: projects.title,
             slug: projects.slug,
             status: projects.status,
             visibility: projects.visibility,
@@ -2583,6 +2742,27 @@ export async function updateProjectVisibilityAction(
         await revalidateProjectPaths(projectId);
         await invalidateProjectPublicCaches(projectId);
 
+        try {
+            await enqueueProjectNotificationEvent({
+                projectId,
+                actorUserId: user.id,
+                ...actorNotificationSnapshot(user),
+                eventKey: 'access.visibility_changed',
+                title: `Project visibility changed to ${nextVisibility}`,
+                body: `${owned.project.title ?? owned.project.slug ?? 'Project'} is now ${nextVisibility}.`,
+                sourceEventId: `${projectId}:visibility:${previousVisibility}:${nextVisibility}`,
+                entityRefs: { projectId, projectSlug: owned.project.slug ?? null },
+            });
+        } catch (notificationError) {
+            logger.warn('project.access_visibility_notification_failed', {
+                module: 'projects',
+                projectId,
+                previousVisibility,
+                nextVisibility,
+                error: notificationError instanceof Error ? notificationError.message : String(notificationError),
+            });
+        }
+
         logger.metric('project.access_visibility.update', {
             projectId,
             userId: user.id,
@@ -2624,6 +2804,90 @@ export async function getProjectAccessImpactAction(projectId: string): Promise<P
     }
 }
 
+export async function updateProjectPublicTabVisibilityAction(
+    projectId: string,
+    nextVisibility: ProjectPublicTabVisibility,
+): Promise<ProjectPublicTabVisibilityResult> {
+    try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+            return { success: false, errorCode: 'UNAUTHORIZED', message: 'You must be signed in.' };
+        }
+
+        const capability = await requireProjectCapability(projectId, user.id, 'manage_public_tabs');
+        const normalized = normalizeProjectPublicTabVisibility(nextVisibility);
+        const [current] = await db
+            .select({ publicTabVisibility: projects.publicTabVisibility })
+            .from(projects)
+            .where(eq(projects.id, projectId))
+            .limit(1);
+        const previous = normalizeProjectPublicTabVisibility(current?.publicTabVisibility);
+
+        await db.transaction(async (tx) => {
+            await tx
+                .update(projects)
+                .set({ publicTabVisibility: normalized, updatedAt: new Date() })
+                .where(eq(projects.id, projectId));
+            await tx.insert(projectNodeEvents).values({
+                projectId,
+                actorId: user.id,
+                nodeId: null,
+                type: 'project_settings.public_tabs_changed',
+                metadata: {
+                    previous,
+                    next: normalized,
+                    source: 'project_settings_access',
+                    actorRole: capability.role,
+                },
+                createdAt: new Date(),
+            });
+        });
+
+        await revalidateProjectPaths(projectId);
+        await invalidateProjectPublicCaches(projectId);
+
+        try {
+            await enqueueProjectNotificationEvent({
+                projectId,
+                actorUserId: user.id,
+                ...actorNotificationSnapshot(user),
+                eventKey: 'access.public_tabs_changed',
+                title: 'Public project surfaces changed',
+                body: 'The visible public tabs for this project were updated.',
+                sourceEventId: `${projectId}:public-tabs:${Date.now()}`,
+                entityRefs: { projectId },
+            });
+        } catch (notificationError) {
+            logger.warn('project.public_tabs_notification_failed', {
+                module: 'projects',
+                projectId,
+                error: notificationError instanceof Error ? notificationError.message : String(notificationError),
+            });
+        }
+
+        return {
+            success: true,
+            message: 'Public tab visibility updated.',
+            data: normalized,
+        };
+    } catch (error) {
+        logger.error('project.public_tabs_update_failed', {
+            module: 'projects',
+            projectId,
+            error: error instanceof Error ? error.message : String(error),
+        });
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.includes('Project not found')) {
+            return { success: false, errorCode: 'NOT_FOUND', message: 'Project not found.' };
+        }
+        if (message.includes('permission')) {
+            return { success: false, errorCode: 'FORBIDDEN', message: 'You do not have permission to change public tab visibility.' };
+        }
+        return { success: false, errorCode: 'INTERNAL_ERROR', message: 'Failed to update public tab visibility.' };
+    }
+}
+
 export async function getProjectSettingsAuditAction(projectId: string): Promise<ProjectSettingsAuditResult> {
     try {
         const supabase = await createClient();
@@ -2652,6 +2916,8 @@ export async function getProjectSettingsAuditAction(projectId: string): Promise<
                 or(
                     sql`${projectNodeEvents.type} LIKE 'project_settings.%'`,
                     sql`${projectNodeEvents.type} LIKE 'project_member.%'`,
+                    sql`${projectNodeEvents.type} LIKE 'project_file_policy.%'`,
+                    sql`${projectNodeEvents.type} LIKE 'project_notification_settings.%'`,
                 ),
             ))
             .orderBy(desc(projectNodeEvents.createdAt))
@@ -2861,6 +3127,7 @@ export async function getProjectCollaboratorSettingsAction(
                 memberId: projectMembers.id,
                 userId: projectMembers.userId,
                 role: projectMembers.role,
+                fileUploadEnabled: projectMembers.fileUploadEnabled,
                 joinedAt: projectMembers.joinedAt,
                 username: profiles.username,
                 fullName: profiles.fullName,
@@ -2898,6 +3165,7 @@ export async function getProjectCollaboratorSettingsAction(
                         memberId: `owner:${ownerProfile.id}`,
                         userId: ownerProfile.id,
                         role: 'owner' as ProjectCollaboratorRole,
+                        fileUploadEnabled: true,
                         joinedAt: new Date(0),
                         username: ownerProfile.username,
                         fullName: ownerProfile.fullName,
@@ -2943,6 +3211,7 @@ export async function getProjectCollaboratorSettingsAction(
                         membershipRole: normalizeCollaboratorRole(row.role, row.userId === owned.project.ownerId ? 'owner' : 'member'),
                         projectRoleTitle: roleTitleByUser.get(row.userId) ?? null,
                         joinedAt: row.joinedAt?.toISOString?.() ?? null,
+                        fileUploadEnabled: row.fileUploadEnabled !== false,
                         responsibilityCounts: responsibilityByUser.get(row.userId) ?? {
                             activeAssignedTasks: 0,
                             activeCreatedTasks: 0,
@@ -2967,6 +3236,473 @@ export async function getProjectCollaboratorSettingsAction(
         }
         return { success: false, errorCode: 'INTERNAL_ERROR', message: 'Failed to load collaborators.' };
     }
+}
+
+function formatFileUploadPermission(role: ProjectCollaboratorRole, enabled: boolean) {
+    if (role === 'owner') return { locked: true, label: 'Owner · always on' };
+    if (role === 'admin') return { locked: true, label: 'Co-leader · always on' };
+    if (role === 'viewer') return { locked: true, label: 'Viewer · upload off' };
+    return { locked: false, label: enabled ? 'Member upload on' : 'Member upload off' };
+}
+
+export async function getProjectFileWorkspaceSettingsAction(projectId: string): Promise<ProjectFileWorkspaceSettingsResult> {
+    try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return { success: false, errorCode: 'UNAUTHORIZED', message: 'You must be signed in.' };
+        const capability = await requireProjectCapability(projectId, user.id, 'manage_files');
+
+        const rows = await db
+            .select({
+                userId: projectMembers.userId,
+                role: projectMembers.role,
+                fileUploadEnabled: projectMembers.fileUploadEnabled,
+                joinedAt: projectMembers.joinedAt,
+                username: profiles.username,
+                fullName: profiles.fullName,
+                avatarUrl: profiles.avatarUrl,
+            })
+            .from(projectMembers)
+            .leftJoin(profiles, eq(profiles.id, projectMembers.userId))
+            .where(eq(projectMembers.projectId, projectId))
+            .orderBy(sql`CASE WHEN ${projectMembers.userId} = ${capability.project.ownerId} THEN 0 WHEN ${projectMembers.role} = 'admin' THEN 1 WHEN ${projectMembers.role} = 'member' THEN 2 ELSE 3 END`, sql`${profiles.fullName} ASC NULLS LAST`, sql`${profiles.username} ASC NULLS LAST`);
+
+        const memberIds = rows.map((row) => row.userId);
+        const roleTitleByUser = await readAcceptedRoleTitles(projectId, memberIds);
+        const members = rows.map((row) => {
+            const role = normalizeCollaboratorRole(row.role, row.userId === capability.project.ownerId ? 'owner' : 'member');
+            const uploadEnabled = canProjectMemberUploadFiles({ role, fileUploadEnabled: row.fileUploadEnabled });
+            const permission = formatFileUploadPermission(role, uploadEnabled);
+            return {
+                id: row.userId,
+                username: row.username ?? null,
+                fullName: row.fullName ?? null,
+                avatarUrl: row.avatarUrl ?? null,
+                membershipRole: role,
+                projectRoleTitle: roleTitleByUser.get(row.userId) ?? null,
+                joinedAt: row.joinedAt?.toISOString?.() ?? null,
+                fileUploadEnabled: uploadEnabled,
+                uploadPermissionLocked: permission.locked,
+                uploadPermissionLabel: permission.label,
+            };
+        });
+
+        return {
+            success: true,
+            data: {
+                members,
+                summary: {
+                    alwaysAllowedCount: members.filter((member) => member.membershipRole === 'owner' || member.membershipRole === 'admin').length,
+                    enabledMemberCount: members.filter((member) => member.membershipRole === 'member' && member.fileUploadEnabled).length,
+                    disabledMemberCount: members.filter((member) => member.membershipRole === 'member' && !member.fileUploadEnabled).length,
+                    viewerCount: members.filter((member) => member.membershipRole === 'viewer').length,
+                },
+            },
+        };
+    } catch (error) {
+        logger.error('project.file_workspace_settings_failed', {
+            module: 'projects',
+            projectId,
+            error: error instanceof Error ? error.message : String(error),
+        });
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.includes('Project not found')) {
+            return { success: false, errorCode: 'NOT_FOUND', message: 'Project not found.' };
+        }
+        if (message.includes('permission')) {
+            return { success: false, errorCode: 'FORBIDDEN', message: 'You do not have permission to manage file workspace settings.' };
+        }
+        return { success: false, errorCode: 'INTERNAL_ERROR', message: 'Failed to load file workspace settings.' };
+    }
+}
+
+export async function updateProjectMemberFileUploadAction(
+    projectId: string,
+    memberUserId: string,
+    enabled: boolean,
+): Promise<ProjectSettingsMutationResult> {
+    try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return { success: false, errorCode: 'UNAUTHORIZED', message: 'You must be signed in.' };
+        const capability = await requireProjectCapability(projectId, user.id, 'manage_files');
+
+        const [target] = await db
+            .select({
+                role: projectMembers.role,
+                fileUploadEnabled: projectMembers.fileUploadEnabled,
+                username: profiles.username,
+                fullName: profiles.fullName,
+            })
+            .from(projectMembers)
+            .leftJoin(profiles, eq(profiles.id, projectMembers.userId))
+            .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, memberUserId)))
+            .limit(1);
+        if (!target) return { success: false, errorCode: 'NOT_FOUND', message: 'Project member not found.' };
+        const targetRole = normalizeCollaboratorRole(target.role, memberUserId === capability.project.ownerId ? 'owner' : 'member');
+        if (targetRole === 'owner' || targetRole === 'admin') {
+            return { success: false, errorCode: 'INVALID_INPUT', message: 'Owner and Co-leader upload access is always on.' };
+        }
+        if (targetRole === 'viewer') {
+            return { success: false, errorCode: 'INVALID_INPUT', message: 'Viewers cannot upload files.' };
+        }
+
+        await db.transaction(async (tx) => {
+            await tx
+                .update(projectMembers)
+                .set({ fileUploadEnabled: enabled })
+                .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, memberUserId)));
+            await tx.insert(projectNodeEvents).values({
+                projectId,
+                actorId: user.id,
+                nodeId: null,
+                type: enabled ? 'project_file_policy.member_upload_enabled' : 'project_file_policy.member_upload_disabled',
+                metadata: {
+                    targetUserId: memberUserId,
+                    targetDisplayName: target.fullName || target.username || 'Project member',
+                    previous: target.fileUploadEnabled !== false,
+                    next: enabled,
+                    actorRole: capability.role,
+                },
+                createdAt: new Date(),
+            });
+        });
+
+        await revalidateProjectPaths(projectId);
+        try {
+            await enqueueProjectNotificationEvent({
+                projectId,
+                actorUserId: user.id,
+                ...actorNotificationSnapshot(user),
+                eventKey: 'access.file_upload_permission_changed',
+                affectedMemberId: memberUserId,
+                title: enabled ? 'File uploads enabled for you' : 'File uploads disabled for you',
+                body: enabled
+                    ? 'You can upload files to this project workspace.'
+                    : 'You can no longer upload files to this project workspace.',
+                sourceEventId: `${projectId}:file-upload:${memberUserId}:${enabled}`,
+                entityRefs: { projectId, targetUserId: memberUserId },
+            });
+        } catch (notificationError) {
+            logger.warn('project.member_file_upload_notification_failed', {
+                module: 'projects',
+                projectId,
+                targetUserId: memberUserId,
+                error: notificationError instanceof Error ? notificationError.message : String(notificationError),
+            });
+        }
+        return { success: true, message: enabled ? 'Member file uploads enabled.' : 'Member file uploads disabled.' };
+    } catch (error) {
+        logger.error('project.member_file_upload_update_failed', {
+            module: 'projects',
+            projectId,
+            targetUserId: memberUserId,
+            error: error instanceof Error ? error.message : String(error),
+        });
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.includes('permission')) {
+            return { success: false, errorCode: 'FORBIDDEN', message: 'You do not have permission to manage file uploads.' };
+        }
+        return { success: false, errorCode: 'INTERNAL_ERROR', message: 'Failed to update member upload permission.' };
+    }
+}
+
+export async function updateProjectFileUploadDefaultsAction(
+    projectId: string,
+    enabled: boolean,
+): Promise<ProjectSettingsMutationResult> {
+    try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return { success: false, errorCode: 'UNAUTHORIZED', message: 'You must be signed in.' };
+        const capability = await requireProjectCapability(projectId, user.id, 'manage_files');
+
+        const updated = await db.transaction(async (tx) => {
+            const rows = await tx
+                .update(projectMembers)
+                .set({ fileUploadEnabled: enabled })
+                .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.role, 'member')))
+                .returning({ userId: projectMembers.userId });
+            await tx.insert(projectNodeEvents).values({
+                projectId,
+                actorId: user.id,
+                nodeId: null,
+                type: 'project_file_policy.member_upload_bulk_changed',
+                metadata: {
+                    next: enabled,
+                    affectedCount: rows.length,
+                    actorRole: capability.role,
+                },
+                createdAt: new Date(),
+            });
+            return rows.length;
+        });
+
+        await revalidateProjectPaths(projectId);
+        try {
+            const affectedUserIds = await db
+                .select({ userId: projectMembers.userId })
+                .from(projectMembers)
+                .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.role, 'member')));
+            await enqueueProjectNotificationEvent({
+                projectId,
+                actorUserId: user.id,
+                ...actorNotificationSnapshot(user),
+                eventKey: 'access.file_upload_permission_changed',
+                directRecipientIds: affectedUserIds.map((row) => row.userId),
+                title: enabled ? 'Project file uploads enabled' : 'Project file uploads disabled',
+                body: enabled
+                    ? 'Members can upload files to this project workspace.'
+                    : 'Members can no longer upload files to this project workspace.',
+                sourceEventId: `${projectId}:file-upload-defaults:${enabled}`,
+                entityRefs: { projectId },
+            });
+        } catch (notificationError) {
+            logger.warn('project.file_upload_defaults_notification_failed', {
+                module: 'projects',
+                projectId,
+                error: notificationError instanceof Error ? notificationError.message : String(notificationError),
+            });
+        }
+        return {
+            success: true,
+            message: enabled
+                ? `Enabled uploads for ${updated} member${updated === 1 ? '' : 's'}.`
+                : `Disabled uploads for ${updated} member${updated === 1 ? '' : 's'}.`,
+        };
+    } catch (error) {
+        logger.error('project.file_upload_defaults_failed', {
+            module: 'projects',
+            projectId,
+            error: error instanceof Error ? error.message : String(error),
+        });
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.includes('permission')) {
+            return { success: false, errorCode: 'FORBIDDEN', message: 'You do not have permission to manage file uploads.' };
+        }
+        return { success: false, errorCode: 'INTERNAL_ERROR', message: 'Failed to update file upload defaults.' };
+    }
+}
+
+export async function readProjectNotificationSettingsAction(projectId: string): Promise<ProjectNotificationSettingsResult> {
+    try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return { success: false, errorCode: 'UNAUTHORIZED', message: 'You must be signed in.' };
+        await requireProjectCapability(projectId, user.id, 'manage_notifications');
+
+        const [project] = await db
+            .select({ notificationPreferences: projects.notificationPreferences })
+            .from(projects)
+            .where(and(eq(projects.id, projectId), isNull(projects.deletedAt)))
+            .limit(1);
+        if (!project) return { success: false, errorCode: 'NOT_FOUND', message: 'Project not found.' };
+
+        const policy = normalizeProjectNotificationPolicy(project.notificationPreferences);
+        return {
+            success: true,
+            data: {
+                policy,
+                summary: summarizeProjectNotificationPolicy(policy),
+            },
+        };
+    } catch (error) {
+        logger.error('project.notification_settings_read_failed', {
+            module: 'projects',
+            projectId,
+            error: error instanceof Error ? error.message : String(error),
+        });
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.includes('permission')) {
+            return { success: false, errorCode: 'FORBIDDEN', message: 'You do not have permission to manage project notifications.' };
+        }
+        return { success: false, errorCode: 'INTERNAL_ERROR', message: 'Failed to load project notification settings.' };
+    }
+}
+
+export async function updateProjectNotificationSettingsAction(
+    projectId: string,
+    input: unknown,
+): Promise<ProjectNotificationSettingsResult & { message?: string }> {
+    try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return { success: false, errorCode: 'UNAUTHORIZED', message: 'You must be signed in.' };
+        const capability = await requireProjectCapability(projectId, user.id, 'manage_notifications');
+        const policy = normalizeProjectNotificationPolicy(input);
+
+        await db.transaction(async (tx) => {
+            await tx
+                .update(projects)
+                .set({ notificationPreferences: policy, updatedAt: new Date() })
+                .where(and(eq(projects.id, projectId), isNull(projects.deletedAt)));
+            await tx.insert(projectNodeEvents).values({
+                projectId,
+                actorId: user.id,
+                nodeId: null,
+                type: 'project_notification_settings.updated',
+                metadata: {
+                    preset: policy.preset,
+                    summary: summarizeProjectNotificationPolicy(policy),
+                    actorRole: capability.role,
+                },
+                createdAt: new Date(),
+            });
+        });
+
+        await revalidateProjectPaths(projectId);
+        return {
+            success: true,
+            message: 'Project notification settings updated.',
+            data: {
+                policy,
+                summary: summarizeProjectNotificationPolicy(policy),
+            },
+        };
+    } catch (error) {
+        logger.error('project.notification_settings_update_failed', {
+            module: 'projects',
+            projectId,
+            error: error instanceof Error ? error.message : String(error),
+        });
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.includes('permission')) {
+            return { success: false, errorCode: 'FORBIDDEN', message: 'You do not have permission to manage project notifications.' };
+        }
+        return { success: false, errorCode: 'INTERNAL_ERROR', message: 'Failed to update project notification settings.' };
+    }
+}
+
+export async function resetProjectNotificationSettingsAction(
+    projectId: string,
+    preset: ProjectNotificationPreset = 'balanced',
+): Promise<ProjectNotificationSettingsResult & { message?: string }> {
+    return updateProjectNotificationSettingsAction(projectId, buildDefaultProjectNotificationPolicy(preset));
+}
+
+async function canViewProjectMemberNotificationSettings(projectId: string, actorUserId: string, memberUserId: string) {
+    if (actorUserId === memberUserId) return true;
+    try {
+        await requireProjectCapability(projectId, actorUserId, 'manage_notifications');
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+export async function readProjectMemberNotificationSettingsAction(
+    projectId: string,
+    memberUserId: string,
+): Promise<ProjectMemberNotificationSettingsResult> {
+    try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return { success: false, errorCode: 'UNAUTHORIZED', message: 'You must be signed in.' };
+        if (!await canViewProjectMemberNotificationSettings(projectId, user.id, memberUserId)) {
+            return { success: false, errorCode: 'FORBIDDEN', message: 'You do not have permission to view these notification settings.' };
+        }
+
+        const [member] = await db
+            .select({
+                id: profiles.id,
+                username: profiles.username,
+                fullName: profiles.fullName,
+                avatarUrl: profiles.avatarUrl,
+                role: projectMembers.role,
+                notificationPreferences: projectMembers.notificationPreferences,
+                ownerId: projects.ownerId,
+            })
+            .from(projectMembers)
+            .innerJoin(projects, eq(projects.id, projectMembers.projectId))
+            .leftJoin(profiles, eq(profiles.id, projectMembers.userId))
+            .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, memberUserId), isNull(projects.deletedAt)))
+            .limit(1);
+        if (!member?.id) {
+            return { success: false, errorCode: 'NOT_FOUND', message: 'Project member not found.' };
+        }
+
+        return {
+            success: true,
+            data: {
+                member: {
+                    id: member.id,
+                    username: member.username,
+                    fullName: member.fullName,
+                    avatarUrl: member.avatarUrl,
+                    membershipRole: normalizeCollaboratorRole(member.role, memberUserId === member.ownerId ? 'owner' : 'member'),
+                },
+                canEdit: user.id === memberUserId,
+                overrides: normalizeProjectMemberNotificationOverrides(member.notificationPreferences),
+            },
+        };
+    } catch (error) {
+        logger.error('project.member_notification_settings_read_failed', {
+            module: 'projects',
+            projectId,
+            targetUserId: memberUserId,
+            error: error instanceof Error ? error.message : String(error),
+        });
+        return { success: false, errorCode: 'INTERNAL_ERROR', message: 'Failed to load member notification settings.' };
+    }
+}
+
+export async function updateProjectMemberNotificationSettingsAction(
+    projectId: string,
+    memberUserId: string,
+    input: unknown,
+): Promise<ProjectMemberNotificationSettingsResult & { message?: string }> {
+    try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return { success: false, errorCode: 'UNAUTHORIZED', message: 'You must be signed in.' };
+        if (user.id !== memberUserId) {
+            return { success: false, errorCode: 'FORBIDDEN', message: 'Members can only update their own project notification settings.' };
+        }
+        const overrides = normalizeProjectMemberNotificationOverrides(input);
+
+        const [updated] = await db
+            .update(projectMembers)
+            .set({ notificationPreferences: overrides })
+            .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, memberUserId)))
+            .returning({ userId: projectMembers.userId, role: projectMembers.role });
+        if (!updated) return { success: false, errorCode: 'NOT_FOUND', message: 'Project member not found.' };
+
+        await db.insert(projectNodeEvents).values({
+            projectId,
+            actorId: user.id,
+            nodeId: null,
+            type: 'project_notification_settings.member_updated',
+            metadata: {
+                targetUserId: memberUserId,
+                mode: overrides.mode,
+                customRules: Object.keys(overrides.rules).length,
+            },
+            createdAt: new Date(),
+        });
+        await revalidateProjectPaths(projectId);
+        const read = await readProjectMemberNotificationSettingsAction(projectId, memberUserId);
+        if (!read.success) return read;
+        return { ...read, message: 'Project notification preferences updated.' };
+    } catch (error) {
+        logger.error('project.member_notification_settings_update_failed', {
+            module: 'projects',
+            projectId,
+            targetUserId: memberUserId,
+            error: error instanceof Error ? error.message : String(error),
+        });
+        return { success: false, errorCode: 'INTERNAL_ERROR', message: 'Failed to update member notification settings.' };
+    }
+}
+
+export async function resetProjectMemberNotificationSettingsAction(
+    projectId: string,
+    memberUserId: string,
+): Promise<ProjectMemberNotificationSettingsResult & { message?: string }> {
+    return updateProjectMemberNotificationSettingsAction(projectId, memberUserId, {
+        version: 1,
+        mode: 'inherit',
+        rules: {},
+    });
 }
 
 export async function updateProjectMemberRoleAction(
@@ -3008,28 +3744,36 @@ export async function updateProjectMemberRoleAction(
         }
         await revalidateProjectPaths(projectId);
         if (result.lifecycle.changed) {
-            try {
-                await emitProjectRoleChangedNotification({
-                    recipientUserId: memberUserId,
-                    actorUserId: user.id,
-                    actorName: (user.user_metadata?.full_name as string | undefined) ?? (user.user_metadata?.username as string | undefined) ?? null,
-                    actorAvatarUrl: (user.user_metadata?.avatar_url as string | undefined) ?? null,
+            const actor = actorNotificationSnapshot(user);
+            const nextRoleLabel = collaboratorRoleLabel(result.lifecycle.nextRole ?? nextRole);
+            await enqueueProjectNotificationBestEffort({
+                projectId,
+                actorUserId: user.id,
+                ...actor,
+                eventKey: 'members.role_changed',
+                affectedMemberId: memberUserId,
+                title: `${actor.actorName || 'Someone'} updated your project role`,
+                body: result.lifecycle.project.title ? `${result.lifecycle.project.title}: ${nextRoleLabel}` : `New role: ${nextRoleLabel}`,
+                href: `/projects/${encodeURIComponent(result.lifecycle.project.slug || projectId)}?tab=settings`,
+                entityRefs: {
                     projectId,
-                    projectSlug: result.lifecycle.project.slug,
-                    projectTitle: result.lifecycle.project.title,
-                    previousRole: result.lifecycle.previousRole ? collaboratorRoleLabel(result.lifecycle.previousRole) : null,
-                    nextRole: collaboratorRoleLabel(result.lifecycle.nextRole ?? nextRole),
-                    eventKey: result.lifecycle.eventId ?? `${result.lifecycle.previousRole}:${result.lifecycle.nextRole}`,
-                });
-            } catch (notificationError) {
-                logger.error('project.member_role_notification_failed', {
-                    module: 'project',
-                    projectId,
-                    actorUserId: user.id,
+                    projectSlug: result.lifecycle.project.slug ?? null,
                     targetUserId: memberUserId,
-                    error: notificationError instanceof Error ? notificationError.message : String(notificationError),
-                });
-            }
+                    previousRole: result.lifecycle.previousRole ? collaboratorRoleLabel(result.lifecycle.previousRole) : null,
+                    nextRole: nextRoleLabel,
+                },
+                preview: {
+                    actorName: actor.actorName,
+                    actorAvatarUrl: actor.actorAvatarUrl,
+                    contextLabel: result.lifecycle.project.title ?? 'Project',
+                    contextKind: 'project',
+                    secondaryText: `Role changed to ${nextRoleLabel}`,
+                },
+                sourceEventId: result.lifecycle.eventId ?? `${result.lifecycle.previousRole}:${result.lifecycle.nextRole}`,
+            }, {
+                action: 'member_role_changed',
+                targetUserId: memberUserId,
+            });
         }
 
         return {
@@ -3180,26 +3924,33 @@ export async function removeProjectMemberAction(
         }
         await revalidateProjectPaths(projectId);
         await queueCounterRefreshBestEffort([memberUserId]);
-        try {
-            await emitProjectMemberRemovedNotification({
-                recipientUserId: memberUserId,
-                actorUserId: user.id,
-                actorName: (user.user_metadata?.full_name as string | undefined) ?? (user.user_metadata?.username as string | undefined) ?? null,
-                actorAvatarUrl: (user.user_metadata?.avatar_url as string | undefined) ?? null,
+        const actor = actorNotificationSnapshot(user);
+        await enqueueProjectNotificationBestEffort({
+            projectId,
+            actorUserId: user.id,
+            ...actor,
+            eventKey: 'members.removed',
+            affectedMemberId: memberUserId,
+            title: `${actor.actorName || 'Someone'} removed you from a project`,
+            body: txResult.lifecycle.project.title ?? 'Project access removed',
+            href: `/projects/${encodeURIComponent(txResult.lifecycle.project.slug || projectId)}`,
+            entityRefs: {
                 projectId,
-                projectSlug: txResult.lifecycle.project.slug,
-                projectTitle: txResult.lifecycle.project.title,
-                eventKey: txResult.lifecycle.eventId ?? `${txResult.lifecycle.previousRole}:removed`,
-            });
-        } catch (notificationError) {
-            logger.error('project.member_removed_notification_failed', {
-                module: 'project',
-                projectId,
-                actorUserId: user.id,
+                projectSlug: txResult.lifecycle.project.slug ?? null,
                 targetUserId: memberUserId,
-                error: notificationError instanceof Error ? notificationError.message : String(notificationError),
-            });
-        }
+            },
+            preview: {
+                actorName: actor.actorName,
+                actorAvatarUrl: actor.actorAvatarUrl,
+                contextLabel: txResult.lifecycle.project.title ?? 'Project',
+                contextKind: 'project',
+                secondaryText: 'Removed from project',
+            },
+            sourceEventId: txResult.lifecycle.eventId ?? `${txResult.lifecycle.previousRole}:removed`,
+        }, {
+            action: 'member_removed',
+            targetUserId: memberUserId,
+        });
         return { success: true, message: 'Collaborator removed. Historical references were preserved.' };
     } catch (error) {
         console.error('Failed to remove project member:', error);
@@ -3284,6 +4035,21 @@ export async function archiveProjectAction(projectId: string): Promise<ProjectSe
             .set({ status: 'archived', updatedAt: new Date() })
             .where(eq(projects.id, projectId));
         await revalidateProjectPaths(projectId);
+        const actor = actorNotificationSnapshot(user);
+        await enqueueProjectNotificationBestEffort({
+            projectId,
+            actorUserId: user.id,
+            ...actor,
+            eventKey: 'security.project_archived',
+            title: `${actor.actorName || 'Someone'} archived ${owned.project.title || 'Project'}`,
+            body: 'The project was archived from settings.',
+            href: `/projects/${encodeURIComponent(owned.project.slug || projectId)}?tab=settings&settings=security-data`,
+            sourceEventId: `archive:${projectId}`,
+            entityRefs: {
+                projectId,
+                projectSlug: owned.project.slug ?? null,
+            },
+        }, { action: 'archive' });
 
         logger.metric('project.settings.archive.result', {
             projectId,
@@ -4461,6 +5227,17 @@ export async function readProjectSprintDetail(input: {
                 message: 'Forbidden',
             };
         }
+        if (!isProjectTabVisibleToViewer({
+            tabId: 'sprints',
+            isOwnerOrMember: viewerState.isOwner || viewerState.isMember,
+            publicTabVisibility: project.publicTabVisibility,
+        })) {
+            return {
+                success: false as const,
+                errorCode: 'FORBIDDEN' as const,
+                message: 'Sprint details are members-only for this project.',
+            };
+        }
 
         const access = await assertProjectReadAccess(project.id, input.actorUserId ?? null);
         const data = await buildSprintDetailPayload({
@@ -5135,30 +5912,33 @@ export async function createTaskAction(data: z.infer<typeof createTaskSchema>) {
         revalidatePath(`/projects/${validated.projectId}`);
 
         if (validated.assigneeId && validated.assigneeId !== user.id) {
-            try {
-                await emitTaskAssignedNotification({
-                    recipientUserId: validated.assigneeId,
-                    actorUserId: user.id,
-                    actorName: (user.user_metadata?.full_name as string | undefined) ?? (user.user_metadata?.username as string | undefined) ?? null,
-                    actorAvatarUrl: (user.user_metadata?.avatar_url as string | undefined) ?? null,
-                    taskId: hydratedTask.id,
-                    taskTitle: hydratedTask.title,
-                    taskNumber: hydratedTask.taskNumber ?? null,
+            const actor = actorNotificationSnapshot(user);
+            await enqueueProjectNotificationBestEffort({
+                projectId: validated.projectId,
+                actorUserId: user.id,
+                ...actor,
+                eventKey: 'tasks.created_assigned',
+                assigneeId: validated.assigneeId,
+                title: `${actor.actorName || 'Someone'} assigned you a task`,
+                body: hydratedTask.title,
+                href: `/projects/${encodeURIComponent(hydratedTask.project?.slug || validated.projectId)}?tab=tasks&drawerType=task&drawerId=${encodeURIComponent(hydratedTask.id)}`,
+                entityRefs: {
                     projectId: validated.projectId,
                     projectSlug: hydratedTask.project?.slug ?? null,
-                    projectKey: hydratedTask.project?.key ?? null,
-                    eventKey: hydratedTask.createdAt?.toISOString?.() ?? hydratedTask.updatedAt?.toISOString?.() ?? null,
-                });
-            } catch (notificationError) {
-                logger.warn("projects.task_assignment_notification_failed", {
-                    module: "projects",
-                    projectId: validated.projectId,
                     taskId: hydratedTask.id,
-                    actorUserId: user.id,
-                    targetUserId: validated.assigneeId,
-                    error: notificationError instanceof Error ? notificationError.message : String(notificationError),
-                });
-            }
+                },
+                preview: {
+                    actorName: actor.actorName,
+                    actorAvatarUrl: actor.actorAvatarUrl,
+                    contextLabel: hydratedTask.project?.key && hydratedTask.taskNumber ? `${hydratedTask.project.key}-${hydratedTask.taskNumber}` : 'Task',
+                    contextKind: 'task',
+                    secondaryText: hydratedTask.title,
+                },
+                sourceEventId: `${hydratedTask.id}:created-assigned`,
+            }, {
+                taskId: hydratedTask.id,
+                targetUserId: validated.assigneeId,
+            });
         }
 
         return { success: true, task: normalizeTaskSurfaceRecord(hydratedTask) };
@@ -5253,6 +6033,17 @@ export async function createSprintAction(data: CreateSprintInput) {
         }
 
         await revalidateProjectPaths(validated.projectId);
+
+        await enqueueProjectNotificationBestEffort({
+            projectId: validated.projectId,
+            actorUserId: user.id,
+            ...actorNotificationSnapshot(user),
+            eventKey: 'sprints.created',
+            title: `Sprint created: ${newSprint.name}`,
+            body: newSprint.goal ?? 'A new sprint was added to the project.',
+            sourceEventId: newSprint.id,
+            entityRefs: { projectId: validated.projectId, sprintId: newSprint.id },
+        }, { sprintId: newSprint.id });
 
         recordSprintMetric('project.sprint.create.result', {
             projectId: validated.projectId,
@@ -5385,6 +6176,17 @@ export async function updateSprintAction(data: UpdateSprintInput) {
 
         await revalidateProjectPaths(validated.projectId);
 
+        await enqueueProjectNotificationBestEffort({
+            projectId: validated.projectId,
+            actorUserId: user.id,
+            ...actorNotificationSnapshot(user),
+            eventKey: 'sprints.updated',
+            title: `Sprint updated: ${updatedSprint.name}`,
+            body: updatedSprint.goal ?? 'Sprint details were updated.',
+            sourceEventId: `${updatedSprint.id}:${updatedSprint.updatedAt?.toISOString?.() ?? Date.now()}`,
+            entityRefs: { projectId: validated.projectId, sprintId: updatedSprint.id },
+        }, { sprintId: updatedSprint.id });
+
         recordSprintMetric('project.sprint.update.result', {
             projectId: validated.projectId,
             sprintId: validated.sprintId,
@@ -5485,6 +6287,17 @@ export async function deleteSprintAction(data: {
 
         await revalidateProjectPaths(validated.projectId);
 
+        await enqueueProjectNotificationBestEffort({
+            projectId: validated.projectId,
+            actorUserId: user.id,
+            ...actorNotificationSnapshot(user),
+            eventKey: 'sprints.deleted',
+            title: 'Sprint deleted',
+            body: `A sprint was deleted and ${sprintWithTaskCount.affected_task_count} task${sprintWithTaskCount.affected_task_count === 1 ? '' : 's'} moved back to the backlog.`,
+            sourceEventId: `${validated.sprintId}:deleted`,
+            entityRefs: { projectId: validated.projectId, sprintId: validated.sprintId },
+        }, { sprintId: validated.sprintId });
+
         recordSprintMetric('project.sprint.delete.result', {
             projectId: validated.projectId,
             sprintId: validated.sprintId,
@@ -5555,6 +6368,17 @@ export async function startSprintAction(sprintId: string, projectId: string) {
 
         await revalidateProjectPaths(projectId);
 
+        await enqueueProjectNotificationBestEffort({
+            projectId,
+            actorUserId: user.id,
+            ...actorNotificationSnapshot(user),
+            eventKey: 'sprints.started',
+            title: 'Sprint started',
+            body: 'A project sprint is now active.',
+            sourceEventId: `${sprintId}:started`,
+            entityRefs: { projectId, sprintId },
+        }, { sprintId });
+
         recordSprintMetric('project.sprint.start.result', {
             projectId,
             sprintId,
@@ -5595,6 +6419,17 @@ export async function completeSprintAction(sprintId: string, projectId: string) 
             .where(eq(projectSprints.id, sprintId));
 
         await revalidateProjectPaths(projectId);
+
+        await enqueueProjectNotificationBestEffort({
+            projectId,
+            actorUserId: user.id,
+            ...actorNotificationSnapshot(user),
+            eventKey: 'sprints.completed',
+            title: 'Sprint completed',
+            body: 'A project sprint was marked complete.',
+            sourceEventId: `${sprintId}:completed`,
+            entityRefs: { projectId, sprintId },
+        }, { sprintId });
 
         recordSprintMetric('project.sprint.complete.result', {
             projectId,
@@ -5647,6 +6482,9 @@ export async function moveTaskToSprintAction(taskId: string, sprintId: string | 
         const [task] = await db
             .select({
                 id: tasks.id,
+                title: tasks.title,
+                assigneeId: tasks.assigneeId,
+                creatorId: tasks.creatorId,
             })
             .from(tasks)
             .where(and(eq(tasks.id, taskId), eq(tasks.projectId, projectId)))
@@ -5677,6 +6515,18 @@ export async function moveTaskToSprintAction(taskId: string, sprintId: string | 
         const slugOrId = project.slug || projectId;
         revalidatePath(`/projects/${slugOrId}`);
         revalidatePath(`/projects/${projectId}`);
+
+        await enqueueProjectNotificationBestEffort({
+            projectId,
+            actorUserId: user.id,
+            ...actorNotificationSnapshot(user),
+            eventKey: 'sprints.task_moved',
+            title: sprintId ? 'Task moved into a sprint' : 'Task moved out of a sprint',
+            body: task.title,
+            sourceEventId: `${taskId}:${sprintId ?? 'backlog'}`,
+            taskParticipantIds: [task.assigneeId, task.creatorId].filter((value): value is string => Boolean(value)),
+            entityRefs: { projectId, taskId, sprintId: sprintId ?? null },
+        }, { taskId, sprintId });
 
         return { success: true };
     } catch (error) {
