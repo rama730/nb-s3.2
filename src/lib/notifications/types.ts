@@ -16,7 +16,18 @@ export type NotificationKind =
     | "file_version_added"
     | "project_role_changed"
     | "project_member_removed"
-    | "project_ownership_transferred";
+    | "project_ownership_transferred"
+    | "project_member_joined"
+    | "project_visibility_changed"
+    | "project_public_surface_changed"
+    | "project_file_permission_changed"
+    | "project_role_activity"
+    | "project_application_activity"
+    | "project_sprint_activity"
+    | "project_task_activity"
+    | "project_file_activity"
+    | "project_security_alert"
+    | "project_update_activity";
 
 export type NotificationImportance = "important" | "more";
 
@@ -75,10 +86,13 @@ export type NotificationEntityRefs = {
     taskId?: string | null;
     commentId?: string | null;
     conversationId?: string | null;
+    sourceMessageId?: string | null;
     workflowItemId?: string | null;
     applicationId?: string | null;
     connectionId?: string | null;
     fileId?: string | null;
+    sprintId?: string | null;
+    roleId?: string | null;
     parentCommentId?: string | null;
     targetUserId?: string | null;
     previousRole?: string | null;
