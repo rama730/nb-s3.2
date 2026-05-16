@@ -2,6 +2,9 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useFieldArray, useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import * as z from "zod";
 import {
     AlertTriangle,
     Archive,
@@ -44,15 +47,30 @@ import {
     getProjectAccessTransitionPreflightAction,
     getProjectCollaboratorSettingsAction,
     getProjectDangerZonePreflightAction,
+    getProjectFileWorkspaceSettingsAction,
     getProjectMemberRemovalPreflightAction,
     getProjectSettingsAuditAction,
+    readProjectMemberNotificationSettingsAction,
+    readProjectNotificationSettingsAction,
     removeProjectMemberAction,
+    resetProjectMemberNotificationSettingsAction,
+    resetProjectNotificationSettingsAction,
     updateProject,
     updateProjectLifecycleAction,
+    updateProjectFileUploadDefaultsAction,
+    updateProjectMemberFileUploadAction,
+    updateProjectMemberNotificationSettingsAction,
     updateProjectMemberRoleAction,
+    updateProjectNotificationSettingsAction,
+    updateProjectPublicTabVisibilityAction,
     updateProjectVisibilityAction,
 } from "@/app/actions/project";
 import LifecycleEditor from "@/components/projects/settings/LifecycleEditor";
+import {
+    ProjectRolesEditor,
+    normalizeProjectRoleFormValues,
+    type ProjectRolesFormValues,
+} from "@/components/projects/settings/ProjectRolesEditor";
 import { cn } from "@/lib/utils";
 import {
     isKnownProjectType,
@@ -62,6 +80,19 @@ import {
     PROJECT_TYPE_OPTIONS,
 } from "@/lib/projects/project-create-options";
 import {
+    buildDefaultProjectNotificationPolicy,
+    groupProjectNotificationEntries,
+    normalizeProjectMemberNotificationOverrides,
+    normalizeProjectNotificationPolicy,
+    resolveProjectNotificationDecision,
+    summarizeProjectNotificationPolicy,
+    type ProjectMemberNotificationOverrides,
+    type ProjectNotificationEventKey,
+    type ProjectNotificationPolicy,
+    type ProjectNotificationPreset,
+    type ProjectNotificationRegistryEntry,
+} from "@/lib/notifications/project-policy";
+import {
     buildProjectAccessImpact,
     buildProjectAccessPolicy,
     buildProjectAccessTransitionPolicy,
@@ -69,14 +100,20 @@ import {
     buildProjectMemberMutationPolicy,
     buildProjectMemberRemovalPreflight,
     buildProjectPersonReference,
-    buildProjectNotificationPolicy,
     buildProjectRolePolicy,
     buildProjectSettingsPreflight,
+    areProjectPublicTabVisibilitiesEqual,
+    DEFAULT_PROJECT_PUBLIC_TAB_VISIBILITY,
     getProjectMemberDisplayName,
     getProjectMemberRoleLabel,
+    normalizeProjectPublicTabVisibility,
     getVisibleProjectSettingsSections,
     normalizeProjectVisibility,
+    PROJECT_PUBLIC_TAB_DESCRIPTIONS,
+    PROJECT_PUBLIC_TAB_LABELS,
     type ProjectMemberRole,
+    type ProjectPublicTabId,
+    type ProjectPublicTabVisibility,
     type ProjectSettingsMember,
     type ProjectSettingsSectionId,
     type ProjectSettingsVisibility,
@@ -153,6 +190,37 @@ type CollaboratorSettingsData = {
     roleCounts: Record<ProjectMemberRole, number>;
     hasMore: boolean;
     nextCursor: string | null;
+};
+
+type FileWorkspaceSettingsData = {
+    members: Array<ProjectSettingsMember & {
+        fileUploadEnabled: boolean;
+        uploadPermissionLocked: boolean;
+        uploadPermissionLabel: string;
+    }>;
+    summary: {
+        alwaysAllowedCount: number;
+        enabledMemberCount: number;
+        disabledMemberCount: number;
+        viewerCount: number;
+    };
+};
+
+type ProjectNotificationSettingsData = {
+    policy: ProjectNotificationPolicy;
+    summary: ReturnType<typeof summarizeProjectNotificationPolicy>;
+};
+
+type MemberNotificationSettingsData = {
+    member: {
+        id: string;
+        username: string | null;
+        fullName: string | null;
+        avatarUrl: string | null;
+        membershipRole: ProjectMemberRole;
+    };
+    canEdit: boolean;
+    overrides: ProjectMemberNotificationOverrides;
 };
 
 type RemovalPreflightData = {
@@ -244,6 +312,16 @@ const PROJECT_IMAGE_MAX_ZOOM = 2.5;
 const PROJECT_TAG_LIMIT = 8;
 const PROJECT_SKILL_LIMIT = 12;
 const ALLOWED_PROJECT_IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
+
+const projectRoleSettingsSchema = z.object({
+    roles: z.array(z.object({
+        id: z.string().optional(),
+        role: z.string().trim().min(1, "Role name is required"),
+        count: z.number().int().min(1, "Count must be at least 1"),
+        description: z.string().optional(),
+        skills: z.array(z.string()).optional(),
+    })),
+});
 
 function clamp(value: number, min: number, max: number) {
     return Math.min(max, Math.max(min, value));
@@ -442,6 +520,7 @@ function formatRole(role: string | null | undefined) {
 function resetSettingsFromProject(project: any) {
     return {
         visibility: normalizeProjectVisibility(project?.visibility),
+        publicTabVisibility: normalizeProjectPublicTabVisibility(project?.publicTabVisibility ?? project?.public_tab_visibility),
     };
 }
 
@@ -505,8 +584,20 @@ export default function ProjectSettingsTab({
     const canManageSettings = isProjectOwner || actorProjectRole === "admin";
     const sections = useMemo(() => {
         const visible = getVisibleProjectSettingsSections();
-        return isProjectOwner ? visible : visible.filter((section) => section.id === "collaborators");
-    }, [isProjectOwner]);
+        if (isProjectOwner) return visible;
+        if (actorProjectRole === "admin") {
+            const adminSections: ProjectSettingsSectionId[] = [
+                "access",
+                "collaborators",
+                "roles-applications",
+                "tasks-workflow",
+                "files-workspace",
+                "notifications",
+            ];
+            return visible.filter((section) => adminSections.includes(section.id));
+        }
+        return visible.filter((section) => section.id === "collaborators");
+    }, [actorProjectRole, isProjectOwner]);
     const [activeSection, setActiveSection] = useState<ProjectSettingsSectionId>(isProjectOwner ? "general" : "collaborators");
     const [advancedOpen, setAdvancedOpen] = useState<Partial<Record<ProjectSettingsSectionId, boolean>>>({});
     const [savingSettings, setSavingSettings] = useState(false);
@@ -528,6 +619,17 @@ export default function ProjectSettingsTab({
     const [collaboratorLoadingMore, setCollaboratorLoadingMore] = useState(false);
     const [collaboratorFilter, setCollaboratorFilter] = useState<CollaboratorFilter>("all");
     const [collaboratorSearch, setCollaboratorSearch] = useState("");
+    const [fileWorkspaceData, setFileWorkspaceData] = useState<FileWorkspaceSettingsData | null>(null);
+    const [fileWorkspaceLoading, setFileWorkspaceLoading] = useState(false);
+    const [fileWorkspaceSavingMemberId, setFileWorkspaceSavingMemberId] = useState<string | null>(null);
+    const [fileWorkspaceBulkSaving, setFileWorkspaceBulkSaving] = useState(false);
+    const [projectNotificationData, setProjectNotificationData] = useState<ProjectNotificationSettingsData | null>(null);
+    const [projectNotificationDraft, setProjectNotificationDraft] = useState<ProjectNotificationPolicy>(() => buildDefaultProjectNotificationPolicy());
+    const [projectNotificationLoading, setProjectNotificationLoading] = useState(false);
+    const [memberNotificationData, setMemberNotificationData] = useState<MemberNotificationSettingsData | null>(null);
+    const [memberNotificationDraft, setMemberNotificationDraft] = useState<ProjectMemberNotificationOverrides>(() => normalizeProjectMemberNotificationOverrides(null));
+    const [memberNotificationLoading, setMemberNotificationLoading] = useState(false);
+    const [memberNotificationSaving, setMemberNotificationSaving] = useState(false);
     const [removalMode, setRemovalMode] = useState<RemovalMode>("preserve_history");
     const [removalReassignToUserId, setRemovalReassignToUserId] = useState("");
     const [removalPreflightDialog, setRemovalPreflightDialog] = useState<RemovalPreflightData | null>(null);
@@ -537,7 +639,12 @@ export default function ProjectSettingsTab({
 
     const initialSettings = useMemo(() => resetSettingsFromProject(project), [project]);
     const initialIdentity = useMemo(() => resetIdentityFromProject(project), [project]);
+    const initialRoles = useMemo<ProjectRolesFormValues>(
+        () => ({ roles: normalizeProjectRoleFormValues(project?.openRoles ?? project?.open_roles) }),
+        [project?.openRoles, project?.open_roles],
+    );
     const [visibility, setVisibility] = useState<ProjectSettingsVisibility>(initialSettings.visibility);
+    const [publicTabVisibility, setPublicTabVisibility] = useState<ProjectPublicTabVisibility>(initialSettings.publicTabVisibility);
     const [projectTitle, setProjectTitle] = useState(initialIdentity.title);
     const [shortDescription, setShortDescription] = useState(initialIdentity.shortDescription);
     const [description, setDescription] = useState(initialIdentity.description);
@@ -547,13 +654,35 @@ export default function ProjectSettingsTab({
     const [skills, setSkills] = useState<string[]>(initialIdentity.skills);
     const [coverImage, setCoverImage] = useState(initialIdentity.coverImage);
     const [coverDraft, setCoverDraft] = useState<CoverDraft | null>(null);
+    const [deletedRoleIds, setDeletedRoleIds] = useState<string[]>([]);
     const projectImageDragRef = useRef<ProjectImageDragState | null>(null);
     const coverInputRef = useRef<HTMLInputElement | null>(null);
     const filePickerScrollSnapshotRef = useRef<ScrollSnapshot | null>(null);
+    const {
+        register: registerRoles,
+        control: rolesControl,
+        handleSubmit: handleRolesSubmit,
+        reset: resetRolesForm,
+        formState: { errors: roleErrors, isDirty: rolesFormDirty },
+    } = useForm<ProjectRolesFormValues>({
+        resolver: zodResolver(projectRoleSettingsSchema),
+        defaultValues: initialRoles,
+    });
+    const { fields: roleFields, append: appendRole, remove: removeRole } = useFieldArray({
+        control: rolesControl,
+        name: "roles",
+        keyName: "fieldKey",
+    });
 
     useEffect(() => {
         setVisibility(initialSettings.visibility);
+        setPublicTabVisibility(initialSettings.publicTabVisibility);
     }, [initialSettings]);
+
+    useEffect(() => {
+        resetRolesForm(initialRoles);
+        setDeletedRoleIds([]);
+    }, [initialRoles, resetRolesForm]);
 
     useEffect(() => {
         collaboratorDataRef.current = collaboratorData;
@@ -629,11 +758,14 @@ export default function ProjectSettingsTab({
     const filteredCollaborators = useMemo(() => {
         return rolePolicy.members.filter((member) => projectMemberRole(member, ownerId) !== "owner");
     }, [ownerId, rolePolicy.members]);
-    const notificationPolicy = useMemo(() => buildProjectNotificationPolicy(), []);
+    const notificationSummary = useMemo(() => summarizeProjectNotificationPolicy(projectNotificationDraft), [projectNotificationDraft]);
+    const notificationGroups = useMemo(() => groupProjectNotificationEntries(), []);
     const filePolicy = useMemo(() => buildProjectFilePolicy(), []);
     const preflightPolicy = useMemo(() => buildProjectSettingsPreflight(dangerPreflight), [dangerPreflight]);
 
-    const accessDirty = visibility !== initialSettings.visibility;
+    const visibilityDirty = visibility !== initialSettings.visibility;
+    const publicTabVisibilityDirty = !areProjectPublicTabVisibilitiesEqual(publicTabVisibility, initialSettings.publicTabVisibility);
+    const accessDirty = visibilityDirty || publicTabVisibilityDirty;
     const categoryValue = resolveProjectCategory(categoryChoice, customCategory);
     const identityDirty =
         projectTitle !== initialIdentity.title ||
@@ -642,12 +774,18 @@ export default function ProjectSettingsTab({
         categoryValue !== initialIdentity.category ||
         !areStringArraysEqual(tags, initialIdentity.tags) ||
         !areStringArraysEqual(skills, initialIdentity.skills);
+    const rolesDirty = rolesFormDirty || deletedRoleIds.length > 0;
+    const notificationDirty = JSON.stringify(projectNotificationDraft) !== JSON.stringify(projectNotificationData?.policy ?? buildDefaultProjectNotificationPolicy());
     const sectionDirty =
         activeSection === "general"
             ? identityDirty
             : activeSection === "access"
                 ? accessDirty
-                : false;
+                : activeSection === "roles-applications"
+                    ? rolesDirty
+                    : activeSection === "notifications"
+                        ? notificationDirty
+                    : false;
 
     const loadDangerPreflight = useCallback(async () => {
         setDangerPreflightLoading(true);
@@ -751,6 +889,45 @@ export default function ProjectSettingsTab({
         }
     }, [collaboratorFilter, collaboratorSearch, projectId]);
 
+    const loadFileWorkspaceSettings = useCallback(async () => {
+        setFileWorkspaceLoading(true);
+        try {
+            const result = await getProjectFileWorkspaceSettingsAction(projectId);
+            if (!result.success) {
+                setFileWorkspaceData(null);
+                toast.error(result.message);
+                return;
+            }
+            setFileWorkspaceData(result.data);
+        } catch (error) {
+            console.error("Failed to load file workspace settings", error);
+            setFileWorkspaceData(null);
+            toast.error("Failed to load file workspace settings.");
+        } finally {
+            setFileWorkspaceLoading(false);
+        }
+    }, [projectId]);
+
+    const loadProjectNotificationSettings = useCallback(async () => {
+        setProjectNotificationLoading(true);
+        try {
+            const result = await readProjectNotificationSettingsAction(projectId);
+            if (!result.success) {
+                setProjectNotificationData(null);
+                toast.error(result.message);
+                return;
+            }
+            setProjectNotificationData(result.data);
+            setProjectNotificationDraft(result.data.policy);
+        } catch (error) {
+            console.error("Failed to load project notification settings", error);
+            setProjectNotificationData(null);
+            toast.error("Failed to load project notification settings.");
+        } finally {
+            setProjectNotificationLoading(false);
+        }
+    }, [projectId]);
+
     useEffect(() => {
         if (activeSection !== "danger") return;
         void loadDangerPreflight();
@@ -767,6 +944,16 @@ export default function ProjectSettingsTab({
     }, [activeSection, loadSettingsAudit]);
 
     useEffect(() => {
+        if (activeSection !== "files-workspace") return;
+        void loadFileWorkspaceSettings();
+    }, [activeSection, loadFileWorkspaceSettings]);
+
+    useEffect(() => {
+        if (activeSection !== "notifications") return;
+        void loadProjectNotificationSettings();
+    }, [activeSection, loadProjectNotificationSettings]);
+
+    useEffect(() => {
         if (activeSection !== "collaborators") return;
         const timer = window.setTimeout(() => {
             void loadCollaborators("initial");
@@ -775,18 +962,40 @@ export default function ProjectSettingsTab({
     }, [activeSection, collaboratorFilter, collaboratorSearch, loadCollaborators]);
 
     const saveAccessSettings = useCallback(async (confirmationToken: string) => {
-        const result = await updateProjectVisibilityAction(projectId, visibility, confirmationToken);
-        if (!result.success) {
-            return { success: false, message: result.message };
+        const messages: string[] = [];
+        if (visibilityDirty) {
+            const result = await updateProjectVisibilityAction(projectId, visibility, confirmationToken);
+            if (!result.success) {
+                return { success: false, message: result.message };
+            }
+            messages.push(result.message);
         }
-        return { success: true, message: result.message, refresh: true };
-    }, [projectId, visibility]);
+        if (publicTabVisibilityDirty) {
+            const result = await updateProjectPublicTabVisibilityAction(projectId, publicTabVisibility);
+            if (!result.success) {
+                return { success: false, message: result.message };
+            }
+            messages.push(result.message);
+        }
+        return { success: true, message: messages.join(" ") || "Access settings updated.", refresh: true };
+    }, [projectId, publicTabVisibility, publicTabVisibilityDirty, visibility, visibilityDirty]);
 
     const handleSaveAccess = useCallback(async () => {
         if (!accessDirty) return;
 
         setSavingSettings(true);
         try {
+            if (!visibilityDirty) {
+                const result = await updateProjectPublicTabVisibilityAction(projectId, publicTabVisibility);
+                if (!result.success) {
+                    toast.error(result.message);
+                    return;
+                }
+                toast.success(result.message);
+                onProjectUpdated();
+                router.refresh();
+                return;
+            }
             const preflightResult = await getProjectAccessTransitionPreflightAction(projectId, visibility);
             if (!preflightResult.success) {
                 toast.error(preflightResult.message);
@@ -809,7 +1018,7 @@ export default function ProjectSettingsTab({
         } finally {
             setSavingSettings(false);
         }
-    }, [accessDirty, projectId, saveAccessSettings, visibility]);
+    }, [accessDirty, onProjectUpdated, projectId, publicTabVisibility, router, saveAccessSettings, visibility, visibilityDirty]);
 
     const handleSaveGeneral = useCallback(async () => {
         const trimmedTitle = projectTitle.trim();
@@ -859,6 +1068,232 @@ export default function ProjectSettingsTab({
         tags,
     ]);
 
+    const handleAddSettingsRole = useCallback(() => {
+        appendRole({ role: "New Role", count: 1, description: "", skills: [] });
+    }, [appendRole]);
+
+    const handleRemoveSettingsRole = useCallback((index: number, roleId?: string) => {
+        if (roleId) {
+            setDeletedRoleIds((current) => current.includes(roleId) ? current : [...current, roleId]);
+        }
+        removeRole(index);
+    }, [removeRole]);
+
+    const handleCancelRoles = useCallback(() => {
+        resetRolesForm(initialRoles);
+        setDeletedRoleIds([]);
+    }, [initialRoles, resetRolesForm]);
+
+    const handleSaveRoles = useCallback(() => {
+        void handleRolesSubmit(
+            async (values) => {
+                setSavingSettings(true);
+                try {
+                    const result = await updateProject(projectId, {
+                        roles: values.roles,
+                        deletedRoleIds,
+                    });
+                    if (!result?.success) {
+                        toast.error("Failed to update project roles.");
+                        return;
+                    }
+
+                    const nextRoles = normalizeProjectRoleFormValues((result as { openRoles?: unknown }).openRoles ?? values.roles);
+                    resetRolesForm({ roles: nextRoles });
+                    setDeletedRoleIds([]);
+                    toast.success("Project roles updated.");
+                    onProjectUpdated();
+                    router.refresh();
+                } catch (error) {
+                    console.error("Failed to save project roles", error);
+                    toast.error(error instanceof Error ? error.message : "Failed to update project roles.");
+                } finally {
+                    setSavingSettings(false);
+                }
+            },
+            () => {
+                toast.error("Fix role fields before saving.");
+            },
+        )();
+    }, [deletedRoleIds, handleRolesSubmit, onProjectUpdated, projectId, resetRolesForm, router]);
+
+    const handleTogglePublicTab = useCallback((tabId: ProjectPublicTabId, enabled: boolean) => {
+        setPublicTabVisibility((current) => ({
+            ...current,
+            [tabId]: enabled,
+        }));
+    }, []);
+
+    const handleToggleMemberFileUpload = useCallback(async (member: FileWorkspaceSettingsData["members"][number], enabled: boolean) => {
+        if (member.uploadPermissionLocked) return;
+        setFileWorkspaceSavingMemberId(member.id);
+        try {
+            const result = await updateProjectMemberFileUploadAction(projectId, member.id, enabled);
+            if (!result.success) {
+                toast.error(result.message);
+                return;
+            }
+            toast.success(result.message);
+            await loadFileWorkspaceSettings();
+            void loadSettingsAudit();
+        } catch (error) {
+            console.error("Failed to update file upload permission", error);
+            toast.error("Failed to update file upload permission.");
+        } finally {
+            setFileWorkspaceSavingMemberId(null);
+        }
+    }, [loadFileWorkspaceSettings, loadSettingsAudit, projectId]);
+
+    const handleBulkFileUploadPermission = useCallback(async (enabled: boolean) => {
+        setFileWorkspaceBulkSaving(true);
+        try {
+            const result = await updateProjectFileUploadDefaultsAction(projectId, enabled);
+            if (!result.success) {
+                toast.error(result.message);
+                return;
+            }
+            toast.success(result.message);
+            await loadFileWorkspaceSettings();
+            void loadSettingsAudit();
+        } catch (error) {
+            console.error("Failed to update file upload defaults", error);
+            toast.error("Failed to update file upload defaults.");
+        } finally {
+            setFileWorkspaceBulkSaving(false);
+        }
+    }, [loadFileWorkspaceSettings, loadSettingsAudit, projectId]);
+
+    const handleProjectNotificationPreset = useCallback((preset: ProjectNotificationPreset) => {
+        setProjectNotificationDraft(buildDefaultProjectNotificationPolicy(preset));
+    }, []);
+
+    const handleProjectNotificationToggle = useCallback((eventKey: ProjectNotificationEventKey, enabled: boolean) => {
+        setProjectNotificationDraft((current) => {
+            const normalized = normalizeProjectNotificationPolicy(current);
+            const entryDecision = resolveProjectNotificationDecision({ eventKey, projectPolicy: normalized });
+            if (entryDecision.mandatory) return normalized;
+            return {
+                ...normalized,
+                rules: {
+                    ...normalized.rules,
+                    [eventKey]: {
+                        ...normalized.rules[eventKey],
+                        enabled,
+                    },
+                },
+            };
+        });
+    }, []);
+
+    const handleSaveNotifications = useCallback(async () => {
+        setSavingSettings(true);
+        try {
+            const result = await updateProjectNotificationSettingsAction(projectId, projectNotificationDraft);
+            if (!result.success) {
+                toast.error(result.message);
+                return;
+            }
+            setProjectNotificationData(result.data);
+            setProjectNotificationDraft(result.data.policy);
+            toast.success(result.message ?? "Project notification settings updated.");
+            void loadSettingsAudit();
+        } catch (error) {
+            console.error("Failed to save project notification settings", error);
+            toast.error("Failed to save project notification settings.");
+        } finally {
+            setSavingSettings(false);
+        }
+    }, [loadSettingsAudit, projectId, projectNotificationDraft]);
+
+    const handleResetNotifications = useCallback(async () => {
+        setSavingSettings(true);
+        try {
+            const result = await resetProjectNotificationSettingsAction(projectId, "balanced");
+            if (!result.success) {
+                toast.error(result.message);
+                return;
+            }
+            setProjectNotificationData(result.data);
+            setProjectNotificationDraft(result.data.policy);
+            toast.success(result.message ?? "Project notification settings reset.");
+            void loadSettingsAudit();
+        } catch (error) {
+            console.error("Failed to reset project notification settings", error);
+            toast.error("Failed to reset project notification settings.");
+        } finally {
+            setSavingSettings(false);
+        }
+    }, [loadSettingsAudit, projectId]);
+
+    const openMemberNotificationSettings = useCallback(async (member: ProjectSettingsMember) => {
+        setMemberNotificationData(null);
+        setMemberNotificationDraft(normalizeProjectMemberNotificationOverrides(null));
+        setMemberNotificationLoading(true);
+        setConfirmAction({
+            title: "Member notification settings",
+            description: `Review ${getProjectMemberDisplayName(member)}'s project notification preferences.`,
+            confirmLabel: "Close",
+            variant: "default",
+            action: async () => ({ success: true, message: "Notification settings closed." }),
+        });
+        try {
+            const result = await readProjectMemberNotificationSettingsAction(projectId, member.id);
+            if (!result.success) {
+                toast.error(result.message);
+                setConfirmAction(null);
+                return;
+            }
+            setMemberNotificationData(result.data);
+            setMemberNotificationDraft(result.data.overrides);
+        } catch (error) {
+            console.error("Failed to load member notification settings", error);
+            toast.error("Failed to load member notification settings.");
+            setConfirmAction(null);
+        } finally {
+            setMemberNotificationLoading(false);
+        }
+    }, [projectId]);
+
+    const handleSaveMemberNotifications = useCallback(async () => {
+        if (!memberNotificationData) return;
+        setMemberNotificationSaving(true);
+        try {
+            const result = await updateProjectMemberNotificationSettingsAction(projectId, memberNotificationData.member.id, memberNotificationDraft);
+            if (!result.success) {
+                toast.error(result.message);
+                return;
+            }
+            setMemberNotificationData(result.data);
+            setMemberNotificationDraft(result.data.overrides);
+            toast.success(result.message ?? "Member notification preferences updated.");
+        } catch (error) {
+            console.error("Failed to save member notification settings", error);
+            toast.error("Failed to save member notification settings.");
+        } finally {
+            setMemberNotificationSaving(false);
+        }
+    }, [memberNotificationData, memberNotificationDraft, projectId]);
+
+    const handleResetMemberNotifications = useCallback(async () => {
+        if (!memberNotificationData) return;
+        setMemberNotificationSaving(true);
+        try {
+            const result = await resetProjectMemberNotificationSettingsAction(projectId, memberNotificationData.member.id);
+            if (!result.success) {
+                toast.error(result.message);
+                return;
+            }
+            setMemberNotificationData(result.data);
+            setMemberNotificationDraft(result.data.overrides);
+            toast.success(result.message ?? "Member notification preferences reset.");
+        } catch (error) {
+            console.error("Failed to reset member notification settings", error);
+            toast.error("Failed to reset member notification settings.");
+        } finally {
+            setMemberNotificationSaving(false);
+        }
+    }, [memberNotificationData, projectId]);
+
     const handleSaveCurrentSection = useCallback(() => {
         if (activeSection === "general") {
             void handleSaveGeneral();
@@ -866,8 +1301,16 @@ export default function ProjectSettingsTab({
         }
         if (activeSection === "access") {
             void handleSaveAccess();
+            return;
         }
-    }, [activeSection, handleSaveAccess, handleSaveGeneral]);
+        if (activeSection === "roles-applications") {
+            handleSaveRoles();
+            return;
+        }
+        if (activeSection === "notifications") {
+            void handleSaveNotifications();
+        }
+    }, [activeSection, handleSaveAccess, handleSaveGeneral, handleSaveNotifications, handleSaveRoles]);
 
     const handleCancelCurrentSection = useCallback(() => {
         if (activeSection === "general") {
@@ -882,8 +1325,17 @@ export default function ProjectSettingsTab({
         }
         if (activeSection === "access") {
             setVisibility(initialSettings.visibility);
+            setPublicTabVisibility(initialSettings.publicTabVisibility);
+            return;
         }
-    }, [activeSection, initialIdentity, initialSettings]);
+        if (activeSection === "roles-applications") {
+            handleCancelRoles();
+            return;
+        }
+        if (activeSection === "notifications") {
+            setProjectNotificationDraft(projectNotificationData?.policy ?? buildDefaultProjectNotificationPolicy());
+        }
+    }, [activeSection, handleCancelRoles, initialIdentity, initialSettings, projectNotificationData?.policy]);
 
     const handleExport = useCallback(async () => {
         setLoadingExport(true);
@@ -1123,6 +1575,8 @@ export default function ProjectSettingsTab({
             }
             setConfirmAction(null);
             setRemovalPreflightDialog(null);
+            setMemberNotificationData(null);
+            setMemberNotificationDraft(normalizeProjectMemberNotificationOverrides(null));
             if (result.redirectTo) {
                 router.push(result.redirectTo);
             }
@@ -1385,7 +1839,7 @@ export default function ProjectSettingsTab({
 
     const coverImageUrl = coverImage.trim();
     const coverInputId = `project-image-${projectId}`;
-    const removalDialogContent = removalPreflightDialog ? (() => {
+    const confirmDialogContent = removalPreflightDialog ? (() => {
         const policyPreview = buildProjectMemberRemovalPreflight(removalPreflightDialog);
         return (
             <div className="space-y-4 text-sm">
@@ -1445,7 +1899,18 @@ export default function ProjectSettingsTab({
                 ) : null}
             </div>
         );
-    })() : confirmAction?.content;
+    })() : memberNotificationLoading || memberNotificationData ? (
+        <MemberNotificationSettingsEditor
+            data={memberNotificationData}
+            draft={memberNotificationDraft}
+            isLoading={memberNotificationLoading}
+            isSaving={memberNotificationSaving}
+            projectPolicy={projectNotificationData?.policy ?? projectNotificationDraft}
+            onDraftChange={setMemberNotificationDraft}
+            onSave={handleSaveMemberNotifications}
+            onReset={handleResetMemberNotifications}
+        />
+    ) : confirmAction?.content;
 
     return (
         <div className="mx-auto grid w-full max-w-7xl gap-6 p-4 sm:p-6 lg:p-8 xl:grid-cols-[280px_minmax(0,1fr)]">
@@ -1763,33 +2228,49 @@ export default function ProjectSettingsTab({
                             ]}
                         />
 
+                        {isProjectOwner ? (
+                            <SettingsCard
+                                title="Project visibility"
+                                description="This one owner-controlled policy is used by project cards, detail pages, search, files, applications, notifications, and future README/Updates surfaces."
+                            >
+                                <div className="grid gap-3">
+                                    {VISIBILITY_OPTIONS.map((option) => (
+                                        <button
+                                            key={option.id}
+                                            type="button"
+                                            onClick={() => setVisibility(option.id)}
+                                            className={cn(
+                                                "rounded-2xl border p-4 text-left transition",
+                                                visibility === option.id
+                                                    ? "border-blue-500 bg-blue-50/70 shadow-sm dark:bg-blue-950/20"
+                                                    : "border-zinc-200 bg-white hover:border-zinc-300 dark:border-zinc-800 dark:bg-zinc-950 dark:hover:border-zinc-700",
+                                            )}
+                                        >
+                                            <span className="flex items-center justify-between gap-3">
+                                                <span className="font-semibold text-zinc-950 dark:text-zinc-50">{option.title}</span>
+                                                <span className={cn("h-3 w-3 rounded-full border", visibility === option.id ? "border-blue-500 bg-blue-500" : "border-zinc-300 dark:border-zinc-700")} />
+                                            </span>
+                                            <span className="mt-1 block text-sm text-zinc-500">{option.description}</span>
+                                            <span className="mt-3 block rounded-xl bg-zinc-50 px-3 py-2 text-xs leading-5 text-zinc-500 dark:bg-zinc-900/70 dark:text-zinc-400">
+                                                {option.detail}
+                                            </span>
+                                        </button>
+                                    ))}
+                                </div>
+                            </SettingsCard>
+                        ) : null}
+
                         <SettingsCard
-                            title="Project visibility"
-                            description="This one owner-controlled policy is used by project cards, detail pages, search, files, applications, notifications, and future README/Updates surfaces."
+                            title="Public surface visibility"
+                            description="Choose which project tabs public visitors can see. Members, leaders, and Co-leaders keep access to their workspace tabs."
                         >
-                            <div className="grid gap-3">
-                                {VISIBILITY_OPTIONS.map((option) => (
-                                    <button
-                                        key={option.id}
-                                        type="button"
-                                        onClick={() => setVisibility(option.id)}
-                                        className={cn(
-                                            "rounded-2xl border p-4 text-left transition",
-                                            visibility === option.id
-                                                ? "border-blue-500 bg-blue-50/70 shadow-sm dark:bg-blue-950/20"
-                                                : "border-zinc-200 bg-white hover:border-zinc-300 dark:border-zinc-800 dark:bg-zinc-950 dark:hover:border-zinc-700",
-                                        )}
-                                    >
-                                        <span className="flex items-center justify-between gap-3">
-                                            <span className="font-semibold text-zinc-950 dark:text-zinc-50">{option.title}</span>
-                                            <span className={cn("h-3 w-3 rounded-full border", visibility === option.id ? "border-blue-500 bg-blue-500" : "border-zinc-300 dark:border-zinc-700")} />
-                                        </span>
-                                        <span className="mt-1 block text-sm text-zinc-500">{option.description}</span>
-                                        <span className="mt-3 block rounded-xl bg-zinc-50 px-3 py-2 text-xs leading-5 text-zinc-500 dark:bg-zinc-900/70 dark:text-zinc-400">
-                                            {option.detail}
-                                        </span>
-                                    </button>
-                                ))}
+                            <PublicTabVisibilityEditor
+                                value={publicTabVisibility}
+                                onChange={handleTogglePublicTab}
+                                disabled={savingSettings}
+                            />
+                            <div className="mt-4 rounded-2xl border border-zinc-200 bg-zinc-50 p-3 text-xs leading-5 text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/60 dark:text-zinc-400">
+                                Defaults are Dashboard and Files on; Sprints, Tasks, and Analytics off. If the project is Private, these settings are saved but only apply after the project becomes Public again.
                             </div>
                         </SettingsCard>
 
@@ -1880,6 +2361,7 @@ export default function ProjectSettingsTab({
                                         onRoleChange={prepareRoleChange}
                                         onRemove={prepareRemoveMember}
                                         onTransfer={prepareTransferToMember}
+                                        onNotificationSettings={openMemberNotificationSettings}
                                     />
                                 ) : (
                                     <p className="rounded-2xl border border-dashed border-zinc-200 p-4 text-sm text-zinc-500 dark:border-zinc-800">Owner record is unavailable.</p>
@@ -1895,6 +2377,7 @@ export default function ProjectSettingsTab({
                                             onRoleChange={prepareRoleChange}
                                             onRemove={prepareRemoveMember}
                                             onTransfer={prepareTransferToMember}
+                                            onNotificationSettings={openMemberNotificationSettings}
                                         />
                                     ))
                                 ) : (
@@ -1972,6 +2455,7 @@ export default function ProjectSettingsTab({
                                             onRoleChange={prepareRoleChange}
                                             onRemove={prepareRemoveMember}
                                             onTransfer={prepareTransferToMember}
+                                            onNotificationSettings={openMemberNotificationSettings}
                                         />
                                     ))}
                                 </div>
@@ -2005,15 +2489,31 @@ export default function ProjectSettingsTab({
                 {activeSection === "roles-applications" && (
                     <div className="space-y-5">
                         <SummaryCard
-                            title="Roles and applications"
-                            description="Application intake stays connected to open roles, reviewer routing, and project notifications."
+                            title="Project Roles Editor"
+                            description="Manage the same open roles used by the top Edit Project flow, application intake, reviewer routing, and project notifications."
                             icon={UserCog}
                             meta={[
-                                ["Open roles", String(dangerPreflight?.openRolesCount ?? project?.openRoles?.length ?? "Load in Danger Zone")],
+                                ["Open roles", String(roleFields.length)],
                                 ["Applications", "Canonical application flow"],
+                                ["Save path", "Project update action"],
                             ]}
                         />
-                        <SettingsCard title="Current enforceable behavior" description="No decorative switches here; these are the flows currently backed by server state.">
+
+                        <SettingsCard
+                            title="Project roles"
+                            description="These are the exact role cards from Edit Project. Changes here update application entry points and public/private project role surfaces."
+                        >
+                            <ProjectRolesEditor
+                                fields={roleFields}
+                                register={registerRoles}
+                                errors={roleErrors}
+                                disabled={savingSettings}
+                                onAddRole={handleAddSettingsRole}
+                                onRemoveRole={handleRemoveSettingsRole}
+                            />
+                        </SettingsCard>
+
+                        <SettingsCard title="Application behavior" description="No decorative switches here; these are the flows currently backed by server state.">
                             <PolicyList
                                 items={[
                                     "Open roles define application entry points and role visibility.",
@@ -2022,20 +2522,29 @@ export default function ProjectSettingsTab({
                                     "Reviewer routing stays attached to role/application server actions.",
                                 ]}
                             />
-                            <div className="mt-4">
-                                <Button variant="outline" onClick={() => router.push(`/projects/${project?.slug ?? projectId}?tab=dashboard`)}>
-                                    Review roles on dashboard
-                                </Button>
-                            </div>
                         </SettingsCard>
+
+                        <AdvancedDisclosure
+                            open={Boolean(advancedOpen["roles-applications"])}
+                            onToggle={() => toggleAdvanced("roles-applications")}
+                            title="Roles and application touchpoints"
+                        >
+                            <AffectedAreas
+                                items={[
+                                    "Project dashboard role cards and application buttons read from these saved open roles.",
+                                    "Deleting a role removes the entry point for new applications, while existing application history stays intact.",
+                                    "Accepted applicants continue through the canonical collaborator lifecycle instead of a settings-only path.",
+                                ]}
+                            />
+                        </AdvancedDisclosure>
                     </div>
                 )}
 
                 {activeSection === "tasks-workflow" && (
                     <div className="space-y-5">
                         <SummaryCard
-                            title="Tasks and workflow"
-                            description="Lifecycle stages are enforceable today and feed project progress surfaces. Task labels/templates stay hidden until they have a canonical backend."
+                            title="Project Lifecycle"
+                            description="Edit the same project journey model used by the dashboard. Task labels/templates stay hidden until they have a canonical backend."
                             icon={Workflow}
                             meta={[
                                 ["Lifecycle", "Enabled"],
@@ -2074,14 +2583,62 @@ export default function ProjectSettingsTab({
                     <div className="space-y-5">
                         <SummaryCard
                             title="Files and workspace"
-                            description="This section documents the file policy currently enforced by project Files and task Files."
+                            description="Control file intake clearly: leaders can always upload, members can be toggled on or off, and viewers stay read-focused."
                             icon={Folder}
                             meta={[
-                                ["Open with", "Row-level"],
-                                ["Versioning", "Enabled in file rows"],
+                                ["Always allowed", String(fileWorkspaceData?.summary.alwaysAllowedCount ?? 0)],
+                                ["Members on", String(fileWorkspaceData?.summary.enabledMemberCount ?? 0)],
+                                ["Members off", String(fileWorkspaceData?.summary.disabledMemberCount ?? 0)],
                             ]}
                         />
-                        <SettingsCard title="Enforced file behavior" description="The same rules are used in project Files, task Files, notifications, and Open with menus.">
+
+                        <SettingsCard
+                            title="Member upload permissions"
+                            description="Turn file uploads on or off per member. This is enforced before signed upload URLs, file rows, folders, and replacement versions are created."
+                        >
+                            <FileWorkspaceMembers
+                                data={fileWorkspaceData}
+                                isLoading={fileWorkspaceLoading}
+                                savingMemberId={fileWorkspaceSavingMemberId}
+                                onToggle={handleToggleMemberFileUpload}
+                            />
+                        </SettingsCard>
+
+                        <SettingsCard
+                            title="Workspace defaults"
+                            description="Bulk actions apply only to standard members. Owners and Co-leaders stay on; viewers stay off."
+                        >
+                            <div className="flex flex-wrap gap-2">
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    disabled={fileWorkspaceBulkSaving}
+                                    onClick={() => void handleBulkFileUploadPermission(true)}
+                                >
+                                    Enable member uploads
+                                </Button>
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    disabled={fileWorkspaceBulkSaving}
+                                    onClick={() => void handleBulkFileUploadPermission(false)}
+                                >
+                                    Disable member uploads
+                                </Button>
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    disabled={fileWorkspaceLoading}
+                                    onClick={() => void loadFileWorkspaceSettings()}
+                                    className="gap-2"
+                                >
+                                    <RefreshCw className={cn("h-3.5 w-3.5", fileWorkspaceLoading && "animate-spin")} />
+                                    Refresh
+                                </Button>
+                            </div>
+                        </SettingsCard>
+
+                        <SettingsCard title="Enforced file behavior" description={filePolicy.uploadPolicySummary}>
                             <PolicyList items={filePolicy.enforcedRules} />
                         </SettingsCard>
                         <AdvancedDisclosure
@@ -2098,27 +2655,110 @@ export default function ProjectSettingsTab({
                     <div className="space-y-5">
                         <SummaryCard
                             title="Project notification policy"
-                            description={notificationPolicy.summary}
+                            description="Project leaders define which project events create durable attention. Personal delivery channels, quiet hours, and push settings still live in global notification settings."
                             icon={Bell}
                             meta={[
-                                ["Delivery channels", "Global settings"],
-                                ["Project events", "Attention-only"],
+                                ["Preset", projectNotificationDraft.preset],
+                                ["Enabled triggers", `${notificationSummary.enabledCount}/${notificationSummary.visibleCount}`],
+                                ["Locked safety events", `${notificationSummary.mandatoryCount}`],
                             ]}
                         />
-                        <SettingsCard title="Project event categories" description="Project settings control which project events create responsibility. Personal delivery channels remain global.">
-                            <PolicyList items={notificationPolicy.categories} />
+
+                        <SettingsCard title="Notification preset" description="Start from a low-noise baseline, then tune exact project triggers below. Mandatory responsibility and security events stay locked on.">
+                            <div className="grid gap-3 md:grid-cols-3">
+                                {([
+                                    ["quiet", "Quiet", "Only critical project responsibility and safety events stay active."],
+                                    ["balanced", "Balanced", "Recommended for most teams: assignments, reviews, files, sprints, and applications."],
+                                    ["active", "Active", "Turns on every visible project trigger for highly collaborative projects."],
+                                ] as const).map(([preset, label, detail]) => (
+                                    <ProjectNotificationPresetButton
+                                        key={preset}
+                                        preset={preset}
+                                        label={label}
+                                        detail={detail}
+                                        activePreset={projectNotificationDraft.preset}
+                                        onSelect={handleProjectNotificationPreset}
+                                    />
+                                ))}
+                            </div>
                             <div className="mt-4 flex flex-wrap gap-2">
+                                <Button type="button" variant="outline" onClick={() => void handleResetNotifications()} disabled={savingSettings}>
+                                    Reset recommended defaults
+                                </Button>
                                 <Button variant="outline" onClick={() => router.push("/settings/notifications")}>
                                     Open global notification settings
                                 </Button>
                             </div>
                         </SettingsCard>
+
+                        {projectNotificationLoading ? (
+                            <SettingsCard title="Loading project triggers" description="Reading the current project notification policy.">
+                                <div className="flex items-center gap-2 text-sm text-zinc-500">
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                    Loading notification controls...
+                                </div>
+                            </SettingsCard>
+                        ) : null}
+
+                        {notificationGroups.map((group) => (
+                            <SettingsCard key={group.id} title={group.title} description={group.description}>
+                                <div className="divide-y divide-zinc-200 overflow-hidden rounded-2xl border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
+                                    {group.entries.map((entry) => (
+                                        <ProjectNotificationRuleRow
+                                            key={entry.key}
+                                            entry={entry}
+                                            policy={projectNotificationDraft}
+                                            disabled={savingSettings}
+                                            onToggle={handleProjectNotificationToggle}
+                                        />
+                                    ))}
+                                </div>
+                            </SettingsCard>
+                        ))}
+
+                        <SettingsCard title="Member-level preferences" description="Members can reduce personal noise for optional triggers. Leaders can review effective summaries, but critical responsibility and safety notifications cannot be silently disabled for another person.">
+                            <div className="grid gap-3 lg:grid-cols-2">
+                                {rolePolicy.members.slice(0, 8).map((member) => {
+                                    const role = projectMemberRole(member, ownerId);
+                                    return (
+                                        <button
+                                            key={member.id}
+                                            type="button"
+                                            onClick={() => void openMemberNotificationSettings(member)}
+                                            className="flex items-center justify-between gap-3 rounded-2xl border border-zinc-200 bg-zinc-50 p-3 text-left transition hover:border-blue-300 hover:bg-blue-50 dark:border-zinc-800 dark:bg-zinc-900/60 dark:hover:border-blue-800 dark:hover:bg-blue-950/20"
+                                        >
+                                            <span className="min-w-0">
+                                                <span className="block truncate text-sm font-semibold text-zinc-950 dark:text-zinc-50">
+                                                    {getProjectMemberDisplayName(member)}
+                                                </span>
+                                                <span className="mt-1 block text-xs text-zinc-500">
+                                                    {getProjectMemberRoleLabel(role)} · Review effective project notification access
+                                                </span>
+                                            </span>
+                                            <Bell className="h-4 w-4 shrink-0 text-zinc-400" />
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                            {rolePolicy.members.length > 8 ? (
+                                <p className="mt-3 text-xs text-zinc-500">
+                                    Open the Collaborators tab to search all members and review their notification preferences from each member card.
+                                </p>
+                            ) : null}
+                        </SettingsCard>
+
                         <AdvancedDisclosure
                             open={Boolean(advancedOpen.notifications)}
                             onToggle={() => toggleAdvanced("notifications")}
                             title="Affected notification surfaces"
                         >
-                            <AffectedAreas items={notificationPolicy.affectedAreas} />
+                            <AffectedAreas items={[
+                                "Source actions still succeed if notification enqueue fails; failures are logged as non-fatal project notification errors.",
+                                "Durable inbox rows remain the source of truth; browser/push/email delivery continues to follow global notification settings.",
+                                "Private project notifications never expose unsafe project metadata to users who lose access.",
+                                "High-volume files, sprint edits, and bulk task events use stable aggregation windows instead of one-row-per-action spam.",
+                                "Member overrides can reduce optional project noise, but mandatory assignment, review, access, and security events stay enabled.",
+                            ]} />
                         </AdvancedDisclosure>
                     </div>
                 )}
@@ -2126,30 +2766,40 @@ export default function ProjectSettingsTab({
                 {activeSection === "security-audit" && (
                     <div className="space-y-5">
                         <SummaryCard
-                            title="Security and audit"
-                            description="Sensitive actions stay owner-only, step-up protected where available, and recorded through the canonical audit path."
+                            title="Security and data"
+                            description="Recent settings audit, protected actions, and exportable project data live in one low-noise control center."
                             icon={Shield}
                             meta={[
-                                ["Settings access", "Owner only"],
+                                ["Settings access", "Owner / Co-leader scoped"],
                                 ["Transfer ownership", "Step-up protected"],
-                                ["Danger actions", "Preflight required"],
+                                ["Export", "Available"],
                             ]}
                         />
+                        <SettingsCard
+                            title="Recent settings audit"
+                            description="Owner-visible history for access-sensitive settings changes. File policy and collaborator changes are included here."
+                        >
+                            <SettingsAuditTimeline events={settingsAuditEvents} isLoading={settingsAuditLoading} />
+                        </SettingsCard>
                         <SettingsCard title="Protected action model" description="These guardrails keep the project stable without adding fake toggles.">
                             <PolicyList
                                 items={[
-                                    "Settings tab is hidden from non-owners.",
+                                    "Settings sections are scoped by capability; non-leaders cannot see project controls.",
                                     "Ownership transfer requires the next owner to already be a member.",
                                     "Danger Zone runs preflight checks before archive/delete.",
                                     "Permission and ownership changes reuse shared security logic.",
                                 ]}
                             />
                         </SettingsCard>
-                        <SettingsCard
-                            title="Recent settings audit"
-                            description="Owner-visible history for access-sensitive settings changes. File activity remains in the Files workspace."
-                        >
-                            <SettingsAuditTimeline events={settingsAuditEvents} isLoading={settingsAuditLoading} />
+                        <SettingsCard title="Export project snapshot" description="Download a JSON snapshot of project identity, settings, lifecycle, and loaded member summaries. Import and restore stay hidden until validation and rollback are safe.">
+                            <Button
+                                onClick={() => void handleExport()}
+                                disabled={loadingExport}
+                                className="gap-2"
+                            >
+                                {loadingExport ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                                Export project snapshot
+                            </Button>
                         </SettingsCard>
                     </div>
                 )}
@@ -2276,6 +2926,8 @@ export default function ProjectSettingsTab({
                     if (!open && !confirmLoading) {
                         setConfirmAction(null);
                         setRemovalPreflightDialog(null);
+                        setMemberNotificationData(null);
+                        setMemberNotificationDraft(normalizeProjectMemberNotificationOverrides(null));
                     }
                 }}
                 title={confirmAction?.title ?? ""}
@@ -2286,7 +2938,7 @@ export default function ProjectSettingsTab({
                 autoCloseOnConfirm={false}
                 onConfirm={runConfirmAction}
             >
-                {removalDialogContent}
+                {confirmDialogContent}
             </ConfirmDialog>
         </div>
     );
@@ -2667,6 +3319,7 @@ function CollaboratorCard({
     onRoleChange,
     onRemove,
     onTransfer,
+    onNotificationSettings,
 }: {
     member: ProjectSettingsMember;
     ownerId: string | null;
@@ -2675,6 +3328,7 @@ function CollaboratorCard({
     onRoleChange: (member: ProjectSettingsMember, role: Exclude<ProjectMemberRole, "owner">) => void;
     onRemove: (member: ProjectSettingsMember) => void | Promise<void>;
     onTransfer: (member: ProjectSettingsMember) => void;
+    onNotificationSettings: (member: ProjectSettingsMember) => void | Promise<void>;
 }) {
     const role = projectMemberRole(member, ownerId) as ProjectMemberRole;
     const reference = buildProjectPersonReference({
@@ -2794,9 +3448,270 @@ function CollaboratorCard({
                             Remove member
                         </Button>
                     ) : null}
+
+                    <Button type="button" variant="outline" size="sm" onClick={() => void onNotificationSettings(member)} className="justify-start">
+                        <Bell className="h-3.5 w-3.5" />
+                        Notification settings
+                    </Button>
                 </div>
             </details>
         </article>
+    );
+}
+
+function ProjectNotificationPresetButton({
+    preset,
+    label,
+    detail,
+    activePreset,
+    onSelect,
+}: {
+    preset: ProjectNotificationPreset;
+    label: string;
+    detail: string;
+    activePreset: ProjectNotificationPreset;
+    onSelect: (preset: ProjectNotificationPreset) => void;
+}) {
+    const active = activePreset === preset;
+    return (
+        <button
+            type="button"
+            aria-pressed={active}
+            onClick={() => onSelect(preset)}
+            className={cn(
+                "rounded-2xl border p-4 text-left transition",
+                active
+                    ? "border-blue-500 bg-blue-50 text-blue-950 dark:border-blue-700 dark:bg-blue-950/30 dark:text-blue-100"
+                    : "border-zinc-200 bg-zinc-50 text-zinc-700 hover:border-zinc-300 dark:border-zinc-800 dark:bg-zinc-900/60 dark:text-zinc-200 dark:hover:border-zinc-700",
+            )}
+        >
+            <span className="text-sm font-semibold">{label}</span>
+            <span className="mt-2 block text-xs leading-5 text-zinc-500 dark:text-zinc-400">{detail}</span>
+        </button>
+    );
+}
+
+function formatProjectNotificationRecipients(entry: ProjectNotificationRegistryEntry) {
+    return entry.defaultRecipients.map((recipient) => recipient.replace(/_/g, " "));
+}
+
+function formatProjectNotificationAggregate(entry: ProjectNotificationRegistryEntry) {
+    if (entry.aggregate === "burst_10m") return "10m burst";
+    if (entry.aggregate === "digest_only") return "Digest";
+    return "Realtime";
+}
+
+function ProjectNotificationRuleRow({
+    entry,
+    policy,
+    disabled,
+    onToggle,
+}: {
+    entry: ProjectNotificationRegistryEntry;
+    policy: ProjectNotificationPolicy;
+    disabled: boolean;
+    onToggle: (eventKey: ProjectNotificationEventKey, enabled: boolean) => void;
+}) {
+    const decision = resolveProjectNotificationDecision({ eventKey: entry.key, projectPolicy: policy });
+    const enabled = decision.enabled;
+    return (
+        <div className="grid gap-3 bg-white p-4 dark:bg-zinc-950 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+            <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-sm font-semibold text-zinc-950 dark:text-zinc-50">{entry.label}</p>
+                    {entry.mandatory ? (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+                            <Lock className="h-3 w-3" />
+                            mandatory
+                        </span>
+                    ) : null}
+                    <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-semibold text-zinc-500 dark:bg-zinc-900 dark:text-zinc-300">
+                        {policy.rules[entry.key]?.importance === "important" ? "Important" : "More"}
+                    </span>
+                    <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-semibold text-zinc-500 dark:bg-zinc-900 dark:text-zinc-300">
+                        {formatProjectNotificationAggregate(entry)}
+                    </span>
+                </div>
+                <p className="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">{entry.description}</p>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                    {formatProjectNotificationRecipients(entry).map((recipient) => (
+                        <span key={recipient} className="rounded-full bg-blue-50 px-2 py-1 text-[11px] font-semibold capitalize text-blue-700 dark:bg-blue-950/30 dark:text-blue-200">
+                            {recipient}
+                        </span>
+                    ))}
+                </div>
+            </div>
+            <TogglePill
+                checked={enabled}
+                disabled={disabled || entry.mandatory}
+                onChange={(nextEnabled) => onToggle(entry.key, nextEnabled)}
+                label={entry.mandatory ? "Locked on" : enabled ? "On" : "Off"}
+            />
+        </div>
+    );
+}
+
+function MemberNotificationSettingsEditor({
+    data,
+    draft,
+    isLoading,
+    isSaving,
+    projectPolicy,
+    onDraftChange,
+    onSave,
+    onReset,
+}: {
+    data: MemberNotificationSettingsData | null;
+    draft: ProjectMemberNotificationOverrides;
+    isLoading: boolean;
+    isSaving: boolean;
+    projectPolicy: ProjectNotificationPolicy;
+    onDraftChange: React.Dispatch<React.SetStateAction<ProjectMemberNotificationOverrides>>;
+    onSave: () => void | Promise<void>;
+    onReset: () => void | Promise<void>;
+}) {
+    const groups = useMemo(() => groupProjectNotificationEntries(), []);
+    const memberName = data?.member.fullName || data?.member.username || data?.member.id || "Member";
+
+    if (isLoading) {
+        return (
+            <div className="flex items-center gap-2 rounded-2xl border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/60">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading member notification preferences...
+            </div>
+        );
+    }
+
+    if (!data) {
+        return (
+            <p className="rounded-2xl border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/60">
+                Member notification preferences are unavailable.
+            </p>
+        );
+    }
+
+    return (
+        <div className="space-y-4 text-sm">
+            <div className="rounded-2xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-800 dark:bg-zinc-900/60">
+                <p className="font-semibold text-zinc-950 dark:text-zinc-50">{memberName}</p>
+                <p className="mt-1 text-xs leading-5 text-zinc-500">
+                    {data.canEdit
+                        ? "Member preferences can reduce optional project noise. Locked responsibility and security notifications stay enabled."
+                        : "Leaders can review this member's effective policy summary, but only the member can change personal notification overrides."}
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                    {([
+                        ["inherit", "Use project defaults"],
+                        ["custom", "Customize"],
+                    ] as const).map(([mode, label]) => (
+                        <button
+                            key={mode}
+                            type="button"
+                            aria-pressed={draft.mode === mode}
+                            disabled={!data.canEdit}
+                            onClick={() => onDraftChange((current) => ({ ...current, mode }))}
+                            className={cn(
+                                "rounded-full px-3 py-1.5 text-xs font-semibold transition",
+                                draft.mode === mode
+                                    ? "bg-blue-600 text-white"
+                                    : "bg-white text-zinc-600 hover:bg-zinc-100 dark:bg-zinc-950 dark:text-zinc-300 dark:hover:bg-zinc-800",
+                            )}
+                        >
+                            {label}
+                        </button>
+                    ))}
+                </div>
+            </div>
+
+            {draft.mode === "custom" ? (
+                <div className="max-h-[52vh] space-y-3 overflow-y-auto pr-1 app-scroll app-scroll-y app-scroll-gutter">
+                    {groups.map((group) => (
+                        <div key={group.id} className="rounded-2xl border border-zinc-200 dark:border-zinc-800">
+                            <div className="border-b border-zinc-200 px-3 py-2 dark:border-zinc-800">
+                                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-400">{group.title}</p>
+                            </div>
+                            <div className="divide-y divide-zinc-200 dark:divide-zinc-800">
+                                {group.entries.map((entry) => (
+                                    <MemberNotificationRuleRow
+                                        key={entry.key}
+                                        entry={entry}
+                                        projectPolicy={projectPolicy}
+                                        draft={draft}
+                                        canEdit={data.canEdit}
+                                        onDraftChange={onDraftChange}
+                                    />
+                                ))}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            ) : (
+                <p className="rounded-2xl border border-zinc-200 bg-zinc-50 p-4 text-xs leading-5 text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/60">
+                    This member inherits the project-level policy. Changes to project defaults will automatically apply to optional triggers.
+                </p>
+            )}
+
+            <div className="flex flex-wrap justify-end gap-2">
+                <Button type="button" variant="outline" disabled={isSaving || !data.canEdit} onClick={() => void onReset()}>
+                    Reset to project defaults
+                </Button>
+                <Button type="button" disabled={isSaving || !data.canEdit} onClick={() => void onSave()}>
+                    {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                    Save member settings
+                </Button>
+            </div>
+        </div>
+    );
+}
+
+function MemberNotificationRuleRow({
+    entry,
+    projectPolicy,
+    draft,
+    canEdit,
+    onDraftChange,
+}: {
+    entry: ProjectNotificationRegistryEntry;
+    projectPolicy: ProjectNotificationPolicy;
+    draft: ProjectMemberNotificationOverrides;
+    canEdit: boolean;
+    onDraftChange: React.Dispatch<React.SetStateAction<ProjectMemberNotificationOverrides>>;
+}) {
+    const decision = resolveProjectNotificationDecision({ eventKey: entry.key, projectPolicy, memberOverrides: draft });
+    const projectDecision = resolveProjectNotificationDecision({ eventKey: entry.key, projectPolicy });
+    const disabled = !canEdit || entry.mandatory || !entry.allowMemberOverride || !projectDecision.enabled;
+    const checked = decision.enabled;
+
+    return (
+        <div className="grid gap-3 bg-white p-3 dark:bg-zinc-950 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+            <div className="min-w-0">
+                <p className="text-xs font-semibold text-zinc-950 dark:text-zinc-50">{entry.label}</p>
+                <p className="mt-1 text-[11px] leading-4 text-zinc-500">
+                    {entry.mandatory
+                        ? "Locked on for responsibility or safety."
+                        : !projectDecision.enabled
+                            ? "Disabled by project defaults."
+                            : entry.allowMemberOverride
+                                ? "Optional personal preference."
+                                : "Managed by project policy."}
+                </p>
+            </div>
+            <TogglePill
+                checked={checked}
+                disabled={disabled}
+                label={disabled ? "Locked" : checked ? "On" : "Off"}
+                onChange={(enabled) => {
+                    onDraftChange((current) => ({
+                        ...current,
+                        mode: "custom",
+                        rules: {
+                            ...current.rules,
+                            [entry.key]: enabled,
+                        },
+                    }));
+                }}
+            />
+        </div>
     );
 }
 
@@ -2901,6 +3816,167 @@ function AccessImpactGrid({
                     <p className="mt-2 text-xs leading-5 text-zinc-500 dark:text-zinc-400">{item.detail}</p>
                 </div>
             ))}
+        </div>
+    );
+}
+
+const PUBLIC_TAB_ORDER: ProjectPublicTabId[] = ["dashboard", "files", "sprints", "tasks", "analytics"];
+
+function TogglePill({
+    checked,
+    disabled,
+    onChange,
+    label,
+}: {
+    checked: boolean;
+    disabled?: boolean;
+    onChange: (checked: boolean) => void;
+    label: string;
+}) {
+    return (
+        <button
+            type="button"
+            role="switch"
+            aria-checked={checked}
+            aria-label={label}
+            disabled={disabled}
+            onClick={() => onChange(!checked)}
+            className={cn(
+                "inline-flex h-7 w-14 items-center rounded-full border p-0.5 transition disabled:cursor-not-allowed disabled:opacity-60",
+                checked
+                    ? "border-blue-500 bg-blue-600"
+                    : "border-zinc-300 bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900",
+            )}
+        >
+            <span
+                className={cn(
+                    "h-5 w-5 rounded-full bg-white shadow-sm transition-transform",
+                    checked ? "translate-x-7" : "translate-x-0",
+                )}
+            />
+        </button>
+    );
+}
+
+function PublicTabVisibilityEditor({
+    value,
+    onChange,
+    disabled,
+}: {
+    value: ProjectPublicTabVisibility;
+    onChange: (tabId: ProjectPublicTabId, enabled: boolean) => void;
+    disabled?: boolean;
+}) {
+    return (
+        <div className="grid gap-3">
+            {PUBLIC_TAB_ORDER.map((tabId) => (
+                <div
+                    key={tabId}
+                    className="flex items-center justify-between gap-4 rounded-2xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950"
+                >
+                    <div className="min-w-0">
+                        <p className="text-sm font-semibold text-zinc-950 dark:text-zinc-50">{PROJECT_PUBLIC_TAB_LABELS[tabId]}</p>
+                        <p className="mt-1 text-sm leading-5 text-zinc-500 dark:text-zinc-400">{PROJECT_PUBLIC_TAB_DESCRIPTIONS[tabId]}</p>
+                        <p className="mt-2 text-xs font-medium text-zinc-400">
+                            Default: {DEFAULT_PROJECT_PUBLIC_TAB_VISIBILITY[tabId] ? "Visible to public" : "Members only"}
+                        </p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                        <span className={cn(
+                            "text-xs font-semibold",
+                            value[tabId] ? "text-blue-600 dark:text-blue-300" : "text-zinc-400",
+                        )}>
+                            {value[tabId] ? "On" : "Off"}
+                        </span>
+                        <TogglePill
+                            checked={value[tabId]}
+                            disabled={disabled}
+                            label={`Toggle public ${PROJECT_PUBLIC_TAB_LABELS[tabId]} visibility`}
+                            onChange={(next) => onChange(tabId, next)}
+                        />
+                    </div>
+                </div>
+            ))}
+        </div>
+    );
+}
+
+function FileWorkspaceMembers({
+    data,
+    isLoading,
+    savingMemberId,
+    onToggle,
+}: {
+    data: FileWorkspaceSettingsData | null;
+    isLoading: boolean;
+    savingMemberId: string | null;
+    onToggle: (member: FileWorkspaceSettingsData["members"][number], enabled: boolean) => void | Promise<void>;
+}) {
+    if (isLoading && !data) {
+        return (
+            <div className="flex items-center gap-2 text-sm text-zinc-500">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading file upload permissions...
+            </div>
+        );
+    }
+    const members = data?.members ?? [];
+    if (members.length === 0) {
+        return <p className="text-sm text-zinc-500">No project members found.</p>;
+    }
+    return (
+        <div className="grid gap-3">
+            {members.map((member) => {
+                const role = member.membershipRole as ProjectMemberRole;
+                const displayName = getProjectMemberDisplayName(member);
+                const isSaving = savingMemberId === member.id;
+                return (
+                    <div
+                        key={member.id}
+                        className="flex items-center justify-between gap-4 rounded-2xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950"
+                    >
+                        <div className="flex min-w-0 items-center gap-3">
+                            <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-zinc-100 text-sm font-semibold text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300">
+                                {member.avatarUrl ? (
+                                    <img src={member.avatarUrl} alt="" className="h-full w-full object-cover" />
+                                ) : (
+                                    displayName.slice(0, 1).toUpperCase()
+                                )}
+                            </div>
+                            <div className="min-w-0">
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <p className="truncate text-sm font-semibold text-zinc-950 dark:text-zinc-50">{displayName}</p>
+                                    <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-semibold text-zinc-500 dark:bg-zinc-900 dark:text-zinc-300">
+                                        {getProjectMemberRoleLabel(role)}
+                                    </span>
+                                </div>
+                                <p className="mt-1 text-xs text-zinc-500">
+                                    {member.projectRoleTitle || member.username || member.uploadPermissionLabel}
+                                </p>
+                                <p className="mt-1 text-xs text-zinc-400">{formatJoinedAt(member.joinedAt)}</p>
+                            </div>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2">
+                            <span className={cn(
+                                "text-xs font-semibold",
+                                member.fileUploadEnabled ? "text-blue-600 dark:text-blue-300" : "text-zinc-400",
+                            )}>
+                                {isSaving ? "Saving" : member.fileUploadEnabled ? "On" : "Off"}
+                            </span>
+                            {isSaving ? (
+                                <Loader2 className="h-4 w-4 animate-spin text-blue-500" />
+                            ) : (
+                                <TogglePill
+                                    checked={member.fileUploadEnabled}
+                                    disabled={member.uploadPermissionLocked}
+                                    label={`Toggle file uploads for ${displayName}`}
+                                    onChange={(next) => void onToggle(member, next)}
+                                />
+                            )}
+                        </div>
+                    </div>
+                );
+            })}
         </div>
     );
 }
