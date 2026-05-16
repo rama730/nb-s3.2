@@ -30,7 +30,7 @@ import {
     resolveLifecycleStatus,
 } from '@/lib/applications/utils';
 import { isApplicationReviewerRole } from '@/lib/applications/authorization';
-import { emitApplicationDecisionNotification, emitApplicationReceivedNotification } from '@/lib/notifications/emitters';
+import { enqueueProjectNotificationEvent } from '@/lib/notifications/project-events';
 import type {
     ApplicationActionOptions,
     ApplicationActionResult,
@@ -197,6 +197,218 @@ function toISODate(value: Date | string | null | undefined) {
     if (!value) return null;
     const date = value instanceof Date ? value : new Date(value);
     return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function applicationActorSnapshot(user: { user_metadata?: Record<string, unknown> | null }) {
+    return {
+        actorName: (user.user_metadata?.full_name as string | undefined) ?? (user.user_metadata?.username as string | undefined) ?? null,
+        actorAvatarUrl: (user.user_metadata?.avatar_url as string | undefined) ?? null,
+    };
+}
+
+async function enqueueApplicationReceivedBestEffort(params: {
+    applicationId: string;
+    projectId: string;
+    projectSlug?: string | null;
+    projectTitle?: string | null;
+    roleId?: string | null;
+    roleTitle?: string | null;
+    actorUserId: string;
+    actorName: string | null;
+    actorAvatarUrl?: string | null;
+    traceId: string;
+}) {
+    try {
+        await enqueueProjectNotificationEvent({
+            projectId: params.projectId,
+            actorUserId: params.actorUserId,
+            actorName: params.actorName,
+            actorAvatarUrl: params.actorAvatarUrl ?? null,
+            eventKey: "applications.received",
+            title: `${params.actorName || "Someone"} applied to ${params.projectTitle || "your project"}`,
+            body: params.roleTitle ? `Role: ${params.roleTitle}` : params.projectTitle ? `Project: ${params.projectTitle}` : "New application received",
+            href: `/people?tab=applications&applicationId=${encodeURIComponent(params.applicationId)}`,
+            entityRefs: {
+                applicationId: params.applicationId,
+                projectId: params.projectId,
+                projectSlug: params.projectSlug ?? null,
+                roleId: params.roleId ?? null,
+            },
+            preview: {
+                actorName: params.actorName,
+                actorAvatarUrl: params.actorAvatarUrl ?? null,
+                contextLabel: params.projectTitle ?? "Application",
+                contextKind: "application",
+                secondaryText: params.roleTitle ?? "Application received",
+            },
+            sourceEventId: params.applicationId,
+        });
+    } catch (notificationError) {
+        console.error('[applications] Failed to enqueue application received notification', {
+            applicationId: params.applicationId,
+            actorUserId: params.actorUserId,
+            projectId: params.projectId,
+            projectSlug: params.projectSlug ?? null,
+            projectTitle: params.projectTitle ?? null,
+            traceId: params.traceId,
+            error: notificationError instanceof Error ? notificationError.message : String(notificationError),
+        });
+    }
+}
+
+async function enqueueApplicationDecisionBestEffort(params: {
+    applicationId: string;
+    status: "accepted" | "rejected" | "reopened";
+    conversationId?: string | null;
+    projectId: string;
+    projectSlug?: string | null;
+    projectTitle?: string | null;
+    roleId?: string | null;
+    applicantId: string;
+    actorUserId: string;
+    actorName: string | null;
+    actorAvatarUrl?: string | null;
+    traceId: string;
+}) {
+    try {
+        await enqueueProjectNotificationEvent({
+            projectId: params.projectId,
+            actorUserId: params.actorUserId,
+            actorName: params.actorName,
+            actorAvatarUrl: params.actorAvatarUrl ?? null,
+            eventKey: "applications.decision",
+            applicantId: params.applicantId,
+            title: `${params.actorName || "Someone"} ${params.status === "accepted" ? "accepted" : params.status === "rejected" ? "updated" : "reopened"} your application`,
+            body: params.projectTitle ? `Project: ${params.projectTitle}` : null,
+            href: params.conversationId
+                ? `/messages?conversationId=${encodeURIComponent(params.conversationId)}`
+                : `/people?tab=applications&applicationId=${encodeURIComponent(params.applicationId)}`,
+            entityRefs: {
+                applicationId: params.applicationId,
+                conversationId: params.conversationId ?? null,
+                projectId: params.projectId,
+                projectSlug: params.projectSlug ?? null,
+                roleId: params.roleId ?? null,
+            },
+            preview: {
+                actorName: params.actorName,
+                actorAvatarUrl: params.actorAvatarUrl ?? null,
+                contextLabel: params.projectTitle ?? "Application",
+                contextKind: "application",
+                secondaryText: params.status,
+            },
+            sourceEventId: `${params.applicationId}:${params.status}`,
+        });
+    } catch (notificationError) {
+        console.error('[applications] Failed to enqueue application decision notification', {
+            applicationId: params.applicationId,
+            status: params.status,
+            actorUserId: params.actorUserId,
+            recipientUserId: params.applicantId,
+            traceId: params.traceId,
+            error: notificationError instanceof Error ? notificationError.message : String(notificationError),
+        });
+    }
+}
+
+async function enqueueApplicationWithdrawnBestEffort(params: {
+    applicationId: string;
+    projectId: string;
+    projectSlug?: string | null;
+    projectTitle?: string | null;
+    roleId?: string | null;
+    roleTitle?: string | null;
+    actorUserId: string;
+    actorName: string | null;
+    actorAvatarUrl?: string | null;
+    traceId: string;
+}) {
+    try {
+        await enqueueProjectNotificationEvent({
+            projectId: params.projectId,
+            actorUserId: params.actorUserId,
+            actorName: params.actorName,
+            actorAvatarUrl: params.actorAvatarUrl ?? null,
+            eventKey: "applications.withdrawn",
+            title: `${params.actorName || "Someone"} withdrew an application`,
+            body: params.roleTitle ? `Role: ${params.roleTitle}` : params.projectTitle ? `Project: ${params.projectTitle}` : "Application withdrawn",
+            href: `/people?tab=applications&applicationId=${encodeURIComponent(params.applicationId)}`,
+            entityRefs: {
+                applicationId: params.applicationId,
+                projectId: params.projectId,
+                projectSlug: params.projectSlug ?? null,
+                roleId: params.roleId ?? null,
+            },
+            preview: {
+                actorName: params.actorName,
+                actorAvatarUrl: params.actorAvatarUrl ?? null,
+                contextLabel: params.projectTitle ?? "Application",
+                contextKind: "application",
+                secondaryText: "Withdrawn",
+            },
+            sourceEventId: `${params.applicationId}:withdrawn`,
+        });
+    } catch (notificationError) {
+        console.error('[applications] Failed to enqueue application withdrawn notification', {
+            applicationId: params.applicationId,
+            actorUserId: params.actorUserId,
+            projectId: params.projectId,
+            traceId: params.traceId,
+            error: notificationError instanceof Error ? notificationError.message : String(notificationError),
+        });
+    }
+}
+
+async function enqueueMemberJoinedBestEffort(params: {
+    projectId: string;
+    projectSlug?: string | null;
+    projectTitle?: string | null;
+    applicationId?: string | null;
+    roleId?: string | null;
+    targetUserId: string;
+    targetName: string;
+    targetAvatarUrl?: string | null;
+    actorUserId: string;
+    actorName: string | null;
+    actorAvatarUrl?: string | null;
+    sourceEventId?: string | null;
+    traceId: string;
+}) {
+    try {
+        await enqueueProjectNotificationEvent({
+            projectId: params.projectId,
+            actorUserId: params.actorUserId,
+            actorName: params.actorName,
+            actorAvatarUrl: params.actorAvatarUrl ?? null,
+            eventKey: "members.joined",
+            title: `${params.targetName} joined ${params.projectTitle || "the project"}`,
+            body: "A new member joined the project.",
+            href: `/projects/${encodeURIComponent(params.projectSlug || params.projectId)}?tab=settings&settings=collaborators`,
+            entityRefs: {
+                projectId: params.projectId,
+                projectSlug: params.projectSlug ?? null,
+                applicationId: params.applicationId ?? null,
+                roleId: params.roleId ?? null,
+                targetUserId: params.targetUserId,
+            },
+            preview: {
+                actorName: params.targetName,
+                actorAvatarUrl: params.targetAvatarUrl ?? null,
+                contextLabel: params.projectTitle ?? "Project",
+                contextKind: "project",
+                secondaryText: "New project member",
+            },
+            sourceEventId: params.sourceEventId ?? `${params.targetUserId}:member-joined`,
+        });
+    } catch (notificationError) {
+        console.error('[applications] Failed to enqueue member joined notification', {
+            projectId: params.projectId,
+            targetUserId: params.targetUserId,
+            actorUserId: params.actorUserId,
+            traceId: params.traceId,
+            error: notificationError instanceof Error ? notificationError.message : String(notificationError),
+        });
+    }
 }
 
 async function canReviewProjectApplicationInternal(
@@ -1056,30 +1268,17 @@ export async function applyToRoleAction(
                         source: 'project',
                         applicationTraceId: traceId,
                     });
-                    try {
-                        await emitApplicationReceivedNotification({
-                            recipientUserId: project.ownerId,
-                            actorUserId: user.id,
-                            actorName: (user.user_metadata?.full_name as string | undefined) ?? (user.user_metadata?.username as string | undefined) ?? null,
-                            actorAvatarUrl: (user.user_metadata?.avatar_url as string | undefined) ?? null,
-                            applicationId: existingApp.id,
-                            projectId,
-                            projectSlug: project.slug ?? null,
-                            projectTitle: project.title ?? null,
-                            eventKey: traceId,
-                        });
-                    } catch (notificationError) {
-                        console.error('[applications] Failed to emit application received notification', {
-                            applicationId: existingApp.id,
-                            actorUserId: user.id,
-                            recipientUserId: project.ownerId,
-                            projectId,
-                            projectSlug: project.slug ?? null,
-                            projectTitle: project.title ?? null,
-                            traceId,
-                            error: notificationError instanceof Error ? notificationError.message : String(notificationError),
-                        });
-                    }
+                    await enqueueApplicationReceivedBestEffort({
+                        applicationId: existingApp.id,
+                        projectId,
+                        projectSlug: project.slug ?? null,
+                        projectTitle: project.title ?? null,
+                        roleId,
+                        roleTitle: roleTitleText,
+                        actorUserId: user.id,
+                        ...applicationActorSnapshot(user),
+                        traceId,
+                    });
                     return toApplicationSuccess(traceId, {
                         applicationId: existingApp.id,
                         conversationId,
@@ -1140,30 +1339,17 @@ export async function applyToRoleAction(
                 source: 'project',
                 applicationTraceId: traceId,
             });
-            try {
-                await emitApplicationReceivedNotification({
-                    recipientUserId: project.ownerId,
-                    actorUserId: user.id,
-                    actorName: (user.user_metadata?.full_name as string | undefined) ?? (user.user_metadata?.username as string | undefined) ?? null,
-                    actorAvatarUrl: (user.user_metadata?.avatar_url as string | undefined) ?? null,
-                    applicationId: newApplicationId,
-                    projectId,
-                    projectSlug: project.slug ?? null,
-                    projectTitle: project.title ?? null,
-                    eventKey: traceId,
-                });
-            } catch (notificationError) {
-                console.error('[applications] Failed to emit application received notification', {
-                    applicationId: newApplicationId,
-                    actorUserId: user.id,
-                    recipientUserId: project.ownerId,
-                    projectId,
-                    projectSlug: project.slug ?? null,
-                    projectTitle: project.title ?? null,
-                    traceId,
-                    error: notificationError instanceof Error ? notificationError.message : String(notificationError),
-                });
-            }
+            await enqueueApplicationReceivedBestEffort({
+                applicationId: newApplicationId,
+                projectId,
+                projectSlug: project.slug ?? null,
+                projectTitle: project.title ?? null,
+                roleId,
+                roleTitle: roleTitleText,
+                actorUserId: user.id,
+                ...applicationActorSnapshot(user),
+                traceId,
+            });
 
             return toApplicationSuccess(traceId, {
                 applicationId: newApplicationId,
@@ -1242,7 +1428,7 @@ export async function acceptApplicationAction(
                 return toApplicationFailure(traceId, 'ROLE_FULL', 'This role is now full');
             }
 
-            await db.transaction(async (tx) => {
+            const memberLifecycle = await db.transaction(async (tx) => {
                 const roleTitleForMember =
                     application.role?.title || application.role?.role || 'Team Member';
 
@@ -1265,7 +1451,7 @@ export async function acceptApplicationAction(
                     columns: { id: true, role: true }
                 });
 
-                await addProjectMemberInternal(tx, {
+                const lifecycle = await addProjectMemberInternal(tx, {
                     projectId: application.projectId,
                     userId: application.applicantId,
                     role: 'member',
@@ -1302,6 +1488,8 @@ export async function acceptApplicationAction(
                         traceId
                     );
                 }
+
+                return lifecycle;
             });
 
             const slugOrId = application.project?.slug || application.projectId;
@@ -1316,28 +1504,36 @@ export async function acceptApplicationAction(
                 source: 'requests',
                 applicationTraceId: traceId,
             });
-            try {
-                await emitApplicationDecisionNotification({
-                    recipientUserId: application.applicantId,
-                    actorUserId: user.id,
-                    actorName: (user.user_metadata?.full_name as string | undefined) ?? (user.user_metadata?.username as string | undefined) ?? null,
-                    actorAvatarUrl: (user.user_metadata?.avatar_url as string | undefined) ?? null,
-                    applicationId,
-                    status: 'accepted',
-                    conversationId: application.conversationId ?? null,
+            if (memberLifecycle.changed) {
+                const memberName = memberLifecycle.target?.fullName || memberLifecycle.target?.username || "A member";
+                await enqueueMemberJoinedBestEffort({
                     projectId: application.projectId,
                     projectSlug: application.project?.slug ?? null,
                     projectTitle: application.project?.title ?? null,
-                    eventKey: traceId,
-                });
-            } catch (notificationError) {
-                console.error('[applications] Failed to emit application decision notification', {
                     applicationId,
-                    status: 'accepted',
+                    roleId: application.roleId,
+                    targetUserId: application.applicantId,
+                    targetName: memberName,
+                    targetAvatarUrl: memberLifecycle.target?.avatarUrl ?? null,
+                    actorUserId: user.id,
+                    ...applicationActorSnapshot(user),
+                    sourceEventId: memberLifecycle.eventId ?? `${applicationId}:member-joined`,
                     traceId,
-                    error: notificationError instanceof Error ? notificationError.message : String(notificationError),
                 });
             }
+            await enqueueApplicationDecisionBestEffort({
+                applicationId,
+                status: 'accepted',
+                conversationId: application.conversationId ?? null,
+                projectId: application.projectId,
+                projectSlug: application.project?.slug ?? null,
+                projectTitle: application.project?.title ?? null,
+                roleId: application.roleId,
+                applicantId: application.applicantId,
+                actorUserId: user.id,
+                ...applicationActorSnapshot(user),
+                traceId,
+            });
 
             return toApplicationSuccess(traceId, { applicationId });
         });
@@ -1463,31 +1659,19 @@ export async function rejectApplicationAction(
                 source: 'requests',
                 applicationTraceId: traceId,
             });
-            try {
-                await emitApplicationDecisionNotification({
-                    recipientUserId: application.applicantId,
-                    actorUserId: user.id,
-                    actorName: (user.user_metadata?.full_name as string | undefined) ?? (user.user_metadata?.username as string | undefined) ?? null,
-                    actorAvatarUrl: (user.user_metadata?.avatar_url as string | undefined) ?? null,
-                    applicationId,
-                    status: 'rejected',
-                    conversationId: application.conversationId ?? null,
-                    projectId: application.projectId,
-                    projectSlug: application.project?.slug ?? null,
-                    projectTitle: application.project?.title ?? null,
-                    eventKey: traceId,
-                });
-            } catch (notificationError) {
-                console.error('[applications] Failed to emit application decision notification', {
-                    applicationId,
-                    status: 'rejected',
-                    actorUserId: user.id,
-                    recipientUserId: application.applicantId,
-                    eventKey: traceId,
-                    traceId,
-                    error: notificationError instanceof Error ? notificationError.message : String(notificationError),
-                });
-            }
+            await enqueueApplicationDecisionBestEffort({
+                applicationId,
+                status: 'rejected',
+                conversationId: application.conversationId ?? null,
+                projectId: application.projectId,
+                projectSlug: application.project?.slug ?? null,
+                projectTitle: application.project?.title ?? null,
+                roleId: application.roleId,
+                applicantId: application.applicantId,
+                actorUserId: user.id,
+                ...applicationActorSnapshot(user),
+                traceId,
+            });
 
             return toApplicationSuccess(traceId, { applicationId });
         });
@@ -1710,6 +1894,17 @@ export async function withdrawApplicationAction(
             source: 'messages',
             applicationTraceId: traceId,
         });
+        await enqueueApplicationWithdrawnBestEffort({
+            applicationId,
+            projectId: application.projectId,
+            projectSlug: application.project?.slug ?? null,
+            projectTitle: application.project?.title ?? null,
+            roleId: application.roleId,
+            roleTitle: application.role?.title || application.role?.role || null,
+            actorUserId: user.id,
+            ...applicationActorSnapshot(user),
+            traceId,
+        });
 
         return toApplicationSuccess(traceId, { applicationId });
     } catch (error) {
@@ -1842,30 +2037,19 @@ export async function reopenApplicationAction(
             source: 'messages',
             applicationTraceId: traceId,
         });
-        try {
-            await emitApplicationDecisionNotification({
-                recipientUserId: application.applicantId,
-                actorUserId: user.id,
-                actorName: (user.user_metadata?.full_name as string | undefined) ?? (user.user_metadata?.username as string | undefined) ?? null,
-                actorAvatarUrl: (user.user_metadata?.avatar_url as string | undefined) ?? null,
-                applicationId,
-                status: 'reopened',
-                conversationId: application.conversationId ?? null,
-                projectId: application.projectId,
-                projectSlug: application.project?.slug ?? null,
-                projectTitle: application.project?.title ?? null,
-                eventKey: traceId,
-            });
-        } catch (notificationError) {
-            console.error('[applications] Failed to emit application decision notification', {
-                applicationId,
-                status: 'reopened',
-                actorUserId: user.id,
-                recipientUserId: application.applicantId,
-                traceId,
-                error: notificationError instanceof Error ? notificationError.message : String(notificationError),
-            });
-        }
+        await enqueueApplicationDecisionBestEffort({
+            applicationId,
+            status: 'reopened',
+            conversationId: application.conversationId ?? null,
+            projectId: application.projectId,
+            projectSlug: application.project?.slug ?? null,
+            projectTitle: application.project?.title ?? null,
+            roleId: application.roleId,
+            applicantId: application.applicantId,
+            actorUserId: user.id,
+            ...applicationActorSnapshot(user),
+            traceId,
+        });
 
         return toApplicationSuccess(traceId, { applicationId });
     } catch (error) {
