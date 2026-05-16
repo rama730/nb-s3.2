@@ -33,7 +33,7 @@ import {
   type TaskDiscussionThreadPage,
 } from "@/lib/projects/task-discussion";
 import { parseMentions } from "@/lib/projects/mention-tokens";
-import { emitTaskCommentReplyNotification } from "@/lib/notifications/emitters";
+import { enqueueProjectNotificationEvent } from "@/lib/notifications/project-events";
 import { enqueueTaskCommentMentionNotifications } from "@/lib/notifications/task-comment-mention";
 import { consumeRateLimit } from "@/lib/security/rate-limit";
 import { getViewerProfileContext } from "@/lib/server/viewer-context";
@@ -614,25 +614,38 @@ export async function createTaskCommentAction(
       !validatedMentionIds.includes(parentCommentAuthorId)
     ) {
       try {
-        await emitTaskCommentReplyNotification({
-          recipientUserId: parentCommentAuthorId,
-          actorUserId: viewer.userId,
-          actorName: viewer.profile?.fullName ?? viewer.profile?.username ?? null,
-          actorAvatarUrl: viewer.profile?.avatarUrl ?? null,
+        const actorName = viewer.profile?.fullName ?? viewer.profile?.username ?? null;
+        await enqueueProjectNotificationEvent({
           projectId,
-          projectSlug: projectRow?.slug ?? null,
-          taskId,
-          commentId: inserted.id,
-          parentCommentId,
-          createdAt,
-          previewText: parsedMentions.plainText,
-          projectLabel: projectRow?.title ?? null,
+          actorUserId: viewer.userId,
+          actorName,
+          actorAvatarUrl: viewer.profile?.avatarUrl ?? null,
+          eventKey: "tasks.replies",
+          affectedMemberId: parentCommentAuthorId,
+          title: `${actorName || "Someone"} replied to your task comment`,
+          body: parsedMentions.plainText,
+          href: `/projects/${encodeURIComponent(projectRow?.slug || projectId)}?tab=tasks&drawerType=task&drawerId=${encodeURIComponent(taskId)}&panelTab=comments&commentId=${encodeURIComponent(inserted.id)}`,
+          entityRefs: {
+            projectId,
+            projectSlug: projectRow?.slug ?? null,
+            taskId,
+            commentId: inserted.id,
+            parentCommentId,
+            createdAt: createdAt.toISOString(),
+          },
+          preview: {
+            actorName,
+            actorAvatarUrl: viewer.profile?.avatarUrl ?? null,
+            contextLabel: projectRow?.title ?? "Task discussion",
+            contextKind: "task",
+          },
+          sourceEventId: inserted.id,
         });
       } catch (notifyError) {
         logger.warn("tasks.comment_reply_notification_failed", {
           module: "notifications",
-          projectId,
           taskId,
+          projectId,
           actorUserId: viewer.userId,
           error: notifyError instanceof Error ? notifyError.message : String(notifyError),
         });
