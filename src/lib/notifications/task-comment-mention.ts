@@ -1,4 +1,4 @@
-import { emitTaskCommentMentionNotification } from "@/lib/notifications/emitters";
+import { enqueueProjectNotificationEvent } from "@/lib/notifications/project-events";
 import { logger } from "@/lib/logger";
 
 export interface TaskCommentMentionNotificationPayload {
@@ -54,40 +54,43 @@ export async function enqueueTaskCommentMentionNotifications(
     const trimmedPreview = trimPreview(params.preview);
     const recipientUserIds = Array.from(recipients);
 
-    const results = await Promise.allSettled(
-        recipientUserIds.map((recipientUserId) =>
-            emitTaskCommentMentionNotification({
-                recipientUserId,
-                actorUserId: params.authorUserId,
-                actorName: params.authorDisplayName,
-                actorAvatarUrl: params.authorAvatarUrl ?? null,
+    try {
+        const result = await enqueueProjectNotificationEvent({
+            projectId: params.projectId,
+            actorUserId: params.authorUserId,
+            actorName: params.authorDisplayName,
+            actorAvatarUrl: params.authorAvatarUrl ?? null,
+            eventKey: "tasks.mentions",
+            directRecipientIds: recipientUserIds,
+            title: `${params.authorDisplayName || "Someone"} mentioned you in a task comment`,
+            body: trimmedPreview,
+            href: `/projects/${encodeURIComponent(params.projectSlug || params.projectId)}?tab=tasks&drawerType=task&drawerId=${encodeURIComponent(params.taskId)}&panelTab=comments&commentId=${encodeURIComponent(params.commentId)}`,
+            entityRefs: {
                 projectId: params.projectId,
                 projectSlug: params.projectSlug ?? null,
                 taskId: params.taskId,
                 commentId: params.commentId,
                 parentCommentId: params.parentCommentId,
-                createdAt: params.createdAt,
-                previewText: trimmedPreview,
-                projectLabel: params.projectLabel ?? null,
-            }),
-        ),
-    );
-
-    const rejectedCount = results.filter((result) => result.status === "rejected").length;
-    if (rejectedCount > 0) {
-        logger.warn("notifications.task_comment_mention_emit_partial_failed", {
+                createdAt: params.createdAt.toISOString(),
+            },
+            preview: {
+                actorName: params.authorDisplayName,
+                actorAvatarUrl: params.authorAvatarUrl ?? null,
+                contextLabel: params.projectLabel ?? "Task comment",
+                contextKind: "task",
+            },
+            sourceEventId: params.commentId,
+        });
+        return { enqueued: "enqueued" in result ? result.enqueued : 0 };
+    } catch (error) {
+        logger.warn("notifications.task_comment_mention_emit_failed", {
             module: "notifications",
             projectId: params.projectId,
             taskId: params.taskId,
             commentId: params.commentId,
-            count: rejectedCount,
-            error: results
-                .filter((result): result is PromiseRejectedResult => result.status === "rejected")
-                .map((result) => result.reason instanceof Error ? result.reason.message : String(result.reason))
-                .slice(0, 3)
-                .join("; "),
+            count: recipientUserIds.length,
+            error: error instanceof Error ? error.message : String(error),
         });
+        return { enqueued: 0 };
     }
-
-    return { enqueued: results.filter((result) => result.status === "fulfilled").length };
 }
