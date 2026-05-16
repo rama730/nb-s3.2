@@ -2,8 +2,25 @@ import { and, eq, isNull, sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { profiles, projectNodes, projects, tasks, taskNodeLinks } from "@/lib/db/schema";
-import { emitFileVersionAddedNotification, emitTaskFileNotification } from "@/lib/notifications/emitters";
+import { enqueueProjectNotificationEvent } from "@/lib/notifications/project-events";
 import { logger } from "@/lib/logger";
+import type { ProjectNotificationEventKey } from "@/lib/notifications/project-policy";
+
+function taskFileEventKey(kind: "task_file_version" | "task_file_replaced" | "task_file_needs_review"): ProjectNotificationEventKey {
+    if (kind === "task_file_needs_review") return "files.review_requested";
+    if (kind === "task_file_replaced") return "files.replaced";
+    return "files.version_added";
+}
+
+function taskFileActionLabel(kind: "task_file_version" | "task_file_replaced" | "task_file_needs_review") {
+    if (kind === "task_file_needs_review") return "marked a task file for review";
+    if (kind === "task_file_replaced") return "replaced a task file";
+    return "uploaded a new file version";
+}
+
+function taskFileHref(projectSlugOrId: string, taskId: string, fileId: string) {
+    return `/projects/${encodeURIComponent(projectSlugOrId)}?tab=tasks&drawerType=task&drawerId=${encodeURIComponent(taskId)}&panelTab=files&fileId=${encodeURIComponent(fileId)}`;
+}
 
 export async function notifyTaskParticipantsForFileEvent(params: {
     actorUserId: string;
@@ -45,21 +62,33 @@ export async function notifyTaskParticipantsForFileEvent(params: {
             const recipients = Array.from(new Set([task.assigneeId, task.creatorId].filter(Boolean) as string[]))
                 .filter((recipientUserId) => recipientUserId !== params.actorUserId);
             if (recipients.length === 0) return Promise.resolve();
-            return emitTaskFileNotification({
-                recipients,
-                actorUserId: params.actorUserId,
-                actorName: actor?.fullName || actor?.username || null,
-                actorAvatarUrl: actor?.avatarUrl ?? null,
-                kind: params.kind,
-                taskId: task.taskId,
-                taskTitle: task.taskTitle,
+            const actorName = actor?.fullName || actor?.username || null;
+            const actionLabel = taskFileActionLabel(params.kind);
+            return enqueueProjectNotificationEvent({
                 projectId: task.projectId,
-                projectSlug: task.projectSlug ?? null,
-                projectKey: task.projectKey ?? null,
-                taskNumber: task.taskNumber ?? null,
-                fileId: node.id,
-                fileName: node.name,
-                version: params.version ?? null,
+                actorUserId: params.actorUserId,
+                actorName,
+                actorAvatarUrl: actor?.avatarUrl ?? null,
+                eventKey: taskFileEventKey(params.kind),
+                taskParticipantIds: recipients,
+                reviewerIds: params.kind === "task_file_needs_review" ? recipients : null,
+                title: `${actorName || "Someone"} ${actionLabel}`,
+                body: node.name,
+                href: taskFileHref(task.projectSlug || task.projectId, task.taskId, node.id),
+                entityRefs: {
+                    projectId: task.projectId,
+                    projectSlug: task.projectSlug ?? null,
+                    taskId: task.taskId,
+                    fileId: node.id,
+                },
+                preview: {
+                    actorName,
+                    actorAvatarUrl: actor?.avatarUrl ?? null,
+                    contextLabel: task.projectKey && task.taskNumber ? `${task.projectKey}-${task.taskNumber}` : "Task file",
+                    contextKind: "file",
+                    secondaryText: params.version ? `${node.name} v${params.version}` : node.name,
+                },
+                sourceEventId: `${task.taskId}:${params.kind}:${node.id}:${params.version ?? "latest"}`,
             });
         }));
     } catch (error) {
@@ -129,27 +158,36 @@ export async function notifyForFileVersionCreated(params: {
         if (!node) return;
 
         if (linkedTasks.length > 0) {
-            // Node has task links → emit existing task_file_replaced notification unchanged
             await Promise.all(linkedTasks.map((task) => {
                 const recipients = Array.from(
                     new Set([task.assigneeId, task.creatorId].filter(Boolean) as string[]),
                 ).filter((recipientUserId) => recipientUserId !== params.actorUserId);
                 if (recipients.length === 0) return Promise.resolve();
-                return emitTaskFileNotification({
-                    recipients,
-                    actorUserId: params.actorUserId,
-                    actorName: actor?.fullName || actor?.username || null,
-                    actorAvatarUrl: actor?.avatarUrl ?? null,
-                    kind: "task_file_replaced",
-                    taskId: task.taskId,
-                    taskTitle: task.taskTitle,
+                const actorName = actor?.fullName || actor?.username || null;
+                return enqueueProjectNotificationEvent({
                     projectId: task.projectId,
-                    projectSlug: task.projectSlug ?? null,
-                    projectKey: task.projectKey ?? null,
-                    taskNumber: task.taskNumber ?? null,
-                    fileId: node.id,
-                    fileName: node.name,
-                    version: params.version,
+                    actorUserId: params.actorUserId,
+                    actorName,
+                    actorAvatarUrl: actor?.avatarUrl ?? null,
+                    eventKey: "files.replaced",
+                    taskParticipantIds: recipients,
+                    title: `${actorName || "Someone"} replaced a task file`,
+                    body: node.name,
+                    href: taskFileHref(task.projectSlug || task.projectId, task.taskId, node.id),
+                    entityRefs: {
+                        projectId: task.projectId,
+                        projectSlug: task.projectSlug ?? null,
+                        taskId: task.taskId,
+                        fileId: node.id,
+                    },
+                    preview: {
+                        actorName,
+                        actorAvatarUrl: actor?.avatarUrl ?? null,
+                        contextLabel: task.projectKey && task.taskNumber ? `${task.projectKey}-${task.taskNumber}` : "Task file",
+                        contextKind: "file",
+                        secondaryText: `${node.name} v${params.version}`,
+                    },
+                    sourceEventId: `${task.taskId}:file-replaced:${node.id}:${params.version}`,
                 });
             }));
         } else {
@@ -175,22 +213,35 @@ export async function notifyForFileVersionCreated(params: {
 
             if (recipients.length === 0) return;
 
-            // Get project slug for the notification href
             const project = await db.query.projects.findFirst({
                 where: eq(projects.id, params.projectId),
                 columns: { slug: true },
             });
 
-            await emitFileVersionAddedNotification({
-                recipients,
-                actorUserId: params.actorUserId,
-                actorName: actor?.fullName || actor?.username || null,
-                actorAvatarUrl: actor?.avatarUrl ?? null,
+            const actorName = actor?.fullName || actor?.username || null;
+            await enqueueProjectNotificationEvent({
                 projectId: params.projectId,
-                projectSlug: project?.slug ?? null,
-                fileId: node.id,
-                fileName: node.name,
-                version: params.version,
+                actorUserId: params.actorUserId,
+                actorName,
+                actorAvatarUrl: actor?.avatarUrl ?? null,
+                eventKey: "files.version_added",
+                directRecipientIds: recipients,
+                title: `${actorName || "Someone"} added a new version`,
+                body: `${node.name} v${params.version}`,
+                href: `/projects/${encodeURIComponent(project?.slug || params.projectId)}?tab=files&fileId=${encodeURIComponent(node.id)}`,
+                entityRefs: {
+                    projectId: params.projectId,
+                    projectSlug: project?.slug ?? null,
+                    fileId: node.id,
+                },
+                preview: {
+                    actorName,
+                    actorAvatarUrl: actor?.avatarUrl ?? null,
+                    contextLabel: "File version",
+                    contextKind: "file",
+                    secondaryText: `${node.name} v${params.version}`,
+                },
+                sourceEventId: `${node.id}:version:${params.version}`,
             });
         }
     } catch (error) {
