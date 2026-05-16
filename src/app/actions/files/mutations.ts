@@ -8,6 +8,8 @@ import { randomUUID } from "crypto";
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { consumeRateLimit } from "@/lib/security/rate-limit";
+import { logger } from "@/lib/logger";
+import { enqueueProjectNotificationEvent } from "@/lib/notifications/project-events";
 import { buildProjectFileKey, isCanonicalProjectFileKey, parseProjectFileKey } from "@/lib/storage/project-file-key";
 import {
     normalizeAndValidateFileSize,
@@ -19,6 +21,8 @@ import { finalizeUploadIntent } from "@/lib/upload/upload-intents";
 import {
     assertProjectWriteAccess,
     assertProjectWriteAccessTx,
+    assertProjectUploadAccess,
+    assertProjectUploadAccessTx,
     assertValidParentFolder,
     assertUniqueSiblingName,
     assertNotMovingIntoDescendant,
@@ -31,6 +35,26 @@ import {
     assertBulkLimit,
     escapeLikePattern,
 } from "./_constants";
+
+function actorNotificationSnapshot(user: { user_metadata?: Record<string, unknown> | null }) {
+    return {
+        actorName: (user.user_metadata?.full_name as string | undefined) ?? (user.user_metadata?.username as string | undefined) ?? null,
+        actorAvatarUrl: (user.user_metadata?.avatar_url as string | undefined) ?? null,
+    };
+}
+
+async function enqueueFileNotificationBestEffort(input: Parameters<typeof enqueueProjectNotificationEvent>[0]) {
+    try {
+        await enqueueProjectNotificationEvent(input);
+    } catch (error) {
+        logger.warn("project_files.notification_enqueue_failed", {
+            module: "files",
+            projectId: input.projectId,
+            eventKey: input.eventKey,
+            error: error instanceof Error ? error.message : String(error),
+        });
+    }
+}
 
 async function getParentPath(tx: any, projectId: string, parentId: string | null): Promise<string> {
     if (!parentId) return "";
@@ -47,13 +71,13 @@ export async function createFolder(projectId: string, parentId: string | null, n
     if (!user) throw new Error("Unauthorized");
     const { allowed } = await consumeRateLimit(`files:${user.id}`, 60, 60);
     if (!allowed) throw new Error("Rate limit exceeded");
-    await assertProjectWriteAccess(projectId, user.id);
+    await assertProjectUploadAccess(projectId, user.id);
 
     const safeName = normalizeNodeName(name);
     assertValidNodeName(safeName);
 
     const node = await db.transaction(async (tx) => {
-        await assertProjectWriteAccessTx(tx, projectId, user.id);
+        await assertProjectUploadAccessTx(tx, projectId, user.id);
         await assertValidParentFolder(projectId, parentId, tx);
         await assertUniqueSiblingName(projectId, parentId, safeName, tx);
         const parentPath = await getParentPath(tx, projectId, parentId);
@@ -72,6 +96,16 @@ export async function createFolder(projectId: string, parentId: string | null, n
 
     await recordNodeEvent(projectId, user.id, node.id, 'create_folder', { parentId, name: safeName });
     revalidatePath(`/projects/${projectId}`); // Revalidate generally
+    await enqueueFileNotificationBestEffort({
+        projectId,
+        actorUserId: user.id,
+        ...actorNotificationSnapshot(user),
+        eventKey: "files.folder_created",
+        title: `Folder created: ${safeName}`,
+        body: "A new folder was added to the project workspace.",
+        sourceEventId: node.id,
+        entityRefs: { projectId, fileId: node.id },
+    });
     return node;
 }
 
@@ -87,7 +121,7 @@ export async function createFileNode(projectId: string, parentId: string | null,
     if (!user) throw new Error("Unauthorized");
     const { allowed } = await consumeRateLimit(`files:${user.id}`, 60, 60);
     if (!allowed) throw new Error("Rate limit exceeded");
-    await assertProjectWriteAccess(projectId, user.id);
+    await assertProjectUploadAccess(projectId, user.id);
 
     const safeName = normalizeNodeName(file.name);
     assertValidNodeName(safeName);
@@ -111,7 +145,7 @@ export async function createFileNode(projectId: string, parentId: string | null,
     const normalizedMimeType = normalizeAndValidateMimeType(finalizedIntent.finalizedMimeType ?? file.mimeType);
 
     const node = await db.transaction(async (tx) => {
-        await assertProjectWriteAccessTx(tx, projectId, user.id);
+        await assertProjectUploadAccessTx(tx, projectId, user.id);
         await assertValidParentFolder(projectId, parentId, tx);
         await assertUniqueSiblingName(projectId, parentId, safeName, tx);
         const parentPath = await getParentPath(tx, projectId, parentId);
@@ -133,6 +167,16 @@ export async function createFileNode(projectId: string, parentId: string | null,
 
     await recordNodeEvent(projectId, user.id, node.id, 'create_file', { parentId, name: safeName, s3Key: canonicalS3Key });
     revalidatePath(`/projects/${projectId}`);
+    await enqueueFileNotificationBestEffort({
+        projectId,
+        actorUserId: user.id,
+        ...actorNotificationSnapshot(user),
+        eventKey: "files.uploaded",
+        title: `File uploaded: ${safeName}`,
+        body: "A file was added to the project workspace.",
+        sourceEventId: node.id,
+        entityRefs: { projectId, fileId: node.id },
+    });
     return node;
 }
 
@@ -186,6 +230,16 @@ export async function renameNode(nodeId: string, newName: string, projectId: str
     });
 
     await recordNodeEvent(projectId, user.id, nodeId, 'rename', { newName: safeName });
+    await enqueueFileNotificationBestEffort({
+        projectId,
+        actorUserId: user.id,
+        ...actorNotificationSnapshot(user),
+        eventKey: "files.organized",
+        title: `File renamed: ${safeName}`,
+        body: "A project file or folder was renamed.",
+        sourceEventId: `${nodeId}:rename:${safeName}`,
+        entityRefs: { projectId, fileId: nodeId },
+    });
     revalidatePath(`/projects/${projectId}`);
     return node;
 }
@@ -239,6 +293,16 @@ export async function moveNode(nodeId: string, newParentId: string | null, proje
     });
 
     await recordNodeEvent(projectId, user.id, nodeId, 'move', { newParentId });
+    await enqueueFileNotificationBestEffort({
+        projectId,
+        actorUserId: user.id,
+        ...actorNotificationSnapshot(user),
+        eventKey: "files.organized",
+        title: `File moved: ${node.name}`,
+        body: "A project file or folder was moved.",
+        sourceEventId: `${nodeId}:move:${newParentId ?? "root"}`,
+        entityRefs: { projectId, fileId: nodeId },
+    });
     revalidatePath(`/projects/${projectId}`);
     return node;
 }
@@ -321,6 +385,20 @@ export async function bulkMoveNodes(nodeIds: string[], newParentId: string | nul
         return movedNodes;
     });
 
+    if (moved.length > 0) {
+        await enqueueFileNotificationBestEffort({
+            projectId,
+            actorUserId: user.id,
+            ...actorNotificationSnapshot(user),
+            eventKey: "files.organized",
+            title: `${moved.length} file${moved.length === 1 ? "" : "s"} moved`,
+            body: "Project files were reorganized.",
+            aggregateCount: moved.length,
+            sourceEventId: `bulk-move:${newParentId ?? "root"}:${moved.map((node) => node.id).join(",")}`,
+            entityRefs: { projectId },
+        });
+    }
+
     revalidatePath(`/projects/${projectId}`);
     return moved;
 }
@@ -358,6 +436,16 @@ export async function trashNode(nodeId: string, projectId: string) {
     });
 
     await recordNodeEvent(projectId, user.id, nodeId, 'trash', {});
+    await enqueueFileNotificationBestEffort({
+        projectId,
+        actorUserId: user.id,
+        ...actorNotificationSnapshot(user),
+        eventKey: "files.deleted_restored",
+        title: "File moved to trash",
+        body: "A project file or folder was moved to trash.",
+        sourceEventId: `${nodeId}:trash`,
+        entityRefs: { projectId, fileId: nodeId },
+    });
     revalidatePath(`/projects/${projectId}`);
 }
 
@@ -377,6 +465,16 @@ export async function restoreNode(nodeId: string, projectId: string) {
     });
 
     await recordNodeEvent(projectId, user.id, nodeId, 'restore', {});
+    await enqueueFileNotificationBestEffort({
+        projectId,
+        actorUserId: user.id,
+        ...actorNotificationSnapshot(user),
+        eventKey: "files.deleted_restored",
+        title: "File restored",
+        body: "A project file or folder was restored.",
+        sourceEventId: `${nodeId}:restore`,
+        entityRefs: { projectId, fileId: nodeId },
+    });
     revalidatePath(`/projects/${projectId}`);
 }
 
@@ -433,6 +531,20 @@ export async function bulkTrashNodes(nodeIds: string[], projectId: string) {
         return { trashedIds: toTrashIds, alreadyTrashedIds };
     });
 
+    if (result.trashedIds.length > 0) {
+        await enqueueFileNotificationBestEffort({
+            projectId,
+            actorUserId: user.id,
+            ...actorNotificationSnapshot(user),
+            eventKey: "files.deleted_restored",
+            title: `${result.trashedIds.length} file${result.trashedIds.length === 1 ? "" : "s"} moved to trash`,
+            body: "Project files were moved to trash.",
+            aggregateCount: result.trashedIds.length,
+            sourceEventId: `bulk-trash:${result.trashedIds.join(",")}`,
+            entityRefs: { projectId },
+        });
+    }
+
     revalidatePath(`/projects/${projectId}`);
     return result;
 }
@@ -483,6 +595,20 @@ export async function bulkRestoreNodes(nodeIds: string[], projectId: string) {
 
         return { restoredIds: toRestoreIds, alreadyActiveIds };
     });
+
+    if (result.restoredIds.length > 0) {
+        await enqueueFileNotificationBestEffort({
+            projectId,
+            actorUserId: user.id,
+            ...actorNotificationSnapshot(user),
+            eventKey: "files.deleted_restored",
+            title: `${result.restoredIds.length} file${result.restoredIds.length === 1 ? "" : "s"} restored`,
+            body: "Project files were restored from trash.",
+            aggregateCount: result.restoredIds.length,
+            sourceEventId: `bulk-restore:${result.restoredIds.join(",")}`,
+            entityRefs: { projectId },
+        });
+    }
 
     revalidatePath(`/projects/${projectId}`);
     return result;
@@ -607,7 +733,7 @@ export async function bulkCreateFolderTree(
     // Sort folders by depth so we create parents before children
     const sortedFolders = Array.from(folderPaths).sort((a, b) => a.split('/').length - b.split('/').length);
 
-    return await db.transaction(async (tx) => {
+    const result = await db.transaction(async (tx) => {
         await assertProjectWriteAccessTx(tx, projectId, user.id);
         await assertValidParentFolder(projectId, targetParentId, tx);
 
@@ -768,4 +894,20 @@ export async function bulkCreateFolderTree(
 
         return resultMappings;
     });
+    if (result.length > 0) {
+        await enqueueFileNotificationBestEffort({
+            projectId,
+            actorUserId: user.id,
+            ...actorNotificationSnapshot(user),
+            eventKey: result.length === 1 ? "files.uploaded" : "files.bulk_uploaded",
+            title: result.length === 1 ? `File uploaded: ${result[0]?.name ?? "File"}` : `${result.length} files uploaded`,
+            body: result.length === 1
+                ? "A file was added to the project workspace."
+                : "Multiple files were added to the project workspace.",
+            sourceEventId: `bulk:${Date.now()}`,
+            aggregateCount: result.length,
+            entityRefs: { projectId, fileId: result[0]?.fileId ?? null },
+        });
+    }
+    return result;
 }
