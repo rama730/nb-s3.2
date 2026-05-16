@@ -370,3 +370,26 @@ CREATE TABLE IF NOT EXISTS "job_heartbeats" (
   "last_payload" jsonb,
   "updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
+--> statement-breakpoint
+
+-- ============================================================================
+-- Project settings governance
+-- ============================================================================
+ALTER TABLE "projects"
+  ADD COLUMN IF NOT EXISTS "public_tab_visibility" jsonb NOT NULL DEFAULT '{"dashboard":true,"files":true,"sprints":false,"tasks":false,"analytics":false}'::jsonb;
+--> statement-breakpoint
+
+ALTER TABLE "projects"
+  ADD COLUMN IF NOT EXISTS "notification_preferences" jsonb NOT NULL DEFAULT '{"version":1,"preset":"balanced","rules":{}}'::jsonb;
+--> statement-breakpoint
+
+ALTER TABLE "project_members"
+  ADD COLUMN IF NOT EXISTS "file_upload_enabled" boolean NOT NULL DEFAULT true;
+--> statement-breakpoint
+
+ALTER TABLE "project_members"
+  ADD COLUMN IF NOT EXISTS "notification_preferences" jsonb NOT NULL DEFAULT '{"version":1,"mode":"inherit","rules":{}}'::jsonb;
+--> statement-breakpoint
+
+CREATE INDEX IF NOT EXISTS "project_members_file_upload_idx"
+  ON "project_members" ("project_id", "file_upload_enabled");
