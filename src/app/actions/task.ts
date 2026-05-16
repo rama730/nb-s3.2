@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { projectMembers, projectNodes, projectSprints, taskNodeLinks, tasks } from "@/lib/db/schema";
 import { createClient } from "@/lib/supabase/server";
-import { emitTaskAssignedNotification, emitTaskStatusAttentionNotification } from "@/lib/notifications/emitters";
+import { enqueueProjectNotificationEvent } from "@/lib/notifications/project-events";
 import { consumeRateLimit } from "@/lib/security/rate-limit";
 import { queueCounterRefreshBestEffort } from "@/lib/workspace/counter-buffer";
 import { getTaskFileWarnings } from "@/lib/projects/task-file-intelligence";
@@ -24,6 +24,21 @@ const ALLOWED_FIELDS: ReadonlySet<MutableTaskField> = new Set([
 
 type Priority = "low" | "medium" | "high" | "urgent";
 export type TaskStatus = "todo" | "in_progress" | "done" | "blocked";
+
+function taskActorSnapshot(user: { user_metadata?: Record<string, unknown> | null }) {
+    return {
+        actorName: (user.user_metadata?.full_name as string | undefined) ?? (user.user_metadata?.username as string | undefined) ?? null,
+        actorAvatarUrl: (user.user_metadata?.avatar_url as string | undefined) ?? null,
+    };
+}
+
+function taskHref(projectSlugOrId: string, taskId: string) {
+    return `/projects/${encodeURIComponent(projectSlugOrId)}?tab=tasks&drawerType=task&drawerId=${encodeURIComponent(taskId)}`;
+}
+
+function taskContextLabel(projectKey?: string | null, taskNumber?: number | null) {
+    return projectKey && taskNumber ? `${projectKey}-${taskNumber}` : "Task";
+}
 
 /**
  * SEC-H5: Atomically lock the task's project + membership rows and verify
@@ -254,8 +269,6 @@ export async function updateTaskStatusAction(
 
         await queueCounterRefreshBestEffort([result.previousAssigneeId]);
         if ((status === "blocked" || status === "done") && status !== result.currentStatus) {
-            const actorName = (user.user_metadata?.full_name as string | undefined) ?? (user.user_metadata?.username as string | undefined) ?? null;
-            const actorAvatarUrl = (user.user_metadata?.avatar_url as string | undefined) ?? null;
             const recipients = new Set<string>();
             if (result.creatorId !== user.id) {
                 recipients.add(result.creatorId);
@@ -264,25 +277,31 @@ export async function updateTaskStatusAction(
                 recipients.add(result.previousAssigneeId);
             }
             try {
-                const eventKey = new Date().toISOString();
-                await Promise.all(
-                    Array.from(recipients).map((recipientUserId) =>
-                        emitTaskStatusAttentionNotification({
-                            recipientUserId,
-                            actorUserId: user.id,
-                            actorName,
-                            actorAvatarUrl,
-                            taskId,
-                            taskTitle: result.title,
-                            status,
-                            projectId: result.projectId,
-                            projectSlug: result.projectSlug,
-                            projectKey: result.projectKey,
-                            taskNumber: result.taskNumber,
-                            eventKey,
-                        }),
-                    ),
-                );
+                const actor = taskActorSnapshot(user);
+                await enqueueProjectNotificationEvent({
+                    projectId: result.projectId,
+                    actorUserId: user.id,
+                    ...actor,
+                    eventKey: "tasks.status_attention",
+                    taskParticipantIds: Array.from(recipients),
+                    title: `${actor.actorName || "Someone"} marked a task ${status === "blocked" ? "blocked" : "done"}`,
+                    body: result.title,
+                    href: taskHref(result.projectSlug || result.projectId, taskId),
+                    entityRefs: {
+                        projectId: result.projectId,
+                        projectSlug: result.projectSlug ?? null,
+                        taskId,
+                        status,
+                    },
+                    preview: {
+                        actorName: actor.actorName,
+                        actorAvatarUrl: actor.actorAvatarUrl,
+                        contextLabel: taskContextLabel(result.projectKey, result.taskNumber),
+                        contextKind: "task",
+                        secondaryText: status,
+                    },
+                    sourceEventId: `${taskId}:status:${status}`,
+                });
             } catch (notificationError) {
                 logger.error("tasks.status_attention_notification_failed", {
                     module: "tasks",
@@ -352,18 +371,29 @@ export async function assignTaskAction(
         await queueCounterRefreshBestEffort([result.previousAssigneeId, assigneeId]);
         if (assigneeId && assigneeId !== user.id && assigneeId !== result.previousAssigneeId) {
             try {
-                await emitTaskAssignedNotification({
-                    recipientUserId: assigneeId,
-                    actorUserId: user.id,
-                    actorName: (user.user_metadata?.full_name as string | undefined) ?? (user.user_metadata?.username as string | undefined) ?? null,
-                    actorAvatarUrl: (user.user_metadata?.avatar_url as string | undefined) ?? null,
-                    taskId,
-                    taskTitle: result.title,
-                    taskNumber: result.taskNumber,
+                const actor = taskActorSnapshot(user);
+                await enqueueProjectNotificationEvent({
                     projectId: result.projectId,
-                    projectSlug: result.projectSlug,
-                    projectKey: result.projectKey,
-                    eventKey: new Date().toISOString(),
+                    actorUserId: user.id,
+                    ...actor,
+                    eventKey: "tasks.assigned",
+                    assigneeId,
+                    title: `${actor.actorName || "Someone"} assigned you a task`,
+                    body: result.title,
+                    href: taskHref(result.projectSlug || result.projectId, taskId),
+                    entityRefs: {
+                        projectId: result.projectId,
+                        projectSlug: result.projectSlug ?? null,
+                        taskId,
+                    },
+                    preview: {
+                        actorName: actor.actorName,
+                        actorAvatarUrl: actor.actorAvatarUrl,
+                        contextLabel: taskContextLabel(result.projectKey, result.taskNumber),
+                        contextKind: "task",
+                        secondaryText: result.title,
+                    },
+                    sourceEventId: `${taskId}:assigned`,
                 });
             } catch (notificationError) {
                 logger.error("tasks.assignment_notification_failed", {
