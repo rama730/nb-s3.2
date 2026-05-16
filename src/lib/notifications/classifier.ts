@@ -15,6 +15,8 @@ const J1_KIND_LIST: readonly NotificationKind[] = [
     "connection_request_received",
     "project_member_removed",
     "project_ownership_transferred",
+    "project_file_permission_changed",
+    "project_security_alert",
 ];
 
 const J1_KINDS: ReadonlySet<NotificationKind> = new Set(J1_KIND_LIST);
