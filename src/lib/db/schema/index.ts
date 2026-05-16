@@ -5,6 +5,15 @@ import { buildMessageSearchDocumentSql } from '@/lib/messages/search-document'
 type ProfileExperienceEntry = Record<string, unknown>;
 type ProfileEducationEntry = Record<string, unknown>;
 type ImportSourceMetadata = Record<string, unknown>;
+type ProjectPublicTabVisibility = {
+    dashboard: boolean;
+    files: boolean;
+    sprints: boolean;
+    tasks: boolean;
+    analytics: boolean;
+};
+type ProjectNotificationPreferencesRecord = Record<string, unknown>;
+type ProjectMemberNotificationPreferencesRecord = Record<string, unknown>;
 type NotificationPreferencesRecord = {
     messages: boolean;
     mentions: boolean;
@@ -31,7 +40,10 @@ type UserNotificationEntityRefs = {
     applicationId?: string | null;
     connectionId?: string | null;
     fileId?: string | null;
+    sprintId?: string | null;
+    roleId?: string | null;
     parentCommentId?: string | null;
+    targetUserId?: string | null;
     status?: string | null;
 };
 type UserNotificationPreview = {
@@ -362,6 +374,18 @@ export const projects = pgTable('projects', {
     tags: jsonb('tags').$type<string[]>().default([]),
     skills: jsonb('skills').$type<string[]>().default([]),
     visibility: text('visibility', { enum: ['public', 'private', 'unlisted'] }).default('public'),
+    publicTabVisibility: jsonb('public_tab_visibility').$type<ProjectPublicTabVisibility>().default({
+        dashboard: true,
+        files: true,
+        sprints: false,
+        tasks: false,
+        analytics: false,
+    }).notNull(),
+    notificationPreferences: jsonb('notification_preferences').$type<ProjectNotificationPreferencesRecord>().default({
+        version: 1,
+        preset: 'balanced',
+        rules: {},
+    }).notNull(),
     status: text('status', { enum: ['draft', 'active', 'completed', 'archived'] }).default('draft'),
 
     // Project Key System
@@ -426,11 +450,18 @@ export const projectMembers = pgTable('project_members', {
     projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
     userId: uuid('user_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
     role: text('role', { enum: ['owner', 'admin', 'member', 'viewer'] }).default('member').notNull(),
+    fileUploadEnabled: boolean('file_upload_enabled').default(true).notNull(),
+    notificationPreferences: jsonb('notification_preferences').$type<ProjectMemberNotificationPreferencesRecord>().default({
+        version: 1,
+        mode: 'inherit',
+        rules: {},
+    }).notNull(),
     joinedAt: timestamp('joined_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
     projectUserUnique: uniqueIndex('project_members_project_user_unique').on(t.projectId, t.userId),
     projectIdx: index('project_members_project_idx').on(t.projectId),
     userIdx: index('project_members_user_idx').on(t.userId),
+    fileUploadIdx: index('project_members_file_upload_idx').on(t.projectId, t.fileUploadEnabled),
 }))
 
 // ============================================================================
