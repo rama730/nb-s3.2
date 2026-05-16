@@ -27,6 +27,17 @@ const KIND_REASON: Record<NotificationKind, NotificationReason> = {
     project_role_changed: "update",
     project_member_removed: "update",
     project_ownership_transferred: "update",
+    project_member_joined: "update",
+    project_visibility_changed: "update",
+    project_public_surface_changed: "update",
+    project_file_permission_changed: "update",
+    project_role_activity: "update",
+    project_application_activity: "application",
+    project_sprint_activity: "update",
+    project_task_activity: "update",
+    project_file_activity: "file",
+    project_security_alert: "update",
+    project_update_activity: "update",
 };
 
 export const REASON_LABELS: Record<NotificationReason, string> = {
@@ -74,6 +85,17 @@ const AGGREGATE_NOUNS: Record<NotificationKind, { singular: string; plural: stri
     project_role_changed: { singular: "role change", plural: "role changes" },
     project_member_removed: { singular: "membership update", plural: "membership updates" },
     project_ownership_transferred: { singular: "ownership transfer", plural: "ownership transfers" },
+    project_member_joined: { singular: "member update", plural: "member updates" },
+    project_visibility_changed: { singular: "visibility change", plural: "visibility changes" },
+    project_public_surface_changed: { singular: "public surface change", plural: "public surface changes" },
+    project_file_permission_changed: { singular: "file permission change", plural: "file permission changes" },
+    project_role_activity: { singular: "role update", plural: "role updates" },
+    project_application_activity: { singular: "application update", plural: "application updates" },
+    project_sprint_activity: { singular: "sprint update", plural: "sprint updates" },
+    project_task_activity: { singular: "task update", plural: "task updates" },
+    project_file_activity: { singular: "file update", plural: "file updates" },
+    project_security_alert: { singular: "security update", plural: "security updates" },
+    project_update_activity: { singular: "project update", plural: "project updates" },
 };
 
 export function getAggregateLabel(kind: NotificationKind, count: number): string | null {
