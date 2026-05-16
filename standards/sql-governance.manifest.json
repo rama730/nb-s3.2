@@ -10,6 +10,7 @@
     "drizzle/0003_messaging.sql",
     "drizzle/0004_chat_storage.sql",
     "drizzle/0004_harsh_randall.sql",
+    "drizzle/0004_message_reactions.sql",
     "drizzle/0005_enable_connections_realtime.sql",
     "drizzle/0005_spooky_romulus.sql",
     "drizzle/0006_furry_susan_delgado.sql",
