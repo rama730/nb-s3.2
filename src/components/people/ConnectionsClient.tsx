@@ -15,7 +15,7 @@ import ProfilePreviewDrawer from "@/components/people/ProfilePreviewDrawer";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { cn } from "@/lib/utils";
-import { useConnections, useConnectionStats, useConnectionMutations } from "@/hooks/useConnections";
+import { useConnections, useConnectionStats, useConnectionMutations, useConnectionTags, useBulkConnectionsActions } from "@/hooks/useConnections";
 import type { NetworkConnectionItem } from "@/hooks/useConnections";
 import type { SuggestedProfile } from "@/app/actions/connections";
 import { useRouter } from "next/navigation";
@@ -76,7 +76,7 @@ export default function ConnectionsClient(_props: ConnectionsClientProps) {
     } = useConnections(50, debouncedSearch, sortBy);
 
     const { data: statsData, isLoading: statsLoading } = useConnectionStats();
-    const { disconnect } = useConnectionMutations();
+    
 
     // Flatten pages — no client-side sort needed (#18)
     const connections = useMemo(() => {
@@ -90,18 +90,10 @@ export default function ConnectionsClient(_props: ConnectionsClientProps) {
         return valid;
     }, [connectionsData, tagFilter]);
 
-    // Collect unique tags for filter dropdown (#15)
-    const allTags = useMemo(() => {
-        const tagSet = new Set<string>();
-        const items = connectionsData?.pages.flatMap((page) => page.items) || [];
-        for (const item of items) {
-            if (item.tags) {
-                for (const tag of item.tags) tagSet.add(tag);
-            }
-        }
-        return Array.from(tagSet).sort();
-    }, [connectionsData]);
 
+
+    const { disconnect } = useConnectionMutations();
+    const allTags: string[] = [];
     const stats = statsData || {
         totalConnections: 0,
         pendingSent: 0,
@@ -300,7 +292,7 @@ export default function ConnectionsClient(_props: ConnectionsClientProps) {
                         >
                             All
                         </Badge>
-                        {allTags.map((tag) => (
+                        {allTags.map((tag: string) => (
                             <Badge
                                 key={tag}
                                 variant={tagFilter === tag ? "default" : "outline"}

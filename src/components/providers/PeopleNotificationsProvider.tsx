@@ -5,6 +5,8 @@ import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useAuthContext } from "@/components/providers/AuthProvider";
 import { useRealtime } from "@/components/providers/RealtimeProvider";
 import { logger } from "@/lib/logger";
+import { useGlobalConnectionsRealtime } from "@/hooks/useConnections";
+
 
 interface PeopleNotificationsContextValue {
   totalPending: number;
@@ -37,6 +39,8 @@ export function getPeopleNotificationsRetryDelay(attempt: number) {
 
 export function PeopleNotificationsProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuthContext();
+  useGlobalConnectionsRealtime();
+
   const { subscribeUserNotifications } = useRealtime();
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
   const userId = user?.id ?? null;
@@ -116,44 +120,6 @@ export function PeopleNotificationsProvider({ children }: { children: React.Reac
     }
   }, [clearRetryTimer, setIdleState, supabase, userId]);
 
-  useEffect(() => {
-    let idleHandle: number | null = null;
-    const idleWindow = window as IdleWindow;
-
-    if (!userId) {
-      setIdleState();
-      return;
-    }
-
-    retryAttemptRef.current = 0;
-
-    const scheduleRefresh = () => {
-      void refresh();
-    };
-
-    if (typeof idleWindow.requestIdleCallback === "function") {
-      idleHandle = idleWindow.requestIdleCallback(() => {
-        idleHandle = null;
-        scheduleRefresh();
-      }, { timeout: 1500 });
-    } else {
-      idleHandle = window.setTimeout(() => {
-        idleHandle = null;
-        scheduleRefresh();
-      }, 300);
-    }
-
-    return () => {
-      if (idleHandle !== null) {
-        if (typeof idleWindow.requestIdleCallback === "function") {
-          idleWindow.cancelIdleCallback(idleHandle);
-        } else {
-          clearTimeout(idleHandle);
-        }
-      }
-      clearRetryTimer();
-    };
-  }, [clearRetryTimer, refresh, setIdleState, userId]);
 
   useEffect(() => {
     if (!userId) return;

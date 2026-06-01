@@ -1,3 +1,4 @@
+import type { DiscoverConnectionItem } from '@/hooks/useConnections';
 'use server';
 
 import { db } from '@/lib/db';
@@ -88,6 +89,7 @@ export interface ConnectionsFeedInput {
     filters?: DiscoverFilters;
     historyFilters?: HistoryFilters;
     requestSortBy?: 'recent' | 'mutual' | 'oldest';
+    tagFilter?: string;
 }
 
 const CONNECTION_REJECTION_REASONS = ['not_interested', 'dont_know', 'spam', 'other'] as const;
@@ -3520,5 +3522,113 @@ export async function checkConnectionStatus(
     } catch (error) {
         console.error('Error checking connection status:', error);
         return { success: false, error: 'Failed to check connection status' };
+    }
+}
+
+export async function getConnectionTags(): Promise<{ success: boolean; tags: string[]; error?: string }> {
+    try {
+        const user = await getAuthUser();
+        if (!user) return { success: false, tags: [], error: 'Not authenticated' };
+
+        const rows = await db.execute(sql`
+            SELECT DISTINCT unnest(tags) as tag
+            FROM connections
+            WHERE (requester_id = ${user.id} OR addressee_id = ${user.id})
+              AND status = 'accepted'
+              AND tags IS NOT NULL
+        `);
+        return { success: true, tags: rows.map(r => r.tag as string) };
+    } catch (error) {
+        console.error('connections.get_tags_failed', { error });
+        return { success: false, tags: [], error: 'Failed to fetch tags' };
+    }
+}
+
+export async function bulkDisconnectConnections(connectionIds: string[]): Promise<{ success: boolean; error?: string }> {
+    try {
+        const user = await getAuthUser();
+        if (!user) return { success: false, error: 'Not authenticated' };
+        
+        if (!connectionIds.length) return { success: true };
+
+        await db.delete(connections)
+            .where(
+                and(
+                    inArray(connections.id, connectionIds),
+                    or(eq(connections.requesterId, user.id), eq(connections.addresseeId, user.id))
+                )
+            );
+        return { success: true };
+    } catch (error) {
+        console.error('connections.bulk_disconnect_failed', { error });
+        return { success: false, error: 'Failed to disconnect' };
+    }
+}
+
+export async function bulkUpdateConnectionTags(connectionIds: string[], tags: string[]): Promise<{ success: boolean; error?: string }> {
+    try {
+        const user = await getAuthUser();
+        if (!user) return { success: false, error: 'Not authenticated' };
+        
+        if (!connectionIds.length) return { success: true };
+
+        await db.update(connections)
+            .set({ tags, updatedAt: new Date() })
+            .where(
+                and(
+                    inArray(connections.id, connectionIds),
+                    or(eq(connections.requesterId, user.id), eq(connections.addresseeId, user.id))
+                )
+            );
+        return { success: true };
+    } catch (error) {
+        console.error('connections.bulk_update_tags_failed', { error });
+        return { success: false, error: 'Failed to update tags' };
+    }
+}
+
+export async function getMutualSuggestions(limit: number = 6): Promise<{ success: boolean; items: DiscoverConnectionItem[]; error?: string }> {
+    try {
+        const user = await getAuthUser();
+        if (!user) return { success: false, items: [], error: 'Not authenticated' };
+
+        // For simplicity, we can fetch from getConnectionsFeed with hasMutuals filter
+        const result = await getConnectionsFeed({ tab: 'discover', limit, filters: { hasMutuals: true, available: true } });
+        if (!result.success) throw new Error(result.error);
+        return { success: true, items: (result.items || []) as DiscoverConnectionItem[] };
+    } catch (error) {
+        return { success: false, items: [], error: 'Failed to fetch mutuals' };
+    }
+}
+
+export async function getRoleSuggestions(limit: number = 6): Promise<{ success: boolean; items: DiscoverConnectionItem[]; error?: string }> {
+    try {
+        const user = await getAuthUser();
+        if (!user) return { success: false, items: [], error: 'Not authenticated' };
+
+        // For simplicity, we can fetch from getConnectionsFeed with hasSharedProjects or seniorPlus filter
+        const result = await getConnectionsFeed({ tab: 'discover', limit, filters: { hasSharedProjects: true, available: true } });
+        if (!result.success) throw new Error(result.error);
+        return { success: true, items: (result.items || []) as DiscoverConnectionItem[] };
+    } catch (error) {
+        return { success: false, items: [], error: 'Failed to fetch roles' };
+    }
+}
+
+export async function withdrawAllSentConnectionRequests() {
+    try {
+        const user = await getAuthUser();
+        if (!user) return { success: false, error: 'Not authenticated' };
+
+        await db.delete(connections).where(
+            and(
+                eq(connections.requesterId, user.id),
+                eq(connections.status, 'pending')
+            )
+        );
+        return { success: true };
+    } catch (error) {
+        console.error('connections.withdraw_all_sent_failed', { error });
+        return { success: false, error: 'Failed to withdraw requests' };
     }
 }

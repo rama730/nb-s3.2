@@ -362,7 +362,7 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
     const { data: requestData, isLoading: requestsLoading } = usePendingRequests();
     // 5I: Align limit with HISTORY_INITIAL_BATCH (20)
     const { data: requestHistoryData, isLoading: historyLoading, fetchNextPage: fetchMoreHistory, hasNextPage: hasMoreHistory, isFetchingNextPage: isFetchingMoreHistory } = useRequestHistory(HISTORY_INITIAL_BATCH);
-    const { acceptRequest, rejectRequest, undoRejectRequest, cancelRequest, acceptAllIncoming, rejectAllIncoming, blockProfile } = useConnectionMutations();
+    const { acceptRequest, rejectRequest, undoRejectRequest, cancelRequest, acceptAllIncoming, rejectAllIncoming, blockProfile, withdrawAllSent } = useConnectionMutations();
 
     const [timelineOpen, setTimelineOpen] = useState(true);
     const [appsOpen, setAppsOpen] = useState(true);
@@ -488,7 +488,7 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
         });
     };
 
-    const [bulkAction, setBulkAction] = useState<{ type: "accept" | "reject" } | null>(null);
+    const [bulkAction, setBulkAction] = useState<{ type: "accept" | "reject" | "withdraw" } | null>(null);
     const bulkPollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     // Clean up bulk polling on unmount
@@ -810,10 +810,20 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
             {/* ── Sent Requests Section ── */}
             {sentRequests.length > 0 && (
                 <section>
-                    <h2 className="text-sm font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider mb-4 flex items-center gap-2">
-                        <Clock className="w-4 h-4 text-amber-500" />
-                        Sent
-                    </h2>
+                    <div className="flex items-center justify-between mb-4">
+                        <h2 className="text-sm font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider flex items-center gap-2">
+                            <Clock className="w-4 h-4 text-amber-500" />
+                            Sent
+                        </h2>
+                        {sentRequests.length > 0 && (
+                            <button
+                                onClick={() => setBulkAction({ type: "withdraw" })}
+                                className="text-xs font-medium text-red-500 hover:text-red-600 transition-colors bg-red-50 hover:bg-red-100 px-3 py-1.5 rounded-lg dark:bg-red-500/10 dark:hover:bg-red-500/20"
+                            >
+                                Withdraw All
+                            </button>
+                        )}
+                    </div>
                     <div className="space-y-3">
                         {visibleSentRequests.map((req) => {
                             const profile = {

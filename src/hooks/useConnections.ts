@@ -1,4 +1,5 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useCallback, useMemo } from 'react';
+import { toast } from 'sonner';
 import {
     InfiniteData,
     QueryKey,
@@ -11,6 +12,7 @@ import {
     acceptAllIncomingConnectionRequests,
     acceptConnectionRequest,
     cancelConnectionRequest,
+    withdrawAllSentConnectionRequests,
     dismissConnectionSuggestion,
     getConnectionStats,
     getConnectionRequestHistory,
@@ -631,7 +633,7 @@ function patchConnectionsRealtimeCaches(
     };
 }
 
-export function useConnectionsRealtimeInvalidation() {
+export function useGlobalConnectionsRealtime() {
     const queryClient = useQueryClient();
     const { user } = useAuth();
     const { subscribeUserNotifications } = useRealtime();
@@ -641,31 +643,22 @@ export function useConnectionsRealtimeInvalidation() {
     useEffect(() => {
         if (!userId) return;
 
-        const scheduleInvalidate = (payload: ConnectionsRealtimePayload) => {
-            const patchResult = patchConnectionsRealtimeCaches(queryClient, userId, payload);
-            const statsPatched = patchRealtimeStatsFromPayload(queryClient, userId, payload);
-            if (patchResult.patched) {
-                if (!statsPatched) {
-                    queryClient.invalidateQueries({ queryKey: ['connections', 'stats'] });
-                }
-                queryClient.invalidateQueries({ queryKey: ['connections', 'request-history'] });
-
-                if (patchResult.affectsNetwork && !patchResult.networkChanged) {
-                    queryClient.invalidateQueries({ queryKey: ['connections', 'feed', 'network'] });
-                }
-                if (patchResult.affectsRequestsIncoming && !patchResult.requestsIncomingChanged) {
-                    queryClient.invalidateQueries({ queryKey: ['connections', 'feed', 'requests_incoming'] });
-                }
-                if (patchResult.affectsRequestsSent && !patchResult.requestsSentChanged) {
-                    queryClient.invalidateQueries({ queryKey: ['connections', 'feed', 'requests_sent'] });
-                }
-                if (patchResult.affectsPendingRequests && !patchResult.pendingRequestsChanged) {
-                    queryClient.invalidateQueries({ queryKey: ['connections', 'pending-requests'] });
-                }
-                return;
+        const handleRealtimeEvent = (payload: any) => {
+            // Toast notifications
+            if (payload.eventType === 'INSERT' && payload.new?.addressee_id === userId && payload.new?.status === 'pending') {
+                import('sonner').then(({ toast }) => {
+                    toast('New connection request', { description: 'Check your pending requests.' });
+                });
+            } else if (payload.eventType === 'UPDATE' && payload.new?.status === 'accepted' && payload.new?.requester_id === userId) {
+                import('sonner').then(({ toast }) => {
+                    toast.success('Connection request accepted!');
+                });
             }
 
-            if (invalidateTimerRef.current) return;
+            if (invalidateTimerRef.current) {
+                clearTimeout(invalidateTimerRef.current);
+            }
+            
             invalidateTimerRef.current = setTimeout(() => {
                 invalidateTimerRef.current = null;
                 invalidateConnectionsScoped(queryClient);
@@ -674,7 +667,7 @@ export function useConnectionsRealtimeInvalidation() {
 
         const unsubscribe = subscribeUserNotifications((event) => {
             if (event.kind === 'connection') {
-                scheduleInvalidate(event.payload as ConnectionsRealtimePayload);
+                handleRealtimeEvent(event.payload);
             }
         });
 
@@ -698,6 +691,7 @@ export function useConnectionsFeed<TTab extends ConnectionsFeedTab>(
         filters?: DiscoverFilters;
         historyFilters?: HistoryFilters;
         requestSortBy?: 'recent' | 'mutual' | 'oldest';
+        tagFilter?: string;
     },
 ) {
     const limit = options?.limit ?? 20;
@@ -707,13 +701,15 @@ export function useConnectionsFeed<TTab extends ConnectionsFeedTab>(
     const filters = options?.filters;
     const historyFilters = options?.historyFilters;
     const requestSortBy = options?.requestSortBy;
+    const tagFilter = options?.tagFilter;
 
     // 2J: Include filters and requestSortBy in queryKey for cache separation
     const filtersKey = filters ? JSON.stringify(filters) : '';
     const requestSortKey = requestSortBy || '';
+    const tagFilterKey = tagFilter || '';
 
     return useInfiniteQuery({
-        queryKey: [...CONNECTIONS_QUERY_KEYS.feed(tab, limit, search), sortBy || 'recent', filtersKey, requestSortKey] as const,
+        queryKey: [...CONNECTIONS_QUERY_KEYS.feed(tab, limit, search), sortBy || 'recent', filtersKey, requestSortKey, tagFilterKey] as const,
         queryFn: async ({ pageParam }: { pageParam: string | undefined }) => {
             const result = await getConnectionsFeed({
                 tab,
@@ -724,6 +720,7 @@ export function useConnectionsFeed<TTab extends ConnectionsFeedTab>(
                 filters,
                 historyFilters,
                 requestSortBy,
+                tagFilter,
             } satisfies ConnectionsFeedInput);
 
             return normalizeFeedResult(result as FeedPage<FeedItemByTab[TTab]> | FeedErrorPage);
@@ -736,8 +733,8 @@ export function useConnectionsFeed<TTab extends ConnectionsFeedTab>(
     });
 }
 
-export function useConnections(limit = 50, search?: string, sortBy?: 'recent' | 'name' | 'oldest') {
-    return useConnectionsFeed('network', { limit, search, sortBy });
+export function useConnections(limit = 50, search?: string, sortBy?: 'recent' | 'name' | 'oldest', tagFilter?: string) {
+    return useConnectionsFeed('network', { limit, search, sortBy, tagFilter });
 }
 
 export function useSuggestedPeople(limit = 20, search?: string, filters?: DiscoverFilters) {
@@ -835,7 +832,6 @@ export function usePendingRequests(limit = 20) {
         },
         staleTime: 45_000,
         gcTime: 5 * 60 * 1000,
-        refetchInterval: isConnected ? false : 30_000,
     });
 }
 
@@ -906,7 +902,6 @@ export function useRequestHistory(limit = 40, historyFilters?: HistoryFilters) {
         initialPageParam: undefined as string | undefined,
         getNextPageParam: (lastPage) => lastPage.nextCursor || undefined,
         staleTime: 20_000,
-        refetchInterval: isConnected ? false : 30_000,
     });
 }
 
@@ -917,7 +912,6 @@ export function useConnectionStats(userId?: string) {
         queryKey: CONNECTIONS_QUERY_KEYS.stats(scope),
         queryFn: () => getConnectionStats(userId),
         staleTime: 60_000,
-        refetchInterval: userId || isConnected ? false : 60_000,
     });
 }
 
@@ -940,12 +934,27 @@ export function useConnectionMutations() {
     const queryClient = useQueryClient();
     const { user } = useAuth();
 
-    const invalidateAll = () => {
-        invalidateConnectionsScoped(queryClient);
-        if (user?.id) {
-            queryClient.invalidateQueries({ queryKey: queryKeys.profile.byTarget(user.id) });
+    const invalidateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const invalidateAll = useCallback(() => {
+        if (invalidateTimeoutRef.current) {
+            clearTimeout(invalidateTimeoutRef.current);
         }
-    };
+        invalidateTimeoutRef.current = setTimeout(() => {
+            invalidateConnectionsScoped(queryClient);
+            if (user?.id) {
+                queryClient.invalidateQueries({ queryKey: queryKeys.profile.byTarget(user.id) });
+            }
+            invalidateTimeoutRef.current = null;
+        }, 150);
+    }, [queryClient, user?.id]);
+
+    useEffect(() => {
+        return () => {
+            if (invalidateTimeoutRef.current) {
+                clearTimeout(invalidateTimeoutRef.current);
+            }
+        };
+    }, []);
 
     const sendRequest = useMutation({
         mutationFn: async ({ userId, message, lane }: { userId: string; message?: string; lane?: string }) => {
@@ -1067,7 +1076,7 @@ export function useConnectionMutations() {
             items: page.items.filter((item) => item.id !== profileId),
         }));
         return snapshots;
-    };
+        };
 
     const restoreDismissedSuggestion = (snapshots: DiscoverFeedSnapshot) => {
         restoreDiscoverFeedSnapshots(queryClient, snapshots);
@@ -1109,6 +1118,19 @@ export function useConnectionMutations() {
             }
         },
         onSettled: invalidateAll,
+    });
+    const withdrawAllSent = useMutation({
+        mutationFn: async () => {
+            const res = await withdrawAllSentConnectionRequests();
+            if (!res.success) throw new Error(res.error || 'Failed to withdraw requests');
+            return res;
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['connections', 'feed'] });
+            queryClient.invalidateQueries({ queryKey: ['connections', 'pending-requests'] });
+            queryClient.invalidateQueries({ queryKey: ['connections', 'stats'] });
+            toast.success("Withdrawn all sent requests");
+        }
     });
 
     const rejectAllIncoming = useMutation({
@@ -1216,7 +1238,23 @@ export function useConnectionMutations() {
         onSettled: invalidateAll,
     });
 
-    return {
+    const result = useMemo(() => ({
+        sendRequest,
+        cancelRequest,
+        withdrawAllSent,
+        acceptRequest,
+        rejectRequest,
+        dismissSuggestion,
+        optimisticallyDismissSuggestion,
+        restoreDismissedSuggestion,
+        undoDismiss,
+        undoRejectRequest,
+        acceptAllIncoming,
+        rejectAllIncoming,
+        disconnect,
+        updateTags,
+        blockProfile,
+    }), [
         sendRequest,
         cancelRequest,
         acceptRequest,
@@ -1231,5 +1269,72 @@ export function useConnectionMutations() {
         disconnect,
         updateTags,
         blockProfile,
-    };
+    ]);
+
+    return result;
+}
+
+import { getConnectionTags, getMutualSuggestions, getRoleSuggestions, bulkDisconnectConnections, bulkUpdateConnectionTags } from '@/app/actions/connections';
+
+export function useConnectionTags() {
+    return useQuery({
+        queryKey: ['connections', 'tags'],
+        queryFn: async () => {
+            const res = await getConnectionTags();
+            if (!res.success) throw new Error(res.error || 'Failed to fetch tags');
+            return res.tags;
+        }
+    });
+}
+
+export function useBulkConnectionsActions() {
+    const queryClient = useQueryClient();
+
+    const disconnect = useMutation({
+        mutationFn: async (ids: string[]) => {
+            const res = await bulkDisconnectConnections(ids);
+            if (!res.success) throw new Error(res.error);
+            return res;
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['connections', 'feed'] });
+            queryClient.invalidateQueries({ queryKey: ['connections', 'stats'] });
+        }
+    });
+
+    const updateTags = useMutation({
+        mutationFn: async ({ ids, tags }: { ids: string[], tags: string[] }) => {
+            const res = await bulkUpdateConnectionTags(ids, tags);
+            if (!res.success) throw new Error(res.error);
+            return res;
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['connections', 'feed'] });
+            queryClient.invalidateQueries({ queryKey: ['connections', 'tags'] });
+        }
+    });
+
+    return { disconnect, updateTags };
+}
+
+export function useMutualSuggestions(limit = 6) {
+    return useQuery({
+        queryKey: ['connections', 'suggestions', 'mutual', limit],
+        queryFn: async () => {
+            const res = await getMutualSuggestions(limit);
+            if (!res.success) throw new Error(res.error);
+            return res.items;
+        }
+    });
+}
+
+export function useRoleSuggestions(limit = 6) {
+    return useQuery({
+        queryKey: ['connections', 'suggestions', 'role', limit],
+        queryFn: async () => {
+            const res = await getRoleSuggestions(limit);
+            if (!res.success) throw new Error(res.error);
+            return res.items;
+        }
+    });
 }

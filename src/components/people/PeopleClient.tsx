@@ -9,7 +9,7 @@ import { VirtuosoGrid } from "react-virtuoso";
 import PersonCard from "@/components/people/PersonCard";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { useConnectionMutations, useSuggestedPeople } from "@/hooks/useConnections";
+import { useConnectionMutations, useSuggestedPeople, useMutualSuggestions, useRoleSuggestions } from "@/hooks/useConnections";
 import type { DiscoverConnectionItem } from "@/hooks/useConnections";
 import { checkConnectionStatus, trackDiscoverImpressions, type DiscoverFilters } from "@/app/actions/connections";
 

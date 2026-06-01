@@ -11,7 +11,7 @@ import PeopleClient from "@/components/people/PeopleClient";
 import ConnectionsClient from "@/components/people/ConnectionsClient";
 import RequestsTab from "@/components/people/RequestsTab";
 import { ComponentErrorBoundary } from "@/components/ui/ComponentErrorBoundary";
-import { useConnectionStats, useConnectionsRealtimeInvalidation } from "@/hooks/useConnections";
+import { useConnectionStats } from "@/hooks/useConnections";
 import type { IncomingApplication, MyApplication } from "@/components/people/ProjectApplicationsSection";
 
 type TabKey = "discover" | "network" | "requests";
@@ -59,9 +59,7 @@ export default function PeopleHubClient({
     };
 
     const [activeTab, setActiveTab] = useState<TabKey>(getInitialTab);
-    useConnectionsRealtimeInvalidation();
-
-    useEffect(() => {
+useEffect(() => {
         if (VALID_TABS.includes(tabParam as TabKey)) {
             setActiveTab(tabParam as TabKey);
         } else if (activeTabOverride && VALID_TABS.includes(activeTabOverride)) {
