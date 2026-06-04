@@ -6,10 +6,10 @@ import { eq, and, sql, gt } from "drizzle-orm";
 import { createClient } from "@/lib/supabase/server";
 import { runInFlightDeduped } from "@/lib/async/inflight-dedupe";
 import {
-    assertProjectReadAccess,
+    assertProjectFileReadAccess,
     assertProjectWriteAccess,
     recordNodeEvent,
-} from "./_shared";
+} from "@/lib/files/internal-helpers";
 import {
     FILES_ERROR_CODES,
     type FilesActionResult,
@@ -192,7 +192,7 @@ export async function getProjectLocks(projectId: string) {
     const { data: { user } } = await supabase.auth.getUser();
     const actorId = user?.id ?? null;
     return await runInFlightDeduped(`files:locks:${projectId}:${actorId ?? "anon"}`, async () => {
-        await assertProjectReadAccess(projectId, actorId);
+        await assertProjectFileReadAccess(projectId, actorId);
         // This is read-only metadata; allow any project member to fetch.
         const now = new Date();
 
