@@ -31,6 +31,66 @@ function shouldExposeLastActiveAt(relationship: PrivacyRelationshipState | null,
   return !!relationship?.canViewProfile && !relationship.blockedByTarget && !relationship.blockedByViewer;
 }
 
+function buildSafeProfileShape(normalized: NonNullable<ReturnType<typeof normalizeProfile>>, options: {
+  exposeIdentity: boolean;
+  exposeFullProfile: boolean;
+  exposeLastActive: boolean;
+}) {
+  const identity = {
+    id: normalized.id,
+    username: options.exposeIdentity ? normalized.username : null,
+    fullName: options.exposeIdentity ? normalized.fullName : null,
+    avatarUrl: options.exposeIdentity ? normalized.avatarUrl : null,
+    headline: options.exposeIdentity ? normalized.headline : null,
+    location: options.exposeIdentity ? normalized.location : null,
+    visibility: normalized.visibility ?? "public",
+    availabilityStatus: normalized.availabilityStatus,
+    profileStrength: normalized.profileStrength,
+    completionMissing: normalized.completionMissing,
+    connectionsCount: normalized.connectionsCount,
+    projectsCount: normalized.projectsCount,
+    followersCount: normalized.followersCount,
+  };
+
+  if (!options.exposeFullProfile) {
+    return {
+      ...identity,
+      bio: null,
+      website: null,
+      bannerUrl: null,
+      socialLinks: {},
+      openTo: [],
+      skills: [],
+      interests: [],
+      experience: [],
+      education: [],
+      lastActiveAt: null,
+      messagePrivacy: null,
+      connectionPrivacy: null,
+      createdAt: null,
+      updatedAt: null,
+    };
+  }
+
+  return {
+    ...identity,
+    bio: normalized.bio,
+    website: normalized.website,
+    bannerUrl: normalized.bannerUrl,
+    socialLinks: normalized.socialLinks,
+    openTo: normalized.openTo,
+    skills: normalized.skills,
+    interests: normalized.interests,
+    experience: normalized.experience,
+    education: normalized.education,
+    lastActiveAt: options.exposeLastActive ? normalized.lastActiveAt ?? null : null,
+    messagePrivacy: normalized.messagePrivacy ?? null,
+    connectionPrivacy: normalized.connectionPrivacy ?? null,
+    createdAt: normalized.createdAt ?? null,
+    updatedAt: normalized.updatedAt ?? null,
+  };
+}
+
 export function buildViewerScopedProfileView(params: {
   profile: ViewerScopedProfileSource | null | undefined;
   relationship: PrivacyRelationshipState | null;
@@ -44,30 +104,9 @@ export function buildViewerScopedProfileView(params: {
   const exposeFullProfile = shouldExposeFullProfile(params.relationship, isOwner);
   const exposeLastActive = shouldExposeLastActiveAt(params.relationship, isOwner);
 
-  if (exposeFullProfile) {
-    return {
-      ...normalized,
-      lastActiveAt: exposeLastActive ? normalized.lastActiveAt ?? null : null,
-    };
-  }
-
-  return {
-    ...normalized,
-    username: exposeIdentity ? normalized.username : null,
-    fullName: exposeIdentity ? normalized.fullName : null,
-    avatarUrl: exposeIdentity ? normalized.avatarUrl : null,
-    headline: exposeIdentity ? normalized.headline : null,
-    location: exposeIdentity ? normalized.location : null,
-    bio: null,
-    website: null,
-    bannerUrl: null,
-    socialLinks: {},
-    openTo: [],
-    skills: [],
-    interests: [],
-    experience: [],
-    education: [],
-    lastActiveAt: null,
-    messagePrivacy: null,
-  };
+  return buildSafeProfileShape(normalized, {
+    exposeIdentity,
+    exposeFullProfile,
+    exposeLastActive,
+  });
 }
