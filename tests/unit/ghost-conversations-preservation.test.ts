@@ -370,7 +370,7 @@ describe('Ghost Conversations — Source-level Preservation Verification', () =>
         // Verify that the getConversations query orders by COALESCE(last_message_at, updated_at) DESC.
         // This ensures conversations with messages appear in the correct order.
         const hasOrderByActivity = ALL_ACTIONS_SOURCE.includes('COALESCE(cp.last_message_at, c.updated_at) DESC')
-            || ALL_ACTIONS_SOURCE.match(/ORDER BY.*COALESCE.*last_message_at.*updated_at.*DESC/s);
+            || ALL_ACTIONS_SOURCE.match(/ORDER BY[\s\S]*COALESCE[\s\S]*last_message_at[\s\S]*updated_at[\s\S]*DESC/);
 
         assert.ok(
             hasOrderByActivity,
