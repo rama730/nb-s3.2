@@ -5,7 +5,7 @@ import { and, eq, inArray, isNull, or } from "drizzle-orm";
 import { createClient } from "@/lib/supabase/server";
 import { db } from "@/lib/db";
 import { conversationParticipants, messages, messageWorkLinks, projectNodes } from "@/lib/db/schema";
-import { assertProjectReadAccess } from "@/app/actions/files/_shared";
+import { assertProjectReadAccess } from "@/lib/files/internal-helpers";
 import {
     groupLinkedWorkByMessage,
     mapMessageWorkLinkToSummary,
@@ -48,7 +48,11 @@ export async function readMessageWorkLinksAction(
         if (!userId) return { success: false, error: "Unauthorized", linksByMessageId: {} };
         await assertConversationAccess(conversationId, userId);
 
-        const uniqueMessageIds = Array.from(new Set(messageIds.filter(Boolean))).slice(0, 120);
+        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        const uniqueMessageIds = Array.from(
+            new Set(messageIds.filter(id => id && uuidRegex.test(id)))
+        ).slice(0, 120);
+
         if (uniqueMessageIds.length === 0) {
             return { success: true, linksByMessageId: {} };
         }
