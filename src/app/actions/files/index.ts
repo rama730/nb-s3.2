@@ -1,5 +1,4 @@
 export * from './_constants';
-export * from './_shared';
 export * from './nodes';
 export * from './mutations';
 export * from './content';
