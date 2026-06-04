@@ -5,7 +5,9 @@ import { projectNodeLocks } from '@/lib/db/schema';
 import { and, eq, inArray } from 'drizzle-orm';
 import { jsonError, jsonSuccess } from '@/app/api/v1/_envelope';
 import { validateCsrf } from '@/lib/security/csrf';
-import { assertProjectWriteAccess } from '@/app/actions/files/_shared';
+import { assertProjectWriteAccess } from '@/lib/files/internal-helpers';
+import { enforceRouteLimit } from '@/app/api/v1/_shared';
+import { z } from 'zod';
 
 /**
  * POST /api/v1/files/locks/release
@@ -19,6 +21,10 @@ export async function POST(request: NextRequest) {
     try {
         const csrfError = validateCsrf(request);
         if (csrfError) return csrfError;
+
+        const limitResponse = await enforceRouteLimit(request, "api:v1:files:locks:release", 60, 60);
+        if (limitResponse) return limitResponse;
+
         const supabase = await createClient();
         const {
             data: { user },
@@ -27,14 +33,26 @@ export async function POST(request: NextRequest) {
             return jsonError('Unauthorized', 401, 'UNAUTHORIZED');
         }
 
-        const body = await request.json().catch(() => null);
-        if (!body || typeof body.projectId !== 'string' || !Array.isArray(body.nodeIds)) {
+        let body;
+        try {
+            body = await request.json();
+        } catch {
+            return jsonError('Invalid JSON', 400, 'BAD_REQUEST');
+        }
+
+        const releaseSchema = z.object({
+            projectId: z.string().uuid(),
+            nodeIds: z.array(z.string().min(1)).max(100),
+        });
+
+        const parsed = releaseSchema.safeParse(body);
+        if (!parsed.success) {
             return jsonError('Invalid request body', 400, 'BAD_REQUEST');
         }
 
-        const { projectId, nodeIds } = body as { projectId: string; nodeIds: string[] };
+        const { projectId, nodeIds: validNodeIds } = parsed.data;
         await assertProjectWriteAccess(projectId, user.id);
-        const validNodeIds = nodeIds.filter((id): id is string => typeof id === 'string' && id.length > 0).slice(0, 100);
+
         if (validNodeIds.length === 0) {
             return jsonSuccess(null, 'No locks to release');
         }
