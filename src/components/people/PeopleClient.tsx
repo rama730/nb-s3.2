@@ -9,7 +9,7 @@ import { VirtuosoGrid } from "react-virtuoso";
 import PersonCard from "@/components/people/PersonCard";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { useConnectionMutations, useSuggestedPeople, useMutualSuggestions, useRoleSuggestions } from "@/hooks/useConnections";
+import { useConnectionMutations, useSuggestedPeople } from "@/hooks/useConnections";
 import type { DiscoverConnectionItem } from "@/hooks/useConnections";
 import { checkConnectionStatus, trackDiscoverImpressions, type DiscoverFilters } from "@/app/actions/connections";
 
@@ -42,6 +42,9 @@ function TopicLane({
     icon,
     profiles,
     onConnect,
+    onAccept,
+    onDecline,
+    onWithdraw,
     onDismiss,
     onDisconnect,
     viewerProjectIds,
@@ -54,6 +57,9 @@ function TopicLane({
     icon: React.ReactNode;
     profiles: DiscoverConnectionItem[];
     onConnect: (userId: string, lane?: string) => Promise<void>;
+    onAccept: (connectionId: string) => Promise<void>;
+    onDecline: (connectionId: string, reason?: string) => Promise<void>;
+    onWithdraw: (connectionId: string) => Promise<void>;
     onDismiss: (userId: string) => Promise<void>;
     onDisconnect: (userId: string, connectionId?: string) => Promise<void>;
     viewerProjectIds?: Set<string>;
@@ -85,6 +91,9 @@ function TopicLane({
                         <PersonCard
                             profile={profile}
                             onConnect={handleLaneConnect}
+                            onAccept={onAccept}
+                            onDecline={onDecline}
+                            onWithdraw={onWithdraw}
                             onDismiss={onDismiss}
                             onDisconnect={onDisconnect}
                             variant="discover"
@@ -172,11 +181,14 @@ export default function PeopleClient({ initialUser }: PeopleClientProps) {
     } = useSuggestedPeople(20, debouncedSearch, serverFilters);
     const {
         sendRequest,
+        acceptRequest,
+        rejectRequest,
         dismissSuggestion,
         optimisticallyDismissSuggestion,
         restoreDismissedSuggestion,
         undoDismiss,
         disconnect,
+        cancelRequest,
     } = useConnectionMutations();
 
     // ── Undo dismiss: deferred pattern with 10s timer ────────────────
@@ -272,9 +284,42 @@ export default function PeopleClient({ initialUser }: PeopleClientProps) {
         }
         await toast.promise(
             sendRequest.mutateAsync({ userId, lane }),
-            { loading: "Sending request...", success: "Connection request sent", error: "Failed to send request" },
+            {
+                loading: "Sending request...",
+                success: (result) => {
+                    if (result.status === "pending_sent") return "Connection request already pending";
+                    if (result.status === "pending_received") return "They already sent you a request";
+                    if (result.status === "connected") return "Already connected";
+                    return "Connection request sent";
+                },
+                error: (err) => err instanceof Error ? err.message : "Failed to send request",
+            },
         );
     }, [initialUser?.id, sendRequest]);
+
+    const handleAccept = useCallback(async (connectionId: string) => {
+        if (!initialUser?.id) return;
+        await toast.promise(
+            acceptRequest.mutateAsync(connectionId),
+            { loading: "Accepting...", success: "Connection accepted!", error: (err) => err instanceof Error ? err.message : "Failed to accept" }
+        );
+    }, [initialUser?.id, acceptRequest]);
+
+    const handleDecline = useCallback(async (connectionId: string, reason?: string) => {
+        if (!initialUser?.id) return;
+        await toast.promise(
+            rejectRequest.mutateAsync({ id: connectionId, reason }),
+            { loading: "Declining...", success: "Request declined", error: (err) => err instanceof Error ? err.message : "Failed to decline" }
+        );
+    }, [initialUser?.id, rejectRequest]);
+
+    const handleWithdraw = useCallback(async (connectionId: string) => {
+        if (!initialUser?.id) return;
+        await toast.promise(
+            cancelRequest.mutateAsync(connectionId),
+            { loading: "Cancelling request...", success: "Request cancelled", error: (err) => err instanceof Error ? err.message : "Failed to cancel" },
+        );
+    }, [cancelRequest, initialUser?.id]);
 
     const handleDisconnect = useCallback(async (userId: string, connectionId?: string) => {
         if (!initialUser?.id) {
@@ -498,6 +543,9 @@ export default function PeopleClient({ initialUser }: PeopleClientProps) {
                                 icon={<Sparkles className="w-4 h-4 text-primary" />}
                                 profiles={mutualProfiles}
                                 onConnect={handleConnect}
+                                onAccept={handleAccept}
+                                onDecline={handleDecline}
+                                onWithdraw={handleWithdraw}
                                 onDismiss={handleDismiss}
                                 onDisconnect={handleDisconnect}
                                 viewerProjectIds={viewerProjectIds}
@@ -511,6 +559,9 @@ export default function PeopleClient({ initialUser }: PeopleClientProps) {
                                 icon={<Briefcase className="w-4 h-4 text-violet-500" />}
                                 profiles={roleProfiles}
                                 onConnect={handleConnect}
+                                onAccept={handleAccept}
+                                onDecline={handleDecline}
+                                onWithdraw={handleWithdraw}
                                 onDismiss={handleDismiss}
                                 onDisconnect={handleDisconnect}
                                 viewerProjectIds={viewerProjectIds}
@@ -524,6 +575,9 @@ export default function PeopleClient({ initialUser }: PeopleClientProps) {
                                 icon={<Globe className="w-4 h-4 text-emerald-500" />}
                                 profiles={contextProfiles}
                                 onConnect={handleConnect}
+                                onAccept={handleAccept}
+                                onDecline={handleDecline}
+                                onWithdraw={handleWithdraw}
                                 onDismiss={handleDismiss}
                                 onDisconnect={handleDisconnect}
                                 viewerProjectIds={viewerProjectIds}
@@ -568,6 +622,9 @@ export default function PeopleClient({ initialUser }: PeopleClientProps) {
                                             <PersonCard
                                                 profile={profile}
                                                 onConnect={handleConnect}
+                                                onAccept={handleAccept}
+                                                onDecline={handleDecline}
+                                                onWithdraw={handleWithdraw}
                                                 onDismiss={handleDismiss}
                                                 onDisconnect={handleDisconnect}
                                                 variant="discover"
