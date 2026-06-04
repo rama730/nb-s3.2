@@ -1,11 +1,13 @@
 "use client";
 
-import { useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { IntegrationsData, NotificationPreferences, PrivacyData, SecurityData, SecurityStepUpCapabilitiesData } from "@/lib/types/settingsTypes";
-import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { queryKeys } from "@/lib/query-keys";
 import { DEFAULT_NOTIFICATION_PREFERENCES, normalizeNotificationPreferences } from "@/lib/notifications/preferences";
+import {
+    readNotificationPreferencesAction,
+    updateNotificationPreferencesAction,
+} from "@/app/actions/notifications";
 
 const DEFAULT_PRIVACY_SETTINGS: PrivacyData = {
     settings: {
@@ -96,113 +98,38 @@ const DEFAULT_INTEGRATIONS_DATA: IntegrationsData = {
     ],
 };
 
-const SETTINGS_VIEWER_TTL_MS = 30_000;
-type SettingsViewerResolverState = {
-    cachedUserId: string | null;
-    expiresAt: number;
-    inFlight: Promise<string | null> | null;
-};
-
-function createSettingsViewerResolverState(): SettingsViewerResolverState {
-    return {
-        cachedUserId: null,
-        expiresAt: 0,
-        inFlight: null,
-    };
-}
-
-async function resolveSettingsViewerId(
-    supabase: ReturnType<typeof createSupabaseBrowserClient>,
-    state: SettingsViewerResolverState,
-): Promise<string | null> {
-    const now = Date.now();
-    if (state.cachedUserId !== null && state.expiresAt > now) {
-        return state.cachedUserId;
-    }
-
-    if (state.inFlight) {
-        return state.inFlight;
-    }
-
-    state.inFlight = supabase.auth
-        .getUser()
-        .then((authResult: { data: { user: { id: string } | null }; error: Error | null }) => {
-            const { data, error } = authResult;
-            if (error) {
-                state.cachedUserId = null;
-                state.expiresAt = 0;
-                throw error;
-            }
-
-            const userId = data.user?.id ?? null;
-            if (userId !== null) {
-                state.cachedUserId = userId;
-                state.expiresAt = Date.now() + SETTINGS_VIEWER_TTL_MS;
-            } else {
-                // Do not cache null viewer IDs so retries after auth changes work immediately.
-                state.cachedUserId = null;
-                state.expiresAt = 0;
-            }
-            return userId;
-        })
-        .finally(() => {
-            state.inFlight = null;
-        });
-
-    return state.inFlight;
-}
-
 // Notification preferences
 export function useNotificationPreferences() {
-    const supabase = createSupabaseBrowserClient();
-    const viewerResolverStateRef = useRef<SettingsViewerResolverState>(createSettingsViewerResolverState());
-
     return useQuery({
         queryKey: queryKeys.settings.notifications(),
         queryFn: async (): Promise<NotificationPreferences> => {
-            const userId = await resolveSettingsViewerId(supabase, viewerResolverStateRef.current);
-            if (!userId) throw new Error("Not authenticated");
-
-            const { data, error } = await supabase
-                .from("profiles")
-                .select("notification_preferences")
-                .eq("id", userId)
-                .maybeSingle();
-
-            if (error) {
-                // Keep settings screens usable even if a profile row/column is unavailable.
-                console.warn("[settings] notification preferences lookup failed", error);
+            const result = await readNotificationPreferencesAction();
+            if (!result.success) {
+                console.warn("[settings] notification preferences lookup failed", result.error);
                 return DEFAULT_NOTIFICATION_PREFERENCES;
             }
 
-            return normalizeNotificationPreferences(data?.notification_preferences);
+            return normalizeNotificationPreferences(result.preferences);
         },
     });
 }
 
 export function useUpdateNotificationPreferences() {
-    const supabase = createSupabaseBrowserClient();
-    const viewerResolverStateRef = useRef<SettingsViewerResolverState>(createSettingsViewerResolverState());
     const queryClient = useQueryClient();
 
     return useMutation({
         mutationFn: async (preferences: NotificationPreferences) => {
-            const userId = await resolveSettingsViewerId(supabase, viewerResolverStateRef.current);
-            if (!userId) throw new Error("Not authenticated");
-
-            const { error } = await supabase
-                .from("profiles")
-                .update({ notification_preferences: normalizeNotificationPreferences(preferences) })
-                .eq("id", userId);
-
-            if (error) throw error;
-            return preferences;
+            const result = await updateNotificationPreferencesAction(normalizeNotificationPreferences(preferences));
+            if (!result.success || !result.preferences) {
+                throw new Error(result.error || "Failed to update notification preferences");
+            }
+            return normalizeNotificationPreferences(result.preferences);
         },
         onMutate: async (newPrefs) => {
             // Optimistic update
             await queryClient.cancelQueries({ queryKey: queryKeys.settings.notifications() });
             const previous = queryClient.getQueryData(queryKeys.settings.notifications());
-            queryClient.setQueryData(queryKeys.settings.notifications(), newPrefs);
+            queryClient.setQueryData(queryKeys.settings.notifications(), normalizeNotificationPreferences(newPrefs));
             return { previous };
         },
         onError: (err, newPrefs, context) => {
@@ -388,28 +315,18 @@ export function usePrivacySettings() {
 // Prefetch hooks
 export function usePrefetchSettings() {
     const queryClient = useQueryClient();
-    const supabase = createSupabaseBrowserClient();
-    const viewerResolverStateRef = useRef<SettingsViewerResolverState>(createSettingsViewerResolverState());
 
     const prefetchNotifications = () => {
         queryClient.prefetchQuery({
             queryKey: queryKeys.settings.notifications(),
             queryFn: async () => {
-                const userId = await resolveSettingsViewerId(supabase, viewerResolverStateRef.current);
-                if (!userId) return DEFAULT_NOTIFICATION_PREFERENCES;
-
-                const { data, error } = await supabase
-                    .from("profiles")
-                    .select("notification_preferences")
-                    .eq("id", userId)
-                    .maybeSingle();
-
-                if (error) {
-                    console.warn("[settings] notification preferences prefetch failed", error);
+                const result = await readNotificationPreferencesAction();
+                if (!result.success) {
+                    console.warn("[settings] notification preferences prefetch failed", result.error);
                     return DEFAULT_NOTIFICATION_PREFERENCES;
                 }
 
-                return normalizeNotificationPreferences(data?.notification_preferences);
+                return normalizeNotificationPreferences(result.preferences);
             },
         });
     };
