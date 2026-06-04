@@ -3,7 +3,7 @@
 import { and, eq, isNull } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { userNotifications } from "@/lib/db/schema";
+import { profiles, userNotifications } from "@/lib/db/schema";
 import {
     countUnreadNotifications,
     dismissNotification,
@@ -17,9 +17,14 @@ import {
     snoozeNotification,
     toNotificationItem,
 } from "@/lib/notifications/service";
-import type { NotificationMuteScope } from "@/lib/notifications/types";
+import {
+    DEFAULT_NOTIFICATION_PREFERENCES,
+    normalizeNotificationPreferences,
+} from "@/lib/notifications/preferences";
+import type { NotificationMuteScope, NotificationPreferences } from "@/lib/notifications/types";
 import { logger } from "@/lib/logger";
 import { createClient } from "@/lib/supabase/server";
+import { clearProfileCache } from "@/lib/services/profile-service";
 
 function extractConversationIdFromEntityRefs(entityRefs: unknown): string | null {
     if (!entityRefs || typeof entityRefs !== "object") return null;
@@ -263,6 +268,67 @@ export async function dismissNotificationAction(notificationId: string) {
     }
 }
 
+export async function readNotificationPreferencesAction() {
+    try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+            return { success: false as const, error: "Unauthorized", preferences: DEFAULT_NOTIFICATION_PREFERENCES };
+        }
+
+        const [row] = await db
+            .select({ notificationPreferences: profiles.notificationPreferences })
+            .from(profiles)
+            .where(eq(profiles.id, user.id))
+            .limit(1);
+
+        return {
+            success: true as const,
+            preferences: normalizeNotificationPreferences(row?.notificationPreferences),
+        };
+    } catch (error: any) {
+        logger.error("notifications.preferences_read_failed", {
+            module: "notifications",
+            error: error?.message || String(error),
+        });
+        return {
+            success: false as const,
+            error: error?.message || "Failed to read notification preferences",
+            preferences: DEFAULT_NOTIFICATION_PREFERENCES,
+        };
+    }
+}
+
+export async function updateNotificationPreferencesAction(preferences: NotificationPreferences) {
+    try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+            return { success: false as const, error: "Unauthorized", preferences: null };
+        }
+
+        const normalized = normalizeNotificationPreferences(preferences);
+        const [row] = await db
+            .update(profiles)
+            .set({ notificationPreferences: normalized, updatedAt: new Date() })
+            .where(eq(profiles.id, user.id))
+            .returning({ notificationPreferences: profiles.notificationPreferences });
+
+        if (!row) {
+            return { success: false as const, error: "Profile not found", preferences: null };
+        }
+
+        clearProfileCache(user.id);
+        return { success: true as const, preferences: normalizeNotificationPreferences(row.notificationPreferences) };
+    } catch (error: any) {
+        logger.error("notifications.preferences_update_failed", {
+            module: "notifications",
+            error: error?.message || String(error),
+        });
+        return { success: false as const, error: error?.message || "Failed to update notification preferences", preferences: null };
+    }
+}
+
 export async function muteNotificationScopeAction(scope: NotificationMuteScope) {
     try {
         const supabase = await createClient();
@@ -272,6 +338,7 @@ export async function muteNotificationScopeAction(scope: NotificationMuteScope) 
         }
 
         const preferences = await muteNotificationScope(user.id, scope, db);
+        clearProfileCache(user.id);
         return { success: true as const, preferences };
     } catch (error: any) {
         logger.error("notifications.mute_failed", {
@@ -298,6 +365,7 @@ export async function pauseNotificationsAction(pausedUntil: string | null) {
         }
 
         const preferences = await pauseNotifications(user.id, pausedUntil, db);
+        clearProfileCache(user.id);
         return { success: true as const, preferences };
     } catch (error: any) {
         logger.error("notifications.pause_failed", {
