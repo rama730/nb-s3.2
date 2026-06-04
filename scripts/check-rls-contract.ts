@@ -9,6 +9,9 @@ async function main() {
     const authorityBackfillSource = await readFile(path.join(root, 'drizzle/0063_database_setup_authority_backfill.sql'), 'utf8')
     const deliveryReceiptSource = await readFile(path.join(root, 'drizzle/0066_message_delivery_receipts.sql'), 'utf8')
     const readReceiptSource = await readFile(path.join(root, 'drizzle/0067_read_receipts_conversation_id.sql'), 'utf8')
+    const publicRlsHardeningSource = await readFile(path.join(root, 'drizzle/0078_public_rls_security_hardening.sql'), 'utf8')
+    const profilePrivilegeHardeningSource = await readFile(path.join(root, 'drizzle/0079_profile_column_privilege_hardening.sql'), 'utf8')
+    const profileWriteHardeningSource = await readFile(path.join(root, 'drizzle/0080_profile_write_privilege_hardening.sql'), 'utf8')
     const setupSource = await readFile(path.join(root, 'scripts/setup-database.ts'), 'utf8')
 
     const checks: Array<[string, boolean]> = [
@@ -31,6 +34,19 @@ async function main() {
         ['read receipts migration defines read receipt read policy', readReceiptSource.includes('CREATE POLICY "Users can view read receipts in their conversations"')],
         ['read receipts migration defines read receipt insert policy', readReceiptSource.includes('CREATE POLICY "Users can upsert their own read receipts"')],
         ['read receipts migration publishes read receipts to supabase realtime', readReceiptSource.includes('ALTER PUBLICATION supabase_realtime ADD TABLE "message_read_receipts"')],
+        ['public RLS hardening migration removes stale view-all profile policy', publicRlsHardeningSource.includes('DROP POLICY IF EXISTS "Users can view all profiles"')],
+        ['public RLS hardening migration enables partition RLS dynamically', publicRlsHardeningSource.includes("project_run_logs\\_%")],
+        ['public RLS hardening migration protects account deletions', publicRlsHardeningSource.includes('CREATE POLICY "Users can view own account deletions"')],
+        ['public RLS hardening migration uses non-recursive membership helpers', publicRlsHardeningSource.includes('CREATE OR REPLACE FUNCTION public.nb_is_conversation_participant')],
+        ['profile column hardening revokes public profile select', profilePrivilegeHardeningSource.includes('REVOKE SELECT ON TABLE public.profiles FROM PUBLIC')],
+        ['profile column hardening revokes broad profile API select', profilePrivilegeHardeningSource.includes('REVOKE SELECT ON TABLE public.profiles FROM anon, authenticated')],
+        ['profile column hardening grants explicit public display columns', profilePrivilegeHardeningSource.includes('GRANT SELECT (') && profilePrivilegeHardeningSource.includes('full_name') && profilePrivilegeHardeningSource.includes('last_active_at')],
+        ['profile column hardening does not grant profile email', !profilePrivilegeHardeningSource.includes('\n  email')],
+        ['profile column hardening does not grant notification preferences', !profilePrivilegeHardeningSource.includes('notification_preferences')],
+        ['profile write hardening revokes direct profile API writes', profileWriteHardeningSource.includes('REVOKE ALL PRIVILEGES ON TABLE public.profiles FROM PUBLIC, anon, authenticated')],
+        ['profile write hardening restores explicit display-only reads', profileWriteHardeningSource.includes('GRANT SELECT (') && profileWriteHardeningSource.includes('username') && profileWriteHardeningSource.includes('last_active_at')],
+        ['profile write hardening does not grant profile email', !profileWriteHardeningSource.includes('\n  email')],
+        ['profile write hardening does not grant notification preferences', !profileWriteHardeningSource.includes('notification_preferences')],
         ['database setup replays migration journal instead of authoring policies directly', setupSource.includes('Starting database setup via Drizzle migrations')],
         ['database setup no longer creates policies directly', !setupSource.includes('CREATE POLICY')],
         ['database setup no longer references supabase-setup.sql', !setupSource.includes('supabase-setup.sql')],
