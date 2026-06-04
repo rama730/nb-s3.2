@@ -29,7 +29,7 @@ import {
   assertProjectWriteAccessTx,
   assertNodeNotLockedByAnotherUser,
   recordNodeEvent,
-} from "./_shared";
+} from "@/lib/files/internal-helpers";
 
 /**
  * Server actions for the task-file version history.
@@ -284,7 +284,7 @@ export async function replaceNodeWithNewVersion(input: {
       .where(eq(projectNodes.id, input.nodeId))
       .returning();
 
-    return { node: updatedNode, version: versionRow };
+    return { node: updatedNode!, version: versionRow! };
   });
 
   // If the transaction returned a lock conflict, return it immediately
@@ -395,7 +395,7 @@ export async function restoreFileVersion(
       .where(eq(projectNodes.id, nodeId))
       .returning();
 
-    return { node: updatedNode, version: versionRow };
+    return { node: updatedNode!, version: versionRow! };
   });
 
   await recordNodeEvent(projectId, user.id, nodeId, "restore_file_version", {
