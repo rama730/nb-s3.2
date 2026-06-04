@@ -1,7 +1,7 @@
 'use server';
 
 import { createAdminClient, createClient } from '@/lib/supabase/server';
-import { assertProjectWriteAccess } from '@/app/actions/files';
+import { assertProjectUploadAccess } from '@/lib/files/internal-helpers';
 import { isCanonicalProjectFileKey, parseProjectFileKey } from '@/lib/storage/project-file-key';
 import { logger } from '@/lib/logger';
 import {
@@ -9,7 +9,7 @@ import {
     normalizeAndValidateMimeType,
     PROJECT_UPLOAD_MAX_FILE_BYTES,
 } from '@/lib/upload/security';
-import { createUploadIntent, finalizeUploadIntent, cleanupExpiredUploadIntents } from '@/lib/upload/upload-intents';
+import { createUploadIntent, createUploadIntents, finalizeUploadIntent, cleanupExpiredUploadIntents } from '@/lib/upload/upload-intents';
 
 const MAX_BATCH_UPLOAD_KEYS = 200;
 
@@ -36,14 +36,14 @@ async function assertUploadAccessForKey(key: string, userId: string) {
         throw new Error(UPLOAD_ERROR_CODES.KEY_FORMAT_INVALID);
     }
     const projectId = parsed.projectId;
-    await assertProjectWriteAccess(projectId, userId);
+    await assertProjectUploadAccess(projectId, userId);
     return projectId;
 }
 
 /**
  * Generate a presigned URL for direct browser-to-S3 upload.
  * Pure optimization: zero server throughput, browser uploads directly.
- * 
+ *
  * @param key - S3 object key (path within bucket)
  * @param contentType - MIME type of the file
  * @returns Presigned URL valid for 1 hour
@@ -155,41 +155,40 @@ export async function getBatchUploadUrls(
             }
         }
 
-        await assertProjectWriteAccess(firstProjectId, user.id);
+        await assertProjectUploadAccess(firstProjectId, user.id);
 
         const supabase = await createAdminClient();
         const urls: Record<string, string> = {};
         const uploadIntentIds: Record<string, string> = {};
 
-        // Process in parallel batches of 10
-        const BATCH_SIZE = 10;
-        for (let i = 0; i < normalizedItems.length; i += BATCH_SIZE) {
-            const batch = normalizedItems.slice(i, i + BATCH_SIZE);
-            const results = await Promise.all(
-                batch.map(async ({ key, contentType, sizeBytes }) => {
-                    const intent = await createUploadIntent({
-                        userId: user.id,
-                        projectId: firstProjectId,
-                        bucket: 'project-files',
-                        storageKey: key,
-                        scope: 'project_file',
-                        kind: 'file',
-                        expectedMimeType: contentType,
-                        expectedSize: sizeBytes,
-                        metadata: { sessionId: options?.sessionId ?? null },
-                    });
-                    const { data, error } = await supabase.storage
-                        .from('project-files')
-                        .createSignedUploadUrl(key, { upsert: true });
-                    return { key, url: data?.signedUrl, error, intentId: intent.id };
-                })
-            );
+        const intents = await createUploadIntents(normalizedItems.map(({ key, contentType, sizeBytes }) => ({
+            userId: user.id,
+            projectId: firstProjectId,
+            bucket: 'project-files',
+            storageKey: key,
+            scope: 'project_file',
+            kind: 'file',
+            expectedMimeType: contentType,
+            expectedSize: sizeBytes,
+            metadata: { sessionId: options?.sessionId ?? null },
+        })));
 
-            for (const result of results) {
-                if (result.url) {
-                    urls[result.key] = result.url;
-                    uploadIntentIds[result.key] = result.intentId;
-                }
+        const intentIdsByKey = new Map(intents.map(intent => [intent.storageKey, intent.id]));
+
+        const results = await Promise.all(
+            normalizedItems.map(async ({ key }) => {
+                const intentId = intentIdsByKey.get(key) || '';
+                const { data, error } = await supabase.storage
+                    .from('project-files')
+                    .createSignedUploadUrl(key, { upsert: true });
+                return { key, url: data?.signedUrl, error, intentId };
+            })
+        );
+
+        for (const result of results) {
+            if (result.url) {
+                urls[result.key] = result.url;
+                uploadIntentIds[result.key] = result.intentId;
             }
         }
 
@@ -224,7 +223,7 @@ export async function finalizeProjectUploadAction(input: {
             return { success: false, error: 'Unauthorized' };
         }
 
-        await assertProjectWriteAccess(input.projectId, user.id);
+        await assertProjectUploadAccess(input.projectId, user.id);
         const intent = await finalizeUploadIntent({
             intentId: input.uploadIntentId,
             storageKey: input.storageKey,
