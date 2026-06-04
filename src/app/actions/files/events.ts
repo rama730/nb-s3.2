@@ -5,10 +5,10 @@ import { profiles, projectNodeEvents, projectNodes, tasks, taskNodeLinks } from 
 import { eq, and, desc } from "drizzle-orm";
 import { createClient } from "@/lib/supabase/server";
 import {
-    assertProjectReadAccess,
+    assertProjectFileReadAccess,
     assertProjectWriteAccess,
     recordNodeEvent,
-} from "./_shared";
+} from "@/lib/files/internal-helpers";
 import {
     MAX_NODE_ACTIVITY_ITEMS,
     MAX_NODE_LINKED_TASKS,
@@ -35,7 +35,7 @@ export async function recordProjectNodeEvent(
 export async function getLastNodeEvent(projectId: string, nodeId: string) {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
-    await assertProjectReadAccess(projectId, user?.id ?? null);
+    await assertProjectFileReadAccess(projectId, user?.id ?? null);
 
     const rows = await db
         .select({
@@ -70,7 +70,7 @@ export type ProjectNodeActivityItem = {
 export async function getNodeActivity(projectId: string, nodeId: string, limit: number = 25) {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
-    await assertProjectReadAccess(projectId, user?.id ?? null);
+    await assertProjectFileReadAccess(projectId, user?.id ?? null);
 
     const node = await db.query.projectNodes.findFirst({
         where: and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId)),
@@ -116,7 +116,7 @@ export type ProjectNodeLinkedTask = {
 export async function getNodeLinkedTasks(projectId: string, nodeId: string, limit: number = 25) {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
-    await assertProjectReadAccess(projectId, user?.id ?? null);
+    await assertProjectFileReadAccess(projectId, user?.id ?? null);
 
     const node = await db.query.projectNodes.findFirst({
         where: and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId)),
