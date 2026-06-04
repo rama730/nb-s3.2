@@ -280,7 +280,7 @@ describe('Reaction Preservation — Property Tests (Task 10)', () => {
                     const viewerRows = scenario.rows.filter(
                         (r) => r.userId === scenario.viewerId,
                     );
-                    const viewerEmojis = new Set(viewerRows.map((r) => r.emoji));
+                    const viewerEmojis = new Set<string>(viewerRows.map((r) => r.emoji));
 
                     for (const reaction of messageSummary) {
                         if (viewerEmojis.has(reaction.emoji)) {
