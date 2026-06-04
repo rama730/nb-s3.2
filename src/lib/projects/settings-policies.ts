@@ -37,16 +37,23 @@ export type ProjectSettingsMember = {
     membershipRole?: "owner" | "admin" | "member" | "viewer" | string | null;
     projectRoleTitle?: string | null;
     joinedAt?: string | null;
+    fileUploadEnabled?: boolean | null;
     responsibilityCounts?: ProjectMemberResponsibilityCounts | null;
 };
 
 export type ProjectMemberRole = "owner" | "admin" | "member" | "viewer";
+
+export type ProjectPublicTabId = "dashboard" | "readme" | "sprints" | "tasks" | "analytics" | "files";
+
+export type ProjectPublicTabVisibility = Record<ProjectPublicTabId, boolean>;
 
 export type ProjectMemberCapability =
     | "transfer_ownership"
     | "archive_project"
     | "delete_project"
     | "manage_settings"
+    | "manage_public_tabs"
+    | "manage_notifications"
     | "manage_collaborators"
     | "manage_roles_applications"
     | "manage_tasks"
@@ -126,14 +133,14 @@ export type ProjectMemberRemovalPreflightInput = {
 };
 
 export const PROJECT_MEMBER_ROLE_LABELS: Record<ProjectMemberRole, string> = {
-    owner: "Owner",
+    owner: "Lead",
     admin: "Co-leader",
     member: "Member",
     viewer: "Viewer",
 };
 
 export const PROJECT_MEMBER_ROLE_DESCRIPTIONS: Record<ProjectMemberRole, string> = {
-    owner: "Single accountable owner with transfer, archive, delete, and all settings permissions.",
+    owner: "Single accountable lead with transfer, archive, delete, and all settings permissions.",
     admin: "Co-leader with collaborator, role/application, task, file, and workflow management.",
     member: "Contributor who can participate in project work by policy.",
     viewer: "Read-focused participant without task assignment or edit rights.",
@@ -145,6 +152,8 @@ export const PROJECT_MEMBER_ROLE_CAPABILITIES: Record<ProjectMemberRole, Project
         "archive_project",
         "delete_project",
         "manage_settings",
+        "manage_public_tabs",
+        "manage_notifications",
         "manage_collaborators",
         "manage_roles_applications",
         "manage_tasks",
@@ -156,6 +165,8 @@ export const PROJECT_MEMBER_ROLE_CAPABILITIES: Record<ProjectMemberRole, Project
         "comment",
     ],
     admin: [
+        "manage_public_tabs",
+        "manage_notifications",
         "manage_collaborators",
         "manage_roles_applications",
         "manage_tasks",
@@ -170,6 +181,33 @@ export const PROJECT_MEMBER_ROLE_CAPABILITIES: Record<ProjectMemberRole, Project
     viewer: ["comment"],
 };
 
+export const DEFAULT_PROJECT_PUBLIC_TAB_VISIBILITY: ProjectPublicTabVisibility = {
+    dashboard: true,
+    readme: true,
+    files: true,
+    sprints: false,
+    tasks: false,
+    analytics: false,
+};
+
+export const PROJECT_PUBLIC_TAB_LABELS: Record<ProjectPublicTabId, string> = {
+    dashboard: "Dashboard",
+    readme: "README",
+    files: "Files",
+    sprints: "Sprints",
+    tasks: "Tasks",
+    analytics: "Analytics",
+};
+
+export const PROJECT_PUBLIC_TAB_DESCRIPTIONS: Record<ProjectPublicTabId, string> = {
+    dashboard: "Public project overview, summary, roles, team preview, and high-level progress.",
+    readme: "Published project documentation, setup notes, screenshots, commands, and contribution guidance.",
+    files: "Public project files and shared workspace materials that are safe for visitors.",
+    sprints: "Sprint history and planning details, usually best kept member-only.",
+    tasks: "Task board and work execution details, usually best kept member-only.",
+    analytics: "Project analytics and operational metrics, usually best kept member-only.",
+};
+
 export function normalizeProjectMemberRole(value: unknown, fallback: ProjectMemberRole = "member"): ProjectMemberRole {
     return value === "owner" || value === "admin" || value === "member" || value === "viewer"
         ? value
@@ -182,6 +220,58 @@ export function getProjectMemberRoleLabel(role: unknown) {
 
 export function projectMemberCan(role: unknown, capability: ProjectMemberCapability) {
     return PROJECT_MEMBER_ROLE_CAPABILITIES[normalizeProjectMemberRole(role)].includes(capability);
+}
+
+export function canProjectMemberUploadFiles(input: { role?: unknown; fileUploadEnabled?: boolean | null }) {
+    const role = input.role;
+    if (role === "owner" || role === "admin") return true;
+    if (role === "viewer") return false;
+    if (role !== "member") return false;
+    return input.fileUploadEnabled !== false;
+}
+
+export function normalizeProjectPublicTabVisibility(value: unknown): ProjectPublicTabVisibility {
+    const source = value && typeof value === "object" ? value as Partial<Record<ProjectPublicTabId, unknown>> : {};
+    return {
+        dashboard: typeof source.dashboard === "boolean" ? source.dashboard : DEFAULT_PROJECT_PUBLIC_TAB_VISIBILITY.dashboard,
+        readme: typeof source.readme === "boolean" ? source.readme : DEFAULT_PROJECT_PUBLIC_TAB_VISIBILITY.readme,
+        files: typeof source.files === "boolean" ? source.files : DEFAULT_PROJECT_PUBLIC_TAB_VISIBILITY.files,
+        sprints: typeof source.sprints === "boolean" ? source.sprints : DEFAULT_PROJECT_PUBLIC_TAB_VISIBILITY.sprints,
+        tasks: typeof source.tasks === "boolean" ? source.tasks : DEFAULT_PROJECT_PUBLIC_TAB_VISIBILITY.tasks,
+        analytics: typeof source.analytics === "boolean" ? source.analytics : DEFAULT_PROJECT_PUBLIC_TAB_VISIBILITY.analytics,
+    };
+}
+
+export function areProjectPublicTabVisibilitiesEqual(left: unknown, right: unknown) {
+    const normalizedLeft = normalizeProjectPublicTabVisibility(left);
+    const normalizedRight = normalizeProjectPublicTabVisibility(right);
+    return (Object.keys(DEFAULT_PROJECT_PUBLIC_TAB_VISIBILITY) as ProjectPublicTabId[])
+        .every((tabId) => normalizedLeft[tabId] === normalizedRight[tabId]);
+}
+
+export function isProjectTabVisibleToViewer(input: {
+    tabId: string;
+    isOwnerOrMember: boolean;
+    canManageSettings?: boolean;
+    publicTabVisibility?: unknown;
+}) {
+    if (input.tabId === "settings") return Boolean(input.canManageSettings);
+    if (input.isOwnerOrMember) return true;
+    if (!(input.tabId in DEFAULT_PROJECT_PUBLIC_TAB_VISIBILITY)) return false;
+    return normalizeProjectPublicTabVisibility(input.publicTabVisibility)[input.tabId as ProjectPublicTabId];
+}
+
+export function resolveAllowedProjectTab(input: {
+    requestedTab?: string | null;
+    isOwnerOrMember: boolean;
+    canManageSettings?: boolean;
+    publicTabVisibility?: unknown;
+}) {
+    const requestedTab = input.requestedTab?.trim() || "dashboard";
+    if (isProjectTabVisibleToViewer({ ...input, tabId: requestedTab })) return requestedTab;
+    if (isProjectTabVisibleToViewer({ ...input, tabId: "dashboard" })) return "dashboard";
+    if (isProjectTabVisibleToViewer({ ...input, tabId: "files" })) return "files";
+    return "dashboard";
 }
 
 export function isAssignableProjectMember(role: unknown) {
@@ -324,14 +414,14 @@ export const PROJECT_SETTINGS_SECTIONS: ProjectSettingsSectionDefinition[] = [
     },
     {
         id: "roles-applications",
-        label: "Roles & Applications",
+        label: "Project Roles Editor",
         description: "Open roles, application intake, and reviewer routing.",
         available: true,
     },
     {
         id: "tasks-workflow",
-        label: "Tasks & Workflow",
-        description: "Lifecycle stages, task defaults, and workflow guidance.",
+        label: "Project Lifecycle",
+        description: "Journey stages, task defaults, and workflow guidance.",
         available: true,
     },
     {
@@ -343,9 +433,8 @@ export const PROJECT_SETTINGS_SECTIONS: ProjectSettingsSectionDefinition[] = [
     {
         id: "readme",
         label: "README",
-        description: "Documentation publishing rules for the future README tab.",
-        available: false,
-        hiddenReason: "README tab is not enforceable yet.",
+        description: "Documentation publishing rules, media policy, and smart blocks.",
+        available: true,
     },
     {
         id: "updates",
@@ -369,15 +458,16 @@ export const PROJECT_SETTINGS_SECTIONS: ProjectSettingsSectionDefinition[] = [
     },
     {
         id: "security-audit",
-        label: "Security & Audit",
-        description: "Owner-only actions, audit posture, and permission history.",
+        label: "Security & Data",
+        description: "Recent settings audit, protected actions, and project data export.",
         available: true,
     },
     {
         id: "data",
         label: "Data",
         description: "Exportable project settings and future data portability controls.",
-        available: true,
+        available: false,
+        hiddenReason: "Merged into Security & Data.",
     },
     {
         id: "danger",
@@ -704,17 +794,22 @@ export function buildProjectNotificationPolicy() {
 export function buildProjectFilePolicy() {
     return {
         enforcedRules: [
-            "Task-file notes use the task link annotation source of truth",
-            "Version history and Open with actions stay on file rows",
-            "Folder intake asks before merge/subfolder/replacement decisions",
-            "File review notifications target task participants only when responsibility is created",
+            "Owners and Co-leaders can always upload, replace, organize, and review project files.",
+            "Members can upload files only when their per-member upload toggle is on.",
+            "Viewers can inspect allowed file surfaces but cannot upload or replace files.",
+            "Task-file notes use the task link annotation source of truth.",
+            "Version history and Open with actions stay on file rows.",
+            "File review notifications target task participants only when responsibility is created.",
         ],
         affectedAreas: [
             "Project Files tab",
             "Task panel Files tab",
+            "Direct upload URLs and batch upload URLs",
+            "Folder/file creation and file version replacement",
             "Notification file-review events",
             "Open with defaults and download flows",
         ],
+        uploadPolicySummary: "File upload permission is checked in server actions before signed URLs, file rows, folders, or replacement versions are created.",
     };
 }
 
