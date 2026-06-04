@@ -1,3 +1,4 @@
+import { useQuery } from '@tanstack/react-query';
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import {
     Loader2, UserPlus, X, Clock, CheckCheck, Briefcase,
@@ -187,8 +188,9 @@ function TimelineAvatar({
 // ── Timeline item ───────────────────────────────────────────────────
 
 function TimelineItem({ item, isLast }: { item: RequestHistoryItem; isLast: boolean }) {
-    const config = getLifecycleStatusStyle(item.status);
-    const StatusIcon = STATUS_ICONS[item.status] || Clock;
+    const displayStatus = item.status;
+    const config = getLifecycleStatusStyle(displayStatus);
+    const StatusIcon = STATUS_ICONS[displayStatus] || Clock;
     const user = item.user;
     const isApplication = item.source === "application";
     const directionIcon = item.direction === "incoming" ? ArrowDownLeft : ArrowUpRight;
@@ -402,7 +404,28 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
         () => visibleHistoryItems.filter((item) => item.source === "application"),
         [visibleHistoryItems],
     );
-    const groupedConnectionHistory = useMemo(() => groupHistoryByTime(connectionHistoryItems), [connectionHistoryItems]);
+    const groupedConnectionHistory = useMemo(() => {
+        const groupsMap = new Map<string, any[]>();
+        for (const page of requestHistoryData?.pages ?? []) {
+            if (page.groupedConnectionItems) {
+                for (const group of page.groupedConnectionItems) {
+                    if (!groupsMap.has(group.label)) groupsMap.set(group.label, []);
+                    groupsMap.get(group.label)!.push(...group.items);
+                }
+            }
+        }
+        const result = Array.from(groupsMap.entries()).map(([label, items]) => ({ label, items }));
+        // Slice the items to respect historyLimit (approximate)
+        let totalCount = 0;
+        for (const group of result) {
+            if (totalCount >= historyLimit) { group.items = []; continue; }
+            if (totalCount + group.items.length > historyLimit) {
+                group.items = group.items.slice(0, historyLimit - totalCount);
+            }
+            totalCount += group.items.length;
+        }
+        return result.filter(g => g.items.length > 0);
+    }, [requestHistoryData?.pages, historyLimit]);
     const groupedApplicationHistory = useMemo(() => groupHistoryByTime(applicationHistoryItems), [applicationHistoryItems]);
 
     const [connectionActivityOpen, setConnectionActivityOpen] = useState(true);
@@ -416,8 +439,8 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
     const previousHistoryViewerIdRef = useRef(viewerId);
     const [requestRenderNowMs, setRequestRenderNowMs] = useState(() => Date.now());
 
-    useEffect(() => { setIncomingLimit(REQUESTS_INITIAL_BATCH); }, [incomingRequests.length, viewerId]);
-    useEffect(() => { setSentLimit(REQUESTS_INITIAL_BATCH); }, [sentRequests.length, viewerId]);
+    useEffect(() => { setIncomingLimit(REQUESTS_INITIAL_BATCH); }, [viewerId]);
+    useEffect(() => { setSentLimit(REQUESTS_INITIAL_BATCH); }, [viewerId]);
     useEffect(() => {
         const previousViewerId = previousHistoryViewerIdRef.current;
         const previousPageCount = previousHistoryPageCountRef.current;
@@ -435,7 +458,7 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
         toast.promise(acceptRequest.mutateAsync(id), {
             loading: "Accepting...",
             success: "Connection accepted!",
-            error: "Failed to accept",
+            error: (err) => err instanceof Error ? err.message : "Failed to accept",
         });
     };
 
@@ -458,7 +481,7 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
                             void toast.promise(undoRejectRequest.mutateAsync(id), {
                                 loading: "Restoring...",
                                 success: "Request restored",
-                                error: "Failed to restore request",
+                                error: (err) => err instanceof Error ? err.message : "Failed to restore request",
                             });
                         },
                     },
@@ -472,11 +495,11 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
         }
     };
 
-    const handleCancel = async (id: string) => {
+    const handleWithdraw = async (id: string) => {
         toast.promise(cancelRequest.mutateAsync(id), {
             loading: "Cancelling...",
             success: "Request cancelled",
-            error: "Failed to cancel",
+            error: (err) => err instanceof Error ? err.message : "Failed to cancel",
         });
     };
 
@@ -484,7 +507,7 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
         toast.promise(blockProfile.mutateAsync(targetUserId), {
             loading: `Blocking ${displayName}...`,
             success: `${displayName} blocked`,
-            error: "Failed to block account",
+            error: (err) => err instanceof Error ? err.message : "Failed to block account",
         });
     };
 
@@ -499,58 +522,43 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
     }, []);
 
     // 5L: Exponential backoff polling for bulk actions
-    const startBulkJobPolling = useCallback((jobId: string, count: number, action: "accept" | "reject") => {
-        const toastId = toast.loading(`Processing ${count} requests...`);
-        let elapsed = 0;
-        let backoff = 1_000; // Start at 1s, double each time, cap at 15s
-        const maxPollMs = 30_000;
+    const [pollingJob, setPollingJob] = useState<{ id: string, count: number, action: "accept" | "reject" | "withdraw" } | null>(null);
 
-        if (bulkPollRef.current) clearTimeout(bulkPollRef.current);
+    const { data: jobStatus } = useQuery({
+        queryKey: ['bulk-job', pollingJob?.id],
+        queryFn: async () => {
+            const res = await fetch(`/api/jobs/connection-bulk?jobId=${pollingJob?.id}`);
+            if (!res.ok) throw new Error("Failed");
+            return res.json();
+        },
+        enabled: !!pollingJob?.id,
+        refetchInterval: (query: any) => {
+            if (query.state.data?.status === 'completed' || query.state.data?.status === 'done' || query.state.data?.status === 'failed') return false;
+            // Exponential backoff: start at 2s, multiply by 1.5x each time, max out at 10s
+            const fetchCount = query.state.dataUpdateCount || 0;
+            return Math.min(2000 * Math.pow(1.5, fetchCount), 10000);
+        },
+    });
 
-        const poll = async () => {
-            elapsed += backoff;
+    useEffect(() => {
+        if (!pollingJob) return;
+        if (jobStatus?.status === 'completed' || jobStatus?.status === 'done') {
+            const completedAction = pollingJob.action === "withdraw" ? "cancelled" : `${pollingJob.action}ed`;
+            toast.dismiss("bulk-job-toast");
+            toast.success(`All ${pollingJob.count} requests ${completedAction} successfully.`);
+            setPollingJob(null);
+        } else if (jobStatus?.status === 'failed') {
+            const failedAction = pollingJob.action === "withdraw" ? "cancellation" : pollingJob.action;
+            toast.dismiss("bulk-job-toast");
+            toast.error(`Bulk ${failedAction} failed. Some requests may not have been processed.`);
+            setPollingJob(null);
+        }
+    }, [jobStatus, pollingJob]);
 
-            try {
-                const res = await fetch(`/api/v1/connections/bulk-job-status?jobId=${encodeURIComponent(jobId)}`);
-                const data = await res.json().catch(() => null);
-
-                if (res.ok) {
-                    if (data?.status === "completed") {
-                        if (bulkPollRef.current) clearTimeout(bulkPollRef.current);
-                        bulkPollRef.current = null;
-                        toast.dismiss(toastId);
-                        toast.success(`All ${count} requests ${action === "accept" ? "accepted" : "rejected"} successfully.`);
-                        return;
-                    }
-                    if (data?.status === "failed") {
-                        if (bulkPollRef.current) clearTimeout(bulkPollRef.current);
-                        bulkPollRef.current = null;
-                        toast.dismiss(toastId);
-                        toast.error(`Bulk ${action} failed. Some requests may not have been processed.`);
-                        return;
-                    }
-                }
-            } catch {
-                // Silently retry on network errors
-            }
-
-            if (elapsed >= maxPollMs) {
-                if (bulkPollRef.current) clearTimeout(bulkPollRef.current);
-                bulkPollRef.current = null;
-                toast.dismiss(toastId);
-                toast.info(`Bulk ${action} is still processing. Requests will update shortly.`);
-                return;
-            }
-
-            backoff = Math.min(backoff * 2, 15_000);
-            bulkPollRef.current = setTimeout(() => {
-                void poll();
-            }, backoff);
-        };
-
-        bulkPollRef.current = setTimeout(() => {
-            void poll();
-        }, backoff);
+    const startBulkJobPolling = useCallback((jobId: string, count: number, action: "accept" | "reject" | "withdraw") => {
+        const processingAction = action === "withdraw" ? "cancellation" : action;
+        setPollingJob({ id: jobId, count, action });
+        toast.loading(`Bulk ${processingAction} processing...`, { id: 'bulk-job-toast' });
     }, []);
 
     const confirmAcceptAll = useCallback(async () => {
@@ -586,6 +594,17 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
             toast.error("Failed to reject all requests");
         }
     }, [rejectAllIncoming, incomingRequests.length, startBulkJobPolling]);
+
+    const confirmWithdrawAll = useCallback(async () => {
+        const pendingToast = toast.loading("Cancelling sent requests...");
+        try {
+            await withdrawAllSent.mutateAsync();
+        } catch {
+            // useConnectionMutations owns the user-facing failure toast.
+        } finally {
+            toast.dismiss(pendingToast);
+        }
+    }, [withdrawAllSent]);
 
     // ── Loading skeleton ───────────────────────────────────────────
     if (isLoading) {
@@ -762,7 +781,7 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
                                                         </button>
                                                     </DropdownMenuTrigger>
                                                     <DropdownMenuContent align="end" className="w-52">
-                                                        {actionModel.secondaryMenu.map((action) => {
+                                                        {actionModel.secondaryMenu.filter((action) => action.key !== "view_profile").map((action) => {
                                                             if (!action.href) return null;
                                                             return (
                                                                 <DropdownMenuItem key={action.key} asChild>
@@ -820,7 +839,7 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
                                 onClick={() => setBulkAction({ type: "withdraw" })}
                                 className="text-xs font-medium text-red-500 hover:text-red-600 transition-colors bg-red-50 hover:bg-red-100 px-3 py-1.5 rounded-lg dark:bg-red-500/10 dark:hover:bg-red-500/20"
                             >
-                                Withdraw All
+                                Cancel All
                             </button>
                         )}
                     </div>
@@ -871,19 +890,13 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
                                             )}
                                             <button
                                                 type="button"
-                                                onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleCancel(req.id); }}
+                                                onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleWithdraw(req.id); }}
                                                 disabled={isProcessing}
                                                 className="px-4 py-1.5 rounded-xl text-sm font-medium text-zinc-600 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700 hover:text-red-500 hover:border-red-200 dark:hover:border-red-800 transition-colors disabled:opacity-50"
                                                 aria-label={`Cancel request to ${req.addresseeFullName || req.addresseeUsername || "user"}`}
                                             >
                                                 {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : "Cancel"}
                                             </button>
-                                            <Link
-                                                href={profileLink}
-                                                className="px-4 py-1.5 rounded-xl text-sm font-medium text-zinc-600 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
-                                            >
-                                                View profile
-                                            </Link>
                                             {actionModel.canSendMessage ? (
                                                 <Link
                                                     href={`/messages?userId=${req.addresseeId}`}
@@ -1055,13 +1068,31 @@ export default function RequestsTab({ initialUser, initialRequests, initialAppli
             <ConfirmDialog
                 open={!!bulkAction}
                 onOpenChange={(open) => { if (!open) setBulkAction(null); }}
-                title={bulkAction?.type === "accept" ? "Accept All Requests" : "Reject All Requests"}
+                title={
+                    bulkAction?.type === "accept"
+                        ? "Accept All Requests"
+                        : bulkAction?.type === "withdraw"
+                            ? "Cancel All Sent Requests"
+                            : "Reject All Requests"
+                }
                 description={bulkAction?.type === "accept"
                     ? `Accept all ${incomingRequests.length} incoming requests?`
-                    : `Reject all ${incomingRequests.length} incoming requests? This cannot be undone in bulk.`}
-                confirmLabel={bulkAction?.type === "accept" ? "Accept All" : "Reject All"}
-                variant={bulkAction?.type === "reject" ? "destructive" : "default"}
-                onConfirm={() => bulkAction?.type === "accept" ? confirmAcceptAll() : confirmRejectAll()}
+                    : bulkAction?.type === "withdraw"
+                        ? `Cancel all ${sentRequests.length} sent requests? They will disappear from recipients' pending requests.`
+                        : `Reject all ${incomingRequests.length} incoming requests? This cannot be undone in bulk.`}
+                confirmLabel={
+                    bulkAction?.type === "accept"
+                        ? "Accept All"
+                        : bulkAction?.type === "withdraw"
+                            ? "Cancel All"
+                            : "Reject All"
+                }
+                variant={bulkAction?.type === "reject" || bulkAction?.type === "withdraw" ? "destructive" : "default"}
+                onConfirm={() => {
+                    if (bulkAction?.type === "accept") return confirmAcceptAll();
+                    if (bulkAction?.type === "withdraw") return confirmWithdrawAll();
+                    return confirmRejectAll();
+                }}
             />
         </div>
     );
