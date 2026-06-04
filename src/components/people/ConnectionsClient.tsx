@@ -90,9 +90,8 @@ export default function ConnectionsClient(_props: ConnectionsClientProps) {
         return valid;
     }, [connectionsData, tagFilter]);
 
-
-
-    const { disconnect } = useConnectionMutations();
+    const { disconnect, blockProfile } = useConnectionMutations();
+    const bulkActions = useBulkConnectionsActions();
     const allTags: string[] = [];
     const stats = statsData || {
         totalConnections: 0,
@@ -114,7 +113,7 @@ export default function ConnectionsClient(_props: ConnectionsClientProps) {
             {
                 loading: "Disconnecting...",
                 success: "Disconnected",
-                error: "Failed to disconnect",
+                error: (err) => err instanceof Error ? err.message : "Failed to disconnect",
             },
         );
     }, [disconnect, disconnectTarget]);
@@ -122,6 +121,14 @@ export default function ConnectionsClient(_props: ConnectionsClientProps) {
     const handleDisconnect = useCallback((connectionId: string, userName: string) => {
         setDisconnectTarget({ id: connectionId, name: userName });
     }, []);
+
+    const handleBlock = useCallback((targetUserId: string, displayName: string) => {
+        toast.promise(blockProfile.mutateAsync(targetUserId), {
+            loading: `Blocking ${displayName}...`,
+            success: `${displayName} blocked`,
+            error: (err) => err instanceof Error ? err.message : "Failed to block account",
+        });
+    }, [blockProfile]);
 
     // Message with prefetch (#21)
     const handleMessage = useCallback((userId: string) => {
@@ -153,6 +160,27 @@ export default function ConnectionsClient(_props: ConnectionsClientProps) {
         setSelectionMode(false);
         setSelectedIds(new Set());
     }, [selectedIds, router]);
+
+    const handleBulkDisconnect = useCallback(async () => {
+        if (selectedIds.size === 0) return;
+        const confirm = window.confirm(`Are you sure you want to disconnect from ${selectedIds.size} users?`);
+        if (!confirm) return;
+
+        // Map userIds to connectionIds
+        const selectedConnectionIds = connections
+            .filter(c => c.otherUser && selectedIds.has(c.otherUser.id))
+            .map(c => c.id);
+
+        const toastId = toast.loading(`Disconnecting ${selectedIds.size} users...`);
+        try {
+            await bulkActions.disconnect.mutateAsync(selectedConnectionIds);
+            toast.success(`Disconnected from ${selectedIds.size} users`, { id: toastId });
+            setSelectionMode(false);
+            setSelectedIds(new Set());
+        } catch (error) {
+            toast.error(`Failed to disconnect from users`, { id: toastId });
+        }
+    }, [selectedIds, connections, bulkActions.disconnect]);
 
     // 4F: Profile preview — enrich with skills/interests/bio
     const openPreview = useCallback((conn: NetworkConnectionItem) => {
@@ -310,14 +338,25 @@ export default function ConnectionsClient(_props: ConnectionsClientProps) {
                     <div className="sticky bottom-4 z-30 mx-auto max-w-sm mb-4">
                         <div className="flex items-center gap-3 px-4 py-2.5 rounded-2xl bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 shadow-lg">
                             <span className="text-sm font-medium">{selectedIds.size} selected</span>
-                            <button
-                                type="button"
-                                onClick={handleBulkMessage}
-                                className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/20 dark:bg-zinc-900/20 text-sm font-medium hover:bg-white/30 dark:hover:bg-zinc-900/30 transition-colors"
-                            >
-                                <MessageSquare className="w-3.5 h-3.5" />
-                                Message
-                            </button>
+                            <div className="ml-auto flex items-center gap-2">
+                                <button
+                                    type="button"
+                                    onClick={handleBulkDisconnect}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/20 dark:bg-zinc-900/20 text-sm font-medium hover:bg-white/30 dark:hover:bg-zinc-900/30 transition-colors"
+                                    disabled={bulkActions.disconnect.isPending}
+                                >
+                                    {bulkActions.disconnect.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <X className="w-3.5 h-3.5" />}
+                                    Remove
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={handleBulkMessage}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/20 dark:bg-zinc-900/20 text-sm font-medium hover:bg-white/30 dark:hover:bg-zinc-900/30 transition-colors"
+                                >
+                                    <MessageSquare className="w-3.5 h-3.5" />
+                                    Message
+                                </button>
+                            </div>
                         </div>
                     </div>
                 )}
@@ -399,15 +438,7 @@ export default function ConnectionsClient(_props: ConnectionsClientProps) {
                                         )}
                                         <div
                                             className="flex-1 cursor-pointer"
-                                            role="button"
-                                            tabIndex={selectionMode ? -1 : 0}
                                             onClick={() => !selectionMode && openPreview(conn)}
-                                            onKeyDown={(event) => {
-                                                if (!selectionMode && (event.key === "Enter" || event.key === " ")) {
-                                                    event.preventDefault();
-                                                    openPreview(conn);
-                                                }
-                                            }}
                                         >
                                             <PersonCard
                                                 profile={mappedProfile}
@@ -450,7 +481,7 @@ export default function ConnectionsClient(_props: ConnectionsClientProps) {
                                                                 </button>
                                                             </DropdownMenuTrigger>
                                                             <DropdownMenuContent align="end" className="w-52">
-                                                                {actionModel.connectedMenu.map((action, index) => {
+                                                                {actionModel.connectedMenu.filter((action) => action.key !== "view_profile").map((action, index) => {
                                                                     if (action.key === "disconnect") {
                                                                         return (
                                                                             <React.Fragment key={action.key}>
@@ -470,6 +501,25 @@ export default function ConnectionsClient(_props: ConnectionsClientProps) {
                                                                                         <X className="w-4 h-4" />
                                                                                     )}
                                                                                     Disconnect
+                                                                                </DropdownMenuItem>
+                                                                            </React.Fragment>
+                                                                        );
+                                                                    }
+
+                                                                    if (action.key === "block") {
+                                                                        return (
+                                                                            <React.Fragment key={action.key}>
+                                                                                {index > 0 && <DropdownMenuSeparator />}
+                                                                                <DropdownMenuItem
+                                                                                    onClick={(e) => {
+                                                                                        e.preventDefault();
+                                                                                        e.stopPropagation();
+                                                                                        handleBlock(user.id, user.fullName || user.username || "User");
+                                                                                    }}
+                                                                                    variant="destructive"
+                                                                                >
+                                                                                    <X className="w-4 h-4" />
+                                                                                    Block Profile
                                                                                 </DropdownMenuItem>
                                                                             </React.Fragment>
                                                                         );
