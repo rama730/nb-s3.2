@@ -14,13 +14,20 @@ import { profileHref } from "@/lib/routing/identifiers";
 import { buildProfileStatusSummary } from "@/lib/ui/status-config";
 import type { SuggestedProfile } from "@/app/actions/connections";
 import { buildDiscoverMatchBadges, resolveRelationshipActionModel, type RelationshipMenuAction } from "@/components/people/person-card-model";
+import { useEnsureDirectConversation } from "@/hooks/useMessagesV2";
+import { useMessagesV2UiStore } from "@/stores/messagesV2UiStore";
+import { toast } from "sonner";
 
 export type PersonCardVariant = "discover" | "featured" | "network" | "request";
 
 export interface PersonCardProps {
     profile: SuggestedProfile;
     onConnect: (userId: string) => Promise<void>;
+    onAccept?: (connectionId: string) => Promise<void>;
+    onDecline?: (connectionId: string, reason?: string) => Promise<void>;
+    onWithdraw?: (connectionId: string) => Promise<void>;
     onDisconnect?: (userId: string, connectionId?: string) => Promise<void>;
+    onBlock?: (userId: string) => Promise<void>;
     onDismiss?: (userId: string) => Promise<void>;
     isConnecting?: boolean;
     variant?: PersonCardVariant;
@@ -164,15 +171,21 @@ const MATCH_BADGE_TONES: Record<ReturnType<typeof buildDiscoverMatchBadges>[numb
 function RelationshipMenuItems({
     actions,
     onDisconnect,
+    onBlock,
+    onMessage,
     isProcessing,
 }: {
     actions: RelationshipMenuAction[];
-    onDisconnect?: (e: React.MouseEvent) => Promise<void>;
+    onDisconnect?: () => void;
+    onBlock?: () => void;
+    onMessage?: (e: React.MouseEvent) => void;
     isProcessing?: boolean;
 }) {
     return (
         <>
             {actions.map((action, index) => {
+                if (action.key === "view_profile") return null;
+
                 if (action.key === "disconnect") {
                     if (!onDisconnect) return null;
                     return (
@@ -186,11 +199,33 @@ function RelationshipMenuItems({
                     );
                 }
 
+                if (action.key === "block") {
+                    if (!onBlock) return null;
+                    return (
+                        <React.Fragment key={action.key}>
+                            {index > 0 && <DropdownMenuSeparator />}
+                            <DropdownMenuItem onClick={onBlock} disabled={isProcessing} variant="destructive">
+                                <Ban className="w-4 h-4" />
+                                {action.label}
+                            </DropdownMenuItem>
+                        </React.Fragment>
+                    );
+                }
+
                 const icon = action.key === "message"
                     ? <MessageSquare className="w-4 h-4" />
                     : action.key === "invite_to_project"
                         ? <Briefcase className="w-4 h-4" />
                         : <ExternalLink className="w-4 h-4" />;
+
+                if (action.key === "message" && onMessage) {
+                    return (
+                        <DropdownMenuItem key={action.key} onClick={onMessage} disabled={isProcessing}>
+                            <MessageSquare className="w-4 h-4" />
+                            {action.label}
+                        </DropdownMenuItem>
+                    );
+                }
 
                 if (!action.href) return null;
                 return (
@@ -293,7 +328,7 @@ function ContextLine({
             : activeProjects;
         if (nonShared.length > 0) {
             const label = nonShared.length === 1
-                ? nonShared[0].title
+                ? nonShared[0]!.title
                 : `${nonShared.length} projects`;
             parts.push(
                 <span key="proj" className="inline-flex items-center gap-1 truncate">
@@ -318,7 +353,10 @@ function ContextLine({
 function PersonCard({
     profile,
     onConnect,
-    onDisconnect,
+    onAccept,
+    onDecline,
+    onWithdraw,
+    onDisconnect, onBlock,
     onDismiss,
     isConnecting,
     variant = "discover",
@@ -332,6 +370,16 @@ function PersonCard({
 }: PersonCardProps) {
     const [localStatus, setLocalStatus] = useState(profile.connectionStatus);
     const [isDisconnecting, setIsDisconnecting] = useState(false);
+    const [isBlocking, setIsBlocking] = useState(false);
+    const [isOpeningMessage, setIsOpeningMessage] = useState(false);
+    const [isAccepting, setIsAccepting] = useState(false);
+    const [isDeclining, setIsDeclining] = useState(false);
+    const [isWithdrawing, setIsWithdrawing] = useState(false);
+
+    const ensureConversation = useEnsureDirectConversation();
+    const setPopupOpen = useMessagesV2UiStore((state) => state.setPopupOpen);
+    const setPopupMinimized = useMessagesV2UiStore((state) => state.setPopupMinimized);
+    const setSelectedConversationId = useMessagesV2UiStore((state) => state.setSelectedConversationId);
 
     useEffect(() => {
         setLocalStatus(profile.connectionStatus);
@@ -340,9 +388,20 @@ function PersonCard({
     const handleConnect = async (e: React.MouseEvent) => {
         e.preventDefault();
         e.stopPropagation();
-        if (localStatus !== "none" && localStatus !== "pending_received") return;
+        if (localStatus === "pending_received") {
+            if (!onAccept || !profile.connectionId) return;
+            const prevStatus = localStatus;
+            setLocalStatus("connected");
+            try {
+                await onAccept(profile.connectionId);
+            } catch {
+                setLocalStatus(prevStatus);
+            }
+            return;
+        }
+        if (localStatus !== "none") return;
         const prevStatus = localStatus;
-        setLocalStatus(localStatus === "pending_received" ? "connected" : "pending_sent");
+        setLocalStatus("pending_sent");
         try {
             await onConnect(profile.id);
         } catch {
@@ -357,19 +416,90 @@ function PersonCard({
         await onDismiss(profile.id);
     };
 
-    const handleDisconnect = async (e: React.MouseEvent) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (!onDisconnect || localStatus !== "connected") return;
-        const previousStatus = localStatus;
-        setLocalStatus("none");
+    const handleDisconnect = async () => {
+        if (!onDisconnect) return;
         setIsDisconnecting(true);
         try {
-            await onDisconnect(profile.id, profile.connectionId);
-        } catch {
-            setLocalStatus(previousStatus);
+            await onDisconnect(profile.id, profile.connectionId || undefined);
         } finally {
             setIsDisconnecting(false);
+        }
+    };
+
+    const handleAccept = async (e: React.MouseEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!onAccept || !profile.connectionId) return;
+        setIsAccepting(true);
+        const prevStatus = localStatus;
+        setLocalStatus("connected");
+        try {
+            await onAccept(profile.connectionId);
+        } catch {
+            setLocalStatus(prevStatus);
+        } finally {
+            setIsAccepting(false);
+        }
+    };
+
+    const handleDecline = async (e: React.MouseEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!onDecline || !profile.connectionId) return;
+        setIsDeclining(true);
+        try {
+            await onDecline(profile.connectionId);
+            // Revert state if successful since they're no longer pending
+            setLocalStatus("none");
+        } finally {
+            setIsDeclining(false);
+        }
+    };
+
+    const handleWithdraw = async (e: React.MouseEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!onWithdraw || !profile.connectionId) return;
+        setIsWithdrawing(true);
+        const prevStatus = localStatus;
+        setLocalStatus("none");
+        try {
+            await onWithdraw(profile.connectionId);
+        } catch {
+            setLocalStatus(prevStatus);
+        } finally {
+            setIsWithdrawing(false);
+        }
+    };
+
+    const handleBlock = async () => {
+        if (!onBlock) return;
+        setIsBlocking(true);
+        try {
+            await onBlock(profile.id);
+        } finally {
+            setIsBlocking(false);
+        }
+    };
+
+    const handleMessageClick = async (e: React.MouseEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (isOpeningMessage) return;
+        setIsOpeningMessage(true);
+        try {
+            const result = await ensureConversation.mutateAsync(profile.id);
+            if (result.conversationId) {
+                setSelectedConversationId(result.conversationId);
+                setPopupOpen(true);
+                setPopupMinimized(false);
+            } else {
+                toast.error("Failed to open conversation");
+            }
+        } catch (error) {
+            toast.error(error instanceof Error ? error.message : "Failed to open conversation");
+        } finally {
+            setIsOpeningMessage(false);
         }
     };
 
@@ -560,10 +690,16 @@ function PersonCard({
                 {/* Top row: avatar + identity */}
                 <div className="flex items-start gap-3">
                     <div className={cn(
-                        "rounded-full flex-shrink-0",
-                        profile.availabilityStatus === "available" && "ring-2 ring-emerald-400/60 animate-pulse",
+                        "relative rounded-full flex-shrink-0",
+                        profile.availabilityStatus === "available" && "ring-2 ring-emerald-400/60",
                     )}>
                         <Avatar profile={profile} size={48} priority={priority} />
+                        {profile.availabilityStatus === "available" ? (
+                            <span
+                                aria-hidden="true"
+                                className="absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-white bg-emerald-500 dark:border-zinc-900"
+                            />
+                        ) : null}
                     </div>
                     <div className="flex-1 min-w-0">
                         <h3 className="font-semibold text-sm text-zinc-900 dark:text-zinc-100 truncate group-hover/link:text-primary transition-colors leading-tight">
@@ -670,7 +806,9 @@ function PersonCard({
                             <RelationshipMenuItems
                                 actions={actionModel.connectedMenu}
                                 onDisconnect={handleDisconnect}
-                                isProcessing={isDisconnecting}
+                                onBlock={handleBlock}
+                                onMessage={handleMessageClick}
+                                isProcessing={isDisconnecting || isBlocking || isOpeningMessage}
                             />
                         </DropdownMenuContent>
                     </DropdownMenu>
@@ -680,20 +818,62 @@ function PersonCard({
                             <Ban className="w-4 h-4" />
                             Blocked
                         </span>
-                        <Link
-                            href={profileLink}
-                            className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-200 px-3 py-1.5 text-xs font-semibold text-zinc-700 transition-colors hover:border-primary hover:text-primary dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-primary dark:hover:text-primary"
-                        >
-                            View Profile
-                        </Link>
                     </div>
                 ) : (
                     <div className="flex flex-wrap items-center gap-2">
                         {localStatus === "pending_sent" ? (
-                            <span className="inline-flex items-center gap-1.5 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/20 dark:text-amber-200">
-                                <Clock className="w-4 h-4" />
-                                Requested
-                            </span>
+                            <div className="flex items-center gap-2">
+                                {onWithdraw && profile.connectionId ? (
+                                    <DropdownMenu>
+                                        <DropdownMenuTrigger asChild>
+                                            <button
+                                                type="button"
+                                                disabled={isWithdrawing}
+                                                className="inline-flex items-center gap-1.5 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800 transition-colors hover:bg-amber-100 disabled:opacity-50 dark:border-amber-900/60 dark:bg-amber-950/20 dark:text-amber-200 dark:hover:bg-amber-950/35"
+                                                aria-label={`Open request actions for ${displayName}`}
+                                            >
+                                                {isWithdrawing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Clock className="w-4 h-4" />}
+                                                Requested
+                                                <ChevronDown className="w-3.5 h-3.5 opacity-70" />
+                                            </button>
+                                        </DropdownMenuTrigger>
+                                        <DropdownMenuContent align="start" className="w-44">
+                                            <DropdownMenuItem
+                                                onClick={handleWithdraw}
+                                                disabled={isWithdrawing}
+                                                variant="destructive"
+                                            >
+                                                {isWithdrawing ? <Loader2 className="w-4 h-4 animate-spin" /> : <X className="w-4 h-4" />}
+                                                Cancel request
+                                            </DropdownMenuItem>
+                                        </DropdownMenuContent>
+                                    </DropdownMenu>
+                                ) : (
+                                    <span className="inline-flex items-center gap-1.5 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/20 dark:text-amber-200">
+                                        <Clock className="w-4 h-4" />
+                                        Requested
+                                    </span>
+                                )}
+                            </div>
+                        ) : localStatus === "pending_received" && onAccept && onDecline && profile.connectionId ? (
+                            <div className="flex items-center gap-2">
+                                <button
+                                    type="button"
+                                    onClick={handleAccept}
+                                    disabled={isAccepting || isDeclining}
+                                    className="px-4 py-1.5 rounded-xl text-sm font-semibold bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
+                                >
+                                    {isAccepting ? <Loader2 className="w-4 h-4 animate-spin" /> : "Accept"}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={handleDecline}
+                                    disabled={isAccepting || isDeclining}
+                                    className="px-4 py-1.5 rounded-xl text-sm font-medium text-zinc-600 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors disabled:opacity-50"
+                                >
+                                    {isDeclining ? <Loader2 className="w-4 h-4 animate-spin" /> : "Decline"}
+                                </button>
+                            </div>
                         ) : (
                             <ConnectButton
                                 localStatus={localStatus}
@@ -701,20 +881,15 @@ function PersonCard({
                                 onClick={handleConnect}
                             />
                         )}
-                        <Link
-                            href={profileLink}
-                            className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-200 px-3 py-1.5 text-xs font-semibold text-zinc-700 transition-colors hover:border-primary hover:text-primary dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-primary dark:hover:text-primary"
-                        >
-                            View Profile
-                        </Link>
                         {canSendMessage ? (
-                            <Link
-                                href={messageHref}
-                                className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-200 px-3 py-1.5 text-xs font-semibold text-zinc-700 transition-colors hover:border-primary hover:text-primary dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-primary dark:hover:text-primary"
+                            <button
+                                onClick={handleMessageClick}
+                                disabled={isOpeningMessage}
+                                className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-200 px-3 py-1.5 text-xs font-semibold text-zinc-700 transition-colors hover:border-primary hover:text-primary dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-primary dark:hover:text-primary disabled:opacity-50"
                             >
-                                <MessageSquare className="w-3.5 h-3.5" />
+                                {isOpeningMessage ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <MessageSquare className="w-3.5 h-3.5" />}
                                 Message
-                            </Link>
+                            </button>
                         ) : null}
                     </div>
                 )}
@@ -733,7 +908,7 @@ const areSameProjects = (
     if (!a || !b) return !a && !b;
     if (a.length !== b.length) return false;
     for (let i = 0; i < a.length; i++) {
-        if (a[i].id !== b[i].id || a[i].title !== b[i].title || a[i].status !== b[i].status) return false;
+        if (a[i]!.id !== b[i]!.id || a[i]!.title !== b[i]!.title || a[i]!.status !== b[i]!.status) return false;
     }
     return true;
 };
@@ -795,6 +970,7 @@ const areCardsEqual = (prev: PersonCardProps, next: PersonCardProps) => (
     prev.priority === next.priority &&
     prev.onDismiss === next.onDismiss &&
     prev.onConnect === next.onConnect &&
+    prev.onWithdraw === next.onWithdraw &&
     prev.actions === next.actions &&
     prev.connectedAt === next.connectedAt &&
     prev.requestedAt === next.requestedAt &&
