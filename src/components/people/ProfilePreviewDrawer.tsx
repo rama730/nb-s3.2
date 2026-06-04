@@ -18,6 +18,7 @@ import { toast } from "sonner";
 import { resolveRelationshipActionModel } from "@/components/people/person-card-model";
 import { buildIdentityPresentation } from "@/lib/ui/identity";
 import { buildProfileStatusSummary } from "@/lib/ui/status-config";
+import { useRouteWarmPrefetch } from "@/hooks/useRouteWarmPrefetch";
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -44,6 +45,7 @@ export default function ProfilePreviewDrawer({
     isConnecting,
     viewerSkills,
 }: ProfilePreviewDrawerProps) {
+    const prefetch = useRouteWarmPrefetch();
     if (!profile) return null;
 
     const identity = buildIdentityPresentation(profile);
@@ -274,7 +276,11 @@ export default function ProfilePreviewDrawer({
 
                         {actionModel.canSendMessage && !isBlocked && (
                             <Button asChild size="sm" variant="outline" className="gap-1.5">
-                                <Link href={`/messages?userId=${profile.id}`}>
+                                <Link
+                                    href={`/messages?userId=${profile.id}`}
+                                    onMouseEnter={() => prefetch(`/messages?userId=${profile.id}`)}
+                                    onFocus={() => prefetch(`/messages?userId=${profile.id}`)}
+                                >
                                     <MessageSquare className="w-3.5 h-3.5" />
                                     Message
                                 </Link>
@@ -283,7 +289,11 @@ export default function ProfilePreviewDrawer({
 
                         {isConnected && !isBlocked && (
                             <Button asChild size="sm" variant="outline" className="gap-1.5">
-                                <Link href={`${href}#profile-collaboration`}>
+                                <Link
+                                    href={`${href}#profile-collaboration`}
+                                    onMouseEnter={() => prefetch(`${href}#profile-collaboration`)}
+                                    onFocus={() => prefetch(`${href}#profile-collaboration`)}
+                                >
                                     <Briefcase className="w-3.5 h-3.5" />
                                     Invite
                                 </Link>
@@ -291,7 +301,11 @@ export default function ProfilePreviewDrawer({
                         )}
 
                         <Button asChild size="sm" variant="outline" className="gap-1.5 ml-auto">
-                            <Link href={href}>
+                            <Link
+                                href={href}
+                                onMouseEnter={() => prefetch(href)}
+                                onFocus={() => prefetch(href)}
+                            >
                                 <ExternalLink className="w-3.5 h-3.5" />
                                 View Profile
                             </Link>
