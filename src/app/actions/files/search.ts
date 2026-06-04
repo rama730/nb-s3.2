@@ -8,10 +8,10 @@ import { revalidatePath } from "next/cache";
 import { filesFeatureFlags } from "@/lib/features/files";
 import { logger } from "@/lib/logger";
 import {
-    assertProjectReadAccess,
+    assertProjectFileReadAccess,
     assertProjectWriteAccess,
     assertNodeNotLockedByAnotherUser,
-} from "./_shared";
+} from "@/lib/files/internal-helpers";
 import {
     normalizeSearchQuery,
     escapeLikePattern,
@@ -93,7 +93,7 @@ export async function upsertProjectFileIndex(projectId: string, nodeId: string, 
 export async function searchProjectFileIndex(projectId: string, query: string, limit: number = 50) {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
-    await assertProjectReadAccess(projectId, user?.id ?? null);
+    await assertProjectFileReadAccess(projectId, user?.id ?? null);
 
     const q = (query || "").trim();
     if (!q) return [] as Array<{ nodeId: string; snippet: string }>;
@@ -196,7 +196,7 @@ export type FederatedNodeSearchResult = {
 export async function searchProjectNodesFederated(projectId: string, query: string, limit: number = 80) {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
-    await assertProjectReadAccess(projectId, user?.id ?? null);
+    await assertProjectFileReadAccess(projectId, user?.id ?? null);
 
     const q = normalizeSearchQuery(query);
     if (!q || q.length < 2) return [] as FederatedNodeSearchResult[];
@@ -259,7 +259,7 @@ export async function previewProjectSearchReplace(
 ) {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
-    await assertProjectReadAccess(projectId, user?.id ?? null);
+    await assertProjectFileReadAccess(projectId, user?.id ?? null);
 
     const needle = normalizeSearchQuery(query);
     if (!needle || needle.length < 2) {
