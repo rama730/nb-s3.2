@@ -77,7 +77,15 @@
     "drizzle/0069_project_nodes_current_version.sql",
     "drizzle/0070_comment_mentions.sql",
     "drizzle/0071_realtime_publication_extension.sql",
-    "drizzle/0072_user_notifications.sql"
+    "drizzle/0072_user_notifications.sql",
+    "drizzle/0073_message_reactions_conversation_scope.sql",
+    "drizzle/0074_v2_schema_optimizations.sql",
+    "drizzle/0075_review_optimization_indexes.sql",
+    "drizzle/0076_profile_collaboration_projection.sql",
+    "drizzle/0077_profile_collaboration_role_stages.sql",
+    "drizzle/0078_public_rls_security_hardening.sql",
+    "drizzle/0079_profile_column_privilege_hardening.sql",
+    "drizzle/0080_profile_write_privilege_hardening.sql"
   ],
   "allowedUtilitySqlFiles": [
     "checkpoints/005_task_subtasks.sql",
