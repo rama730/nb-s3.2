@@ -1,7 +1,7 @@
 import { cache } from "react";
 import { db } from "@/lib/db";
 import { connections, profiles } from "@/lib/db/schema";
-import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { logger } from "@/lib/logger";
 import { getRedisClient } from "@/lib/redis";
 import {
@@ -148,7 +148,7 @@ export async function resolvePrivacyRelationship(
       connectionPrivacy: profiles.connectionPrivacy,
     })
     .from(profiles)
-    .where(eq(profiles.id, targetUserId))
+    .where(and(eq(profiles.id, targetUserId), isNull(profiles.deletedAt)))
     .limit(1);
 
   if (!targetProfile) return null;
@@ -274,7 +274,7 @@ export async function resolvePrivacyRelationships(
       connectionPrivacy: profiles.connectionPrivacy,
     })
     .from(profiles)
-    .where(inArray(profiles.id, uniqueTargetIds));
+    .where(and(inArray(profiles.id, uniqueTargetIds), isNull(profiles.deletedAt)));
 
   const profileById = new Map(targetProfiles.map((profile) => [profile.id, profile]));
 
