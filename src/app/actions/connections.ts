@@ -1,11 +1,14 @@
-import type { DiscoverConnectionItem } from '@/hooks/useConnections';
-'use server';
+"use server";
+
+import type { DiscoverConnectionItem } from "@/hooks/useConnections";
 
 import { db } from '@/lib/db';
+import { z } from 'zod';
 import { isMissingRelationError } from '@/lib/db/errors';
 import { connectionSuggestionDismissals, connectionSuggestions, connections, profiles, projects, roleApplications } from '@/lib/db/schema';
 import { createClient } from '@/lib/supabase/server';
 import { eq, and, or, desc, asc, sql, inArray } from 'drizzle-orm';
+import { subDays, isToday, isYesterday } from "date-fns";
 import { randomUUID } from 'crypto';
 import { revalidatePath } from 'next/cache';
 import { consumeRateLimit } from '@/lib/security/rate-limit';
@@ -22,6 +25,7 @@ import { queueCounterRefreshBestEffort } from '@/lib/workspace/counter-buffer';
 import { recordPrivacyReadEvents } from '@/lib/privacy/audit';
 import { buildViewerScopedProfileView } from '@/lib/privacy/profile-views';
 import { resolvePrivacyRelationship, resolvePrivacyRelationships } from '@/lib/privacy/resolver';
+import type { PrivacyRelationshipState } from '@/lib/privacy/relationship-state';
 import { emitConnectionAcceptedNotification, emitConnectionRequestReceivedNotification } from '@/lib/notifications/emitters';
 import { inngest } from '../../inngest/client';
 
@@ -121,7 +125,7 @@ async function applySuggestedProfilePrivacy(
 ): Promise<SuggestedProfile[]> {
     const relationships = await resolvePrivacyRelationships(viewerId, items.map((item) => item.id));
 
-    return items.map((item, index) => {
+    return items.map((item) => {
         const relationship = relationships.get(item.id) ?? null;
         const scoped = buildViewerScopedProfileView({
             profile: item as unknown as Record<string, unknown> & { id: string },
@@ -129,10 +133,14 @@ async function applySuggestedProfilePrivacy(
             isOwner: viewerId === item.id,
         });
         const locked = !!relationship && !relationship.canViewProfile;
+        const connectionStatus = suggestedStatusFromPrivacyRelationship(relationship, item.connectionStatus);
+        const connectionId = getUsableRelationshipConnectionId(relationship?.latestConnectionId) ?? item.connectionId;
 
         if (!locked) {
             return {
                 ...item,
+                connectionStatus,
+                connectionId,
                 username: scoped?.username ?? item.username,
                 fullName: scoped?.fullName ?? item.fullName,
                 avatarUrl: scoped?.avatarUrl ?? item.avatarUrl,
@@ -155,6 +163,8 @@ async function applySuggestedProfilePrivacy(
 
         return {
             ...item,
+            connectionStatus,
+            connectionId,
             username: scoped?.username ?? null,
             fullName: scoped?.fullName ?? null,
             avatarUrl: scoped?.avatarUrl ?? null,
@@ -175,6 +185,32 @@ async function applySuggestedProfilePrivacy(
             isLockedProfile: locked,
         };
     });
+}
+
+function suggestedStatusFromPrivacyRelationship(
+    relationship: PrivacyRelationshipState | null,
+    fallback: SuggestedProfile['connectionStatus'],
+): SuggestedProfile['connectionStatus'] {
+    if (!relationship) return fallback;
+    switch (relationship.connectionState) {
+        case 'connected':
+            return 'connected';
+        case 'pending_outgoing':
+            return 'pending_sent';
+        case 'pending_incoming':
+            return 'pending_received';
+        case 'blocked_by_viewer':
+        case 'blocked_by_target':
+            return 'blocked';
+        case 'none':
+        default:
+            return 'none';
+    }
+}
+
+function getUsableRelationshipConnectionId(connectionId: string | null | undefined) {
+    if (!connectionId || connectionId.startsWith('redis-fast-path-')) return undefined;
+    return connectionId;
 }
 
 type PendingRequestsResult = {
@@ -617,7 +653,7 @@ async function invalidateDiscoverCacheForUser(userId: string) {
         const discoverPattern = `discover:profile:${userId}:*`;
         const inboxPattern = `connections:inbox_cache:${userId}:*`;
         const patterns = [discoverPattern, inboxPattern];
-        
+
         for (const pattern of patterns) {
             let cursor = "0";
             do {
@@ -626,7 +662,7 @@ async function invalidateDiscoverCacheForUser(userId: string) {
                     count: 100,
                 });
                 cursor = nextCursor;
-    
+
                 if (keys.length > 0) {
                     const deleteBatchSize = 100;
                     for (let i = 0; i < keys.length; i += deleteBatchSize) {
@@ -650,7 +686,7 @@ export async function invalidateDiscoverCacheForUsers(userIds: Iterable<string |
     );
     if (uniqueUserIds.length === 0) return;
     // PURE OPTIMIZATION: Execute cache invalidation non-blocking to prevent request hangs
-    Promise.allSettled(uniqueUserIds.map((userId) => invalidateDiscoverCacheForUser(userId))).catch(console.error);
+    await Promise.allSettled(uniqueUserIds.map((userId) => invalidateDiscoverCacheForUser(userId))).catch(console.error);
 }
 
 // ============================================================================
@@ -664,9 +700,9 @@ export async function syncConnectionsToRedis(userId: string) {
         const key = `user:${userId}:connections`;
         const accepted = await db
             .select({
-                otherId: sql<string>`CASE 
-                    WHEN ${connections.requesterId} = ${userId} THEN ${connections.addresseeId} 
-                    ELSE ${connections.requesterId} 
+                otherId: sql<string>`CASE
+                    WHEN ${connections.requesterId} = ${userId} THEN ${connections.addresseeId}
+                    ELSE ${connections.requesterId}
                 END`
             })
             .from(connections)
@@ -674,9 +710,9 @@ export async function syncConnectionsToRedis(userId: string) {
                 eq(connections.status, 'accepted'),
                 or(eq(connections.requesterId, userId), eq(connections.addresseeId, userId))
             ));
-        
+
         const otherIds = accepted.map(row => row.otherId);
-        
+
         const pipeline = redisClient.pipeline();
         pipeline.del(key);
         if (otherIds.length > 0) {
@@ -710,7 +746,7 @@ export async function isConnected(userId1: string, userId2: string): Promise<boo
     try {
         const key = `user:${userId1}:connections`;
         const exists = await redis.exists(key);
-        
+
         if (exists) {
             const isMember = await redis.sismember(key, userId2);
             return !!isMember;
@@ -736,7 +772,22 @@ export async function isConnected(userId1: string, userId2: string): Promise<boo
     return !!conn;
 }
 
+const connectionsFeedInputSchema = z.object({
+    tab: z.enum(['network', 'discover', 'requests_incoming', 'requests_sent']),
+    limit: z.number().max(100).optional(),
+    cursor: z.string().optional(),
+    search: z.string().max(100).optional(),
+    sortBy: z.enum(['recent', 'name', 'oldest']).optional(),
+    filters: z.any().optional(),
+    historyFilters: z.any().optional(),
+    requestSortBy: z.enum(['recent', 'mutual', 'oldest']).optional(),
+    targetUserId: z.string().optional()
+});
+
 export async function getConnectionsFeed(input: ConnectionsFeedInput) {
+    // Validate input boundaries
+    connectionsFeedInputSchema.parse(input);
+
     const user = await getAuthUser();
     if (!user) {
         return {
@@ -975,11 +1026,11 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
         const nextCursor = hasMore && visibleItems.length > 0
             ? sortBy === 'name'
                 ? encodeConnectionsNameCursor(
-                    visibleItems[visibleItems.length - 1].otherUser.fullName,
-                    visibleItems[visibleItems.length - 1].otherUser.username,
-                    visibleItems[visibleItems.length - 1].id,
+                    visibleItems[visibleItems.length - 1]!.otherUser.fullName,
+                    visibleItems[visibleItems.length - 1]!.otherUser.username,
+                    visibleItems[visibleItems.length - 1]!.id,
                 )
-                : encodeConnectionsCursor(visibleItems[visibleItems.length - 1].updatedAt, visibleItems[visibleItems.length - 1].id, sortBy)
+                : encodeConnectionsCursor(visibleItems[visibleItems.length - 1]!.updatedAt, visibleItems[visibleItems.length - 1]!.id, sortBy)
             : null;
 
         return { success: true as const, items: visibleItems, hasMore, nextCursor, stats: enrichedStats };
@@ -1126,9 +1177,9 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
             const hasMore = pagedItems.length > limit;
             const nextCursor = hasMore && items.length > 0
                 ? encodeConnectionsMutualCursor(
-                    items[items.length - 1].mutualCount ?? 0,
-                    items[items.length - 1].createdAt,
-                    items[items.length - 1].id,
+                    items[items.length - 1]!.mutualCount ?? 0,
+                    items[items.length - 1]!.createdAt,
+                    items[items.length - 1]!.id,
                 )
                 : null;
             return { success: true as const, items, hasMore, nextCursor, stats };
@@ -1137,8 +1188,8 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
         const items = dedupedItems.slice(0, limit);
         const nextCursor = rawHasMore && items.length > 0
             ? encodeConnectionsCursor(
-                items[items.length - 1].createdAt,
-                items[items.length - 1].id,
+                items[items.length - 1]!.createdAt,
+                items[items.length - 1]!.id,
                 input.requestSortBy === 'oldest' ? 'oldest' : 'recent',
             )
             : null;
@@ -1296,7 +1347,7 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
                     const hasMore = preComputed.length > limit;
                     // 2F: Return keyset cursor using score
                     const lastItem = preComputed[Math.min(limit - 1, preComputed.length - 1)];
-                    const nextCursor = hasMore ? `s:${lastItem.score}|${lastItem.suggestedUserId}` : null;
+                    const nextCursor = hasMore ? `s:${lastItem!.score}|${lastItem!.suggestedUserId}` : null;
                     // 2D: Use cached viewer project IDs
                     const [viewerProjectIds, viewerProfileRows] = await Promise.all([
                         getCachedViewerProjectIds(user.id, isHeavyLoad),
@@ -1559,7 +1610,7 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
                     if (!projectsByOwner.has(project.ownerId)) {
                         projectsByOwner.set(project.ownerId, []);
                     }
-                    const ownerProjects = projectsByOwner.get(project.ownerId)!;
+                    const ownerProjects = projectsByOwner.get(project.ownerId) ?? [];
                     if (ownerProjects.length < 3) {
                         ownerProjects.push({ id: project.id, title: project.title, status: project.status });
                     }
@@ -1658,12 +1709,12 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
             // 1I: Post-query filters (require computed data)
             if (discoverFilters?.hasMutuals) {
                 for (let i = scored.length - 1; i >= 0; i--) {
-                    if ((scored[i].mutual ?? 0) === 0) scored.splice(i, 1);
+                    if ((scored[i]!.mutual ?? 0) === 0) scored.splice(i, 1);
                 }
             }
             if (discoverFilters?.hasSharedProjects && isHeavyLoad) {
                 for (let i = scored.length - 1; i >= 0; i--) {
-                    if (!projectsByOwner.has(scored[i].id) || projectsByOwner.get(scored[i].id)!.length === 0) {
+                    if (!projectsByOwner.has(scored[i]!.id) || projectsByOwner.get(scored[i]!.id)!.length === 0) {
                         scored.splice(i, 1);
                     }
                 }
@@ -1696,8 +1747,8 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
                         const interleaved: typeof scored = [];
                         let di = 0, oi = 0;
                         while (di < dominant.length || oi < others.length) {
-                            if (di < dominant.length) interleaved.push(dominant[di++]);
-                            if (oi < others.length) interleaved.push(others[oi++]);
+                            if (di < dominant.length) interleaved.push(dominant[di++]!);
+                            if (oi < others.length) interleaved.push(others[oi++]!);
                         }
                         scored.length = 0;
                         scored.push(...interleaved);
@@ -1757,7 +1808,7 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
                 subjectUserIds: visibleItems.map((item) => item.id),
                 viewerUserId: user.id,
                 eventType: 'discover_profile_served',
-                route: 'connections.discover.realtime',
+                route: 'connections.discover.scored',
                 metadata: { count: visibleItems.length },
             });
 
@@ -1768,7 +1819,7 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
                     nextCursor = `o:${safeOffset + limit}`;
                 } else {
                     const lastScored = scored[Math.min(limit - 1, scored.length - 1)];
-                    nextCursor = `c:${lastScored.connectionsCount}|${lastScored.id}`;
+                    nextCursor = `c:${lastScored!.connectionsCount}|${lastScored!.id}`;
                 }
             }
             return {
@@ -1871,6 +1922,31 @@ export async function getConnectionsFeed(input: ConnectionsFeedInput) {
     return fallbackResult;
 }
 
+
+function groupHistoryByTimeOnServer(items: ConnectionRequestHistoryItem[]): { label: string; items: ConnectionRequestHistoryItem[] }[] {
+    const today: ConnectionRequestHistoryItem[] = [];
+    const yesterday: ConnectionRequestHistoryItem[] = [];
+    const lastWeek: ConnectionRequestHistoryItem[] = [];
+    const older: ConnectionRequestHistoryItem[] = [];
+
+    const weekAgo = subDays(new Date(), 7);
+
+    for (const item of items) {
+        const date = new Date(item.eventAt);
+        if (isToday(date)) today.push(item);
+        else if (isYesterday(date)) yesterday.push(item);
+        else if (date >= weekAgo) lastWeek.push(item);
+        else older.push(item);
+    }
+
+    const groups: { label: string; items: ConnectionRequestHistoryItem[] }[] = [];
+    if (today.length > 0) groups.push({ label: "Today", items: today });
+    if (yesterday.length > 0) groups.push({ label: "Yesterday", items: yesterday });
+    if (lastWeek.length > 0) groups.push({ label: "Last 7 days", items: lastWeek });
+    if (older.length > 0) groups.push({ label: "Older", items: older });
+    return groups;
+}
+
 export async function getConnectionRequestHistory(
     limit: number = 80,
     cursor?: string,
@@ -1878,13 +1954,14 @@ export async function getConnectionRequestHistory(
 ): Promise<{
     success: boolean;
     items: ConnectionRequestHistoryItem[];
+    groupedItems: { label: string; items: ConnectionRequestHistoryItem[] }[];
     nextCursor?: string | null;
     hasMore?: boolean;
     error?: string;
 }> {
     try {
         const user = await getAuthUser();
-        if (!user) return { success: false, items: [], error: 'Not authenticated' };
+        if (!user) return { success: false, items: [], groupedItems: [], error: 'Not authenticated' };
 
         const effectiveLimit = Math.max(1, Math.min(limit, 200));
 
@@ -2003,14 +2080,14 @@ export async function getConnectionRequestHistory(
             let nextCursor: string | null = null;
             if (hasMore && items.length > 0) {
                 const last = items[items.length - 1];
-                nextCursor = `${last.eventAt}|${last.id}`;
+                nextCursor = `${last!.eventAt}|${last!.id}`;
             }
 
-            return { success: true, items, nextCursor, hasMore };
+            return { success: true, items, groupedItems: groupHistoryByTimeOnServer(items), nextCursor, hasMore };
         });
     } catch (error) {
         console.error('Error fetching connection request history:', error);
-        return { success: false, items: [], error: 'Failed to load history' };
+        return { success: false, items: [], groupedItems: [], error: 'Failed to load history' };
     }
 }
 
@@ -2029,12 +2106,29 @@ const CONNECTION_REQUEST_DAILY_CAP = 50;
 const CONNECTION_REQUEST_DAILY_WINDOW_SECONDS = 24 * 60 * 60;
 const CONNECTION_REQUEST_PER_TARGET_HOLD_SECONDS = 24 * 60 * 60;
 
+async function clearConnectionRequestHold(userA: string, userB: string) {
+    if (!redis) return;
+    try {
+        await Promise.allSettled([
+            redis.del(`connections-send-hold:${userA}:${userB}`),
+            redis.del(`connections-send-hold:${userB}:${userA}`),
+        ]);
+    } catch {
+        // A stale hold should never make terminal DB states unrecoverable.
+    }
+}
+
 export async function sendConnectionRequest(
     addresseeId: string,
     idempotencyKey?: string,
     _message?: string,
     lane?: string,
-): Promise<{ success: boolean; error?: string; connectionId?: string }> {
+): Promise<{
+    success: boolean;
+    error?: string;
+    connectionId?: string;
+    status?: 'created' | 'pending_sent' | 'pending_received' | 'connected';
+}> {
     let idempotencyCacheKey: string | null = null;
 
     const releaseIdempotencyLock = async () => {
@@ -2076,47 +2170,48 @@ export async function sendConnectionRequest(
             return await returnFailure('Cannot connect to yourself');
         }
 
-        const requestRate = await consumeRateLimit(`connections-send:${user.id}`, 30, 60);
-        if (!requestRate.allowed) {
-            return await returnFailure('Too many requests. Please wait and try again.');
-        }
-        // SEC-H7: daily global cap per sender. Independent of the 30/60s bucket
-        // above, which only throttles bursts — this one enforces "you can't
-        // DM 500 strangers today."
-        const dailyRate = await consumeRateLimit(
-            `connections-send-daily:${user.id}`,
-            CONNECTION_REQUEST_DAILY_CAP,
-            CONNECTION_REQUEST_DAILY_WINDOW_SECONDS,
-        );
-        if (!dailyRate.allowed) {
-            return await returnFailure('You have sent too many connection requests today. Try again tomorrow.');
-        }
-        const targetRate = await consumeRateLimit(`connections-send-target:${user.id}:${addresseeId}`, 3, 3600);
-        if (!targetRate.allowed) {
-            return await returnFailure('You have sent too many requests to this person. Please wait before trying again.');
+        const [existingConnection] = await db
+            .select({
+                id: connections.id,
+                status: connections.status,
+                requesterId: connections.requesterId,
+                addresseeId: connections.addresseeId,
+                updatedAt: connections.updatedAt,
+            })
+            .from(connections)
+            .where(
+                or(
+                    and(eq(connections.requesterId, user.id), eq(connections.addresseeId, addresseeId)),
+                    and(eq(connections.requesterId, addresseeId), eq(connections.addresseeId, user.id))
+                )
+            )
+            .orderBy(desc(connections.updatedAt))
+            .limit(1);
+
+        if (existingConnection?.status === 'accepted') {
+            return { success: true, connectionId: existingConnection.id, status: 'connected' };
         }
 
-        // SEC-H7: per-(sender, target) 24h hold. Once a request has been
-        // attempted against this target within the past 24 hours, reject any
-        // new attempt — even if the per-hour bucket has since refilled. The
-        // hold is stamped AFTER the DB write succeeds (below) so a legit
-        // retry after an auth failure still works.
-        const perTargetHoldKey = `connections-send-hold:${user.id}:${addresseeId}`;
-        if (redis) {
-            try {
-                const held = await redis.get(perTargetHoldKey);
-                if (held) {
-                    return await returnFailure('You have recently contacted this person. Please wait before trying again.');
+        if (existingConnection?.status === 'pending') {
+            return {
+                success: true,
+                connectionId: existingConnection.id,
+                status: existingConnection.requesterId === user.id ? 'pending_sent' : 'pending_received',
+            };
+        }
+
+        if (existingConnection?.status === 'blocked') {
+            return await returnFailure('You cannot send a request to this account.');
+        }
+
+        if (existingConnection?.status === 'rejected') {
+            const isSameDirection = existingConnection.requesterId === user.id && existingConnection.addresseeId === addresseeId;
+            if (isSameDirection) {
+                const cooldownUntil = new Date(new Date(existingConnection.updatedAt).getTime() + REJECT_REQUEST_COOLDOWN_MS);
+                if (cooldownUntil.getTime() > Date.now()) {
+                    return await returnFailure(`This request was recently declined. You can retry after ${cooldownUntil.toLocaleString()}.`);
                 }
-            } catch {
-                // Fall through — Redis hiccup should not block legit flow;
-                // the DB-level duplicate check below still enforces state.
             }
-        }
-
-        // PURE OPTIMIZATION: O(1) Pre-check for already connected users (1M+ Users Scalability)
-        if (await isConnected(user.id, addresseeId)) {
-            return await returnFailure('Already connected');
         }
 
         const privacy = await resolvePrivacyRelationship(user.id, addresseeId);
@@ -2134,6 +2229,45 @@ export async function sendConnectionRequest(
                 return await returnFailure('This user only accepts requests from mutual connections.');
             }
             return await returnFailure('Cannot send request right now.');
+        }
+
+        const canRetryExistingConnection =
+            existingConnection?.status === 'cancelled'
+            || existingConnection?.status === 'disconnected'
+            || existingConnection?.status === 'rejected';
+
+        if (canRetryExistingConnection) {
+            await clearConnectionRequestHold(user.id, addresseeId);
+        }
+
+        const perTargetHoldKey = `connections-send-hold:${user.id}:${addresseeId}`;
+        const shouldEnforcePerTargetHold = !existingConnection;
+        if (shouldEnforcePerTargetHold && redis) {
+            try {
+                const held = await redis.get(perTargetHoldKey);
+                if (held) {
+                    return await returnFailure('You have recently contacted this person. Please wait before trying again.');
+                }
+            } catch {
+                // Fall through — Redis hiccup should not block legit flow.
+            }
+        }
+
+        const requestRate = await consumeRateLimit(`connections-send:${user.id}`, 30, 60);
+        if (!requestRate.allowed) {
+            return await returnFailure('Too many requests. Please wait and try again.');
+        }
+        const dailyRate = await consumeRateLimit(
+            `connections-send-daily:${user.id}`,
+            CONNECTION_REQUEST_DAILY_CAP,
+            CONNECTION_REQUEST_DAILY_WINDOW_SECONDS,
+        );
+        if (!dailyRate.allowed) {
+            return await returnFailure('You have sent too many connection requests today. Try again tomorrow.');
+        }
+        const targetRate = await consumeRateLimit(`connections-send-target:${user.id}:${addresseeId}`, 3, 3600);
+        if (!targetRate.allowed) {
+            return await returnFailure('You have sent too many requests to this person. Please wait before trying again.');
         }
 
         // PURE OPTIMIZATION: Dropped advisory lock for native connection pairs unique constraints
@@ -2157,12 +2291,13 @@ export async function sendConnectionRequest(
                 .limit(1);
 
             if (existing.length > 0) {
-                const conn = existing[0];
-                if (conn.status === 'accepted') return { error: 'Already connected' };
+                const conn = existing[0]!;
+                if (conn.status === 'accepted') return { connectionId: conn.id, status: 'connected' as const, skippedWrite: true };
                 if (conn.status === 'pending') {
                     return {
                         connectionId: conn.id,
-                        error: conn.requesterId === user.id ? 'Request already pending' : 'Incoming request exists',
+                        status: conn.requesterId === user.id ? 'pending_sent' as const : 'pending_received' as const,
+                        skippedWrite: true,
                     };
                 }
                 if (conn.status === 'blocked') return { error: 'Cannot send request' };
@@ -2191,7 +2326,7 @@ export async function sendConnectionRequest(
                             createdAt: new Date(), // PURE OPTIMIZATION: Reset createdAt so it bubbles to top of incoming feeds
                         })
                         .where(eq(connections.id, conn.id));
-                    return { connectionId: conn.id };
+                    return { connectionId: conn.id, status: 'created' as const };
                 }
             }
 
@@ -2206,7 +2341,7 @@ export async function sendConnectionRequest(
                         message: requestMessage,
                     })
                     .returning({ id: connections.id });
-                return { connectionId: inserted[0].id };
+                return { connectionId: inserted[0]!.id, status: 'created' as const };
             } catch (err: unknown) {
                 // If unique constraint is violated, someone else inserted concurrently
                 if (getErrorCode(err) === '23505') {
@@ -2220,10 +2355,7 @@ export async function sendConnectionRequest(
             return await returnFailure(txResult.error || 'Failed to send request');
         }
 
-        // SEC-H7: stamp the per-(sender, target) 24h hold now that the DB
-        // write has committed. If Redis is unavailable the DB unique constraint
-        // + REJECT_REQUEST_COOLDOWN_MS still serve as a backstop.
-        if (redis) {
+        if (!txResult.skippedWrite && redis) {
             try {
                 await redis.set(perTargetHoldKey, '1', {
                     nx: true,
@@ -2244,26 +2376,28 @@ export async function sendConnectionRequest(
             } catch { /* ignore */ }
         }
 
-        try {
-            await emitConnectionRequestReceivedNotification({
-                recipientUserId: addresseeId,
-                actorUserId: user.id,
-                actorName: (user.user_metadata?.full_name as string | undefined) ?? (user.user_metadata?.username as string | undefined) ?? null,
-                actorAvatarUrl: (user.user_metadata?.avatar_url as string | undefined) ?? null,
-                connectionId: txResult.connectionId,
-                eventKey: new Date().toISOString(),
-            });
-        } catch (notificationError) {
-            console.error('[sendConnectionRequest] Notification failed:', {
-                connectionId: txResult.connectionId,
-                actorUserId: user.id,
-                recipientUserId: addresseeId,
-                error: notificationError instanceof Error ? notificationError.message : String(notificationError),
-            });
+        if (!txResult.skippedWrite) {
+            try {
+                await emitConnectionRequestReceivedNotification({
+                    recipientUserId: addresseeId,
+                    actorUserId: user.id,
+                    actorName: (user.user_metadata?.full_name as string | undefined) ?? (user.user_metadata?.username as string | undefined) ?? null,
+                    actorAvatarUrl: (user.user_metadata?.avatar_url as string | undefined) ?? null,
+                    connectionId: txResult.connectionId,
+                    eventKey: new Date().toISOString(),
+                });
+            } catch (notificationError) {
+                console.error('[sendConnectionRequest] Notification failed:', {
+                    connectionId: txResult.connectionId,
+                    actorUserId: user.id,
+                    recipientUserId: addresseeId,
+                    error: notificationError instanceof Error ? notificationError.message : String(notificationError),
+                });
+            }
         }
 
         await revalidateConnectionsPaths();
-        return { success: true, connectionId: txResult.connectionId };
+        return { success: true, connectionId: txResult.connectionId, status: txResult.status ?? 'created' };
     } catch (error) {
         await releaseIdempotencyLock();
         console.error('Error sending connection request:', error);
@@ -2438,6 +2572,8 @@ export async function acceptAllIncomingConnectionRequests(
                     completed: '0',
                     failed: '0',
                     status: 'pending',
+                    action: 'accept',
+                    userId: user.id,
                 });
                 await redis.expire(`bulk_job:${jobId}`, 3600);
                 redisJobCreated = true;
@@ -2495,6 +2631,8 @@ export async function rejectAllIncomingConnectionRequests(
                     completed: '0',
                     failed: '0',
                     status: 'pending',
+                    action: 'reject',
+                    userId: user.id,
                 });
                 await redis.expire(`bulk_job:${jobId}`, 3600);
                 redisJobCreated = true;
@@ -2531,7 +2669,14 @@ export async function rejectAllIncomingConnectionRequests(
 
 export async function cancelConnectionRequest(
     connectionId: string
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{
+    success: boolean;
+    error?: string;
+    connectionId?: string;
+    requesterId?: string;
+    addresseeId?: string;
+    status?: 'withdrawn' | 'already_withdrawn';
+}> {
     try {
         const user = await getAuthUser();
         if (!user) return { success: false, error: 'Not authenticated' };
@@ -2559,21 +2704,62 @@ export async function cancelConnectionRequest(
                 addresseeId: connections.addresseeId,
             });
 
-        const cancelled = updated ? {
+        let cancelled: {
+            id: string;
+            requesterId: string;
+            addresseeId: string;
+            status: 'withdrawn' | 'already_withdrawn';
+        } | null = updated ? {
             id: updated.id,
             requesterId: updated.requesterId,
             addresseeId: updated.addresseeId,
+            status: 'withdrawn' as const,
         } : null;
 
-        if (!cancelled) return { success: false, error: 'Request not found or cannot be cancelled' };
+        if (!cancelled) {
+            const [existing] = await db
+                .select({
+                    id: connections.id,
+                    requesterId: connections.requesterId,
+                    addresseeId: connections.addresseeId,
+                    status: connections.status,
+                })
+                .from(connections)
+                .where(and(eq(connections.id, connectionId), eq(connections.requesterId, user.id)))
+                .limit(1);
 
+            if (!existing) return { success: false, error: 'Request not found' };
+            if (existing.status === 'cancelled') {
+                cancelled = {
+                    id: existing.id,
+                    requesterId: existing.requesterId,
+                    addresseeId: existing.addresseeId,
+                    status: 'already_withdrawn' as const,
+                };
+            } else if (existing.status === 'accepted') {
+                return { success: false, error: 'Request was already accepted.' };
+            } else if (existing.status === 'rejected') {
+                return { success: false, error: 'Request was already declined.' };
+            } else {
+                return { success: false, error: 'Request cannot be withdrawn.' };
+            }
+        }
+        if (!cancelled) return { success: false, error: 'Request cannot be withdrawn.' };
+
+        await clearConnectionRequestHold(cancelled.requesterId, cancelled.addresseeId);
         await queueCounterRefreshBestEffort([cancelled.addresseeId]);
         await invalidateDiscoverCacheForUsers([cancelled.requesterId, cancelled.addresseeId]);
         await revalidateConnectionsPaths();
-        return { success: true };
+        return {
+            success: true,
+            connectionId: cancelled.id,
+            requesterId: cancelled.requesterId,
+            addresseeId: cancelled.addresseeId,
+            status: cancelled.status,
+        };
     } catch (error) {
         console.error('Error cancelling request:', error);
-        return { success: false, error: 'Failed to cancel request' };
+        return { success: false, error: 'Failed to withdraw request' };
     }
 }
 
@@ -2624,57 +2810,84 @@ export async function acceptConnectionRequest(
                             addresseeId: connections.addresseeId,
                         });
 
-                    if (updated.length === 0) return null;
+                    if (updated.length === 0) {
+                        const [existing] = await tx
+                            .select({
+                                requesterId: connections.requesterId,
+                                addresseeId: connections.addresseeId,
+                                status: connections.status,
+                            })
+                            .from(connections)
+                            .where(and(eq(connections.id, connectionId), eq(connections.addresseeId, user.id)))
+                            .limit(1);
+
+                        if (existing?.status === 'accepted') {
+                            return {
+                                requesterId: existing.requesterId,
+                                addresseeId: existing.addresseeId,
+                                changed: false,
+                            };
+                        }
+
+                        return null;
+                    }
 
                     await applyConnectionsCountDelta(
                         tx,
-                        [updated[0].requesterId, updated[0].addresseeId],
+                        [updated[0]!.requesterId, updated[0]!.addresseeId],
                         1
                     );
 
-                    return updated[0];
+                    return { ...updated[0], changed: true };
                 });
 
                 if (!accepted) {
                     return { success: false, error: 'Request not found' };
                 }
 
-                await queueCounterRefreshBestEffort([accepted.requesterId, accepted.addresseeId]);
-                await invalidateDiscoverCacheForUsers([accepted.requesterId, accepted.addresseeId]);
+                const acceptedRequesterId = accepted.requesterId;
+                const acceptedAddresseeId = accepted.addresseeId;
+                if (!acceptedRequesterId || !acceptedAddresseeId) {
+                    return { success: false, error: 'Connection record is incomplete' };
+                }
 
-                // PURE OPTIMIZATION: Non-blocking sync to Redis Edge Cache + Suggestion Pre-computation + Rolling Stats
-                const { incrementConnectionStat } = await import('@/lib/connections/connection-stats-counters');
-                Promise.allSettled([
-                    syncConnectionsToRedis(accepted.requesterId),
-                    syncConnectionsToRedis(accepted.addresseeId),
-                    inngest.send({ name: 'workspace/connections.sync_suggestions', data: { userId: accepted.requesterId } }),
-                    inngest.send({ name: 'workspace/connections.sync_suggestions', data: { userId: accepted.addresseeId } }),
-                    // Phase 6C: Rolling window stat counters
-                    incrementConnectionStat(accepted.requesterId, 'this_month'),
-                    incrementConnectionStat(accepted.addresseeId, 'this_month'),
-                    incrementConnectionStat(accepted.addresseeId, 'gained'),
-                ]).catch(console.error);
+                await clearConnectionRequestHold(acceptedRequesterId, acceptedAddresseeId);
+                await queueCounterRefreshBestEffort([acceptedRequesterId, acceptedAddresseeId]);
+                await invalidateDiscoverCacheForUsers([acceptedRequesterId, acceptedAddresseeId]);
 
-                try {
-                    await emitConnectionAcceptedNotification({
-                        recipientUserId: accepted.requesterId,
-                        actorUserId: accepted.addresseeId,
-                        actorName: (user.user_metadata?.full_name as string | undefined) ?? (user.user_metadata?.username as string | undefined) ?? null,
-                        actorAvatarUrl: (user.user_metadata?.avatar_url as string | undefined) ?? null,
-                        connectionId,
-                        eventKey: new Date().toISOString(),
-                    });
-                } catch (notificationError) {
-                    console.error('[acceptConnectionRequest] Notification failed:', {
-                        connectionId,
-                        actorUserId: accepted.addresseeId,
-                        recipientUserId: accepted.requesterId,
-                        error: notificationError instanceof Error ? notificationError.message : String(notificationError),
-                    });
+                if (accepted.changed) {
+                    const { incrementConnectionStat } = await import('@/lib/connections/connection-stats-counters');
+                    await Promise.allSettled([
+                        syncConnectionsToRedis(acceptedRequesterId),
+                        syncConnectionsToRedis(acceptedAddresseeId),
+                        inngest.send({ name: 'workspace/connections.sync_suggestions', data: { userId: acceptedRequesterId } }),
+                        inngest.send({ name: 'workspace/connections.sync_suggestions', data: { userId: acceptedAddresseeId } }),
+                        incrementConnectionStat(acceptedRequesterId, 'this_month'),
+                        incrementConnectionStat(acceptedAddresseeId, 'this_month'),
+                        incrementConnectionStat(acceptedAddresseeId, 'gained'),
+                    ]).catch(console.error);
+
+                    try {
+                        await emitConnectionAcceptedNotification({
+                            recipientUserId: acceptedRequesterId,
+                            actorUserId: acceptedAddresseeId,
+                            actorName: (user.user_metadata?.full_name as string | undefined) ?? (user.user_metadata?.username as string | undefined) ?? null,
+                            actorAvatarUrl: (user.user_metadata?.avatar_url as string | undefined) ?? null,
+                            connectionId,
+                            eventKey: new Date().toISOString(),
+                        });
+                    } catch (notificationError) {
+                        console.error('[acceptConnectionRequest] Notification failed:', {
+                            connectionId,
+                            actorUserId: acceptedAddresseeId,
+                            recipientUserId: acceptedRequesterId,
+                            error: notificationError instanceof Error ? notificationError.message : String(notificationError),
+                        });
+                    }
                 }
 
                 await revalidateConnectionsPaths();
-                return { success: true, requesterId: accepted.requesterId, addresseeId: accepted.addresseeId };
+                return { success: true, requesterId: acceptedRequesterId, addresseeId: acceptedAddresseeId };
             },
         );
 
@@ -2862,11 +3075,12 @@ export async function removeConnection(
             return { success: false, error: 'Connection not found' };
         }
 
+        await clearConnectionRequestHold(removed.requesterId, removed.addresseeId);
         await invalidateDiscoverCacheForUsers([removed.requesterId, removed.addresseeId]);
 
         // PURE OPTIMIZATION: Non-blocking sync to Redis Edge Cache (removes from set) + Rolling Stats
         const { decrementConnectionStat } = await import('@/lib/connections/connection-stats-counters');
-        Promise.allSettled([
+        await Promise.allSettled([
             syncConnectionsToRedis(removed.requesterId),
             syncConnectionsToRedis(removed.addresseeId),
             // Phase 6C: Decrement rolling window stat counters
@@ -3239,7 +3453,7 @@ export async function getAcceptedConnections(
             return { connections: [], hasMore: false, nextCursor: null };
         }
 
-        const visibility = targetProfile[0].visibility || 'public';
+        const visibility = targetProfile[0]!.visibility || 'public';
         if (visibility === 'private') {
             return { connections: [], hasMore: false, nextCursor: null };
         }
@@ -3336,7 +3550,7 @@ export async function getAcceptedConnections(
     const connectionList = results.slice(0, limit);
 
     const nextCursor = hasMore && connectionList.length > 0
-        ? `${connectionList[connectionList.length - 1].updatedAt.toISOString()}|${connectionList[connectionList.length - 1].id}`
+        ? `${connectionList[connectionList.length - 1]!.updatedAt.toISOString()}|${connectionList[connectionList.length - 1]!.id}`
         : null;
 
     // Map to expected structure
@@ -3548,7 +3762,10 @@ export async function bulkDisconnectConnections(connectionIds: string[]): Promis
     try {
         const user = await getAuthUser();
         if (!user) return { success: false, error: 'Not authenticated' };
-        
+
+        // Zod validation for bulk action
+        z.array(z.string()).max(100).parse(connectionIds);
+
         if (!connectionIds.length) return { success: true };
 
         await db.delete(connections)
@@ -3569,7 +3786,11 @@ export async function bulkUpdateConnectionTags(connectionIds: string[], tags: st
     try {
         const user = await getAuthUser();
         if (!user) return { success: false, error: 'Not authenticated' };
-        
+
+        // Zod validation for bulk tags
+        z.array(z.string()).max(100).parse(connectionIds);
+        z.array(z.string()).max(100).parse(tags);
+
         if (!connectionIds.length) return { success: true };
 
         await db.update(connections)
@@ -3587,46 +3808,77 @@ export async function bulkUpdateConnectionTags(connectionIds: string[], tags: st
     }
 }
 
-export async function getMutualSuggestions(limit: number = 6): Promise<{ success: boolean; items: DiscoverConnectionItem[]; error?: string }> {
+export async function getMutualSuggestions(limit: number = 6, search?: string): Promise<{ success: boolean; items: DiscoverConnectionItem[]; error?: string }> {
     try {
         const user = await getAuthUser();
         if (!user) return { success: false, items: [], error: 'Not authenticated' };
 
         // For simplicity, we can fetch from getConnectionsFeed with hasMutuals filter
-        const result = await getConnectionsFeed({ tab: 'discover', limit, filters: { hasMutuals: true, available: true } });
+        const result = await getConnectionsFeed({ tab: 'discover', limit, search, filters: { hasMutuals: true, available: true } });
         if (!result.success) throw new Error(result.error);
         return { success: true, items: (result.items || []) as DiscoverConnectionItem[] };
-    } catch (error) {
+    } catch {
         return { success: false, items: [], error: 'Failed to fetch mutuals' };
     }
 }
 
-export async function getRoleSuggestions(limit: number = 6): Promise<{ success: boolean; items: DiscoverConnectionItem[]; error?: string }> {
+export async function getRoleSuggestions(limit: number = 6, search?: string): Promise<{ success: boolean; items: DiscoverConnectionItem[]; error?: string }> {
     try {
         const user = await getAuthUser();
         if (!user) return { success: false, items: [], error: 'Not authenticated' };
 
         // For simplicity, we can fetch from getConnectionsFeed with hasSharedProjects or seniorPlus filter
-        const result = await getConnectionsFeed({ tab: 'discover', limit, filters: { hasSharedProjects: true, available: true } });
+        const result = await getConnectionsFeed({ tab: 'discover', limit, search, filters: { hasSharedProjects: true, available: true } });
         if (!result.success) throw new Error(result.error);
         return { success: true, items: (result.items || []) as DiscoverConnectionItem[] };
-    } catch (error) {
+    } catch {
         return { success: false, items: [], error: 'Failed to fetch roles' };
     }
 }
 
-export async function withdrawAllSentConnectionRequests() {
+export async function withdrawAllSentConnectionRequests(): Promise<{ success: boolean; count?: number; error?: string }> {
     try {
         const user = await getAuthUser();
         if (!user) return { success: false, error: 'Not authenticated' };
 
-        await db.delete(connections).where(
-            and(
-                eq(connections.requesterId, user.id),
-                eq(connections.status, 'pending')
+        const withdrawRate = await consumeRateLimit(`connections-withdraw-all:${user.id}`, 6, 60);
+        if (!withdrawRate.allowed) {
+            return { success: false, error: 'Too many bulk actions. Please wait and try again.' };
+        }
+
+        const withdrawn = await db
+            .update(connections)
+            .set({
+                status: 'cancelled',
+                updatedAt: new Date(),
+            })
+            .where(
+                and(
+                    eq(connections.requesterId, user.id),
+                    eq(connections.status, 'pending')
+                )
             )
-        );
-        return { success: true };
+            .returning({
+                requesterId: connections.requesterId,
+                addresseeId: connections.addresseeId,
+            });
+
+        if (withdrawn.length > 0) {
+            await Promise.allSettled(
+                withdrawn.map((row) => clearConnectionRequestHold(row.requesterId, row.addresseeId)),
+            );
+
+            const affectedUserIds = new Set<string>([user.id]);
+            for (const row of withdrawn) {
+                affectedUserIds.add(row.addresseeId);
+            }
+
+            await queueCounterRefreshBestEffort([...affectedUserIds]);
+            await invalidateDiscoverCacheForUsers(affectedUserIds);
+            await revalidateConnectionsPaths();
+        }
+
+        return { success: true, count: withdrawn.length };
     } catch (error) {
         console.error('connections.withdraw_all_sent_failed', { error });
         return { success: false, error: 'Failed to withdraw requests' };
