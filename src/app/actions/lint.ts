@@ -1,7 +1,7 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
-import { assertProjectAccess } from "./files/_shared";
+import { assertProjectAccess } from "@/lib/files/internal-helpers";
 import { consumeRateLimit } from "@/lib/security/rate-limit";
 import { db } from "@/lib/db";
 import { projectNodes } from "@/lib/db/schema";
