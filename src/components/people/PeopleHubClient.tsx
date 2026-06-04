@@ -58,14 +58,7 @@ export default function PeopleHubClient({
         return defaultTab;
     };
 
-    const [activeTab, setActiveTab] = useState<TabKey>(getInitialTab);
-useEffect(() => {
-        if (VALID_TABS.includes(tabParam as TabKey)) {
-            setActiveTab(tabParam as TabKey);
-        } else if (activeTabOverride && VALID_TABS.includes(activeTabOverride)) {
-            setActiveTab(activeTabOverride);
-        }
-    }, [tabParam, activeTabOverride]);
+    const activeTab = getInitialTab();
 
     const { data: connectionStats } = useConnectionStats();
     const totalPending = Number(connectionStats?.pendingIncoming || 0);
