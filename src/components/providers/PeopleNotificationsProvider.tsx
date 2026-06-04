@@ -3,9 +3,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useAuthContext } from "@/components/providers/AuthProvider";
-import { useRealtime } from "@/components/providers/RealtimeProvider";
 import { logger } from "@/lib/logger";
-import { useGlobalConnectionsRealtime } from "@/hooks/useConnections";
 
 
 interface PeopleNotificationsContextValue {
@@ -24,10 +22,6 @@ const PeopleNotificationsContext = createContext<PeopleNotificationsContextValue
 
 const MAX_RETRY_DELAY_MS = 30_000;
 const INITIAL_RETRY_DELAY_MS = 1_000;
-type IdleWindow = Window & typeof globalThis & {
-  requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number;
-  cancelIdleCallback?: (handle: number) => void;
-};
 
 export function getPeopleNotificationsRetryDelay(attempt: number) {
   const safeAttempt = Math.max(1, attempt);
@@ -39,9 +33,7 @@ export function getPeopleNotificationsRetryDelay(attempt: number) {
 
 export function PeopleNotificationsProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuthContext();
-  useGlobalConnectionsRealtime();
 
-  const { subscribeUserNotifications } = useRealtime();
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
   const userId = user?.id ?? null;
 
@@ -122,15 +114,12 @@ export function PeopleNotificationsProvider({ children }: { children: React.Reac
 
 
   useEffect(() => {
-    if (!userId) return;
+    void refresh();
+  }, [refresh]);
 
-    return subscribeUserNotifications((event) => {
-      if (event.kind !== "connection") return;
-      retryAttemptRef.current = 0;
-      clearRetryTimer();
-      void refresh();
-    });
-  }, [clearRetryTimer, refresh, subscribeUserNotifications, userId]);
+  useEffect(() => {
+    return () => clearRetryTimer();
+  }, [clearRetryTimer]);
 
   const value = useMemo<PeopleNotificationsContextValue>(
     () => ({
