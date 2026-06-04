@@ -1,4 +1,5 @@
 import PeopleHubClient from '@/components/people/PeopleHubClient'
+import { Suspense } from 'react'
 import { getMyApplicationsAction, getIncomingApplicationsAction } from '@/app/actions/applications'
 import { isHardeningDomainEnabled } from '@/lib/features/hardening'
 import { getViewerAuthContext } from '@/lib/server/viewer-context'
@@ -16,10 +17,14 @@ interface PeoplePageProps {
     searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }
 
-export default async function PeoplePage({ searchParams }: PeoplePageProps) {
-    const { user } = await getViewerAuthContext()
-    const peopleHardeningEnabled = isHardeningDomainEnabled("peopleV1", user?.id ?? null);
+async function ResolvedPeople({
+    searchParams,
+}: {
+    searchParams: Promise<Record<string, string | string[] | undefined>> | undefined;
+}) {
+    const { user } = await getViewerAuthContext();
     const resolvedSearchParams = searchParams ? await searchParams : undefined;
+    const peopleHardeningEnabled = isHardeningDomainEnabled("peopleV1", user?.id ?? null);
     const tabParam = typeof resolvedSearchParams?.tab === 'string'
         ? resolvedSearchParams.tab.toLowerCase()
         : '';
@@ -39,15 +44,23 @@ export default async function PeoplePage({ searchParams }: PeoplePageProps) {
     };
 
     return (
+        <PeopleHubClient
+            initialUser={user ? { id: user.id } : null}
+            initialApplications={initialApplications}
+            // Other heavy lists (profiles, connections) remain lazy loaded for TTFB
+        />
+    )
+}
+
+export default function PeoplePage({ searchParams }: PeoplePageProps) {
+    return (
         <div
             data-scroll-root="route"
             className="h-full min-h-0 overflow-hidden app-scroll app-scroll-y app-scroll-gutter bg-zinc-50 dark:bg-black"
         >
-            <PeopleHubClient
-                initialUser={user}
-                initialApplications={initialApplications}
-                // Other heavy lists (profiles, connections) remain lazy loaded for TTFB
-            />
+            <Suspense fallback={<div className="h-full flex items-center justify-center animate-pulse text-zinc-500">Loading people...</div>}>
+                <ResolvedPeople searchParams={searchParams} />
+            </Suspense>
         </div>
     )
 }
