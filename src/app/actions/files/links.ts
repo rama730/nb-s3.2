@@ -6,15 +6,15 @@ import { eq, and, isNull, inArray, sql, desc, ilike } from "drizzle-orm";
 import { createClient } from "@/lib/supabase/server";
 import { notifyTaskParticipantsForFileEvent } from "@/lib/notifications/task-file";
 import {
-    assertProjectReadAccess,
+    assertProjectFileReadAccess,
     assertProjectWriteAccess,
     getTaskProjectId,
-} from "./_shared";
+} from "@/lib/files/internal-helpers";
 
 export async function getTaskLinkCounts(projectId: string, nodeIds: string[]) {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
-    await assertProjectReadAccess(projectId, user?.id ?? null);
+    await assertProjectFileReadAccess(projectId, user?.id ?? null);
 
     const unique = Array.from(new Set(nodeIds)).filter(Boolean);
     if (unique.length === 0) return {} as Record<string, number>;
@@ -48,7 +48,7 @@ export interface LinkedTask {
 export async function getTaskLinksForNode(projectId: string, nodeId: string): Promise<LinkedTask[]> {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
-    await assertProjectReadAccess(projectId, user?.id ?? null);
+    await assertProjectFileReadAccess(projectId, user?.id ?? null);
 
     // Confirm the node belongs to the project
     const node = await db.query.projectNodes.findFirst({
@@ -156,7 +156,7 @@ export async function getTaskAttachments(taskId: string) {
     if (!user) throw new Error("Unauthorized");
 
     const projectId = await getTaskProjectId(taskId);
-    await assertProjectReadAccess(projectId, user.id);
+    await assertProjectFileReadAccess(projectId, user.id);
 
     const rows = await db
         .select({
@@ -259,7 +259,7 @@ export async function countTaskAttachments(taskId: string) {
     if (!user) throw new Error("Unauthorized");
 
     const projectId = await getTaskProjectId(taskId);
-    await assertProjectReadAccess(projectId, user.id);
+    await assertProjectFileReadAccess(projectId, user.id);
 
     const rows = await db
         .select({ count: sql<number>`count(*)` })
@@ -288,7 +288,7 @@ export async function searchProjectTasks(
 ): Promise<SearchableTask[]> {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
-    await assertProjectReadAccess(projectId, user?.id ?? null);
+    await assertProjectFileReadAccess(projectId, user?.id ?? null);
 
     const safeLimit = Math.min(Math.max(limit, 1), 100);
     const trimmed = (query || "").trim();
