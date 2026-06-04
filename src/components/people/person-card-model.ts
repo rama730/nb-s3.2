@@ -6,7 +6,8 @@ export type RelationshipMenuActionKey =
     | "message"
     | "view_profile"
     | "invite_to_project"
-    | "disconnect";
+    | "disconnect"
+    | "block";
 
 export type RelationshipMenuAction = {
     key: RelationshipMenuActionKey;
@@ -101,6 +102,9 @@ export function resolveRelationshipActionModel(input: {
     if (input.state === "connected") {
         connectedMenu.push({ key: "disconnect", label: "Disconnect", destructive: true });
     }
+
+    connectedMenu.push({ key: "block", label: "Block Profile", destructive: true });
+    secondaryMenu.push({ key: "block", label: "Block Profile", destructive: true });
 
     return {
         state: input.state,
