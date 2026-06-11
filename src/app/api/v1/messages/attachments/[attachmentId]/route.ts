@@ -187,8 +187,22 @@ export async function GET(
     return jsonError("Attachment not found", 404, "NOT_FOUND");
   }
 
+  const requestUrl = new URL(request.url);
+  const download = requestUrl.searchParams.get("download") === "1";
+  const preview = requestUrl.searchParams.get("preview") === "1";
+  const requestedMimeType = (attachment.mimeType || "").trim();
+  const usePreviewTransform = preview && requestedMimeType.startsWith("image/");
+
   const admin = await createAdminClient();
-  const { data, error } = await admin.storage.from(ATTACHMENTS_BUCKET).download(storagePath);
+  const { data, error } = usePreviewTransform
+    ? await admin.storage.from(ATTACHMENTS_BUCKET).download(storagePath, {
+        transform: {
+          width: 480,
+          height: 480,
+          resize: "cover",
+        },
+      })
+    : await admin.storage.from(ATTACHMENTS_BUCKET).download(storagePath);
   if (error || !data) {
     logApiRoute(request, {
       requestId,
@@ -202,7 +216,6 @@ export async function GET(
     return jsonError("Attachment not found", 404, "NOT_FOUND");
   }
 
-  const download = new URL(request.url).searchParams.get("download") === "1";
   const filename = sanitizeFilename(attachment.filename);
   const mimeType = (attachment.mimeType || data.type || "application/octet-stream").trim() || "application/octet-stream";
   const disposition = download || !canServeInline(mimeType) ? "attachment" : "inline";
@@ -216,7 +229,7 @@ export async function GET(
     status: 200,
   });
 
-  return new Response(await data.arrayBuffer(), {
+  return new Response(data.stream(), {
     status: 200,
     headers: {
       "cache-control": "private, max-age=60, must-revalidate",
