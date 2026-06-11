@@ -19,6 +19,10 @@ import { subscribePresenceRoom } from '@/lib/realtime/presence-client';
 
 const FLUSH_INTERVAL_MS = 250;
 
+function isPresenceEligibleConversationId(conversationId: string | null): conversationId is string {
+    return Boolean(conversationId && !conversationId.startsWith('draft:'));
+}
+
 export function useDeliveryAcks(
     viewerId: string | null,
     conversationId: string | null,
@@ -31,7 +35,7 @@ export function useDeliveryAcks(
     // Wave 2 Step 11: maintain a viewer-only subscription to the conversation
     // presence room so we can broadcast delivered receipts via it.
     useEffect(() => {
-        if (!conversationId || typeof window === 'undefined') return;
+        if (!isPresenceEligibleConversationId(conversationId) || typeof window === 'undefined') return;
 
         const subscription = subscribePresenceRoom({
             roomType: 'conversation',
@@ -72,7 +76,7 @@ export function useDeliveryAcks(
 
     // Start/stop the flush timer
     useEffect(() => {
-        if (!viewerId || !conversationId) return;
+        if (!viewerId || !isPresenceEligibleConversationId(conversationId)) return;
 
         bufferRef.current.clear();
         flushedRef.current.clear();
