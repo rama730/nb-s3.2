@@ -165,12 +165,13 @@ function detectMentionState(
     let idx = startOffset - 1;
     while (idx >= 0) {
         const ch = text[idx];
+        if (!ch) return null;
         if (ch === "@") break;
         if (/\s/.test(ch)) return null;
         idx -= 1;
     }
     if (idx < 0) return null;
-    if (idx > 0 && !/\s/.test(text[idx - 1])) return null;
+    if (idx > 0 && !/\s/.test(text[idx - 1] || "")) return null;
 
     const query = text.slice(idx + 1, startOffset);
     if (query.length > MENTION_DISPLAY_NAME_MAX_LENGTH) return null;
