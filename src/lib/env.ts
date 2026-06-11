@@ -17,8 +17,10 @@ const envSchema = z.object({
     GITHUB_WEBHOOK_SECRET: z.string().min(1).optional(),
     PRESENCE_TOKEN_SECRET: z.string().min(1).optional(),
     PRESENCE_EVENT_SECRET: z.string().min(1).optional(),
+    README_COLLABORATION_TOKEN_SECRET: z.string().min(1).optional(),
     PRESENCE_WS_URL: z.string().url().optional(),
     NEXT_PUBLIC_PRESENCE_WS_URL: z.string().url().optional(),
+    NEXT_PUBLIC_YJS_WEBSOCKET_URL: z.string().url().optional(),
     INNGEST_SIGNING_KEY: z.string().min(1).optional(),
     E2E_AUTH_FALLBACK: z.string().optional(),
     NEXT_PUBLIC_E2E_AUTH_FALLBACK: z.string().optional(),
@@ -29,10 +31,11 @@ const envSchema = z.object({
     ADMIN_USER_IDS: z.string().optional(),
 
     NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
-    DB_POOL_MAX: z.coerce.number().int().min(1).max(100).optional(),
+    DB_POOL_MAX: z.coerce.number().int().min(1).max(200).optional(),
     DB_IDLE_TIMEOUT_SECONDS: z.coerce.number().int().min(5).max(600).optional(),
     DB_CONNECT_TIMEOUT_SECONDS: z.coerce.number().int().min(2).max(60).optional(),
     DB_PREPARE_STATEMENTS: z.string().optional(),
+    DB_USE_SUPAVISOR_PORT: z.string().optional(),
     RATE_LIMIT_MODE: z.enum(['best-effort', 'distributed-only']).optional(),
     EXECUTION_BACKEND_URL: z.string().url().optional(),
 })
@@ -75,7 +78,8 @@ function assertProductionSecurityEnv(env: Env) {
     if (!presenceWsUrl) {
         throw new Error('Production security environment requires NEXT_PUBLIC_PRESENCE_WS_URL or PRESENCE_WS_URL')
     }
-    if (!presenceWsUrl.startsWith('wss://')) {
+    const isLocalhost = presenceWsUrl.includes('://127.0.0.1') || presenceWsUrl.includes('://localhost') || presenceWsUrl.includes('://::1');
+    if (!presenceWsUrl.startsWith('wss://') && !isLocalhost) {
         throw new Error('Production presence websocket URL must use wss://')
     }
 
