@@ -3,8 +3,8 @@
 import { randomUUID } from 'crypto'
 import { createAdminClient, createClient } from '@/lib/supabase/server'
 import { db } from '@/lib/db'
-import { profileAuditEvents, profiles, projects, usernameAliases } from '@/lib/db/schema'
-import { eq, and, ne, desc, sql } from 'drizzle-orm'
+import { profileAuditEvents, profiles, usernameAliases } from '@/lib/db/schema'
+import { eq, and, desc, sql } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { consumeRateLimit } from '@/lib/security/rate-limit'
 import {
@@ -14,6 +14,7 @@ import {
     type ProfileUpdateInput,
 } from '@/lib/validations/profile'
 import { clearProfileCache } from '@/lib/services/profile-service'
+import { markProfileCollaborationSummaryStale } from '@/lib/profile/collaboration'
 import { runInFlightDeduped } from '@/lib/async/inflight-dedupe'
 import { normalizeAndValidateFileSize, normalizeAndValidateMimeType } from '@/lib/upload/security'
 import { cleanupExpiredUploadIntents, createUploadIntent, finalizeUploadIntent } from '@/lib/upload/upload-intents'
@@ -141,7 +142,7 @@ export async function createProfileImageUploadUrlAction(input: {
             input.sizeBytes,
             Number.isFinite(PROFILE_IMAGE_UPLOAD_MAX_FILE_BYTES) && PROFILE_IMAGE_UPLOAD_MAX_FILE_BYTES > 0
                 ? PROFILE_IMAGE_UPLOAD_MAX_FILE_BYTES
-                : 2 * 1024 * 1024,
+                : 10 * 1024 * 1024,
             input.kind === 'banner' ? 'Banner image' : 'Avatar image',
         )
     } catch (error) {
@@ -292,7 +293,7 @@ export async function updateProfileAction(data: UpdateProfileInput): Promise<Upd
 
         const result = profileUpdateSchema.safeParse(data)
         if (!result.success) {
-            return { success: false, error: result.error.issues[0].message, errorCode: 'VALIDATION_ERROR' }
+            return { success: false, error: result.error.issues[0]!.message, errorCode: 'VALIDATION_ERROR' }
         }
         const validData = normalizeProfileUpdateInput(result.data)
 
@@ -441,7 +442,6 @@ export async function updateProfileAction(data: UpdateProfileInput): Promise<Upd
         if (patch.genderIdentity !== undefined) updateData.genderIdentity = patch.genderIdentity
         if (patch.pronouns !== undefined) updateData.pronouns = patch.pronouns
         if (patch.experience !== undefined) updateData.experience = patch.experience
-        if (patch.education !== undefined) updateData.education = patch.education
 
         const expectedUpdatedAt = validData.expectedUpdatedAt
             ? new Date(validData.expectedUpdatedAt)
@@ -605,6 +605,20 @@ export async function updateProfileAction(data: UpdateProfileInput): Promise<Upd
         }
 
         clearProfileCache(user.id)
+        if (
+            patch.experience !== undefined ||
+            patch.skills !== undefined ||
+            patch.openTo !== undefined ||
+            patch.availabilityStatus !== undefined
+        ) {
+            await markProfileCollaborationSummaryStale(user.id).catch((staleError) => {
+                logger.warn('profile.collaboration_summary_stale_failed', {
+                    module: 'profile',
+                    userId: user.id,
+                    error: staleError instanceof Error ? staleError.message : String(staleError),
+                })
+            })
+        }
         revalidatePath('/profile')
         if (current.username) revalidatePath(`/u/${current.username}`)
         if (patch.username) revalidatePath(`/u/${patch.username}`)
@@ -618,7 +632,7 @@ export async function updateProfileAction(data: UpdateProfileInput): Promise<Upd
             })
         }
 
-        return { success: true, updatedAt: updatedRows[0].updatedAt.toISOString() }
+        return { success: true, updatedAt: updatedRows[0]!.updatedAt.toISOString() }
     } catch (error) {
         const usernameError = mapUsernamePersistenceError(error)
         if (usernameError.code !== 'DB_ERROR') {
