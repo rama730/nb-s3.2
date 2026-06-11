@@ -3,21 +3,15 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Users, UserPlus, Plus, LayoutGrid, List } from "lucide-react";
+import dynamic from "next/dynamic";
 import { cn } from "@/lib/utils";
 import { AnimatePresence } from "framer-motion";
 import { useRealtimeTasks } from "@/hooks/useRealtimeTasks";
 import { createTaskAction, getProjectTaskDetailAction } from "@/app/actions/project";
 import { useReducedMotionPreference } from "@/components/providers/theme-provider";
 
-import TaskFilters from "@/components/projects/v2/tasks/TaskFilters";
-import KanbanBoard from "@/components/projects/v2/tasks/KanbanBoard";
-import TasksTable from "@/components/projects/v2/tasks/TasksTable";
-import CreateTaskModal from "@/components/projects/v2/tasks/CreateTaskModal";
-import TaskDetailPanel from "@/components/projects/v2/tasks/TaskDetailPanel";
-
-import FocusStrip from "./tasks/components/FocusStrip";
 import { useTaskFilters } from "./tasks/hooks/useTaskFilters";
-import { useProjectInfiniteTasks, useProjectSprints, type ProjectTaskScope } from "@/hooks/hub/useProjectData";
+import { useProjectInfiniteTasks, useProjectSprints, type ProjectTaskScope } from "@/hooks/hub/useProjectTasksData";
 import { patchSprintDetailInfiniteData } from "@/lib/projects/sprint-cache";
 import { normalizeSprintOptions, normalizeTaskSurfaceRecord, type TaskSurfaceRecord } from "@/lib/projects/task-presentation";
 import { buildTaskSubmitPayload } from "@/lib/projects/task-draft";
@@ -26,6 +20,13 @@ import { useToast } from "@/components/ui-custom/Toast";
 import type { ProjectNode } from "@/lib/db/schema";
 import { queryKeys } from "@/lib/query-keys";
 import type { TaskPanelTab } from "@/hooks/useTaskPanelResource";
+
+const CreateTaskModal = dynamic(() => import("@/components/projects/v2/tasks/CreateTaskModal"), { ssr: false });
+const TaskDetailPanel = dynamic(() => import("@/components/projects/v2/tasks/TaskDetailPanel"), { ssr: false });
+const TaskFilters = dynamic(() => import("@/components/projects/v2/tasks/TaskFilters"), { ssr: false });
+const KanbanBoard = dynamic(() => import("@/components/projects/v2/tasks/KanbanBoard"), { ssr: false });
+const TasksTable = dynamic(() => import("@/components/projects/v2/tasks/TasksTable"), { ssr: false });
+const FocusStrip = dynamic(() => import("./tasks/components/FocusStrip"), { ssr: false });
 
 interface TasksTabProps {
     projectId: string;
@@ -81,12 +82,6 @@ export default function TasksTab({
     const reduceMotion = useReducedMotionPreference();
     const queryClient = useQueryClient();
     const { showToast } = useToast();
-    const { data: projectSprintsData, isFetched: hasFetchedProjectSprints } = useProjectSprints(projectId);
-    const sprintOptions = useMemo(() => {
-        const sprintSource = hasFetchedProjectSprints ? (projectSprintsData ?? []) : sprints;
-        return normalizeSprintOptions(sprintSource);
-    }, [hasFetchedProjectSprints, projectSprintsData, sprints]);
-    const sprintById = useMemo(() => new Map(sprintOptions.map((sprint) => [sprint.id, sprint])), [sprintOptions]);
     const activeAssignableMemberIds = useMemo(() => new Set(
         members
             .filter((member) => String(member?.membershipRole ?? member?.role ?? "").toLowerCase() !== "viewer")
@@ -122,6 +117,25 @@ export default function TasksTab({
     const fetchedTasks = useMemo(() => {
         return (infiniteData?.pages.flatMap(page => page.tasks) || []).map(normalizeTaskSurfaceRecord);
     }, [infiniteData]);
+    const hasSprintReferences = useMemo(
+        () => fetchedTasks.some((task) => Boolean(normalizeTaskSurfaceRecord(task).sprintId)),
+        [fetchedTasks],
+    );
+    const shouldFetchProjectSprints = scope !== "backlog" && (
+        showCreateModal ||
+        Boolean(editingTask) ||
+        (hasSprintReferences && sprints.length === 0)
+    );
+    const { data: projectSprintsData, isFetched: hasFetchedProjectSprints } = useProjectSprints(
+        projectId,
+        sprints,
+        shouldFetchProjectSprints,
+    );
+    const sprintOptions = useMemo(() => {
+        const sprintSource = hasFetchedProjectSprints ? (projectSprintsData ?? []) : sprints;
+        return normalizeSprintOptions(sprintSource);
+    }, [hasFetchedProjectSprints, projectSprintsData, sprints]);
+    const sprintById = useMemo(() => new Map(sprintOptions.map((sprint) => [sprint.id, sprint])), [sprintOptions]);
 
     useRealtimeTasks(projectId);
 
@@ -423,23 +437,25 @@ export default function TasksTab({
             )}
 
             {/* Modals & Drawers */}
-            <CreateTaskModal
-                isOpen={showCreateModal}
-                onClose={() => setShowCreateModal(false)}
-                onCreate={async (value) => {
-                    const payload = buildTaskSubmitPayload({
-                        draft: value.draft,
-                        projectId,
-                        subtasks: value.subtasks,
-                        attachments: value.attachments,
-                    });
-                    return handleCreateTask({ ...payload, attachments: value.attachments });
-                }}
-                projectId={projectId}
-                projectName={projectName}
-                members={members}
-                sprints={sprintOptions}
-            />
+            {showCreateModal ? (
+                <CreateTaskModal
+                    isOpen={showCreateModal}
+                    onClose={() => setShowCreateModal(false)}
+                    onCreate={async (value) => {
+                        const payload = buildTaskSubmitPayload({
+                            draft: value.draft,
+                            projectId,
+                            subtasks: value.subtasks,
+                            attachments: value.attachments,
+                        });
+                        return handleCreateTask({ ...payload, attachments: value.attachments });
+                    }}
+                    projectId={projectId}
+                    projectName={projectName}
+                    members={members}
+                    sprints={sprintOptions}
+                />
+            ) : null}
 
             <AnimatePresence initial={!reduceMotion}>
                 {editingTask && (
