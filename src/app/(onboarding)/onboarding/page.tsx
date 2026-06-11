@@ -12,10 +12,13 @@ import { MobileProgressBar } from '@/components/onboarding/MobileProgressBar'
 import { StepHeader } from '@/components/onboarding/StepHeader'
 import { StepFooter } from '@/components/onboarding/StepFooter'
 import { StepTransition } from '@/components/onboarding/StepTransition'
-import { Step1Identity } from '@/components/onboarding/steps/Step1Identity'
-import Step2Details from '@/components/onboarding/steps/Step2Details'
-import Step3Skills from '@/components/onboarding/steps/Step3Skills'
-import { Step4Privacy } from '@/components/onboarding/steps/Step4Privacy'
+import dynamic from 'next/dynamic'
+import { Suspense } from 'react'
+
+const Step1Identity = dynamic(() => import('@/components/onboarding/steps/Step1Identity').then(mod => mod.Step1Identity))
+const Step2Details = dynamic(() => import('@/components/onboarding/steps/Step2Details'))
+const Step3Skills = dynamic(() => import('@/components/onboarding/steps/Step3Skills'))
+const Step4Privacy = dynamic(() => import('@/components/onboarding/steps/Step4Privacy').then(mod => mod.Step4Privacy))
 import { STEP_UI_CONFIG } from '@/lib/onboarding/step-ui-config'
 import type { UsernameAvailabilityStatus } from '@/hooks/useUsernameAvailability'
 import {
@@ -318,6 +321,7 @@ export default function OnboardingPage() {
     const lastInputMetricAtRef = useRef<number>(0)
     const lastRenderMetricAtRef = useRef<number>(0)
     const submitIdempotencyKeyRef = useRef<string>('')
+    const submitInFlightRef = useRef(false)
     const onboardingStartedAtRef = useRef<number>(Date.now())
     const stepEnteredAtRef = useRef<number>(Date.now())
     const lastStepViewRef = useRef<number | null>(null)
@@ -627,13 +631,9 @@ export default function OnboardingPage() {
         setError(null)
 
         try {
-            // Show immediate preview using FileReader
-            const reader = new FileReader()
-            reader.onload = (event) => {
-                const previewUrl = event.target?.result as string
-                updateData({ avatarUrl: previewUrl })
-            }
-            reader.readAsDataURL(file)
+            // Show immediate preview using object URL
+            const previewUrl = URL.createObjectURL(file)
+            updateData({ avatarUrl: previewUrl })
 
             // Try to upload compressed version to storage (background, non-blocking)
             try {
@@ -675,7 +675,7 @@ export default function OnboardingPage() {
             if (currentIndex >= 0 && currentIndex < ONBOARDING_STEP2_SECTIONS.length - 1) {
                 renderStartedAtRef.current = performance.now()
                 setTransitionDirection('section')
-                setStep2Section(ONBOARDING_STEP2_SECTIONS[currentIndex + 1].id)
+                setStep2Section(ONBOARDING_STEP2_SECTIONS[currentIndex + 1]!.id)
                 return
             }
         }
@@ -710,7 +710,7 @@ export default function OnboardingPage() {
             if (currentIndex > 0) {
                 renderStartedAtRef.current = performance.now()
                 setTransitionDirection('section')
-                setStep2Section(ONBOARDING_STEP2_SECTIONS[currentIndex - 1].id)
+                setStep2Section(ONBOARDING_STEP2_SECTIONS[currentIndex - 1]!.id)
                 return
             }
         }
@@ -727,7 +727,7 @@ export default function OnboardingPage() {
             })
             renderStartedAtRef.current = performance.now()
             if (step === 3) {
-                setStep2Section(ONBOARDING_STEP2_SECTIONS[ONBOARDING_STEP2_SECTIONS.length - 1].id)
+                setStep2Section(ONBOARDING_STEP2_SECTIONS[ONBOARDING_STEP2_SECTIONS.length - 1]!.id)
             }
             setTransitionDirection('backward')
             setStep(step - 1)
@@ -800,10 +800,13 @@ export default function OnboardingPage() {
     }, [customOpenTo, data.openTo, markInteraction])
 
     const handleSubmit = async () => {
+        if (submitInFlightRef.current) return
+        submitInFlightRef.current = true
         setError(null)
         const idempotencyKey = submitIdempotencyKeyRef.current
         if (!idempotencyKey) {
             setError('Unable to submit yet. Please wait a moment and retry.')
+            submitInFlightRef.current = false
             return
         }
         setIsLoading(true)
@@ -921,6 +924,7 @@ export default function OnboardingPage() {
                 },
             })
         } finally {
+            submitInFlightRef.current = false
             setIsLoading(false)
         }
     }
@@ -997,7 +1001,7 @@ export default function OnboardingPage() {
         >
             <StepTransition step={step} direction={transitionDirection}>
                 {/* Render StepHeader for steps 1 and 2 (steps 3 and 4 include their own) */}
-                {(step === 1 || step === 2) && (
+                {(step === 1 || step === 2) && currentStepConfig && (
                     <StepHeader
                         title={currentStepConfig.title}
                         subtitle={currentStepConfig.subtitle}
@@ -1006,112 +1010,120 @@ export default function OnboardingPage() {
 
                 {/* Step 1: Identity */}
                 {step === 1 && (
-                    <Step1Identity
-                        fullName={data.fullName}
-                        username={data.username}
-                        avatarUrl={data.avatarUrl}
-                        isUploadingAvatar={isUploadingAvatar}
-                        onFullNameChange={(value) => updateData({ fullName: value })}
-                        onUsernameChange={(username) => updateData({ username })}
-                        onAvatarChange={handleAvatarChange}
-                        onUsernameStatusChange={setUsernameStatus}
-                    />
+                    <Suspense fallback={<div className="h-96 w-full animate-pulse bg-zinc-50 dark:bg-zinc-900 rounded-xl" />}>
+                        <Step1Identity
+                            fullName={data.fullName}
+                            username={data.username}
+                            avatarUrl={data.avatarUrl}
+                            isUploadingAvatar={isUploadingAvatar}
+                            onFullNameChange={(value) => updateData({ fullName: value })}
+                            onUsernameChange={(username) => updateData({ username })}
+                            onAvatarChange={handleAvatarChange}
+                            onUsernameStatusChange={setUsernameStatus}
+                        />
+                    </Suspense>
                 )}
 
 
                 {/* Step 2: Profile Details with SectionNav */}
                 {step === 2 && (
-                    <Step2Details
-                        step2Section={step2Section}
-                        onSectionChange={(sectionId) => {
-                            const nextSection = ONBOARDING_STEP2_SECTIONS.find((item) => item.id === sectionId)
-                            if (!nextSection) return
-                            renderStartedAtRef.current = performance.now()
-                            markInteraction('toggle')
-                            setTransitionDirection('section')
-                            setStep2Section(nextSection.id)
-                        }}
-                        genderIdentity={data.genderIdentity}
-                        pronouns={data.pronouns}
-                        onGenderChange={(value) => updateData({ genderIdentity: value }, 'toggle')}
-                        onPronounsChange={(value) => updateData({ pronouns: value }, 'input')}
-                        experienceLevel={data.experienceLevel}
-                        hoursPerWeek={data.hoursPerWeek}
-                        openTo={data.openTo}
-                        availabilityStatus={data.availabilityStatus}
-                        onExperienceLevelChange={(value) => updateData({ experienceLevel: value }, 'toggle')}
-                        onHoursPerWeekChange={(value) => updateData({ hoursPerWeek: value }, 'toggle')}
-                        onToggleOpenTo={toggleOpenTo}
-                        onAvailabilityChange={(value) => updateData({ availabilityStatus: value }, 'toggle')}
-                        customOpenTo={customOpenTo}
-                        customOpenToError={customOpenToError}
-                        onCustomOpenToChange={(value) => {
-                            setCustomOpenTo(value)
-                            setCustomOpenToError(null)
-                        }}
-                        onAddCustomOpenTo={addCustomOpenTo}
-                        enableCustomOpenTo={ONBOARDING_FEATURE_FLAGS.enableCustomOpenTo}
-                        headline={data.headline}
-                        bio={data.bio}
-                        location={data.location}
-                        website={data.website}
-                        onHeadlineChange={(value) => updateData({ headline: value }, 'input')}
-                        onBioChange={(value) => updateData({ bio: value }, 'input')}
-                        onLocationChange={(value) => updateData({ location: value }, 'input')}
-                        onWebsiteChange={(value) => updateData({ website: value }, 'input')}
-                        isDetectingLocation={isDetectingLocation}
-                        onDetectLocation={async () => {
-                            setIsDetectingLocation(true)
-                            setError(null)
-                            try {
-                                const { detectLocation } = await import('@/lib/services/location-service')
-                                const { location, error: locError } = await detectLocation()
-                                if (location) {
-                                    updateData({ location: location.formatted }, 'input')
-                                } else if (locError) {
-                                    setError(locError)
+                    <Suspense fallback={<div className="h-96 w-full animate-pulse bg-zinc-50 dark:bg-zinc-900 rounded-xl" />}>
+                        <Step2Details
+                            step2Section={step2Section}
+                            onSectionChange={(sectionId) => {
+                                const nextSection = ONBOARDING_STEP2_SECTIONS.find((item) => item.id === sectionId)
+                                if (!nextSection) return
+                                renderStartedAtRef.current = performance.now()
+                                markInteraction('toggle')
+                                setTransitionDirection('section')
+                                setStep2Section(nextSection.id)
+                            }}
+                            genderIdentity={data.genderIdentity}
+                            pronouns={data.pronouns}
+                            onGenderChange={(value) => updateData({ genderIdentity: value }, 'toggle')}
+                            onPronounsChange={(value) => updateData({ pronouns: value }, 'input')}
+                            experienceLevel={data.experienceLevel}
+                            hoursPerWeek={data.hoursPerWeek}
+                            openTo={data.openTo}
+                            availabilityStatus={data.availabilityStatus}
+                            onExperienceLevelChange={(value) => updateData({ experienceLevel: value }, 'toggle')}
+                            onHoursPerWeekChange={(value) => updateData({ hoursPerWeek: value }, 'toggle')}
+                            onToggleOpenTo={toggleOpenTo}
+                            onAvailabilityChange={(value) => updateData({ availabilityStatus: value }, 'toggle')}
+                            customOpenTo={customOpenTo}
+                            customOpenToError={customOpenToError}
+                            onCustomOpenToChange={(value) => {
+                                setCustomOpenTo(value)
+                                setCustomOpenToError(null)
+                            }}
+                            onAddCustomOpenTo={addCustomOpenTo}
+                            enableCustomOpenTo={ONBOARDING_FEATURE_FLAGS.enableCustomOpenTo}
+                            headline={data.headline}
+                            bio={data.bio}
+                            location={data.location}
+                            website={data.website}
+                            onHeadlineChange={(value) => updateData({ headline: value }, 'input')}
+                            onBioChange={(value) => updateData({ bio: value }, 'input')}
+                            onLocationChange={(value) => updateData({ location: value }, 'input')}
+                            onWebsiteChange={(value) => updateData({ website: value }, 'input')}
+                            isDetectingLocation={isDetectingLocation}
+                            onDetectLocation={async () => {
+                                setIsDetectingLocation(true)
+                                setError(null)
+                                try {
+                                    const { detectLocation } = await import('@/lib/services/location-service')
+                                    const { location, error: locError } = await detectLocation()
+                                    if (location) {
+                                        updateData({ location: location.formatted }, 'input')
+                                    } else if (locError) {
+                                        setError(locError)
+                                    }
+                                } catch {
+                                    setError('Failed to detect location')
+                                } finally {
+                                    setIsDetectingLocation(false)
                                 }
-                            } catch {
-                                setError('Failed to detect location')
-                            } finally {
-                                setIsDetectingLocation(false)
-                            }
-                        }}
-                        socialLinks={data.socialLinks}
-                        onSocialLinkChange={updateSocialLink}
-                    />
+                            }}
+                            socialLinks={data.socialLinks}
+                            onSocialLinkChange={updateSocialLink}
+                        />
+                    </Suspense>
                 )}
 
                 {/* Step 3: Skills & Interests */}
                 {step === 3 && (
-                    <Step3Skills
-                        skillOptions={SKILL_SUGGESTIONS.map((s) => ({ value: s, label: s }))}
-                        interestOptions={INTEREST_SUGGESTIONS.map((i) => ({ value: i, label: i }))}
-                        selectedSkills={selectedSkills}
-                        selectedInterests={selectedInterests}
-                        onToggleSkill={toggleSkill}
-                        onToggleInterest={toggleInterest}
-                    />
+                    <Suspense fallback={<div className="h-96 w-full animate-pulse bg-zinc-50 dark:bg-zinc-900 rounded-xl" />}>
+                        <Step3Skills
+                            skillOptions={SKILL_SUGGESTIONS.map((s) => ({ value: s, label: s }))}
+                            interestOptions={INTEREST_SUGGESTIONS.map((i) => ({ value: i, label: i }))}
+                            selectedSkills={selectedSkills}
+                            selectedInterests={selectedInterests}
+                            onToggleSkill={toggleSkill}
+                            onToggleInterest={toggleInterest}
+                        />
+                    </Suspense>
                 )}
 
                 {/* Step 4: Privacy & Review */}
                 {step === 4 && (
-                    <Step4Privacy
-                        visibility={data.visibility}
-                        messagePrivacy={data.messagePrivacy}
-                        onVisibilityChange={(value) => updateData({ visibility: value }, 'toggle')}
-                        onMessagePrivacyChange={(value) => updateData({ messagePrivacy: value }, 'toggle')}
-                        summaryItems={[
-                            { label: '@' + data.username, value: data.fullName },
-                            { label: 'Visibility', value: data.visibility },
-                            { label: 'Messages', value: data.messagePrivacy },
-                            { label: 'Availability', value: data.availabilityStatus },
-                            { label: 'Skills', value: `${data.skills.length} selected` },
-                            { label: 'Open to', value: `${data.openTo.length} preferences` },
-                            { label: 'Social links', value: `${filledSocialLinks.length} connected` },
-                        ]}
-                        error={error}
-                    />
+                    <Suspense fallback={<div className="h-96 w-full animate-pulse bg-zinc-50 dark:bg-zinc-900 rounded-xl" />}>
+                        <Step4Privacy
+                            visibility={data.visibility}
+                            messagePrivacy={data.messagePrivacy}
+                            onVisibilityChange={(value) => updateData({ visibility: value }, 'toggle')}
+                            onMessagePrivacyChange={(value) => updateData({ messagePrivacy: value }, 'toggle')}
+                            summaryItems={[
+                                { label: '@' + data.username, value: data.fullName },
+                                { label: 'Visibility', value: data.visibility },
+                                { label: 'Messages', value: data.messagePrivacy },
+                                { label: 'Availability', value: data.availabilityStatus },
+                                { label: 'Skills', value: `${data.skills.length} selected` },
+                                { label: 'Open to', value: `${data.openTo.length} preferences` },
+                                { label: 'Social links', value: `${filledSocialLinks.length} connected` },
+                            ]}
+                            error={error}
+                        />
+                    </Suspense>
                 )}
             </StepTransition>
 
