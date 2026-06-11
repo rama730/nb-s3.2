@@ -127,6 +127,7 @@ export async function toggleReaction(
             // Add reaction
             await db.insert(messageReactions).values({
                 messageId,
+                conversationId: messageRow.conversationId,
                 userId: user.id,
                 emoji,
             });
