@@ -27,7 +27,7 @@ function StatusBadge({ status }: { status: string | null | undefined }) {
         withdrawn: { bg: 'bg-zinc-100 dark:bg-zinc-800', text: 'text-zinc-600 dark:text-zinc-400', label: 'Withdrawn' },
         role_filled: { bg: 'bg-blue-100 dark:bg-blue-900/30', text: 'text-blue-700 dark:text-blue-300', label: 'Filled' },
     };
-    const c = config[status || 'pending'] || config.pending;
+    const c = config[status || 'pending'] || config.pending!;
     return (
         <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${c.bg} ${c.text}`}>{c.label}</span>
     );
@@ -262,7 +262,7 @@ export function ApplicationsListV2({
                                                         />
                                                     ) : (
                                                         <span className="text-xs font-bold text-white">
-                                                            {(application.displayUser.fullName || application.displayUser.username || '?')[0].toUpperCase()}
+                                                            {(application.displayUser.fullName || application.displayUser.username || '?')[0]!.toUpperCase()}
                                                         </span>
                                                     )}
                                                 </div>
@@ -308,7 +308,11 @@ export function ApplicationsListV2({
                                                                         : 'text-primary'
                                                         }
                                                     >
-                                                        {application.type === 'incoming' ? 'Applying for ' : 'Applied for '}
+                                                        {application.isWorkflowItem ? (
+                                                            application.type === 'incoming' ? 'Invited you as ' : 'Invited as '
+                                                        ) : (
+                                                            application.type === 'incoming' ? 'Applying for ' : 'Applied for '
+                                                        )}
                                                         {application.roleTitle}
                                                     </span>
                                                 </p>
