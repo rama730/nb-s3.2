@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useRealtime } from "@/components/providers/RealtimeProvider";
 import { subscribeTaskResource } from "@/lib/realtime/task-resource";
-import { countTaskAttachments } from "@/app/actions/files";
+import { countTaskAttachments } from "@/app/actions/files/links";
 import { createVisibilityAwareInterval } from "@/lib/utils/visibility";
 
 type TaskCounts = {
@@ -168,5 +168,5 @@ export function useTaskCounts(taskId: string) {
         };
     }, [fetchCounts, isConnected, resourceConnected, taskId]);
 
-    return { counts, isLoading };
+    return useMemo(() => ({ counts, isLoading }), [counts, isLoading]);
 }
