@@ -41,7 +41,7 @@ export interface UseFileVersionsReturn {
 
 function extOf(name: string) {
   const parts = name.split(".");
-  return parts.length > 1 ? parts[parts.length - 1].toLowerCase() : "";
+  return parts.length > 1 ? (parts[parts.length - 1]?.toLowerCase() || "") : "";
 }
 
 /**
@@ -279,12 +279,12 @@ export function useFileVersions(projectId: string, nodeId: string): UseFileVersi
     [projectId, nodeId],
   );
 
-  return {
+  return useMemo(() => ({
     versions,
     isLoading,
     error,
     listVersions,
     saveAsNewVersion,
     restoreVersion,
-  };
+  }), [versions, isLoading, error, listVersions, saveAsNewVersion, restoreVersion]);
 }
