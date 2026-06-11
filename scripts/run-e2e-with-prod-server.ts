@@ -9,6 +9,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import { spawnSync } from "node:child_process";
+import { config as loadDotenv } from "dotenv";
+
+loadDotenv({ path: ".env.local", quiet: true });
+loadDotenv({ quiet: true });
 
 function resolveServerTarget() {
   const explicitPort = process.env.E2E_PORT;
@@ -53,8 +57,10 @@ const perfRunId =
   `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
 let serverProcess: ChildProcess | null = null;
+let presenceProcess: ChildProcess | null = null;
 let shuttingDown = false;
 let serverExitedUnexpectedly = false;
+let presenceExitedUnexpectedly = false;
 
 function killServerProcessTree(pid: number) {
   // On POSIX, kill the spawned process group (requires detached: true).
@@ -86,12 +92,18 @@ function killServerProcessTree(pid: number) {
   }
 }
 
+function killChildProcess(processRef: ChildProcess | null) {
+  if (processRef?.pid) {
+    killServerProcessTree(processRef.pid);
+  }
+}
+
 function killServer() {
   shuttingDown = true;
-  if (serverProcess?.pid) {
-    killServerProcessTree(serverProcess.pid);
-    serverProcess = null;
-  }
+  killChildProcess(serverProcess);
+  killChildProcess(presenceProcess);
+  serverProcess = null;
+  presenceProcess = null;
 }
 
 async function waitForReady(): Promise<boolean> {
@@ -106,6 +118,75 @@ async function waitForReady(): Promise<boolean> {
     await new Promise((r) => setTimeout(r, pollMs));
   }
   return false;
+}
+
+async function waitForPresenceReady(port: string, timeout = 30_000): Promise<boolean> {
+  const start = Date.now();
+  const healthUrl = `http://127.0.0.1:${port}/health`;
+  while (Date.now() - start < timeout) {
+    try {
+      const res = await fetch(healthUrl, { signal: AbortSignal.timeout(1000) });
+      if (res.ok) return true;
+    } catch {
+      // retry
+    }
+    await new Promise((r) => setTimeout(r, pollMs));
+  }
+  return false;
+}
+
+async function startPresenceServiceIfNeeded() {
+  if (process.env.E2E_START_PRESENCE_SERVICE === "0") return;
+
+  const presencePort = process.env.PRESENCE_SERVICE_PORT || "4010";
+  if (await waitForPresenceReady(presencePort, 1_000)) {
+    console.log(`[e2e] Reusing existing presence service on :${presencePort}`);
+    return;
+  }
+
+  const allowedOrigins = new Set(
+    [
+      baseURL,
+      process.env.ALLOWED_WS_ORIGINS,
+      process.env.PRESENCE_ALLOWED_ORIGINS,
+      process.env.APP_URL,
+      process.env.NEXT_PUBLIC_APP_URL,
+    ]
+      .filter(Boolean)
+      .flatMap((value) => String(value).split(",").map((origin) => origin.trim()).filter(Boolean)),
+  );
+
+  const requestedPresenceNodeEnv = process.env.E2E_PRESENCE_NODE_ENV;
+  const presenceNodeEnv =
+    requestedPresenceNodeEnv === "production"
+    || requestedPresenceNodeEnv === "test"
+    || requestedPresenceNodeEnv === "development"
+      ? requestedPresenceNodeEnv
+      : "development";
+
+  const spawnedPresenceProcess = spawn("pnpm", ["exec", "tsx", "services/presence/src/server.ts"], {
+    stdio: ["ignore", "pipe", "pipe"],
+    detached: true,
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      NODE_ENV: presenceNodeEnv,
+      ALLOWED_WS_ORIGINS: Array.from(allowedOrigins).join(","),
+      PRESENCE_ALLOWED_ORIGINS: Array.from(allowedOrigins).join(","),
+    },
+  });
+  presenceProcess = spawnedPresenceProcess;
+  spawnedPresenceProcess.stdout?.on("data", (chunk) => process.stdout.write(chunk));
+  spawnedPresenceProcess.stderr?.on("data", (chunk) => process.stderr.write(chunk));
+  spawnedPresenceProcess.on("exit", (code, signal) => {
+    if (shuttingDown) return;
+    presenceExitedUnexpectedly = true;
+    console.error(`[e2e] Presence service exited unexpectedly (code=${code}, signal=${signal})`);
+  });
+
+  if (!(await waitForPresenceReady(presencePort)) || presenceExitedUnexpectedly) {
+    throw new Error(`[e2e] Presence service did not become ready on :${presencePort}`);
+  }
 }
 
 async function main() {
@@ -124,6 +205,8 @@ async function main() {
     process.exit(143);
   });
 
+  await startPresenceServiceIfNeeded();
+
   serverProcess = spawn("pnpm", ["exec", "next", "start", "-H", "0.0.0.0", "-p", port], {
     stdio: ["ignore", "pipe", "pipe"],
     detached: true,
@@ -139,7 +222,7 @@ async function main() {
   });
 
   const ready = await waitForReady();
-  if (!ready || serverExitedUnexpectedly) {
+  if (!ready || serverExitedUnexpectedly || presenceExitedUnexpectedly) {
     console.error("[e2e] Production server did not become ready in time");
     killServer();
     process.exit(1);
@@ -170,6 +253,9 @@ async function main() {
     }
     if (serverExitedUnexpectedly) {
       throw new Error("Production server exited unexpectedly during E2E run");
+    }
+    if (presenceExitedUnexpectedly) {
+      throw new Error("Presence service exited unexpectedly during E2E run");
     }
     console.log(
       JSON.stringify({
