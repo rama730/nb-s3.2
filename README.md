@@ -13,12 +13,12 @@ The repo is split into four runtime paths:
 
 The most important architecture docs live here:
 
-- [System map](/Users/chrama/Downloads/nb-s3/docs/architecture/system-map.md)
-- [Engineering standards charter](/Users/chrama/Downloads/nb-s3/docs/architecture/engineering-standards-charter.md)
-- [Engineering standards enforcement matrix](/Users/chrama/Downloads/nb-s3/docs/architecture/engineering-standards-enforcement-matrix.md)
-- [Stability rollout runbook](/Users/chrama/Downloads/nb-s3/docs/stability-rollout-runbook.md)
-- [Page data contract](/Users/chrama/Downloads/nb-s3/docs/performance/page-data-contract.md)
-- [Security checklist](/Users/chrama/Downloads/nb-s3/docs/security-checklist.md)
+- [System map](docs/architecture/system-map.md)
+- [Engineering standards charter](docs/architecture/engineering-standards-charter.md)
+- [Engineering standards enforcement matrix](docs/architecture/engineering-standards-enforcement-matrix.md)
+- [Stability rollout runbook](docs/stability-rollout-runbook.md)
+- [Page data contract](docs/performance/page-data-contract.md)
+- [Security checklist](docs/security-checklist.md)
 
 ## Runtime Boundaries
 
@@ -30,30 +30,30 @@ Request delivery is classified into three route classes:
 
 Those contracts are enforced in:
 
-- [page-contract.ts](/Users/chrama/Downloads/nb-s3/src/lib/performance/page-contract.ts)
-- [route-class.ts](/Users/chrama/Downloads/nb-s3/src/lib/routing/route-class.ts)
-- [check-page-performance-contract.ts](/Users/chrama/Downloads/nb-s3/scripts/check-page-performance-contract.ts)
-- [check-runtime-boundaries.ts](/Users/chrama/Downloads/nb-s3/scripts/check-runtime-boundaries.ts)
+- [page-contract.ts](src/lib/performance/page-contract.ts)
+- [route-class.ts](src/lib/routing/route-class.ts)
+- [check-page-performance-contract.ts](scripts/check-page-performance-contract.ts)
+- [check-runtime-boundaries.ts](scripts/check-runtime-boundaries.ts)
 
 ## Realtime Model
 
 Durable invalidation stays on Supabase-backed wrappers:
 
-- [subscriptions.ts](/Users/chrama/Downloads/nb-s3/src/lib/realtime/subscriptions.ts)
-- [RealtimeProvider.tsx](/Users/chrama/Downloads/nb-s3/src/components/providers/RealtimeProvider.tsx)
+- [subscriptions.ts](src/lib/realtime/subscriptions.ts)
+- [RealtimeProvider.tsx](src/components/providers/RealtimeProvider.tsx)
 
 Ephemeral collaboration traffic is isolated:
 
-- Presence token API: [route.ts](/Users/chrama/Downloads/nb-s3/src/app/api/realtime/presence-token/route.ts)
-- Presence client transport: [presence-client.ts](/Users/chrama/Downloads/nb-s3/src/lib/realtime/presence-client.ts)
-- Presence service: [server.ts](/Users/chrama/Downloads/nb-s3/services/presence/src/server.ts)
+- Presence token API: [route.ts](src/app/api/realtime/presence-token/route.ts)
+- Presence client transport: [presence-client.ts](src/lib/realtime/presence-client.ts)
+- Presence service: [server.ts](services/presence/src/server.ts)
 
 ## Worker Model
 
 The web deployment must not register heavy Git/import workers. Function registration is controlled by:
 
-- [registry.ts](/Users/chrama/Downloads/nb-s3/src/inngest/registry.ts)
-- [route.ts](/Users/chrama/Downloads/nb-s3/src/app/api/v1/inngest/route.ts)
+- [registry.ts](src/inngest/registry.ts)
+- [route.ts](src/app/api/v1/inngest/route.ts)
 
 Set `INNGEST_EXECUTION_ROLE=web` for the web app and `INNGEST_EXECUTION_ROLE=worker` for the worker deployment.
 
@@ -73,20 +73,15 @@ Dedicated runtime commands:
 
 ```bash
 npm run dev
-```
-
-`npm run dev` now starts both the Next.js app and the dedicated local presence service so typing indicators and cursor presence work in local development.
-
-Dedicated runtime commands:
-
-```bash
 npm run presence:dev
 npm run run:load-suite -- --base-url=http://127.0.0.1:3000 --auth-cookie="sb-access-token=...; sb-refresh-token=..."
 ```
 
+`npm run dev` starts both the Next.js app and the dedicated local presence service so typing indicators and cursor presence work in local development.
+
 ## Environment
 
-The minimal local env template is in [.env.local.example](/Users/chrama/Downloads/nb-s3/.env.local.example).
+The minimal local env template is in [.env.local.example](.env.local.example).
 
 The new scale-critical settings are:
 
@@ -101,9 +96,9 @@ The new scale-critical settings are:
 
 Repo code is only one part of scale readiness. The final rollout and capacity artifacts live in:
 
-- [ops/stability/README.md](/Users/chrama/Downloads/nb-s3/ops/stability/README.md)
-- [capacity-audit.example.json](/Users/chrama/Downloads/nb-s3/ops/stability/capacity-audit.example.json)
-- [production-rollout.example.json](/Users/chrama/Downloads/nb-s3/ops/stability/production-rollout.example.json)
+- [ops/stability/README.md](ops/stability/README.md)
+- [capacity-audit.example.json](ops/stability/capacity-audit.example.json)
+- [production-rollout.example.json](ops/stability/production-rollout.example.json)
 
 Readiness is not claimed until:
 
@@ -111,4 +106,4 @@ Readiness is not claimed until:
 - the capacity audit is approved
 - the production rollout plan is approved
 - the load suite is green
-- [reports/stability/headroom/latest.json](/Users/chrama/Downloads/nb-s3/reports/stability/headroom/latest.json) reports `READY`
+- [reports/stability/headroom/latest.json](reports/stability/headroom/latest.json) reports `READY`
