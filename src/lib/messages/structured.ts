@@ -45,6 +45,7 @@ export const STRUCTURED_WORKFLOW_RESOLUTION_ACTIONS = [
     'busy',
     'offline',
     'focusing',
+    'cancel',
 ] as const;
 export type WorkflowResolutionAction = (typeof STRUCTURED_WORKFLOW_RESOLUTION_ACTIONS)[number];
 
@@ -151,6 +152,11 @@ const STRUCTURED_WORKFLOW_TRANSITIONS: Record<
             nextStatus: 'declined',
             nextLabel: 'Declined',
             bridge: { title: 'Invite declined', summary: 'Project invite declined' },
+        },
+        cancel: {
+            nextStatus: 'canceled',
+            nextLabel: 'Canceled',
+            bridge: { title: 'Invite canceled', summary: 'Project invite canceled' },
         },
     },
     feedback_request: {
@@ -321,8 +327,14 @@ export function resolveStructuredWorkflowTransition(params: {
         return null;
     }
     const actorRole = getStructuredWorkflowActorRole(params);
-    if (actorRole !== 'assignee') {
-        return null;
+    if (params.action === 'cancel') {
+        if (actorRole !== 'creator') {
+            return null;
+        }
+    } else {
+        if (actorRole !== 'assignee') {
+            return null;
+        }
     }
     return STRUCTURED_WORKFLOW_TRANSITIONS[params.kind][params.action] ?? null;
 }
