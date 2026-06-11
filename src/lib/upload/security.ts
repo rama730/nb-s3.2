@@ -86,7 +86,7 @@ export function normalizeAndValidateMimeType(rawMimeType: unknown): string {
   }
 
   const [topLevel] = normalized.split("/");
-  if (!SAFE_MIME_TOP_LEVEL.has(topLevel)) {
+  if (!topLevel || !SAFE_MIME_TOP_LEVEL.has(topLevel)) {
     throw new Error("Unsupported MIME type");
   }
   if (BLOCKED_MIME_TYPES.has(normalized)) {
