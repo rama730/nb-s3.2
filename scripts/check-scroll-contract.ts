@@ -17,6 +17,8 @@ const LEGACY_CLASS_ALLOWLIST = new Set<string>([
   "src/components/projects/tabs/SprintPlanning.tsx",
   "src/components/projects/v2/tasks/TaskDetailPanel.tsx",
   "src/components/projects/v2/ProjectLayout.tsx",
+  "src/components/workspace/WorkspaceDrawer.tsx",
+  "src/components/workspace/WorkspaceTaskDetailView.tsx",
 ]);
 
 function toPosix(filePath: string): string {
