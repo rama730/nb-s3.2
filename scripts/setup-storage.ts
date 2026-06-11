@@ -27,10 +27,10 @@ async function setupStorage() {
         // Create avatars bucket
         await sql`
             INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
-            VALUES ('avatars', 'avatars', true, 1048576, ARRAY['image/jpeg', 'image/png', 'image/webp'])
+            VALUES ('avatars', 'avatars', true, 10485760, ARRAY['image/jpeg', 'image/png', 'image/webp'])
             ON CONFLICT (id) DO UPDATE SET 
                 public = true, 
-                file_size_limit = 1048576,
+                file_size_limit = 10485760,
                 allowed_mime_types = ARRAY['image/jpeg', 'image/png', 'image/webp']
         `
         console.log('✅ Avatars bucket created')
