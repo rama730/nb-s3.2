@@ -93,7 +93,7 @@ export default function TurnstileWidget({
                 onError={() => errorRef.current?.()}
             />
             <div className="space-y-2">
-                <div ref={containerRef} />
+                <div ref={containerRef} style={{ minHeight: '65px' }} />
                 <p className="text-xs text-muted-foreground">
                     Protected by Cloudflare Turnstile.
                 </p>
