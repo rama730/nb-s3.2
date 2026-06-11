@@ -7,7 +7,8 @@ import { format, formatDistanceToNowStrict } from "date-fns";
 import { ExternalLink, Paperclip, X } from "lucide-react";
 
 import { getProjectTaskDetailAction } from "@/app/actions/project";
-import { getNodeActivity, getNodeLinkedTasks, getNodeMetadataBatch } from "@/app/actions/files";
+import { getNodeActivity, getNodeLinkedTasks } from "@/app/actions/files/events";
+import { getNodeMetadataBatch } from "@/app/actions/files/nodes";
 import { UserAvatar } from "@/components/ui/UserAvatar";
 import { VersionPill } from "@/components/projects/v2/files-tab/VersionPill";
 import { recordSprintMetric } from "@/lib/projects/sprint-observability";
