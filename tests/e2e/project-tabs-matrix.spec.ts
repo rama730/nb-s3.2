@@ -65,20 +65,24 @@ test.describe("Project tabs matrix @critical", () => {
     perf.mark("route.interactive.core", projectShellMs, `/projects/${fixtureProjectSlug}`);
     perf.mark("project.detail.shell.interactive", projectShellMs, `/projects/${fixtureProjectSlug}`);
 
+    await expect(page.getByTestId("project-tab-dashboard")).toBeVisible({ timeout: 15000 });
+
     const headContract = await page.evaluate(() => ({
-      titleCount: document.head.querySelectorAll("title").length,
-      canonicalCount: document.head.querySelectorAll('link[rel="canonical"]').length,
-      descriptionCount: document.head.querySelectorAll('meta[name="description"]').length,
+      titleText: document.title,
+      titleCount: document.querySelectorAll("title").length,
+      canonicalCount: document.querySelectorAll('link[rel="canonical"]').length,
+      descriptionCount: document.querySelectorAll('meta[name="description"]').length,
       themeColorOwnerCount: document.head.querySelectorAll('meta[data-app-theme-color="true"]').length,
       mainCount: document.querySelectorAll("main").length,
     }));
+    expect(headContract.titleText).toContain("QA Files Workspace Controls");
     expect(headContract.titleCount).toBe(1);
     expect(headContract.canonicalCount).toBe(1);
     expect(headContract.descriptionCount).toBe(1);
     expect(headContract.themeColorOwnerCount).toBe(1);
     expect(headContract.mainCount).toBe(1);
 
-    await expect(page.getByTestId("project-tab-dashboard")).toBeVisible();
+    await expect(page.getByTestId("project-tab-readme")).toBeVisible();
     await expect(page.getByTestId("project-tab-sprints")).toBeVisible();
     await expect(page.getByTestId("project-tab-tasks")).toBeVisible();
     await expect(page.getByTestId("project-tab-analytics")).toBeVisible();
@@ -96,6 +100,9 @@ test.describe("Project tabs matrix @critical", () => {
         .toBe(tabParam);
     };
 
+    await switchTab("project-tab-readme", "readme", "readme");
+    await expect(page.getByText(/README|Create the project README|README unavailable/i).first()).toBeVisible({ timeout: 15000 });
+
     await switchTab("project-tab-sprints", "sprints", "sprints");
     await expect(page.getByText(/Sprint|No Sprints Yet|Sprint planning/i).first()).toBeVisible({ timeout: 15000 });
 
@@ -103,7 +110,7 @@ test.describe("Project tabs matrix @critical", () => {
     await expect(page.getByText(/Task|No tasks|Create task/i).first()).toBeVisible({ timeout: 15000 });
 
     await switchTab("project-tab-analytics", "analytics", "analytics");
-    await expect(page.getByText(/Analytics|Views|Followers|Saves/i).first()).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText(/Project Intelligence|Member Contributions|Work Flow/i).first()).toBeVisible({ timeout: 15000 });
 
     // Retry the server-rendered files tab route once before UI navigation; do not suppress 5xx responses.
     await ensureFilesTabRouteHealthy(page);
@@ -114,14 +121,14 @@ test.describe("Project tabs matrix @critical", () => {
     const { elapsedMs: filesTabOpenMs } = await measureWithTiming(async () => {
       await filesTab.click();
       await expect(filesTab).toHaveAttribute("data-active", "true", { timeout: 15000 });
-      await expect(page.getByTestId("files-workspace-toolbar-panel-toggle").first()).toBeVisible({ timeout: 15000 });
+      await expect(page.getByTestId("files-tab-root").first()).toBeVisible({ timeout: 15000 });
+      await expect(page.getByTestId("files-tab-folder-list-header").first()).toBeVisible({ timeout: 15000 });
     });
     perf.mark("project.detail.files.tab.open", filesTabOpenMs, `/projects/${fixtureProjectSlug}?tab=files`);
     await expect
       .poll(() => new URL(page.url()).searchParams.get("tab"), { timeout: 15000 })
       .toBe("files");
-    await expect(page.getByTestId("files-explorer-actions-trigger").first()).toBeVisible({ timeout: 15000 });
-    await expect(page.locator('[role="tree"] [role="treeitem"]').first()).toBeVisible({ timeout: 15000 });
+    await expect(page.getByRole("treeitem", { name: /workspace/i }).first()).toBeVisible({ timeout: 15000 });
 
     // Let the initial files workspace bootstrap settle before we start counting
     // post-hide background traffic. The contract here is "no hidden polling",
