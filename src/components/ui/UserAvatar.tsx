@@ -63,7 +63,7 @@ export function UserAvatar({
           alt={presentation.alt}
           fill
           unoptimized={unoptimized}
-          sizes={sizes ?? (size ? `${size}px` : undefined)}
+          sizes={sizes ?? (size ? `${size}px` : "40px")}
           loading={priority ? "eager" : "lazy"}
           fetchPriority={priority ? "high" : "auto"}
           className={cn("object-cover", roundedClassName, imageClassName)}
