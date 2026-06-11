@@ -32,7 +32,7 @@ self.onmessage = (e: MessageEvent<SortWorkerPayload>) => {
         const sortedChildrenByParentId: Record<string, string[]> = {};
 
         for (const [parentId, childIds] of Object.entries(childrenByParentId)) {
-            const nodes = childIds.map(id => nodesById[id]).filter(Boolean);
+            const nodes = childIds.map(id => nodesById[id]).filter(Boolean) as ProjectNode[];
             sortedChildrenByParentId[parentId] = nodes.sort(cmp).map(n => n.id);
         }
 
