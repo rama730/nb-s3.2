@@ -79,6 +79,7 @@ type NotificationDeliveryRefreshEvent = {
 
 export const schemas = new EventSchemas().fromRecord<{
     "project/import": ProjectImportEvent;
+    "project/import.hydrate": ProjectImportEvent;
     "git/push": GitPushEvent;
     "git/pull": GitPullEvent;
     "account/cleanup": AccountCleanupEvent;
