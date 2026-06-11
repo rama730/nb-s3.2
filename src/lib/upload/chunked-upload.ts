@@ -77,6 +77,7 @@ function createTasks(files: FileList, projectId: string): UploadTask[] {
     const tasks: UploadTask[] = [];
     for (let i = 0; i < files.length; i += 1) {
         const file = files[i];
+        if (!file) continue;
         const relativePath = file.webkitRelativePath || file.name;
         tasks.push({
             file,
@@ -222,7 +223,10 @@ export async function uploadFolder(
             const index = cursor;
             cursor += 1;
             if (index >= queuedTasks.length) return;
-            await runTask(queuedTasks[index]);
+            const task = queuedTasks[index];
+            if (task) {
+                await runTask(task);
+            }
         }
     });
 
