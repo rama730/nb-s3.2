@@ -6,6 +6,7 @@ import { getAcceptedConnections } from '@/app/actions/connections';
 import Image from 'next/image';
 import Link from 'next/link';
 import { profileHref } from '@/lib/routing/identifiers';
+import { useRouteWarmPrefetch } from '@/hooks/useRouteWarmPrefetch';
 import { logger } from '@/lib/logger';
 import {
     Dialog,
@@ -36,14 +37,15 @@ interface ConnectionRow {
 }
 
 export function UserConnectionsModal({ isOpen, onClose, userId, userName }: UserConnectionsModalProps) {
+    const prefetch = useRouteWarmPrefetch();
     const [connections, setConnections] = useState<ConnectionRow[]>([]);
     const [loading, setLoading] = useState(true);
     const [loadingMore, setLoadingMore] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
     const [debouncedSearch, setDebouncedSearch] = useState('');
-    const [cursor, setCursor] = useState<string | null>(null);
     const [hasMore, setHasMore] = useState(false);
     const requestTokenRef = useRef(0);
+    const cursorRef = useRef<string | null>(null);
     const ownerDisplayName = userName.trim() ? userName : 'User';
 
     useEffect(() => {
@@ -64,7 +66,7 @@ export function UserConnectionsModal({ isOpen, onClose, userId, userName }: User
         try {
             const response = await getAcceptedConnections({
                 limit: 30,
-                cursor: append ? cursor || undefined : undefined,
+                cursor: append ? cursorRef.current || undefined : undefined,
                 search: search || undefined,
                 targetUserId: userId,
             });
@@ -73,7 +75,7 @@ export function UserConnectionsModal({ isOpen, onClose, userId, userName }: User
 
             const nextRows = (response.connections || []) as ConnectionRow[];
             setHasMore(Boolean(response.hasMore));
-            setCursor(response.nextCursor || null);
+            cursorRef.current = response.nextCursor || null;
 
             if (append) {
                 setConnections((prev) => {
@@ -100,7 +102,7 @@ export function UserConnectionsModal({ isOpen, onClose, userId, userName }: User
             if (!append) {
                 setConnections([]);
                 setHasMore(false);
-                setCursor(null);
+                cursorRef.current = null;
             }
         } finally {
             if (requestToken === requestTokenRef.current) {
@@ -108,7 +110,7 @@ export function UserConnectionsModal({ isOpen, onClose, userId, userName }: User
                 setLoadingMore(false);
             }
         }
-    }, [cursor, debouncedSearch, userId]);
+    }, [debouncedSearch, userId]);
 
     useEffect(() => {
         if (!isOpen || !userId) return;
@@ -121,7 +123,7 @@ export function UserConnectionsModal({ isOpen, onClose, userId, userName }: User
             setSearchQuery('');
             setDebouncedSearch('');
             setConnections([]);
-            setCursor(null);
+            cursorRef.current = null;
             setHasMore(false);
             setLoading(true);
             setLoadingMore(false);
@@ -178,6 +180,8 @@ export function UserConnectionsModal({ isOpen, onClose, userId, userName }: User
                                         key={conn.id}
                                         href={profileHref(user)}
                                         onClick={onClose}
+                                        onMouseEnter={() => prefetch(profileHref(user))}
+                                        onFocus={() => prefetch(profileHref(user))}
                                         className="flex items-center gap-3 p-2 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 rounded-xl transition-colors group"
                                     >
                                         {user.avatarUrl ? (
