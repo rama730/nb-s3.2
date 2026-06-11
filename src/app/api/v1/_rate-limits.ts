@@ -41,13 +41,28 @@ export const RATE_LIMITS = {
     // ── PUBLIC ─────────────────────────────────────────────────────
     "health.check":             [60, 60]   as const,  // 60/min
     "ready.check":              [60, 60]   as const,  // 60/min
+    "live.check":               [120, 60]  as const,  // 120/min
     "usernameCheck":            [60, 60]   as const,  // 60/min
 
     // ── ADMIN ──────────────────────────────────────────────────────
     "admin.reservedUsernames":  [30, 60]   as const,  // 30/min
+    "cleanupOrphan":            [10, 60]   as const,  // 10/min
 
     // ── GITHUB IMPORT ──────────────────────────────────────────────
     "github.import":            [60, 60]   as const,  // 60/min
+    "github.import.accessState":[60, 60]   as const,  // 60/min
+    "github.import.preflight":  [30, 60]   as const,  // 30/min
+    "webhooks.github":          [120, 60]  as const,  // 120/min
+
+    // ── FILES / WORKSPACE ──────────────────────────────────────────
+    "files.locks.release":      [60, 60]   as const,  // 60/min
+
+    // ── PROJECTS / COVER IMAGES ────────────────────────────────────
+    "projects.image":           [60, 60]   as const,  // 60/min
+    "projects.readmeAssets":    [120, 60]  as const,  // 120/min
+
+    // ── AUTH SESSION ───────────────────────────────────────────────
+    "auth.session":             [20, 60]   as const,  // 20/min
 } as const;
 
 export type RateLimitKey = keyof typeof RATE_LIMITS;
