@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNull, lt } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, lt, sql } from "drizzle-orm";
 
 import { inngest } from "../client";
 import { db } from "@/lib/db";
@@ -103,40 +103,40 @@ export const projectImportStaleReconcile = inngest.createFunction(
     }
 
     let reconciled = 0;
-    let skippedRace = 0;
     let githubReconciled = 0;
     let uploadReconciled = 0;
 
-    for (const project of staleProjects) {
-      const source = normalizeImportSource(project.importSource);
-      const sourceType = typeof source.type === "string" ? source.type : "scratch";
-      const reason = `Reconciled stale ${String(project.syncStatus)} import state`;
-      const nextImportSource = buildFailedImportSource(project.importSource, reason, nowIso);
+    const projectIds = staleProjects.map(p => p.id);
+    const reason = `Reconciled stale import state`;
 
-      const updated = await db
+    const cases = staleProjects.map(project => {
+        const source = normalizeImportSource(project.importSource);
+        const sourceType = typeof source.type === "string" ? source.type : "scratch";
+        
+        if (sourceType === "github") githubReconciled += 1;
+        if (sourceType === "upload") uploadReconciled += 1;
+        
+        const nextImportSource = buildFailedImportSource(project.importSource, reason, nowIso);
+        return sql`WHEN ${projects.id} = ${project.id} THEN ${JSON.stringify(nextImportSource)}::jsonb`;
+    });
+
+    const updated = await db
         .update(projects)
         .set({
-          syncStatus: "failed",
-          importSource: nextImportSource as any,
-          updatedAt: now,
+            syncStatus: "failed",
+            importSource: sql`CASE ${sql.join(cases, sql` `)} ELSE ${projects.importSource} END`,
+            updatedAt: now,
         })
         .where(
-          and(
-            eq(projects.id, project.id),
-            inArray(projects.syncStatus, IN_PROGRESS_SYNC_STATUSES),
-          ),
+            and(
+                inArray(projects.id, projectIds),
+                inArray(projects.syncStatus, IN_PROGRESS_SYNC_STATUSES),
+            ),
         )
         .returning({ id: projects.id });
 
-      if (updated.length === 0) {
-        skippedRace += 1;
-        continue;
-      }
-
-      reconciled += 1;
-      if (sourceType === "github") githubReconciled += 1;
-      if (sourceType === "upload") uploadReconciled += 1;
-    }
+    reconciled = updated.length;
+    let skippedRace = staleProjects.length - reconciled;
 
     logger.metric("project.import.stale.reconcile", {
       scanned: staleProjects.length,
