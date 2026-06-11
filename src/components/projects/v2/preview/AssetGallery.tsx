@@ -74,7 +74,7 @@ function LazyThumb({
     if (!el) return;
     const observer = new IntersectionObserver(
       ([entry]) => {
-        if (entry.isIntersecting) {
+        if (entry && entry.isIntersecting) {
           setVisible(true);
           observer.disconnect();
         }
@@ -194,7 +194,7 @@ export default function AssetGallery({
     setSortKey((prev) => {
       const keys: SortKey[] = ["name", "updated", "size"];
       const idx = keys.indexOf(prev);
-      return keys[(idx + 1) % keys.length];
+      return keys[(idx + 1) % keys.length] || "name";
     });
   }, []);
 
