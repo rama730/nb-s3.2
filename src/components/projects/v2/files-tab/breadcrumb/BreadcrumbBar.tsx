@@ -37,7 +37,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { getBreadcrumbs } from "@/app/actions/files";
+import { getBreadcrumbs } from "@/app/actions/files/nodes";
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 
 import { ancestorChain, type CurrentLocation } from "../navigation";
