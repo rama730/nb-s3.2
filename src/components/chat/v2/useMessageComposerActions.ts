@@ -13,6 +13,7 @@ import { acceptConnectionRequest, cancelConnectionRequest, sendConnectionRequest
 import type { MessageWithSender, UploadedAttachment } from '@/app/actions/messaging';
 import type { ConversationCapabilityV2 } from '@/app/actions/messaging/v2';
 import { canSendFromCapability } from '@/lib/chat/composer-workflow';
+import { formatDraftWithCodeSnippet } from '@/lib/messages/code-snippets';
 import { upsertThreadConversation } from '@/lib/messages/v2-cache';
 import { refreshConversationCache } from '@/lib/messages/v2-refresh';
 import { useMessagesActions } from '@/hooks/useMessagesV2';
@@ -256,7 +257,7 @@ export function useMessageComposerActions({
     ]);
 
     const handleSend = useCallback(async () => {
-        const text = draft.trim();
+        const text = formatDraftWithCodeSnippet(draft);
         const uploadedAttachments = attachments
             .filter((attachment) => attachment.status === 'uploaded' && attachment.uploaded && !attachment.error)
             .map((attachment) => attachment.uploaded!);
