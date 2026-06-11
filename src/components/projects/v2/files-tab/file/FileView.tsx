@@ -58,7 +58,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ComponentErrorBoundary } from "@/components/ui/ComponentErrorBoundary";
 import { useToast } from "@/components/ui-custom/Toast";
 import { getProjectFileSignedUrl } from "@/app/actions/files/content";
-import { getProjectFileContent } from "@/app/actions/files";
+import { getProjectFileContent } from "@/app/actions/files/content";
 import { listFileVersions } from "@/app/actions/files/versions";
 import type { ProjectNode } from "@/lib/db/schema";
 import { computeContentHash } from "@/lib/files/content-hash";
@@ -213,7 +213,7 @@ export function FileView({
       void (async () => {
         setIsDropProcessing(true);
         try {
-          // Compute hash of the dropped file
+          if (!droppedFile) return;
           const hashResult = await computeContentHash(droppedFile).catch(
             () => null,
           );
