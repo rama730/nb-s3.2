@@ -16,12 +16,14 @@ export function useSwipeAction() {
     const isSwipingRef = useRef(false);
 
     const onTouchStart = useCallback((e: React.TouchEvent) => {
+        if (!e.touches[0]) return;
         startXRef.current = e.touches[0].clientX;
         startYRef.current = e.touches[0].clientY;
         isSwipingRef.current = false;
     }, []);
 
     const onTouchMove = useCallback((e: React.TouchEvent) => {
+        if (!e.touches[0]) return;
         const deltaX = startXRef.current - e.touches[0].clientX;
         const deltaY = Math.abs(startYRef.current - e.touches[0].clientY);
         if (!isSwipingRef.current && deltaY > Math.abs(deltaX)) return;
