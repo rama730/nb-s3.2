@@ -131,16 +131,19 @@ export default function Phase3TeamRoles({ wizardContext }: Phase3TeamRolesProps)
                                         <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">
                                             Role Title
                                         </label>
-                                        <select
+                                        <input
+                                            type="text"
+                                            list={`role-options-${index}`}
                                             value={role.role}
                                             onChange={(e) => updateRole(index, { role: e.target.value })}
+                                            placeholder="Select or type a role"
                                             className="w-full px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100"
-                                        >
-                                            <option value="">Select a role</option>
+                                        />
+                                        <datalist id={`role-options-${index}`}>
                                             {ROLE_OPTIONS.map((r) => (
-                                                <option key={r} value={r}>{r}</option>
+                                                <option key={r} value={r} />
                                             ))}
-                                        </select>
+                                        </datalist>
                                     </div>
 
                                     <div>
