@@ -142,13 +142,13 @@ function decodeJwt(token: string): DecodedJwt {
     }
 
     const [rawHeader, rawPayload, rawSignature] = parts
-    const header = JSON.parse(decodeBase64UrlToString(rawHeader)) as JwtHeader
-    const payload = JSON.parse(decodeBase64UrlToString(rawPayload)) as JwtPayload
+    const header = JSON.parse(decodeBase64UrlToString(rawHeader!)) as JwtHeader
+    const payload = JSON.parse(decodeBase64UrlToString(rawPayload!)) as JwtPayload
 
     return {
         header,
         payload,
-        signature: decodeBase64UrlToBytes(rawSignature),
+        signature: decodeBase64UrlToBytes(rawSignature!),
         signingInput: encodeUtf8(`${rawHeader}.${rawPayload}`),
     }
 }
@@ -173,7 +173,7 @@ function assertTemporalClaims(payload: JwtPayload, nowSeconds = Date.now() / 100
     }
 }
 
-function getJwtVerifyAlgorithm(alg: string): RsaHashedImportParams | HmacImportParams {
+function getJwtVerifyAlgorithm(alg: string): any {
     switch (alg) {
         case 'RS256':
             return { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }
@@ -187,12 +187,18 @@ function getJwtVerifyAlgorithm(alg: string): RsaHashedImportParams | HmacImportP
             return { name: 'HMAC', hash: 'SHA-384' }
         case 'HS512':
             return { name: 'HMAC', hash: 'SHA-512' }
+        case 'ES256':
+            return { name: 'ECDSA', hash: { name: 'SHA-256' } }
+        case 'ES384':
+            return { name: 'ECDSA', hash: { name: 'SHA-384' } }
+        case 'ES512':
+            return { name: 'ECDSA', hash: { name: 'SHA-512' } }
         default:
             throw new Error(`Unsupported JWT algorithm: ${alg}`)
     }
 }
 
-function getJwkImportAlgorithm(alg: string): RsaHashedImportParams {
+function getJwkImportAlgorithm(alg: string): any {
     switch (alg) {
         case 'RS256':
             return { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }
@@ -200,6 +206,12 @@ function getJwkImportAlgorithm(alg: string): RsaHashedImportParams {
             return { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-384' }
         case 'RS512':
             return { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-512' }
+        case 'ES256':
+            return { name: 'ECDSA', namedCurve: 'P-256' }
+        case 'ES384':
+            return { name: 'ECDSA', namedCurve: 'P-384' }
+        case 'ES512':
+            return { name: 'ECDSA', namedCurve: 'P-521' }
         default:
             throw new Error(`Unsupported JWK algorithm: ${alg}`)
     }
@@ -421,92 +433,7 @@ function authError(message: string, status: number): AuthSnapshotResolution['err
     }
 }
 
-function buildAuthSnapshotFromVerifiedUser(user: User, session: Session): AuthSnapshot {
-    const payload = tryDecodeJwtPayload(session.access_token)
-    const appMetadata = asRecord(user.app_metadata)
-    const userMetadata = asRecord(user.user_metadata)
-    const username = typeof userMetadata.username === 'string' ? userMetadata.username.trim() : ''
-    const onboarded = userMetadata.onboarded === true
-    const expiresAtFromSession =
-        typeof session.expires_at === 'number' && Number.isFinite(session.expires_at)
-            ? session.expires_at
-            : null
 
-    return {
-        userId: user.id,
-        sessionId: typeof payload?.session_id === 'string' ? payload.session_id : null,
-        onboardingComplete: onboarded || username.length > 0,
-        emailVerified: isEmailVerified(user as unknown as Record<string, unknown>),
-        issuedAt: parseNumericClaim(payload?.iat),
-        expiresAt: parseNumericClaim(payload?.exp) ?? expiresAtFromSession,
-        roles: readRoles(payload ?? {}, appMetadata),
-        email: typeof user.email === 'string' ? user.email : null,
-        appMetadata,
-        userMetadata,
-    }
-}
-
-async function fetchVerifiedUserFromAuthServer(
-    supabase: SupabaseClient,
-    accessToken: string,
-) {
-    const awareClient = supabase as AuthSnapshotAwareClient
-    if (awareClient.__getUserFromAuthServer) {
-        return awareClient.__getUserFromAuthServer(accessToken)
-    }
-    return supabase.auth.getUser(accessToken)
-}
-
-async function withAuthSnapshotTimeout<T>(
-    promise: Promise<T>,
-    label: string,
-): Promise<T> {
-    let timeoutId: ReturnType<typeof setTimeout> | null = null
-
-    try {
-        return await Promise.race([
-            promise,
-            new Promise<T>((_, reject) => {
-                timeoutId = setTimeout(() => {
-                    reject(new Error(`${label} timed out`))
-                }, AUTH_SNAPSHOT_NETWORK_TIMEOUT_MS)
-            }),
-        ])
-    } finally {
-        if (timeoutId) clearTimeout(timeoutId)
-    }
-}
-
-async function resolveAuthSnapshotFromRemoteUser(
-    supabase: SupabaseClient,
-    session: Session,
-): Promise<AuthSnapshotResolution> {
-    const userResponse = await withAuthSnapshotTimeout(
-        fetchVerifiedUserFromAuthServer(supabase, session.access_token),
-        'Auth snapshot remote lookup',
-    )
-    const user = userResponse.data.user ?? null
-
-    if (!user || userResponse.error) {
-        return {
-            session: null,
-            snapshot: null,
-            user: null,
-            error: authError(
-                userResponse.error?.message || 'Unable to verify auth session',
-                typeof userResponse.error?.status === 'number' ? userResponse.error.status : 401,
-            ),
-        }
-    }
-
-    const snapshot = buildAuthSnapshotFromVerifiedUser(user, session)
-    return {
-        session,
-        snapshot,
-        user,
-        error: null,
-    }
-}
 
 export async function resolveAuthSnapshot(
     supabase: SupabaseClient
@@ -555,20 +482,12 @@ export async function resolveAuthSnapshot(
             error: null,
         }
     } catch (error) {
-        try {
-            return await resolveAuthSnapshotFromRemoteUser(supabase, session)
-        } catch (remoteError) {
-            const message = remoteError instanceof Error
-                ? remoteError.message
-                : error instanceof Error
-                    ? error.message
-                    : 'Unable to verify auth session'
-            return {
-                session: null,
-                snapshot: null,
-                user: null,
-                error: authError(message, 401),
-            }
+        const message = error instanceof Error ? error.message : 'Unable to verify auth session'
+        return {
+            session: null,
+            snapshot: null,
+            user: null,
+            error: authError(message, 401),
         }
     }
 }
