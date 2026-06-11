@@ -24,8 +24,10 @@ function isHttpsUrl(value: string) {
 function readJwtAlgorithm(token: string): string | null {
     const parts = token.split('.')
     if (parts.length < 2) return null
+    const headerBase64 = parts[0];
+    if (!headerBase64) return null;
     try {
-        const header = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8')) as { alg?: unknown }
+        const header = JSON.parse(Buffer.from(headerBase64, 'base64url').toString('utf8')) as { alg?: unknown }
         return typeof header.alg === 'string' ? header.alg : null
     } catch {
         return null
