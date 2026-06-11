@@ -39,6 +39,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import type { ProjectNode } from "@/lib/db/schema";
 import {
@@ -51,6 +52,14 @@ import {
 } from "@/components/projects/v2/files-tab/file/MetadataStrip";
 import { FileActionsBar } from "@/components/projects/v2/files-tab/file/FileActionsBar";
 import { isEmptyMedia } from "@/components/projects/v2/files-tab/file/previewPicker";
+
+const testQueryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: false,
+    },
+  },
+});
 
 // ─── Fixture builder ─────────────────────────────────────────────────
 
@@ -97,33 +106,39 @@ function renderMetadataStrip(options: RenderMetadataOptions): string {
   const role: Role = options.role ?? "Role_Owner";
   const canEdit = options.canEdit ?? role !== "Role_Viewer";
   return renderToStaticMarkup(
-    React.createElement(FilesTabRoleProvider, {
-      role,
-      canEdit,
-      children: React.createElement(MetadataStrip, {
-        node: options.node,
+    React.createElement(QueryClientProvider, {
+      client: testQueryClient,
+      children: React.createElement(FilesTabRoleProvider, {
+        role,
         canEdit,
-        signedUrl: options.signedUrl ?? null,
-        onRaw: () => {},
-        onEdit: () => {},
-        onDownload: () => {},
+        children: React.createElement(MetadataStrip, {
+          node: options.node,
+          canEdit,
+          signedUrl: options.signedUrl ?? null,
+          onRaw: () => {},
+          onEdit: () => {},
+          onDownload: () => {},
+        }),
       }),
-    }),
+    })
   );
 }
 
 function renderFileActionsBar(role: Role): string {
   const canEdit = role !== "Role_Viewer";
   return renderToStaticMarkup(
-    React.createElement(FilesTabRoleProvider, {
-      role,
-      canEdit,
-      children: React.createElement(FileActionsBar, {
-        onRaw: () => {},
-        onEdit: () => {},
-        onDownload: () => {},
+    React.createElement(QueryClientProvider, {
+      client: testQueryClient,
+      children: React.createElement(FilesTabRoleProvider, {
+        role,
+        canEdit,
+        children: React.createElement(FileActionsBar, {
+          onRaw: () => {},
+          onEdit: () => {},
+          onDownload: () => {},
+        }),
       }),
-    }),
+    })
   );
 }
 
@@ -531,17 +546,20 @@ describe("FileView — 0-byte media placeholder (Req 5.6) — source-level contr
 function renderFileActionsBarWithNode(role: Role): string {
   const canEdit = role !== "Role_Viewer";
   return renderToStaticMarkup(
-    React.createElement(FilesTabRoleProvider, {
-      role,
-      canEdit,
-      children: React.createElement(FileActionsBar, {
-        onRaw: () => {},
-        onEdit: () => {},
-        onDownload: () => {},
-        projectId: "proj-test-123",
-        nodeId: "node-test-456",
+    React.createElement(QueryClientProvider, {
+      client: testQueryClient,
+      children: React.createElement(FilesTabRoleProvider, {
+        role,
+        canEdit,
+        children: React.createElement(FileActionsBar, {
+          onRaw: () => {},
+          onEdit: () => {},
+          onDownload: () => {},
+          projectId: "proj-test-123",
+          nodeId: "node-test-456",
+        }),
       }),
-    }),
+    })
   );
 }
 
@@ -615,11 +633,11 @@ describe("FileActionsBar — Replace… source-level contracts (Req 11.4–11.6,
     "utf8",
   );
 
-  it("calls useFileVersions.saveAsNewVersion on file selection (Req 11.4)", () => {
+  it("calls saveFileAsNewVersion on file selection (Req 11.4)", () => {
     assert.match(
       FILE_ACTIONS_BAR_SRC,
-      /saveAsNewVersion\(file\)/,
-      "Must call saveAsNewVersion with the selected file (Req 11.4)",
+      /saveFileAsNewVersion\(\{\s*projectId,\s*nodeId,\s*file,/,
+      "Must call saveFileAsNewVersion with the selected file (Req 11.4)",
     );
   });
 
