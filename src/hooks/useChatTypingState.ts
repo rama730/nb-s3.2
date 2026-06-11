@@ -33,9 +33,9 @@ export function useChatTypingState({
         [activeConversationId, activeTypingUsers, listTypingUsersByConversation],
     );
 
-    return {
+    return useMemo(() => ({
         activeTypingUsers,
         sendTyping,
         typingUsersByConversation,
-    };
+    }), [activeTypingUsers, sendTyping, typingUsersByConversation]);
 }
