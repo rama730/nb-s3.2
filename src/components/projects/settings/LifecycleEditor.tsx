@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useCallback, useId } from "react";
+import React, { useState, useCallback, useId, useMemo } from "react";
 import {
     DndContext,
     closestCenter,
@@ -35,6 +35,7 @@ interface SortableStageItemProps {
     name: string;
     isCurrent: boolean;
     isLast: boolean;
+    error?: string;
     onRename: (newName: string) => void;
     onDelete: () => void;
 }
@@ -44,6 +45,7 @@ function SortableStageItem({
     name,
     isCurrent,
     isLast,
+    error,
     onRename,
     onDelete,
 }: SortableStageItemProps) {
@@ -62,56 +64,66 @@ function SortableStageItem({
     };
 
     return (
-        <div
-            ref={setNodeRef}
-            style={style}
-            className={cn(
-                "flex items-center gap-3 p-3 rounded-lg border bg-white dark:bg-zinc-900 transition-all",
-                isDragging
-                    ? "shadow-lg border-indigo-400 z-10"
-                    : "border-zinc-200 dark:border-zinc-700",
-                isCurrent && "ring-2 ring-indigo-500 ring-offset-2 dark:ring-offset-zinc-900"
-            )}
-        >
-            {/* Drag Handle */}
-            <button
-                {...attributes}
-                {...listeners}
-                className="cursor-grab touch-none text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300"
+        <div className="flex flex-col gap-1 w-full">
+            <div
+                ref={setNodeRef}
+                style={style}
+                className={cn(
+                    "flex items-center gap-3 p-3 rounded-lg border bg-white dark:bg-zinc-900 transition-all",
+                    isDragging
+                        ? "shadow-lg border-indigo-400 z-10"
+                        : error
+                            ? "border-red-500 dark:border-red-900 ring-1 ring-red-500/20"
+                            : "border-zinc-200 dark:border-zinc-700",
+                    isCurrent && "ring-2 ring-indigo-500 ring-offset-2 dark:ring-offset-zinc-900"
+                )}
             >
-                <GripVertical className="w-5 h-5" />
-            </button>
+                {/* Drag Handle */}
+                <button
+                    {...attributes}
+                    {...listeners}
+                    className="cursor-grab touch-none text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300"
+                >
+                    <GripVertical className="w-5 h-5" />
+                </button>
 
-            {/* Stage Name Input */}
-            <input
-                type="text"
-                value={name}
-                onChange={(e) => onRename(e.target.value)}
-                className="flex-1 bg-transparent border-none outline-none text-zinc-900 dark:text-zinc-100 font-medium text-sm focus:ring-0"
-                placeholder="Stage name"
-            />
+                {/* Stage Name Input */}
+                <input
+                    type="text"
+                    value={name}
+                    onChange={(e) => onRename(e.target.value)}
+                    maxLength={35}
+                    className="flex-1 bg-transparent border-none outline-none text-zinc-900 dark:text-zinc-100 font-medium text-sm focus:ring-0"
+                    placeholder="Stage name"
+                />
 
-            {/* Current Badge */}
-            {isCurrent && (
-                <span className="px-2 py-0.5 text-xs font-semibold bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 rounded-full">
-                    Current
+                {/* Current Badge */}
+                {isCurrent && (
+                    <span className="px-2 py-0.5 text-xs font-semibold bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 rounded-full">
+                        Current
+                    </span>
+                )}
+
+                {/* Delete Button */}
+                <button
+                    onClick={onDelete}
+                    disabled={isLast}
+                    className={cn(
+                        "p-1.5 rounded-md transition-colors",
+                        isLast
+                            ? "text-zinc-300 dark:text-zinc-600 cursor-not-allowed"
+                            : "text-zinc-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20"
+                    )}
+                    title={isLast ? "Cannot delete the last stage" : "Delete stage"}
+                >
+                    <Trash2 className="w-4 h-4" />
+                </button>
+            </div>
+            {error && (
+                <span className="text-[10px] text-red-500 dark:text-red-400 font-medium px-2 animate-in slide-in-from-top-1 duration-200">
+                    {error}
                 </span>
             )}
-
-            {/* Delete Button */}
-            <button
-                onClick={onDelete}
-                disabled={isLast}
-                className={cn(
-                    "p-1.5 rounded-md transition-colors",
-                    isLast
-                        ? "text-zinc-300 dark:text-zinc-600 cursor-not-allowed"
-                        : "text-zinc-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20"
-                )}
-                title={isLast ? "Cannot delete the last stage" : "Delete stage"}
-            >
-                <Trash2 className="w-4 h-4" />
-            </button>
         </div>
     );
 }
@@ -139,6 +151,42 @@ export default function LifecycleEditor({
         })
     );
 
+    // Dynamic validation
+    const validatedStages = useMemo(() => {
+        const stageNameRegex = /^[\p{L}\p{N}\s&]+$/u;
+        const seen = new Set<string>();
+
+        return stages.map((stage) => {
+            const name = stage.name.trim().replace(/\s+/g, " ");
+            let error = "";
+
+            if (!name) {
+                error = "Stage name cannot be empty";
+            } else if (name.length < 2) {
+                error = "Must be at least 2 characters";
+            } else if (name.length > 35) {
+                error = "Must be 35 characters or less";
+            } else if (!stageNameRegex.test(name)) {
+                error = "Only letters, numbers, spaces, and & are allowed";
+            } else {
+                const lower = name.toLowerCase();
+                if (seen.has(lower)) {
+                    error = "Duplicate stage name is not allowed";
+                } else {
+                    seen.add(lower);
+                }
+            }
+
+            return {
+                ...stage,
+                error,
+                isValid: !error,
+            };
+        });
+    }, [stages]);
+
+    const isValid = validatedStages.every((s) => s.isValid);
+
     const handleDragEnd = useCallback((event: DragEndEvent) => {
         const { active, over } = event;
         if (over && active.id !== over.id) {
@@ -151,8 +199,12 @@ export default function LifecycleEditor({
     }, []);
 
     const handleRename = useCallback((id: string, newName: string) => {
+        const cleaned = newName.replace(/[^\p{L}\p{N}\s&]/gu, "");
+        if (cleaned !== newName) {
+            toast.error("Only letters, numbers, spaces, and & are allowed", { id: "stage-validation-error" });
+        }
         setStages((prev) =>
-            prev.map((s) => (s.id === id ? { ...s, name: newName } : s))
+            prev.map((s) => (s.id === id ? { ...s, name: cleaned } : s))
         );
     }, []);
 
@@ -174,11 +226,37 @@ export default function LifecycleEditor({
     }, []);
 
     const handleSave = useCallback(async () => {
-        const stageNames = stages.map((s) => s.name.trim()).filter(Boolean);
+        const stageNames = stages
+            .map((s) => s.name.trim().replace(/\s+/g, " "))
+            .filter(Boolean);
+
         if (stageNames.length === 0) {
             toast.error("You must have at least one stage");
             return;
         }
+
+        const stageNameRegex = /^[\p{L}\p{N}\s&]+$/u;
+        for (const name of stageNames) {
+            if (name.length < 2) {
+                toast.error(`Stage name "${name}" is too short (min 2 characters)`);
+                return;
+            }
+            if (name.length > 35) {
+                toast.error(`Stage name "${name}" is too long (max 35 characters)`);
+                return;
+            }
+            if (!stageNameRegex.test(name)) {
+                toast.error(`Stage name "${name}" contains invalid characters`);
+                return;
+            }
+        }
+
+        const uniqueNames = new Set(stageNames.map((s) => s.toLowerCase()));
+        if (uniqueNames.size !== stageNames.length) {
+            toast.error("Duplicate stage names are not allowed");
+            return;
+        }
+
         // Pass the current stage identity so backend can rebalance
         await onSave(stageNames, currentStageName);
     }, [stages, currentStageName, onSave]);
@@ -199,13 +277,14 @@ export default function LifecycleEditor({
                     strategy={verticalListSortingStrategy}
                 >
                     <div className="space-y-2">
-                        {stages.map((stage) => (
+                        {validatedStages.map((stage) => (
                             <SortableStageItem
                                 key={stage.id}
                                 id={stage.id}
                                 name={stage.name}
                                 isCurrent={stage.id === currentItemId}
                                 isLast={stages.length === 1}
+                                error={stage.error}
                                 onRename={(newName) => handleRename(stage.id, newName)}
                                 onDelete={() => handleDelete(stage.id)}
                             />
@@ -227,8 +306,8 @@ export default function LifecycleEditor({
             <div className="pt-4">
                 <Button
                     onClick={handleSave}
-                    disabled={isSaving}
-                    className="bg-indigo-600 hover:bg-indigo-700 text-white"
+                    disabled={isSaving || !isValid}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                     {isSaving ? "Saving..." : "Save Lifecycle"}
                 </Button>
