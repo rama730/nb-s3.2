@@ -17,6 +17,12 @@ import {
     getInboxApplicationsAction as getInboxApplicationsActionImpl,
     getApplicationRequestHistory as getApplicationRequestHistoryImpl,
 } from './queries';
+import {
+    proposeApplicationRoleChangeAction as proposeApplicationRoleChangeActionImpl,
+    acceptProposedRoleAction as acceptProposedRoleActionImpl,
+    declineProposedRoleAction as declineProposedRoleActionImpl,
+    getProjectInviteOptionsAction as getProjectInviteOptionsActionImpl,
+} from './internal';
 import type { ApplicationActionOptions, ApplicationCursorPaginationInput } from './types';
 
 export type {
@@ -24,6 +30,7 @@ export type {
     ApplicationActionOptions,
     ApplicationActionResult,
     ApplicationCursorPaginationInput,
+    ApplicationStatusResult,
 } from './types';
 
 export async function getApplicationStatusAction(projectId: string) {
@@ -97,4 +104,31 @@ export async function getInboxApplicationsAction(limit: number = 20, offset: num
 
 export async function getApplicationRequestHistory(limit: number = 80) {
     return getApplicationRequestHistoryImpl(limit);
+}
+
+export async function proposeApplicationRoleChangeAction(
+    applicationId: string,
+    newRoleId: string,
+    message?: string,
+    options?: ApplicationActionOptions
+) {
+    return proposeApplicationRoleChangeActionImpl(applicationId, newRoleId, message, options);
+}
+
+export async function acceptProposedRoleAction(
+    applicationId: string,
+    options?: ApplicationActionOptions
+) {
+    return acceptProposedRoleActionImpl(applicationId, options);
+}
+
+export async function declineProposedRoleAction(
+    applicationId: string,
+    options?: ApplicationActionOptions
+) {
+    return declineProposedRoleActionImpl(applicationId, options);
+}
+
+export async function getProjectInviteOptionsAction(projectId: string) {
+    return getProjectInviteOptionsActionImpl(projectId);
 }
