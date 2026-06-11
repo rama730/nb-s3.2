@@ -27,6 +27,7 @@ self.onmessage = async (e: MessageEvent) => {
             }
 
             const node = uploadNodes[cursor++];
+            if (!node) continue;
             active++;
             const uploadUrl = uploadUrls[node.s3Key];
             if (!uploadUrl) {
