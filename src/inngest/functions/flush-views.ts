@@ -9,7 +9,7 @@ export const flushProjectViews = inngest.createFunction(
     { cron: "* * * * *" }, // Run every minute for highly consistent eventual view counts
     async ({ step }) => {
         if (!redis) return { skipped: true, reason: "No Redis configured" };
-        const writeThroughEnabled = process.env.PROJECT_VIEWS_WRITE_THROUGH !== "0";
+        const writeThroughEnabled = process.env.PROJECT_VIEWS_WRITE_THROUGH === "1";
 
         const bufferedViews = await step.run("get-redis-views", async () => {
             // Atomic RENAME to prevent race condition:
@@ -85,7 +85,7 @@ export const flushProjectViews = inngest.createFunction(
             if (failed.length > 0) {
                 console.error("flush-views: project view updates failed", {
                     failedCount: failed.length,
-                    failedProjectIds: failed.map(({ projectId }) => projectId),
+                    failedProjectIds: failed.map((f) => f?.projectId).filter(Boolean),
                     reasons: results
                         .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
                         .map((r) => r.reason),
@@ -93,9 +93,11 @@ export const flushProjectViews = inngest.createFunction(
 
                 // Requeue only the failed increments so they can be retried in the next flush.
                 const requeueResults = await Promise.allSettled(
-                    failed.map(({ projectId, increments }) =>
-                        redis!.hincrby("project:views", projectId, increments)
-                    )
+                    failed
+                        .filter((f): f is NonNullable<typeof f> => !!f)
+                        .map(({ projectId, increments }) =>
+                            redis!.hincrby("project:views", projectId, increments)
+                        )
                 );
 
                 const requeueFailures = requeueResults
