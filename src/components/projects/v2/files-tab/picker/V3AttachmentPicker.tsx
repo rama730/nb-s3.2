@@ -18,13 +18,15 @@ import React, {
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import { X, Search, FileText, Clock } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 
 import type { ProjectNode } from "@/lib/db/schema";
 import { logger } from "@/lib/logger";
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
-import { getProjectTreeFlat } from "@/app/actions/files/nodes";
+import { getProjectNodes, getProjectTreeFlat } from "@/app/actions/files/nodes";
+import { FILES_RUNTIME_BUDGETS } from "@/lib/files/runtime-budgets";
 
 import {
   buildNodePathMap,
@@ -67,6 +69,11 @@ export function V3AttachmentPicker({
     () => initialSelection ?? [],
   );
 
+  const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    setPortalTarget(typeof document !== "undefined" ? document.body : null);
+  }, []);
+
   // Sync initial selection when it changes externally
   useEffect(() => {
     if (initialSelection) {
@@ -91,7 +98,7 @@ export function V3AttachmentPicker({
   }, [searchInput]);
 
   // ── Store selectors ─────────────────────────────────────────────────
-  const { nodesById, recents, childrenByParentId, expandedFolderIds } =
+  const { nodesById, recents, childrenByParentId, expandedFolderIds, loadedChildren } =
     useFilesWorkspaceStore(
       useShallow((s) => {
         const ws = s.byProjectId[projectId];
@@ -100,6 +107,7 @@ export function V3AttachmentPicker({
           recents: ws?.recents ?? EMPTY_RECENTS,
           childrenByParentId: ws?.childrenByParentId ?? EMPTY_CHILDREN,
           expandedFolderIds: ws?.expandedFolderIds ?? EMPTY_EXPANDED,
+          loadedChildren: ws?.loadedChildren ?? EMPTY_EXPANDED,
         };
       }),
     );
@@ -119,9 +127,10 @@ export function V3AttachmentPicker({
     // Ensure workspace entry exists
     ensureProjectWorkspace(projectId);
 
-    // If the store already has nodes for this project, skip fetching
+    // If the root directory children are already loaded, skip booting
     const ws = useFilesWorkspaceStore.getState().byProjectId[projectId];
-    if (ws && Object.keys(ws.nodesById).length > 0) return;
+    const isRootLoaded = ws?.loadedChildren?.["root"];
+    if (isRootLoaded) return;
 
     // Store is empty — fetch the full tree so the picker has data
     let cancelled = false;
@@ -129,7 +138,19 @@ export function V3AttachmentPicker({
 
     void (async () => {
       try {
-        const { nodes, isComplete } = await getProjectTreeFlat(projectId);
+        const { nodes, isComplete } = await getProjectTreeFlat(projectId, {
+          maxNodes: FILES_RUNTIME_BUDGETS.maxFlatTreeBootNodes,
+        });
+        if (!isComplete) {
+          const rootResult = await getProjectNodes(projectId, null, undefined, 100);
+          const rootNodes = Array.isArray(rootResult) ? rootResult : rootResult.nodes;
+          if (!cancelled && rootNodes.length > 0) {
+            upsertNodes(projectId, rootNodes);
+            setChildren(projectId, null, Array.from(new Set(rootNodes.map((node) => node.id))));
+            markChildrenLoaded(projectId, null);
+          }
+          return;
+        }
         if (cancelled || nodes.length === 0) return;
 
         upsertNodes(projectId, nodes);
@@ -272,16 +293,39 @@ export function V3AttachmentPicker({
     [],
   );
 
+  const loadChildren = useCallback(
+    async (parentId: string) => {
+      try {
+        const res = await getProjectNodes(projectId, parentId);
+        const nodes = Array.isArray(res) ? res : res.nodes;
+        upsertNodes(projectId, nodes);
+        setChildren(
+          projectId,
+          parentId,
+          nodes.map((n) => n.id),
+        );
+        markChildrenLoaded(projectId, parentId);
+      } catch (e) {
+        console.error("Failed to load picker file children", e);
+      }
+    },
+    [projectId, upsertNodes, setChildren, markChildrenLoaded],
+  );
+
   // ── Tree node click (navigate-only: expand folders, select files) ──
   const handleTreeNodeClick = useCallback(
-    (node: ProjectNode) => {
+    async (node: ProjectNode) => {
       if (node.type === "folder") {
-        toggleExpanded(projectId, node.id);
+        const next = !expandedFolderIds[node.id];
+        toggleExpanded(projectId, node.id, next);
+        if (next && !loadedChildren[node.id]) {
+          await loadChildren(node.id);
+        }
       } else {
         toggleSelection(node);
       }
     },
-    [projectId, toggleExpanded, toggleSelection],
+    [projectId, toggleExpanded, toggleSelection, expandedFolderIds, loadedChildren, loadChildren],
   );
 
   // ── Keyboard: Escape closes ────────────────────────────────────────
@@ -298,11 +342,12 @@ export function V3AttachmentPicker({
   }, [isOpen, onClose]);
 
   // ── Render gate ────────────────────────────────────────────────────
-  if (!isOpen) return null;
+  if (!isOpen || !portalTarget) return null;
 
-  return (
+  return createPortal(
     <div
-      className="fixed inset-0 z-50 bg-black/30 flex items-center justify-center p-4"
+      data-composer-portal="true"
+      className="fixed inset-0 z-[100] bg-black/30 flex items-center justify-center p-4"
       role="dialog"
       aria-modal="true"
       aria-label="Attachment picker"
@@ -495,7 +540,8 @@ export function V3AttachmentPicker({
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    portalTarget
   );
 }
 
