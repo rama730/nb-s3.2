@@ -11,7 +11,7 @@
 import React, { useCallback, useState } from "react";
 
 import type { ProjectNode } from "@/lib/db/schema";
-import { linkNodeToTask } from "@/app/actions/files";
+import { linkNodeToTask } from "@/app/actions/files/links";
 import { useToast } from "@/components/ui-custom/Toast";
 
 import { V3AttachmentPicker } from "./V3AttachmentPicker";
