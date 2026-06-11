@@ -110,9 +110,10 @@ async function main() {
     `[backfill-file-hashes] done. processed=${processed} succeeded=${succeeded} failed=${failed}`,
   );
   // Sanity probe — any stragglers left?
-  const [{ remaining }] = await db.execute<{ remaining: number }>(
+  const result = await db.execute<{ remaining: number }>(
     sql`SELECT COUNT(*)::int AS remaining FROM file_versions WHERE content_hash IS NULL AND s3_key <> ''`,
   );
+  const remaining = result[0]?.remaining ?? 0;
   console.log(`[backfill-file-hashes] remaining NULL hashes: ${remaining}`);
 
   process.exit(failed > 0 && succeeded === 0 ? 1 : 0);
