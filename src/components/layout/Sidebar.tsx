@@ -30,7 +30,8 @@ const secondaryItems = [
 
 export function Sidebar() {
     const pathname = usePathname()
-    const { sidebarCollapsed, setSidebarCollapsed } = useUIStore()
+    const sidebarCollapsed = useUIStore((state) => state.sidebarCollapsed)
+    const setSidebarCollapsed = useUIStore((state) => state.setSidebarCollapsed)
 
     return (
         <aside
