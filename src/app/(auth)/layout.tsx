@@ -1,10 +1,8 @@
-import { AuthRouteProviders } from '@/components/providers/AuthRouteProviders';
-
-export default function AuthLayout({
+export default async function AuthLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  return <AuthRouteProviders>{children}</AuthRouteProviders>;
+  return <>{children}</>;
 }
 
