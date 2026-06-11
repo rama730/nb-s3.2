@@ -27,7 +27,36 @@ export const useProfile = (usernameOrId?: string, initialData?: Profile | null) 
             if (!targetKey) return null;
 
             // Try fetching by ID first
-            let query = supabase.from('profiles').select('*');
+            let query = supabase
+                .from('profiles')
+                .select(`
+                    id,
+                    username,
+                    full_name,
+                    avatar_url,
+                    banner_url,
+                    bio,
+                    headline,
+                    location,
+                    website,
+                    skills,
+                    interests,
+                    experience,
+                    education,
+                    open_to,
+                    availability_status,
+                    social_links,
+                    visibility,
+                    message_privacy,
+                    connection_privacy,
+                    created_at,
+                    updated_at,
+                    connections_count,
+                    projects_count,
+                    followers_count,
+                    last_active_at
+                `)
+                .is('deleted_at', null);
             if (targetKey.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
                 query = query.eq('id', targetKey);
             } else {
@@ -93,9 +122,9 @@ export const useProfile = (usernameOrId?: string, initialData?: Profile | null) 
         };
     }, [activeProfile?.id, queryClient, targetKey, isMe, supabase]);
 
-    return {
+    return useMemo(() => ({
         profile: activeProfile || null,
         loading: activeLoading,
         error: shouldUseContext ? null : error
-    };
+    }), [activeProfile, activeLoading, shouldUseContext, error]);
 };
