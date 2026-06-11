@@ -19,6 +19,10 @@ import { subscribePresenceRoom } from '@/lib/realtime/presence-client';
 
 const FLUSH_INTERVAL_MS = 600;
 
+function isPresenceEligibleConversationId(conversationId: string | null): conversationId is string {
+    return Boolean(conversationId && !conversationId.startsWith('draft:'));
+}
+
 export function useMarkMessagesRead(
     conversationId: string | null,
     viewerId: string | null,
@@ -34,7 +38,7 @@ export function useMarkMessagesRead(
     // conversation — the presence client dedupes identical room sockets, so
     // no extra WS connection is opened.
     useEffect(() => {
-        if (!conversationId || typeof window === 'undefined') return;
+        if (!isPresenceEligibleConversationId(conversationId) || typeof window === 'undefined') return;
 
         const subscription = subscribePresenceRoom({
             roomType: 'conversation',
@@ -76,7 +80,7 @@ export function useMarkMessagesRead(
 
     // Start/stop the flush timer based on the active conversation
     useEffect(() => {
-        if (!conversationId || !viewerId) return;
+        if (!isPresenceEligibleConversationId(conversationId) || !viewerId) return;
 
         bufferRef.current.clear();
         flushedRef.current.clear();
