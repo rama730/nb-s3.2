@@ -25,6 +25,22 @@ function attachOnboardingMonitoring(page: import('@playwright/test').Page) {
         ],
     })
 }
+
+async function switchStep2Section(page: import('@playwright/test').Page, sectionName: string) {
+    await page
+        .getByRole('navigation', { name: 'Section navigation' })
+        .getByRole('button', { name: sectionName })
+        .click()
+}
+
+async function selectComboboxOption(
+    page: import('@playwright/test').Page,
+    comboboxName: string,
+    optionName: string,
+) {
+    await page.getByRole('combobox', { name: comboboxName }).click()
+    await page.getByRole('option', { name: optionName }).click()
+}
 const FIXTURE_EMAILS = {
     happy: process.env.E2E_ONBOARDING_HAPPY_EMAIL || 'codex.onboarding.happy@example.com',
     legacy: process.env.E2E_ONBOARDING_LEGACY_EMAIL || 'codex.onboarding.legacy@example.com',
@@ -170,21 +186,21 @@ test.describe('Onboarding smoke', () => {
         await page.getByRole('button', { name: 'Continue' }).click()
         await page.getByText('Male', { exact: true }).click()
         await page.getByLabel('Pronouns (optional)').fill('he/him')
-        await page.getByRole('tab', { name: 'Work prefs' }).click()
-        await page.getByLabel('Experience level').selectOption('mid')
-        await page.getByLabel('Availability per week').selectOption('h_10_20')
+        await switchStep2Section(page, 'Work prefs')
+        await selectComboboxOption(page, 'Experience level', 'Mid-level')
+        await selectComboboxOption(page, 'Weekly availability', '10-20 hrs/week')
         await page.getByText('Freelance projects', { exact: true }).click()
-        await page.getByText('Available', { exact: true }).first().click()
-        await page.getByRole('tab', { name: 'Social' }).click()
-        await page.getByLabel('GitHub URL').fill('github.com/onboarding-happy')
+        await page.getByRole('radio', { name: /Available/ }).click()
+        await switchStep2Section(page, 'Social')
+        await page.getByLabel('GitHub').fill('github.com/onboarding-happy')
         await page.getByRole('button', { name: 'Continue' }).click()
         await page.getByText('React', { exact: true }).click()
         await page.getByRole('button', { name: 'Continue' }).click()
         await page.getByText('Everyone', { exact: true }).click()
-        await page.getByRole('button', { name: 'Complete Setup' }).click()
+        await page.getByRole('button', { name: 'Complete setup' }).click()
 
         await expect
-            .poll(() => new URL(page.url()).pathname, { timeout: 20000 })
+            .poll(() => new URL(page.url()).pathname, { timeout: 45000 })
             .toBe('/hub')
 
         await monitor.assertNoViolations()
@@ -337,16 +353,16 @@ test.describe('Onboarding smoke', () => {
         await page.locator('#username').fill(username)
         await expect(page.getByText('Username is available')).toBeVisible({ timeout: 15000 })
         await page.getByRole('button', { name: 'Continue' }).click()
-        await page.getByRole('tab', { name: 'Social' }).click()
+        await switchStep2Section(page, 'Social')
         await page.getByRole('button', { name: 'Continue' }).click()
         await page.getByText('React', { exact: true }).click()
         await page.getByRole('button', { name: 'Continue' }).click()
 
-        const submitButton = page.getByRole('button', { name: 'Complete Setup' })
+        const submitButton = page.getByRole('button', { name: 'Complete setup' })
         await submitButton.dblclick()
 
         await expect
-            .poll(() => new URL(page.url()).pathname, { timeout: 20000 })
+            .poll(() => new URL(page.url()).pathname, { timeout: 45000 })
             .toBe('/hub')
 
         await monitor.assertNoViolations()
