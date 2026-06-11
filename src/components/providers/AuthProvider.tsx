@@ -132,7 +132,12 @@ function profileNeedsHydration(profile: any): boolean {
     );
 }
 
+let lastSyncedSessionToken: string | null = null;
+
 async function syncBrowserSessionToServer(session: Session | null) {
+    const token = session ? `${session.access_token}:${session.refresh_token}` : null;
+    if (token === lastSyncedSessionToken) return;
+
     const response = await fetch('/api/v1/auth/session', {
         method: session ? 'POST' : 'DELETE',
         headers: session ? { 'content-type': 'application/json' } : undefined,
@@ -149,6 +154,8 @@ async function syncBrowserSessionToServer(session: Session | null) {
     if (!response.ok) {
         throw new Error(`Browser session sync failed (${response.status})`);
     }
+    
+    lastSyncedSessionToken = token;
 }
 
 async function bootstrapBrowserSessionFromServer() {
@@ -210,7 +217,7 @@ export function AuthProvider({
         const loadProfile = async (userId: string) => {
             const { data: profile } = await supabase
                 .from('profiles')
-                .select('*')
+                .select('id, full_name, avatar_url, username, created_at, updated_at, deleted_at')
                 .eq('id', userId)
                 .single();
             return transformProfile(profile);
@@ -271,21 +278,24 @@ export function AuthProvider({
                     });
                 } else if (event === 'SIGNED_OUT') {
                     browserSessionBootstrapPendingRef.current = false;
-                    void syncBrowserSessionToServer(null).catch((error) => {
+                    syncBrowserSessionToServer(null).catch((error) => {
                         logger.warn('auth.session.clear_failed', {
                             error: error instanceof Error ? error.message : String(error),
                         });
-                    });
-                    runMonotonicUpdate(MONOTONIC_AUTH_KEY, eventVersion, () => {
-                        activeUserIdRef.current = null;
-                        setState({
-                            user: null,
-                            session: null,
-                            profile: null,
-                            isLoading: false
+                    }).finally(() => {
+                        runMonotonicUpdate(MONOTONIC_AUTH_KEY, eventVersion, () => {
+                            activeUserIdRef.current = null;
+                            setState({
+                                user: null,
+                                session: null,
+                                profile: null,
+                                isLoading: false
+                            });
                         });
+                        if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+                            window.location.href = '/login';
+                        }
                     });
-                    router.refresh();
                 } else if (event === 'USER_UPDATED' && session) {
                     browserSessionBootstrapPendingRef.current = false;
                     void syncBrowserSessionToServer(session).catch((error) => {
@@ -568,15 +578,22 @@ export function AuthProvider({
 
     const signOut = useCallback(async () => {
         const supabase = createClient();
-        await supabase.auth.signOut().catch(() => null);
+        
+        // 1. Await the server cookie deletion first
         await syncBrowserSessionToServer(null).catch(() => null);
-        // State update handled by onAuthStateChange, but we can optimise responsiveness
-        setState({
-            user: null,
-            session: null,
-            profile: null,
-            isLoading: false
-        });
+        
+        // 2. Clear browser session (this also fires the SIGNED_OUT listener)
+        await supabase.auth.signOut().catch(() => null);
+        
+        // 3. Dispatch cache-clearing event
+        if (typeof window !== 'undefined') {
+            window.dispatchEvent(new Event('auth:signout'));
+            
+            // 4. Hard redirect if not already handled
+            if (window.location.pathname !== '/login') {
+                window.location.href = '/login';
+            }
+        }
     }, []);
 
     const refreshProfile = useCallback(async () => {
@@ -586,7 +603,7 @@ export function AuthProvider({
 
         const { data: profile } = await supabase
             .from('profiles')
-            .select('*')
+            .select('id, full_name, avatar_url, username, created_at, updated_at, deleted_at')
             .eq('id', currentUser.id)
             .single();
 
@@ -629,7 +646,7 @@ export function AuthProvider({
     }, [refreshProfile, state.user]);
 
 
-    const value = {
+    const value = useMemo(() => ({
         ...state,
         isAuthenticated: !!state.user,
         signIn,
@@ -638,7 +655,16 @@ export function AuthProvider({
         signInWithGoogle,
         signInWithGitHub,
         refreshProfile
-    };
+    }), [
+        state,
+        signIn,
+        signUp,
+        signOut,
+        signInWithGoogle,
+        signInWithGitHub,
+        refreshProfile
+    ]);
+
 
     return (
         <AuthContext.Provider value={value as any}>
