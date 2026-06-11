@@ -104,6 +104,7 @@ export function parseMentions(raw: string): ParsedMentions {
 
     while ((match = MENTION_TOKEN_RE.exec(raw)) !== null) {
         const [fullMatch, rawId, rawName] = match;
+        if (!fullMatch || !rawId || !rawName) continue;
         const userId = rawId.toLowerCase();
 
         if (match.index > lastIndex) {
