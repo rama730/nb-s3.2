@@ -55,65 +55,7 @@ export function getComposerWorkflowNotice(
         };
     }
 
-    if (capability.hasActiveApplication && capability.activeApplicationId) {
-        const status = capability.activeApplicationStatus ?? 'pending';
-        return {
-            tone: status === 'accepted'
-                ? 'success'
-                : status === 'rejected'
-                    ? 'danger'
-                    : status === 'project_deleted'
-                        ? 'warning'
-                        : 'brand',
-            badge: `Application ${status === 'project_deleted' ? 'Project deleted' : `${status[0].toUpperCase()}${status.slice(1)}`}`,
-            icon: status === 'accepted'
-                ? <Check className="h-4 w-4" />
-                : status === 'rejected'
-                    ? <X className="h-4 w-4" />
-                    : status === 'project_deleted'
-                        ? <AlertTriangle className="h-4 w-4" />
-                        : <Clock className="h-4 w-4" />,
-            title: status === 'accepted'
-                ? capability.isApplicant
-                    ? 'Your application was accepted and this thread is now collaborative.'
-                    : 'This applicant is now part of the project.'
-                : status === 'rejected'
-                    ? capability.isApplicant
-                        ? 'This application was closed. You can still review the history here.'
-                        : 'This application was rejected. You can reopen it if needed.'
-                    : status === 'project_deleted'
-                        ? 'The related project was deleted, so this thread is now read-only context.'
-                        : capability.isApplicant
-                            ? 'Your application is still active in this thread.'
-                            : 'This conversation still has an active application workflow.',
-            description: status === 'pending'
-                ? capability.isApplicant
-                    ? 'You can edit or withdraw this request while it is pending.'
-                    : 'Accept or reject this application directly from the conversation.'
-                : status === 'accepted'
-                    ? 'Project context and request history stay available here.'
-                    : status === 'rejected'
-                        ? 'The workflow is preserved in this thread for context.'
-                        : 'Project deletion freezes this application thread for reference only.',
-            actionLabel: null,
-            requestHref: `/people?tab=requests#app-${capability.activeApplicationId}`,
-            projectHref: status === 'accepted' && capability.activeProjectId
-                ? `/projects/${capability.activeProjectId}`
-                : null,
-            canAccept: capability.isCreator === true && status === 'pending',
-            canReject: capability.isCreator === true && status === 'pending',
-            canWithdraw: capability.isApplicant === true && status === 'pending',
-            canReopen: capability.isCreator === true && status === 'rejected',
-            canEditRequest: capability.isApplicant === true && status === 'pending',
-            lastStatusLabel: status === 'accepted'
-                ? 'Accepted'
-                : status === 'rejected'
-                    ? 'Rejected'
-                    : status === 'project_deleted'
-                        ? 'Project deleted'
-                        : 'Pending',
-        };
-    }
+    // Active applications are now handled entirely by inline system cards, so we don't need a composer notice.
 
     if (capability.canSend) return null;
 
