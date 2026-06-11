@@ -10,7 +10,7 @@
 //        Implemented as a source-level audit of `src/app/actions/files/*`:
 //        every mutation server action SHALL contain the canonical pair
 //        `if (!user) throw new Error("Unauthorized")` +
-//        `assertProjectWriteAccess(...)` so unauthorized callers are
+//        a project write/upload access assertion so unauthorized callers are
 //        refused before any DB mutation runs. The shared helper
 //        `assertProjectWriteAccess` (in `_shared.ts`) is itself asserted
 //        to throw `"Forbidden"` on no-access paths, matching the
@@ -41,12 +41,21 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import {
   FilesTabRoleProvider,
   type Role,
 } from "@/components/projects/v2/files-tab/FilesTabRoleContext";
 import { FileActionsBar } from "@/components/projects/v2/files-tab/file/FileActionsBar";
+
+const testQueryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: false,
+    },
+  },
+});
 import {
   DEEP_LINK_MAX_LENGTH,
   evaluateDeepLinkPath,
@@ -63,11 +72,20 @@ const ACTIONS_DIR = path.resolve(
   "../../../src/app/actions/files",
 );
 
+const LIB_FILES_DIR = path.resolve(
+  __dirname,
+  "../../../src/lib/files",
+);
+
 function readActionSource(file: string): string {
   return readFileSync(path.join(ACTIONS_DIR, file), "utf8");
 }
 
-const SHARED_SRC = readActionSource("_shared.ts");
+function readLibSource(file: string): string {
+  return readFileSync(path.join(LIB_FILES_DIR, file), "utf8");
+}
+
+const SHARED_SRC = readLibSource("internal-helpers.ts");
 const MUTATIONS_SRC = readActionSource("mutations.ts");
 const CONTENT_SRC = readActionSource("content.ts");
 const VERSIONS_SRC = readActionSource("versions.ts");
@@ -81,15 +99,18 @@ const NODES_SRC = readActionSource("nodes.ts");
 describe("Role_Viewer — mutation UI is absent (Req 19.3, Req 5.4)", () => {
   function renderActionsBarWithRole(role: Role): string {
     return renderToStaticMarkup(
-      React.createElement(FilesTabRoleProvider, {
-        role,
-        canEdit: role !== "Role_Viewer",
-        children: React.createElement(FileActionsBar, {
-          onRaw: () => {},
-          onEdit: () => {},
-          onDownload: () => {},
+      React.createElement(QueryClientProvider, {
+        client: testQueryClient,
+        children: React.createElement(FilesTabRoleProvider, {
+          role,
+          canEdit: role !== "Role_Viewer",
+          children: React.createElement(FileActionsBar, {
+            onRaw: () => {},
+            onEdit: () => {},
+            onDownload: () => {},
+          }),
         }),
-      }),
+      })
     );
   }
 
@@ -133,11 +154,14 @@ describe("Role_Viewer — mutation UI is absent (Req 19.3, Req 5.4)", () => {
     // harnesses that forget to mount the provider. Req 19.3 ("must not
     // be visible, focusable, or activatable").
     const html = renderToStaticMarkup(
-      React.createElement(FileActionsBar, {
-        onRaw: () => {},
-        onEdit: () => {},
-        onDownload: () => {},
-      }),
+      React.createElement(QueryClientProvider, {
+        client: testQueryClient,
+        children: React.createElement(FileActionsBar, {
+          onRaw: () => {},
+          onEdit: () => {},
+          onDownload: () => {},
+        }),
+      })
     );
     assert.doesNotMatch(html, /files-tab-file-actions-edit/);
   });
@@ -188,6 +212,7 @@ describe("Server-side mutation authorization (Req 19.6)", () => {
   //    const { data: { user } } = await supabase.auth.getUser();
   //    if (!user) throw new Error("Unauthorized");
   //    await assertProjectWriteAccess(projectId, user.id);
+  //    // Upload-specific mutations use assertProjectUploadAccess instead.
   //
   // `assertProjectWriteAccess` calls `requireProjectCapability(...,
   // "upload_files")` which rejects the `viewer` role via
@@ -232,7 +257,7 @@ describe("Server-side mutation authorization (Req 19.6)", () => {
   ];
 
   for (const { fn, src } of MUTATION_ACTIONS) {
-    it(`${fn} rejects unauthenticated callers and calls assertProjectWriteAccess`, () => {
+    it(`${fn} rejects unauthenticated callers and asserts write/upload access`, () => {
       // Scope the regex to the function body: from `export async function
       // ${fn}(` up to (but not including) the next top-of-file
       // `export async function` or end-of-file. This gives us the
@@ -250,12 +275,13 @@ describe("Server-side mutation authorization (Req 19.6)", () => {
         `${fn} must reject anonymous callers with an "Unauthorized" error (Req 19.6)`,
       );
 
-      // Step 2: write-access assertion (rejects Role_Viewer via
-      // `projectMemberCan("upload_files")` inside the helper).
+      // Step 2: write/upload-access assertion. File upload/version
+      // mutations use the member-specific upload policy; structural
+      // mutations use the broader write policy. Both reject Role_Viewer.
       assert.match(
         body,
-        /\bassertProjectWriteAccess(?:Tx)?\s*\(/,
-        `${fn} must assert write access before any DB mutation (Req 19.6)`,
+        /\bassertProject(?:Write|Upload)Access(?:Tx)?\s*\(/,
+        `${fn} must assert write/upload access before any DB mutation (Req 19.6)`,
       );
     });
   }
@@ -352,10 +378,10 @@ describe("Unauthenticated deep-link arrival (Req 19.7, Req 19.5)", () => {
       "Unauthorized check MUST precede the first node lookup — otherwise an anonymous caller could observe a row existing before being refused",
     );
 
-    // And `assertProjectAccess` (read-access check for the project
+    // And `assertProjectFileReadAccess` (read-access check for the project
     // itself) must also run before the per-segment walk. Together
     // they close Req 19.7 at the server boundary.
-    const accessIdx = body.search(/await\s+assertProjectAccess\(/);
+    const accessIdx = body.search(/await\s+assertProjectFileReadAccess\(/);
     assert.ok(accessIdx >= 0);
     assert.ok(accessIdx < firstQueryIdx);
   });
