@@ -4,6 +4,8 @@ import { MapPin, Globe, Edit2, Share2, MessageCircle, Github, Linkedin, Twitter 
 import { UserAvatar } from "@/components/ui/UserAvatar";
 import { buildIdentityPresentation } from "@/lib/ui/identity";
 import type { Profile } from "@/lib/db/schema";
+import { normalizeSocialLinks } from "@/lib/profile/normalization";
+import { isSafeHttpUrl } from "@/lib/security/urls";
 
 interface ProfileHeaderProps {
     profile: Profile;
@@ -11,7 +13,12 @@ interface ProfileHeaderProps {
 }
 
 export default function ProfileHeader({ profile, isOwner }: ProfileHeaderProps) {
-    const socialLinks = (profile?.socialLinks as Record<string, string>) || {};
+    const socialLinks = normalizeSocialLinks(profile as Record<string, unknown>);
+    const socialByLabel = new Map(socialLinks.map((link) => [link.label.toLowerCase(), link.url]));
+    const githubUrl = socialByLabel.get("github");
+    const linkedinUrl = socialByLabel.get("linkedin");
+    const twitterUrl = socialByLabel.get("twitter");
+    const website = typeof profile?.website === "string" && isSafeHttpUrl(profile.website) ? profile.website : null;
     const identity = buildIdentityPresentation(profile);
     const usernameLabel =
         identity.usernameLabel ||
@@ -59,15 +66,15 @@ export default function ProfileHeader({ profile, isOwner }: ProfileHeaderProps) 
                                         <span className="truncate">{profile.location}</span>
                                     </div>
                                 )}
-                                {profile?.website && (
+                                {website && (
                                     <a
-                                        href={profile.website}
+                                        href={website}
                                         target="_blank"
                                         rel="noopener noreferrer"
                                         className="flex items-center gap-1.5 hover:text-primary transition-colors truncate"
                                     >
                                         <Globe className="w-4 h-4 flex-shrink-0" />
-                                        <span className="truncate max-w-xs">{profile.website.replace(/^https?:\/\//, "")}</span>
+                                        <span className="truncate max-w-xs">{website.replace(/^https?:\/\//, "")}</span>
                                     </a>
                                 )}
                             </div>
@@ -80,11 +87,11 @@ export default function ProfileHeader({ profile, isOwner }: ProfileHeaderProps) 
                             )}
 
                             {/* Social Links */}
-                            {(socialLinks.github || socialLinks.linkedin || socialLinks.twitter) && (
+                            {(githubUrl || linkedinUrl || twitterUrl) && (
                                 <div className="flex items-center gap-3 flex-wrap mb-4">
-                                    {socialLinks.github && (
+                                    {githubUrl && (
                                         <a
-                                            href={socialLinks.github}
+                                            href={githubUrl}
                                             target="_blank"
                                             rel="noopener noreferrer"
                                             className="text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white transition-all duration-200 hover:scale-110"
@@ -92,9 +99,9 @@ export default function ProfileHeader({ profile, isOwner }: ProfileHeaderProps) 
                                             <Github className="w-5 h-5" />
                                         </a>
                                     )}
-                                    {socialLinks.linkedin && (
+                                    {linkedinUrl && (
                                         <a
-                                            href={socialLinks.linkedin}
+                                            href={linkedinUrl}
                                             target="_blank"
                                             rel="noopener noreferrer"
                                             className="text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white transition-all duration-200 hover:scale-110"
@@ -102,9 +109,9 @@ export default function ProfileHeader({ profile, isOwner }: ProfileHeaderProps) 
                                             <Linkedin className="w-5 h-5" />
                                         </a>
                                     )}
-                                    {socialLinks.twitter && (
+                                    {twitterUrl && (
                                         <a
-                                            href={socialLinks.twitter}
+                                            href={twitterUrl}
                                             target="_blank"
                                             rel="noopener noreferrer"
                                             className="text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white transition-all duration-200 hover:scale-110"
