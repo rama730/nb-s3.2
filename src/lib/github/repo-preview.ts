@@ -29,8 +29,9 @@ export function parseGithubRepo(repoUrl: string): GitHubRepoRef | null {
   if (!normalized) return null;
   const url = new URL(normalized);
   const parts = url.pathname.split("/").filter(Boolean);
-  if (parts.length < 2) return null;
-  return { owner: parts[0], repo: parts[1] };
+  const [owner, repo] = parts;
+  if (!owner || !repo) return null;
+  return { owner, repo };
 }
 
 function makeHeaders(token?: string): HeadersInit {
@@ -83,6 +84,7 @@ export async function fetchRepoMeta(args: {
     res = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
       headers: makeHeaders(token),
       signal: timeout.signal,
+      next: { revalidate: 3600 },
     });
   } finally {
     timeout.cleanup();
@@ -135,6 +137,7 @@ export async function fetchContents(args: {
     res = await fetch(url.toString(), {
       headers: makeHeaders(token),
       signal: timeout.signal,
+      next: { revalidate: 3600 },
     });
   } finally {
     timeout.cleanup();
