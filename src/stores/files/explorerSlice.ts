@@ -81,8 +81,9 @@ export const createExplorerSlice: StateCreator<FilesWorkspaceState, [], [], Expl
   setSelectedNodeIds: (projectId, nodeIds) =>
     set((state) => {
       const ws = state.byProjectId[projectId] ?? defaultWorkspace();
+      const firstId = nodeIds[0];
       const nextSelectedNodeId =
-        nodeIds.length === 1 ? nodeIds[0] : (nodeIds.length === 0 ? null : ws.selectedNodeId);
+        nodeIds.length === 1 && firstId !== undefined ? firstId : (nodeIds.length === 0 ? null : ws.selectedNodeId);
       const changed =
         ws.selectedNodeId !== nextSelectedNodeId ||
         ws.selectedNodeIds.length !== nodeIds.length ||
