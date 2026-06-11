@@ -5,13 +5,30 @@
 
 export const IGNORED_DIRS = new Set([
   '.git',
+  '.github',
+  '.svn',
+  '.hg',
   'node_modules',
   '.next',
+  '.nuxt',
   'dist',
   'build',
+  'out',
+  'vendor',
   '.DS_Store',
   'coverage',
+  '.nyc_output',
   '.vercel',
+  '.netlify',
+  '.serverless',
+  '__pycache__',
+  '.pytest_cache',
+  '.tox',
+  '.idea',
+  '.vscode',
+  'tmp',
+  'temp',
+  'logs'
 ]);
 
 // Skip large files (> 25MB) to avoid timeouts/memory spikes.
