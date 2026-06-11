@@ -1,9 +1,46 @@
 import { createHmac } from "node:crypto";
-import { expect, type Page } from "@playwright/test";
+import fs from "node:fs";
+import path from "node:path";
+import { expect, type BrowserContext, type Page } from "@playwright/test";
 
 export const e2eEmail = process.env.E2E_USER_EMAIL;
 export const e2ePassword = process.env.E2E_USER_PASSWORD;
 export const hasE2ECredentials = Boolean(e2eEmail && e2ePassword);
+const AUTH_STATE_PATH = path.join(process.cwd(), "test-results", ".auth", "e2e-storage-state.json");
+
+type BrowserStorageState = Awaited<ReturnType<BrowserContext["storageState"]>>;
+let cachedAuthState: BrowserStorageState | null = null;
+
+function readCachedAuthState(): BrowserStorageState | null {
+  if (cachedAuthState) return cachedAuthState;
+  try {
+    if (!fs.existsSync(AUTH_STATE_PATH)) return null;
+    cachedAuthState = JSON.parse(fs.readFileSync(AUTH_STATE_PATH, "utf8")) as BrowserStorageState;
+    return cachedAuthState;
+  } catch {
+    cachedAuthState = null;
+    return null;
+  }
+}
+
+async function writeCachedAuthState(page: Page) {
+  try {
+    cachedAuthState = await page.context().storageState();
+    fs.mkdirSync(path.dirname(AUTH_STATE_PATH), { recursive: true });
+    fs.writeFileSync(AUTH_STATE_PATH, JSON.stringify(cachedAuthState), "utf8");
+  } catch {
+    cachedAuthState = null;
+  }
+}
+
+async function tryUseCachedAuthState(page: Page) {
+  const state = readCachedAuthState();
+  if (!state || state.cookies.length === 0) return false;
+
+  await page.context().addCookies(state.cookies);
+  await page.goto("/hub", { waitUntil: "domcontentloaded" });
+  return new URL(page.url()).pathname !== "/login";
+}
 
 // SEC-L10: when the server is configured with E2E_AUTH_HMAC_SECRET, every
 // request to /api/e2e/auth must carry a matching signature over
@@ -32,6 +69,10 @@ export async function login(page: Page): Promise<void> {
   const useE2EFallback =
     process.env.E2E_AUTH_FALLBACK === "1" || process.env.NEXT_PUBLIC_E2E_AUTH_FALLBACK === "1";
 
+  if (await tryUseCachedAuthState(page)) {
+    return;
+  }
+
   if (useE2EFallback) {
     const rawBody = JSON.stringify({ email, password });
     const fallback = await page.request.post("/api/e2e/auth", {
@@ -46,6 +87,7 @@ export async function login(page: Page): Promise<void> {
       await expect
         .poll(async () => new URL(page.url()).pathname, { timeout: 15000 })
         .not.toBe("/login");
+      await writeCachedAuthState(page);
       return;
     }
   }
@@ -70,6 +112,7 @@ export async function login(page: Page): Promise<void> {
           return "pending";
         }, { timeout: 35000 })
         .toBe("redirected");
+      await writeCachedAuthState(page);
       return;
     } catch (error) {
       if (attempt === 1) throw error;
