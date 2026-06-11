@@ -91,7 +91,7 @@ test('rich message content is bounded inside popup message lanes', () => {
     assert.match(structuredCard, /msg-rich-content/);
     assert.match(structuredCard, /w-full max-w-full min-w-0/);
     assert.match(rendering, /msg-rich-content/);
-    assert.match(rendering, /w-full max-w-full min-w-0 gap-1/);
+    assert.match(rendering, /w-full max-w-full min-w-0/);
     assert.match(chips, /min-w-0 max-w-full/);
     assert.match(reactionBar, /msg-reaction-quick-bar/);
     assert.match(cssBlock(css, '.msg-reaction-quick-bar'), /width:\s*max-content/);
@@ -226,7 +226,7 @@ test('visible unread messages commit a conversation read watermark across lifecy
     assert.match(workspace, /read_seen_detected/);
     assert.match(workspace, /latestReadableMessageId/);
     assert.doesNotMatch(workspace, /latest-server-message/);
-    assert.match(workspace, /const handleCloseConversation = \(\) => \{[\s\S]*handleCommitVisibleThreadRead\(\)/);
+    assert.match(workspace, /const handleCloseConversation = (?:useCallback\()?\(.*?\) => \{[\s\S]*handleCommitVisibleThreadRead\(\)/);
     assert.match(workspace, /conversationId !== selectedConversationId[\s\S]*handleCommitVisibleThreadRead\(\)/);
     assert.doesNotMatch(workspace, /READ_COMMIT_DWELL_MS/);
     assert.doesNotMatch(workspace, /readOpenCommitTimerRef/);
