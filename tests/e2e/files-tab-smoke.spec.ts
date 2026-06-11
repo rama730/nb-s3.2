@@ -8,7 +8,7 @@ const fixtureProjectSlug = process.env.E2E_FILES_PROJECT_SLUG || "e2e-files-work
 test.describe("Files tab smoke", () => {
     test.skip(!hasE2ECredentials, "E2E_USER_EMAIL and E2E_USER_PASSWORD are required.");
 
-    test("create folder and move to trash", async ({ browser }) => {
+    test("folder tree, context menu, and non-destructive delete affordance are stable", async ({ browser }) => {
         const context = await browser.newContext();
         const page = await context.newPage();
         const monitor = attachPageMonitoring(page, {
@@ -35,49 +35,28 @@ test.describe("Files tab smoke", () => {
             if (await filesTab.count()) {
                 await filesTab.click();
             }
-            await expect(page.getByTestId("files-explorer-actions-trigger").first()).toBeVisible({ timeout: 15000 });
+            await expect(page.getByTestId("files-tab-root").first()).toBeVisible({ timeout: 15000 });
         };
-        const actionsButton = page.getByTestId("files-explorer-actions-trigger").first();
         const filesTab = page.getByTestId("project-tab-files").first();
         await filesTab.hover();
         await page.waitForTimeout(200);
         const { elapsedMs: filesOpenMs } = await measureWithTiming(async () => {
             await filesTab.click();
             await expect(filesTab).toHaveAttribute("data-active", "true", { timeout: 15000 });
-            await expect(page.getByTestId("files-workspace-toolbar-panel-toggle").first()).toBeVisible({ timeout: 15000 });
+            await expect(page.getByTestId("files-tab-root").first()).toBeVisible({ timeout: 15000 });
+            await expect(page.getByTestId("files-tab-folder-list-header").first()).toBeVisible({ timeout: 15000 });
         });
         perf.mark("project.detail.files.tab.open", filesOpenMs, `/projects/${fixtureProjectSlug}?tab=files`);
         await expect
             .poll(() => new URL(page.url()).searchParams.get("tab"), { timeout: 15000 })
             .toBe("files");
-        await expect(page.locator('[role="tree"] [role="treeitem"]').first()).toBeVisible({ timeout: 15000 });
-        await expect(actionsButton).toBeVisible({ timeout: 15000 });
-        await actionsButton.click();
+        await expect(page.getByRole("treeitem", { name: /workspace/i }).first()).toBeVisible({ timeout: 15000 });
+        const folderRows = page.locator('[data-testid="files-tab-folder-list-row"][data-node-type="folder"]');
+        await expect(folderRows.first()).toBeVisible({ timeout: 15000 });
+        await folderRows.first().click({ button: "right" });
         const newFolderMenuItem = page.getByRole("menuitem", { name: "New folder" });
         await expect(newFolderMenuItem).toBeVisible({ timeout: 15000 });
         await newFolderMenuItem.click();
-
-        const firstFileEntry = page
-            .locator("span")
-            .filter({ hasText: /\.(md|txt|ts|tsx|js|jsx|json|css|html|py|sql)$/ })
-            .first();
-        if (await firstFileEntry.count()) {
-            await firstFileEntry.click();
-            const saveButton = page.getByTestId("files-editor-save").first();
-            await expect(saveButton).toBeVisible();
-            await expect(saveButton).toBeDisabled();
-            await expect(page.getByText("Unsaved")).toHaveCount(0);
-            await page.waitForTimeout(3500);
-            await expect(saveButton).toBeDisabled();
-            await expect(page.getByText("Unsaved")).toHaveCount(0);
-
-            const readOnlyBadge = page.getByText("Read-only").first();
-            if (await readOnlyBadge.count()) {
-                await expect(readOnlyBadge).toBeVisible();
-                await page.waitForTimeout(3500);
-                await expect(readOnlyBadge).toBeVisible();
-            }
-        }
 
         const folderName = scopedName("pw-folder");
         await expect(page.getByRole("heading", { name: "Create folder" })).toBeVisible();
@@ -86,15 +65,17 @@ test.describe("Files tab smoke", () => {
         await ensureFilesWorkspaceSession();
         await expect(page.getByRole("heading", { name: "Create folder" })).toHaveCount(0);
 
-        await page.getByTestId("files-explorer-mode-trash").click();
-        await expect(page.getByRole("tree", { name: "File explorer" })).toBeVisible();
+        await folderRows.first().click({ button: "right" });
+        await expect(page.getByRole("menuitem", { name: "Move to trash" })).toBeVisible({ timeout: 5000 });
+        await page.keyboard.press("Escape");
+        await expect(folderRows.first()).toBeVisible();
 
         await monitor.assertNoViolations();
         monitor.detach();
         await context.close();
     });
 
-    test("bottom panel: run, output, problems", async ({ browser }) => {
+    test("folder navigation and file preview surfaces", async ({ browser }) => {
         const context = await browser.newContext();
         const page = await context.newPage();
         const monitor = attachPageMonitoring(page, {
@@ -109,45 +90,26 @@ test.describe("Files tab smoke", () => {
         await page.goto(`/projects/${fixtureProjectSlug}`);
         await page.getByTestId("project-tab-files").first().click();
 
-        // Wait for Files workspace to load (header Panel button)
-        await expect(page.getByTestId("files-workspace-toolbar-panel-toggle").first()).toBeVisible({ timeout: 15000 });
+        await expect(page.getByTestId("files-tab-root").first()).toBeVisible({ timeout: 15000 });
+        await expect(page.getByTestId("files-tab-breadcrumb").first()).toBeVisible({ timeout: 15000 });
+        await expect(page.getByTestId("files-tab-folder-list-header").first()).toBeVisible({ timeout: 15000 });
 
-        // Expand bottom panel (if needed) and verify Run, Output, Problems tabs
-        const runTab = page.getByTestId("files-bottom-panel-tab-run").first();
-        const runAlreadyVisible = await runTab.isVisible().catch(() => false);
-        if (!runAlreadyVisible) {
-            await page.getByTestId("files-workspace-toolbar-panel-toggle").first().click();
+        const firstFolder = page.locator('[data-testid="files-tab-folder-list-row"][data-node-type="folder"]').first();
+        if (await firstFolder.isVisible().catch(() => false)) {
+            await firstFolder.click();
+            await expect(page.getByTestId("files-tab-breadcrumb").first()).toContainText(/workspace|root/i, { timeout: 15000 });
         }
-        await expect(page.getByTestId("files-bottom-panel-tab-run")).toBeVisible({ timeout: 5000 });
-        await expect(page.getByTestId("files-bottom-panel-tab-output").first()).toBeVisible();
-        await expect(page.getByTestId("files-bottom-panel-tab-problems")).toBeVisible();
 
-        // Open Run tab and run the current file or a custom command
-        await page.getByTestId("files-bottom-panel-tab-run").click();
-
-        const runCurrentFile = page.getByRole("button", { name: /Run current file/i });
-        const runInput = page.getByTestId("run-command-input");
-        if (await runCurrentFile.count()) {
-            await runCurrentFile.click();
+        const firstFile = page.locator('[data-testid="files-tab-folder-list-row"][data-node-type="file"]').first();
+        if (await firstFile.isVisible().catch(() => false)) {
+            await firstFile.click();
+            await expect(page.getByTestId("files-tab-file-view").first()).toBeVisible({ timeout: 15000 });
+            await expect(page.getByTestId("files-tab-file-actions-bar").first()).toBeVisible({ timeout: 15000 });
         } else {
-            await page.getByRole("button", { name: /Custom command/i }).click();
-            await expect(runInput).toBeVisible({ timeout: 5000 });
-            await runInput.fill("python hello.py");
-            await page.getByRole("button", { name: /Run command/i }).click();
+            await expect(
+                page.getByTestId("files-tab-folder-list-view").or(page.getByTestId("files-tab-folder-list-empty")).first(),
+            ).toBeVisible({ timeout: 15000 });
         }
-
-        // Wait for execution (output appears or error)
-        await expect(
-            page.getByText(/\$ python hello\.py|Hello|File not found|error/i).first()
-        ).toBeVisible({ timeout: 20000 });
-
-        // Output tab shows execution result
-        await page.getByTestId("files-bottom-panel-tab-output").first().click();
-        await expect(page.getByText(/\$ python hello\.py|Hello|File not found|No output/i).first()).toBeVisible({ timeout: 5000 });
-
-        // Problems tab renders
-        await page.getByTestId("files-bottom-panel-tab-problems").first().click();
-        await expect(page.getByText("No problems detected")).toBeVisible({ timeout: 5000 });
 
         await monitor.assertNoViolations();
         monitor.detach();
