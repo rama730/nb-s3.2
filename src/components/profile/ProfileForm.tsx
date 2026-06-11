@@ -11,7 +11,8 @@ import { createProfileImageUploadUrlAction, finalizeProfileImageUploadAction, up
 import { useAuth } from "@/lib/hooks/use-auth";
 import { useQueryClient } from "@tanstack/react-query";
 import { queryKeys } from "@/lib/query-keys";
-import { uploadToSupabaseSignedUrl } from "@/lib/upload/supabase-signed-upload-client";
+
+const PROFILE_IMAGE_UPLOAD_MAX_BYTES = 2 * 1024 * 1024;
 
 interface ProfileFormProps {
     initialData: {
@@ -55,16 +56,26 @@ export function ProfileForm({ initialData, onOptimisticUpdate }: ProfileFormProp
 
         setAvatarUploading(true);
         try {
+            const [{ prepareImageForUpload }, { uploadToSupabaseSignedUrl }] = await Promise.all([
+                import("@/lib/upload/image-prep-client"),
+                import("@/lib/upload/supabase-signed-upload-client"),
+            ]);
+            const preparedImage = await prepareImageForUpload(file, {
+                maxBytes: PROFILE_IMAGE_UPLOAD_MAX_BYTES,
+                maxWidth: 512,
+                maxHeight: 512,
+                outputType: "image/jpeg",
+            });
             const uploadSession = await createProfileImageUploadUrlAction({
-                mimeType: file.type || "application/octet-stream",
-                sizeBytes: file.size,
+                mimeType: preparedImage.contentType,
+                sizeBytes: preparedImage.blob.size,
                 kind: "avatar",
             });
             if (!uploadSession.success) {
                 throw new Error(uploadSession.error || "Failed to prepare avatar upload");
             }
 
-            const uploadResult = await uploadToSupabaseSignedUrl(uploadSession, file);
+            const uploadResult = await uploadToSupabaseSignedUrl(uploadSession, preparedImage.blob);
             if (!uploadResult.path && !uploadResult.fullPath) {
                 throw new Error("Avatar upload completed without a storage path.");
             }
@@ -90,6 +101,8 @@ export function ProfileForm({ initialData, onOptimisticUpdate }: ProfileFormProp
             showToast("Failed to upload avatar", "error");
         } finally {
             setAvatarUploading(false);
+            // Clear the input value so the same file can be selected again
+            e.target.value = "";
         }
     };
 
