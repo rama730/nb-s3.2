@@ -272,14 +272,26 @@ export function useTaskSurfaceMutations(params: {
     }
   }, [applyOptimisticTask, availableMembers, projectId, rollbackOptimisticTask, takeSnapshots, task]);
 
-  return {
+  const clearMutationError = useCallback(() => setMutationError(null), []);
+  const clearStatusWarnings = useCallback(() => setStatusWarnings([]), []);
+
+  return useMemo(() => ({
     isMutating,
     mutationError,
     statusWarnings,
-    clearMutationError: () => setMutationError(null),
-    clearStatusWarnings: () => setStatusWarnings([]),
+    clearMutationError,
+    clearStatusWarnings,
     updateField,
     updateStatus,
     updateAssignee,
-  };
+  }), [
+    isMutating,
+    mutationError,
+    statusWarnings,
+    clearMutationError,
+    clearStatusWarnings,
+    updateField,
+    updateStatus,
+    updateAssignee,
+  ]);
 }
