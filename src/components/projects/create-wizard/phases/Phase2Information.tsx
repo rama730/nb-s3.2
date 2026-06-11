@@ -3,7 +3,7 @@ import { CreateProjectInput } from '@/lib/validations/project';
 import { useState } from 'react';
 import { X, Plus } from 'lucide-react';
 import { LifecycleEditor } from '@/components/projects/LifecycleEditor';
-import { POPULAR_PROJECT_TAGS, POPULAR_PROJECT_TECH } from '@/lib/projects/project-create-options';
+import { POPULAR_PROJECT_TAGS, POPULAR_PROJECT_TECH, PROJECT_TYPE_OPTIONS } from '@/lib/projects/project-create-options';
 
 export default function Phase2Information() {
     const { register, setValue, watch, formState: { errors } } = useFormContext<CreateProjectInput>();
@@ -37,6 +37,25 @@ export default function Phase2Information() {
 
     return (
         <div className="space-y-6">
+            {/* Project Category / Type */}
+            <div>
+                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">
+                    Project Category *
+                </label>
+                <select
+                    {...register('project_type')}
+                    className="w-full px-4 py-3 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                >
+                    <option value="">Select a category</option>
+                    {PROJECT_TYPE_OPTIONS.map((type) => (
+                        <option key={type.id} value={type.id}>
+                            {type.label}
+                        </option>
+                    ))}
+                </select>
+                {errors.project_type && <p className="mt-1 text-sm text-red-500">{errors.project_type.message}</p>}
+            </div>
+
             {/* Title */}
             <div>
                 <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">
