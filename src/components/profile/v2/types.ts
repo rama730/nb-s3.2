@@ -1,5 +1,5 @@
-import { Profile, Project } from '@/lib/db/schema'
-import { User } from '@supabase/supabase-js'
+import { Profile } from '@/lib/db/schema'
+import type { ProfileCollaborationSummary } from '@/lib/profile/collaboration'
 import type { PrivacyConnectionState, PrivacyVisibilityReason } from '@/lib/privacy/relationship-state'
 
 export type ConnectionState = 'none' | 'pending_incoming' | 'pending_outgoing' | 'accepted' | 'rejected' | 'blocked'
@@ -23,6 +23,10 @@ export interface ProfileStats {
     mutualCount?: number
 }
 
+export interface ProfileViewerUser {
+    id: string
+}
+
 // Defines what the Client Component expects
 export interface ProfilePageData {
     profile: Profile & {
@@ -32,15 +36,16 @@ export interface ProfilePageData {
     }
     stats: ProfileStats
     isOwner: boolean
-    currentUser: User | null
+    currentUser: ProfileViewerUser | null
     connectionStatus: ConnectionState
     privacyRelationship: ProfilePrivacyRelationship
     lockedShell?: boolean
     projects?: any[] // Project type
+    collaborationSummary?: ProfileCollaborationSummary
 }
 
 export interface ViewerContext {
-    currentUser: User | null
+    currentUser: ProfileViewerUser | null
     isAuthenticated: boolean
     isOwner: boolean
     connectionStatus: ConnectionState
