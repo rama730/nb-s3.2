@@ -17,7 +17,7 @@ const MARKDOWN_EXTENSIONS = new Set(["md", "markdown"]);
 
 function extOf(name: string): string {
   const parts = name.split(".");
-  return parts.length > 1 ? parts[parts.length - 1].toLowerCase() : "";
+  return parts.length > 1 ? parts[parts.length - 1]?.toLowerCase() ?? "" : "";
 }
 
 /**
