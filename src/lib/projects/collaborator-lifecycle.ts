@@ -13,6 +13,7 @@ import {
     taskNodeLinks,
     tasks,
     projectNodes,
+    messageWorkflowItems,
 } from "@/lib/db/schema";
 import {
     isEligibleProjectMember,
@@ -22,6 +23,11 @@ import {
     type ProjectMemberEligibility,
     type ProjectMemberRole,
 } from "@/lib/projects/settings-policies";
+import {
+    endProfileProjectContributionMembership,
+    markProfileCollaborationSummaryStale,
+    upsertProfileProjectContributionFromMembership,
+} from "@/lib/profile/collaboration";
 
 type DbTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 export type ProjectCollaboratorExecutor = typeof db | DbTransaction;
@@ -182,6 +188,7 @@ export async function ensureProjectGroupConversationIdInternal(
         .insert(conversations)
         .values({ type: "project_group" })
         .returning({ id: conversations.id });
+    if (!conversation) throw new Error("Failed to create project conversation");
 
     await executor
         .update(projects)
@@ -287,6 +294,61 @@ export async function addProjectMemberInternal(
             .update(projectOpenRoles)
             .set({ filled: sql`${projectOpenRoles.filled} + 1`, updatedAt: new Date() })
             .where(eq(projectOpenRoles.id, params.roleId));
+
+        if (role.filled + 1 >= role.count) {
+            // Find user IDs to invalidate
+            const [otherApps, otherInvites] = await Promise.all([
+                executor
+                    .select({ applicantId: roleApplications.applicantId })
+                    .from(roleApplications)
+                    .where(and(
+                        eq(roleApplications.projectId, params.projectId),
+                        eq(roleApplications.roleId, params.roleId),
+                        eq(roleApplications.status, 'pending')
+                    )),
+                executor
+                    .select({ assigneeUserId: messageWorkflowItems.assigneeUserId })
+                    .from(messageWorkflowItems)
+                    .where(and(
+                        eq(messageWorkflowItems.projectId, params.projectId),
+                        eq(messageWorkflowItems.kind, 'project_invite'),
+                        eq(messageWorkflowItems.status, 'pending'),
+                        sql`${messageWorkflowItems.payload}->>'roleId' = ${params.roleId}`
+                    ))
+            ]);
+
+            const userIdsToInvalidate = new Set<string>();
+            otherApps.forEach(a => userIdsToInvalidate.add(a.applicantId));
+            otherInvites.forEach(i => {
+                if (i.assigneeUserId) userIdsToInvalidate.add(i.assigneeUserId);
+            });
+
+            // Sweep database records
+            await executor
+                .update(roleApplications)
+                .set({ status: 'rejected', decisionAt: new Date(), updatedAt: new Date() })
+                .where(and(
+                    eq(roleApplications.projectId, params.projectId),
+                    eq(roleApplications.roleId, params.roleId),
+                    eq(roleApplications.status, 'pending')
+                ));
+
+            await executor
+                .update(messageWorkflowItems)
+                .set({ status: 'expired', resolvedAt: new Date(), updatedAt: new Date() })
+                .where(and(
+                    eq(messageWorkflowItems.projectId, params.projectId),
+                    eq(messageWorkflowItems.kind, 'project_invite'),
+                    eq(messageWorkflowItems.status, 'pending'),
+                    sql`${messageWorkflowItems.payload}->>'roleId' = ${params.roleId}`
+                ));
+
+            if (userIdsToInvalidate.size > 0) {
+                // Invalidate caches (non-blocking)
+                const { invalidateDiscoverCacheForUsers } = await import('@/lib/connections/internal-helpers');
+                invalidateDiscoverCacheForUsers(userIdsToInvalidate).catch(console.error);
+            }
+        }
     }
 
     const conversationId = params.syncGroupConversation !== false
@@ -315,6 +377,25 @@ export async function addProjectMemberInternal(
         },
         createdAt: new Date(),
     }).returning({ id: projectNodeEvents.id });
+
+    if (changed) {
+        await upsertProfileProjectContributionFromMembership(executor, {
+            profileId: params.userId,
+            projectId: params.projectId,
+            verifiedBy: params.actorId,
+            previousRole,
+            nextRole,
+            eventId: event?.id ?? null,
+            source: params.source === "project_invite"
+                ? "project_invite"
+                : params.source === "application_accept"
+                    ? "application"
+                    : params.source === "ownership_transfer"
+                        ? "ownership_transfer"
+                        : "membership",
+        });
+        await markProfileCollaborationSummaryStale(project.ownerId, executor);
+    }
 
     return { eventId: event?.id ?? null, changed, project: { ...project, conversationId }, target, previousRole, nextRole, conversationId };
 }
@@ -358,6 +439,16 @@ export async function changeProjectMemberRoleInternal(
         },
         createdAt: new Date(),
     }).returning({ id: projectNodeEvents.id });
+
+    await upsertProfileProjectContributionFromMembership(executor, {
+        profileId: params.targetUserId,
+        projectId: params.projectId,
+        verifiedBy: params.actorId,
+        previousRole,
+        nextRole: params.nextRole,
+        eventId: event?.id ?? null,
+        source: "role_change",
+    });
 
     return { eventId: event?.id ?? null, changed: true, project, target, previousRole, nextRole: params.nextRole };
 }
@@ -600,6 +691,14 @@ export async function removeProjectMemberInternal(
         },
         createdAt: new Date(),
     }).returning({ id: projectNodeEvents.id });
+
+    await endProfileProjectContributionMembership(executor, {
+        profileId: params.targetUserId,
+        projectId: params.projectId,
+        verifiedBy: params.actorId,
+        eventId: event?.id ?? null,
+    });
+    await markProfileCollaborationSummaryStale(project.ownerId, executor);
 
     return { eventId: event?.id ?? null, changed: true, project, target, previousRole, nextRole: null };
 }
