@@ -2,6 +2,7 @@
 
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { z } from "zod";
 import { db } from "@/lib/db";
 import { projectMembers, projectNodes, projectSprints, taskNodeLinks, tasks } from "@/lib/db/schema";
 import { createClient } from "@/lib/supabase/server";
@@ -127,6 +128,13 @@ async function lockTaskForWrite(
     };
 }
 
+const updateTaskFieldSchema = z.object({
+    taskId: z.string().uuid(),
+    field: z.enum(["title", "description", "priority", "sprintId", "dueDate"]),
+    value: z.union([z.string(), z.null()]).optional(),
+    projectId: z.string().uuid(),
+});
+
 /**
  * Update task field
  */
@@ -137,6 +145,11 @@ export async function updateTaskFieldAction(
     projectId: string
 ) {
     try {
+        const parsed = updateTaskFieldSchema.safeParse({ taskId, field, value, projectId });
+        if (!parsed.success) {
+            return { success: false, error: "Invalid input: " + parsed.error.issues.map(i => i.message).join(", ") };
+        }
+
         const supabase = await createClient();
         const { data: { user }, error: authError } = await supabase.auth.getUser();
         if (authError || !user) {
@@ -145,7 +158,7 @@ export async function updateTaskFieldAction(
         const { allowed: taskRlOk } = await consumeRateLimit(`task:${user.id}`, 60, 60);
         if (!taskRlOk) return { success: false, error: "Rate limit exceeded" };
 
-        if (!ALLOWED_FIELDS.has(field as MutableTaskField)) {
+        if (!ALLOWED_FIELDS.has(parsed.data.field)) {
             return { success: false, error: "Invalid field" };
         }
 
@@ -225,6 +238,8 @@ export async function updateTaskStatusAction(
         if (authError || !user) {
             return { success: false, error: "Unauthorized" };
         }
+        const { allowed: taskRlOk } = await consumeRateLimit(`task:${user.id}`, 60, 60);
+        if (!taskRlOk) return { success: false, error: "Rate limit exceeded" };
 
         if (!["todo", "in_progress", "done", "blocked"].includes(status)) {
             return { success: false, error: "Invalid status" };
@@ -322,6 +337,12 @@ export async function updateTaskStatusAction(
     }
 }
 
+const assignTaskSchema = z.object({
+    taskId: z.string().uuid(),
+    assigneeId: z.string().uuid().nullable(),
+    projectId: z.string().uuid(),
+});
+
 /**
  * Assign task to user
  */
@@ -331,12 +352,19 @@ export async function assignTaskAction(
     projectId: string
 ) {
     try {
+        const parsed = assignTaskSchema.safeParse({ taskId, assigneeId, projectId });
+        if (!parsed.success) {
+            return { success: false, error: "Invalid input: " + parsed.error.issues.map(i => i.message).join(", ") };
+        }
+
         const supabase = await createClient();
         const { data: { user }, error: authError } = await supabase.auth.getUser();
         if (authError || !user) {
             return { success: false, error: "Unauthorized" };
         }
-        await requireProjectCapability(projectId, user.id, "assign_tasks");
+        const { allowed: taskRlOk } = await consumeRateLimit(`task:${user.id}`, 60, 60);
+        if (!taskRlOk) return { success: false, error: "Rate limit exceeded" };
+        await requireProjectCapability(parsed.data.projectId, user.id, "assign_tasks");
 
         const result = await db.transaction(async (tx) => {
             const locked = await lockTaskForWrite(tx, taskId, user.id);
