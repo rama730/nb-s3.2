@@ -122,7 +122,7 @@ export function ReactionDetailSheet({
                                                     className="text-xs font-medium text-zinc-600 dark:text-zinc-300"
                                                     aria-hidden="true"
                                                 >
-                                                    {(user.username || '?')[0].toUpperCase()}
+                                                    {(user.username || '?')[0]!.toUpperCase()}
                                                 </span>
                                             )}
                                         </div>
