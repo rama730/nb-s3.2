@@ -133,16 +133,18 @@ export function buildTaskFileOutcomeSummary(
 
   if (ranked.length > 0) {
     const fallback = ranked[0];
-    const role = inferTaskFileRole(fallback);
-    const label =
-      role === "reference"
-        ? "Reference files are linked, but no final output is confirmed yet."
-        : `${fallback.name} is the active working file, but no final deliverable is confirmed yet.`;
-    return {
-      headline: "No final deliverable confirmed yet",
-      detail: label,
-      currentDeliverableId: null,
-    };
+    if (fallback) {
+      const role = inferTaskFileRole(fallback);
+      const label =
+        role === "reference"
+          ? "Reference files are linked, but no final output is confirmed yet."
+          : `${fallback.name} is the active working file, but no final deliverable is confirmed yet.`;
+      return {
+        headline: "No final deliverable confirmed yet",
+        detail: label,
+        currentDeliverableId: null,
+      };
+    }
   }
 
   return {
