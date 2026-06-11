@@ -44,6 +44,7 @@ export async function getUserLocation(): Promise<{
                     'Accept-Language': 'en',
                     'User-Agent': 'EdgePlatform/1.0',
                 },
+                next: { revalidate: 3600 },
             }
         )
 
@@ -96,6 +97,7 @@ export async function getLocationFromIP(): Promise<{
     try {
         const response = await fetch('https://ipapi.co/json/', {
             headers: { 'Accept': 'application/json' },
+            next: { revalidate: 3600 },
         })
 
         if (!response.ok) {
