@@ -105,7 +105,7 @@ async function assertTaskAccess(params: {
   const [taskRow] = await db
     .select({ id: tasks.id, projectId: tasks.projectId })
     .from(tasks)
-    .where(eq(tasks.id, params.taskId))
+    .where(and(eq(tasks.id, params.taskId), isNull(tasks.deletedAt)))
     .limit(1);
 
   if (!taskRow) {
@@ -683,6 +683,11 @@ export async function toggleTaskCommentLikeAction(
       return { success: false as const, error: "Unauthorized" };
     }
 
+    const { allowed } = await consumeRateLimit(`task-comment:${viewer.userId}`, 60, 60);
+    if (!allowed) {
+      return { success: false as const, error: "Rate limit exceeded" };
+    }
+
     const comment = await assertCommentAccess({
       commentId,
       projectId,
@@ -732,6 +737,11 @@ export async function deleteTaskCommentAction(
     const viewer = await getViewerProfileContext();
     if (!viewer.userId) {
       return { success: false as const, error: "Unauthorized" };
+    }
+
+    const { allowed } = await consumeRateLimit(`task-comment:${viewer.userId}`, 60, 60);
+    if (!allowed) {
+      return { success: false as const, error: "Rate limit exceeded" };
     }
 
     const comment = await assertCommentAccess({
