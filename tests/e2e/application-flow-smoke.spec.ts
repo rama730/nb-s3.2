@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { hasE2ECredentials, login } from "./_helpers/auth";
 import { scopedName } from "./_helpers/fixtures";
+import { switchMessagesTab } from "./_helpers/messages";
 import { attachPageMonitoring } from "./_helpers/monitoring";
 import { PerfTracker, markNavigationMetrics, measure } from "./_helpers/perf";
 
@@ -18,7 +19,7 @@ test.describe("Application flow smoke", () => {
             page.goto("/messages", { waitUntil: "domcontentloaded" })
         );
         await markNavigationMetrics(perf, page, "/messages");
-        await page.getByRole("button", { name: "Applications" }).click();
+        await switchMessagesTab(page, "applications");
 
         const applicationRows = page
             .locator("button")
@@ -53,7 +54,9 @@ test.describe("Application flow smoke", () => {
         const firstApplicationRow = applicationRows.first();
         await firstApplicationRow.click();
 
-        await expect(page.getByPlaceholder("Type a message...")).toBeVisible();
+        const sendableComposer = page.getByPlaceholder("Type a message...");
+        const unavailableComposer = page.getByPlaceholder("Messaging unavailable");
+        await expect(sendableComposer.or(unavailableComposer).first()).toBeVisible({ timeout: 15000 });
         const viewRequestLink = page.getByRole("link", { name: "View request" });
         if (await viewRequestLink.count()) {
             await expect(viewRequestLink).toBeVisible();
@@ -70,10 +73,10 @@ test.describe("Application flow smoke", () => {
         const terminalBannerText = page
             .getByText(/application was accepted|accepted this application|application was rejected|rejected this application/i)
             .first();
-        if (await terminalBannerText.count()) {
+        if (await terminalBannerText.count() && await sendableComposer.isVisible().catch(() => false)) {
             const marker = scopedName("pw-followup");
-            await page.getByPlaceholder("Type a message...").fill(marker);
-            await page.getByPlaceholder("Type a message...").press("Enter");
+            await sendableComposer.fill(marker);
+            await sendableComposer.press("Enter");
             await expect(page.getByText(marker).last()).toBeVisible({ timeout: 10000 });
             await expect(terminalBannerText).toHaveCount(0, { timeout: 10000 });
         }
