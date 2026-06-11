@@ -15,13 +15,14 @@ export function getTypingStatusText(
   if (users.length === 0) return null;
 
   const suffix = options.ellipsis ? "..." : "";
-  const primaryName = getTypingDisplayName(users[0]);
+  const primaryName = users[0] ? getTypingDisplayName(users[0]) : "Someone";
   if (users.length === 1) {
     return `${primaryName} is typing${suffix}`;
   }
 
   if (users.length === 2) {
-    return `${primaryName} and ${getTypingDisplayName(users[1])} are typing${suffix}`;
+    const secondName = users[1] ? getTypingDisplayName(users[1]) : "Someone";
+    return `${primaryName} and ${secondName} are typing${suffix}`;
   }
 
   return `${primaryName} and ${users.length - 1} others are typing${suffix}`;
