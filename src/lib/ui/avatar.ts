@@ -18,5 +18,5 @@ const AVATAR_GRADIENTS = [
  */
 export function getAvatarGradient(name: string): string {
     const hash = name.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0);
-    return AVATAR_GRADIENTS[hash % AVATAR_GRADIENTS.length];
+    return AVATAR_GRADIENTS[hash % AVATAR_GRADIENTS.length] ?? 'from-violet-500 to-indigo-500';
 }
