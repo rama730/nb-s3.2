@@ -27,7 +27,8 @@ const navItems = [
 
 export function MobileNav() {
     const pathname = usePathname()
-    const { mobileMenuOpen, setMobileMenuOpen } = useUIStore()
+    const mobileMenuOpen = useUIStore((state) => state.mobileMenuOpen)
+    const setMobileMenuOpen = useUIStore((state) => state.setMobileMenuOpen)
 
     if (!mobileMenuOpen) return null
 
