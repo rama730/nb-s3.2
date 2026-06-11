@@ -44,9 +44,9 @@ function decodeBase64UrlSegment(value: string): string | null {
 
 function tryDecodeJwtPayload(token: string): JwtPayloadLike | null {
     const parts = token.split(".");
-    if (parts.length < 2 || parts[1].trim().length === 0) return null;
+    if (parts.length < 2 || !parts[1]?.trim()) return null;
 
-    const decoded = decodeBase64UrlSegment(parts[1]);
+    const decoded = decodeBase64UrlSegment(parts[1]!);
     if (!decoded) return null;
 
     try {
