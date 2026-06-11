@@ -34,8 +34,6 @@ export function TaskLinkChip({
   onClick,
   className,
 }: TaskLinkChipProps): React.JSX.Element | null {
-  if (count < 1) return null;
-
   const handleClick = React.useCallback(
     (event: React.MouseEvent) => {
       event.stopPropagation();
@@ -47,6 +45,8 @@ export function TaskLinkChip({
     },
     [count, onClick],
   );
+
+  if (count < 1) return null;
 
   return (
     <button
