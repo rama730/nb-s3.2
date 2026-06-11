@@ -423,7 +423,7 @@ export function useTaskDiscussionResource(params: {
   const comments = page.comments;
   const totalCount = page.totalCount || countTaskDiscussionEntries(page);
 
-  return {
+  return useMemo(() => ({
     comments,
     totalCount,
     nextCursor: page.nextCursor,
@@ -440,5 +440,22 @@ export function useTaskDiscussionResource(params: {
     addComment,
     toggleLike,
     deleteComment,
-  };
+  }), [
+    comments,
+    totalCount,
+    page.nextCursor,
+    isLoading,
+    isLoadingMore,
+    isLoaded,
+    error,
+    typing.presenceStatus,
+    typing.topLevelTypingUsers,
+    typing.replyTypingUsersByParentId,
+    typing.sendTyping,
+    refreshDiscussion,
+    loadOlderComments,
+    addComment,
+    toggleLike,
+    deleteComment,
+  ]);
 }
