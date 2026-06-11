@@ -64,8 +64,19 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
         connectionTokenRef.current = connectionToken;
         let cancelled = false;
         let channel: ReturnType<typeof subscribeUserNotifications> | null = null;
+        let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+        let reconnectAttempt = 0;
+        const MAX_BACKOFF_MS = 30_000;
 
-        void (async () => {
+        const connect = async () => {
+            if (cancelled || connectionTokenRef.current !== connectionToken) return;
+
+            // Clean up previous channel if reconnecting
+            if (channel) {
+                supabase.removeChannel(channel);
+                channel = null;
+            }
+
             await supabase.realtime.setAuth(session.access_token);
             if (cancelled || connectionTokenRef.current !== connectionToken) {
                 return;
@@ -82,18 +93,37 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
 
                     if (status === REALTIME_SUBSCRIBE_STATES.SUBSCRIBED) {
                         setIsConnected(true);
+                        reconnectAttempt = 0; // Reset backoff on successful connection
                         return;
                     }
 
                     if (isRealtimeTerminalStatus(status)) {
                         setIsConnected(false);
+                        // Schedule reconnection with exponential backoff
+                        if (!cancelled && connectionTokenRef.current === connectionToken) {
+                            const delay = Math.min(1000 * Math.pow(2, reconnectAttempt), MAX_BACKOFF_MS);
+                            reconnectAttempt += 1;
+                            reconnectTimer = setTimeout(() => {
+                                void connect();
+                            }, delay);
+                        }
                     }
                 },
             });
-        })().catch((error) => {
+        };
+
+        void connect().catch((error) => {
             console.error('[realtime] failed to initialize authenticated notifications', error);
             if (connectionTokenRef.current === connectionToken) {
                 setIsConnected(false);
+                // Schedule reconnection on initialization failure too
+                if (!cancelled) {
+                    const delay = Math.min(1000 * Math.pow(2, reconnectAttempt), MAX_BACKOFF_MS);
+                    reconnectAttempt += 1;
+                    reconnectTimer = setTimeout(() => {
+                        void connect();
+                    }, delay);
+                }
             }
         });
 
@@ -101,6 +131,7 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
             cancelled = true;
             connectionTokenRef.current += 1;
             setIsConnected(false);
+            if (reconnectTimer) clearTimeout(reconnectTimer);
             if (channel) {
                 supabase.removeChannel(channel);
             }
