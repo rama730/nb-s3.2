@@ -1,5 +1,6 @@
 import { validateCsrf } from "@/lib/security/csrf";
 import {
+  enforceRouteLimit,
   getRequestId,
   jsonError,
   jsonSuccess,
@@ -40,6 +41,19 @@ export async function POST(request: Request) {
       errorCode: "FORBIDDEN",
     });
     return csrfError;
+  }
+
+  const limitResponse = await enforceRouteLimit(request, "api:v1:auth:session", 240, 60);
+  if (limitResponse) {
+    logApiRoute(request, {
+      requestId,
+      action: "auth.session.post",
+      startedAt,
+      success: false,
+      status: 429,
+      errorCode: "RATE_LIMITED",
+    });
+    return limitResponse;
   }
 
   const supabase = await createClient();
@@ -142,6 +156,19 @@ export async function DELETE(request: Request) {
       errorCode: "FORBIDDEN",
     });
     return csrfError;
+  }
+
+  const limitResponse = await enforceRouteLimit(request, "api:v1:auth:session", 240, 60);
+  if (limitResponse) {
+    logApiRoute(request, {
+      requestId,
+      action: "auth.session.delete",
+      startedAt,
+      success: false,
+      status: 429,
+      errorCode: "RATE_LIMITED",
+    });
+    return limitResponse;
   }
 
   try {
