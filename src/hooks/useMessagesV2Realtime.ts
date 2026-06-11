@@ -6,6 +6,7 @@ import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import type { MessageWithSender } from '@/app/actions/messaging';
 import { playMessageSound } from '@/lib/messages/notification-sound';
 import {
+    getConversationSummariesV2,
     getConversationSummaryV2,
     getConversationThreadPageV2,
     getUnreadSummaryV2,
@@ -422,19 +423,34 @@ export function useMessagesV2Realtime(
         ));
         if (ids.length === 0) return;
 
-        await Promise.all(ids.map(async (conversationId) => {
-            await getConversationSummaryV2(conversationId).then((result) => {
-                if (!result.success || !result.conversation) return;
-                upsertInboxConversation(queryClient, result.conversation);
-                if (conversationId === activeConversationIdRef.current) {
-                    upsertThreadConversation(queryClient, result.conversation);
+        const result = await getConversationSummariesV2(ids);
+        if (!result.success || !result.conversations) {
+            await Promise.all(ids.map(async (conversationId) => {
+                await getConversationSummaryV2(conversationId).then((summaryResult) => {
+                    if (!summaryResult.success || !summaryResult.conversation) return;
+                    upsertInboxConversation(queryClient, summaryResult.conversation);
+                    if (conversationId === activeConversationIdRef.current) {
+                        upsertThreadConversation(queryClient, summaryResult.conversation);
+                        queryClient.setQueriesData(
+                            { queryKey: ['chat-v2', 'capabilities', conversationId] as const },
+                            () => summaryResult.conversation?.capability,
+                        );
+                    }
+                });
+            }));
+            return;
+        }
+
+        for (const conversation of result.conversations) {
+            upsertInboxConversation(queryClient, conversation);
+            if (conversation.id === activeConversationIdRef.current) {
+                upsertThreadConversation(queryClient, conversation);
                     queryClient.setQueriesData(
-                        { queryKey: ['chat-v2', 'capabilities', conversationId] as const },
-                        () => result.conversation?.capability,
+                        { queryKey: ['chat-v2', 'capabilities', conversation.id] as const },
+                        () => conversation.capability,
                     );
-                }
-            });
-        }));
+            }
+        }
     }, [queryClient]);
 
     const scheduleInboxRefresh = useCallback(() => {
@@ -696,14 +712,6 @@ export function useMessagesV2Realtime(
                         return;
                     }
 
-                    if (event.kind === 'connection') {
-                        bufferEvent(() => void refreshTrackedConversations());
-                        if (currentActiveId) {
-                            bufferEvent(() => void refreshConversationSummary(currentActiveId, { syncThread: true }));
-                        }
-                        return;
-                    }
-
                     const hiddenConversationId = getPayloadConversationId(event.payload);
                     const messageId = getPayloadHiddenMessageId(event.payload);
                     if (hiddenConversationId) {
@@ -880,14 +888,13 @@ export function useMessagesV2Realtime(
                             scheduleUnreadRefresh();
                         },
                     },
-                    // Subscribe to INSERT/DELETE on message_reactions for
-                    // real-time reaction sync from other users. The table
-                    // lacks a conversation_id column so we filter client-side
-                    // using hasCachedThreadMessage. Own reactions are handled
+                    // Subscribe to INSERT/DELETE on message_reactions scoped
+                    // to the active conversation. Own reactions are handled
                     // optimistically by useToggleReaction and skipped here.
                     {
                         event: 'INSERT',
                         table: 'message_reactions',
+                        filter: `conversation_id=eq.${activeConversationId}`,
                         handler: (payload) => {
                             const reactionUserId = getPayloadStringField(payload, 'new', 'user_id');
                             if (!reactionUserId || reactionUserId === userId) return;
@@ -899,6 +906,7 @@ export function useMessagesV2Realtime(
                     {
                         event: 'DELETE',
                         table: 'message_reactions',
+                        filter: `conversation_id=eq.${activeConversationId}`,
                         handler: (payload) => {
                             const reactionUserId = getPayloadStringField(payload, 'old', 'user_id');
                             if (!reactionUserId || reactionUserId === userId) return;
