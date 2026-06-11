@@ -28,6 +28,43 @@ test('resolvePresenceWebSocketUrl uses configured environment URLs', () => {
     )
 })
 
+test('resolvePresenceWebSocketUrl allows local websocket URLs for local production smoke runs', () => {
+    assert.equal(
+        resolvePresenceWebSocketUrl({
+            env: makeEnv({
+                NODE_ENV: 'production',
+                NEXT_PUBLIC_PRESENCE_WS_URL: 'ws://127.0.0.1:4010/ws/',
+            }),
+            hostname: 'localhost',
+        }),
+        'ws://127.0.0.1:4010/ws',
+    )
+
+    assert.equal(
+        resolvePresenceWebSocketUrl({
+            env: makeEnv({
+                NODE_ENV: 'production',
+                NEXT_PUBLIC_PRESENCE_WS_URL: 'ws://127.0.0.1:4010/ws/',
+            }),
+            hostname: '0.0.0.0',
+        }),
+        'ws://127.0.0.1:4010/ws',
+    )
+})
+
+test('resolvePresenceWebSocketUrl rejects non-secure remote websocket URLs in production', () => {
+    assert.throws(
+        () => resolvePresenceWebSocketUrl({
+            env: makeEnv({
+                NODE_ENV: 'production',
+                NEXT_PUBLIC_PRESENCE_WS_URL: 'ws://presence.example/ws',
+            }),
+            hostname: 'app.edge.example',
+        }),
+        /wss:\/\/ in production/,
+    )
+})
+
 test('resolvePresenceWebSocketUrl falls back to the local presence service in development', () => {
     assert.equal(
         resolvePresenceWebSocketUrl({
