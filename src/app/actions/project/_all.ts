@@ -1,13 +1,13 @@
 'use server';
 
 import { db } from '@/lib/db';
-import { projects, projectFollows, projectOpenRoles, roleApplications, conversations, conversationParticipants, messages, projectNodes, projectNodeEvents, projectMembers, profiles, tasks, projectSprints, taskNodeLinks, taskSubtasks, taskComments, tags, projectTags, skills, projectSkills } from '@/lib/db/schema';
+import { projects, projectFollows, projectOpenRoles, roleApplications, conversations, conversationParticipants, messages, projectNodes, projectNodeEvents, projectMembers, profiles, tasks, projectSprints, taskNodeLinks, taskSubtasks, taskComments, tags, projectTags, skills, projectSkills, fileVersions, messageWorkflowItems, messageWorkLinks, projectReadmes, projectReadmeVersions } from '@/lib/db/schema';
 import { eq, and, or, sql, inArray, isNotNull, isNull, desc, ilike } from 'drizzle-orm';
 import { createClient, createAdminClient } from '@/lib/supabase/server';
 import { redis } from '@/lib/redis';
 import { revalidatePath, revalidateTag, unstable_cache } from 'next/cache';
-import { cookies } from 'next/headers';
-import { CreateProjectInput } from '@/lib/validations/project';
+import { cookies, headers } from 'next/headers';
+import { CreateProjectInput, validateAndSanitizeLifecycleStages } from '@/lib/validations/project';
 import { z } from 'zod';
 import { createHash, randomUUID } from 'crypto';
 import { generateSlug } from '@/lib/utils/slug';
@@ -17,6 +17,7 @@ import { normalizeGithubBranch, normalizeGithubRepoUrl } from '@/lib/github/repo
 import { clearSealedGithubTokenFromImportSource, sanitizeGitErrorMessage, sealGithubImportToken } from '@/lib/github/repo-security';
 import { fetchRepoMeta, parseGithubRepo } from '@/lib/github/repo-preview';
 import { buildGithubImportEventId, resolveGithubRepoAccess } from '@/lib/github/auth-resolver';
+import { runGithubProjectImport } from '@/lib/github/project-import-runner';
 import { buildProjectImportEventId } from '@/lib/import/idempotency';
 import { isProjectVisibility, normalizeProjectVisibility, type ProjectVisibility } from '@/lib/projects/project-visibility';
 import { consumeRateLimit } from '@/lib/security/rate-limit';
@@ -31,6 +32,10 @@ import { inngest } from '@/inngest/client';
 import { getLifecycleStagesForProjectType } from '@/lib/projects/lifecycle-templates';
 import type { Project } from '@/types/hub';
 import { logger } from '@/lib/logger';
+import {
+    markProjectCollaboratorsSummaryStale,
+    upsertProfileProjectContributionFromMembership,
+} from '@/lib/profile/collaboration';
 import { buildProjectOwnerPresentation } from '@/lib/privacy/presentation';
 import { resolvePrivacyRelationship } from '@/lib/privacy/resolver';
 import {
@@ -91,6 +96,26 @@ import {
     normalizeProjectPublicTabVisibility,
     type ProjectPublicTabVisibility,
 } from '@/lib/projects/settings-policies';
+import {
+    buildProjectAnalyticsFiles,
+    buildProjectAnalyticsMemberDetail,
+    buildProjectAnalyticsMemberSummaries,
+    buildProjectAnalyticsOverview,
+    buildProjectAnalyticsReport,
+    buildProjectAnalyticsRisks,
+    buildProjectAnalyticsSprints,
+    buildProjectAnalyticsSnapshot,
+    buildProjectAnalyticsTimeline,
+    buildProjectAnalyticsWorkflow,
+    filterProjectAnalyticsDatasetByContext,
+    normalizeProjectAnalyticsContext,
+    PROJECT_ANALYTICS_DATASET_LIMITS,
+    resolveProjectAnalyticsAccess,
+    type BuildProjectAnalyticsInput,
+    type ProjectAnalyticsContextFilters,
+    type ProjectAnalyticsRiskLifecycleStatus,
+    type ProjectAnalyticsTimelineFilters,
+} from '@/lib/projects/analytics';
 
 const isMissingColumn = (error: unknown, column: string) => {
     const msg = error instanceof Error ? error.message : String(error);
@@ -396,6 +421,11 @@ async function hasProjectSprintDescriptionColumn() {
 }
 
 const revalidateProjectPaths = async (projectId: string) => {
+    try {
+        await invalidatePublicProjectsFeedCache(projectId);
+    } catch (err) {
+        console.error('Failed to invalidate public feed cache:', err);
+    }
     revalidatePath(`/projects/${projectId}`);
     revalidatePath('/hub');
     // Next.js 16's cache API requires an explicit cache-life profile for tag revalidation.
@@ -476,6 +506,164 @@ type ImportSourcePayload = {
     s3Key?: string;
     metadata?: Record<string, any>;
 };
+
+type GithubImportDispatchSource = "create" | "retry";
+
+function shouldRunGithubImportInlineFallback(error: unknown): boolean {
+    const override = process.env.GITHUB_IMPORT_INLINE_FALLBACK?.trim().toLowerCase();
+    // Allow explicitly opting into inline fallback via env var
+    if (override === "always" || override === "true") return true;
+    
+    // In development, we always want a simple and synchronous logic flow
+    // without depending on the complex external Inngest background queue.
+    if (process.env.NODE_ENV !== "production") return true;
+
+    // In production, rely on the Inngest worker.
+    return false;
+}
+
+async function persistGithubImportQueueFailure(input: {
+    projectId: string;
+    importSource: ImportSourcePayload;
+    message: string;
+}) {
+    const clearedImportSource = clearSealedGithubTokenFromImportSource(input.importSource) as Record<string, any>;
+    const nextImportSource = {
+        ...clearedImportSource,
+        metadata: {
+            ...((clearedImportSource as any)?.metadata || {}),
+            lastError: input.message,
+            syncPhase: 'failed',
+        },
+    };
+
+    await db
+        .update(projects)
+        .set({ syncStatus: 'failed', importSource: nextImportSource as any, updatedAt: new Date() })
+        .where(eq(projects.id, input.projectId));
+}
+
+async function enqueueGithubImportOrRunInline(input: {
+    projectId: string;
+    userId: string;
+    importSource: ImportSourcePayload;
+    eventId: string;
+    source: GithubImportDispatchSource;
+}): Promise<{ success: true; mode: 'queued' | 'inline' } | { success: false; error: string }> {
+    const queueImportSource = clearSealedGithubTokenFromImportSource(input.importSource) as ImportSourcePayload;
+    const githubImportSource = {
+        type: 'github' as const,
+        repoUrl: queueImportSource.repoUrl!,
+        branch: queueImportSource.branch,
+        metadata: queueImportSource.metadata,
+    };
+
+    // In development mode, completely bypass the external queue and run inline immediately
+    if (process.env.NODE_ENV !== "production" || process.env.GITHUB_IMPORT_INLINE_FALLBACK?.trim().toLowerCase() === "always") {
+        try {
+            await runGithubProjectImport({
+                projectId: input.projectId,
+                importSource: githubImportSource,
+                userId: input.userId,
+                importEventId: input.eventId,
+                queueAgeMs: 0,
+            });
+            logger.metric('github.import.enqueue', {
+                projectId: input.projectId,
+                userId: input.userId,
+                result: 'inline_dev',
+                eventId: input.eventId,
+                source: input.source,
+            });
+            return { success: true, mode: 'inline' };
+        } catch (inlineError) {
+            const inlineMsg = sanitizeGitErrorMessage(
+                inlineError instanceof Error ? inlineError.message : 'GitHub import failed'
+            );
+            logger.metric('github.import.enqueue', {
+                projectId: input.projectId,
+                userId: input.userId,
+                result: 'inline_error',
+                eventId: input.eventId,
+                source: input.source,
+            });
+            return { success: false, error: inlineMsg };
+        }
+    }
+
+    try {
+        await inngest.send({
+            name: "project/import",
+            id: input.eventId,
+            data: {
+                projectId: input.projectId,
+                importSource: githubImportSource,
+                userId: input.userId
+            }
+        });
+        logger.metric('github.import.enqueue', {
+            projectId: input.projectId,
+            userId: input.userId,
+            result: 'success',
+            eventId: input.eventId,
+            source: input.source,
+        });
+        return { success: true, mode: 'queued' };
+    } catch (queueError) {
+        const msg = sanitizeGitErrorMessage(
+            queueError instanceof Error ? queueError.message : 'Failed to enqueue GitHub import'
+        );
+        console.error('[Action] Failed to add GitHub import to queue', msg);
+
+        if (shouldRunGithubImportInlineFallback(queueError)) {
+            logger.metric('github.import.enqueue', {
+                projectId: input.projectId,
+                userId: input.userId,
+                result: 'inline_fallback',
+                eventId: input.eventId,
+                source: input.source,
+            });
+
+            try {
+                await runGithubProjectImport({
+                    projectId: input.projectId,
+                    importSource: githubImportSource,
+                    userId: input.userId,
+                    importEventId: input.eventId,
+                    queueAgeMs: 0,
+                });
+                return { success: true, mode: 'inline' };
+            } catch (inlineError) {
+                const inlineMsg = sanitizeGitErrorMessage(
+                    inlineError instanceof Error ? inlineError.message : 'GitHub import failed'
+                );
+                logger.metric('github.import.enqueue', {
+                    projectId: input.projectId,
+                    userId: input.userId,
+                    result: 'inline_error',
+                    eventId: input.eventId,
+                    source: input.source,
+                    error: inlineMsg,
+                });
+                return { success: false, error: inlineMsg };
+            }
+        }
+
+        await persistGithubImportQueueFailure({
+            projectId: input.projectId,
+            importSource: queueImportSource,
+            message: msg,
+        });
+        logger.metric('github.import.enqueue', {
+            projectId: input.projectId,
+            userId: input.userId,
+            result: 'error',
+            eventId: input.eventId,
+            source: input.source,
+        });
+        return { success: false, error: msg };
+    }
+}
 
 function normalizeImportSourceForPersist(
     importSource: CreateProjectInput['import_source'] | undefined,
@@ -651,6 +839,8 @@ const projectDetailProjectSchema = z.object({
     visibility: z.string(),
     publicTabVisibility: z.object({
         dashboard: z.boolean(),
+        readme: z.boolean(),
+        updates: z.boolean(),
         files: z.boolean(),
         sprints: z.boolean(),
         tasks: z.boolean(),
@@ -662,6 +852,8 @@ const projectDetailProjectSchema = z.object({
     lifecycleStages: z.array(z.string()),
     currentStageIndex: z.number().int().nonnegative(),
     importSource: z.unknown().nullable(),
+    githubRepoUrl: z.string().nullable().optional(),
+    githubDefaultBranch: z.string().nullable().optional(),
     syncStatus: z.enum(['pending', 'cloning', 'indexing', 'ready', 'failed']),
     updatedAt: z.string().nullable(),
     viewCount: z.number().int().nonnegative(),
@@ -675,6 +867,10 @@ const projectDetailProjectSchema = z.object({
     owner: projectDetailProfileSchema.nullable(),
     membersHasMore: z.boolean(),
     membersNextCursor: z.string().nullable(),
+    hasPublishedReadme: z.boolean(),
+    readmeExcerpt: z.string().nullable(),
+    readmeUpdatedAt: z.string().nullable(),
+    readmeVersionNumber: z.number().int().positive().nullable(),
     isOwner: z.boolean(),
     isMember: z.boolean(),
     memberRole: projectDetailMemberRoleSchema.nullable(),
@@ -717,6 +913,7 @@ export type ProjectDetailMetadataRead = {
     title: string;
     shortDescription: string | null;
     description: string | null;
+    readmeExcerpt: string | null;
     coverImage: string | null;
 };
 
@@ -727,20 +924,14 @@ function isProjectDetailMemberRole(value: unknown): value is 'owner' | 'admin' |
     return value === 'owner' || value === 'admin' || value === 'member' || value === 'viewer';
 }
 
-async function resolveProjectDetailTarget(slugOrId: string) {
+async function resolveProjectDetailTarget(slugOrId: string, actorUserId: string | null = null) {
     const trimmed = slugOrId.trim();
     const isUuid = projectDetailUuidRegex.test(trimmed);
     const where = isUuid
-        ? and(
-            isNull(projects.deletedAt),
-            or(eq(projects.slug, trimmed), eq(projects.id, trimmed))
-        )
-        : and(
-            isNull(projects.deletedAt),
-            eq(projects.slug, trimmed)
-        );
+        ? and(isNull(projects.deletedAt), or(eq(projects.slug, trimmed), eq(projects.id, trimmed)))
+        : and(isNull(projects.deletedAt), eq(projects.slug, trimmed));
 
-    const [project] = await db
+    const q = db
         .select({
             id: projects.id,
             ownerId: projects.ownerId,
@@ -762,33 +953,37 @@ async function resolveProjectDetailTarget(slugOrId: string) {
             status: projects.status,
             lifecycleStages: projects.lifecycleStages,
             currentStageIndex: projects.currentStageIndex,
+            stageCompletionDates: projects.stageCompletionDates,
             importSource: projects.importSource,
+            githubRepoUrl: projects.githubRepoUrl,
+            githubDefaultBranch: projects.githubDefaultBranch,
             syncStatus: projects.syncStatus,
             updatedAt: projects.updatedAt,
             viewCount: projects.viewCount,
             followersCount: projects.followersCount,
+            memberRole: actorUserId ? projectMembers.role : sql<string | null>`NULL`,
+            isFollowed: actorUserId ? sql<boolean>`${projectFollows.id} IS NOT NULL` : sql<boolean>`false`,
         })
-        .from(projects)
-        .where(where)
-        .limit(1);
+        .from(projects);
+
+    if (actorUserId) {
+        q.leftJoin(projectMembers, and(eq(projectMembers.projectId, projects.id), eq(projectMembers.userId, actorUserId)))
+         .leftJoin(projectFollows, and(eq(projectFollows.projectId, projects.id), eq(projectFollows.userId, actorUserId)));
+    }
+
+    const [project] = await q.where(where).limit(1);
 
     return project ?? null;
 }
 
-async function resolveProjectDetailMetadataTarget(slugOrId: string) {
+async function resolveProjectDetailMetadataTarget(slugOrId: string, actorUserId: string | null = null) {
     const trimmed = slugOrId.trim();
     const isUuid = projectDetailUuidRegex.test(trimmed);
     const where = isUuid
-        ? and(
-            isNull(projects.deletedAt),
-            or(eq(projects.slug, trimmed), eq(projects.id, trimmed))
-        )
-        : and(
-            isNull(projects.deletedAt),
-            eq(projects.slug, trimmed)
-        );
+        ? and(isNull(projects.deletedAt), or(eq(projects.slug, trimmed), eq(projects.id, trimmed)))
+        : and(isNull(projects.deletedAt), eq(projects.slug, trimmed));
 
-    const [project] = await db
+    const q = db
         .select({
             projectId: projects.id,
             ownerId: projects.ownerId,
@@ -797,51 +992,37 @@ async function resolveProjectDetailMetadataTarget(slugOrId: string) {
             shortDescription: projects.shortDescription,
             description: projects.description,
             coverImage: projects.coverImage,
+            publicTabVisibility: projects.publicTabVisibility,
             visibility: projects.visibility,
             status: projects.status,
+            memberRole: actorUserId ? projectMembers.role : sql<string | null>`NULL`,
         })
-        .from(projects)
-        .where(where)
-        .limit(1);
+        .from(projects);
+
+    if (actorUserId) {
+        q.leftJoin(projectMembers, and(eq(projectMembers.projectId, projects.id), eq(projectMembers.userId, actorUserId)));
+    }
+
+    const [project] = await q.where(where).limit(1);
 
     return project ?? null;
 }
 
-async function resolveProjectDetailViewerState(input: {
+function resolveProjectDetailViewerState(input: {
     projectId: string;
     ownerId: string;
     visibility: string | null;
     status: string | null;
     actorUserId: string | null;
-    includeFollowState?: boolean;
+    memberRoleRaw: string | null;
+    isFollowed: boolean;
 }) {
-    const { projectId, ownerId, visibility, status, actorUserId, includeFollowState = true } = input;
-    const [memberRow, followRow] = actorUserId
-        ? await Promise.all([
-            db
-                .select({ role: projectMembers.role })
-                .from(projectMembers)
-                .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, actorUserId)))
-                .limit(1),
-            includeFollowState
-                ? db
-                    .select({ id: projectFollows.id })
-                    .from(projectFollows)
-                    .where(and(eq(projectFollows.projectId, projectId), eq(projectFollows.userId, actorUserId)))
-                    .limit(1)
-                : Promise.resolve([]),
-        ])
-        : [[], []] as const;
-
+    const { ownerId, visibility, status, actorUserId, memberRoleRaw, isFollowed } = input;
     const isOwner = !!actorUserId && actorUserId === ownerId;
-    const memberRoleRaw = memberRow[0]?.role;
-    const memberRole = isProjectDetailMemberRole(memberRoleRaw)
-        ? memberRoleRaw
-        : null;
+    const memberRole = isProjectDetailMemberRole(memberRoleRaw) ? memberRoleRaw : null;
     const isMember = !isOwner && !!memberRole;
     const canRead = computeProjectReadAccess(visibility, status, isOwner, isMember);
     const canWrite = computeProjectWriteAccess(isOwner, memberRole);
-    const isFollowed = includeFollowState ? !!followRow[0] : false;
 
     return {
         canRead,
@@ -854,7 +1035,7 @@ async function resolveProjectDetailViewerState(input: {
 }
 
 async function fetchProjectDetailShellData(projectId: string, ownerId: string, includeFollowersCount: boolean, viewerId: string | null) {
-    const [ownerRows, followersResult, membersResult, rolesResult] = await Promise.all([
+    const [ownerRows, followersResult, membersResult, rolesResult, readmeRows] = await Promise.all([
         db
             .select({
                 id: profiles.id,
@@ -873,6 +1054,7 @@ async function fetchProjectDetailShellData(projectId: string, ownerId: string, i
             : Promise.resolve([]),
         db
             .select({
+                membershipId: projectMembers.id,
                 userId: projectMembers.userId,
                 membershipRole: projectMembers.role,
                 joinedAt: projectMembers.joinedAt,
@@ -903,6 +1085,17 @@ async function fetchProjectDetailShellData(projectId: string, ownerId: string, i
             .where(eq(projectOpenRoles.projectId, projectId))
             .orderBy(desc(projectOpenRoles.updatedAt), desc(projectOpenRoles.createdAt))
             .limit(PROJECT_DETAIL_OPEN_ROLES_PAGE_SIZE),
+        db
+            .select({
+                publishedVersionId: projectReadmes.publishedVersionId,
+                versionNumber: projectReadmeVersions.versionNumber,
+                excerpt: projectReadmeVersions.excerpt,
+                createdAt: projectReadmeVersions.createdAt,
+            })
+            .from(projectReadmes)
+            .leftJoin(projectReadmeVersions, eq(projectReadmes.publishedVersionId, projectReadmeVersions.id))
+            .where(eq(projectReadmes.projectId, projectId))
+            .limit(1),
     ]);
 
     const followersCount = includeFollowersCount
@@ -914,7 +1107,7 @@ async function fetchProjectDetailShellData(projectId: string, ownerId: string, i
     const lastMember = limitedMembers[limitedMembers.length - 1];
     const membersNextCursor =
         hasMoreMembers && lastMember
-            ? Buffer.from(`${lastMember.joinedAt.toISOString()}:::${lastMember.userId}`).toString('base64')
+            ? Buffer.from(`${lastMember.joinedAt.toISOString()}:::${lastMember.membershipId}`).toString('base64')
             : null;
 
     const collaborators = limitedMembers
@@ -995,6 +1188,10 @@ async function fetchProjectDetailShellData(projectId: string, ownerId: string, i
         collaborators: collaboratorsWithRoleTitle,
         membersHasMore: hasMoreMembers,
         membersNextCursor,
+        hasPublishedReadme: Boolean(readmeRows[0]?.publishedVersionId),
+        readmeExcerpt: readmeRows[0]?.excerpt ?? null,
+        readmeUpdatedAt: readmeRows[0]?.createdAt?.toISOString?.() ?? null,
+        readmeVersionNumber: readmeRows[0]?.versionNumber ?? null,
     };
 }
 
@@ -1012,6 +1209,15 @@ const getPublicProjectDetailMetadata = unstable_cache(
 
         const canRead = computeProjectReadAccess(project.visibility, project.status, false, false);
         if (!canRead) return null;
+        const readmeVisible = normalizeProjectPublicTabVisibility(project.publicTabVisibility).readme;
+        const readme = readmeVisible
+            ? await db
+                .select({ excerpt: projectReadmeVersions.excerpt })
+                .from(projectReadmes)
+                .leftJoin(projectReadmeVersions, eq(projectReadmes.publishedVersionId, projectReadmeVersions.id))
+                .where(eq(projectReadmes.projectId, project.projectId))
+                .limit(1)
+            : [];
 
         return {
             projectId: project.projectId,
@@ -1020,6 +1226,7 @@ const getPublicProjectDetailMetadata = unstable_cache(
             title: project.title,
             shortDescription: project.shortDescription || null,
             description: project.description || null,
+            readmeExcerpt: readme[0]?.excerpt ?? null,
             coverImage: project.coverImage || null,
         };
     },
@@ -1057,7 +1264,7 @@ export async function readProjectDetailMetadata(input: {
             }
         }
 
-        const project = await resolveProjectDetailMetadataTarget(trimmed);
+        const project = await resolveProjectDetailMetadataTarget(trimmed, actorUserId);
         if (!project) {
             return {
                 success: false,
@@ -1066,13 +1273,14 @@ export async function readProjectDetailMetadata(input: {
             };
         }
 
-        const viewerState = await resolveProjectDetailViewerState({
+        const viewerState = resolveProjectDetailViewerState({
             projectId: project.projectId,
             ownerId: project.ownerId,
             visibility: project.visibility,
             status: project.status,
             actorUserId,
-            includeFollowState: false,
+            memberRoleRaw: project.memberRole,
+            isFollowed: false,
         });
 
         if (!viewerState.canRead) {
@@ -1082,6 +1290,15 @@ export async function readProjectDetailMetadata(input: {
                 message: 'Forbidden',
             };
         }
+        const readmeVisible = viewerState.isOwner || viewerState.isMember || normalizeProjectPublicTabVisibility(project.publicTabVisibility).readme;
+        const readme = readmeVisible
+            ? await db
+                .select({ excerpt: projectReadmeVersions.excerpt })
+                .from(projectReadmes)
+                .leftJoin(projectReadmeVersions, eq(projectReadmes.publishedVersionId, projectReadmeVersions.id))
+                .where(eq(projectReadmes.projectId, project.projectId))
+                .limit(1)
+            : [];
 
         return {
             success: true,
@@ -1092,6 +1309,7 @@ export async function readProjectDetailMetadata(input: {
                 title: project.title,
                 shortDescription: project.shortDescription || null,
                 description: project.description || null,
+                readmeExcerpt: readme[0]?.excerpt ?? null,
                 coverImage: project.coverImage || null,
             },
         };
@@ -1133,7 +1351,7 @@ export async function readProjectDetailShell(input: {
     try {
         const actorUserId = requestedActorUserId ?? null;
 
-        const project = await resolveProjectDetailTarget(slugOrId);
+        const project = await resolveProjectDetailTarget(slugOrId, actorUserId);
         if (!project) {
             return {
                 success: false,
@@ -1145,12 +1363,14 @@ export async function readProjectDetailShell(input: {
         return await runInFlightDeduped(
             `project:detail-shell:${project.id}:${actorUserId ?? 'anon'}`,
             async () => {
-                const viewerState = await resolveProjectDetailViewerState({
+                const viewerState = resolveProjectDetailViewerState({
                     projectId: project.id,
                     ownerId: project.ownerId,
                     visibility: project.visibility,
                     status: project.status,
                     actorUserId,
+                    memberRoleRaw: project.memberRole,
+                    isFollowed: project.isFollowed,
                 });
 
                 const { canRead, canWrite, isOwner, isMember, memberRole, isFollowed } = viewerState;
@@ -1236,6 +1456,10 @@ export async function readProjectDetailShell(input: {
                     owner: shell.owner || null,
                     membersHasMore: shell.membersHasMore || false,
                     membersNextCursor: shell.membersNextCursor || null,
+                    hasPublishedReadme: Boolean(shell.hasPublishedReadme),
+                    readmeExcerpt: shell.readmeExcerpt ?? null,
+                    readmeUpdatedAt: shell.readmeUpdatedAt ?? null,
+                    readmeVersionNumber: shell.readmeVersionNumber ?? null,
                     isOwner,
                     isMember,
                     memberRole: isOwner ? 'owner' : memberRole,
@@ -1368,7 +1592,8 @@ export async function ensureProjectGroupExists(
             const members = await tx
                 .select({ userId: projectMembers.userId })
                 .from(projectMembers)
-                .where(eq(projectMembers.projectId, projectId));
+                .where(eq(projectMembers.projectId, projectId))
+                .limit(500); // Prevent unbounded fetch on huge projects
 
             // Collect all participant user IDs (ensure owner is ALWAYS included)
             const participantIds = new Set<string>([ownerId]); // Always include owner
@@ -1501,9 +1726,11 @@ export async function createProjectAction(input: CreateProjectInput & { slug?: s
                     visibility,
                     status: mapStatus(input.status),
                     lookingForCollaborators: true,
-                    lifecycleStages: (input.lifecycle_stages && input.lifecycle_stages.length > 0)
-                        ? input.lifecycle_stages
-                        : getLifecycleStagesForProjectType(input.project_type),
+                    lifecycleStages: validateAndSanitizeLifecycleStages(
+                        (input.lifecycle_stages && input.lifecycle_stages.length > 0)
+                            ? input.lifecycle_stages
+                            : getLifecycleStagesForProjectType(input.project_type)
+                    ),
                     currentStageIndex: input.current_stage_index || 0,
                     importSource: normalizedImportSourceWithLeadFocus,
                     // For GitHub imports, start at `pending` until the worker actually begins cloning.
@@ -1551,6 +1778,14 @@ export async function createProjectAction(input: CreateProjectInput & { slug?: s
                         userId: user.id,
                         role: 'owner'
                     });
+                    await upsertProfileProjectContributionFromMembership(tx, {
+                        profileId: user.id,
+                        projectId: newProject.id,
+                        verifiedBy: user.id,
+                        previousRole: null,
+                        nextRole: 'owner',
+                        source: 'owner',
+                    });
 
                     // Keep denormalized profile stats in sync.
                     await tx.update(profiles)
@@ -1572,29 +1807,41 @@ export async function createProjectAction(input: CreateProjectInput & { slug?: s
 
                     // 6. Insert Tags and Skills into Junction Tables
                     const tagsArray = input.tags || [];
-                    for (const tagName of tagsArray) {
-                        const slug = tagName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-                        if (!slug) continue;
-                        let [tag] = await tx.select().from(tags).where(eq(tags.slug, slug)).limit(1);
-                        if (!tag) {
-                            await tx.insert(tags).values({ name: tagName, slug }).onConflictDoNothing();
-                            [tag] = await tx.select().from(tags).where(eq(tags.slug, slug)).limit(1);
+                    if (tagsArray.length > 0) {
+                        const tagValues = tagsArray.map(t => {
+                            const slug = t.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+                            return { name: t, slug };
+                        }).filter(t => t.slug);
+                        
+                        if (tagValues.length > 0) {
+                            await tx.insert(tags).values(tagValues).onConflictDoNothing();
+                            const slugs = tagValues.map(v => v.slug);
+                            const foundTags = await tx.select().from(tags).where(inArray(tags.slug, slugs));
+                            if (foundTags.length > 0) {
+                                await tx.insert(projectTags).values(
+                                    foundTags.map(t => ({ projectId: newProject.id, tagId: t.id }))
+                                ).onConflictDoNothing();
+                            }
                         }
-                        if (!tag) throw new Error(`Failed to resolve tag for slug: ${slug}`);
-                        await tx.insert(projectTags).values({ projectId: newProject.id, tagId: tag.id }).onConflictDoNothing();
                     }
 
                     const skillsArray = input.technologies_used || [];
-                    for (const skillName of skillsArray) {
-                        const slug = skillName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-                        if (!slug) continue;
-                        let [skill] = await tx.select().from(skills).where(eq(skills.slug, slug)).limit(1);
-                        if (!skill) {
-                            await tx.insert(skills).values({ name: skillName, slug }).onConflictDoNothing();
-                            [skill] = await tx.select().from(skills).where(eq(skills.slug, slug)).limit(1);
+                    if (skillsArray.length > 0) {
+                        const skillValues = skillsArray.map(s => {
+                            const slug = s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+                            return { name: s, slug };
+                        }).filter(s => s.slug);
+
+                        if (skillValues.length > 0) {
+                            await tx.insert(skills).values(skillValues).onConflictDoNothing();
+                            const slugs = skillValues.map(v => v.slug);
+                            const foundSkills = await tx.select().from(skills).where(inArray(skills.slug, slugs));
+                            if (foundSkills.length > 0) {
+                                await tx.insert(projectSkills).values(
+                                    foundSkills.map(s => ({ projectId: newProject.id, skillId: s.id }))
+                                ).onConflictDoNothing();
+                            }
                         }
-                        if (!skill) throw new Error(`Failed to resolve skill for slug: ${slug}`);
-                        await tx.insert(projectSkills).values({ projectId: newProject.id, skillId: skill.id }).onConflictDoNothing();
                     }
 
                     return newProject;
@@ -1604,63 +1851,19 @@ export async function createProjectAction(input: CreateProjectInput & { slug?: s
 
                 // Add to Import Queue if applicable
                 if (normalizedImportSourceWithLeadFocus?.type === 'github' && normalizedImportSourceWithLeadFocus.repoUrl) {
-                    try {
-                        const queueImportSource = clearSealedGithubTokenFromImportSource(normalizedImportSourceWithLeadFocus) as ImportSourcePayload;
-                        const queueEventId = buildGithubImportEventId(
-                            result.id,
-                            queueImportSource.repoUrl!,
-                            queueImportSource.branch || null
-                        );
-                        await inngest.send({
-                            name: "project/import",
-                            id: queueEventId,
-                            data: {
-                                projectId: result.id,
-                                importSource: {
-                                    type: 'github',
-                                    repoUrl: queueImportSource.repoUrl!,
-                                    branch: queueImportSource.branch,
-                                    metadata: queueImportSource.metadata
-                                },
-                                userId: user.id
-                            }
-                        });
-                        logger.metric('github.import.enqueue', {
-                            projectId: result.id,
-                            userId: user.id,
-                            result: 'success',
-                            eventId: queueEventId,
-                            source: 'create',
-                        });
-                    } catch (queueError) {
-                        // If we can't enqueue, mark the project as failed so the Files tab becomes actionable.
-                        const msg = sanitizeGitErrorMessage(
-                            queueError instanceof Error ? queueError.message : 'Failed to enqueue GitHub import'
-                        );
-                        console.error('[Action] Failed to add to queue', msg);
-
-                        const currentImportSource = normalizedImportSourceWithLeadFocus!;
-                        const clearedImportSource = clearSealedGithubTokenFromImportSource(currentImportSource) as Record<string, any>;
-                        const nextImportSource = {
-                            ...clearedImportSource,
-                            metadata: {
-                                ...((clearedImportSource as any)?.metadata || {}),
-                                lastError: msg,
-                                syncPhase: 'failed',
-                            },
-                        };
-
-                        await db
-                            .update(projects)
-                            .set({ syncStatus: 'failed', importSource: nextImportSource as any, updatedAt: new Date() })
-                            .where(eq(projects.id, result.id));
-                        logger.metric('github.import.enqueue', {
-                            projectId: result.id,
-                            userId: user.id,
-                            result: 'error',
-                            source: 'create',
-                        });
-                    }
+                    const queueImportSource = clearSealedGithubTokenFromImportSource(normalizedImportSourceWithLeadFocus) as ImportSourcePayload;
+                    const queueEventId = buildGithubImportEventId(
+                        result.id,
+                        queueImportSource.repoUrl!,
+                        queueImportSource.branch || null
+                    );
+                    await enqueueGithubImportOrRunInline({
+                        projectId: result.id,
+                        userId: user.id,
+                        importSource: queueImportSource,
+                        eventId: queueEventId,
+                        source: 'create',
+                    });
                 }
 
                 return {
@@ -1674,9 +1877,11 @@ export async function createProjectAction(input: CreateProjectInput & { slug?: s
 
             } catch (error: any) {
                 // Check for Unique Constraint Violation on Slug
-                // Postgres error code 23505 is unique_violation
-                if (error.code === '23505') {
-                    if (error.message?.includes('slug')) {
+                // Postgres error code 23505 is unique_violation. Drizzle wraps this in `error.cause`.
+                const dbError = error.cause || error;
+                if (dbError.code === '23505') {
+                    const errorMsg = String(dbError.message || '') + String(dbError.detail || '') + String(dbError.constraint_name || '');
+                    if (errorMsg.includes('slug')) {
                         if (input.slug) {
                             throw new Error('This project URL is already taken. Please choose another.');
                         }
@@ -1686,7 +1891,7 @@ export async function createProjectAction(input: CreateProjectInput & { slug?: s
                         continue;
                     }
                     // Project Key Collision (e.g. "NB" already exists)
-                    if (error.message?.includes('key')) {
+                    if (errorMsg.includes('key')) {
                         attempts++;
                         const suffix = Math.floor(Math.random() * 9) + 1;
                         finalKey = `${generateProjectKey(input.title)}${suffix}`;
@@ -1781,47 +1986,58 @@ export async function updateProject(projectId: string, data: any) {
         if (raw.skills !== undefined || raw.technologies_used !== undefined) updateValues.skills = skillsArray;
 
         // Lifecycle
-        if (raw.lifecycleStages !== undefined) updateValues.lifecycleStages = raw.lifecycleStages;
-        else if (raw.lifecycle_stages !== undefined) updateValues.lifecycleStages = raw.lifecycle_stages;
+        if (raw.lifecycleStages !== undefined) {
+            updateValues.lifecycleStages = validateAndSanitizeLifecycleStages(raw.lifecycleStages);
+        } else if (raw.lifecycle_stages !== undefined) {
+            updateValues.lifecycleStages = validateAndSanitizeLifecycleStages(raw.lifecycle_stages);
+        }
 
         if (raw.currentStageIndex !== undefined) updateValues.currentStageIndex = raw.currentStageIndex;
         else if (raw.current_stage_index !== undefined) updateValues.currentStageIndex = raw.current_stage_index;
 
         await tx.update(projects).set(updateValues).where(eq(projects.id, projectId));
+        await markProjectCollaboratorsSummaryStale(projectId, tx);
 
         // Sync Junction Tables for normalized relational search
         if (raw.tags !== undefined) {
             await tx.delete(projectTags).where(eq(projectTags.projectId, projectId));
-            for (const tagName of tagsArray) {
-                const slug = tagName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-                if (!slug) continue;
-                let [tag] = await tx.select().from(tags).where(eq(tags.slug, slug)).limit(1);
-                if (!tag) {
-                    try {
-                        [tag] = await tx.insert(tags).values({ name: tagName, slug }).returning();
-                    } catch (e) {
-                        // Concurrent insert collision safe fallback
-                        [tag] = await tx.select().from(tags).where(eq(tags.slug, slug)).limit(1);
+            if (tagsArray.length > 0) {
+                const tagValues = tagsArray.map(t => {
+                    const slug = t.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+                    return { name: t, slug };
+                }).filter(t => t.slug);
+                
+                if (tagValues.length > 0) {
+                    await tx.insert(tags).values(tagValues).onConflictDoNothing();
+                    const slugs = tagValues.map(v => v.slug);
+                    const foundTags = await tx.select().from(tags).where(inArray(tags.slug, slugs));
+                    if (foundTags.length > 0) {
+                        await tx.insert(projectTags).values(
+                            foundTags.map(t => ({ projectId, tagId: t.id }))
+                        ).onConflictDoNothing();
                     }
                 }
-                if (tag) await tx.insert(projectTags).values({ projectId, tagId: tag.id }).onConflictDoNothing();
             }
         }
 
         if (raw.skills !== undefined || raw.technologies_used !== undefined) {
             await tx.delete(projectSkills).where(eq(projectSkills.projectId, projectId));
-            for (const skillName of skillsArray) {
-                const slug = skillName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-                if (!slug) continue;
-                let [skill] = await tx.select().from(skills).where(eq(skills.slug, slug)).limit(1);
-                if (!skill) {
-                    try {
-                        [skill] = await tx.insert(skills).values({ name: skillName, slug }).returning();
-                    } catch (e) {
-                        [skill] = await tx.select().from(skills).where(eq(skills.slug, slug)).limit(1);
+            if (skillsArray.length > 0) {
+                const skillValues = skillsArray.map(s => {
+                    const slug = s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+                    return { name: s, slug };
+                }).filter(s => s.slug);
+
+                if (skillValues.length > 0) {
+                    await tx.insert(skills).values(skillValues).onConflictDoNothing();
+                    const slugs = skillValues.map(v => v.slug);
+                    const foundSkills = await tx.select().from(skills).where(inArray(skills.slug, slugs));
+                    if (foundSkills.length > 0) {
+                        await tx.insert(projectSkills).values(
+                            foundSkills.map(s => ({ projectId, skillId: s.id }))
+                        ).onConflictDoNothing();
                     }
                 }
-                if (skill) await tx.insert(projectSkills).values({ projectId, skillId: skill.id }).onConflictDoNothing();
             }
         }
 
@@ -1836,30 +2052,41 @@ export async function updateProject(projectId: string, data: any) {
                 ));
             }
 
+            const inserts = [];
+            const updatePromises = [];
+
             for (const role of roles) {
                 if (role.id) {
-                    await tx.update(projectOpenRoles)
-                        .set({
-                            role: role.role,
-                            count: role.count,
-                            description: role.description || "",
-                            skills: role.skills || [],
-                            updatedAt: new Date(),
-                        })
-                        .where(and(
-                            eq(projectOpenRoles.projectId, projectId),
-                            eq(projectOpenRoles.id, role.id),
-                        ));
+                    updatePromises.push(
+                        tx.update(projectOpenRoles)
+                            .set({
+                                role: role.role,
+                                count: role.count,
+                                description: role.description || "",
+                                skills: role.skills || [],
+                                updatedAt: new Date(),
+                            })
+                            .where(and(
+                                eq(projectOpenRoles.projectId, projectId),
+                                eq(projectOpenRoles.id, role.id),
+                            ))
+                    );
                 } else {
-                    await tx.insert(projectOpenRoles)
-                        .values({
-                            projectId: project.id,
-                            role: role.role,
-                            count: role.count || 1,
-                            description: role.description || "",
-                            skills: role.skills || [],
-                        });
+                    inserts.push({
+                        projectId: project.id,
+                        role: role.role,
+                        count: role.count || 1,
+                        description: role.description || "",
+                        skills: role.skills || [],
+                    });
                 }
+            }
+
+            if (updatePromises.length > 0) {
+                await Promise.all(updatePromises);
+            }
+            if (inserts.length > 0) {
+                await tx.insert(projectOpenRoles).values(inserts);
             }
 
             openRoles = await tx
@@ -2228,11 +2455,27 @@ type ProjectFileWorkspaceSettingsResult =
                 uploadPermissionLocked: boolean;
                 uploadPermissionLabel: string;
             }>;
+            manualFiles: Array<{
+                id: string;
+                name: string;
+                path: string;
+                uploadedByName: string | null;
+                uploadedAt: string | null;
+                updatedAt: string | null;
+                size: number | null;
+                linkedTasks: number;
+                analyticsVisible: boolean;
+                publicVisible: boolean;
+                privateReason: string | null;
+            }>;
             summary: {
                 alwaysAllowedCount: number;
                 enabledMemberCount: number;
                 disabledMemberCount: number;
                 viewerCount: number;
+                manualFileCount: number;
+                privateManualFileCount: number;
+                analyticsVisibleManualFileCount: number;
             };
         };
     }
@@ -2704,6 +2947,7 @@ export async function updateProjectVisibilityAction(
                     updatedAt: new Date(),
                 })
                 .where(and(eq(projects.id, projectId), eq(projects.ownerId, user.id)));
+            await markProjectCollaboratorsSummaryStale(projectId, tx);
 
             await tx.insert(projectNodeEvents).values({
                 projectId,
@@ -3245,6 +3489,74 @@ function formatFileUploadPermission(role: ProjectCollaboratorRole, enabled: bool
     return { locked: false, label: enabled ? 'Member upload on' : 'Member upload off' };
 }
 
+type AnalyticsFileSource = 'github' | 'manual' | 'system';
+
+function readRecord(value: unknown): Record<string, unknown> {
+    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function readBoolean(value: unknown): boolean | null {
+    return typeof value === 'boolean' ? value : null;
+}
+
+function normalizeProjectNodeAnalyticsMetadata(input: {
+    metadata: Record<string, unknown> | null | undefined;
+    gitHash?: string | null;
+    importSourceType?: 'github' | 'upload' | 'scratch' | null;
+}): {
+    source: AnalyticsFileSource;
+    analyticsVisible: boolean;
+    publicVisible: boolean;
+    privateReason: string | null;
+} {
+    const metadata = readRecord(input.metadata);
+    const analytics = readRecord(metadata.analytics);
+    const privacy = readRecord(metadata.privacy);
+    const rawSource = analytics.source ?? metadata.source ?? metadata.importSource;
+    const source: AnalyticsFileSource = rawSource === 'github' || input.gitHash
+        ? 'github'
+        : rawSource === 'system'
+            ? 'system'
+            : input.importSourceType === 'github' && input.gitHash
+                ? 'github'
+                : 'manual';
+    const privateReason = typeof analytics.privateReason === 'string'
+        ? analytics.privateReason
+        : typeof privacy.reason === 'string'
+            ? privacy.reason
+            : typeof metadata.privateReason === 'string'
+                ? metadata.privateReason
+                : null;
+    const publicVisible = readBoolean(analytics.publicVisible)
+        ?? readBoolean(privacy.publicVisible)
+        ?? readBoolean(metadata.publicVisible)
+        ?? metadata.visibility !== 'private';
+    const analyticsVisible = readBoolean(analytics.analyticsVisible)
+        ?? readBoolean(metadata.analyticsVisible)
+        ?? (metadata.visibility === 'private' || privacy.private === true ? false : true);
+    return {
+        source,
+        analyticsVisible,
+        publicVisible,
+        privateReason,
+    };
+}
+
+function mergeProjectNodeAnalyticsMetadata(
+    metadata: Record<string, unknown> | null | undefined,
+    next: Partial<ReturnType<typeof normalizeProjectNodeAnalyticsMetadata>>,
+) {
+    const current = readRecord(metadata);
+    const analytics = readRecord(current.analytics);
+    return {
+        ...current,
+        analytics: {
+            ...analytics,
+            ...next,
+        },
+    };
+}
+
 export async function getProjectFileWorkspaceSettingsAction(projectId: string): Promise<ProjectFileWorkspaceSettingsResult> {
     try {
         const supabase = await createClient();
@@ -3287,15 +3599,96 @@ export async function getProjectFileWorkspaceSettingsAction(projectId: string): 
             };
         });
 
+        const [projectSourceRow] = await db
+            .select({
+                importSource: projects.importSource,
+            })
+            .from(projects)
+            .where(eq(projects.id, projectId))
+            .limit(1);
+        const importSourceType = (projectSourceRow?.importSource as { type?: 'github' | 'upload' | 'scratch' } | null | undefined)?.type ?? null;
+
+        const fileRows = await db
+            .select({
+                id: projectNodes.id,
+                name: projectNodes.name,
+                path: projectNodes.path,
+                size: projectNodes.size,
+                createdBy: projectNodes.createdBy,
+                createdAt: projectNodes.createdAt,
+                updatedAt: projectNodes.updatedAt,
+                metadata: projectNodes.metadata,
+                gitHash: projectNodes.gitHash,
+                uploaderName: profiles.fullName,
+                uploaderUsername: profiles.username,
+            })
+            .from(projectNodes)
+            .leftJoin(profiles, eq(profiles.id, projectNodes.createdBy))
+            .where(and(eq(projectNodes.projectId, projectId), eq(projectNodes.type, 'file'), isNull(projectNodes.deletedAt)))
+            .orderBy(desc(projectNodes.updatedAt))
+            .limit(100);
+
+        const manualFileRows = fileRows.filter((file) => {
+            const contract = normalizeProjectNodeAnalyticsMetadata({
+                metadata: file.metadata as Record<string, unknown> | null | undefined,
+                gitHash: file.gitHash,
+                importSourceType,
+            });
+            return contract.source === 'manual';
+        });
+        const manualFileIds = manualFileRows.map((file) => file.id);
+        const linkedRows = manualFileIds.length
+            ? await db
+                .select({
+                    nodeId: taskNodeLinks.nodeId,
+                    taskId: taskNodeLinks.taskId,
+                })
+                .from(taskNodeLinks)
+                .where(inArray(taskNodeLinks.nodeId, manualFileIds))
+            : [];
+        const linkedCounts = linkedRows.reduce((map, row) => {
+            map.set(row.nodeId, (map.get(row.nodeId) ?? 0) + 1);
+            return map;
+        }, new Map<string, number>());
+        const manualFileContracts = new Map(manualFileRows.map((file) => [file.id, normalizeProjectNodeAnalyticsMetadata({
+            metadata: file.metadata as Record<string, unknown> | null | undefined,
+            gitHash: file.gitHash,
+            importSourceType,
+        })]));
+        const manualFiles = manualFileRows.slice(0, 24).map((file) => {
+            const contract = normalizeProjectNodeAnalyticsMetadata({
+                metadata: file.metadata as Record<string, unknown> | null | undefined,
+                gitHash: file.gitHash,
+                importSourceType,
+            });
+            return {
+                id: file.id,
+                name: file.name,
+                path: file.path,
+                uploadedByName: file.uploaderName ?? file.uploaderUsername ?? null,
+                uploadedAt: file.createdAt?.toISOString?.() ?? null,
+                updatedAt: file.updatedAt?.toISOString?.() ?? null,
+                size: file.size ?? null,
+                linkedTasks: linkedCounts.get(file.id) ?? 0,
+                analyticsVisible: contract.analyticsVisible,
+                publicVisible: contract.publicVisible,
+                privateReason: contract.privateReason,
+            };
+        });
+
         return {
             success: true,
             data: {
                 members,
+                manualFiles,
                 summary: {
                     alwaysAllowedCount: members.filter((member) => member.membershipRole === 'owner' || member.membershipRole === 'admin').length,
                     enabledMemberCount: members.filter((member) => member.membershipRole === 'member' && member.fileUploadEnabled).length,
                     disabledMemberCount: members.filter((member) => member.membershipRole === 'member' && !member.fileUploadEnabled).length,
                     viewerCount: members.filter((member) => member.membershipRole === 'viewer').length,
+                    manualFileCount: manualFileRows.length,
+                    privateManualFileCount: manualFileRows.filter((file) => !manualFileContracts.get(file.id)?.publicVisible).length,
+                    analyticsVisibleManualFileCount: manualFileRows.filter((file) => manualFileContracts.get(file.id)?.analyticsVisible).length,
                 },
             },
         };
@@ -4016,6 +4409,92 @@ export async function getProjectDangerZonePreflightAction(
     }
 }
 
+export async function updateProjectManualFileAnalyticsVisibilityAction(
+    projectId: string,
+    nodeId: string,
+    analyticsVisible: boolean,
+): Promise<ProjectSettingsMutationResult> {
+    try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return { success: false, errorCode: 'UNAUTHORIZED', message: 'You must be signed in.' };
+        const capability = await requireProjectCapability(projectId, user.id, 'manage_files');
+
+        const [file] = await db
+            .select({
+                id: projectNodes.id,
+                name: projectNodes.name,
+                metadata: projectNodes.metadata,
+                gitHash: projectNodes.gitHash,
+                importSource: projects.importSource,
+            })
+            .from(projectNodes)
+            .innerJoin(projects, eq(projects.id, projectNodes.projectId))
+            .where(and(
+                eq(projectNodes.projectId, projectId),
+                eq(projectNodes.id, nodeId),
+                eq(projectNodes.type, 'file'),
+                isNull(projectNodes.deletedAt),
+            ))
+            .limit(1);
+
+        if (!file) return { success: false, errorCode: 'NOT_FOUND', message: 'File not found.' };
+        const importSourceType = (file.importSource as { type?: 'github' | 'upload' | 'scratch' } | null | undefined)?.type ?? null;
+        const current = normalizeProjectNodeAnalyticsMetadata({
+            metadata: file.metadata as Record<string, unknown> | null | undefined,
+            gitHash: file.gitHash,
+            importSourceType,
+        });
+        if (current.source !== 'manual') {
+            return { success: false, errorCode: 'INVALID_INPUT', message: 'Only manually uploaded files can be managed here.' };
+        }
+
+        const nextMetadata = mergeProjectNodeAnalyticsMetadata(file.metadata as Record<string, unknown> | null | undefined, {
+            source: current.source,
+            analyticsVisible,
+            publicVisible: current.publicVisible,
+            privateReason: analyticsVisible ? null : 'Hidden from analytics in file workspace settings',
+        });
+
+        await db.transaction(async (tx) => {
+            await tx
+                .update(projectNodes)
+                .set({ metadata: nextMetadata, updatedAt: new Date() })
+                .where(eq(projectNodes.id, nodeId));
+            await tx.insert(projectNodeEvents).values({
+                projectId,
+                nodeId,
+                actorId: user.id,
+                type: 'project_file.analytics_visibility_changed',
+                metadata: {
+                    fileName: file.name,
+                    analyticsVisible,
+                    source: 'file_workspace_settings',
+                },
+            });
+        });
+
+        revalidatePath(`/projects/${projectId}`);
+        return {
+            success: true,
+            message: analyticsVisible ? 'File will appear in analytics.' : 'File is hidden from analytics.',
+        };
+    } catch (error) {
+        logger.error('project.manual_file_analytics_visibility_failed', {
+            module: 'projects',
+            projectId,
+            nodeId,
+            analyticsVisible,
+            error: error instanceof Error ? error.message : String(error),
+        });
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.includes('permission')) {
+            return { success: false, errorCode: 'FORBIDDEN', message: 'You do not have permission to manage file analytics visibility.' };
+        }
+        return { success: false, errorCode: 'INTERNAL_ERROR', message: 'Failed to update file analytics visibility.' };
+    }
+}
+
 export async function archiveProjectAction(projectId: string): Promise<ProjectSettingsMutationResult> {
     try {
         const supabase = await createClient();
@@ -4108,10 +4587,8 @@ export async function deleteProject(projectId: string): Promise<
 
         const s3Keys = fileNodes.map(n => n.s3Key!).filter(Boolean);
 
-        // 2. Soft-Delete Transaction (avoids cascade locks at 1M+ scale)
+        // 2. Hard-Delete Transaction
         await db.transaction(async (tx) => {
-            const deletedAt = new Date();
-
             // A. Update application messages to show "project_deleted" status
             await tx.execute(sql`
                 UPDATE ${messages}
@@ -4123,24 +4600,12 @@ export async function deleteProject(projectId: string): Promise<
                 WHERE metadata->>'projectId' = ${projectId}
             `);
 
-            // B. Soft-delete the project (sets deletedAt instead of hard DELETE)
-            const deletedProjects = await tx.update(projects)
-                .set({ deletedAt })
-                .where(and(
-                    eq(projects.id, projectId),
-                    isNull(projects.deletedAt)
-                ))
+            // B. Hard-delete the project (cascades to nodes, tasks, sprints, members, etc.)
+            const deletedProjects = await tx.delete(projects)
+                .where(eq(projects.id, projectId))
                 .returning({ id: projects.id });
 
-            // C. Soft-delete all child nodes
-            await tx.update(projectNodes)
-                .set({ deletedAt })
-                .where(and(
-                    eq(projectNodes.projectId, projectId),
-                    isNull(projectNodes.deletedAt)
-                ));
-
-            // Keep denormalized profile stats in sync only on first soft-delete.
+            // C. Keep denormalized profile stats in sync
             if (deletedProjects.length > 0) {
                 await tx.update(profiles)
                     .set({ projectsCount: sql`GREATEST(0, ${profiles.projectsCount} - 1)` })
@@ -4364,48 +4829,30 @@ export async function incrementProjectViewAction(projectId: string): Promise<{ s
         const {
             data: { user },
         } = await supabase.auth.getUser();
-        const cookieStore = await cookies();
-        const anonymousViewerSeed = cookieStore.get('edge-csrf-token')?.value?.trim() || 'anonymous';
-        const viewerKey = user?.id
-            ? `user:${user.id}`
-            : `anon:${createHash('sha256').update(anonymousViewerSeed).digest('hex').slice(0, 16)}`;
         const access = await getProjectAccessById(projectId, user?.id ?? null);
         if (!access.project || !access.canRead) {
             return { success: false, error: "Project not found" };
         }
-        const rateLimit = await consumeRateLimit(`project:view:${projectId}:${viewerKey}`, 1, 60 * 30);
-        if (!rateLimit.allowed) {
-            const [current] = await db
+
+        const writeThroughEnabled = process.env.PROJECT_VIEWS_WRITE_THROUGH === "1" || !redis;
+
+        if (writeThroughEnabled) {
+            const [updated] = await db.update(projects)
+                .set({ viewCount: sql`${projects.viewCount} + 1` })
+                .where(eq(projects.id, projectId))
+                .returning({ viewCount: projects.viewCount });
+
+            return { success: true, viewCount: Number(updated?.viewCount ?? 1) };
+        } else {
+            const bufferedVal = await redis!.hincrby("project:views", projectId, 1);
+            const [dbRow] = await db
                 .select({ viewCount: projects.viewCount })
                 .from(projects)
                 .where(eq(projects.id, projectId))
                 .limit(1);
-            if (!current) {
-                return { success: false, error: "Project not found" };
-            }
-            return { success: true, viewCount: Number(current.viewCount ?? 0) };
+            const dbVal = dbRow?.viewCount ?? 0;
+            return { success: true, viewCount: dbVal + bufferedVal };
         }
-
-        const [updated] = await db.update(projects)
-            .set({ viewCount: sql`${projects.viewCount} + 1` })
-            .where(eq(projects.id, projectId))
-            .returning({ viewCount: projects.viewCount });
-
-        if (!updated) {
-            return { success: false, error: "Project not found" };
-        }
-
-        // Optional telemetry path only; never the source of truth for UI counters.
-        if (redis) {
-            void redis.hincrby('project:views:telemetry', projectId, 1).catch((telemetryError) => {
-                console.warn("Failed to record project view telemetry", {
-                    projectId,
-                    error: telemetryError instanceof Error ? telemetryError.message : String(telemetryError),
-                });
-            });
-        }
-
-        return { success: true, viewCount: Number(updated.viewCount ?? 0) };
     } catch (e) {
         if (isMissingCounterColumn(e, 'view_count')) {
             return { success: false, error: "Project views are unavailable until migrations are applied" };
@@ -4549,6 +4996,7 @@ export async function fetchProjectTasksAction(
                 const projectTasks = await db.query.tasks.findMany({
                     where: (t, { eq, and, or, lt, isNull, isNotNull }) => and(
                         eq(t.projectId, projectId),
+                        isNull(t.deletedAt),
                         parsedCursor
                             ? or(
                                 lt(t.createdAt, parsedCursor.createdAt),
@@ -4611,8 +5059,8 @@ export async function fetchProjectTasksAction(
                 const tasks = projectTasks.slice(0, safeLimit).map((task) => normalizeTaskSurfaceRecord(task));
                 const nextCursor = hasMore
                     ? encodeTaskPaginationCursor({
-                        createdAt: new Date(tasks[tasks.length - 1].createdAt ?? new Date().toISOString()),
-                        id: tasks[tasks.length - 1].id,
+                        createdAt: new Date(tasks[tasks.length - 1]!.createdAt ?? new Date().toISOString()),
+                        id: tasks[tasks.length - 1]!.id,
                     })
                     : undefined;
 
@@ -4792,6 +5240,60 @@ async function readProjectSprintsList(projectId: string, limit: number) {
     }
 }
 
+async function readProjectSprintListItem(projectId: string, sprintId: string) {
+    const readSprint = async (supportsDescription: boolean) => {
+        if (supportsDescription) {
+            return db
+                .select({
+                    id: projectSprints.id,
+                    projectId: projectSprints.projectId,
+                    name: projectSprints.name,
+                    goal: projectSprints.goal,
+                    description: projectSprints.description,
+                    startDate: projectSprints.startDate,
+                    endDate: projectSprints.endDate,
+                    status: projectSprints.status,
+                    createdAt: projectSprints.createdAt,
+                    updatedAt: projectSprints.updatedAt,
+                })
+                .from(projectSprints)
+                .where(and(eq(projectSprints.id, sprintId), eq(projectSprints.projectId, projectId)))
+                .limit(1);
+        }
+
+        return db
+            .select({
+                id: projectSprints.id,
+                projectId: projectSprints.projectId,
+                name: projectSprints.name,
+                goal: projectSprints.goal,
+                startDate: projectSprints.startDate,
+                endDate: projectSprints.endDate,
+                status: projectSprints.status,
+                createdAt: projectSprints.createdAt,
+                updatedAt: projectSprints.updatedAt,
+            })
+            .from(projectSprints)
+            .where(and(eq(projectSprints.id, sprintId), eq(projectSprints.projectId, projectId)))
+            .limit(1)
+            .then((rows) => rows.map((row) => ({ ...row, description: null })));
+    };
+
+    const supportsDescription = await hasProjectSprintDescriptionColumn();
+
+    try {
+        const rows = await readSprint(supportsDescription);
+        return rows[0] ? serializeSprintListItem(rows[0]) : null;
+    } catch (error) {
+        if (supportsDescription && isMissingColumn(error, 'description')) {
+            sprintDescriptionColumnSupport = false;
+            const rows = await readSprint(false);
+            return rows[0] ? serializeSprintListItem(rows[0]) : null;
+        }
+        throw error;
+    }
+}
+
 async function readSprintSummary(sprintId: string) {
     const rows = await db.execute<SprintSummaryQueryRow>(sql`
         SELECT
@@ -4888,7 +5390,7 @@ async function readSprintTaskActivityPage(input: {
     const nextCursor = hasMore && nextCursorActivityAt
         ? encodeSprintDetailPaginationCursor({
             activityAt: nextCursorActivityAt,
-            taskId: lastRow.id,
+            taskId: lastRow!.id,
         })
         : null;
 
@@ -4899,22 +5401,20 @@ async function readSprintTaskActivityPage(input: {
         ),
     );
 
-    const actorRows = actorIds.length > 0
-        ? await db
-            .select({
-                id: profiles.id,
-                fullName: profiles.fullName,
-                avatarUrl: profiles.avatarUrl,
-            })
-            .from(profiles)
-            .where(inArray(profiles.id, actorIds))
-        : [];
+    const [actorRows, fileRows] = await Promise.all([
+        actorIds.length > 0
+            ? db
+                .select({
+                    id: profiles.id,
+                    fullName: profiles.fullName,
+                    avatarUrl: profiles.avatarUrl,
+                })
+                .from(profiles)
+                .where(inArray(profiles.id, actorIds))
+            : Promise.resolve([]),
 
-    const actorById = new Map(actorRows.map((row) => [row.id, row]));
-
-    const fileRows = taskIds.length > 0
-        ? Array.from(
-            await db.execute<SprintTaskFileQueryRow>(sql`
+        taskIds.length > 0
+            ? db.execute<SprintTaskFileQueryRow>(sql`
                 SELECT
                     lnk.id,
                     lnk.task_id,
@@ -4930,9 +5430,11 @@ async function readSprintTaskActivityPage(input: {
                   AND pn.project_id = ${projectId}
                   AND pn.deleted_at IS NULL
                 ORDER BY lnk.linked_at ASC, lnk.id ASC
-            `),
-        )
-        : [];
+            `).then((rows) => Array.from(rows))
+            : Promise.resolve([]),
+    ]);
+
+    const actorById = new Map(actorRows.map((row) => [row.id, row]));
 
     const nodeIds = Array.from(new Set(fileRows.map((row) => row.node_id).filter((value): value is string => !!value)));
     const nodeEventRows = nodeIds.length > 0
@@ -4952,6 +5454,7 @@ async function readSprintTaskActivityPage(input: {
                 ),
             )
             .orderBy(desc(projectNodeEvents.createdAt))
+            .limit(100) // Prevent unbounded fetch
         : [];
 
     const latestNodeEventByNodeId = new Map<string, SprintNodeEventQueryRow>();
@@ -5135,6 +5638,74 @@ async function buildSprintDetailPayload(input: {
     };
 }
 
+async function buildSprintTimelinePagePayload(input: {
+    projectId: string;
+    access: ProjectAccess;
+    sprintId: string | null;
+    cursor?: string;
+    limit?: number;
+}): Promise<SprintDetailPayload | null> {
+    if (!input.sprintId) {
+        return buildSprintDetailPayload(input);
+    }
+
+    const safeLimit = Math.min(Math.max(input.limit ?? 24, 1), 50);
+    const parsedCursor = parseSprintDetailPaginationCursor(input.cursor);
+    const access = input.access;
+    if (!access.project) throw new Error("Project not found");
+    if (!access.canRead) throw new Error("Forbidden");
+
+    const selectedSprint = await readProjectSprintListItem(input.projectId, input.sprintId);
+    if (!selectedSprint) return null;
+
+    const permissions = buildSprintPermissionSet({
+        canRead: access.canRead,
+        canWrite: access.canWrite,
+        isOwner: access.isOwner,
+        isMember: access.isMember,
+        memberRole: access.memberRole,
+    });
+
+    const [summary, taskPage] = await Promise.all([
+        readSprintSummary(selectedSprint.id),
+        readSprintTaskActivityPage({
+            projectId: input.projectId,
+            sprintId: selectedSprint.id,
+            limit: safeLimit,
+            cursor: parsedCursor,
+        }),
+    ]);
+
+    const rows = buildSprintTimeline({
+        sprint: selectedSprint,
+        tasks: taskPage.tasks,
+        summary,
+        includeKickoff: false,
+        includeCloseout: !taskPage.hasMore,
+    });
+
+    return {
+        projectId: input.projectId,
+        projectSlug: access.project.slug ?? null,
+        sprints: [selectedSprint],
+        selectedSprintId: selectedSprint.id,
+        permissions,
+        timelineMode: 'chronological',
+        summary,
+        compareSummary: null,
+        filterCounts: buildSprintFilterCounts({
+            totalTasks: summary.totalTasks,
+            completedTasks: summary.completedTasks,
+            blockedTasks: summary.blockedTasks,
+            linkedFileCount: summary.linkedFileCount,
+        }),
+        rows,
+        drawerPreviews: buildSprintDrawerPreviews(rows),
+        nextCursor: taskPage.nextCursor,
+        hasMore: taskPage.hasMore,
+    };
+}
+
 export async function fetchProjectSprintDetailAction(input: {
     projectId: string;
     sprintId?: string | null;
@@ -5195,6 +5766,56 @@ export async function fetchProjectSprintDetailAction(input: {
     }
 }
 
+export async function fetchProjectSprintTimelinePageAction(input: {
+    projectId: string;
+    sprintId: string | null;
+    cursor?: string;
+    limit?: number;
+}) {
+    try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        const actorId = user?.id ?? null;
+        const cursorKey = input.cursor ?? 'head';
+        const sprintKey = input.sprintId ?? 'default';
+        const startedAt = Date.now();
+
+        const data = await runInFlightDeduped(
+            `project:sprint-timeline-page:${input.projectId}:${sprintKey}:${actorId ?? 'anon'}:${cursorKey}:${input.limit ?? 24}`,
+            async () => {
+                const access = await getProjectAccessById(input.projectId, actorId);
+                if (!access.project) {
+                    throw new Error("Project not found");
+                }
+                return buildSprintTimelinePagePayload({
+                    projectId: input.projectId,
+                    access,
+                    sprintId: input.sprintId,
+                    cursor: input.cursor,
+                    limit: input.limit,
+                });
+            },
+        );
+
+        if (!data) {
+            return { success: false as const, error: "Sprint not found" };
+        }
+
+        recordSprintMetric('project.sprint.timeline.page_load_ms', {
+            projectId: input.projectId,
+            sprintId: data.selectedSprintId,
+            durationMs: Date.now() - startedAt,
+            rowCount: data.rows.length,
+            hasMore: data.hasMore,
+        });
+
+        return { success: true as const, data };
+    } catch (error) {
+        console.error("Failed to fetch sprint timeline page:", error);
+        return { success: false as const, error: "Failed to fetch sprint timeline page" };
+    }
+}
+
 export async function readProjectSprintDetail(input: {
     slugOrId: string;
     sprintId?: string | null;
@@ -5212,12 +5833,14 @@ export async function readProjectSprintDetail(input: {
             };
         }
 
-        const viewerState = await resolveProjectDetailViewerState({
+        const viewerState = resolveProjectDetailViewerState({
             projectId: project.id,
             ownerId: project.ownerId,
             visibility: project.visibility,
             status: project.status,
             actorUserId: input.actorUserId ?? null,
+            memberRoleRaw: project.memberRole,
+            isFollowed: project.isFollowed,
         });
 
         if (!viewerState.canRead) {
@@ -5364,8 +5987,8 @@ export async function fetchSprintTasksAction(
                 const tasks = sprintTasks.slice(0, safeLimit).map((task) => normalizeTaskSurfaceRecord(task));
                 const nextCursor = hasMore
                     ? encodeTaskPaginationCursor({
-                        createdAt: new Date(tasks[tasks.length - 1].createdAt ?? new Date().toISOString()),
-                        id: tasks[tasks.length - 1].id,
+                        createdAt: new Date(tasks[tasks.length - 1]!.createdAt ?? new Date().toISOString()),
+                        id: tasks[tasks.length - 1]!.id,
                     })
                     : undefined;
 
@@ -5657,78 +6280,541 @@ export async function getProjectMembersAction(
     }
 }
 
-export async function getProjectAnalyticsAction(projectId: string) {
+async function getProjectAnalyticsDataset(projectId: string, actorId: string | null): Promise<BuildProjectAnalyticsInput> {
+    await assertProjectReadAccess(projectId, actorId);
+
+    const [projectRow] = await db
+        .select({
+            id: projects.id,
+            slug: projects.slug,
+            title: projects.title,
+            ownerId: projects.ownerId,
+            visibility: projects.visibility,
+            publicTabVisibility: projects.publicTabVisibility,
+            importSource: projects.importSource,
+            syncStatus: projects.syncStatus,
+        })
+        .from(projects)
+        .where(and(eq(projects.id, projectId), isNull(projects.deletedAt)))
+        .limit(1);
+
+    if (!projectRow) throw new Error("Project not found");
+
+    const actorMemberRows = actorId && actorId !== projectRow.ownerId
+        ? await db
+            .select({
+                userId: projectMembers.userId,
+                role: projectMembers.role,
+            })
+            .from(projectMembers)
+            .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, actorId)))
+            .limit(1)
+        : [];
+
+    const membersForAccess = actorMemberRows.map((member) => ({ userId: member.userId, role: member.role }));
+    const accessLevel = resolveProjectAnalyticsAccess({
+        actorId,
+        projectOwnerId: projectRow.ownerId,
+        members: membersForAccess,
+        projectIsPublic: projectRow.visibility === 'public',
+    });
+
+    if (accessLevel === 'public' && !isProjectTabVisibleToViewer({
+        tabId: 'analytics',
+        isOwnerOrMember: false,
+        publicTabVisibility: projectRow.publicTabVisibility,
+    })) {
+        throw new Error("Project analytics are not publicly visible");
+    }
+
+    if (accessLevel === 'public') {
+        const importSourceType = (projectRow.importSource as { type?: 'github' | 'upload' | 'scratch' } | null | undefined)?.type ?? null;
+        return {
+            project: {
+                id: projectRow.id,
+                slug: projectRow.slug,
+                title: projectRow.title,
+                ownerId: projectRow.ownerId,
+                importSourceType,
+                syncStatus: projectRow.syncStatus,
+            },
+            accessLevel,
+            actorId,
+            hiddenPrivateFiles: 0,
+            members: [],
+            tasks: [],
+            sprints: [],
+            files: [],
+            fileVersions: [],
+            taskFileLinks: [],
+            comments: [],
+            applications: [],
+            roles: [],
+            workflows: [],
+            events: [],
+        };
+    }
+
+    const memberRows = await db
+        .select({
+            id: projectMembers.id,
+            userId: projectMembers.userId,
+            role: projectMembers.role,
+            joinedAt: projectMembers.joinedAt,
+            username: profiles.username,
+            fullName: profiles.fullName,
+            avatarUrl: profiles.avatarUrl,
+        })
+        .from(projectMembers)
+        .leftJoin(profiles, eq(profiles.id, projectMembers.userId))
+        .where(and(eq(projectMembers.projectId, projectId), isNull(profiles.deletedAt)))
+        .orderBy(desc(projectMembers.joinedAt))
+        .limit(PROJECT_ANALYTICS_DATASET_LIMITS.members);
+
+    const [
+        taskRows,
+        sprintRows,
+        fileRows,
+        applicationRows,
+        roleRows,
+        workflowRows,
+        linkedWorkRows,
+        eventRows,
+    ] = await Promise.all([
+        db
+            .select({
+                id: tasks.id,
+                title: tasks.title,
+                status: tasks.status,
+                priority: tasks.priority,
+                assigneeId: tasks.assigneeId,
+                creatorId: tasks.creatorId,
+                sprintId: tasks.sprintId,
+                dueDate: tasks.dueDate,
+                createdAt: tasks.createdAt,
+                updatedAt: tasks.updatedAt,
+            })
+            .from(tasks)
+            .where(and(eq(tasks.projectId, projectId), isNull(tasks.deletedAt)))
+            .orderBy(desc(tasks.updatedAt))
+            .limit(PROJECT_ANALYTICS_DATASET_LIMITS.tasks),
+        db
+            .select({
+                id: projectSprints.id,
+                name: projectSprints.name,
+                status: projectSprints.status,
+                startDate: projectSprints.startDate,
+                endDate: projectSprints.endDate,
+                createdAt: projectSprints.createdAt,
+                updatedAt: projectSprints.updatedAt,
+            })
+            .from(projectSprints)
+            .where(eq(projectSprints.projectId, projectId))
+            .orderBy(desc(projectSprints.updatedAt))
+            .limit(PROJECT_ANALYTICS_DATASET_LIMITS.sprints),
+        db
+            .select({
+                id: projectNodes.id,
+                name: projectNodes.name,
+                path: projectNodes.path,
+                type: projectNodes.type,
+                createdBy: projectNodes.createdBy,
+                createdAt: projectNodes.createdAt,
+                updatedAt: projectNodes.updatedAt,
+                metadata: projectNodes.metadata,
+                gitHash: projectNodes.gitHash,
+            })
+            .from(projectNodes)
+            .where(and(eq(projectNodes.projectId, projectId), eq(projectNodes.type, 'file'), isNull(projectNodes.deletedAt)))
+            .orderBy(desc(projectNodes.updatedAt))
+            .limit(PROJECT_ANALYTICS_DATASET_LIMITS.files),
+        db
+            .select({
+                id: roleApplications.id,
+                applicantId: roleApplications.applicantId,
+                status: roleApplications.status,
+                createdAt: roleApplications.createdAt,
+                updatedAt: roleApplications.updatedAt,
+            })
+            .from(roleApplications)
+            .where(eq(roleApplications.projectId, projectId))
+            .orderBy(desc(roleApplications.updatedAt))
+            .limit(PROJECT_ANALYTICS_DATASET_LIMITS.applications),
+        db
+            .select({
+                id: projectOpenRoles.id,
+                title: projectOpenRoles.title,
+                role: projectOpenRoles.role,
+                count: projectOpenRoles.count,
+                filled: projectOpenRoles.filled,
+                updatedAt: projectOpenRoles.updatedAt,
+            })
+            .from(projectOpenRoles)
+            .where(eq(projectOpenRoles.projectId, projectId))
+            .orderBy(desc(projectOpenRoles.updatedAt))
+            .limit(PROJECT_ANALYTICS_DATASET_LIMITS.roles),
+        db
+            .select({
+                id: messageWorkflowItems.id,
+                targetId: messageWorkflowItems.taskId,
+                status: messageWorkflowItems.status,
+                assigneeUserId: messageWorkflowItems.assigneeUserId,
+                createdBy: messageWorkflowItems.creatorId,
+                createdAt: messageWorkflowItems.createdAt,
+                updatedAt: messageWorkflowItems.updatedAt,
+            })
+            .from(messageWorkflowItems)
+            .where(eq(messageWorkflowItems.projectId, projectId))
+            .orderBy(desc(messageWorkflowItems.updatedAt))
+            .limit(PROJECT_ANALYTICS_DATASET_LIMITS.workflows / 2),
+        db
+            .select({
+                id: messageWorkLinks.id,
+                targetId: messageWorkLinks.targetId,
+                status: messageWorkLinks.status,
+                assigneeUserId: messageWorkLinks.assigneeUserId,
+                createdBy: messageWorkLinks.createdBy,
+                createdAt: messageWorkLinks.createdAt,
+                updatedAt: messageWorkLinks.updatedAt,
+            })
+            .from(messageWorkLinks)
+            .where(and(eq(messageWorkLinks.targetProjectId, projectId), isNull(messageWorkLinks.deletedAt)))
+            .orderBy(desc(messageWorkLinks.updatedAt))
+            .limit(PROJECT_ANALYTICS_DATASET_LIMITS.workflows / 2),
+        db
+            .select({
+                id: projectNodeEvents.id,
+                type: projectNodeEvents.type,
+                actorId: projectNodeEvents.actorId,
+                metadata: projectNodeEvents.metadata,
+                createdAt: projectNodeEvents.createdAt,
+            })
+            .from(projectNodeEvents)
+            .where(eq(projectNodeEvents.projectId, projectId))
+            .orderBy(desc(projectNodeEvents.createdAt))
+            .limit(PROJECT_ANALYTICS_DATASET_LIMITS.events),
+    ]);
+
+    const importSourceType = (projectRow.importSource as { type?: 'github' | 'upload' | 'scratch' } | null | undefined)?.type ?? null;
+    const analyticsFileRows = fileRows.map((file) => {
+        const contract = normalizeProjectNodeAnalyticsMetadata({
+            metadata: file.metadata as Record<string, unknown> | null | undefined,
+            gitHash: file.gitHash,
+            importSourceType,
+        });
+        return { ...file, analyticsContract: contract };
+    });
+    const visibleFileRows = analyticsFileRows.filter((file) => file.analyticsContract.analyticsVisible);
+    const hiddenPrivateFiles = analyticsFileRows.length - visibleFileRows.length;
+    const fileNodeIds = visibleFileRows.map((file) => file.id);
+    const taskIds = taskRows.map((task) => task.id);
+
+    const [versionRows, taskFileLinkRows, commentRows] = await Promise.all([
+        fileNodeIds.length
+            ? db
+                .select({
+                    id: fileVersions.id,
+                    nodeId: fileVersions.nodeId,
+                    uploadedBy: fileVersions.uploadedBy,
+                    uploadedAt: fileVersions.uploadedAt,
+                })
+                .from(fileVersions)
+                .where(inArray(fileVersions.nodeId, fileNodeIds))
+                .orderBy(desc(fileVersions.uploadedAt))
+                .limit(PROJECT_ANALYTICS_DATASET_LIMITS.fileVersions)
+            : Promise.resolve([]),
+        taskIds.length
+            ? db
+                .select({
+                    id: taskNodeLinks.id,
+                    taskId: taskNodeLinks.taskId,
+                    nodeId: taskNodeLinks.nodeId,
+                    annotation: taskNodeLinks.annotation,
+                    linkedAt: taskNodeLinks.linkedAt,
+                })
+                .from(taskNodeLinks)
+                .where(inArray(taskNodeLinks.taskId, taskIds))
+                .orderBy(desc(taskNodeLinks.linkedAt))
+                .limit(PROJECT_ANALYTICS_DATASET_LIMITS.taskFileLinks)
+            : Promise.resolve([]),
+        taskIds.length
+            ? db
+                .select({
+                    id: taskComments.id,
+                    taskId: taskComments.taskId,
+                    userId: taskComments.userId,
+                    createdAt: taskComments.createdAt,
+                })
+                .from(taskComments)
+                .where(and(inArray(taskComments.taskId, taskIds), isNull(taskComments.deletedAt)))
+                .orderBy(desc(taskComments.createdAt))
+                .limit(PROJECT_ANALYTICS_DATASET_LIMITS.comments)
+            : Promise.resolve([]),
+    ]);
+
+    return {
+        project: {
+            id: projectRow.id,
+            slug: projectRow.slug,
+            title: projectRow.title,
+            ownerId: projectRow.ownerId,
+            importSourceType,
+            syncStatus: projectRow.syncStatus,
+        },
+        accessLevel,
+        actorId,
+        hiddenPrivateFiles,
+        members: memberRows.map((member) => ({
+            id: member.id,
+            userId: member.userId,
+            role: projectRow.ownerId === member.userId ? 'owner' : member.role,
+            joinedAt: member.joinedAt,
+            user: {
+                id: member.userId,
+                username: member.username,
+                fullName: member.fullName,
+                avatarUrl: member.avatarUrl,
+            },
+        })),
+        tasks: taskRows,
+        sprints: sprintRows,
+        files: visibleFileRows.map((file) => ({
+            id: file.id,
+            name: file.name,
+            path: file.path,
+            type: file.type,
+            createdBy: file.createdBy,
+            createdAt: file.createdAt,
+            updatedAt: file.updatedAt,
+            source: file.analyticsContract.source,
+            analyticsVisible: file.analyticsContract.analyticsVisible,
+            publicVisible: file.analyticsContract.publicVisible,
+            privateReason: file.analyticsContract.privateReason,
+        })),
+        fileVersions: versionRows,
+        taskFileLinks: taskFileLinkRows,
+        comments: commentRows,
+        applications: applicationRows,
+        roles: roleRows,
+        workflows: [
+            ...workflowRows,
+            ...linkedWorkRows.map((link) => ({
+                id: link.id,
+                targetId: link.targetId,
+                status: link.status,
+                assigneeUserId: link.assigneeUserId,
+                createdBy: link.createdBy,
+                createdAt: link.createdAt,
+                updatedAt: link.updatedAt,
+            })),
+        ],
+        events: eventRows,
+    };
+}
+
+const readProjectAnalyticsData = async (projectId: string) => {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    const actorId = user?.id ?? null;
+    return runInFlightDeduped(`project:analytics:v2:${projectId}:${actorId ?? 'anon'}`, () =>
+        getProjectAnalyticsDataset(projectId, actorId)
+    );
+};
+
+const readProjectAnalyticsScopedData = async (
+    projectId: string,
+    context?: Partial<ProjectAnalyticsContextFilters> | null,
+) => {
+    const dataset = await readProjectAnalyticsData(projectId);
+    return filterProjectAnalyticsDatasetByContext(dataset, normalizeProjectAnalyticsContext(context));
+};
+
+const canReadMemberDetail = (dataset: BuildProjectAnalyticsInput, memberUserId: string) => {
+    if (dataset.accessLevel === 'owner' || dataset.accessLevel === 'co_leader') return true;
+    if (dataset.accessLevel === 'member' || dataset.accessLevel === 'viewer') return dataset.actorId === memberUserId;
+    return false;
+};
+
+const canReadOperationalRisk = (dataset: BuildProjectAnalyticsInput) =>
+    dataset.accessLevel === 'owner' || dataset.accessLevel === 'co_leader';
+
+export async function readProjectAnalyticsOverviewAction(projectId: string, context?: Partial<ProjectAnalyticsContextFilters> | null) {
     try {
+        const rawDataset = await readProjectAnalyticsData(projectId);
+        const dataset = filterProjectAnalyticsDatasetByContext(rawDataset, normalizeProjectAnalyticsContext(context));
+        return { success: true as const, overview: buildProjectAnalyticsOverview(dataset, context, rawDataset) };
+    } catch (error) {
+        console.error("Failed to fetch project analytics overview:", error);
+        return { success: false as const, error: "Failed to fetch project analytics overview" };
+    }
+}
+
+export async function readProjectAnalyticsMembersAction(projectId: string, context?: Partial<ProjectAnalyticsContextFilters> | null) {
+    try {
+        const dataset = await readProjectAnalyticsScopedData(projectId, context);
+        if (dataset.accessLevel === 'public') return { success: true as const, members: [] };
+        return { success: true as const, members: buildProjectAnalyticsMemberSummaries(dataset) };
+    } catch (error) {
+        console.error("Failed to fetch project analytics members:", error);
+        return { success: false as const, error: "Failed to fetch project analytics members" };
+    }
+}
+
+export async function readProjectMemberAnalyticsAction(projectId: string, memberUserId: string, context?: Partial<ProjectAnalyticsContextFilters> | null) {
+    try {
+        const dataset = await readProjectAnalyticsScopedData(projectId, { ...context, memberId: memberUserId });
+        if (!canReadMemberDetail(dataset, memberUserId)) {
+            return { success: false as const, error: "Member analytics are not visible for this access level" };
+        }
+        return { success: true as const, detail: buildProjectAnalyticsMemberDetail(dataset, memberUserId) };
+    } catch (error) {
+        console.error("Failed to fetch project member analytics:", error);
+        return { success: false as const, error: "Failed to fetch project member analytics" };
+    }
+}
+
+export async function readProjectAnalyticsWorkflowAction(projectId: string, context?: Partial<ProjectAnalyticsContextFilters> | null) {
+    try {
+        const dataset = await readProjectAnalyticsScopedData(projectId, context);
+        if (dataset.accessLevel === 'public') {
+            return { success: true as const, workflow: { statusCounts: {}, friction: [], unassigned: [], blocked: [], stale: [], removedMemberAssignments: [] } };
+        }
+        return { success: true as const, workflow: buildProjectAnalyticsWorkflow(dataset) };
+    } catch (error) {
+        console.error("Failed to fetch project analytics workflow:", error);
+        return { success: false as const, error: "Failed to fetch project analytics workflow" };
+    }
+}
+
+export async function readProjectAnalyticsSprintsAction(projectId: string, context?: Partial<ProjectAnalyticsContextFilters> | null) {
+    try {
+        const dataset = await readProjectAnalyticsScopedData(projectId, context);
+        if (dataset.accessLevel === 'public') return { success: true as const, sprints: [] };
+        return { success: true as const, sprints: buildProjectAnalyticsSprints(dataset) };
+    } catch (error) {
+        console.error("Failed to fetch project analytics sprints:", error);
+        return { success: false as const, error: "Failed to fetch project analytics sprints" };
+    }
+}
+
+export async function readProjectAnalyticsFilesAction(projectId: string, context?: Partial<ProjectAnalyticsContextFilters> | null) {
+    try {
+        const dataset = await readProjectAnalyticsScopedData(projectId, context);
+        if (dataset.accessLevel === 'public') {
+            return { success: true as const, files: buildProjectAnalyticsFiles({ ...dataset, taskFileLinks: [] }) };
+        }
+        return { success: true as const, files: buildProjectAnalyticsFiles(dataset) };
+    } catch (error) {
+        console.error("Failed to fetch project analytics files:", error);
+        return { success: false as const, error: "Failed to fetch project analytics files" };
+    }
+}
+
+export async function readProjectAnalyticsRisksAction(projectId: string, context?: Partial<ProjectAnalyticsContextFilters> | null) {
+    try {
+        const dataset = await readProjectAnalyticsScopedData(projectId, context);
+        return { success: true as const, risks: canReadOperationalRisk(dataset) ? buildProjectAnalyticsRisks(dataset) : [] };
+    } catch (error) {
+        console.error("Failed to fetch project analytics risks:", error);
+        return { success: false as const, error: "Failed to fetch project analytics risks" };
+    }
+}
+
+export async function readProjectAnalyticsTimelineAction(projectId: string, filters: ProjectAnalyticsTimelineFilters = {}) {
+    try {
+        const dataset = await readProjectAnalyticsData(projectId);
+        if (dataset.accessLevel === 'public') {
+            return { success: true as const, timeline: buildProjectAnalyticsTimeline({ ...dataset, events: [], comments: [], workflows: [] }, filters) };
+        }
+        return { success: true as const, timeline: buildProjectAnalyticsTimeline(dataset, filters) };
+    } catch (error) {
+        console.error("Failed to fetch project analytics timeline:", error);
+        return { success: false as const, error: "Failed to fetch project analytics timeline" };
+    }
+}
+
+export async function readProjectAnalyticsSnapshotAction(projectId: string, context?: Partial<ProjectAnalyticsContextFilters> | null) {
+    try {
+        const dataset = await readProjectAnalyticsData(projectId);
+        return { success: true as const, snapshot: buildProjectAnalyticsSnapshot(dataset, context) };
+    } catch (error) {
+        console.error("Failed to fetch project analytics snapshot:", error);
+        return { success: false as const, error: "Failed to fetch project analytics snapshot" };
+    }
+}
+
+export async function readProjectAnalyticsReportAction(projectId: string, context?: Partial<ProjectAnalyticsContextFilters> | null) {
+    try {
+        const dataset = await readProjectAnalyticsData(projectId);
+        const snapshot = buildProjectAnalyticsSnapshot(dataset, context);
+        return {
+            success: true as const,
+            filename: `project-intelligence-${projectId}-${new Date().toISOString().slice(0, 10)}.md`,
+            content: buildProjectAnalyticsReport(snapshot),
+        };
+    } catch (error) {
+        console.error("Failed to build project analytics report:", error);
+        return { success: false as const, error: "Failed to build project analytics report" };
+    }
+}
+
+export async function updateProjectAnalyticsRiskLifecycleAction(
+    projectId: string,
+    riskId: string,
+    status: ProjectAnalyticsRiskLifecycleStatus,
+) {
+    try {
+        const normalizedStatus = status === 'active' || status === 'acknowledged' || status === 'resolved' || status === 'dismissed'
+            ? status
+            : null;
+        if (!normalizedStatus) return { success: false as const, error: "Invalid risk lifecycle status" };
         const supabase = await createClient();
         const { data: { user } } = await supabase.auth.getUser();
-        const actorId = user?.id ?? null;
-
-        return await runInFlightDeduped(`project:analytics:${projectId}:${actorId ?? 'anon'}`, async () => {
-            await assertProjectReadAccess(projectId, actorId);
-
-            const [row] = await db
-                .select({
-                    totalTasks: sql<number>`count(*)`,
-                    completedTasks: sql<number>`count(*) FILTER (WHERE ${tasks.status} = 'done')`,
-                    inProgressTasks: sql<number>`count(*) FILTER (WHERE ${tasks.status} = 'in_progress')`,
-                    overdueTasks: sql<number>`count(*) FILTER (WHERE ${tasks.status} != 'done' AND ${tasks.dueDate} IS NOT NULL AND ${tasks.dueDate} < NOW())`,
-                    urgentCount: sql<number>`count(*) FILTER (WHERE ${tasks.priority} = 'urgent')`,
-                    highCount: sql<number>`count(*) FILTER (WHERE ${tasks.priority} = 'high')`,
-                    mediumCount: sql<number>`count(*) FILTER (WHERE ${tasks.priority} = 'medium')`,
-                    lowCount: sql<number>`count(*) FILTER (WHERE ${tasks.priority} = 'low')`,
-                    tasksCreated7d: sql<number>`count(*) FILTER (WHERE ${tasks.createdAt} >= NOW() - INTERVAL '7 days')`,
-                    tasksCreated30d: sql<number>`count(*) FILTER (WHERE ${tasks.createdAt} >= NOW() - INTERVAL '30 days')`,
-                    tasksCreated90d: sql<number>`count(*) FILTER (WHERE ${tasks.createdAt} >= NOW() - INTERVAL '90 days')`,
-                    tasksCompleted7d: sql<number>`count(*) FILTER (WHERE ${tasks.status} = 'done' AND ${tasks.updatedAt} >= NOW() - INTERVAL '7 days')`,
-                    tasksCompleted30d: sql<number>`count(*) FILTER (WHERE ${tasks.status} = 'done' AND ${tasks.updatedAt} >= NOW() - INTERVAL '30 days')`,
-                    tasksCompleted90d: sql<number>`count(*) FILTER (WHERE ${tasks.status} = 'done' AND ${tasks.updatedAt} >= NOW() - INTERVAL '90 days')`,
-                })
-                .from(tasks)
-                .where(eq(tasks.projectId, projectId));
-
-            const totalTasks = Number(row?.totalTasks || 0);
-            const completedTasks = Number(row?.completedTasks || 0);
-            const inProgressTasks = Number(row?.inProgressTasks || 0);
-            const overdueTasks = Number(row?.overdueTasks || 0);
-
-            const priorityDistribution = {
-                urgent: Number(row?.urgentCount || 0),
-                high: Number(row?.highCount || 0),
-                medium: Number(row?.mediumCount || 0),
-                low: Number(row?.lowCount || 0),
-            } as Record<string, number>;
-            const activityByWindow = {
-                7: {
-                    tasksCreated: Number(row?.tasksCreated7d || 0),
-                    tasksCompleted: Number(row?.tasksCompleted7d || 0),
-                },
-                30: {
-                    tasksCreated: Number(row?.tasksCreated30d || 0),
-                    tasksCompleted: Number(row?.tasksCompleted30d || 0),
-                },
-                90: {
-                    tasksCreated: Number(row?.tasksCreated90d || 0),
-                    tasksCompleted: Number(row?.tasksCompleted90d || 0),
-                },
-            } as const;
-
-            const completionRate = totalTasks > 0
-                ? Math.round((completedTasks / totalTasks) * 100)
-                : 0;
-
-            return {
-                success: true as const,
-                analytics: {
-                    totalTasks,
-                    completedTasks,
-                    inProgressTasks,
-                    overdueTasks,
-                    priorityDistribution,
-                    completionRate,
-                    activityByWindow,
-                }
-            };
+        if (!user) return { success: false as const, error: "Not authenticated" };
+        const dataset = await getProjectAnalyticsDataset(projectId, user.id);
+        if (!canReadOperationalRisk(dataset)) return { success: false as const, error: "Not authorized to update risk lifecycle" };
+        await db.insert(projectNodeEvents).values({
+            projectId,
+            actorId: user.id,
+            nodeId: null,
+            type: "project_analytics.risk_lifecycle_changed",
+            metadata: {
+                riskId,
+                status: normalizedStatus,
+                source: "analytics_risk_panel",
+            },
+            createdAt: new Date(),
         });
+        return { success: true as const, status: normalizedStatus };
+    } catch (error) {
+        console.error("Failed to update project analytics risk lifecycle:", error);
+        return { success: false as const, error: "Failed to update project analytics risk lifecycle" };
+    }
+}
+
+export async function getProjectAnalyticsAction(projectId: string) {
+    try {
+        const dataset = await readProjectAnalyticsData(projectId);
+        const overview = buildProjectAnalyticsOverview(dataset);
+        return {
+            success: true as const,
+            analytics: {
+                totalTasks: overview.sourceSummary.tasks,
+                completedTasks: overview.pulse.completedWork,
+                inProgressTasks: overview.pulse.activeWork,
+                overdueTasks: overview.pulse.staleWork,
+                priorityDistribution: {},
+                completionRate: overview.sourceSummary.tasks > 0
+                    ? Math.round((overview.pulse.completedWork / overview.sourceSummary.tasks) * 100)
+                    : 0,
+                activityByWindow: {
+                    7: { tasksCreated: overview.pulse.recentMovement, tasksCompleted: overview.pulse.completedWork },
+                    30: { tasksCreated: overview.sourceSummary.tasks, tasksCompleted: overview.pulse.completedWork },
+                    90: { tasksCreated: overview.sourceSummary.tasks, tasksCompleted: overview.pulse.completedWork },
+                },
+                overview,
+            },
+        };
     } catch (error) {
         console.error("Failed to fetch project analytics:", error);
         return { success: false as const, error: "Failed to fetch project analytics" };
@@ -6591,6 +7677,7 @@ type UpdateProjectStageResult =
         success: true;
         currentStageIndex: number;
         updatedAt: string | null;
+        stageCompletionDates?: Record<string, string>;
     }
     | {
         success: false;
@@ -6625,6 +7712,7 @@ export async function updateProjectStageAction(
             .select({
                 ownerId: projects.ownerId,
                 lifecycleStages: projects.lifecycleStages,
+                stageCompletionDates: projects.stageCompletionDates,
             })
             .from(projects)
             .where(eq(projects.id, projectId))
@@ -6665,10 +7753,28 @@ export async function updateProjectStageAction(
             )
             : and(eq(projects.id, projectId), eq(projects.ownerId, user.id));
 
+        const currentDates = (projectForStageUpdate?.stageCompletionDates || {}) as Record<string, string>;
+        const updatedDates: Record<string, string> = {};
+
+        for (const [key, val] of Object.entries(currentDates)) {
+            const idx = parseInt(key, 10);
+            if (idx < normalizedIndex) {
+                updatedDates[key] = val;
+            }
+        }
+        
+        if (normalizedIndex > 0) {
+            const prevIndexStr = String(normalizedIndex - 1);
+            if (!updatedDates[prevIndexStr]) {
+                updatedDates[prevIndexStr] = new Date().toISOString();
+            }
+        }
+
         const [updated] = await db
             .update(projects)
             .set({
                 currentStageIndex: normalizedIndex,
+                stageCompletionDates: updatedDates,
                 updatedAt: new Date(),
             })
             .where(whereClause)
@@ -6676,6 +7782,7 @@ export async function updateProjectStageAction(
                 currentStageIndex: projects.currentStageIndex,
                 updatedAt: projects.updatedAt,
                 slug: projects.slug,
+                stageCompletionDates: projects.stageCompletionDates,
             });
 
         if (!updated) {
@@ -6722,6 +7829,7 @@ export async function updateProjectStageAction(
             success: true,
             currentStageIndex: Math.max(0, updated.currentStageIndex ?? normalizedIndex),
             updatedAt: updated.updatedAt?.toISOString?.() ?? null,
+            stageCompletionDates: updated.stageCompletionDates as Record<string, string> | undefined,
         };
     } catch (error) {
         console.error("[updateProjectStageAction] Failed:", error);
@@ -6748,10 +7856,8 @@ export async function updateProjectLifecycleAction(
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) throw new Error("Unauthorized");
 
-        // Validate
-        if (!newStages || newStages.length === 0) {
-            throw new Error("At least one lifecycle stage is required");
-        }
+        // Validate and sanitize stages
+        const sanitizedStages = validateAndSanitizeLifecycleStages(newStages);
 
         // Get current index for Smart Rebalance calculation
         const { data: project, error: fetchError } = await supabase
@@ -6766,19 +7872,19 @@ export async function updateProjectLifecycleAction(
         }
 
         // SMART REBALANCE: Find the new index for the current stage
-        let newIndex = newStages.findIndex(s => s === currentActiveStageName);
+        let newIndex = sanitizedStages.findIndex(s => s === currentActiveStageName);
         if (newIndex === -1) {
             // Stage was deleted - fallback to previous index or 0
             newIndex = Math.max(0, (project.current_stage_index || 0) - 1);
             // Clamp to max
-            newIndex = Math.min(newIndex, newStages.length - 1);
+            newIndex = Math.min(newIndex, sanitizedStages.length - 1);
         }
 
         // Use Supabase client directly for RLS-compliant update
         const { error } = await supabase
             .from('projects')
             .update({
-                lifecycle_stages: newStages,
+                lifecycle_stages: sanitizedStages,
                 current_stage_index: newIndex,
                 updated_at: new Date().toISOString()
             })
@@ -7056,28 +8162,22 @@ export async function retryGithubImportAction(projectId: string) {
             normalizedRepoUrl,
             enqueueBranch || null
         )}:retry:${Date.parse(retryAt)}`;
-        await inngest.send({
-            name: "project/import",
-            id: retryEventId,
-            data: {
-                projectId,
-                importSource: {
-                    type: 'github',
-                    repoUrl: normalizedRepoUrl,
-                    branch: enqueueBranch,
-                    metadata: (clearSealedGithubTokenFromImportSource(nextImportSource) as Record<string, any>).metadata,
-                },
-                userId: user.id,
-            }
-        });
-
-        logger.metric('github.import.enqueue', {
+        const dispatchResult = await enqueueGithubImportOrRunInline({
             projectId,
             userId: user.id,
-            result: 'success',
+            importSource: {
+                type: 'github',
+                repoUrl: normalizedRepoUrl,
+                branch: enqueueBranch,
+                metadata: (clearSealedGithubTokenFromImportSource(nextImportSource) as Record<string, any>).metadata,
+            },
             eventId: retryEventId,
             source: 'retry',
         });
+
+        if (!dispatchResult.success) {
+            return { success: false, error: dispatchResult.error };
+        }
 
         return { success: true };
     } catch (e: any) {
@@ -7114,5 +8214,65 @@ export async function retryGithubImportAction(projectId: string) {
         });
 
         return { success: false, error: msg };
+    }
+}
+
+export async function getProjectLiveStatsAction(projectId: string): Promise<{
+    success: boolean;
+    viewCount?: number;
+    followersCount?: number;
+    isFollowed?: boolean;
+    error?: string;
+}> {
+    try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+
+        const access = await getProjectAccessById(projectId, user?.id ?? null);
+        if (!access.project || !access.canRead) {
+            return { success: false, error: "Project not found or access denied" };
+        }
+
+        const [row] = await db
+            .select({
+                viewCount: projects.viewCount,
+                followersCount: projects.followersCount,
+            })
+            .from(projects)
+            .where(eq(projects.id, projectId))
+            .limit(1);
+
+        if (!row) {
+            return { success: false, error: "Project not found" };
+        }
+
+        let liveViewCount = Math.max(0, row.viewCount ?? 0);
+        if (redis && process.env.PROJECT_VIEWS_WRITE_THROUGH !== "1") {
+            const bufferedVal = await redis.hget("project:views", projectId);
+            if (bufferedVal) {
+                liveViewCount += parseInt(bufferedVal as any, 10) || 0;
+            }
+        }
+        const followersCount = Math.max(0, row.followersCount ?? 0);
+
+        let isFollowed = false;
+        if (user) {
+            const [followRow] = await db
+                .select({ id: projectFollows.id })
+                .from(projectFollows)
+                .where(and(eq(projectFollows.userId, user.id), eq(projectFollows.projectId, projectId)))
+                .limit(1);
+            isFollowed = !!followRow;
+        }
+
+        return {
+            success: true,
+            viewCount: liveViewCount,
+            followersCount,
+            isFollowed,
+        };
+    } catch (error) {
+        console.error("Failed to get live project stats", error);
+        return { success: false, error: "Failed to get live stats" };
     }
 }
