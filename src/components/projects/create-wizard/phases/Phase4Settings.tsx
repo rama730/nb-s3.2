@@ -77,21 +77,7 @@ export default function Phase4Settings() {
                 </p>
 
                 <div className="space-y-4">
-                    <div>
-                        <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">
-                            IP Agreement
-                        </label>
-                        <select
-                            value={terms?.ip_agreement || 'discuss'}
-                            onChange={(e) => updateTerms({ ip_agreement: e.target.value as typeof DEFAULT_TERMS.ip_agreement })}
-                            className="w-full px-4 py-3 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100"
-                        >
-                            <option value="discuss">To be discussed</option>
-                            <option value="company_owned">Company/Project owned</option>
-                            <option value="contributor_owned">Contributor retains rights</option>
-                            <option value="shared">Shared ownership</option>
-                        </select>
-                    </div>
+
 
                     <div className="flex items-center gap-3">
                         <input
