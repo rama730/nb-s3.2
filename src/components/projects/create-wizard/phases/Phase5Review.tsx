@@ -3,11 +3,11 @@
 import { useFormContext } from 'react-hook-form';
 import { CreateProjectInput } from '@/lib/validations/project';
 import { WizardContextType } from '../useCreateProjectWizard';
-import { Edit3, Globe, Lock, Users, Tag } from 'lucide-react';
+import { BookOpen, Edit3, Globe, Lock, Users, Tag } from 'lucide-react';
 
 interface Phase5ReviewProps {
     wizardContext: WizardContextType;
-    goToPhase: (phase: 1 | 2 | 3 | 4 | 5) => void;
+    goToPhase: (phase: 1 | 2 | 3 | 4) => void;
 }
 
 export default function Phase5Review({ wizardContext, goToPhase }: Phase5ReviewProps) {
@@ -15,6 +15,25 @@ export default function Phase5Review({ wizardContext, goToPhase }: Phase5ReviewP
     const formData = watch();
     const { openRoles } = wizardContext;
     const leadFocus = (formData.creator_role?.title || '').trim();
+    const readmeIntent = formData.readme ?? { mode: 'starter' as const, sourcePath: null };
+    const readmeSummary = (() => {
+        if (readmeIntent.mode === 'detected') {
+            return {
+                title: 'Use detected README',
+                description: `A private draft will be prepared from ${readmeIntent.sourcePath || 'the detected README'} after project files are available.`,
+            };
+        }
+        if (readmeIntent.mode === 'skip') {
+            return {
+                title: 'Skip README for now',
+                description: 'The README tab stays empty until a project leader creates or imports one.',
+            };
+        }
+        return {
+            title: 'Create starter README draft',
+            description: 'A private draft with overview, setup, project focus, and roles will be prepared.',
+        };
+    })();
 
     const visibilityIcons = {
         public: Globe,
@@ -176,6 +195,33 @@ export default function Phase5Review({ wizardContext, goToPhase }: Phase5ReviewP
                 ) : (
                     <p className="text-sm text-zinc-500 dark:text-zinc-400">No open positions added</p>
                 )}
+            </div>
+
+            {/* README Section */}
+            <div className="bg-zinc-50 dark:bg-zinc-800/50 rounded-xl p-6">
+                <div className="flex items-center justify-between mb-4">
+                    <h4 className="font-semibold text-zinc-900 dark:text-zinc-100">Project README</h4>
+                    <button
+                        type="button"
+                        onClick={() => goToPhase(1)}
+                        className="flex items-center gap-1 text-sm text-indigo-600 hover:text-indigo-700"
+                    >
+                        <Edit3 className="w-3 h-3" />
+                        Edit
+                    </button>
+                </div>
+
+                <div className="flex items-start gap-3 rounded-lg border border-zinc-200 bg-white p-3 dark:border-zinc-700 dark:bg-zinc-900/60">
+                    <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600 dark:bg-indigo-900/20 dark:text-indigo-300">
+                        <BookOpen className="h-4 w-4" />
+                    </div>
+                    <div className="min-w-0">
+                        <p className="font-medium text-zinc-900 dark:text-zinc-100">{readmeSummary.title}</p>
+                        <p className="mt-1 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
+                            {readmeSummary.description}
+                        </p>
+                    </div>
+                </div>
             </div>
 
             {/* Ready to Launch */}
