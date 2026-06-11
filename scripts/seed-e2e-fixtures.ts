@@ -325,6 +325,7 @@ async function seedFixtures() {
 
         for (let index = 0; index < HUB_PROJECT_FIXTURES.length; index += 1) {
             const fixture = HUB_PROJECT_FIXTURES[index];
+            if (!fixture) continue;
             const shiftedSeconds = 3600 + index;
 
             await tx`
