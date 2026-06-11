@@ -292,7 +292,7 @@ function extractMessageMentions(content: string) {
     let match: RegExpExecArray | null;
 
     while ((match = mentionRegex.exec(content)) !== null) {
-        const raw = match[2].toLowerCase();
+        const raw = match[2]!.toLowerCase();
         if (['all', 'qa', 'design', 'dev', 'frontend', 'backend', 'product'].includes(raw)) {
             roleMentions.add(raw);
         } else {
@@ -986,10 +986,18 @@ async function reconcileConversationLastMessagePreviews(
     }
 
     const refreshedEntries = await Promise.all(staleConversationIds.map(async (conversationId) => {
-        await refreshConversationParticipantPreviews(conversationId);
+        const latestMessage = await readLatestVisibleConversationPreview(conversationId, viewerId);
+        
+        await db.update(conversationParticipants)
+            .set(buildConversationParticipantPreview(latestMessage))
+            .where(and(
+                eq(conversationParticipants.conversationId, conversationId),
+                eq(conversationParticipants.userId, viewerId)
+            ));
+
         return [
             conversationId,
-            await readLatestVisibleConversationPreview(conversationId, viewerId),
+            latestMessage,
         ] as const;
     }));
     const refreshedLastMessageByConversationId = new Map(refreshedEntries);
@@ -1203,7 +1211,9 @@ async function hydrateAttachmentUrls(attachmentRows: AttachmentRowForResolution[
 
     return attachmentRows.map((attachment) => {
         const resolvedUrl = buildMessageAttachmentAccessUrl(attachment.id);
-        const resolvedThumbnail = attachment.type === 'image' ? resolvedUrl : attachment.thumbnailUrl;
+        const resolvedThumbnail = attachment.type === 'image'
+            ? buildMessageAttachmentAccessUrl(attachment.id, { preview: true })
+            : attachment.thumbnailUrl;
 
         return {
             id: attachment.id,
@@ -1224,7 +1234,8 @@ function resolveAttachmentStoragePath(input: { storagePath?: string | null; url?
 }
 
 async function normalizeUploadedAttachmentsForCommit(
-    attachments: UploadedAttachment[]
+    attachments: UploadedAttachment[],
+    userId: string
 ): Promise<{ attachments?: NormalizedAttachmentInput[]; error?: string }> {
     if (attachments.length === 0) return { attachments: [] };
 
@@ -1235,6 +1246,10 @@ async function normalizeUploadedAttachmentsForCommit(
 
     if (normalizedWithPath.some((item) => !item.storagePath)) {
         return { error: 'One or more attachments are missing storage references. Please re-upload and try again.' };
+    }
+
+    if (normalizedWithPath.some((item) => !item.storagePath?.startsWith(`${userId}/`))) {
+        return { error: 'You do not have permission to attach one or more of these files.' };
     }
 
     const missingSignedPaths = normalizedWithPath
@@ -1318,7 +1333,9 @@ async function validateAttachmentOwnershipForConversation(
             return { ok: false, error: 'Some attachments are not ready yet. Please retry in a moment.' };
         }
         if (row.conversationId !== null && row.conversationId !== conversationId) {
-            return { ok: false, error: 'Attachment conversation mismatch detected.' };
+            if (!row.conversationId.startsWith('draft:')) {
+                return { ok: false, error: 'Attachment conversation mismatch detected.' };
+            }
         }
     }
 
@@ -1394,8 +1411,8 @@ export async function getOrCreateDMConversation(
 
             await tx.insert(conversationParticipants)
                 .values([
-                    { conversationId: newConversation.id, userId: user.id },
-                    { conversationId: newConversation.id, userId: otherUserId },
+                    { conversationId: newConversation!.id, userId: user.id },
+                    { conversationId: newConversation!.id, userId: otherUserId },
                 ])
                 .onConflictDoNothing({
                     target: [conversationParticipants.conversationId, conversationParticipants.userId],
@@ -1404,10 +1421,10 @@ export async function getOrCreateDMConversation(
             await tx.insert(dmPairs).values({
                 userLow: low,
                 userHigh: high,
-                conversationId: newConversation.id,
+                conversationId: newConversation!.id,
             });
 
-            return newConversation.id;
+            return newConversation!.id;
         });
 
         return { success: true, conversationId };
@@ -1568,7 +1585,7 @@ export async function getConversations(
                 conversations: orderedResult,
                 hasMore,
                 nextCursor: hasMore
-                    ? `${paginatedConvs[paginatedConvs.length - 1].sort_at.toISOString()}|${paginatedConvs[paginatedConvs.length - 1].conversation_id}`
+                    ? `${paginatedConvs[paginatedConvs.length - 1]!.sort_at.toISOString()}|${paginatedConvs[paginatedConvs.length - 1]!.conversation_id}`
                     : undefined
             };
         });
@@ -1673,27 +1690,27 @@ export async function getConversationById(
         const baseConversation: ConversationWithDetails = {
             id: details.id,
             type: details.type as 'dm' | 'group' | 'project_group',
-            updatedAt: membership[0].lastMessageAt || details.updated_at || new Date(),
-            lifecycleState: membership[0].archivedAt ? 'archived' : membership[0].lastMessageId ? 'active' : 'draft',
-            muted: Boolean(membership[0].muted),
+            updatedAt: membership[0]!.lastMessageAt || details.updated_at || new Date(),
+            lifecycleState: membership[0]!.archivedAt ? 'archived' : membership[0]!.lastMessageId ? 'active' : 'draft',
+            muted: Boolean(membership[0]!.muted),
             participants: participants.map((participant) => ({
                 id: participant.id,
                 username: participant.username,
                 fullName: participant.fullName,
                 avatarUrl: participant.avatarUrl,
             })),
-            lastMessage: membership[0].lastMessageId
+            lastMessage: membership[0]!.lastMessageId
                 ? {
-                    id: membership[0].lastMessageId,
-                    content: membership[0].lastMessagePreview,
-                    senderId: membership[0].lastMessageSenderId,
-                    createdAt: membership[0].lastMessageAt || details.updated_at || new Date(),
-                    type: membership[0].lastMessageType,
+                    id: membership[0]!.lastMessageId,
+                    content: membership[0]!.lastMessagePreview,
+                    senderId: membership[0]!.lastMessageSenderId,
+                    createdAt: membership[0]!.lastMessageAt || details.updated_at || new Date(),
+                    type: membership[0]!.lastMessageType,
                 }
                 : null,
-            unreadCount: membership[0].unreadCount || 0,
-            lastReadAt: membership[0].lastReadAt ?? null,
-            lastReadMessageId: membership[0].lastReadMessageId ?? null,
+            unreadCount: membership[0]!.unreadCount || 0,
+            lastReadAt: membership[0]!.lastReadAt ?? null,
+            lastReadMessageId: membership[0]!.lastReadMessageId ?? null,
         };
         const [reconciledConversation] = await reconcileConversationLastMessagePreviews(user.id, [baseConversation]);
         const [conversation] = await hydrateConversationLastMessageDeliveryMetadata(
@@ -2184,6 +2201,17 @@ export async function sendMessage(
             return { success: false, error: `Message too long. Maximum is ${MAX_MESSAGE_CONTENT_LENGTH} characters.` };
         }
 
+        if (attachmentIds && attachmentIds.length > 0) {
+            const ownershipCheck = await validateAttachmentOwnershipForConversation(
+                user.id,
+                conversationId,
+                attachmentIds
+            );
+            if (!ownershipCheck.ok) {
+                return { success: false, error: ownershipCheck.error };
+            }
+        }
+
         const normalizedContent = content?.trim() || '';
         const mentions = extractMessageMentions(normalizedContent);
         const replyPreview = await validateReplyTarget(
@@ -2307,17 +2335,17 @@ export async function sendMessage(
         return {
             success: true,
             message: {
-                id: newMessage.id,
-                conversationId: newMessage.conversationId,
-                senderId: newMessage.senderId,
+                id: newMessage!.id,
+                conversationId: newMessage!.conversationId,
+                senderId: newMessage!.senderId,
                 replyTo: replyPreview,
-                clientMessageId: newMessage.clientMessageId,
-                content: newMessage.content,
-                type: newMessage.type as MessageWithSender['type'],
-                metadata: withDeliveryMetadata(newMessage.metadata as Record<string, unknown>, 'sent'),
-                createdAt: newMessage.createdAt,
-                editedAt: newMessage.editedAt,
-                deletedAt: newMessage.deletedAt,
+                clientMessageId: newMessage!.clientMessageId,
+                content: newMessage!.content,
+                type: newMessage!.type as MessageWithSender['type'],
+                metadata: withDeliveryMetadata(newMessage!.metadata as Record<string, unknown>, 'sent'),
+                createdAt: newMessage!.createdAt,
+                editedAt: newMessage!.editedAt,
+                deletedAt: newMessage!.deletedAt,
                 sender: senderProfile || null,
                 attachments: [],
             },
@@ -2714,70 +2742,15 @@ export async function searchMessages(
             metadata: messages.metadata,
         });
 
-        // Get user's conversations first
-        const userConversations = await db
-            .select({
-                conversationId: conversationParticipants.conversationId,
-                type: conversations.type,
-            })
-            .from(conversationParticipants)
-            .innerJoin(conversations, eq(conversations.id, conversationParticipants.conversationId))
-            .where(eq(conversationParticipants.userId, user.id));
-
-        if (userConversations.length === 0) {
-            return { success: true, results: [] };
-        }
-
-        const conversationIds = userConversations
-            .filter((conversation) => {
-                if (!inFilter) return true;
-                return conversation.type === inFilter;
-            })
-            .map(c => c.conversationId);
-        if (conversationIds.length === 0) {
-            return { success: true, results: [] };
-        }
-
-        const dmConversationIds = userConversations
-            .filter((conversation) => conversation.type === 'dm' && conversationIds.includes(conversation.conversationId))
-            .map((conversation) => conversation.conversationId);
-
-        const blockedDmConversationIds = new Set<string>();
-        if (dmConversationIds.length > 0) {
-            const dmParticipants = await db
-                .select({
-                    conversationId: conversationParticipants.conversationId,
-                    userId: conversationParticipants.userId,
-                })
-                .from(conversationParticipants)
-                .where(
-                    and(
-                        inArray(conversationParticipants.conversationId, dmConversationIds),
-                        ne(conversationParticipants.userId, user.id),
-                    ),
-                );
-
-            const otherUserIds = Array.from(new Set(dmParticipants.map((participant) => participant.userId).filter(Boolean)));
-            if (otherUserIds.length > 0) {
-                const privacyMap = new Map(
-                    await Promise.all(
-                        otherUserIds.map(async (otherUserId) => [otherUserId, await resolvePrivacyRelationship(user.id, otherUserId)] as const)
-                    )
-                );
-
-                for (const participant of dmParticipants) {
-                    const privacy = privacyMap.get(participant.userId) ?? null;
-                    if (!privacy || privacy.blockedByViewer || privacy.blockedByTarget) {
-                        blockedDmConversationIds.add(participant.conversationId);
-                    }
-                }
-            }
-        }
-
-        const readableConversationIds = conversationIds.filter((conversationId) => !blockedDmConversationIds.has(conversationId));
-        if (readableConversationIds.length === 0) {
-            return { success: true, results: [] };
-        }
+        const conversationScopePredicate = sql`EXISTS (
+            SELECT 1
+            FROM ${conversationParticipants} search_cp
+            INNER JOIN ${conversations} search_c
+                ON search_c.id = search_cp.conversation_id
+            WHERE search_cp.conversation_id = ${messages.conversationId}
+              AND search_cp.user_id = ${user.id}
+              ${inFilter ? sql`AND search_c.type = ${inFilter}` : sql``}
+        )`;
 
         const textPredicate = normalizedQuery
             ? sql`(
@@ -2829,7 +2802,7 @@ export async function searchMessages(
             .from(messages)
             .where(
                 and(
-                    inArray(messages.conversationId, readableConversationIds),
+                    conversationScopePredicate,
                     sql`${messages.deletedAt} IS NULL`,
                     sql`NOT EXISTS (
                         SELECT 1
@@ -2939,12 +2912,47 @@ export async function searchMessages(
                 participantMap.get(p.conversationId)!.push(p);
             }
         }
+
+        const dmOtherUserIdsByConversation = new Map<string, string>();
+        for (const conversationId of resultConversationIds) {
+            const details = detailsMap.get(conversationId);
+            if (details?.type !== 'dm') continue;
+            const otherUserId = participantMap.get(conversationId)?.[0]?.userId ?? null;
+            if (otherUserId) {
+                dmOtherUserIdsByConversation.set(conversationId, otherUserId);
+            }
+        }
+
+        const privacyByOtherUserId = dmOtherUserIdsByConversation.size > 0
+            ? new Map(
+                await Promise.all(
+                    Array.from(new Set(dmOtherUserIdsByConversation.values())).map(async (otherUserId) =>
+                        [otherUserId, await resolvePrivacyRelationship(user.id, otherUserId)] as const,
+                    ),
+                ),
+            )
+            : new Map<string, Awaited<ReturnType<typeof resolvePrivacyRelationship>> | null>();
+        const blockedDmConversationIds = new Set<string>();
+        for (const [conversationId, otherUserId] of dmOtherUserIdsByConversation) {
+            const privacy = privacyByOtherUserId.get(otherUserId) ?? null;
+            if (!privacy || privacy.blockedByViewer || privacy.blockedByTarget) {
+                blockedDmConversationIds.add(conversationId);
+            }
+        }
+
+        const visibleSearchResults = searchResults.filter((message) =>
+            !blockedDmConversationIds.has(message.conversationId),
+        );
+        if (visibleSearchResults.length === 0) {
+            return { success: true, results: [] };
+        }
+
         const reactionSummaryMap = await getReactionSummaryMap(
-            searchResults.map((message) => message.id),
+            visibleSearchResults.map((message) => message.id),
             user.id,
         );
 
-        const results = searchResults.map(m => {
+        const results = visibleSearchResults.map(m => {
             const details = detailsMap.get(m.conversationId);
             const participants = participantMap.get(m.conversationId) || [];
 
@@ -3886,16 +3894,7 @@ export async function sendMessageWithAttachments(
             };
         }
 
-        const attachmentOwnership = await validateAttachmentOwnershipForConversation(
-            user.id,
-            conversationId,
-            attachments.map((attachment) => attachment.id)
-        );
-        if (!attachmentOwnership.ok) {
-            return { success: false, error: attachmentOwnership.error };
-        }
-
-        const normalizedCommit = await normalizeUploadedAttachmentsForCommit(attachments);
+        const normalizedCommit = await normalizeUploadedAttachmentsForCommit(attachments, user.id);
         if (!normalizedCommit.attachments) {
             return { success: false, error: normalizedCommit.error || 'Attachments are not ready yet' };
         }
@@ -3904,7 +3903,7 @@ export async function sendMessageWithAttachments(
         // Determine message type based on attachments
         let messageType: 'text' | 'image' | 'video' | 'file' = 'text';
         if (committedAttachments.length > 0) {
-            const primaryAttachment = committedAttachments[0];
+            const primaryAttachment = committedAttachments[0]!;
             messageType = primaryAttachment.type;
         }
 
@@ -3942,7 +3941,7 @@ export async function sendMessageWithAttachments(
                     .insert(messageAttachments)
                     .values(
                         committedAttachments.map(att => ({
-                            messageId: msg.id,
+                            messageId: msg!.id,
                             storagePath: att.storagePath || null,
                             type: att.type,
                             url: att.signedUrl,
@@ -4037,17 +4036,17 @@ export async function sendMessageWithAttachments(
         return {
             success: true,
             message: {
-                id: newMessage.id,
-                conversationId: newMessage.conversationId,
-                senderId: newMessage.senderId,
+                id: newMessage!.id,
+                conversationId: newMessage!.conversationId,
+                senderId: newMessage!.senderId,
                 replyTo: replyPreview,
-                clientMessageId: newMessage.clientMessageId,
-                content: newMessage.content,
-                type: newMessage.type as MessageWithSender['type'],
-                metadata: withDeliveryMetadata(newMessage.metadata as Record<string, unknown>, 'sent'),
-                createdAt: newMessage.createdAt,
-                editedAt: newMessage.editedAt,
-                deletedAt: newMessage.deletedAt,
+                clientMessageId: newMessage!.clientMessageId,
+                content: newMessage!.content,
+                type: newMessage!.type as MessageWithSender['type'],
+                metadata: withDeliveryMetadata(newMessage!.metadata as Record<string, unknown>, 'sent'),
+                createdAt: newMessage!.createdAt,
+                editedAt: newMessage!.editedAt,
+                deletedAt: newMessage!.deletedAt,
                 sender: senderProfile || null,
                 attachments: responseAttachments,
             },
