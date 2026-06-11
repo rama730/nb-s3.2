@@ -282,7 +282,8 @@ export function getTaskFileWarnings(input: {
 
 export function summarizeTaskFileWarnings(warnings: TaskFileReadinessWarning[]) {
   if (warnings.length === 0) return null;
-  if (warnings.length === 1) return warnings[0].message;
+  const first = warnings[0];
+  if (warnings.length === 1 && first) return first.message;
   return `${warnings.length} file follow-ups need attention before this task feels fully wrapped.`;
 }
 
@@ -333,32 +334,32 @@ function resolveFolderCandidate(input: {
     return linkedFileNames.has(normalizeToken(child)) ? count + 1 : count;
   }, 0);
 
-  if (linkedFolders.length > 0 && childOverlapCount > 0) {
-    const target = linkedFolders[0];
+  const firstOverlapTarget = linkedFolders[0];
+  if (firstOverlapTarget && childOverlapCount > 0) {
     return baseIntentResolution("folder_merge_into_existing", {
       confidence: childOverlapCount >= 2 ? "high" : "medium",
       requiresPrompt: true,
       recommendedChoice: "merge",
-      matchedNodeId: target.id,
-      matchedNodeName: target.name,
-      linkedFolderId: target.id,
-      linkedFolderName: target.name,
-      linkedFolderPath: target.path,
-      reason: `${childOverlapCount} of the dropped folder's files look like updates to files already linked under ${target.name}. We can merge, attach as a subfolder, or attach as a new folder.`,
+      matchedNodeId: firstOverlapTarget.id,
+      matchedNodeName: firstOverlapTarget.name,
+      linkedFolderId: firstOverlapTarget.id,
+      linkedFolderName: firstOverlapTarget.name,
+      linkedFolderPath: firstOverlapTarget.path,
+      reason: `${childOverlapCount} of the dropped folder's files look like updates to files already linked under ${firstOverlapTarget.name}. We can merge, attach as a subfolder, or attach as a new folder.`,
     });
   }
 
   // 3. A linked folder exists but no overlap → suggest creating a subfolder.
-  if (linkedFolders.length > 0) {
-    const target = linkedFolders[0];
+  const firstLinkedFolder = linkedFolders[0];
+  if (firstLinkedFolder) {
     return baseIntentResolution("folder_create_subfolder", {
       confidence: "medium",
       requiresPrompt: true,
       recommendedChoice: "subfolder",
-      linkedFolderId: target.id,
-      linkedFolderName: target.name,
-      linkedFolderPath: target.path,
-      reason: `${input.candidateName} doesn't match anything linked yet, but ${target.name} is the task's working folder. Add it as a subfolder, or attach it as a new folder at the task's root.`,
+      linkedFolderId: firstLinkedFolder.id,
+      linkedFolderName: firstLinkedFolder.name,
+      linkedFolderPath: firstLinkedFolder.path,
+      reason: `${input.candidateName} doesn't match anything linked yet, but ${firstLinkedFolder.name} is the task's working folder. Add it as a subfolder, or attach it as a new folder at the task's root.`,
     });
   }
 
@@ -403,15 +404,15 @@ export function resolveTaskFileIntent(input: {
     return normalizeToken(attachment.name) === candidateToken && normalizedExtension(attachment.name) === candidateExt;
   });
 
-  if (directFileMatches.length === 1) {
-    const match = directFileMatches[0];
+  const firstMatch = directFileMatches[0];
+  if (directFileMatches.length === 1 && firstMatch) {
     return baseIntentResolution("replace_existing", {
       confidence: "high",
       requiresPrompt: true,
       recommendedChoice: "replace",
-      matchedNodeId: match.id,
-      matchedNodeName: match.name,
-      reason: `${match.name} is already linked to this task with the same normalized filename.`,
+      matchedNodeId: firstMatch.id,
+      matchedNodeName: firstMatch.name,
+      reason: `${firstMatch.name} is already linked to this task with the same normalized filename.`,
     });
   }
 
@@ -461,19 +462,19 @@ export function resolveTaskFileIntent(input: {
     return normalizeToken(match.name) === candidateToken && normalizedExtension(match.name) === candidateExt;
   });
 
-  if (exactDescendantMatches.length === 1) {
-    const match = exactDescendantMatches[0];
-    const linkedFolder = linkedFolders.find((folder) => isDescendantPath(folder.path, match.path)) ?? null;
+  const firstDescendantMatch = exactDescendantMatches[0];
+  if (exactDescendantMatches.length === 1 && firstDescendantMatch) {
+    const linkedFolder = linkedFolders.find((folder) => isDescendantPath(folder.path, firstDescendantMatch.path)) ?? null;
     return baseIntentResolution("candidate_child_of_linked_folder", {
       confidence: "medium",
       requiresPrompt: true,
       recommendedChoice: "link_existing",
-      matchedNodeId: match.id,
-      matchedNodeName: match.name,
+      matchedNodeId: firstDescendantMatch.id,
+      matchedNodeName: firstDescendantMatch.name,
       linkedFolderId: linkedFolder?.id ?? null,
       linkedFolderName: linkedFolder?.name ?? null,
       linkedFolderPath: linkedFolder?.path ?? null,
-      reason: `${match.name} already exists under a folder linked to this task.`,
+      reason: `${firstDescendantMatch.name} already exists under a folder linked to this task.`,
     });
   }
 
