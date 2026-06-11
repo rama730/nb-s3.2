@@ -29,6 +29,7 @@
 
 import React, {
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -74,6 +75,7 @@ import { ExplorerDialogsHost } from "../explorer/ExplorerDialogsHost";
 
 import type { Role } from "./FilesTabRoleContext";
 import { useNavigateTo } from "./hooks/useNavigateTo";
+import { FilesTabBootContext } from "./hooks/useFolderContents";
 import {
   FILES_TAB_SIDEBAR_HEADER_HEIGHT_PX,
   FILES_TAB_SIDEBAR_SEARCH_DEBOUNCE_MS,
@@ -218,14 +220,11 @@ export function FilesTabSidebar({
   );
 
   // ── Data bootstrapping ────────────────────────────────────────────
-  const { isBooting, accessError, loadFolderContent, handleToggleFolder, handleLoadMore } =
-    useExplorerBoot({
-      projectId,
-      canEdit,
-      isActive,
-      syncStatus,
-      showToast,
-    });
+  const bootContext = useContext(FilesTabBootContext);
+  if (!bootContext) {
+    throw new Error("FilesTabSidebar must be used within FilesTabBootContext");
+  }
+  const { isBooting, accessError, loadFolderContent, handleToggleFolder, handleLoadMore } = bootContext;
 
   // ── Operations log (powers undo on rename/delete/move) ────────────
   const { operations, recordOperation } = useExplorerOperationLog();
@@ -383,6 +382,7 @@ export function FilesTabSidebar({
     const nodes = nodesById as Record<string, ProjectNode>;
     for (const id in nodes) {
       const node = nodes[id];
+      if (!node) continue;
       if (node.type !== "file" || !node.parentId || !node.size) continue;
       let cursor: string | null = node.parentId;
       let depth = 0;
