@@ -2,7 +2,7 @@
 import { Inngest } from "inngest";
 import { schemas } from "./types";
 
-const inngestEventKey = process.env.INNGEST_EVENT_KEY?.trim() || "";
+const inngestEventKey = process.env.INNGEST_EVENT_KEY?.trim() || (process.env.NODE_ENV !== "production" ? "local" : "");
 
 if (process.env.NODE_ENV === "production" && !inngestEventKey) {
     throw new Error("INNGEST_EVENT_KEY must be configured in production");
