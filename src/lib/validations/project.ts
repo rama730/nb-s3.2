@@ -60,6 +60,15 @@ export const projectNotificationSettingsSchema = z.object({
     daily_digest: z.boolean().default(false),
 });
 
+export const projectReadmeCreationIntentSchema = z.object({
+    mode: z.enum(['detected', 'starter', 'skip']).default('starter'),
+    sourcePath: z.string().max(500).nullable().optional(),
+    publishOnCreate: z.boolean().default(false),
+    includeRoles: z.boolean().default(true),
+});
+
+export type ProjectReadmeCreationIntentInput = z.infer<typeof projectReadmeCreationIntentSchema>;
+
 // Main Project Schema
 export const createProjectSchema = z.object({
     title: z.string().trim().min(3, 'Title must be at least 3 characters').max(100, 'Title must be less than 100 characters'),
@@ -89,6 +98,12 @@ export const createProjectSchema = z.object({
     terms: termsSchema.optional(),
     external_links: externalLinksSchema.optional(),
     notification_preferences: projectNotificationSettingsSchema.optional(),
+    readme: projectReadmeCreationIntentSchema.default({
+        mode: 'starter',
+        sourcePath: null,
+        publishOnCreate: false,
+        includeRoles: true,
+    }),
     is_draft: z.boolean().default(false),
     metadata: z.record(z.string(), z.any()).default({}),
     import_source: z.object({
@@ -123,3 +138,38 @@ export const createProjectSchema = z.object({
 });
 
 export type CreateProjectInput = z.infer<typeof createProjectSchema>;
+
+export function validateAndSanitizeLifecycleStages(rawStages: string[]): string[] {
+    if (!rawStages || rawStages.length === 0) {
+        throw new Error("At least one lifecycle stage is required");
+    }
+
+    const stageNameRegex = /^[\p{L}\p{N}\s&]+$/u;
+    const sanitizedStages: string[] = [];
+    const seen = new Set<string>();
+
+    for (const rawStage of rawStages) {
+        const trimmed = (rawStage || "").trim().replace(/\s+/g, " ");
+        if (!trimmed) continue;
+
+        if (trimmed.length < 2 || trimmed.length > 35) {
+            throw new Error(`Stage name "${trimmed}" must be between 2 and 35 characters`);
+        }
+        if (!stageNameRegex.test(trimmed)) {
+            throw new Error(`Stage name "${trimmed}" contains invalid characters (only alphanumeric, spaces, and & are allowed)`);
+        }
+
+        const lower = trimmed.toLowerCase();
+        if (seen.has(lower)) {
+            throw new Error(`Duplicate stage name "${trimmed}" is not allowed`);
+        }
+        seen.add(lower);
+        sanitizedStages.push(trimmed);
+    }
+
+    if (sanitizedStages.length === 0) {
+        throw new Error("At least one valid lifecycle stage is required");
+    }
+
+    return sanitizedStages;
+}
