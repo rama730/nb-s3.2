@@ -10,6 +10,7 @@ import { resolveGithubRepoAccess } from '@/lib/github/auth-resolver';
 import { runInFlightDeduped } from '@/lib/async/inflight-dedupe';
 import { logger } from '@/lib/logger';
 import { getGithubImportAccessState } from '@/lib/github/import-access-state';
+import { safeFetch } from '@/lib/security/ssrf-guard';
 
 type PreviewEntry = {
   name: string;
@@ -144,7 +145,7 @@ async function fetchGithubJson<T>(
   while (true) {
     const timeout = createTimeoutSignal(timeoutMs);
     try {
-      const response = await fetch(url, {
+      const response = await safeFetch(url, {
         ...init,
         signal: timeout.signal,
         headers: {
@@ -725,8 +726,8 @@ export async function analyzeGithubRepoAction(
 
       const timeout = createTimeoutSignal();
       const [pkgResult, readmeResult] = await Promise.allSettled([
-        fetch(`https://api.github.com/repos/${parsed.owner}/${parsed.repo}/contents/package.json`, { headers: rawHeaders, signal: timeout.signal }),
-        fetch(`https://api.github.com/repos/${parsed.owner}/${parsed.repo}/readme`, { headers: rawHeaders, signal: timeout.signal }),
+        safeFetch(`https://api.github.com/repos/${parsed.owner}/${parsed.repo}/contents/package.json`, { headers: rawHeaders, signal: timeout.signal }),
+        safeFetch(`https://api.github.com/repos/${parsed.owner}/${parsed.repo}/readme`, { headers: rawHeaders, signal: timeout.signal }),
       ]);
       timeout.cleanup();
 
@@ -756,7 +757,7 @@ export async function analyzeGithubRepoAction(
 
           for (const key of frameworkOrder) {
             if (deps[key]) {
-              detectedFramework = frameworkNames[key];
+              detectedFramework = frameworkNames[key] ?? null;
               break;
             }
           }
