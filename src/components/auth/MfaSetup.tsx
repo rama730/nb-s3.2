@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Image from "next/image";
 import {
   CheckCircle2,
@@ -71,8 +71,6 @@ export function MfaSetup({ initialFactors, recoveryCodes }: MfaSetupProps) {
   const queryClient = useQueryClient();
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
 
-  const [factors, setFactors] = useState<MfaFactor[]>(initialFactors ?? []);
-  const [loading, setLoading] = useState(!hasInitialFactors);
   const [enrolling, setEnrolling] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const [protectedActionPending, setProtectedActionPending] = useState(false);
@@ -85,46 +83,25 @@ export function MfaSetup({ initialFactors, recoveryCodes }: MfaSetupProps) {
   const [protectedAction, setProtectedAction] = useState<ProtectedAction>(null);
   const [revealedRecoveryCodes, setRevealedRecoveryCodes] = useState<RevealedRecoveryCodes | null>(null);
 
-  useEffect(() => {
-    if (Array.isArray(initialFactors)) {
-      setFactors(initialFactors);
-      setLoading(false);
-    }
-  }, [initialFactors]);
-
   const refreshSecurity = useCallback(async () => {
     await queryClient.invalidateQueries({ queryKey: queryKeys.settings.security() });
   }, [queryClient]);
 
-  const loadFactors = useCallback(async () => {
-    try {
+  const { data: factors = initialFactors ?? [], isLoading: factorsLoading, refetch: refetchFactors } = useQuery<MfaFactor[]>({
+    queryKey: queryKeys.settings.mfaFactors(),
+    queryFn: async () => {
       const res = await fetch("/api/v1/auth/mfa/factors");
-      const contentType = res.headers.get("content-type") || "";
-      if (!contentType.includes("application/json")) {
-        toast.error(`Failed to load MFA settings (${res.status})`);
-        return;
-      }
+      if (!res.ok) throw new Error("Failed to load MFA settings");
       const json = await res.json();
-      if (!res.ok || json?.success === false) {
-        toast.error(json?.message || `Failed to load MFA settings (${res.status})`);
-        return;
-      }
-      setFactors(json?.data?.factors || []);
-    } catch {
-      toast.error("Failed to load MFA settings");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+      return json?.data?.factors || [];
+    },
+    initialData: hasInitialFactors ? initialFactors : undefined,
+  });
 
-  useEffect(() => {
-    if (!hasInitialFactors) {
-      void loadFactors();
-    }
-  }, [hasInitialFactors, loadFactors]);
+  const loading = !hasInitialFactors && factorsLoading;
 
-  const verifiedFactors = factors.filter((factor) => factor.type === "totp" && factor.status === "verified");
-  const pendingFactors = factors.filter((factor) => factor.type === "totp" && factor.status === "unverified");
+  const verifiedFactors = useMemo(() => factors.filter((factor) => factor.type === "totp" && factor.status === "verified"), [factors]);
+  const pendingFactors = useMemo(() => factors.filter((factor) => factor.type === "totp" && factor.status === "unverified"), [factors]);
   const primaryVerifiedFactor = verifiedFactors[0] ?? null;
   const hasVerifiedFactor = verifiedFactors.length > 0;
 
@@ -154,7 +131,7 @@ export function MfaSetup({ initialFactors, recoveryCodes }: MfaSetupProps) {
   const handleSetupOpenChange = useCallback(async (open: boolean) => {
     if (!open && pendingFactor && !verifying) {
       await cleanupPendingFactor(pendingFactor.id);
-      void loadFactors();
+      void refetchFactors();
       await refreshSecurity();
     }
 
@@ -163,7 +140,7 @@ export function MfaSetup({ initialFactors, recoveryCodes }: MfaSetupProps) {
     }
 
     setSetupOpen(open);
-  }, [cleanupPendingFactor, loadFactors, pendingFactor, refreshSecurity, resetSetupDialog, verifying]);
+  }, [cleanupPendingFactor, refetchFactors, pendingFactor, refreshSecurity, resetSetupDialog, verifying]);
 
   const handleEnroll = async () => {
     setEnrolling(true);
@@ -237,7 +214,7 @@ export function MfaSetup({ initialFactors, recoveryCodes }: MfaSetupProps) {
       toast.success("Authenticator app enabled");
       resetSetupDialog();
       setSetupOpen(false);
-      await loadFactors();
+      await refetchFactors();
       await refreshSecurity();
 
       try {
@@ -271,7 +248,7 @@ export function MfaSetup({ initialFactors, recoveryCodes }: MfaSetupProps) {
           throw new Error(json?.message || `Failed to remove MFA factor (${res.status})`);
         }
 
-        setFactors((prev) => prev.filter((factor) => factor.id !== action.factorId));
+        queryClient.setQueryData(queryKeys.settings.mfaFactors(), (old: MfaFactor[] | undefined) => old?.filter((factor) => factor.id !== action.factorId) ?? []);
         toast.success("Authenticator app removed");
       }
 
@@ -280,7 +257,7 @@ export function MfaSetup({ initialFactors, recoveryCodes }: MfaSetupProps) {
         toast.success("Recovery codes regenerated");
       }
 
-      await loadFactors();
+      await refetchFactors();
       await refreshSecurity();
       setProtectedAction(null);
       setUnenrollId(null);
@@ -289,7 +266,7 @@ export function MfaSetup({ initialFactors, recoveryCodes }: MfaSetupProps) {
     } finally {
       setProtectedActionPending(false);
     }
-  }, [handleGenerateRecoveryCodes, loadFactors, refreshSecurity]);
+  }, [handleGenerateRecoveryCodes, refetchFactors, refreshSecurity]);
 
   const handleCopySecret = async () => {
     if (!pendingFactor) return;
