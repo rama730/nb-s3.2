@@ -10,9 +10,11 @@ interface ProjectsGridCardProps {
     projects: any[]
     title?: string
     description?: string
+    isLoading?: boolean
+    onProjectIntent?: (href: string) => void
 }
 
-export function ProjectsGridCard({ projects, title = 'Projects', description }: ProjectsGridCardProps) {
+export function ProjectsGridCard({ projects, title = 'Projects', description, isLoading = false, onProjectIntent }: ProjectsGridCardProps) {
     return (
         <div className="space-y-6">
             <div className="flex items-center justify-between">
@@ -22,7 +24,20 @@ export function ProjectsGridCard({ projects, title = 'Projects', description }: 
                 </div>
             </div>
 
-            {projects && projects.length > 0 ? (
+            {isLoading ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6" aria-busy="true">
+                    {Array.from({ length: 6 }).map((_, idx) => (
+                        <div key={idx} className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 overflow-hidden">
+                            <div className="aspect-video w-full bg-zinc-100 dark:bg-zinc-800 animate-pulse" />
+                            <div className="p-5 space-y-3">
+                                <div className="h-4 w-2/3 rounded bg-zinc-100 dark:bg-zinc-800 animate-pulse" />
+                                <div className="h-3 w-full rounded bg-zinc-100 dark:bg-zinc-800 animate-pulse" />
+                                <div className="h-3 w-4/5 rounded bg-zinc-100 dark:bg-zinc-800 animate-pulse" />
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            ) : projects && projects.length > 0 ? (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
                     {projects.map((project, idx) => {
                         const projectHref = project.href || project.url
@@ -70,6 +85,8 @@ export function ProjectsGridCard({ projects, title = 'Projects', description }: 
                                     {projectHref ? (
                                         <Link
                                             href={projectHref}
+                                            onMouseEnter={() => onProjectIntent?.(projectHref)}
+                                            onFocus={() => onProjectIntent?.(projectHref)}
                                             className="text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:underline"
                                         >
                                             View Details
