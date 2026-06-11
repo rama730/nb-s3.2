@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import { ProjectNode } from "@/lib/db/schema";
-import { getBreadcrumbs, findNodeByPathAny } from "@/app/actions/files";
+import { getBreadcrumbs, findNodeByPathAny } from "@/app/actions/files/nodes";
 import { ChevronRight, Home, ChevronDown } from "lucide-react";
 import {
   DropdownMenu,
@@ -32,8 +32,8 @@ export function BreadcrumbBar({
   const [isEditing, setIsEditing] = useState(false);
   const [pathInput, setPathInput] = useState("");
 
-  const childrenByParentId = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.childrenByParentId || EMPTY_OBJECT);
-  const nodesById = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.nodesById || EMPTY_OBJECT);
+  const childrenByParentId = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.childrenByParentId || EMPTY_OBJECT) as Record<string, string[]>;
+  const nodesById = useFilesWorkspaceStore((s) => s.byProjectId[projectId]?.nodesById || EMPTY_OBJECT) as Record<string, ProjectNode>;
 
   useEffect(() => {
     const folderId = node?.type === "file" ? node.parentId ?? null : node?.id ?? null;
@@ -76,7 +76,7 @@ export function BreadcrumbBar({
 
     const siblings = childIds
       .map((id) => nodesById[id])
-      .filter((n) => n && n.id !== currentId) // Filter out self? No, keep self but mark active? VS Code keeps self.
+      .filter((n): n is ProjectNode => !!n && n.id !== currentId) // Filter out self? No, keep self but mark active? VS Code keeps self.
       .sort((a, b) => {
         if (a.type === b.type) return a.name.localeCompare(b.name);
         return a.type === "folder" ? -1 : 1;
