@@ -11,10 +11,12 @@ const TABS: Array<{ key: ProfileTabKey; label: string; hint: string }> = [
 export function ProfileTabs({
     value,
     onChange,
+    onIntent,
     className,
 }: {
     value: ProfileTabKey;
     onChange: (next: ProfileTabKey) => void;
+    onIntent?: (next: ProfileTabKey) => void;
     className?: string;
 }) {
     return (
@@ -43,6 +45,8 @@ export function ProfileTabs({
                                 key={t.key}
                                 type="button"
                                 onClick={() => onChange(t.key)}
+                                onMouseEnter={() => onIntent?.(t.key)}
+                                onFocus={() => onIntent?.(t.key)}
                                 role="tab"
                                 id={`profile-tab-${t.key}`}
                                 aria-selected={active}
