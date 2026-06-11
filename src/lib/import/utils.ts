@@ -43,10 +43,10 @@ function getMimeType(filename: string): string {
 }
 
 const ROOT_KEY = 'root';
-const FILE_BATCH_SIZE = 50;
+const FILE_BATCH_SIZE = 25;
 const DB_BATCH_SIZE = 500;
-const UPLOAD_CONCURRENCY = 5;
-const MAX_IMPORT_FILE_COUNT = Number(process.env.GITHUB_IMPORT_MAX_FILES || 6000);
+const UPLOAD_CONCURRENCY = 2;
+const MAX_IMPORT_FILE_COUNT = Number(process.env.GITHUB_IMPORT_MAX_FILES || 20000);
 const MAX_IMPORT_TOTAL_BYTES = Number(process.env.GITHUB_IMPORT_MAX_TOTAL_BYTES || 1024 * 1024 * 1024); // 1GB
 const MAX_IMPORT_DIR_COUNT = Number(process.env.GITHUB_IMPORT_MAX_DIRS || 8000);
 
@@ -72,7 +72,7 @@ async function fetchExistingNodes(
     type: 'folder' | 'file',
     entries: Array<{ parentId: string | null; name: string }>
 ) {
-    const map = new Map<string, { id: string; parentId: string | null; name: string }>();
+    const map = new Map<string, { id: string; parentId: string | null; name: string; path: string }>();
     if (entries.length === 0) return map;
 
     for (const batch of chunkArray(entries, DB_BATCH_SIZE)) {
@@ -102,7 +102,7 @@ async function fetchExistingNodes(
 
         const rows = await db.query.projectNodes.findMany({
             where: and(...conditions),
-            columns: { id: true, parentId: true, name: true },
+            columns: { id: true, parentId: true, name: true, path: true },
         });
 
         for (const r of rows) {
@@ -110,6 +110,7 @@ async function fetchExistingNodes(
                 id: r.id,
                 parentId: r.parentId ?? null,
                 name: r.name,
+                path: r.path,
             });
         }
     }
@@ -165,7 +166,7 @@ export async function scanFiles(dir: string, rootDir: string = dir): Promise<Sca
     return files;
 }
 
-async function createDirectoryStructureFromPaths(
+export async function createDirectoryStructureFromPaths(
     projectId: string,
     dirPaths: Set<string>,
     userId: string
@@ -208,17 +209,23 @@ async function createDirectoryStructureFromPaths(
             parentId: string | null;
             type: 'folder';
             name: string;
+            path: string;
             createdBy: string;
             createdAt: Date;
             updatedAt: Date;
         }> = [];
+        const toPathUpdate: Array<{ id: string; path: string }> = [];
         const pathByKey = new Map<string, string>();
 
         for (const item of items) {
             const key = makeKey(item.parentId, item.name);
+            const nodePath = `/${item.dirPath}`;
             const existing = existingMap.get(key);
             if (existing) {
                 folderIdByPath.set(item.dirPath, existing.id);
+                if (existing.path !== nodePath) {
+                    toPathUpdate.push({ id: existing.id, path: nodePath });
+                }
             } else {
                 pathByKey.set(key, item.dirPath);
                 const now = new Date();
@@ -227,6 +234,7 @@ async function createDirectoryStructureFromPaths(
                     parentId: item.parentId,
                     type: 'folder',
                     name: item.name,
+                    path: nodePath,
                     createdBy: userId,
                     createdAt: now,
                     updatedAt: now,
@@ -245,6 +253,17 @@ async function createDirectoryStructureFromPaths(
                 const path = pathByKey.get(key);
                 if (path) folderIdByPath.set(path, row.id);
             }
+        }
+
+        if (toPathUpdate.length > 0) {
+            const values = toPathUpdate.map((u) => sql`(${u.id}, ${u.path})`);
+            await db.execute(sql`
+                UPDATE ${projectNodes} AS t
+                SET path = v.path,
+                    updated_at = NOW()
+                FROM (VALUES ${sql.join(values, sql`,`)}) AS v(id, path)
+                WHERE t.id = v.id
+            `);
         }
     }
 
@@ -299,7 +318,7 @@ export async function uploadToStorageAndDB(
         const runners = new Array(Math.min(limit, items.length)).fill(0).map(async () => {
             while (index < items.length) {
                 const current = index++;
-                results[current] = await worker(items[current]);
+                results[current] = await worker(items[current]!);
             }
         });
         await Promise.all(runners);
@@ -313,7 +332,8 @@ export async function uploadToStorageAndDB(
             const parentId = dir === '.' ? null : folderMap.get(dir) || null;
             const name = path.posix.basename(rel);
             const s3Key = buildProjectFileKey(projectId, rel);
-            return { name, parentId, s3Key, size: file.size, mimeType: file.mimeType };
+            const nodePath = `/${rel}`;
+            return { name, parentId, path: nodePath, s3Key, size: file.size, mimeType: file.mimeType };
         });
 
         const existingMap = await fetchExistingNodes(
@@ -327,6 +347,7 @@ export async function uploadToStorageAndDB(
             parentId: string | null;
             type: 'file';
             name: string;
+            path: string;
             s3Key: string;
             size: number;
             mimeType: string;
@@ -334,7 +355,7 @@ export async function uploadToStorageAndDB(
             createdAt: Date;
             updatedAt: Date;
         }> = [];
-        const toUpdate: Array<{ id: string; s3Key: string; size: number; mimeType: string; updatedAt: Date }> = [];
+        const toUpdate: Array<{ id: string; path: string; s3Key: string; size: number; mimeType: string; updatedAt: Date }> = [];
 
         for (const item of items) {
             const key = makeKey(item.parentId, item.name);
@@ -342,6 +363,7 @@ export async function uploadToStorageAndDB(
             if (existing) {
                 toUpdate.push({
                     id: existing.id,
+                    path: item.path,
                     s3Key: item.s3Key,
                     size: item.size,
                     mimeType: item.mimeType,
@@ -354,6 +376,7 @@ export async function uploadToStorageAndDB(
                     parentId: item.parentId,
                     type: 'file',
                     name: item.name,
+                    path: item.path,
                     s3Key: item.s3Key,
                     size: item.size,
                     mimeType: item.mimeType,
@@ -370,15 +393,16 @@ export async function uploadToStorageAndDB(
 
         if (toUpdate.length > 0) {
             const values = toUpdate.map((u) =>
-                sql`(${u.id}, ${u.s3Key}, ${u.size}, ${u.mimeType}, ${u.updatedAt})`
+                sql`(${u.id}, ${u.path}, ${u.s3Key}, ${u.size}, ${u.mimeType}, ${u.updatedAt})`
             );
             await db.execute(sql`
                 UPDATE ${projectNodes} AS t
-                SET s3_key = v.s3_key,
+                SET path = v.path,
+                    s3_key = v.s3_key,
                     size = v.size,
                     mime_type = v.mime_type,
                     updated_at = v.updated_at
-                FROM (VALUES ${sql.join(values, sql`,`)}) AS v(id, s3_key, size, mime_type, updated_at)
+                FROM (VALUES ${sql.join(values, sql`,`)}) AS v(id, path, s3_key, size, mime_type, updated_at)
                 WHERE t.id = v.id
             `);
         }
@@ -460,7 +484,7 @@ export async function uploadRepoFiles(
         const runners = new Array(Math.min(limit, items.length)).fill(0).map(async () => {
             while (index < items.length) {
                 const current = index++;
-                results[current] = await worker(items[current]);
+                results[current] = await worker(items[current]!);
             }
         });
         await Promise.all(runners);
@@ -474,7 +498,8 @@ export async function uploadRepoFiles(
             const parentId = dir === '.' ? null : folderMap.get(dir) || null;
             const name = path.posix.basename(rel);
             const s3Key = buildProjectFileKey(projectId, rel);
-            return { name, parentId, s3Key, size: file.size, mimeType: file.mimeType };
+            const nodePath = `/${rel}`;
+            return { name, parentId, path: nodePath, s3Key, size: file.size, mimeType: file.mimeType };
         });
 
         const existingMap = await fetchExistingNodes(
@@ -488,6 +513,7 @@ export async function uploadRepoFiles(
             parentId: string | null;
             type: 'file';
             name: string;
+            path: string;
             s3Key: string;
             size: number;
             mimeType: string;
@@ -495,7 +521,7 @@ export async function uploadRepoFiles(
             createdAt: Date;
             updatedAt: Date;
         }> = [];
-        const toUpdate: Array<{ id: string; s3Key: string; size: number; mimeType: string; updatedAt: Date }> = [];
+        const toUpdate: Array<{ id: string; path: string; s3Key: string; size: number; mimeType: string; updatedAt: Date }> = [];
 
         for (const item of items) {
             const key = makeKey(item.parentId, item.name);
@@ -503,6 +529,7 @@ export async function uploadRepoFiles(
             if (existing) {
                 toUpdate.push({
                     id: existing.id,
+                    path: item.path,
                     s3Key: item.s3Key,
                     size: item.size,
                     mimeType: item.mimeType,
@@ -515,6 +542,7 @@ export async function uploadRepoFiles(
                     parentId: item.parentId,
                     type: 'file',
                     name: item.name,
+                    path: item.path,
                     s3Key: item.s3Key,
                     size: item.size,
                     mimeType: item.mimeType,
@@ -539,15 +567,16 @@ export async function uploadRepoFiles(
                 touchedNodeIds.add(row.id);
             }
             const values = toUpdate.map((u) =>
-                sql`(${u.id}, ${u.s3Key}, ${u.size}, ${u.mimeType}, ${u.updatedAt})`
+                sql`(${u.id}, ${u.path}, ${u.s3Key}, ${u.size}, ${u.mimeType}, ${u.updatedAt})`
             );
             await db.execute(sql`
                 UPDATE ${projectNodes} AS t
-                SET s3_key = v.s3_key,
+                SET path = v.path,
+                    s3_key = v.s3_key,
                     size = v.size,
                     mime_type = v.mime_type,
                     updated_at = v.updated_at
-                FROM (VALUES ${sql.join(values, sql`,`)}) AS v(id, s3_key, size, mime_type, updated_at)
+                FROM (VALUES ${sql.join(values, sql`,`)}) AS v(id, path, s3_key, size, mime_type, updated_at)
                 WHERE t.id = v.id
             `);
         }
@@ -650,4 +679,33 @@ export async function uploadRepoFiles(
         failed: failedCount,
         touchedNodeIds: Array.from(touchedNodeIds),
     };
+}
+export async function insertVirtualFileNodes(
+    projectId: string,
+    files: { path: string; name: string; sha: string; size: number; mimeType: string }[],
+    folderMap: Map<string, string>,
+    userId: string
+): Promise<void> {
+    const toInsert = files.map((file) => {
+        const dir = path.posix.dirname(normalizeRelativePath(file.path));
+        const parentId = dir && dir !== '.' ? folderMap.get(dir) ?? null : null;
+        
+        return {
+            projectId,
+            parentId,
+            type: 'file' as const,
+            name: file.name,
+            path: `/${normalizeRelativePath(file.path)}`,
+            size: file.size,
+            mimeType: file.mimeType,
+            gitHash: file.sha,
+            s3Key: null, // Virtual file, loaded on demand
+            createdBy: userId,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+        };
+    });
+
+    const chunks = chunkArray(toInsert, DB_BATCH_SIZE);
+    await Promise.all(chunks.map(chunk => db.insert(projectNodes).values(chunk).onConflictDoNothing()));
 }
