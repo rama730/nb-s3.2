@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Bell, LayoutGrid, LogOut, MessageSquare, Settings, Users, X } from "lucide-react";
+import { useState } from "react";
+import { Bell, LayoutGrid, Loader2, LogOut, MessageSquare, Settings, Users, X } from "lucide-react";
 
 import { ProfileAvatar } from "@/components/layout/header/ProfileMenu";
 import { ROUTES } from "@/constants/routes";
@@ -28,8 +29,19 @@ export default function MobileMenu(props: {
     onOpenNotifications?: () => void;
 }) {
     const pathname = usePathname();
+    const [isSigningOut, setIsSigningOut] = useState(false);
     const unreadImportantCount = props.notificationUnreadCount ?? 0;
     if (!props.isOpen) return null;
+
+    const handleSignOut = async () => {
+        if (isSigningOut) return;
+        setIsSigningOut(true);
+        try {
+            await props.onSignOut?.();
+        } finally {
+            setIsSigningOut(false);
+        }
+    };
 
     return (
         <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm md:hidden">
@@ -97,11 +109,12 @@ export default function MobileMenu(props: {
 
                 <button
                     type="button"
-                    onClick={() => void props.onSignOut?.()}
-                    className="mt-4 flex items-center justify-center gap-2 rounded-xl border border-zinc-200 px-3 py-3 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-900"
+                    onClick={handleSignOut}
+                    disabled={isSigningOut}
+                    className="mt-4 flex items-center justify-center gap-2 rounded-xl border border-zinc-200 px-3 py-3 text-sm font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-900"
                 >
-                    <LogOut className="h-4 w-4" />
-                    Sign out
+                    {isSigningOut ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogOut className="h-4 w-4" />}
+                    {isSigningOut ? "Signing out..." : "Sign out"}
                 </button>
             </div>
         </div>
