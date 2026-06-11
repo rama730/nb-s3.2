@@ -27,7 +27,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useToast } from "@/components/ui-custom/Toast";
 import type { ProjectNode } from "@/lib/db/schema";
-import { getProjectNodes } from "@/app/actions/files";
+import { getProjectNodes } from "@/app/actions/files/nodes";
 import { useFilesWorkspaceStore, filesParentKey } from "@/stores/filesWorkspaceStore";
 import { updateTaskNodeLink, updateTaskNodeLinksOrder } from "@/app/actions/files/links";
 import {
@@ -311,7 +311,7 @@ export function TaskFilesExplorer({
 
       const childNodes = childIds
         .map((id) => nodesById[id])
-        .filter(Boolean)
+        .filter((n): n is ProjectNode => !!n)
         .sort((a, b) => {
           if (a.type !== b.type) return a.type === "folder" ? -1 : 1;
           return a.name.localeCompare(b.name);
