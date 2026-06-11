@@ -5,11 +5,10 @@ import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type 
 import { createClient } from "@/lib/supabase/client";
 import type { ProjectNode } from "@/lib/db/schema";
 import {
-  createFileNode,
-  createFolder,
   linkNodeToTask,
   unlinkNodeFromTask,
-} from "@/app/actions/files";
+} from "@/app/actions/files/links";
+import { createFileNode, createFolder } from "@/app/actions/files/mutations";
 import { getProjectNodes } from "@/app/actions/files/nodes";
 import { getUploadPresignedUrl } from "@/app/actions/upload";
 import { buildProjectFileKey } from "@/lib/storage/project-file-key";
@@ -61,7 +60,7 @@ type UploadJob = {
 
 function extOf(name: string) {
   const parts = name.split(".");
-  return parts.length > 1 ? parts[parts.length - 1].toLowerCase() : "";
+  return parts.length > 1 ? (parts[parts.length - 1]?.toLowerCase() || "") : "";
 }
 
 function appendUploadSuffix(filename: string, suffix: number) {
@@ -825,7 +824,7 @@ export function useTaskFileMutations(params: {
     uploadNewNode,
   ]);
 
-  return {
+  return useMemo(() => ({
     uploadQueue,
     isUploading,
     pendingResolution,
@@ -839,5 +838,19 @@ export function useTaskFileMutations(params: {
     saveAsNewVersion,
     clearPendingFileWarnings: clearPendingWarnings,
     downloadAttachment: handleDownload,
-  };
+  }), [
+    uploadQueue,
+    isUploading,
+    pendingResolution,
+    unresolvedReplacementCount,
+    unclassifiedUploadCount,
+    uploadFiles,
+    uploadFolders,
+    attachExisting,
+    unlinkAttachment,
+    resolvePendingResolution,
+    saveAsNewVersion,
+    clearPendingWarnings,
+    handleDownload,
+  ]);
 }
