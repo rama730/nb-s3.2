@@ -13,13 +13,14 @@ import { useMessageAttentionState } from '@/hooks/useMessageAttentionState';
 import type { TypingUser } from '@/hooks/useTypingChannel';
 import type { InboxConversationV2 } from '@/hooks/useMessagesV2';
 import { TypingIndicator } from '@/components/chat/TypingIndicator';
+import { UserAvatar } from '@/components/ui/UserAvatar';
 import { OnlineIndicator } from '@/components/ui/OnlineIndicator';
 import { useMessagesV2UiStore } from '@/stores/messagesV2UiStore';
 import type { MessageAttentionState } from '@/lib/messages/attention';
 import { cn } from '@/lib/utils';
 import { getLastMessageDeliveryState } from '@/lib/messages/delivery-state';
 import { areConversationPreviewStatesEqual } from '@/lib/messages/v2-render-state';
-import { formatMessagePreview } from './message-rendering';
+import { formatMessagePreview } from '@/lib/messages/preview';
 import { DeliveryIndicator } from './MessageBubbleV2';
 import { InboxListSkeletonV2 } from './MessagesSurfaceSkeletons';
 
@@ -77,20 +78,17 @@ export function ConversationListV2({
     onPrefetchConversation,
 }: ConversationListV2Props) {
     const { user } = useAuth();
-    const draftsByConversation = useMessagesV2UiStore((state) => state.draftsByConversation);
     const highlightedConversationId = useMessagesV2UiStore((state) => state.highlightedConversationId);
     const setHighlightedConversationId = useMessagesV2UiStore((state) => state.setHighlightedConversationId);
     const isPopup = surface === 'popup';
     const [internalSearchQuery, setInternalSearchQuery] = useState('');
     const effectiveSearch = searchQuery ?? internalSearchQuery;
     const debouncedSearch = useDebouncedValue(effectiveSearch, 300);
-    const handleSearchChange = onSearchQueryChange ?? setInternalSearchQuery;
     const visibleKeyRef = useRef('');
     const [visibleRange, setVisibleRange] = useState(() => ({
         startIndex: 0,
         endIndex: DEFAULT_VISIBLE_WINDOW - 1,
     }));
-    const [activeFilter, setActiveFilter] = useState<'all' | 'groups'>('all');
 
     const filteredConversations = useMemo(() => {
         // Client-side safety net: exclude conversations without a last message
@@ -108,12 +106,8 @@ export function ConversationListV2({
                 );
             });
         }
-        // Category filter
-        if (activeFilter === 'groups') {
-            result = result.filter((c) => c.type === 'project_group');
-        }
         return result;
-    }, [conversations, debouncedSearch, activeFilter]);
+    }, [conversations, debouncedSearch]);
     const {
         attentionByConversation,
         attentionConversations,
@@ -192,7 +186,14 @@ export function ConversationListV2({
         onVisibleConversationIdsChange?.(visibleConversationIds);
     }, [listRows, onVisibleConversationIdsChange, visibleRange.endIndex, visibleRange.startIndex]);
 
+    const [idbWait, setIdbWait] = useState(true);
+    useEffect(() => {
+        const timer = setTimeout(() => setIdbWait(false), 50);
+        return () => clearTimeout(timer);
+    }, []);
+
     if (loading && conversations.length === 0) {
+        if (idbWait) return null;
         return <InboxListSkeletonV2 surface={surface} />;
     }
 
@@ -213,29 +214,6 @@ export function ConversationListV2({
     if (!loading && filteredConversations.length === 0) {
         return (
             <div className="flex h-full min-h-0 flex-col overflow-hidden bg-white dark:bg-zinc-950">
-                <div className={cn('shrink-0 border-b border-border/40', 'px-3 pb-2 pt-2')}>
-                    <SearchFieldV2
-                        value={effectiveSearch}
-                        onChange={handleSearchChange}
-                    />
-                </div>
-                <div className={cn('flex shrink-0 items-center gap-1.5 border-b border-border/40 px-3 py-1.5')}>
-                    {(['all', 'groups'] as const).map((filter) => (
-                        <button
-                            key={filter}
-                            type="button"
-                            onClick={() => setActiveFilter(filter)}
-                            className={cn(
-                                'rounded-full px-2.5 py-1 text-[11px] font-semibold transition-colors',
-                                activeFilter === filter
-                                    ? 'bg-primary/10 text-primary'
-                                    : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-                            )}
-                        >
-                            {filter === 'all' ? 'All' : 'Groups'}
-                        </button>
-                    ))}
-                </div>
                 <div className="flex flex-1 flex-col items-center justify-center p-6 text-center">
                     <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-primary/10">
                         <MessageSquare className="h-8 w-8 text-primary" />
@@ -253,34 +231,6 @@ export function ConversationListV2({
 
     return (
         <div className="flex h-full min-h-0 flex-col overflow-hidden bg-white dark:bg-zinc-950">
-            <div className={cn(
-                'border-b border-zinc-100 dark:border-zinc-800',
-                isPopup ? 'px-3 pb-3 pt-2' : 'px-4 pb-4 pt-3',
-            )}>
-                <SearchFieldV2
-                    value={effectiveSearch}
-                    onChange={handleSearchChange}
-                />
-            </div>
-
-            <div className={cn('flex items-center gap-2 border-b border-zinc-100 dark:border-zinc-800', isPopup ? 'px-3 py-2' : 'px-4 py-2')}>
-                {(['all', 'groups'] as const).map((filter) => (
-                    <button
-                        key={filter}
-                        type="button"
-                        onClick={() => setActiveFilter(filter)}
-                        className={cn(
-                            'rounded-full px-3 py-1 text-xs font-medium transition-colors',
-                            activeFilter === filter
-                                ? 'bg-primary text-primary-foreground'
-                                : 'bg-zinc-100 text-zinc-500 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-700',
-                        )}
-                    >
-                        {filter === 'all' ? 'All' : 'Groups'}
-                    </button>
-                ))}
-            </div>
-
             <div className="min-h-0 flex-1">
                 <Virtuoso
                     style={{ height: '100%' }}
@@ -332,14 +282,13 @@ export function ConversationListV2({
                                 highlighted={highlightedConversationId === conversation.id}
                                 attention={row.attention}
                                 typingUsers={typingUsersByConversation?.[conversation.id] ?? EMPTY_TYPING_USERS}
-                                draft={draftsByConversation[conversation.id] || ''}
                                 onClick={onSelectConversation}
                                 isPopup={isPopup}
                                 viewerUserId={user?.id}
                                 peerOnline={peerId ? onlineMap[peerId] === true : false}
-                                onMute={onMuteConversation ? () => onMuteConversation(conversation.id) : undefined}
-                                onArchive={onArchiveConversation ? () => onArchiveConversation(conversation.id) : undefined}
-                                onPrefetch={onPrefetchConversation ? () => onPrefetchConversation(conversation.id) : undefined}
+                                onMute={onMuteConversation}
+                                onArchive={onArchiveConversation}
+                                onPrefetch={onPrefetchConversation}
                             />
                         );
                     }}
@@ -349,27 +298,7 @@ export function ConversationListV2({
     );
 }
 
-function SearchFieldV2({
-    value,
-    onChange,
-}: {
-    value: string;
-    onChange: (value: string) => void;
-}) {
-    return (
-        <div className="relative">
-            <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-            <input
-                type="text"
-                aria-label="Search conversations"
-                placeholder="Search…"
-                value={value}
-                onChange={(event) => onChange(event.target.value)}
-                className="h-9 w-full rounded-full border border-border/60 bg-muted/40 pl-9 pr-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary/40 focus:bg-background focus:ring-2 focus:ring-primary/15"
-            />
-        </div>
-    );
-}
+
 
 function capabilityText(conversation: InboxConversationV2) {
     if (conversation.capability.blocked) return 'Blocked';
@@ -411,14 +340,13 @@ interface ConversationItemV2Props {
     highlighted?: boolean;
     attention?: MessageAttentionState | null;
     typingUsers: TypingUser[];
-    draft: string;
     onClick: (conversationId: string) => void;
     isPopup: boolean;
     viewerUserId?: string;
     peerOnline?: boolean;
-    onMute?: () => void;
-    onArchive?: () => void;
-    onPrefetch?: () => void;
+    onMute?: (conversationId: string) => void;
+    onArchive?: (conversationId: string) => void;
+    onPrefetch?: (conversationId: string) => void;
 }
 
 export const ConversationItemV2 = React.memo(function ConversationItemV2({
@@ -427,7 +355,6 @@ export const ConversationItemV2 = React.memo(function ConversationItemV2({
     highlighted = false,
     attention = null,
     typingUsers,
-    draft,
     onClick,
     isPopup,
     viewerUserId,
@@ -436,6 +363,7 @@ export const ConversationItemV2 = React.memo(function ConversationItemV2({
     onArchive,
     onPrefetch,
 }: ConversationItemV2Props) {
+    const draft = useMessagesV2UiStore((state) => state.draftsByConversation[conversation.id] || '');
     const participant = conversation.participants[0];
     const relativeLastMessageTime = conversation.lastMessage
         ? safeFormatRelativeTime(conversation.lastMessage.createdAt)
@@ -451,14 +379,14 @@ export const ConversationItemV2 = React.memo(function ConversationItemV2({
     }, []);
 
     return (
-        <div className="px-2 py-1">
-            <div className="relative overflow-hidden rounded-2xl" {...handlers}>
+        <div className="border-b border-zinc-100 dark:border-zinc-800/50">
+            <div className="relative overflow-hidden" {...handlers}>
                 {/* Swipe action buttons behind */}
                 <div className="absolute inset-y-0 right-0 flex items-stretch">
-                    <button type="button" onClick={() => { onArchive?.(); close(); }} className="flex w-16 items-center justify-center bg-blue-500 text-white" aria-label="Archive">
+                    <button type="button" onClick={() => { onArchive?.(conversation.id); close(); }} className="flex w-16 items-center justify-center bg-blue-500 text-white" aria-label="Archive">
                         <Archive className="h-5 w-5" />
                     </button>
-                    <button type="button" onClick={() => { onMute?.(); close(); }} className="flex w-16 items-center justify-center bg-amber-500 text-white" aria-label="Mute">
+                    <button type="button" onClick={() => { onMute?.(conversation.id); close(); }} className="flex w-16 items-center justify-center bg-amber-500 text-white" aria-label="Mute">
                         {conversation.muted ? <Bell className="h-5 w-5" /> : <BellOff className="h-5 w-5" />}
                     </button>
                 </div>
@@ -470,7 +398,7 @@ export const ConversationItemV2 = React.memo(function ConversationItemV2({
                         data-testid={`conversation-row-${conversation.id}`}
                         onMouseEnter={() => {
                             if (onPrefetch) {
-                                prefetchTimerRef.current = setTimeout(() => onPrefetch(), 200);
+                                prefetchTimerRef.current = setTimeout(() => onPrefetch(conversation.id), 200);
                             }
                         }}
                         onMouseLeave={() => {
@@ -480,44 +408,35 @@ export const ConversationItemV2 = React.memo(function ConversationItemV2({
                             }
                         }}
                         className={cn(
-                            'relative w-full rounded-xl text-left transition-colors app-density-list-row',
-                            isPopup ? 'min-h-[60px] px-3 py-2' : 'min-h-[64px] px-3 py-2.5',
+                            'relative w-full text-left transition-colors app-density-list-row outline-none focus:outline-none',
+                            isPopup ? 'min-h-[52px] px-3 py-1.5' : 'min-h-[56px] px-4 py-2',
                             selected
-                                ? 'bg-primary/[0.08] shadow-[inset_3px_0_0_var(--primary)]'
+                                ? 'bg-zinc-50 dark:bg-zinc-900/40 border-r-2 border-primary'
                                 : highlighted
-                                    ? 'bg-primary/[0.06] ring-1 ring-primary/25'
-                                    : 'hover:bg-muted/60',
+                                    ? 'bg-zinc-50/50 dark:bg-zinc-900/20'
+                                    : 'hover:bg-zinc-50/30 dark:hover:bg-zinc-900/10',
                         )}
                         aria-current={selected ? 'true' : undefined}
                     >
                         <div className="flex items-center gap-3">
                             <div className="relative shrink-0">
-                                <div className={cn(
-                                    'flex items-center justify-center overflow-hidden rounded-full app-accent-gradient',
-                                    isPopup ? 'h-9 w-9' : 'h-10 w-10',
-                                )}>
-                                    {participant?.avatarUrl ? (
-                                        <Image
-                                            src={participant.avatarUrl}
-                                            alt={participant.fullName || ''}
-                                            width={48}
-                                            height={48}
-                                            unoptimized
-                                            className="h-full w-full object-cover"
-                                        />
-                                    ) : (
-                                        <span className="font-medium text-white">
-                                            {(participant?.fullName || participant?.username || '?')[0].toUpperCase()}
-                                        </span>
-                                    )}
-                                </div>
+                                <UserAvatar
+                                    identity={participant}
+                                    className={isPopup ? 'h-9 w-9' : 'h-10 w-10'}
+                                    fallbackClassName="text-sm font-medium"
+                                />
                                 <OnlineIndicator online={peerOnline} size="sm" />
                             </div>
 
                             <div className="min-w-0 flex-1">
                                 <div className="mb-1 flex items-center justify-between gap-2">
                                     <div className="flex min-w-0 items-center gap-1.5">
-                                        <span className="truncate text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                                        <span className={cn(
+                                            "truncate text-sm",
+                                            attention?.hasNewMessages && !attention.clearing
+                                                ? "font-bold text-zinc-950 dark:text-white"
+                                                : "font-semibold text-zinc-900 dark:text-zinc-100"
+                                        )}>
                                             {participant?.fullName || participant?.username || 'Unknown'}
                                         </span>
                                         {conversation.muted ? (
@@ -540,7 +459,12 @@ export const ConversationItemV2 = React.memo(function ConversationItemV2({
                                         ) : null}
                                     </div>
                                 </div>
-                                <div className="flex items-center gap-1 truncate text-[12px] leading-5 text-zinc-500 dark:text-zinc-400">
+                                <div className={cn(
+                                    "flex items-center gap-1 truncate text-[13px] leading-5",
+                                    attention?.hasNewMessages && !attention.clearing
+                                        ? "text-zinc-800 dark:text-zinc-300 font-medium"
+                                        : "text-zinc-500 dark:text-zinc-400"
+                                )}>
                                     {!typingUsers.length && !draft.trim() && conversation.lastMessage && conversation.lastMessage.senderId === viewerUserId && (
                                         <DeliveryIndicator deliveryState={getLastMessageDeliveryState(conversation.lastMessage) ?? 'sent'} />
                                     )}
@@ -577,7 +501,6 @@ export function areConversationItemPropsEqual(
         prev.attention?.clearing === next.attention?.clearing &&
         prev.attention?.latestNewMessageId === next.attention?.latestNewMessageId &&
         prev.typingUsers === next.typingUsers &&
-        prev.draft === next.draft &&
         prev.onClick === next.onClick &&
         prev.isPopup === next.isPopup &&
         prev.viewerUserId === next.viewerUserId &&
