@@ -83,7 +83,6 @@ export const ProfileHeader = React.memo(function ProfileHeader({
     mutualCount = 0,
     privacyRelationship,
     lockedShell = false,
-    publicProfileHref = null,
 }: {
     profile: any
     viewerId?: string | null
@@ -101,7 +100,6 @@ export const ProfileHeader = React.memo(function ProfileHeader({
     mutualCount?: number
     privacyRelationship: ProfilePrivacyRelationship
     lockedShell?: boolean
-    publicProfileHref?: string | null
 }) {
     // CamelCase accessors
     const vm = normalizeProfileVM(profile)
@@ -248,14 +246,6 @@ export const ProfileHeader = React.memo(function ProfileHeader({
                     <div className="flex flex-col sm:flex-row gap-2 pb-1">
                         {isOwner ? (
                             <>
-                                {publicProfileHref ? (
-                                    <Link
-                                        href={publicProfileHref}
-                                        className="inline-flex items-center justify-center rounded-xl border border-zinc-200 bg-white px-4 py-2.5 text-sm font-semibold text-zinc-900 transition-colors hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700"
-                                    >
-                                        View Public Profile
-                                    </Link>
-                                ) : null}
                                 <PrimaryButton onClick={onEdit} variant="outline">
                                     <Pencil className="w-4 h-4" />
                                     Edit Profile
