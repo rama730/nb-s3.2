@@ -122,11 +122,11 @@
   --ui-topnav-height: 3.5rem;
 
   --msg-rail-width: 360px;
-  --msg-bubble-radius: 18px;
+  --msg-bubble-radius: 16px;
   --msg-tail-radius: 6px;
-  --msg-bubble-pad-x: 14px;
-  --msg-bubble-pad-y: 9px;
-  --msg-action-rail-width: 3.125rem;
+  --msg-bubble-pad-x: 10px;
+  --msg-bubble-pad-y: 5px;
+  --msg-action-rail-width: 0px;
   --msg-own-bg: linear-gradient(135deg, color-mix(in oklch, var(--primary) 92%, white 8%), var(--primary));
   --msg-own-fg: oklch(0.99 0 0);
   --msg-peer-bg: var(--card);
@@ -155,10 +155,10 @@
   --ui-topnav-height: 3.25rem;
 
   --msg-rail-width: 320px;
-  --msg-bubble-radius: 16px;
-  --msg-bubble-pad-x: 12px;
-  --msg-bubble-pad-y: 7px;
-  --msg-action-rail-width: 2.875rem;
+  --msg-bubble-radius: 14px;
+  --msg-bubble-pad-x: 8px;
+  --msg-bubble-pad-y: 4px;
+  --msg-action-rail-width: 0px;
 }
 
 :root[data-density="default"] {
@@ -666,6 +666,7 @@ html[data-reduce-motion="true"] :is(
 
 .msg-bubble-shell[data-rich="true"] {
   width: 100%;
+  max-width: 380px;
 }
 
 .msg-message-text {
@@ -703,16 +704,51 @@ html[data-reduce-motion="true"] :is(
   opacity: 0.72;
 }
 
+/* Action rail floating overlay positioning */
+.msg-action-rail {
+  position: absolute !important;
+  top: 50% !important;
+  transform: translateY(-50%) !important;
+  z-index: 10 !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 0.125rem !important;
+}
+
+.msg-action-rail-own {
+  right: 100% !important;
+  margin-right: 0.5rem !important;
+}
+
+.msg-action-rail-peer {
+  left: 100% !important;
+  margin-left: 0.5rem !important;
+}
+
+/* Peer message corner flattening */
+.msg-bubble-peer[data-consecutive-next="true"] {
+  border-bottom-left-radius: var(--msg-bubble-radius) !important;
+}
+.msg-bubble-peer[data-consecutive-prev="true"] {
+  border-top-left-radius: var(--msg-tail-radius) !important;
+}
+
+/* Own message corner flattening */
+.msg-bubble-own[data-consecutive-next="true"] {
+  border-bottom-right-radius: var(--msg-bubble-radius) !important;
+}
+.msg-bubble-own[data-consecutive-prev="true"] {
+  border-top-right-radius: var(--msg-tail-radius) !important;
+}
+
 .msg-date-pill {
   background: var(--msg-date-pill-bg);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
   border: 1px solid color-mix(in oklch, var(--border) 60%, transparent);
   color: var(--muted-foreground);
-  font-size: 11px;
-  letter-spacing: 0.04em;
+  font-size: 10px;
+  letter-spacing: 0.03em;
   border-radius: 9999px;
-  padding: 4px 12px;
+  padding: 2px 8px;
   font-weight: 500;
 }
 
@@ -733,4 +769,109 @@ html[data-reduce-motion="true"] :is(
     * {
         transition-duration: 0.01ms !important;
     }
+}
+
+/* Blur-only edge treatment for the header and composer overlap. */
+.msg-thread-mask {
+  --_blur-top: 3.25rem;
+  --_blur-bottom: var(--msg-thread-composer-blur, 4.75rem);
+  --_blur-strength: 5px;
+  position: relative;
+  transform: translate3d(0, 0, 0);
+}
+
+.msg-thread-mask::before,
+.msg-thread-mask::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  pointer-events: none;
+  backdrop-filter: blur(var(--_blur-strength));
+  -webkit-backdrop-filter: blur(var(--_blur-strength));
+}
+
+.msg-thread-mask::before {
+  top: 0;
+  height: var(--_blur-top);
+  mask-image: linear-gradient(
+    to bottom,
+    black 0%,
+    rgba(0, 0, 0, 0.78) 38%,
+    rgba(0, 0, 0, 0.24) 78%,
+    rgba(0, 0, 0, 0.04) 94%,
+    transparent 100%
+  );
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    black 0%,
+    rgba(0, 0, 0, 0.78) 38%,
+    rgba(0, 0, 0, 0.24) 78%,
+    rgba(0, 0, 0, 0.04) 94%,
+    transparent 100%
+  );
+}
+
+.msg-thread-mask::after {
+  bottom: 0;
+  height: var(--_blur-bottom);
+  mask-image: linear-gradient(
+    to top,
+    black 0%,
+    rgba(0, 0, 0, 0.78) 38%,
+    rgba(0, 0, 0, 0.24) 78%,
+    rgba(0, 0, 0, 0.04) 94%,
+    transparent 100%
+  );
+  -webkit-mask-image: linear-gradient(
+    to top,
+    black 0%,
+    rgba(0, 0, 0, 0.78) 38%,
+    rgba(0, 0, 0, 0.24) 78%,
+    rgba(0, 0, 0, 0.04) 94%,
+    transparent 100%
+  );
+}
+
+/* Popup header and composer are shorter than the page surface. */
+[data-surface="popup"] .msg-thread-mask,
+.msg-thread-mask[data-surface="popup"] {
+  --_blur-top: 2.875rem;
+  --_blur-bottom: var(--msg-thread-composer-blur, 4.25rem);
+  --_blur-strength: 4px;
+}
+
+/* ── Tiptap Collaborative Cursors & Selections Styling ── */
+.collaboration-carets__caret,
+.tiptap .collaboration-carets__caret {
+  position: relative;
+  border-left: 1px solid currentColor;
+  border-right: 1px solid currentColor;
+  margin-left: -1px;
+  margin-right: -1px;
+  pointer-events: none;
+  word-break: normal;
+}
+
+.collaboration-carets__label,
+.tiptap .collaboration-carets__label {
+  position: absolute;
+  top: -1.4em;
+  left: -1px;
+  padding: 0.1rem 0.3rem;
+  border-radius: 3px 3px 3px 0;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 600;
+  line-height: normal;
+  user-select: none;
+  white-space: nowrap;
+  background-color: currentColor;
+  color: #fff;
+}
+
+.ProseMirror-yjs-selection,
+.tiptap .ProseMirror-yjs-selection {
+  background-color: rgba(13, 109, 253, 0.3);
 }
