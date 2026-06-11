@@ -5,6 +5,18 @@
 -- instead of running this file directly.
 -- ============================================================================
 
+-- ============================================================================
+-- RLS INITPLAN OPTIMIZATION (public.get_auth_uid() stable wrapper)
+-- ============================================================================
+CREATE OR REPLACE FUNCTION public.get_auth_uid()
+RETURNS uuid 
+LANGUAGE sql STABLE
+SET search_path = ''
+AS $
+  SELECT nullif(current_setting('request.jwt.claim.sub', true), '')::uuid;
+$;
+
+
 -- Profile lookups by username (used for availability checks)
 CREATE INDEX IF NOT EXISTS idx_profiles_username ON profiles(username);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_profiles_username_lower_unique ON profiles (lower(username)) WHERE username IS NOT NULL;
@@ -325,12 +337,12 @@ VALUES (
     'avatars',
     'avatars',
     true,
-    1048576, -- 1MB limit (images are compressed before upload)
+    10485760, -- 10MB limit (images are compressed before upload)
     ARRAY['image/jpeg', 'image/png', 'image/webp']
 )
 ON CONFLICT (id) DO UPDATE SET
     public = true,
-    file_size_limit = 1048576;
+    file_size_limit = 10485760;
 
 -- Storage policies for avatars bucket
 DROP POLICY IF EXISTS "Avatar images are publicly accessible" ON storage.objects;
@@ -348,7 +360,7 @@ CREATE POLICY "Users can upload their own avatar"
 ON storage.objects FOR INSERT
 WITH CHECK (
     bucket_id = 'avatars' AND
-    auth.uid()::text = split_part(name, '-', 1)
+    public.get_auth_uid()::text = split_part(name, '-', 1)
 );
 
 -- Users can update their own avatar
@@ -356,7 +368,7 @@ CREATE POLICY "Users can update their own avatar"
 ON storage.objects FOR UPDATE
 USING (
     bucket_id = 'avatars' AND
-    auth.uid()::text = split_part(name, '-', 1)
+    public.get_auth_uid()::text = split_part(name, '-', 1)
 );
 
 -- Users can delete their own avatar
@@ -364,7 +376,7 @@ CREATE POLICY "Users can delete their own avatar"
 ON storage.objects FOR DELETE
 USING (
     bucket_id = 'avatars' AND
-    auth.uid()::text = split_part(name, '-', 1)
+    public.get_auth_uid()::text = split_part(name, '-', 1)
 );
 
 -- ============================================================================
@@ -378,12 +390,12 @@ ALTER TABLE reserved_usernames ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Profiles are viewable by everyone" ON profiles;
 CREATE POLICY "Profiles are viewable by everyone"
 ON profiles FOR SELECT
-USING (true);
+USING (deleted_at IS NULL);
 
 DROP POLICY IF EXISTS "Reserved usernames are publicly readable" ON reserved_usernames;
 CREATE POLICY "Reserved usernames are publicly readable"
 ON reserved_usernames FOR SELECT
-USING (true);
+USING (public.get_auth_uid() IS NOT NULL);
 
 -- Onboarding tables RLS
 ALTER TABLE onboarding_drafts ENABLE ROW LEVEL SECURITY;
@@ -394,44 +406,44 @@ ALTER TABLE profile_audit_events ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Users can insert own profile" ON profiles;
 CREATE POLICY "Users can insert own profile"
 ON profiles FOR INSERT
-WITH CHECK (auth.uid() = id);
+WITH CHECK (public.get_auth_uid() = id);
 
 DROP POLICY IF EXISTS "Users can update own profile" ON profiles;
 CREATE POLICY "Users can update own profile"
 ON profiles FOR UPDATE
-USING (auth.uid() = id);
+USING (public.get_auth_uid() = id AND deleted_at IS NULL);
 
 DROP POLICY IF EXISTS "Users can manage own onboarding drafts" ON onboarding_drafts;
 CREATE POLICY "Users can manage own onboarding drafts"
 ON onboarding_drafts FOR ALL
-USING (auth.uid() = user_id)
-WITH CHECK (auth.uid() = user_id);
+USING (public.get_auth_uid() = user_id)
+WITH CHECK (public.get_auth_uid() = user_id);
 
 DROP POLICY IF EXISTS "Users can view own onboarding submissions" ON onboarding_submissions;
 CREATE POLICY "Users can view own onboarding submissions"
 ON onboarding_submissions FOR SELECT
-USING (auth.uid() = user_id);
+USING (public.get_auth_uid() = user_id);
 
 DROP POLICY IF EXISTS "Users can create own onboarding submissions" ON onboarding_submissions;
 CREATE POLICY "Users can create own onboarding submissions"
 ON onboarding_submissions FOR INSERT
-WITH CHECK (auth.uid() = user_id);
+WITH CHECK (public.get_auth_uid() = user_id);
 
 DROP POLICY IF EXISTS "Users can update own onboarding submissions" ON onboarding_submissions;
 CREATE POLICY "Users can update own onboarding submissions"
 ON onboarding_submissions FOR UPDATE
-USING (auth.uid() = user_id)
-WITH CHECK (auth.uid() = user_id);
+USING (public.get_auth_uid() = user_id)
+WITH CHECK (public.get_auth_uid() = user_id);
 
 DROP POLICY IF EXISTS "Users can view own onboarding events" ON onboarding_events;
 CREATE POLICY "Users can view own onboarding events"
 ON onboarding_events FOR SELECT
-USING (auth.uid() = user_id);
+USING (public.get_auth_uid() = user_id);
 
 DROP POLICY IF EXISTS "Users can view own profile audit events" ON profile_audit_events;
 CREATE POLICY "Users can view own profile audit events"
 ON profile_audit_events FOR SELECT
-USING (auth.uid() = user_id);
+USING (public.get_auth_uid() = user_id);
 
 -- Connections RLS
 ALTER TABLE connections ENABLE ROW LEVEL SECURITY;
@@ -439,17 +451,17 @@ ALTER TABLE connections ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Users can view own connections" ON connections;
 CREATE POLICY "Users can view own connections"
 ON connections FOR SELECT
-USING (auth.uid() = requester_id OR auth.uid() = addressee_id);
+USING (public.get_auth_uid() = requester_id OR public.get_auth_uid() = addressee_id);
 
 DROP POLICY IF EXISTS "Users can create connection requests" ON connections;
 CREATE POLICY "Users can create connection requests"
 ON connections FOR INSERT
-WITH CHECK (auth.uid() = requester_id);
+WITH CHECK (public.get_auth_uid() = requester_id);
 
 DROP POLICY IF EXISTS "Users can update own connections" ON connections;
 CREATE POLICY "Users can update own connections"
 ON connections FOR UPDATE
-USING (auth.uid() = requester_id OR auth.uid() = addressee_id);
+USING (public.get_auth_uid() = requester_id OR public.get_auth_uid() = addressee_id);
 
 -- Posts RLS
 ALTER TABLE posts ENABLE ROW LEVEL SECURITY;
@@ -457,22 +469,22 @@ ALTER TABLE posts ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Public posts are viewable by everyone" ON posts;
 CREATE POLICY "Public posts are viewable by everyone"
 ON posts FOR SELECT
-USING (visibility = 'public' OR author_id = auth.uid());
+USING (visibility = 'public' OR author_id = public.get_auth_uid());
 
 DROP POLICY IF EXISTS "Users can create own posts" ON posts;
 CREATE POLICY "Users can create own posts"
 ON posts FOR INSERT
-WITH CHECK (auth.uid() = author_id);
+WITH CHECK (public.get_auth_uid() = author_id);
 
 DROP POLICY IF EXISTS "Users can update own posts" ON posts;
 CREATE POLICY "Users can update own posts"
 ON posts FOR UPDATE
-USING (auth.uid() = author_id);
+USING (public.get_auth_uid() = author_id);
 
 DROP POLICY IF EXISTS "Users can delete own posts" ON posts;
 CREATE POLICY "Users can delete own posts"
 ON posts FOR DELETE
-USING (auth.uid() = author_id);
+USING (public.get_auth_uid() = author_id);
 
 -- Projects RLS
 ALTER TABLE projects ENABLE ROW LEVEL SECURITY;
@@ -480,17 +492,17 @@ ALTER TABLE projects ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Public projects are viewable by everyone" ON projects;
 CREATE POLICY "Public projects are viewable by everyone"
 ON projects FOR SELECT
-USING (visibility = 'public' OR owner_id = auth.uid());
+USING ((visibility = 'public' OR owner_id = public.get_auth_uid()) AND deleted_at IS NULL);
 
 DROP POLICY IF EXISTS "Users can create own projects" ON projects;
 CREATE POLICY "Users can create own projects"
 ON projects FOR INSERT
-WITH CHECK (auth.uid() = owner_id);
+WITH CHECK (public.get_auth_uid() = owner_id);
 
 DROP POLICY IF EXISTS "Users can update own projects" ON projects;
 CREATE POLICY "Users can update own projects"
 ON projects FOR UPDATE
-USING (auth.uid() = owner_id);
+USING (public.get_auth_uid() = owner_id AND deleted_at IS NULL);
 
 -- Project Members RLS
 ALTER TABLE project_members ENABLE ROW LEVEL SECURITY;
@@ -498,7 +510,18 @@ ALTER TABLE project_members ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Project members are viewable" ON project_members;
 CREATE POLICY "Project members are viewable"
 ON project_members FOR SELECT
-USING (true);
+USING (
+    EXISTS (
+        SELECT 1 FROM projects p
+        WHERE p.id = project_members.project_id
+        AND (p.visibility = 'public' OR p.owner_id = public.get_auth_uid())
+    )
+    OR EXISTS (
+        SELECT 1 FROM project_members m
+        WHERE m.project_id = project_members.project_id
+        AND m.user_id = public.get_auth_uid()
+    )
+);
 
 DROP POLICY IF EXISTS "Project owners can manage members" ON project_members;
 CREATE POLICY "Project owners can manage members"
@@ -507,7 +530,7 @@ USING (
     EXISTS (
         SELECT 1 FROM projects
         WHERE projects.id = project_members.project_id
-        AND projects.owner_id = auth.uid()
+        AND projects.owner_id = public.get_auth_uid()
     )
 );
 
@@ -537,8 +560,10 @@ DROP POLICY IF EXISTS project_nodes_read ON project_nodes;
 CREATE POLICY project_nodes_read ON project_nodes
 FOR SELECT
 USING (
-  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid())
-  OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid())
+  deleted_at IS NULL AND (
+    EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = public.get_auth_uid())
+    OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = public.get_auth_uid())
+  )
 );
 
 DROP POLICY IF EXISTS project_nodes_public_read ON project_nodes;
@@ -557,17 +582,19 @@ DROP POLICY IF EXISTS project_nodes_write ON project_nodes;
 CREATE POLICY project_nodes_write ON project_nodes
 FOR ALL
 USING (
-  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid())
-  OR EXISTS (
-    SELECT 1 FROM project_members m
-    WHERE m.project_id = project_id AND m.user_id = auth.uid() AND m.role <> 'viewer'
+  deleted_at IS NULL AND (
+    EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = public.get_auth_uid())
+    OR EXISTS (
+      SELECT 1 FROM project_members m
+      WHERE m.project_id = project_id AND m.user_id = public.get_auth_uid() AND m.role <> 'viewer'
+    )
   )
 )
 WITH CHECK (
-  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid())
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = public.get_auth_uid())
   OR EXISTS (
     SELECT 1 FROM project_members m
-    WHERE m.project_id = project_id AND m.user_id = auth.uid() AND m.role <> 'viewer'
+    WHERE m.project_id = project_id AND m.user_id = public.get_auth_uid() AND m.role <> 'viewer'
   )
 );
 
@@ -575,8 +602,8 @@ DROP POLICY IF EXISTS project_file_index_read ON project_file_index;
 CREATE POLICY project_file_index_read ON project_file_index
 FOR SELECT
 USING (
-  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid())
-  OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid())
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = public.get_auth_uid())
+  OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = public.get_auth_uid())
 );
 
 DROP POLICY IF EXISTS project_file_index_public_read ON project_file_index;
@@ -594,17 +621,17 @@ DROP POLICY IF EXISTS project_file_index_write ON project_file_index;
 CREATE POLICY project_file_index_write ON project_file_index
 FOR ALL
 USING (
-  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid())
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = public.get_auth_uid())
   OR EXISTS (
     SELECT 1 FROM project_members m
-    WHERE m.project_id = project_id AND m.user_id = auth.uid() AND m.role <> 'viewer'
+    WHERE m.project_id = project_id AND m.user_id = public.get_auth_uid() AND m.role <> 'viewer'
   )
 )
 WITH CHECK (
-  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid())
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = public.get_auth_uid())
   OR EXISTS (
     SELECT 1 FROM project_members m
-    WHERE m.project_id = project_id AND m.user_id = auth.uid() AND m.role <> 'viewer'
+    WHERE m.project_id = project_id AND m.user_id = public.get_auth_uid() AND m.role <> 'viewer'
   )
 );
 
@@ -612,25 +639,25 @@ DROP POLICY IF EXISTS project_node_locks_read ON project_node_locks;
 CREATE POLICY project_node_locks_read ON project_node_locks
 FOR SELECT
 USING (
-  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid())
-  OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid())
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = public.get_auth_uid())
+  OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = public.get_auth_uid())
 );
 
 DROP POLICY IF EXISTS project_node_locks_write ON project_node_locks;
 CREATE POLICY project_node_locks_write ON project_node_locks
 FOR ALL
 USING (
-  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid())
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = public.get_auth_uid())
   OR EXISTS (
     SELECT 1 FROM project_members m
-    WHERE m.project_id = project_id AND m.user_id = auth.uid() AND m.role <> 'viewer'
+    WHERE m.project_id = project_id AND m.user_id = public.get_auth_uid() AND m.role <> 'viewer'
   )
 )
 WITH CHECK (
-  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid())
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = public.get_auth_uid())
   OR EXISTS (
     SELECT 1 FROM project_members m
-    WHERE m.project_id = project_id AND m.user_id = auth.uid() AND m.role <> 'viewer'
+    WHERE m.project_id = project_id AND m.user_id = public.get_auth_uid() AND m.role <> 'viewer'
   )
 );
 
@@ -638,25 +665,25 @@ DROP POLICY IF EXISTS project_node_events_read ON project_node_events;
 CREATE POLICY project_node_events_read ON project_node_events
 FOR SELECT
 USING (
-  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid())
-  OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid())
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = public.get_auth_uid())
+  OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = public.get_auth_uid())
 );
 
 DROP POLICY IF EXISTS project_node_events_write ON project_node_events;
 CREATE POLICY project_node_events_write ON project_node_events
 FOR ALL
 USING (
-  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid())
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = public.get_auth_uid())
   OR EXISTS (
     SELECT 1 FROM project_members m
-    WHERE m.project_id = project_id AND m.user_id = auth.uid() AND m.role <> 'viewer'
+    WHERE m.project_id = project_id AND m.user_id = public.get_auth_uid() AND m.role <> 'viewer'
   )
 )
 WITH CHECK (
-  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid())
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = public.get_auth_uid())
   OR EXISTS (
     SELECT 1 FROM project_members m
-    WHERE m.project_id = project_id AND m.user_id = auth.uid() AND m.role <> 'viewer'
+    WHERE m.project_id = project_id AND m.user_id = public.get_auth_uid() AND m.role <> 'viewer'
   )
 );
 
@@ -679,7 +706,7 @@ USING (
       AND EXISTS (
         SELECT 1 FROM projects p
         WHERE p.id::text = split_part(name, '/', 2)
-          AND p.owner_id = auth.uid()
+          AND p.owner_id = public.get_auth_uid()
       )
     )
     OR (
@@ -689,12 +716,12 @@ USING (
       AND EXISTS (
         SELECT 1 FROM projects p
         WHERE p.id::text = split_part(name, '/', 1)
-          AND p.owner_id = auth.uid()
+          AND p.owner_id = public.get_auth_uid()
       )
     )
     OR EXISTS (
       SELECT 1 FROM project_members m
-      WHERE m.user_id = auth.uid()
+      WHERE m.user_id = public.get_auth_uid()
         AND (
           (
             split_part(name, '/', 1) = 'projects'
@@ -743,10 +770,10 @@ USING (
   AND split_part(name, '/', 1) <> ''
   AND split_part(name, '/', 2) <> ''
   AND (
-    EXISTS (SELECT 1 FROM projects p WHERE p.id::text = split_part(name, '/', 1) AND p.owner_id = auth.uid())
+    EXISTS (SELECT 1 FROM projects p WHERE p.id::text = split_part(name, '/', 1) AND p.owner_id = public.get_auth_uid())
     OR EXISTS (
       SELECT 1 FROM project_members m
-      WHERE m.project_id::text = split_part(name, '/', 1) AND m.user_id = auth.uid() AND m.role <> 'viewer'
+      WHERE m.project_id::text = split_part(name, '/', 1) AND m.user_id = public.get_auth_uid() AND m.role <> 'viewer'
     )
   )
 )
@@ -756,10 +783,55 @@ WITH CHECK (
   AND split_part(name, '/', 1) <> ''
   AND split_part(name, '/', 2) <> ''
   AND (
-    EXISTS (SELECT 1 FROM projects p WHERE p.id::text = split_part(name, '/', 1) AND p.owner_id = auth.uid())
+    EXISTS (SELECT 1 FROM projects p WHERE p.id::text = split_part(name, '/', 1) AND p.owner_id = public.get_auth_uid())
     OR EXISTS (
       SELECT 1 FROM project_members m
-      WHERE m.project_id::text = split_part(name, '/', 1) AND m.user_id = auth.uid() AND m.role <> 'viewer'
+      WHERE m.project_id::text = split_part(name, '/', 1) AND m.user_id = public.get_auth_uid() AND m.role <> 'viewer'
+    )
+  )
+);
+
+-- ============================================================================
+-- STORAGE BUCKET FOR PROJECT UPDATES MEDIA
+-- ============================================================================
+
+INSERT INTO storage.buckets (id, name, public, file_size_limit)
+VALUES ('project-updates-media', 'project-updates-media', true, 104857600) -- 100MB limit for videos/images
+ON CONFLICT (id) DO UPDATE SET
+    public = true,
+    file_size_limit = 104857600;
+
+DROP POLICY IF EXISTS project_updates_media_public_read ON storage.objects;
+CREATE POLICY project_updates_media_public_read ON storage.objects
+FOR SELECT
+USING (bucket_id = 'project-updates-media');
+
+DROP POLICY IF EXISTS project_updates_media_write ON storage.objects;
+CREATE POLICY project_updates_media_write ON storage.objects
+FOR INSERT
+WITH CHECK (
+  bucket_id = 'project-updates-media'
+  AND split_part(name, '/', 1) <> ''
+  AND (
+    EXISTS (SELECT 1 FROM projects p WHERE p.id::text = split_part(name, '/', 1) AND p.owner_id = public.get_auth_uid())
+    OR EXISTS (
+      SELECT 1 FROM project_members m
+      WHERE m.project_id::text = split_part(name, '/', 1) AND m.user_id = public.get_auth_uid() AND m.role <> 'viewer'
+    )
+  )
+);
+
+DROP POLICY IF EXISTS project_updates_media_delete ON storage.objects;
+CREATE POLICY project_updates_media_delete ON storage.objects
+FOR DELETE
+USING (
+  bucket_id = 'project-updates-media'
+  AND split_part(name, '/', 1) <> ''
+  AND (
+    EXISTS (SELECT 1 FROM projects p WHERE p.id::text = split_part(name, '/', 1) AND p.owner_id = public.get_auth_uid())
+    OR EXISTS (
+      SELECT 1 FROM project_members m
+      WHERE m.project_id::text = split_part(name, '/', 1) AND m.user_id = public.get_auth_uid() AND m.role <> 'viewer'
     )
   )
 );
@@ -795,7 +867,7 @@ FOR SELECT
 USING (
   EXISTS (
     SELECT 1 FROM conversation_participants cp 
-    WHERE cp.conversation_id = id AND cp.user_id = auth.uid()
+    WHERE cp.conversation_id = id AND cp.user_id = public.get_auth_uid()
   )
 );
 
@@ -803,23 +875,23 @@ DROP POLICY IF EXISTS "Users can view participants of their conversations" ON co
 CREATE POLICY "Users can view participants of their conversations" ON conversation_participants
 FOR SELECT
 USING (
-  user_id = auth.uid() OR
+  user_id = public.get_auth_uid() OR
   EXISTS (
     SELECT 1 FROM conversation_participants my_cp 
-    WHERE my_cp.conversation_id = conversation_id AND my_cp.user_id = auth.uid()
+    WHERE my_cp.conversation_id = conversation_id AND my_cp.user_id = public.get_auth_uid()
   )
 );
 
 DROP POLICY IF EXISTS "Users can manage their own participant state" ON conversation_participants;
 CREATE POLICY "Users can manage their own participant state" ON conversation_participants
 FOR ALL
-USING (user_id = auth.uid())
-WITH CHECK (user_id = auth.uid());
+USING (user_id = public.get_auth_uid())
+WITH CHECK (user_id = public.get_auth_uid());
 
 DROP POLICY IF EXISTS "Users can view DM pairs they are part of" ON dm_pairs;
 CREATE POLICY "Users can view DM pairs they are part of" ON dm_pairs
 FOR SELECT
-USING (user_low = auth.uid() OR user_high = auth.uid());
+USING (user_low = public.get_auth_uid() OR user_high = public.get_auth_uid());
 
 -- 2. MESSAGES & ATTACHMENTS
 ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
@@ -834,19 +906,19 @@ FOR SELECT
 USING (
   EXISTS (
     SELECT 1 FROM conversation_participants cp 
-    WHERE cp.conversation_id = conversation_id AND cp.user_id = auth.uid()
-  )
+    WHERE cp.conversation_id = conversation_id AND cp.user_id = public.get_auth_uid()
+  ) AND deleted_at IS NULL
 );
 
 DROP POLICY IF EXISTS "Users can insert their own messages" ON messages;
 CREATE POLICY "Users can insert their own messages" ON messages
 FOR INSERT
-WITH CHECK (sender_id = auth.uid());
+WITH CHECK (sender_id = public.get_auth_uid());
 
 DROP POLICY IF EXISTS "Users can update their own messages" ON messages;
 CREATE POLICY "Users can update their own messages" ON messages
 FOR UPDATE
-USING (sender_id = auth.uid());
+USING (sender_id = public.get_auth_uid() AND deleted_at IS NULL);
 
 DROP POLICY IF EXISTS "Users can view attachments in their conversations" ON message_attachments;
 CREATE POLICY "Users can view attachments in their conversations" ON message_attachments
@@ -855,7 +927,7 @@ USING (
   EXISTS (
     SELECT 1 FROM messages m
     JOIN conversation_participants cp ON m.conversation_id = cp.conversation_id
-    WHERE m.id = message_id AND cp.user_id = auth.uid()
+    WHERE m.id = message_id AND cp.user_id = public.get_auth_uid()
   )
 );
 
@@ -866,21 +938,21 @@ USING (
   EXISTS (
     SELECT 1 FROM messages m
     JOIN conversation_participants cp ON m.conversation_id = cp.conversation_id
-    WHERE m.id = message_id AND cp.user_id = auth.uid()
+    WHERE m.id = message_id AND cp.user_id = public.get_auth_uid()
   )
 );
 
 DROP POLICY IF EXISTS "Users can manage their own message hidden state" ON message_hidden_for_users;
 CREATE POLICY "Users can manage their own message hidden state" ON message_hidden_for_users
 FOR ALL
-USING (user_id = auth.uid())
-WITH CHECK (user_id = auth.uid());
+USING (user_id = public.get_auth_uid())
+WITH CHECK (user_id = public.get_auth_uid());
 
 DROP POLICY IF EXISTS "Users can manage their own uploads" ON attachment_uploads;
 CREATE POLICY "Users can manage their own uploads" ON attachment_uploads
 FOR ALL
-USING (user_id = auth.uid())
-WITH CHECK (user_id = auth.uid());
+USING (user_id = public.get_auth_uid())
+WITH CHECK (user_id = public.get_auth_uid());
 
 -- 3. TASKS, SUBTASKS & LINKS
 ALTER TABLE tasks ENABLE ROW LEVEL SECURITY;
@@ -891,20 +963,22 @@ DROP POLICY IF EXISTS "Tasks are viewable by project members or if public" ON ta
 CREATE POLICY "Tasks are viewable by project members or if public" ON tasks
 FOR SELECT
 USING (
-  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND (p.owner_id = auth.uid() OR p.visibility = 'public'))
-  OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid())
+  (EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND (p.owner_id = public.get_auth_uid() OR p.visibility = 'public'))
+  OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = public.get_auth_uid()))
+  AND deleted_at IS NULL
 );
 
 DROP POLICY IF EXISTS "Task writers can manage tasks" ON tasks;
 CREATE POLICY "Task writers can manage tasks" ON tasks
 FOR ALL
 USING (
-  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid())
-  OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid() AND m.role <> 'viewer')
+  (EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = public.get_auth_uid())
+  OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = public.get_auth_uid() AND m.role <> 'viewer'))
+  AND deleted_at IS NULL
 )
 WITH CHECK (
-  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid())
-  OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid() AND m.role <> 'viewer')
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = public.get_auth_uid())
+  OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = public.get_auth_uid() AND m.role <> 'viewer')
 );
 
 DROP POLICY IF EXISTS "Subtasks are viewable like tasks" ON task_subtasks;
@@ -914,8 +988,8 @@ USING (
   EXISTS (
     SELECT 1 FROM tasks t 
     WHERE t.id = task_id AND (
-      EXISTS (SELECT 1 FROM projects p WHERE p.id = t.project_id AND (p.owner_id = auth.uid() OR p.visibility = 'public'))
-      OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = t.project_id AND m.user_id = auth.uid())
+      EXISTS (SELECT 1 FROM projects p WHERE p.id = t.project_id AND (p.owner_id = public.get_auth_uid() OR p.visibility = 'public'))
+      OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = t.project_id AND m.user_id = public.get_auth_uid())
     )
   )
 );
@@ -927,8 +1001,8 @@ USING (
   EXISTS (
     SELECT 1 FROM tasks t 
     WHERE t.id = task_id AND (
-      EXISTS (SELECT 1 FROM projects p WHERE p.id = t.project_id AND p.owner_id = auth.uid())
-      OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = t.project_id AND m.user_id = auth.uid() AND m.role <> 'viewer')
+      EXISTS (SELECT 1 FROM projects p WHERE p.id = t.project_id AND p.owner_id = public.get_auth_uid())
+      OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = t.project_id AND m.user_id = public.get_auth_uid() AND m.role <> 'viewer')
     )
   )
 )
@@ -936,8 +1010,8 @@ WITH CHECK (
   EXISTS (
     SELECT 1 FROM tasks t 
     WHERE t.id = task_id AND (
-      EXISTS (SELECT 1 FROM projects p WHERE p.id = t.project_id AND p.owner_id = auth.uid())
-      OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = t.project_id AND m.user_id = auth.uid() AND m.role <> 'viewer')
+      EXISTS (SELECT 1 FROM projects p WHERE p.id = t.project_id AND p.owner_id = public.get_auth_uid())
+      OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = t.project_id AND m.user_id = public.get_auth_uid() AND m.role <> 'viewer')
     )
   )
 );
@@ -949,8 +1023,8 @@ USING (
   EXISTS (
     SELECT 1 FROM tasks t 
     WHERE t.id = task_id AND (
-      EXISTS (SELECT 1 FROM projects p WHERE p.id = t.project_id AND (p.owner_id = auth.uid() OR p.visibility = 'public'))
-      OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = t.project_id AND m.user_id = auth.uid())
+      EXISTS (SELECT 1 FROM projects p WHERE p.id = t.project_id AND (p.owner_id = public.get_auth_uid() OR p.visibility = 'public'))
+      OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = t.project_id AND m.user_id = public.get_auth_uid())
     )
   )
 );
@@ -962,8 +1036,8 @@ USING (
   EXISTS (
     SELECT 1 FROM tasks t 
     WHERE t.id = task_id AND (
-      EXISTS (SELECT 1 FROM projects p WHERE p.id = t.project_id AND p.owner_id = auth.uid())
-      OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = t.project_id AND m.user_id = auth.uid() AND m.role <> 'viewer')
+      EXISTS (SELECT 1 FROM projects p WHERE p.id = t.project_id AND p.owner_id = public.get_auth_uid())
+      OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = t.project_id AND m.user_id = public.get_auth_uid() AND m.role <> 'viewer')
     )
   )
 )
@@ -971,8 +1045,8 @@ WITH CHECK (
   EXISTS (
     SELECT 1 FROM tasks t 
     WHERE t.id = task_id AND (
-      EXISTS (SELECT 1 FROM projects p WHERE p.id = t.project_id AND p.owner_id = auth.uid())
-      OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = t.project_id AND m.user_id = auth.uid() AND m.role <> 'viewer')
+      EXISTS (SELECT 1 FROM projects p WHERE p.id = t.project_id AND p.owner_id = public.get_auth_uid())
+      OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = t.project_id AND m.user_id = public.get_auth_uid() AND m.role <> 'viewer')
     )
   )
 );
@@ -987,57 +1061,68 @@ DROP POLICY IF EXISTS "Sprints are viewable like projects" ON project_sprints;
 CREATE POLICY "Sprints are viewable like projects" ON project_sprints
 FOR SELECT
 USING (
-  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND (p.owner_id = auth.uid() OR p.visibility = 'public'))
-  OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid())
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND (p.owner_id = public.get_auth_uid() OR p.visibility = 'public'))
+  OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = public.get_auth_uid())
 );
 
 DROP POLICY IF EXISTS "Project writers can manage sprints" ON project_sprints;
 CREATE POLICY "Project writers can manage sprints" ON project_sprints
 FOR ALL
 USING (
-  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid())
-  OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid() AND m.role <> 'viewer')
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = public.get_auth_uid())
+  OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = public.get_auth_uid() AND m.role <> 'viewer')
 )
 WITH CHECK (
-  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid())
-  OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid() AND m.role <> 'viewer')
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = public.get_auth_uid())
+  OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = public.get_auth_uid() AND m.role <> 'viewer')
 );
 
 DROP POLICY IF EXISTS "Follows are public" ON project_follows;
 CREATE POLICY "Follows are public" ON project_follows
 FOR SELECT
-USING (true);
+USING (
+  EXISTS (
+    SELECT 1 FROM projects p 
+    WHERE p.id = project_id 
+    AND (p.visibility = 'public' OR p.owner_id = public.get_auth_uid())
+  )
+  OR EXISTS (
+    SELECT 1 FROM project_members m 
+    WHERE m.project_id = project_id 
+    AND m.user_id = public.get_auth_uid()
+  )
+);
 
 DROP POLICY IF EXISTS "Users can manage their own follows" ON project_follows;
 CREATE POLICY "Users can manage their own follows" ON project_follows
 FOR ALL
-USING (user_id = auth.uid())
-WITH CHECK (user_id = auth.uid());
+USING (user_id = public.get_auth_uid())
+WITH CHECK (user_id = public.get_auth_uid());
 
 DROP POLICY IF EXISTS "Users can manage their own saves" ON saved_projects;
 CREATE POLICY "Users can manage their own saves" ON saved_projects
 FOR ALL
-USING (user_id = auth.uid())
-WITH CHECK (user_id = auth.uid());
+USING (user_id = public.get_auth_uid())
+WITH CHECK (user_id = public.get_auth_uid());
 
 DROP POLICY IF EXISTS "Run profiles are viewable by members" ON project_run_profiles;
 CREATE POLICY "Run profiles are viewable by members" ON project_run_profiles
 FOR SELECT
 USING (
-  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid())
-  OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid())
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = public.get_auth_uid())
+  OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = public.get_auth_uid())
 );
 
 DROP POLICY IF EXISTS "Project writers can manage run profiles" ON project_run_profiles;
 CREATE POLICY "Project writers can manage run profiles" ON project_run_profiles
 FOR ALL
 USING (
-  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid())
-  OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid() AND m.role <> 'viewer')
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = public.get_auth_uid())
+  OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = public.get_auth_uid() AND m.role <> 'viewer')
 )
 WITH CHECK (
-  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid())
-  OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid() AND m.role <> 'viewer')
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = public.get_auth_uid())
+  OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = public.get_auth_uid() AND m.role <> 'viewer')
 );
 
 -- 5. PROJECT LOGS (SECURE SESSION IDS - OWNER ONLY AS REQUESTED)
@@ -1048,20 +1133,20 @@ ALTER TABLE project_run_diagnostics ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Project owners can manage sessions" ON project_run_sessions;
 CREATE POLICY "Project owners can manage sessions" ON project_run_sessions
 FOR ALL
-USING (EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid()))
-WITH CHECK (EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid()));
+USING (EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = public.get_auth_uid()))
+WITH CHECK (EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = public.get_auth_uid()));
 
 DROP POLICY IF EXISTS "Project owners can manage logs" ON project_run_logs;
 CREATE POLICY "Project owners can manage logs" ON project_run_logs
 FOR ALL
-USING (EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid()))
-WITH CHECK (EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid()));
+USING (EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = public.get_auth_uid()))
+WITH CHECK (EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = public.get_auth_uid()));
 
 DROP POLICY IF EXISTS "Project owners can manage diagnostics" ON project_run_diagnostics;
 CREATE POLICY "Project owners can manage diagnostics" ON project_run_diagnostics
 FOR ALL
-USING (EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid()))
-WITH CHECK (EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid()));
+USING (EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = public.get_auth_uid()))
+WITH CHECK (EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = public.get_auth_uid()));
 
 -- 6. ROLES & APPLICATIONS
 ALTER TABLE project_open_roles ENABLE ROW LEVEL SECURITY;
@@ -1071,28 +1156,28 @@ DROP POLICY IF EXISTS "Open roles are viewable like projects" ON project_open_ro
 CREATE POLICY "Open roles are viewable like projects" ON project_open_roles
 FOR SELECT
 USING (
-  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND (p.owner_id = auth.uid() OR p.visibility = 'public'))
-  OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid())
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND (p.owner_id = public.get_auth_uid() OR p.visibility = 'public'))
+  OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = public.get_auth_uid())
 );
 
 DROP POLICY IF EXISTS "Project owners can manage open roles" ON project_open_roles;
 CREATE POLICY "Project owners can manage open roles" ON project_open_roles
 FOR ALL
-USING (EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid()))
-WITH CHECK (EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid()));
+USING (EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = public.get_auth_uid()))
+WITH CHECK (EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = public.get_auth_uid()));
 
 DROP POLICY IF EXISTS "Users can view their own applications or project owner can view all" ON role_applications;
 CREATE POLICY "Users can view their own applications or project owner can view all" ON role_applications
 FOR SELECT
 USING (
-  applicant_id = auth.uid() OR
-  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid())
+  applicant_id = public.get_auth_uid() OR
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = public.get_auth_uid())
 );
 
 DROP POLICY IF EXISTS "Users can apply" ON role_applications;
 CREATE POLICY "Users can apply" ON role_applications
 FOR INSERT
-WITH CHECK (applicant_id = auth.uid());
+WITH CHECK (applicant_id = public.get_auth_uid());
 
 DROP POLICY IF EXISTS "Project owners can update applications" ON role_applications;
 -- Canonical UPDATE policy for applications is defined later in this script as:
@@ -1105,8 +1190,8 @@ ALTER TABLE connection_suggestion_dismissals ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Users can manage their dismissals" ON connection_suggestion_dismissals;
 CREATE POLICY "Users can manage their dismissals" ON connection_suggestion_dismissals
 FOR ALL
-USING (user_id = auth.uid())
-WITH CHECK (user_id = auth.uid());
+USING (user_id = public.get_auth_uid())
+WITH CHECK (user_id = public.get_auth_uid());
 -- ============================================================================
 -- SUPABASE AI ADVISOR REMEDIATIONS (PERFORMANCE & CORRECTNESS)
 -- ============================================================================
@@ -1139,21 +1224,7 @@ BEGIN
   END IF;
 END $$;
 
--- 2. RLS INITPLAN OPTIMIZATION (auth.uid() wrappers)
--- Wrapping auth.uid() in a stable function forces PostgreSQL to evaluate it ONCE
--- per query (initplan) rather than once per row, drastically improving RLS performance
--- when selecting multiple rows.
-CREATE OR REPLACE FUNCTION public.get_auth_uid()
-RETURNS uuid 
-LANGUAGE sql STABLE
-SET search_path = ''
-AS $$
-  SELECT nullif(current_setting('request.jwt.claim.sub', true), '')::uuid;
-$$;
 
--- Note: We are not rewriting all 60 existing RLS policies in this script yet.
--- Using the wrapper function in new policies or when modifying existing complex policies
--- is the best practice. For this immediate fix, the wrapper is made available.
 
 -- 3. ADD COVERING INDEXES FOR FOREIGN KEYS
 -- The advisor flags foreign keys that lack an index, leading to slow cascade deletes and joins.
@@ -1241,77 +1312,77 @@ DROP POLICY IF EXISTS "Users can view applications for their projects or their o
 CREATE POLICY "Users can view applications for their projects or their own" ON role_applications
 FOR SELECT
 USING (
-  applicant_id = auth.uid() OR
-  EXISTS (SELECT 1 FROM projects p WHERE p.id = role_applications.project_id AND p.owner_id = auth.uid()) OR
-  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = role_applications.project_id AND m.user_id = auth.uid() AND m.role IN ('owner', 'admin'))
+  applicant_id = public.get_auth_uid() OR
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = role_applications.project_id AND p.owner_id = public.get_auth_uid()) OR
+  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = role_applications.project_id AND m.user_id = public.get_auth_uid() AND m.role IN ('owner', 'admin'))
 );
 
 DROP POLICY IF EXISTS "Users can create their own applications" ON role_applications;
 CREATE POLICY "Users can create their own applications" ON role_applications
 FOR INSERT
-WITH CHECK (applicant_id = auth.uid());
+WITH CHECK (applicant_id = public.get_auth_uid());
 
 DROP POLICY IF EXISTS "Users can update their own applications or project admins can manage" ON role_applications;
 DROP POLICY IF EXISTS "Project owners can update applications" ON role_applications;
 CREATE POLICY "Users can update their own applications or project admins can manage" ON role_applications
 FOR UPDATE
 USING (
-  applicant_id = auth.uid() OR
-  EXISTS (SELECT 1 FROM projects p WHERE p.id = role_applications.project_id AND p.owner_id = auth.uid()) OR
-  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = role_applications.project_id AND m.user_id = auth.uid() AND m.role IN ('owner', 'admin'))
+  applicant_id = public.get_auth_uid() OR
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = role_applications.project_id AND p.owner_id = public.get_auth_uid()) OR
+  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = role_applications.project_id AND m.user_id = public.get_auth_uid() AND m.role IN ('owner', 'admin'))
 )
 WITH CHECK (
-  applicant_id = auth.uid() OR
-  EXISTS (SELECT 1 FROM projects p WHERE p.id = role_applications.project_id AND p.owner_id = auth.uid()) OR
-  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = role_applications.project_id AND m.user_id = auth.uid() AND m.role IN ('owner', 'admin'))
+  applicant_id = public.get_auth_uid() OR
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = role_applications.project_id AND p.owner_id = public.get_auth_uid()) OR
+  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = role_applications.project_id AND m.user_id = public.get_auth_uid() AND m.role IN ('owner', 'admin'))
 );
 
 -- Saved Projects
 DROP POLICY IF EXISTS "Users can manage their saved projects" ON saved_projects;
 CREATE POLICY "Users can manage their saved projects" ON saved_projects
 FOR ALL
-USING (user_id = auth.uid())
-WITH CHECK (user_id = auth.uid());
+USING (user_id = public.get_auth_uid())
+WITH CHECK (user_id = public.get_auth_uid());
 
 -- Connection Suggestion Dismissals
 DROP POLICY IF EXISTS "Users can manage their connection dismissals" ON connection_suggestion_dismissals;
 CREATE POLICY "Users can manage their connection dismissals" ON connection_suggestion_dismissals
 FOR ALL
-USING (user_id = auth.uid())
-WITH CHECK (user_id = auth.uid());
+USING (user_id = public.get_auth_uid())
+WITH CHECK (user_id = public.get_auth_uid());
 
 -- Collections
 DROP POLICY IF EXISTS "Users can view public collections or their own" ON collections;
 CREATE POLICY "Users can view public collections or their own" ON collections
 FOR SELECT
-USING (owner_id = auth.uid());
+USING (owner_id = public.get_auth_uid());
 
 DROP POLICY IF EXISTS "Users can manage their own collections" ON collections;
 CREATE POLICY "Users can manage their own collections" ON collections
 FOR ALL
-USING (owner_id = auth.uid())
-WITH CHECK (owner_id = auth.uid());
+USING (owner_id = public.get_auth_uid())
+WITH CHECK (owner_id = public.get_auth_uid());
 
 -- Collection Projects
 DROP POLICY IF EXISTS "Users can view projects in public collections or their own" ON collection_projects;
 CREATE POLICY "Users can view projects in public collections or their own" ON collection_projects
 FOR SELECT
 USING (
-  EXISTS (SELECT 1 FROM collections c WHERE c.id = collection_id AND c.owner_id = auth.uid())
+  EXISTS (SELECT 1 FROM collections c WHERE c.id = collection_id AND c.owner_id = public.get_auth_uid())
 );
 
 DROP POLICY IF EXISTS "Users can manage projects in their collections" ON collection_projects;
 CREATE POLICY "Users can manage projects in their collections" ON collection_projects
 FOR ALL
-USING (EXISTS (SELECT 1 FROM collections c WHERE c.id = collection_id AND c.owner_id = auth.uid()))
-WITH CHECK (EXISTS (SELECT 1 FROM collections c WHERE c.id = collection_id AND c.owner_id = auth.uid()));
+USING (EXISTS (SELECT 1 FROM collections c WHERE c.id = collection_id AND c.owner_id = public.get_auth_uid()))
+WITH CHECK (EXISTS (SELECT 1 FROM collections c WHERE c.id = collection_id AND c.owner_id = public.get_auth_uid()));
 
 -- Project Follows
 DROP POLICY IF EXISTS "Users can manage their project follows" ON project_follows;
 CREATE POLICY "Users can manage their project follows" ON project_follows
 FOR ALL
-USING (user_id = auth.uid())
-WITH CHECK (user_id = auth.uid());
+USING (user_id = public.get_auth_uid())
+WITH CHECK (user_id = public.get_auth_uid());
 
 -- Project Open Roles
 DROP POLICY IF EXISTS "Open roles are viewable by everyone" ON project_open_roles;
@@ -1324,12 +1395,12 @@ USING (
     WHERE p.id = project_id
       AND (
         p.visibility = 'public'
-        OR p.owner_id = auth.uid()
+        OR p.owner_id = public.get_auth_uid()
         OR EXISTS (
           SELECT 1
           FROM project_members m
           WHERE m.project_id = p.id
-            AND m.user_id = auth.uid()
+            AND m.user_id = public.get_auth_uid()
         )
       )
   )
@@ -1339,12 +1410,12 @@ DROP POLICY IF EXISTS "Project admins can manage open roles" ON project_open_rol
 CREATE POLICY "Project admins can manage open roles" ON project_open_roles
 FOR ALL
 USING (
-  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid()) OR
-  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid() AND m.role IN ('owner', 'admin'))
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = public.get_auth_uid()) OR
+  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = public.get_auth_uid() AND m.role IN ('owner', 'admin'))
 )
 WITH CHECK (
-  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid()) OR
-  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid() AND m.role IN ('owner', 'admin'))
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = public.get_auth_uid()) OR
+  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = public.get_auth_uid() AND m.role IN ('owner', 'admin'))
 );
 
 -- Project Sprints
@@ -1352,20 +1423,20 @@ DROP POLICY IF EXISTS "Sprints are viewable by project members or if public" ON 
 CREATE POLICY "Sprints are viewable by project members or if public" ON project_sprints
 FOR SELECT
 USING (
-  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND (p.owner_id = auth.uid() OR p.visibility = 'public')) OR
-  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid())
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND (p.owner_id = public.get_auth_uid() OR p.visibility = 'public')) OR
+  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = public.get_auth_uid())
 );
 
 DROP POLICY IF EXISTS "Project admins can manage sprints" ON project_sprints;
 CREATE POLICY "Project admins can manage sprints" ON project_sprints
 FOR ALL
 USING (
-  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid()) OR
-  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid() AND m.role IN ('owner', 'admin', 'member'))
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = public.get_auth_uid()) OR
+  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = public.get_auth_uid() AND m.role IN ('owner', 'admin', 'member'))
 )
 WITH CHECK (
-  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid()) OR
-  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid() AND m.role IN ('owner', 'admin', 'member'))
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = public.get_auth_uid()) OR
+  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = public.get_auth_uid() AND m.role IN ('owner', 'admin', 'member'))
 );
 
 
@@ -1379,15 +1450,15 @@ FOR SELECT
 USING (
   EXISTS (
     SELECT 1 FROM tasks t JOIN projects p ON t.project_id = p.id
-    WHERE t.id = task_id AND (p.owner_id = auth.uid() OR p.visibility = 'public' OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = p.id AND m.user_id = auth.uid()))
+    WHERE t.id = task_id AND (p.owner_id = public.get_auth_uid() OR p.visibility = 'public' OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = p.id AND m.user_id = public.get_auth_uid()))
   )
 );
 
 DROP POLICY IF EXISTS "Users can manage their own comments" ON task_comments;
 CREATE POLICY "Users can manage their own comments" ON task_comments
 FOR ALL
-USING (user_id = auth.uid())
-WITH CHECK (user_id = auth.uid());
+USING (user_id = public.get_auth_uid())
+WITH CHECK (user_id = public.get_auth_uid());
 
 DROP POLICY IF EXISTS "Likes are viewable by users who can see the comment task" ON task_comment_likes;
 CREATE POLICY "Likes are viewable by users who can see the comment task" ON task_comment_likes
@@ -1395,15 +1466,15 @@ FOR SELECT
 USING (
   EXISTS (
     SELECT 1 FROM task_comments tc JOIN tasks t ON tc.task_id = t.id JOIN projects p ON t.project_id = p.id
-    WHERE tc.id = comment_id AND (p.owner_id = auth.uid() OR p.visibility = 'public' OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = p.id AND m.user_id = auth.uid()))
+    WHERE tc.id = comment_id AND (p.owner_id = public.get_auth_uid() OR p.visibility = 'public' OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = p.id AND m.user_id = public.get_auth_uid()))
   )
 );
 
 DROP POLICY IF EXISTS "Users can manage their own likes" ON task_comment_likes;
 CREATE POLICY "Users can manage their own likes" ON task_comment_likes
 FOR ALL
-USING (user_id = auth.uid())
-WITH CHECK (user_id = auth.uid());
+USING (user_id = public.get_auth_uid())
+WITH CHECK (user_id = public.get_auth_uid());
 
 
 -- 6. RUNNER LOGS & SESSIONS & PROFILES (SENSITIVE COLUMNS)
@@ -1419,40 +1490,40 @@ DROP POLICY IF EXISTS "Project runners can view sessions" ON project_run_session
 CREATE POLICY "Project runners can view sessions" ON project_run_sessions
 FOR SELECT
 USING (
-  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid()) OR
-  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid())
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = public.get_auth_uid()) OR
+  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = public.get_auth_uid())
 );
 
 DROP POLICY IF EXISTS "Project runners can manage sessions" ON project_run_sessions;
 CREATE POLICY "Project runners can manage sessions" ON project_run_sessions
 FOR ALL
 USING (
-  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid()) OR
-  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid())
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = public.get_auth_uid()) OR
+  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = public.get_auth_uid())
 )
 WITH CHECK (
-  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid()) OR
-  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid())
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = public.get_auth_uid()) OR
+  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = public.get_auth_uid())
 );
 
 DROP POLICY IF EXISTS "Project runners can view run profiles" ON project_run_profiles;
 CREATE POLICY "Project runners can view run profiles" ON project_run_profiles
 FOR SELECT
 USING (
-  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid()) OR
-  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid())
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = public.get_auth_uid()) OR
+  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = public.get_auth_uid())
 );
 
 DROP POLICY IF EXISTS "Project runners can manage run profiles" ON project_run_profiles;
 CREATE POLICY "Project runners can manage run profiles" ON project_run_profiles
 FOR ALL
 USING (
-  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid()) OR
-  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid())
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = public.get_auth_uid()) OR
+  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = public.get_auth_uid())
 )
 WITH CHECK (
-  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid()) OR
-  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid())
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = public.get_auth_uid()) OR
+  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = public.get_auth_uid())
 );
 
 -- STRICT RLS ON SENSITIVE TABLES (project_run_diagnostics, project_run_logs)
@@ -1460,32 +1531,32 @@ DROP POLICY IF EXISTS "Project runners can view run diagnostics" ON project_run_
 CREATE POLICY "Project runners can view run diagnostics" ON project_run_diagnostics
 FOR SELECT
 USING (
-  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid()) OR
-  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid())
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = public.get_auth_uid()) OR
+  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = public.get_auth_uid())
 );
 
 DROP POLICY IF EXISTS "Project runners can insert run diagnostics" ON project_run_diagnostics;
 CREATE POLICY "Project runners can insert run diagnostics" ON project_run_diagnostics
 FOR INSERT
 WITH CHECK (
-  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid()) OR
-  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid())
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = public.get_auth_uid()) OR
+  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = public.get_auth_uid())
 );
 
 DROP POLICY IF EXISTS "Project runners can view run logs" ON project_run_logs;
 CREATE POLICY "Project runners can view run logs" ON project_run_logs
 FOR SELECT
 USING (
-  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid()) OR
-  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid())
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = public.get_auth_uid()) OR
+  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = public.get_auth_uid())
 );
 
 DROP POLICY IF EXISTS "Project runners can insert run logs" ON project_run_logs;
 CREATE POLICY "Project runners can insert run logs" ON project_run_logs
 FOR INSERT
 WITH CHECK (
-  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = auth.uid()) OR
-  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = auth.uid())
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND p.owner_id = public.get_auth_uid()) OR
+  EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = public.get_auth_uid())
 );
 
 
@@ -1658,30 +1729,30 @@ ALTER TABLE public.profile_security_states ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Users can view own profile security state" ON public.profile_security_states;
 CREATE POLICY "Users can view own profile security state"
 ON public.profile_security_states FOR SELECT
-USING (auth.uid() = user_id);
+USING (public.get_auth_uid() = user_id);
 
 DROP POLICY IF EXISTS "Users can insert own profile security state" ON public.profile_security_states;
 CREATE POLICY "Users can insert own profile security state"
 ON public.profile_security_states FOR INSERT
-WITH CHECK (auth.uid() = user_id);
+WITH CHECK (public.get_auth_uid() = user_id);
 
 DROP POLICY IF EXISTS "Users can update own profile security state" ON public.profile_security_states;
 CREATE POLICY "Users can update own profile security state"
 ON public.profile_security_states FOR UPDATE
-USING (auth.uid() = user_id)
-WITH CHECK (auth.uid() = user_id);
+USING (public.get_auth_uid() = user_id)
+WITH CHECK (public.get_auth_uid() = user_id);
 
 DROP POLICY IF EXISTS "Users can delete own profile security state" ON public.profile_security_states;
 CREATE POLICY "Users can delete own profile security state"
 ON public.profile_security_states FOR DELETE
-USING (auth.uid() = user_id);
+USING (public.get_auth_uid() = user_id);
 
 DROP POLICY IF EXISTS "Profiles are viewable by everyone" ON public.profiles;
 DROP POLICY IF EXISTS "Profiles are viewable by allowed users" ON public.profiles;
 CREATE POLICY "Profiles are viewable by allowed users"
 ON public.profiles FOR SELECT
 USING (
-    auth.uid() = id
+    public.get_auth_uid() = id
     OR visibility = 'public'
     OR (
         visibility = 'connections'
@@ -1690,8 +1761,8 @@ USING (
             FROM public.connections c
             WHERE c.status = 'accepted'
               AND (
-                  (c.requester_id = auth.uid() AND c.addressee_id = public.profiles.id)
-                  OR (c.addressee_id = auth.uid() AND c.requester_id = public.profiles.id)
+                  (c.requester_id = public.get_auth_uid() AND c.addressee_id = public.profiles.id)
+                  OR (c.addressee_id = public.get_auth_uid() AND c.requester_id = public.profiles.id)
               )
         )
     )
@@ -1700,19 +1771,137 @@ USING (
 DROP POLICY IF EXISTS "Users can update own profile" ON public.profiles;
 CREATE POLICY "Users can update own profile"
 ON public.profiles FOR UPDATE
-USING (auth.uid() = id)
-WITH CHECK (auth.uid() = id);
+USING (public.get_auth_uid() = id)
+WITH CHECK (public.get_auth_uid() = id);
 
 DROP POLICY IF EXISTS "Users can insert their own messages" ON public.messages;
 DROP POLICY IF EXISTS "Users can send messages in their conversations" ON public.messages;
 CREATE POLICY "Users can send messages in their conversations"
 ON public.messages FOR INSERT
 WITH CHECK (
-    sender_id = auth.uid()
+    sender_id = public.get_auth_uid()
     AND EXISTS (
         SELECT 1
         FROM public.conversation_participants cp
         WHERE cp.conversation_id = public.messages.conversation_id
-          AND cp.user_id = auth.uid()
+          AND cp.user_id = public.get_auth_uid()
     )
+);
+
+-- ============================================================================
+-- TABLE PARTITIONING FOR LOGS (1M+ USER SCALE)
+-- ============================================================================
+-- The project_run_logs table generates massive volume, we partition it by range (timestamp)
+-- Note: Native partitioning requires the partition key to be part of the PK.
+-- The Drizzle schema already defines PK as (id, created_at).
+
+DO $$ 
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 
+        FROM pg_class c 
+        JOIN pg_namespace n ON n.oid = c.relnamespace 
+        WHERE c.relname = 'project_run_logs' AND c.relkind = 'p'
+    ) THEN
+        -- Rename existing table
+        ALTER TABLE IF EXISTS public.project_run_logs RENAME TO project_run_logs_old;
+
+        -- Create the partitioned table
+        CREATE TABLE public.project_run_logs (
+            id UUID NOT NULL DEFAULT gen_random_uuid(),
+            session_id UUID NOT NULL,
+            project_id UUID NOT NULL,
+            stream TEXT NOT NULL DEFAULT 'stdout',
+            line_number INTEGER NOT NULL DEFAULT 0,
+            message TEXT NOT NULL,
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+            PRIMARY KEY (id, created_at)
+        ) PARTITION BY RANGE (created_at);
+
+        -- Create default partition
+        CREATE TABLE public.project_run_logs_default PARTITION OF public.project_run_logs DEFAULT;
+
+        -- Create current year/month partitions dynamically via a trigger, or pre-create some:
+        CREATE TABLE public.project_run_logs_y2026m05 PARTITION OF public.project_run_logs FOR VALUES FROM ('2026-05-01') TO ('2026-06-01');
+        CREATE TABLE public.project_run_logs_y2026m06 PARTITION OF public.project_run_logs FOR VALUES FROM ('2026-06-01') TO ('2026-07-01');
+
+        -- Insert existing data into the partitioned table
+        INSERT INTO public.project_run_logs 
+        SELECT * FROM public.project_run_logs_old;
+
+        -- Drop old table
+        DROP TABLE public.project_run_logs_old;
+
+        -- Add RLS to the new partitioned table
+        ALTER TABLE public.project_run_logs ENABLE ROW LEVEL SECURITY;
+        
+        -- Create foreign keys that were dropped during rename
+        ALTER TABLE public.project_run_logs
+        ADD CONSTRAINT project_run_logs_session_id_fkey FOREIGN KEY (session_id) REFERENCES public.project_run_sessions(id) ON DELETE CASCADE;
+        
+        ALTER TABLE public.project_run_logs
+        ADD CONSTRAINT project_run_logs_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.projects(id) ON DELETE CASCADE;
+        
+    END IF;
+END $$;
+
+-- Add RLS for message workflow items and links
+ALTER TABLE public.message_workflow_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.message_work_links ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Workflow items visible to project members" ON public.message_workflow_items;
+CREATE POLICY "Workflow items visible to project members" ON public.message_workflow_items
+FOR SELECT
+USING (
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND (p.owner_id = public.get_auth_uid() OR p.visibility = 'public'))
+  OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = public.get_auth_uid())
+);
+
+DROP POLICY IF EXISTS "Work links visible to project members" ON public.message_work_links;
+CREATE POLICY "Work links visible to project members" ON public.message_work_links
+FOR SELECT
+USING (
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = target_project_id AND (p.owner_id = public.get_auth_uid() OR p.visibility = 'public'))
+  OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = target_project_id AND m.user_id = public.get_auth_uid())
+);
+
+-- Security Audit RLS Additions
+ALTER TABLE public.interests ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.skills ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.tags ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.profile_interests ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.profile_skills ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.project_skills ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.project_tags ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.push_subscriptions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.notification_deliveries ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.job_heartbeats ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.project_readmes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.project_readme_versions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.project_readme_assets ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Taxonomy tables are publicly readable" ON public.interests FOR SELECT USING (true);
+CREATE POLICY "Taxonomy tables are publicly readable" ON public.skills FOR SELECT USING (true);
+CREATE POLICY "Taxonomy tables are publicly readable" ON public.tags FOR SELECT USING (true);
+
+CREATE POLICY "Users can manage own profile interests" ON public.profile_interests FOR ALL USING (profile_id = public.get_auth_uid());
+CREATE POLICY "Users can manage own profile skills" ON public.profile_skills FOR ALL USING (profile_id = public.get_auth_uid());
+
+CREATE POLICY "Project skills viewable by everyone" ON public.project_skills FOR SELECT USING (true);
+CREATE POLICY "Project tags viewable by everyone" ON public.project_tags FOR SELECT USING (true);
+
+CREATE POLICY "Users can manage own push subscriptions" ON public.push_subscriptions FOR ALL USING (user_id = public.get_auth_uid());
+CREATE POLICY "Users can manage own notifications" ON public.notification_deliveries FOR ALL USING (user_id = public.get_auth_uid());
+
+CREATE POLICY "Readmes viewable by public" ON public.project_readmes FOR SELECT USING (
+  EXISTS (SELECT 1 FROM projects p WHERE p.id = project_id AND (p.visibility = 'public' OR p.owner_id = public.get_auth_uid()))
+  OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = project_id AND m.user_id = public.get_auth_uid())
+);
+CREATE POLICY "Readme versions viewable by public" ON public.project_readme_versions FOR SELECT USING (
+  EXISTS (SELECT 1 FROM project_readmes r JOIN projects p ON p.id = r.project_id WHERE r.id = readme_id AND (p.visibility = 'public' OR p.owner_id = public.get_auth_uid()))
+  OR EXISTS (SELECT 1 FROM project_readmes r JOIN project_members m ON m.project_id = r.project_id WHERE r.id = readme_id AND m.user_id = public.get_auth_uid())
+);
+CREATE POLICY "Readme assets viewable by public" ON public.project_readme_assets FOR SELECT USING (
+  EXISTS (SELECT 1 FROM project_readmes r JOIN projects p ON p.id = r.project_id WHERE r.id = readme_id AND (p.visibility = 'public' OR p.owner_id = public.get_auth_uid()))
+  OR EXISTS (SELECT 1 FROM project_readmes r JOIN project_members m ON m.project_id = r.project_id WHERE r.id = readme_id AND m.user_id = public.get_auth_uid())
 );
