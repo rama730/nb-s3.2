@@ -1,7 +1,8 @@
 'use client';
 
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useMemo } from 'react';
+import { useMemo, useEffect } from 'react';
+import { get as idbGet, set as idbSet } from 'idb-keyval';
 import {
     convertMessageToFollowUpV2,
     convertMessageToTaskV2,
@@ -119,13 +120,34 @@ function unwrapThreadPage(value: unknown): MessageThreadPageV2 | null {
 }
 
 export function useInbox(limit: number = 20) {
+    const queryClient = useQueryClient();
+    const queryKey = useMemo(() => queryKeys.messages.v2.inbox(limit), [limit]);
+    const storageKey = useMemo(() => queryKey.join('-'), [queryKey]);
+
+    useEffect(() => {
+        idbGet(storageKey).then((cachedPage) => {
+            if (cachedPage) {
+                const currentData = queryClient.getQueryState(queryKey);
+                if (!currentData?.data) {
+                    queryClient.setQueryData(queryKey, {
+                        pages: [cachedPage],
+                        pageParams: [undefined],
+                    });
+                }
+            }
+        }).catch(() => {});
+    }, [queryClient, queryKey, storageKey]);
+
     const query = useInfiniteQuery({
-        queryKey: queryKeys.messages.v2.inbox(limit),
+        queryKey,
         initialPageParam: undefined as string | undefined,
         queryFn: async ({ pageParam }) => {
             const result = await getInboxPageV2(limit, pageParam);
             if (!result.success || !result.page) {
                 throw new Error(result.error || 'Failed to fetch inbox');
+            }
+            if (!pageParam) {
+                idbSet(storageKey, result.page).catch(() => {});
             }
             return result.page;
         },
@@ -138,10 +160,12 @@ export function useInbox(limit: number = 20) {
         [query.data?.pages],
     );
 
-    return {
+    const result = useMemo(() => ({
         ...query,
         conversations,
-    };
+    }), [query, conversations]);
+
+    return result;
 }
 
 export function useConversationThread(conversationId: string | null, limit: number = 30) {
@@ -153,8 +177,27 @@ export function useConversationThread(conversationId: string | null, limit: numb
             : EMPTY_OUTBOX_ITEMS),
         [conversationId, outboxStateItems],
     );
+    const queryClient = useQueryClient();
+    const queryKey = useMemo(() => queryKeys.messages.v2.thread(conversationId), [conversationId]);
+    const storageKey = useMemo(() => queryKey.join('-'), [queryKey]);
+
+    useEffect(() => {
+        if (!conversationId || conversationId.startsWith('draft:')) return;
+        idbGet(storageKey).then((cachedPage) => {
+            if (cachedPage) {
+                const currentData = queryClient.getQueryState(queryKey);
+                if (!currentData?.data) {
+                    queryClient.setQueryData(queryKey, {
+                        pages: [cachedPage],
+                        pageParams: [undefined],
+                    });
+                }
+            }
+        }).catch(() => {});
+    }, [queryClient, conversationId, queryKey, storageKey]);
+
     const query = useInfiniteQuery({
-        queryKey: queryKeys.messages.v2.thread(conversationId),
+        queryKey,
         initialPageParam: undefined as string | undefined,
         enabled: Boolean(conversationId) && !conversationId?.startsWith('draft:'),
         queryFn: async ({ pageParam }) => {
@@ -163,11 +206,13 @@ export function useConversationThread(conversationId: string | null, limit: numb
             if (!result.success || !result.page) {
                 throw new Error(result.error || 'Failed to fetch conversation');
             }
+            if (!pageParam) {
+                idbSet(storageKey, result.page).catch(() => {});
+            }
             return result.page;
         },
         getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
         staleTime: 15_000,
-        refetchOnMount: 'always',
         refetchOnReconnect: true,
         refetchOnWindowFocus: true,
     });
@@ -227,13 +272,19 @@ export function useConversationThread(conversationId: string | null, limit: numb
     );
     const firstPage = normalizedPages[0] ?? null;
 
-    return {
+    const conversation = firstPage?.conversation ?? null;
+    const capability = firstPage?.capability ?? null;
+    const pinnedMessages = firstPage?.pinnedMessages ?? [];
+
+    const result = useMemo(() => ({
         ...query,
         messages,
-        conversation: firstPage?.conversation ?? null,
-        capability: firstPage?.capability ?? null,
-        pinnedMessages: firstPage?.pinnedMessages ?? [],
-    };
+        conversation,
+        capability,
+        pinnedMessages,
+    }), [query, messages, conversation, capability, pinnedMessages]);
+
+    return result;
 }
 
 export function useConversationCapabilities(conversationId: string | null, targetUserId?: string | null) {
@@ -251,7 +302,7 @@ export function useConversationCapabilities(conversationId: string | null, targe
     });
 }
 
-export function useUnreadSummary() {
+export function useUnreadSummary(options?: { enabled?: boolean }) {
     return useQuery({
         queryKey: queryKeys.messages.v2.unread(),
         queryFn: async () => {
@@ -260,6 +311,7 @@ export function useUnreadSummary() {
             return result.count ?? 0;
         },
         staleTime: 15_000,
+        enabled: options?.enabled ?? true,
     });
 }
 
@@ -464,7 +516,10 @@ export function useMessagesActions() {
     const muteConversation = useMutation({
         mutationFn: async (params: { conversationId: string; muted: boolean }) =>
             setConversationMutedV2(params.conversationId, params.muted),
-        onSuccess: (_result, params) => {
+        onMutate: async (params) => {
+            await queryClient.cancelQueries({ queryKey: queryKeys.messages.v2.thread(params.conversationId) });
+            await queryClient.cancelQueries({ queryKey: queryKeys.messages.v2.inbox(20) });
+
             const nextConversation = (conversation: InboxConversationV2) => ({
                 ...conversation,
                 muted: params.muted,
@@ -477,7 +532,10 @@ export function useMessagesActions() {
     const archiveConversation = useMutation({
         mutationFn: async (params: { conversationId: string; archived: boolean }) =>
             setConversationArchivedV2(params.conversationId, params.archived),
-        onSuccess: async (_result, params) => {
+        onMutate: async (params) => {
+            await queryClient.cancelQueries({ queryKey: queryKeys.messages.v2.thread(params.conversationId) });
+            await queryClient.cancelQueries({ queryKey: queryKeys.messages.v2.inbox(20) });
+
             const currentThread = queryClient.getQueryData<{ pages: MessageThreadPageV2[] }>(
                 queryKeys.messages.v2.thread(params.conversationId),
             );
@@ -494,21 +552,25 @@ export function useMessagesActions() {
                 }
                 if (unreadBefore > 0) {
                     patchUnreadSummary(queryClient, (count) => Math.max(0, count - unreadBefore));
-                } else {
-                    await refreshUnreadCache(queryClient);
                 }
                 return;
             }
-            const refreshedConversation = await getConversationSummaryV2(params.conversationId);
-            if (refreshedConversation.success && refreshedConversation.conversation) {
-                upsertThreadConversation(queryClient, refreshedConversation.conversation);
-                return;
-            }
+
             if (cachedConversation) {
                 patchThreadConversation(queryClient, params.conversationId, (conversation) => ({
                     ...conversation,
                     lifecycleState: 'active',
                 }));
+            }
+        },
+        onSuccess: async (_result, params) => {
+            if (params.archived) {
+                await refreshUnreadCache(queryClient);
+                return;
+            }
+            const refreshedConversation = await getConversationSummaryV2(params.conversationId);
+            if (refreshedConversation.success && refreshedConversation.conversation) {
+                upsertThreadConversation(queryClient, refreshedConversation.conversation);
             }
         },
     });
