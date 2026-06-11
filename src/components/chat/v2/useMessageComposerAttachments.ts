@@ -10,6 +10,7 @@ import {
 
 const MAX_ATTACHMENTS = 12;
 const UPLOAD_CONCURRENCY = 3;
+const COMPRESSION_CONCURRENCY = 2;
 
 interface UseMessageComposerAttachmentsParams {
     conversationId: string;
@@ -35,14 +36,31 @@ function releaseAttachmentPreview(attachment: Pick<PendingAttachment, 'preview'>
     }
 }
 
+async function compressFilesWithLimit(files: File[], concurrency: number) {
+    const results = new Array<File>(files.length);
+    let nextIndex = 0;
+
+    async function worker() {
+        while (nextIndex < files.length) {
+            const index = nextIndex;
+            nextIndex += 1;
+            results[index] = await compressImage(files[index]!);
+        }
+    }
+
+    await Promise.all(
+        Array.from({ length: Math.min(concurrency, files.length) }, () => worker()),
+    );
+
+    return results;
+}
+
 export function useMessageComposerAttachments({
     conversationId,
     onAddFiles,
 }: UseMessageComposerAttachmentsParams) {
     const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
-    const [uploadsPaused, setUploadsPaused] = useState(false);
     const attachmentsRef = useRef<PendingAttachment[]>([]);
-    const uploadsPausedRef = useRef(uploadsPaused);
     const activeUploadIdsRef = useRef<Set<string>>(new Set());
     const progressTimeoutsRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
     const pendingAttachmentReservationsRef = useRef(0);
@@ -127,8 +145,9 @@ export function useMessageComposerAttachments({
 
         const epoch = conversationEpochRef.current;
         try {
-            const processedFiles = await Promise.all(
-                files.slice(0, reservedCount).map((file) => compressImage(file)),
+            const processedFiles = await compressFilesWithLimit(
+                files.slice(0, reservedCount),
+                COMPRESSION_CONCURRENCY,
             );
             if (conversationEpochRef.current !== epoch) {
                 releaseAttachmentSlots(reservedCount);
@@ -172,10 +191,6 @@ export function useMessageComposerAttachments({
     }, [attachments]);
 
     useEffect(() => {
-        uploadsPausedRef.current = uploadsPaused;
-    }, [uploadsPaused]);
-
-    useEffect(() => {
         return () => {
             attachmentsRef.current.forEach((attachment) => {
                 if (attachment.preview) URL.revokeObjectURL(attachment.preview);
@@ -186,12 +201,11 @@ export function useMessageComposerAttachments({
     }, []);
 
     const startQueuedUploads = useCallback(() => {
-        if (uploadsPausedRef.current) return;
         const available = Math.max(0, UPLOAD_CONCURRENCY - activeUploadIdsRef.current.size);
         if (available === 0) return;
 
         attachmentsRef.current
-            .filter((attachment) => attachment.status === 'queued')
+            .filter((attachment) => attachment.status === 'queued' && !activeUploadIdsRef.current.has(attachment.id))
             .slice(0, available)
             .forEach((attachment) => {
                 const scheduledEpoch = conversationEpochRef.current;
@@ -344,12 +358,11 @@ export function useMessageComposerAttachments({
     return {
         attachments,
         attachmentsRef,
-        uploadsPaused,
-        setUploadsPaused,
         handleFileSelect,
         removeAttachment,
         retryAttachment,
-        enqueuePastedImage,
         clearAttachments,
+        enqueueFiles,
+        enqueuePastedImage,
     };
 }
