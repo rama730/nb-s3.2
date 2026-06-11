@@ -8,11 +8,14 @@ import {
     buildProjectPersonReference,
     buildProjectRolePolicy,
     buildProjectSettingsPreflight,
+    canProjectMemberUploadFiles,
     getProjectMemberRoleLabel,
     isEligibleProjectMember,
     isAssignableProjectMember,
     getVisibleProjectSettingsSections,
+    isProjectTabVisibleToViewer,
     normalizeProjectVisibility,
+    resolveAllowedProjectTab,
 } from "../../src/lib/projects/settings-policies";
 import {
     OTHER_PROJECT_TYPE_ID,
@@ -26,13 +29,21 @@ import {
     isProjectPubliclyReadableVisibility,
     isProjectVisibility,
 } from "../../src/lib/projects/project-visibility";
+import {
+    PROJECT_NOTIFICATION_EVENT_REGISTRY,
+    buildDefaultProjectNotificationPolicy,
+    normalizeProjectMemberNotificationOverrides,
+    normalizeProjectNotificationPolicy,
+    resolveProjectNotificationDecision,
+    summarizeProjectNotificationPolicy,
+} from "../../src/lib/notifications/project-policy";
 
-test("project settings hides future-only sections until they are enforceable", () => {
+test("project settings exposes enforceable Updates and hides future-only sections", () => {
     const ids = getVisibleProjectSettingsSections().map((section) => section.id);
     assert.ok(ids.includes("general"));
     assert.ok(ids.includes("danger"));
-    assert.ok(!ids.includes("readme"));
-    assert.ok(!ids.includes("updates"));
+    assert.ok(ids.includes("readme"));
+    assert.ok(ids.includes("updates"));
     assert.ok(!ids.includes("automation"));
 });
 
@@ -59,6 +70,111 @@ test("project visibility helper keeps private closed and treats legacy unlisted 
     assert.equal(isProjectVisibility("public"), true);
     assert.equal(isProjectVisibility("private"), true);
     assert.equal(isProjectVisibility("unlisted"), false);
+});
+
+test("project public tab visibility defaults keep public workspace low-noise", () => {
+    assert.equal(isProjectTabVisibleToViewer({
+        tabId: "dashboard",
+        isOwnerOrMember: false,
+        publicTabVisibility: undefined,
+    }), true);
+    assert.equal(isProjectTabVisibleToViewer({
+        tabId: "readme",
+        isOwnerOrMember: false,
+        publicTabVisibility: undefined,
+    }), true);
+    assert.equal(isProjectTabVisibleToViewer({
+        tabId: "files",
+        isOwnerOrMember: false,
+        publicTabVisibility: undefined,
+    }), true);
+    assert.equal(isProjectTabVisibleToViewer({
+        tabId: "updates",
+        isOwnerOrMember: false,
+        publicTabVisibility: undefined,
+    }), true);
+    assert.equal(isProjectTabVisibleToViewer({
+        tabId: "updates",
+        isOwnerOrMember: false,
+        publicTabVisibility: { dashboard: true, readme: true, updates: false, files: true, sprints: false, tasks: false, analytics: false },
+    }), false);
+    assert.equal(isProjectTabVisibleToViewer({
+        tabId: "tasks",
+        isOwnerOrMember: false,
+        publicTabVisibility: undefined,
+    }), false);
+    assert.equal(isProjectTabVisibleToViewer({
+        tabId: "tasks",
+        isOwnerOrMember: true,
+        publicTabVisibility: undefined,
+    }), true);
+    assert.equal(resolveAllowedProjectTab({
+        requestedTab: "analytics",
+        isOwnerOrMember: false,
+        canManageSettings: false,
+        publicTabVisibility: { dashboard: true, readme: true, updates: true, files: true, sprints: false, tasks: false, analytics: false },
+    }), "dashboard");
+});
+
+test("project file upload policy keeps leaders on and respects member toggles", () => {
+    assert.equal(canProjectMemberUploadFiles({ role: "owner", fileUploadEnabled: false }), true);
+    assert.equal(canProjectMemberUploadFiles({ role: "admin", fileUploadEnabled: false }), true);
+    assert.equal(canProjectMemberUploadFiles({ role: "member", fileUploadEnabled: true }), true);
+    assert.equal(canProjectMemberUploadFiles({ role: "member", fileUploadEnabled: false }), false);
+    assert.equal(canProjectMemberUploadFiles({ role: "viewer", fileUploadEnabled: true }), false);
+    assert.equal(canProjectMemberUploadFiles({ role: "unknown", fileUploadEnabled: true }), false);
+});
+
+test("project notification policy normalizes defaults and locks mandatory events", () => {
+    const quiet = buildDefaultProjectNotificationPolicy("quiet");
+    assert.equal(quiet.preset, "quiet");
+    assert.equal(quiet.rules["members.removed"].enabled, true);
+    assert.equal(quiet.rules["files.uploaded"].enabled, false);
+
+    const normalized = normalizeProjectNotificationPolicy({
+        preset: "active",
+        rules: {
+            "members.removed": { enabled: false },
+            "files.uploaded": { enabled: false },
+            "unknown.event": { enabled: true },
+        },
+    });
+    assert.equal(normalized.rules["members.removed"].enabled, true);
+    assert.equal(normalized.rules["files.uploaded"].enabled, false);
+
+    const overrides = normalizeProjectMemberNotificationOverrides({
+        mode: "custom",
+        rules: {
+            "files.uploaded": false,
+            "members.removed": false,
+            "unknown.event": false,
+        },
+    });
+    assert.equal(overrides.mode, "custom");
+    assert.deepEqual(overrides.rules, { "files.uploaded": false });
+
+    assert.equal(resolveProjectNotificationDecision({
+        eventKey: "files.uploaded",
+        projectPolicy: normalized,
+        memberOverrides: overrides,
+    }).enabled, false);
+    assert.equal(resolveProjectNotificationDecision({
+        eventKey: "members.removed",
+        projectPolicy: normalized,
+        memberOverrides: overrides,
+    }).enabled, true);
+
+    const summary = summarizeProjectNotificationPolicy(normalized);
+    assert.ok(summary.visibleCount > 20);
+    assert.ok(summary.mandatoryCount > 0);
+    assert.equal(PROJECT_NOTIFICATION_EVENT_REGISTRY["applications.review_needed"].visible, false);
+    assert.equal(PROJECT_NOTIFICATION_EVENT_REGISTRY["files.git_sync_status"].visible, false);
+    assert.equal(PROJECT_NOTIFICATION_EVENT_REGISTRY["security.protected_action"].visible, false);
+    assert.equal(PROJECT_NOTIFICATION_EVENT_REGISTRY["security.data_export_ready"].visible, false);
+    assert.equal(PROJECT_NOTIFICATION_EVENT_REGISTRY["security.delete_scheduled"].visible, false);
+    assert.equal(PROJECT_NOTIFICATION_EVENT_REGISTRY["updates.published"].visible, true);
+    assert.equal(PROJECT_NOTIFICATION_EVENT_REGISTRY["updates.comment"].visible, true);
+    assert.equal(PROJECT_NOTIFICATION_EVENT_REGISTRY["updates.follower_digest"].visible, true);
 });
 
 test("project access impact explains counts and transition checklist", () => {
