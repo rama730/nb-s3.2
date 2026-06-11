@@ -83,6 +83,7 @@ export type NotificationPreferences = Record<NotificationPreferenceCategory, boo
 export type NotificationEntityRefs = {
     projectId?: string | null;
     projectSlug?: string | null;
+    updateId?: string | null;
     taskId?: string | null;
     commentId?: string | null;
     conversationId?: string | null;
