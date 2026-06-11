@@ -250,10 +250,10 @@ export function useTaskDiscussionTyping(taskId: string | null, enabled = true) {
     sendPresenceTyping(requestedTypingStateRef.current);
   }, [currentUserProfile, enabled, isVisible, sendPresenceTyping, taskId]);
 
-  return {
+  return useMemo(() => ({
     topLevelTypingUsers: snapshot.topLevel,
     replyTypingUsersByParentId: snapshot.repliesByParentId,
     presenceStatus: status,
     sendTyping,
-  };
+  }), [snapshot.topLevel, snapshot.repliesByParentId, status, sendTyping]);
 }
