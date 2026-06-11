@@ -3,14 +3,11 @@ import { projects, projectFollows, projectOpenRoles, profiles, projectMembers } 
 import { eq, desc, sql, and, isNull, ne, or } from 'drizzle-orm';
 import { cache } from 'react';
 
-// Removing cache for debug
-export const getProjectDetails = async (rawProjectId: string) => {
+export const getProjectDetails = cache(async (rawProjectId: string) => {
     const projectId = decodeURIComponent(rawProjectId).trim();
-    console.log("[getProjectDetails] Lookup", { projectId });
 
     // UUID Regex
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(projectId);
-    console.log("[getProjectDetails] Parsed project identifier", { projectId, isUuid });
 
     try {
         const conditions = isUuid ? eq(projects.id, projectId) : eq(projects.slug, projectId);
@@ -19,13 +16,11 @@ export const getProjectDetails = async (rawProjectId: string) => {
         const project = await db.query.projects.findFirst({
             where: and(conditions, isNull(projects.deletedAt)),
             with: {
-                owner: true,
-                // Remove deep fetches from here
+                owner: { columns: { id: true, username: true, fullName: true, avatarUrl: true } },
             }
         });
 
         if (!project) {
-            console.log("[getProjectDetails] Not found", { projectId });
             return null;
         }
 
@@ -33,7 +28,7 @@ export const getProjectDetails = async (rawProjectId: string) => {
         const savesCount = Number(project.savesCount || 0);
 
         const [openRoles, members] = await Promise.all([
-            db.select().from(projectOpenRoles).where(eq(projectOpenRoles.projectId, project.id)),
+            db.select().from(projectOpenRoles).where(eq(projectOpenRoles.projectId, project.id)).limit(100),
 
             // Members (LIMIT to 20 to prevent bloat)
             // Frontend should use dedicated "Team" tab or infinite scroll for full list
@@ -103,7 +98,7 @@ export const getProjectDetails = async (rawProjectId: string) => {
         console.error("[getProjectDetails] Error fetching project", { projectId, error });
         return null;
     }
-};
+});
 
 export const getPopularProjectIds = cache(async (limit: number = 20) => {
     const data = await db
