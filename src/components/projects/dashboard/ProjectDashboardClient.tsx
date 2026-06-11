@@ -6,24 +6,33 @@ import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
 import dynamic from "next/dynamic";
+import { createClient } from "@/lib/supabase/client";
 import ProjectLayout from "@/components/projects/dashboard/ProjectLayout";
+import InviteCollaboratorModal from "@/components/projects/dashboard/InviteCollaboratorModal";
 import { TabErrorBoundary } from "@/components/projects/TabErrorBoundary";
-import { ProjectIntelligenceProvider } from "@/components/projects/intelligence/ProjectIntelligenceProvider";
 import type { Project } from "@/types/hub";
-import { toggleProjectFollowAction, updateProjectStageAction, incrementProjectViewAction } from "@/app/actions/project";
-import { getApplicationStatusAction } from "@/app/actions/applications";
-import ApplicationStatusBanner from "@/components/projects/ApplicationStatusBanner";
-import { useProjectMembers } from "@/hooks/hub/useProjectData";
+import { toggleProjectFollowAction, updateProjectStageAction, incrementProjectViewAction, getProjectLiveStatsAction, type ProjectUpdateMovementSummary, type ProjectUpdateView } from "@/app/actions/project";
+import { getApplicationStatusAction, acceptProposedRoleAction, declineProposedRoleAction, type ApplicationStatusResult } from "@/app/actions/applications";
+import { resolveMessageWorkflowActionV2 } from "@/app/actions/messaging";
+import { useProjectMembers } from "@/hooks/hub/useProjectMembers";
 import { filesFeatureFlags } from "@/lib/features/files";
-import { getProjectNodes } from "@/app/actions/files";
+import { getProjectNodes } from "@/app/actions/files/nodes";
 import { queryKeys } from "@/lib/query-keys";
 import { logger } from "@/lib/logger";
 import type { SprintDetailPayload } from "@/lib/projects/sprint-detail";
 import type { TaskPanelTab } from "@/hooks/useTaskPanelResource";
-import { normalizeProjectMemberRole, type ProjectMemberRole } from "@/lib/projects/settings-policies";
+import {
+    isProjectTabVisibleToViewer,
+    normalizeProjectMemberRole,
+    normalizeProjectPublicTabVisibility,
+    resolveAllowedProjectTab,
+    type ProjectMemberRole,
+} from "@/lib/projects/settings-policies";
 
 import { 
     DashboardTab, 
+    ReadmeTab,
+    UpdatesTab,
     TasksTab, 
     FilesTab, 
     AnalyticsTab, 
@@ -33,40 +42,57 @@ import {
 
 const EditProjectModal = dynamic(
     () => import("@/components/projects/EditProjectModal"),
-    { ssr: false }
+    { ssr: false, loading: () => null }
 );
 
 const ApplyRoleModal = dynamic(
     () => import("@/components/projects/ApplyRoleModal"),
-    { ssr: false }
+    { ssr: false, loading: () => null }
 );
 
 const ProjectOnboardingModal = dynamic(
     () => import("@/components/projects/ProjectOnboardingModal").then(mod => mod.ProjectOnboardingModal),
-    { ssr: false }
+    { ssr: false, loading: () => null }
 );
 
 interface ProjectDashboardClientProps {
     project: Project;
     currentUserId: string | null;
+    viewerDisplayName?: string | null;
+    viewerAvatarUrl?: string | null;
     isOwner: boolean;
     isMember: boolean;
     initialSprintData?: SprintDetailPayload | null;
+    initialUpdatesPage?: {
+        updates: ProjectUpdateView[];
+        nextCursor: string | null;
+        hasMore: boolean;
+        movementSummary?: ProjectUpdateMovementSummary | null;
+        capabilities?: {
+            canCreate: boolean;
+            canManage: boolean;
+            canInteract: boolean;
+        };
+    } | null;
     forcedActiveTab?: string;
 }
 
 export default function ProjectDashboardClient({
     project,
     currentUserId,
+    viewerDisplayName = null,
+    viewerAvatarUrl = null,
     isOwner,
     isMember,
     initialSprintData = null,
+    initialUpdatesPage = null,
     forcedActiveTab,
 }: ProjectDashboardClientProps) {
     const router = useRouter();
     const pathname = usePathname();
     const queryClient = useQueryClient();
     const searchParams = useSearchParams();
+    const applyRoleIdFromUrl = searchParams?.get("applyRole") || null;
 
     const invalidateProjectDetailSlices = useCallback((options?: {
         shell?: boolean;
@@ -123,10 +149,25 @@ export default function ProjectDashboardClient({
         () => `/projects/${project.slug || project.id}`,
         [project.id, project.slug],
     );
+    const publicTabVisibility = useMemo(
+        () => normalizeProjectPublicTabVisibility((project as any).publicTabVisibility ?? (project as any).public_tab_visibility),
+        [project],
+    );
+    const isOwnerOrMember = isOwner || isMember;
     const isSprintRoute = pathname?.includes("/sprints/") ?? false;
-    const resolvedActiveTab = forcedActiveTab || (isSprintRoute ? "sprints" : (searchParams?.get("tab") || "dashboard"));
+    const resolvedActiveTab = resolveAllowedProjectTab({
+        requestedTab: (() => {
+            const requested = forcedActiveTab || (isSprintRoute ? "sprints" : (searchParams?.get("tab") || "dashboard"));
+            if (requested === "readme" && !isOwnerOrMember && !(project as any)?.hasPublishedReadme) return "dashboard";
+            return requested;
+        })(),
+        isOwnerOrMember,
+        canManageSettings: isOwner,
+        publicTabVisibility,
+    });
 
     const [activeTab, setActiveTab] = useState(() => resolvedActiveTab);
+    const [isReadmeEditing, setIsReadmeEditing] = useState(false);
 
     // State management
     const [isFollowing, setIsFollowing] = useState((project as any).isFollowed || false);
@@ -135,6 +176,7 @@ export default function ProjectDashboardClient({
     const [viewCount, setViewCount] = useState((project as any).viewCount || 0);
     const [isEditModalOpen, setIsEditModalOpen] = useState(false);
     const [isApplyModalOpen, setIsApplyModalOpen] = useState(false);
+    const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
     const [preselectedRoleId, setPreselectedRoleId] = useState<string | undefined>(undefined);
     const [isOnboardingOpen, setIsOnboardingOpen] = useState(false);
     const [isStageUpdating, setIsStageUpdating] = useState(false);
@@ -147,6 +189,8 @@ export default function ProjectDashboardClient({
     const shareRequestRef = useRef(0);
     const viewRequestRef = useRef(0);
     const stageRequestRef = useRef(0);
+    const roleApplyRequestRef = useRef<string | null>(null);
+    const statsChannelRef = useRef<any>(null);
 
     const setStageVersionSafe = useCallback((nextVersion: string | null) => {
         stageVersionRef.current = nextVersion;
@@ -182,18 +226,78 @@ export default function ProjectDashboardClient({
     }, [searchParams, isMember, isOwner]);
 
     // Application status for non-owner/non-member users
-    const [applicationStatus, setApplicationStatus] = useState<{
-        status: 'none' | 'pending' | 'accepted' | 'rejected';
-        roleTitle?: string;
-        decisionReason?: string | null;
-        lifecycleStatus?: 'none' | 'pending' | 'accepted' | 'rejected' | 'withdrawn' | 'role_filled';
-        canReapply?: boolean;
-        waitTime?: string;
-        membershipEnded?: boolean;
-    }>({ status: 'none' });
+    const [applicationStatus, setApplicationStatus] = useState<ApplicationStatusResult>({ status: 'none' });
+    const [invitationLoading, setInvitationLoading] = useState(false);
+
+    const handleAcceptInvitation = useCallback(async () => {
+        if (invitationLoading) return;
+        setInvitationLoading(true);
+        try {
+            let res;
+            if (applicationStatus.applicationId) {
+                res = await acceptProposedRoleAction(applicationStatus.applicationId);
+            } else if (applicationStatus.workflowItemId) {
+                res = await resolveMessageWorkflowActionV2({
+                    workflowItemId: applicationStatus.workflowItemId,
+                    action: "accept",
+                });
+            } else {
+                throw new Error("No active invitation ID found.");
+            }
+
+            if (res.success) {
+                toast.success("Invitation accepted successfully!");
+                refreshProjectData();
+                const nextStatus = await getApplicationStatusAction(project.id);
+                setApplicationStatus(nextStatus);
+            } else {
+                toast.error(res.error || "Failed to accept invitation");
+            }
+        } catch (error) {
+            console.error("Error accepting invitation:", error);
+            toast.error(error instanceof Error ? error.message : "Failed to accept invitation");
+        } finally {
+            setInvitationLoading(false);
+        }
+    }, [applicationStatus, invitationLoading, project.id, refreshProjectData]);
+
+    const handleDeclineInvitation = useCallback(async () => {
+        if (invitationLoading) return;
+        setInvitationLoading(true);
+        try {
+            let res;
+            if (applicationStatus.applicationId) {
+                res = await declineProposedRoleAction(applicationStatus.applicationId);
+            } else if (applicationStatus.workflowItemId) {
+                res = await resolveMessageWorkflowActionV2({
+                    workflowItemId: applicationStatus.workflowItemId,
+                    action: "decline",
+                });
+            } else {
+                throw new Error("No active invitation ID found.");
+            }
+
+            if (res.success) {
+                toast.success("Invitation declined.");
+                refreshProjectData();
+                const nextStatus = await getApplicationStatusAction(project.id);
+                setApplicationStatus(nextStatus);
+            } else {
+                toast.error(res.error || "Failed to decline invitation");
+            }
+        } catch (error) {
+            console.error("Error declining invitation:", error);
+            toast.error(error instanceof Error ? error.message : "Failed to decline invitation");
+        } finally {
+            setInvitationLoading(false);
+        }
+    }, [applicationStatus, invitationLoading, project.id, refreshProjectData]);
 
     // Optimistic State for Project Journey
     const [optimisticStageIndex, setOptimisticStageIndex] = useState((project as any).currentStageIndex || 0);
+    const [stageCompletionDates, setStageCompletionDates] = useState<Record<string, string>>(() => (project as any).stageCompletionDates || {});
+    // Track if the journey timeline has already animated during this page lifecycle
+    const [timelineHasAnimated, setTimelineHasAnimated] = useState(false);
 
     // Sync state with server updates (e.g. revalidation or external changes)
     // This ensures we don't get stuck in a detached state if the server updates
@@ -201,17 +305,59 @@ export default function ProjectDashboardClient({
     const serverProjectUpdatedAt = (project as any).updatedAt || null;
     useEffect(() => {
         setOptimisticStageIndex(serverStageIndex);
-    }, [serverStageIndex]);
+        setStageCompletionDates((project as any).stageCompletionDates || {});
+    }, [serverStageIndex, (project as any).stageCompletionDates]);
 
-    // Derived state
-    const isOwnerOrMember = isOwner || isMember;
+    // Reset timeline animation state when changing projects
+    useEffect(() => {
+        setTimelineHasAnimated(false);
+    }, [project?.id]);
+
+    // Realtime subscription for project stage changes
+    useEffect(() => {
+        if (!project?.id) return;
+        const supabase = createClient();
+        const channel = supabase
+            .channel(`project-stage:${project.id}`)
+            .on(
+                "postgres_changes" as any,
+                {
+                    event: "UPDATE",
+                    schema: "public",
+                    table: "projects",
+                    filter: `id=eq.${project.id}`,
+                },
+                (payload: any) => {
+                    if (isStageUpdatingRef.current) return;
+                    
+                    const nextIndex = payload.new?.current_stage_index;
+                    if (nextIndex !== undefined && nextIndex !== null) {
+                        setOptimisticStageIndex(Number(nextIndex));
+                    }
+                    const nextDates = payload.new?.stage_completion_dates;
+                    if (nextDates !== undefined && nextDates !== null) {
+                        setStageCompletionDates(nextDates as Record<string, string>);
+                    }
+                    const nextVersion = payload.new?.updated_at;
+                    if (typeof nextVersion === 'string') {
+                        setStageVersionSafe(nextVersion);
+                    }
+                }
+            )
+            .subscribe();
+
+        return () => {
+            void supabase.removeChannel(channel);
+        };
+    }, [project?.id, setStageVersionSafe]);
 
     // Extended project data (may come from joined queries, cast to any for flexibility)
     const projectWithLiveStats = useMemo(() => ({
         ...(project as any),
         viewCount,
         followersCount,
-    }), [project, viewCount, followersCount]);
+        stageCompletionDates,
+    }), [project, viewCount, followersCount, stageCompletionDates]);
     const extendedProject = projectWithLiveStats as any;
 
     const lastProjectIdRef = useRef<string | null>(null);
@@ -227,7 +373,6 @@ export default function ProjectDashboardClient({
 
     // OPTIMIZATION: Default to empty arrays as these are now fetched client-side or lazy loaded
     const tasks = useMemo(() => extendedProject?.tasks || [], [extendedProject]);
-    const files = useMemo(() => extendedProject?.files || [], [extendedProject]);
     const initialFileNodes = useMemo(() => extendedProject?.initialFileNodes || [], [extendedProject]);
     const sprints = useMemo(() => {
         if (initialSprintData?.sprints?.length) return initialSprintData.sprints;
@@ -266,6 +411,7 @@ export default function ProjectDashboardClient({
     const shouldLoadMembers =
         activeTab === "dashboard" ||
         activeTab === "tasks" ||
+        activeTab === "updates" ||
         activeTab === "sprints" ||
         activeTab === "settings";
 
@@ -300,6 +446,19 @@ export default function ProjectDashboardClient({
     }, [allMembers, currentUserId, isOwner]);
     const canManageProjectSettings = isOwner || currentProjectRole === "admin";
 
+    const currentUserName = useMemo(() => {
+        if (!currentUserId) return undefined;
+        const member = allMembers.find((item: any) => item?.id === currentUserId);
+        return member?.displayName || member?.fullName || member?.name || viewerDisplayName || "Anonymous";
+    }, [allMembers, currentUserId, viewerDisplayName]);
+    const currentUserAvatarUrl = useMemo(() => {
+        if (!currentUserId) return undefined;
+        const member = allMembers.find((item: any) => item?.id === currentUserId);
+        return member?.avatarUrl || member?.profile?.avatarUrl || member?.user?.avatarUrl || viewerAvatarUrl || null;
+    }, [allMembers, currentUserId, viewerAvatarUrl]);
+    const canCreateUpdates = isOwner || currentProjectRole === "admin" || currentProjectRole === "member";
+    const canManageUpdates = canManageProjectSettings;
+
     // Current members
     const members = useMemo(() => {
         return membersData?.pages.flatMap((p: any) => p.members) || collaboratorUsers || [];
@@ -326,6 +485,15 @@ export default function ProjectDashboardClient({
 
     // Tab change handler
     const handleTabChange = useCallback((tabId: string) => {
+        if (!isProjectTabVisibleToViewer({
+            tabId,
+            isOwnerOrMember,
+            canManageSettings: canManageProjectSettings,
+            publicTabVisibility,
+        })) {
+            toast.error("That project tab is not visible for your current access.");
+            return;
+        }
         if (tabId === activeTab) return;
         setActiveTab(tabId);
         if (tabId === "sprints") {
@@ -347,12 +515,25 @@ export default function ProjectDashboardClient({
         const safePath = pathname ?? window.location.pathname;
         const nextUrl = nextQuery ? `${safePath}?${nextQuery}` : safePath;
         window.history.replaceState(window.history.state, "", nextUrl);
-    }, [activeTab, canonicalProjectHref, forcedActiveTab, isSprintRoute, pathname, router]);
+    }, [activeTab, canManageProjectSettings, canonicalProjectHref, forcedActiveTab, isOwnerOrMember, isSprintRoute, pathname, publicTabVisibility, router]);
 
     useEffect(() => {
-        const nextTab = forcedActiveTab || (isSprintRoute ? "sprints" : (searchParams?.get("tab") || "dashboard"));
+        const requestedTab = forcedActiveTab || (isSprintRoute ? "sprints" : (searchParams?.get("tab") || "dashboard"));
+        const normalizedRequestedTab = requestedTab === "readme" && !isOwnerOrMember && !(project as any)?.hasPublishedReadme
+            ? "dashboard"
+            : requestedTab;
+        const nextTab = resolveAllowedProjectTab({
+            requestedTab: normalizedRequestedTab,
+            isOwnerOrMember,
+            canManageSettings: canManageProjectSettings,
+            publicTabVisibility,
+        });
         setActiveTab((prev) => (prev === nextTab ? prev : nextTab));
-    }, [forcedActiveTab, isSprintRoute, searchParams]);
+    }, [canManageProjectSettings, forcedActiveTab, isOwnerOrMember, isSprintRoute, project, publicTabVisibility, searchParams]);
+
+    useEffect(() => {
+        if (activeTab !== "readme") setIsReadmeEditing(false);
+    }, [activeTab]);
 
     const filesPrefetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const filesPrefetchQueryKey = useMemo(
@@ -363,6 +544,8 @@ export default function ProjectDashboardClient({
     const handleTabHover = useCallback((tabId: string) => {
         if (!(filesFeatureFlags.prefetchHover || filesFeatureFlags.wave2PrefetchHover)) return;
         if (tabId !== "files") return;
+        if (activeTab === "files") return;
+        if (!isOwnerOrMember) return;
         if (filesPrefetchTimerRef.current) {
             clearTimeout(filesPrefetchTimerRef.current);
             filesPrefetchTimerRef.current = null;
@@ -378,8 +561,8 @@ export default function ProjectDashboardClient({
                 queryFn: () => getProjectNodes(project.id, null),
                 staleTime: 60_000,
             });
-        }, 120);
-    }, [filesPrefetchQueryKey, project.id, queryClient]);
+        }, 450);
+    }, [activeTab, filesPrefetchQueryKey, isOwnerOrMember, project.id, queryClient]);
 
     const handleTabLeave = useCallback((tabId: string) => {
         if (tabId !== "files") return;
@@ -477,6 +660,18 @@ export default function ProjectDashboardClient({
                     ? Math.max(serverCount, baselineFollowersCount + 1)
                     : Math.min(serverCount, Math.max(0, baselineFollowersCount - 1));
                 setFollowersCount(reconciledCount);
+
+                // Invalidate the Hub project feed query cache
+                void queryClient.invalidateQueries({ queryKey: queryKeys.hub.projectsSimpleRoot() });
+
+                // Broadcast updated stats to other connected clients
+                if (statsChannelRef.current) {
+                    void statsChannelRef.current.send({
+                        type: "broadcast",
+                        event: "stats_update",
+                        payload: { followersCount: reconciledCount },
+                    });
+                }
             }
             toast.success(newIsFollowing ? "Following project" : "Unfollowed project");
             logger.metric("project.detail.follow.result", {
@@ -506,32 +701,101 @@ export default function ProjectDashboardClient({
         }
     }, [currentUserId, followLoading, followersCount, isFollowing, project.id]);
 
+    // Realtime stats sync and cache-busting mount fetch
     useEffect(() => {
         if (!project?.id) return;
-        if (typeof window === "undefined") return;
-        const viewKey = `project_viewed:${project.id}`;
-        if (sessionStorage.getItem(viewKey)) return;
-        sessionStorage.setItem(viewKey, "1");
-        const requestId = ++viewRequestRef.current;
-        incrementProjectViewAction(project.id).then((result) => {
-            if (!isMountedRef.current || requestId !== viewRequestRef.current) return;
-            const nextViewCount = result.viewCount;
-            if (result.success && typeof nextViewCount === "number") {
-                setViewCount((current: number) => Math.max(current, nextViewCount));
-                logger.metric("project.detail.view.increment", {
-                    projectId: project.id,
-                    success: true,
-                    viewCount: nextViewCount,
-                });
-            } else {
-                logger.metric("project.detail.view.increment", {
-                    projectId: project.id,
-                    success: false,
-                    message: result.error || "increment failed",
-                });
+
+        let active = true;
+        const supabase = createClient();
+
+        // 1. Fetch latest reconciled view count, followers, and follow status on mount
+        getProjectLiveStatsAction(project.id).then((result) => {
+            if (!active) return;
+            if (result.success) {
+                if (result.viewCount !== undefined) setViewCount(result.viewCount);
+                if (result.followersCount !== undefined) setFollowersCount(result.followersCount);
+                if (result.isFollowed !== undefined) setIsFollowing(result.isFollowed);
             }
         });
+
+        // 2. Subscribe to live realtime broadcast updates
+        const channel = supabase.channel(`project-stats:${project.id}`);
+        statsChannelRef.current = channel;
+
+        channel.on("broadcast", { event: "stats_update" }, ({ payload }: { payload: { viewCount?: number; followersCount?: number } }) => {
+            if (!active) return;
+            const liveViews = payload.viewCount;
+            if (typeof liveViews === "number") {
+                setViewCount((current: number) => Math.max(current, liveViews));
+            }
+            if (typeof payload.followersCount === "number") {
+                setFollowersCount(payload.followersCount);
+            }
+        });
+
+        channel.subscribe();
+
+        return () => {
+            active = false;
+            statsChannelRef.current = null;
+            void supabase.removeChannel(channel);
+        };
     }, [project?.id]);
+
+    useEffect(() => {
+        if (!project?.id) return;
+        const requestId = ++viewRequestRef.current;
+        let cancelled = false;
+        const incrementView = () => {
+            if (cancelled) return;
+            incrementProjectViewAction(project.id).then((result) => {
+                if (cancelled) return;
+                if (!isMountedRef.current || requestId !== viewRequestRef.current) return;
+                const nextViewCount = result.viewCount;
+                if (result.success && typeof nextViewCount === "number") {
+                    setViewCount((current: number) => Math.max(current, nextViewCount));
+
+                    // Invalidate the Hub project feed query cache
+                    void queryClient.invalidateQueries({ queryKey: queryKeys.hub.projectsSimpleRoot() });
+
+                    // Broadcast updated view count to peers
+                    if (statsChannelRef.current) {
+                        void statsChannelRef.current.send({
+                            type: "broadcast",
+                            event: "stats_update",
+                            payload: { viewCount: nextViewCount },
+                        });
+                    }
+
+                    logger.metric("project.detail.view.increment", {
+                        projectId: project.id,
+                        success: true,
+                        viewCount: nextViewCount,
+                    });
+                } else {
+                    logger.metric("project.detail.view.increment", {
+                        projectId: project.id,
+                        success: false,
+                        message: result.error || "increment failed",
+                    });
+                }
+            });
+        };
+        let idleId: number | null = null;
+        let timeoutId: number | null = null;
+        if (typeof window.requestIdleCallback === "function") {
+            idleId = window.requestIdleCallback(incrementView, { timeout: 2500 });
+        } else {
+            timeoutId = window.setTimeout(incrementView, 1200);
+        }
+        return () => {
+            cancelled = true;
+            if (idleId !== null && typeof window.cancelIdleCallback === "function") {
+                window.cancelIdleCallback(idleId);
+            }
+            if (timeoutId !== null) window.clearTimeout(timeoutId);
+        };
+    }, [project?.id, queryClient]);
 
     const handleApplyToRole = useCallback((role: any) => {
         if (!currentUserId) {
@@ -555,6 +819,22 @@ export default function ProjectDashboardClient({
         setIsApplyModalOpen(true);
     }, [currentUserId, applicationStatus]);
 
+    useEffect(() => {
+        if (!applyRoleIdFromUrl) {
+            roleApplyRequestRef.current = null;
+            return;
+        }
+
+        if (roleApplyRequestRef.current === applyRoleIdFromUrl) return;
+
+        const role = rolesWithFilled.find((item: any) => item?.id === applyRoleIdFromUrl);
+        if (!role) return;
+
+        roleApplyRequestRef.current = applyRoleIdFromUrl;
+        setActiveTab("dashboard");
+        handleApplyToRole(role);
+    }, [applyRoleIdFromUrl, handleApplyToRole, rolesWithFilled]);
+
     const commitStageIndex = useCallback(async (
         targetIndex: number,
         expectedUpdatedAt: string | null,
@@ -573,6 +853,9 @@ export default function ProjectDashboardClient({
                 const nextIndex = typeof result.currentStageIndex === "number" ? result.currentStageIndex : targetIndex;
                 setOptimisticStageIndex(nextIndex);
                 setStageVersionSafe(result.updatedAt ?? null);
+                if (result.stageCompletionDates) {
+                    setStageCompletionDates(result.stageCompletionDates);
+                }
                 return true;
             }
 
@@ -600,6 +883,9 @@ export default function ProjectDashboardClient({
                         : retryTarget;
                     setOptimisticStageIndex(nextIndex);
                     setStageVersionSafe(retryResult.updatedAt ?? latestVersion);
+                    if (retryResult.stageCompletionDates) {
+                        setStageCompletionDates(retryResult.stageCompletionDates);
+                    }
                     return true;
                 }
 
@@ -634,6 +920,49 @@ export default function ProjectDashboardClient({
         }
         toast.success("Undid stage advancement");
     }, [commitStageIndex]);
+
+    const handleRegressStage = useCallback(async () => {
+        if (isStageUpdating) {
+            toast.info("Stage update is in progress");
+            return;
+        }
+        if (!isOwner) {
+            toast.error("Only the project owner can revert the stage");
+            return;
+        }
+
+        if (optimisticStageIndex <= 0) {
+            toast.info("Project is already at the starting stage");
+            return;
+        }
+
+        const stages = lifecycleStageNames;
+        const prevIndex = optimisticStageIndex;
+        const nextIndex = prevIndex - 1;
+        const prevStageName = stages[nextIndex];
+        const expectedUpdatedAt = stageVersionRef.current;
+
+        // 1. Optimistic Update
+        setOptimisticStageIndex(nextIndex);
+        
+        // 2. Show Toast with Undo
+        toast.success(`Returned to ${prevStageName}`, {
+            action: {
+                label: "Undo",
+                onClick: () => {
+                    void handleUndoStage(prevIndex, nextIndex, expectedUpdatedAt);
+                },
+            },
+            duration: 4000,
+        });
+
+        // 3. Server Action
+        const committed = await commitStageIndex(nextIndex, expectedUpdatedAt, true);
+        if (!committed) {
+            // Revert on failure
+            setOptimisticStageIndex(prevIndex);
+        }
+    }, [isOwner, isStageUpdating, lifecycleStageNames, optimisticStageIndex, commitStageIndex, handleUndoStage]);
 
     const handleAdvanceStage = useCallback(async () => {
         if (isStageUpdating) {
@@ -739,32 +1068,59 @@ export default function ProjectDashboardClient({
                         <DashboardTab
                             project={projectWithLiveStats}
                             isCreator={isOwner}
-                            isOwnerOrMember={isOwnerOrMember}
                             isCollaborator={isMember}
-                            currentUserId={currentUserId}
-                            tasks={tasks}
-                            dashboardTasks={tasks.slice(0, 10)}
-                            files={files}
                             members={members}
                             hasNextMembers={hasNextMembers}
                             fetchNextMembers={fetchNextMembers}
                             loadingMembers={loadingMembers}
                             rolesWithFilled={rolesWithFilled}
-                            projectActivityEvents={[]}
                             onEdit={handleEdit}
                             onShare={handleShare}
                             onAdvanceStage={handleAdvanceStage}
+                            onRedoStage={handleRegressStage}
                             onApplyToRole={handleApplyToRole}
-                            onManageTeam={() => handleEdit("team")}
-                            onViewBoard={() => handleTabChange("tasks")}
-                            onUploadFile={() => handleTabChange("files")}
-                            onViewAnalytics={() => handleTabChange("analytics")}
-                            onViewSprints={() => handleTabChange("sprints")}
-                            onViewSettings={() => handleTabChange("settings")}
-                            onTaskClick={(taskId) => router.push(`/projects/${project.id}/tasks/${taskId}`)}
+                            onManageTeam={() => setIsInviteModalOpen(true)}
                             lifecycleStages={lifecycleStages}
                             currentStageIndex={optimisticStageIndex}
                             applicationStatus={applicationStatus}
+                            timelineHasAnimated={timelineHasAnimated}
+                            setTimelineHasAnimated={setTimelineHasAnimated}
+                            onAcceptInvitation={handleAcceptInvitation}
+                            onDeclineInvitation={handleDeclineInvitation}
+                            invitationLoading={invitationLoading}
+                        />
+                    </TabErrorBoundary>
+                );
+
+            case "readme":
+                return (
+                    <TabErrorBoundary tabName="README" fillContainer>
+                        <ReadmeTab
+                            projectId={project.id}
+                            project={projectWithLiveStats}
+                            currentUserId={currentUserId}
+                            currentUserName={currentUserName}
+                            canEditProject={canManageProjectSettings}
+                            onEditingChange={setIsReadmeEditing}
+                        />
+                    </TabErrorBoundary>
+                );
+
+            case "updates":
+                return (
+                    <TabErrorBoundary tabName="Updates">
+                        <UpdatesTab
+                            projectId={project.id}
+                            projectSlug={project.slug || project.id}
+                            projectName={project.title}
+                            currentUserId={currentUserId}
+                            currentUserName={currentUserName}
+                            currentUserAvatarUrl={currentUserAvatarUrl}
+                            canCreateUpdates={canCreateUpdates}
+                            canManageUpdates={canManageUpdates}
+                            initialUpdateId={searchParams?.get("updateId") || null}
+                            initialCommentId={searchParams?.get("commentId") || null}
+                            initialUpdatesPage={initialUpdatesPage}
                         />
                     </TabErrorBoundary>
                 );
@@ -846,12 +1202,14 @@ export default function ProjectDashboardClient({
     }
 
     return (
-        <ProjectIntelligenceProvider>
-            <ProjectLayout
+        <ProjectLayout
                 project={projectWithLiveStats}
                 isOwner={isOwner}
                 canManageSettings={canManageProjectSettings}
+                isOwnerOrMember={isOwnerOrMember}
+                publicTabVisibility={publicTabVisibility}
                 activeTab={activeTab}
+                isReadmeEditing={isReadmeEditing}
                 onTabChange={handleTabChange}
                 followersCount={followersCount}
                 viewCount={viewCount}
@@ -863,49 +1221,35 @@ export default function ProjectDashboardClient({
                 onTabHover={handleTabHover}
                 onTabLeave={handleTabLeave}
             >
-                {/* Application Status Banner for visitors */}
-                {!isOwner && !isMember && currentUserId && rolesWithFilled.length > 0 && (
-                    <div className="mb-6">
-                        <ApplicationStatusBanner
-                            status={applicationStatus.status}
-                            lifecycleStatus={applicationStatus.lifecycleStatus}
-                            decisionReason={applicationStatus.decisionReason}
-                            roleTitle={applicationStatus.roleTitle}
-                            canReapply={applicationStatus.canReapply}
-                            waitTime={applicationStatus.waitTime}
-                            membershipEnded={applicationStatus.membershipEnded}
-                            onApply={() => setIsApplyModalOpen(true)}
-                            isOwner={isOwner}
-                            isMember={isMember}
-                        />
-                    </div>
-                )}
-                
                 {activeTab === "files" ? filesTabContent : renderTabContent()}
 
-                <ProjectOnboardingModal
-                    isOpen={isOnboardingOpen}
-                    onClose={() => setIsOnboardingOpen(false)}
-                    projectTitle={project.title}
-                    roleTitle={isMember ? "Team Member" : undefined} // Ideally pass role from DB
-                    onViewTasks={() => {
-                        setIsOnboardingOpen(false);
-                        handleTabChange("tasks");
-                    }}
-                    onViewDocs={() => {
-                        setIsOnboardingOpen(false);
-                        handleTabChange("files");
-                    }}
-                />
+                {isOnboardingOpen ? (
+                    <ProjectOnboardingModal
+                        isOpen={isOnboardingOpen}
+                        onClose={() => setIsOnboardingOpen(false)}
+                        projectTitle={project.title}
+                        roleTitle={isMember ? "Team Member" : undefined} // Ideally pass role from DB
+                        onViewTasks={() => {
+                            setIsOnboardingOpen(false);
+                            handleTabChange("tasks");
+                        }}
+                        onViewDocs={() => {
+                            setIsOnboardingOpen(false);
+                            handleTabChange("files");
+                        }}
+                    />
+                ) : null}
+
+                {isEditModalOpen ? (
+                    <EditProjectModal
+                        project={extendedProject}
+                        isOpen={isEditModalOpen}
+                        onClose={() => setIsEditModalOpen(false)}
+                        onSaved={() => refreshProjectData()}
+                    />
+                ) : null}
                 
-                <EditProjectModal 
-                    project={extendedProject}
-                    isOpen={isEditModalOpen}
-                    onClose={() => setIsEditModalOpen(false)}
-                    onSaved={() => refreshProjectData()}
-                />
-                
-                {rolesWithFilled.length > 0 && (
+                {isApplyModalOpen && rolesWithFilled.length > 0 && (
                     <ApplyRoleModal
                         isOpen={isApplyModalOpen}
                         onClose={() => {
@@ -922,7 +1266,18 @@ export default function ProjectDashboardClient({
                         onSuccess={() => refreshProjectData()}
                     />
                 )}
-            </ProjectLayout>
-        </ProjectIntelligenceProvider>
+
+                {isInviteModalOpen && (
+                    <InviteCollaboratorModal
+                        isOpen={isInviteModalOpen}
+                        onClose={() => {
+                            setIsInviteModalOpen(false);
+                            refreshProjectData();
+                        }}
+                        projectId={project.id}
+                        projectTitle={project.title}
+                    />
+                )}
+        </ProjectLayout>
     );
 }
