@@ -1,9 +1,9 @@
 import { db } from '@/lib/db'
-import { profiles, projects, connections, projectMembers } from '@/lib/db/schema'
-import { eq, or, and, desc, ne, inArray, asc, sql } from 'drizzle-orm'
+import { profiles } from '@/lib/db/schema'
+import { eq, or, and, desc, isNull } from 'drizzle-orm'
 import { cache } from 'react'
 import type { User } from '@supabase/supabase-js'
-import type { ConnectionState } from '@/components/profile/v2/types'
+import type { ConnectionState, ProfileViewerUser } from '@/components/profile/v2/types'
 import { recordPrivacyReadEvent } from '@/lib/privacy/audit'
 import { buildViewerScopedProfileView } from '@/lib/privacy/profile-views'
 import { createClient } from '@/lib/supabase/server'
@@ -14,14 +14,17 @@ import { normalizeUsername, validateUsername } from '@/lib/validations/username'
 import {
     buildProfileMetadataDescription,
     buildPublicProfileTitle,
-    normalizeProjectDescription,
-    normalizeProjectTitle,
-    trimDisplayText,
-    trimOptionalDisplayText,
 } from '@/lib/profile/display'
 import { normalizeNotificationPreferences } from '@/lib/notifications/preferences'
 export { normalizeProfile } from '@/lib/utils/normalize-profile'
 import { normalizeProfile } from '@/lib/utils/normalize-profile'
+import {
+    getProfileCollaborationSummary,
+    type ProfileCollaborationProject,
+    type ProfileCollaborationSummary,
+    type ProfileCollaborationMemberPreview,
+} from '@/lib/profile/collaboration'
+import { getRedisClient } from '@/lib/redis'
 
 function toBootstrapProfile(
     profile: Pick<
@@ -141,7 +144,7 @@ export const getUserProfile = cache(async (userId: string) => {
                 workspaceInProgressCount: profiles.workspaceInProgressCount,
             })
             .from(profiles)
-            .where(eq(profiles.id, userId))
+            .where(and(eq(profiles.id, userId), isNull(profiles.deletedAt)))
             .limit(1);
 
         if (!data) return null;
@@ -160,37 +163,11 @@ export const getUserProfile = cache(async (userId: string) => {
 interface ProfileDetailsOptions {
     skipHeavyData?: boolean;
     viewerUser?: User | null;
+    recordViewEvent?: boolean;
 }
 
-export interface ProfileProjectMemberPreview {
-    id: string;
-    displayName: string;
-    username: string | null;
-    avatarUrl: string | null;
-}
-
-export interface ProfileProjectPreview {
-    id: string;
-    ownerId: string;
-    title: string;
-    slug: string | null;
-    description: string;
-    shortDescription: string | null;
-    coverImage: string | null;
-    category: string | null;
-    viewCount: number | null;
-    followersCount: number | null;
-    tags: string[];
-    skills: string[];
-    visibility: string | null;
-    status: string | null;
-    createdAt: Date;
-    updatedAt: Date;
-    href: string;
-    image: string | null;
-    url: string;
-    members: ProfileProjectMemberPreview[];
-}
+export type ProfileProjectMemberPreview = ProfileCollaborationMemberPreview;
+export type ProfileProjectPreview = ProfileCollaborationProject;
 
 export interface ProfileMetadataRead {
     title: string;
@@ -205,6 +182,7 @@ export interface ProfileDetailsResult {
     visibilityReason?: string;
     profile: ReturnType<typeof normalizeProfile> | null;
     projects: ProfileProjectPreview[];
+    collaborationSummary: ProfileCollaborationSummary;
     posts: any[];
     stats: {
         connectionsCount: number;
@@ -225,133 +203,95 @@ export interface ProfileDetailsResult {
     } | null;
     lockedShell: boolean;
     isOwner: boolean;
-    currentUser: User | null;
+    currentUser: ProfileViewerUser | null;
 }
 
-function buildProjectHref(project: { id: string; slug: string | null }) {
-    return project.slug ? `/projects/${project.slug}` : `/projects/${project.id}`;
-}
-
-async function fetchProjectMembers(projectRows: Array<{ id: string; ownerId: string }>) {
-    const projectIds = projectRows.map((project) => project.id);
-    if (projectIds.length === 0) {
-        return new Map<string, ProfileProjectMemberPreview[]>();
-    }
-
-    const [membershipRows, ownerRows] = await Promise.all([
-        db
-            .select({
-                projectId: projectMembers.projectId,
-                userId: profiles.id,
-                fullName: profiles.fullName,
-                username: profiles.username,
-                avatarUrl: profiles.avatarUrl,
-            })
-            .from(projectMembers)
-            .innerJoin(profiles, eq(projectMembers.userId, profiles.id))
-            .where(inArray(projectMembers.projectId, projectIds))
-            .orderBy(asc(projectMembers.joinedAt)),
-        db
-            .select({
-                id: profiles.id,
-                fullName: profiles.fullName,
-                username: profiles.username,
-                avatarUrl: profiles.avatarUrl,
-            })
-            .from(profiles)
-            .where(inArray(profiles.id, Array.from(new Set(projectRows.map((project) => project.ownerId))))),
-    ]);
-
-    const ownerById = new Map(
-        ownerRows.map((owner) => [
-            owner.id,
-            {
-                id: owner.id,
-                displayName: trimDisplayText(owner.fullName) || trimDisplayText(owner.username) || "Project owner",
-                username: trimOptionalDisplayText(owner.username),
-                avatarUrl: trimOptionalDisplayText(owner.avatarUrl),
-            } satisfies ProfileProjectMemberPreview,
-        ]),
-    );
-
-    const byProject = new Map<string, ProfileProjectMemberPreview[]>();
-    for (const project of projectRows) {
-        byProject.set(project.id, []);
-        const owner = ownerById.get(project.ownerId);
-        if (owner) {
-            byProject.get(project.id)!.push(owner);
-        }
-    }
-
-    for (const row of membershipRows) {
-        const current = byProject.get(row.projectId) ?? [];
-        if (current.some((member) => member.id === row.userId) || current.length >= 3) {
-            byProject.set(row.projectId, current);
-            continue;
-        }
-        current.push({
-            id: row.userId,
-            displayName: trimDisplayText(row.fullName) || trimDisplayText(row.username) || "Collaborator",
-            username: trimOptionalDisplayText(row.username),
-            avatarUrl: trimOptionalDisplayText(row.avatarUrl),
-        });
-        byProject.set(row.projectId, current);
-    }
-
-    return byProject;
-}
-
-function toProjectPreview(
-    project: {
-        id: string;
-        ownerId: string;
-        title: string;
-        slug: string | null;
-        description: string | null;
-        shortDescription: string | null;
-        coverImage: string | null;
-        category: string | null;
-        viewCount: number | null;
-        followersCount: number | null;
-        tags: string[] | null;
-        skills: string[] | null;
-        visibility: string | null;
-        status: string | null;
-        createdAt: Date;
-        updatedAt: Date;
+const EMPTY_COLLABORATION_SUMMARY: ProfileCollaborationSummary = {
+    version: 1,
+    generatedAt: '',
+    projects: [],
+    featuredProjects: [],
+    contributions: [],
+    stats: {
+        projectsCount: 0,
+        visibleProjectsCount: 0,
+        contributionCount: 0,
     },
-    members: ProfileProjectMemberPreview[],
-): ProfileProjectPreview {
-    const title = normalizeProjectTitle(project.title);
-    const description = normalizeProjectDescription(project.shortDescription, project.description);
-    const href = buildProjectHref(project);
+    cacheStatus: 'miss',
+};
 
-    return {
-        id: project.id,
-        ownerId: project.ownerId,
-        title,
-        slug: project.slug,
-        description,
-        shortDescription: trimOptionalDisplayText(project.shortDescription),
-        coverImage: trimOptionalDisplayText(project.coverImage),
-        category: trimOptionalDisplayText(project.category),
-        viewCount: project.viewCount,
-        followersCount: project.followersCount,
-        tags: Array.isArray(project.tags) ? project.tags : [],
-        skills: Array.isArray(project.skills) ? project.skills : [],
-        visibility: project.visibility,
-        status: project.status,
-        createdAt: project.createdAt,
-        updatedAt: project.updatedAt,
-        href,
-        image: trimOptionalDisplayText(project.coverImage),
-        url: href,
-        members,
-    };
+function toProfileViewerUser(user: User | null): ProfileViewerUser | null {
+    return user?.id ? { id: user.id } : null;
 }
+
+async function getProfileMutualCount(viewerId: string, profileId: string) {
+    if (!viewerId || !profileId || viewerId === profileId) return 0;
+    const redis = getRedisClient();
+    if (redis) {
+        try {
+            const viewerKey = `user:${viewerId}:connections`;
+            const profileKey = `user:${profileId}:connections`;
+            const [viewerExists, profileExists] = await Promise.all([
+                redis.exists(viewerKey),
+                redis.exists(profileKey),
+            ]);
+            if (viewerExists && profileExists) {
+                const mutualIds = await redis.sinter(viewerKey, profileKey) as string[];
+                return mutualIds.length;
+            }
+        } catch (error) {
+            logger.warn('[profile.data] mutual redis overlay failed', {
+                module: 'profile',
+                viewerId,
+                profileId,
+                error: error instanceof Error ? error.message : String(error),
+            });
+        }
+    }
+
+    try {
+        const supabase = await createClient();
+        const res = await supabase.rpc('get_mutual_connections', {
+            p_viewer_id: viewerId,
+            p_profile_id: profileId,
+        });
+        return (res.data as { count?: number } | null)?.count || 0;
+    } catch {
+        return 0;
+    }
+}
+
+const PROFILE_DETAIL_COLUMNS = {
+    id: true,
+    username: true,
+    fullName: true,
+    avatarUrl: true,
+    bannerUrl: true,
+    bio: true,
+    headline: true,
+    location: true,
+    website: true,
+    skills: true,
+    interests: true,
+    experience: true,
+    education: true,
+    openTo: true,
+    availabilityStatus: true,
+    socialLinks: true,
+    visibility: true,
+    messagePrivacy: true,
+    connectionPrivacy: true,
+    createdAt: true,
+    updatedAt: true,
+    connectionsCount: true,
+    projectsCount: true,
+    followersCount: true,
+    lastActiveAt: true,
+} as const;
 
 export async function getProfileDetails(username?: string, options: ProfileDetailsOptions = {}) {
     const viewerUser = options.viewerUser ?? null;
+    const shouldRecordViewEvent = options.recordViewEvent ?? true;
 
     // 2. Fetch Target Profile (Optimized Parallel approach)
     let profileData = null;
@@ -365,13 +305,15 @@ export async function getProfileDetails(username?: string, options: ProfileDetai
         } else {
             profileData = await db.query.profiles.findFirst({
                 where: isUuid
-                    ? or(eq(profiles.username, normalizedUsername), eq(profiles.id, username))
-                    : eq(profiles.username, normalizedUsername)
+                    ? and(or(eq(profiles.username, normalizedUsername), eq(profiles.id, username)), isNull(profiles.deletedAt))
+                    : and(eq(profiles.username, normalizedUsername), isNull(profiles.deletedAt)),
+                columns: PROFILE_DETAIL_COLUMNS,
             });
         }
     } else if (viewerUser) {
         profileData = await db.query.profiles.findFirst({
-            where: eq(profiles.id, viewerUser.id),
+            where: and(eq(profiles.id, viewerUser.id), isNull(profiles.deletedAt)),
+            columns: PROFILE_DETAIL_COLUMNS,
         });
     }
 
@@ -387,18 +329,31 @@ export async function getProfileDetails(username?: string, options: ProfileDetai
                 followersCount: 0,
                 mutualCount: 0,
             },
+            collaborationSummary: EMPTY_COLLABORATION_SUMMARY,
             metadata: null,
             connectionStatus: 'none',
             privacyRelationship: null,
             lockedShell: false,
             isOwner: false,
-            currentUser: viewerUser,
+            currentUser: toProfileViewerUser(viewerUser),
         } satisfies ProfileDetailsResult;
     }
 
     const isOwner = viewerUser?.id === profileData.id;
     const shouldResolveViewerState = !!viewerUser && !isOwner;
-    const privacyRelationship = await resolvePrivacyRelationship(viewerUser?.id ?? null, profileData.id);
+
+    // Resolve privacy, collaboration, and mutual count in parallel to avoid waterfall
+    const [privacyRelationship, collaborationSummaryRaw, mutualCountRaw] = await Promise.all([
+        resolvePrivacyRelationship(viewerUser?.id ?? null, profileData.id),
+        getProfileCollaborationSummary(profileData.id, {
+            includePrivate: !!isOwner && !options.skipHeavyData,
+            preferCached: !isOwner,
+        }),
+        shouldResolveViewerState && viewerUser
+            ? getProfileMutualCount(viewerUser.id, profileData.id)
+            : Promise.resolve(0),
+    ]);
+
     if (!privacyRelationship) {
         return {
             privacyStatus: 'not_found',
@@ -411,12 +366,13 @@ export async function getProfileDetails(username?: string, options: ProfileDetai
                 followersCount: 0,
                 mutualCount: 0,
             },
+            collaborationSummary: EMPTY_COLLABORATION_SUMMARY,
             metadata: null,
             connectionStatus: 'none',
             privacyRelationship: null,
             lockedShell: false,
             isOwner: !!isOwner,
-            currentUser: viewerUser,
+            currentUser: toProfileViewerUser(viewerUser),
         } satisfies ProfileDetailsResult;
     }
     const canViewProfile = privacyRelationship.canViewProfile;
@@ -431,97 +387,19 @@ export async function getProfileDetails(username?: string, options: ProfileDetai
         });
     }
 
-    const shouldLoadProjects = !options.skipHeavyData && canViewProfile;
-    const shouldLoadMutualCount = shouldResolveViewerState && canViewProfile;
-    const canViewAllProjects = !!isOwner;
+    const collaborationSummary = canViewProfile ? collaborationSummaryRaw : EMPTY_COLLABORATION_SUMMARY;
+    const mutualCount = (shouldResolveViewerState && canViewProfile) ? mutualCountRaw : 0;
 
-    const projectVisibilityFilter = canViewAllProjects
-        ? eq(projects.ownerId, profileData.id)
-        : and(
-            eq(projects.ownerId, profileData.id),
-            or(eq(projects.visibility, 'public'), eq(projects.visibility, 'unlisted')),
-            ne(projects.status, 'draft')
-        );
-
-    // 3. PURE OPTIMIZATION: Lightweight shell first, heavy data only on-demand.
-    const [projectRows, projectCountResult, conn, mutualCount] = await Promise.all([
-        shouldLoadProjects
-            ? db.query.projects.findMany({
-                where: projectVisibilityFilter,
-                orderBy: [desc(projects.viewCount), desc(projects.updatedAt), desc(projects.createdAt)],
-                limit: 12,
-                columns: {
-                    id: true,
-                    ownerId: true,
-                    title: true,
-                    slug: true,
-                    description: true,
-                    shortDescription: true,
-                    coverImage: true,
-                    category: true,
-                    viewCount: true,
-                    followersCount: true,
-                    tags: true,
-                    skills: true,
-                    visibility: true,
-                    status: true,
-                    createdAt: true,
-                    updatedAt: true,
-                }
-            })
-            : Promise.resolve([]),
-        canViewProfile
-            ? db
-                .select({ count: sql<number>`count(*)::int` })
-                .from(projects)
-                .where(projectVisibilityFilter)
-                .then((rows) => rows[0]?.count ?? 0)
-            : Promise.resolve(0),
-        shouldResolveViewerState
-            ? db.query.connections.findFirst({
-                where: or(
-                    and(eq(connections.requesterId, viewerUser!.id), eq(connections.addresseeId, profileData.id)),
-                    and(eq(connections.requesterId, profileData.id), eq(connections.addresseeId, viewerUser!.id))
-                ),
-                columns: { status: true, requesterId: true },
-                orderBy: [desc(connections.updatedAt)]
-            })
-            : Promise.resolve(null),
-        shouldLoadMutualCount && viewerUser
-            ? (async () => {
-                try {
-                    const supabase = await createClient()
-                    const res = await supabase.rpc('get_mutual_connections', {
-                        p_viewer_id: viewerUser.id,
-                        p_profile_id: profileData.id
-                    });
-                    return (res.data as any)?.count || 0;
-                } catch {
-                    return 0;
-                }
-            })()
-            : Promise.resolve(0),
-    ]);
-
-    const projectMembersByProject = shouldLoadProjects
-        ? await fetchProjectMembers(projectRows.map((project) => ({
-            id: project.id,
-            ownerId: project.ownerId,
-        })))
-        : new Map<string, ProfileProjectMemberPreview[]>();
-
-    const userProjects = shouldLoadProjects
-        ? projectRows.map((project) => toProjectPreview(project, projectMembersByProject.get(project.id) ?? []))
-        : [];
-
-    // Map Connection Status
-    let connectionStatus: ConnectionState = 'none';
-    if (conn) {
-        if (conn.status === 'accepted') connectionStatus = 'accepted';
-        else if (conn.status === 'pending') {
-            connectionStatus = conn.requesterId === viewerUser?.id ? 'pending_outgoing' : 'pending_incoming';
-        } else connectionStatus = 'rejected';
-    }
+    const connectionStatus: ConnectionState =
+        privacyRelationship.connectionState === 'connected'
+            ? 'accepted'
+            : privacyRelationship.connectionState === 'pending_incoming'
+                ? 'pending_incoming'
+                : privacyRelationship.connectionState === 'pending_outgoing'
+                    ? 'pending_outgoing'
+                    : privacyRelationship.connectionState === 'blocked_by_viewer' || privacyRelationship.connectionState === 'blocked_by_target'
+                        ? 'blocked'
+                        : 'none';
 
     const normalizedProfile = normalizeProfile(profileData)
     const metadata = normalizedProfile
@@ -548,8 +426,8 @@ export async function getProfileDetails(username?: string, options: ProfileDetai
         })
         : null
 
-    if (viewerUser?.id && viewerUser.id !== profileData.id) {
-        await recordPrivacyReadEvent({
+    if (shouldRecordViewEvent && viewerUser?.id && viewerUser.id !== profileData.id) {
+        void recordPrivacyReadEvent({
             subjectUserId: profileData.id,
             viewerUserId: viewerUser.id,
             eventType: 'profile_viewed',
@@ -565,11 +443,12 @@ export async function getProfileDetails(username?: string, options: ProfileDetai
         privacyStatus: lockedShell ? 'private' : 'public',
         visibilityReason: privacyRelationship.visibilityReason,
         profile: visibleProfile,
-        projects: canViewProfile ? userProjects : [],
+        projects: [],
+        collaborationSummary: canViewProfile ? collaborationSummary : EMPTY_COLLABORATION_SUMMARY,
         posts: [],
         stats: {
             connectionsCount: profileData.connectionsCount || 0,
-            projectsCount: projectCountResult || 0,
+            projectsCount: collaborationSummary.stats.projectsCount || profileData.projectsCount || 0,
             followersCount: profileData.followersCount || 0,
             mutualCount,
         },
@@ -586,7 +465,7 @@ export async function getProfileDetails(username?: string, options: ProfileDetai
         },
         lockedShell,
         isOwner: !!isOwner,
-        currentUser: viewerUser,
+        currentUser: toProfileViewerUser(viewerUser),
     } satisfies ProfileDetailsResult;
 }
 
@@ -600,7 +479,7 @@ export const getProfileVisibilityMeta = cache(async (username: string) => {
             visibility: profiles.visibility,
         })
         .from(profiles)
-        .where(eq(profiles.username, normalizedUsername))
+        .where(and(eq(profiles.username, normalizedUsername), isNull(profiles.deletedAt)))
         .limit(1);
 
     return profile || null;
@@ -625,7 +504,8 @@ export const getPublicProfileMeta = cache(async (username: string) => {
             .where(
                 and(
                     eq(profiles.username, normalizedUsername),
-                    eq(profiles.visibility, 'public')
+                    eq(profiles.visibility, 'public'),
+                    isNull(profiles.deletedAt),
                 )
             )
             .limit(1);
@@ -647,6 +527,7 @@ export const getPopularUsernames = cache(async (limit = 100) => {
     const data = await db
         .select({ username: profiles.username })
         .from(profiles)
+        .where(isNull(profiles.deletedAt))
         .orderBy(desc(profiles.createdAt))
         .limit(limit);
 
