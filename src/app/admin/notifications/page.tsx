@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { sql } from "drizzle-orm";
+import { Suspense } from "react";
 
 import { db } from "@/lib/db";
 import { isAdminUser } from "@/lib/security/admin";
@@ -118,14 +119,7 @@ function aggregateByChannel(rollup: ChannelRollup[]): Map<string, { delivered: n
     return map;
 }
 
-export default async function AdminNotificationsPage() {
-    const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-
-    if (!isAdminUser(user)) {
-        notFound();
-    }
-
+async function ResolvedAdminNotifications() {
     const [rollup24h, rollup7d, errorRollup, retention] = await Promise.all([
         fetchChannelRollup(24),
         fetchChannelRollup(24 * 7),
@@ -269,5 +263,20 @@ export default async function AdminNotificationsPage() {
                 </p>
             </section>
         </div>
+    );
+}
+
+export default async function AdminNotificationsPage() {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+
+    if (!isAdminUser(user)) {
+        notFound();
+    }
+
+    return (
+        <Suspense fallback={<div className="mx-auto max-w-5xl space-y-8 px-6 py-10 animate-pulse text-zinc-500">Loading admin notifications...</div>}>
+            <ResolvedAdminNotifications />
+        </Suspense>
     );
 }
