@@ -191,7 +191,7 @@ describe("useFolderContents / deriveFolderContents — status matrix (Req 4.1, 4
 
 describe("useFolderContents / runFolderLoad — retry side effect (Req 4.10)", () => {
   it("invokes the loader with the given folderId in refresh mode", async () => {
-    const calls: Array<[string | null, "refresh" | "append"]> = [];
+    const calls: Array<[string | null, "refresh" | "append" | undefined]> = [];
     const load: LoadFolderContent = async (parentId, mode) => {
       calls.push([parentId, mode]);
     };
@@ -211,7 +211,7 @@ describe("useFolderContents / runFolderLoad — retry side effect (Req 4.10)", (
   });
 
   it("invokes the loader with null folderId for the project root", async () => {
-    const calls: Array<[string | null, "refresh" | "append"]> = [];
+    const calls: Array<[string | null, "refresh" | "append" | undefined]> = [];
     const load: LoadFolderContent = async (parentId, mode) => {
       calls.push([parentId, mode]);
     };
