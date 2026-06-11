@@ -50,11 +50,27 @@ export interface Project {
     slug?: string | undefined;
     status: 'draft' | 'active' | 'completed' | 'archived';
     syncStatus?: 'pending' | 'cloning' | 'indexing' | 'ready' | 'failed';
+    importSource?: any | null;
+    githubRepoUrl?: string | null;
+    githubDefaultBranch?: string | null;
     category?: string | null;
     coverImage?: string | null;
     tags?: string[];
     skills?: string[];
     visibility?: string;
+    publicTabVisibility?: {
+        dashboard: boolean;
+        readme: boolean;
+        updates: boolean;
+        files: boolean;
+        sprints: boolean;
+        tasks: boolean;
+        analytics: boolean;
+    };
+    hasPublishedReadme?: boolean;
+    readmeExcerpt?: string | null;
+    readmeUpdatedAt?: string | null;
+    readmeVersionNumber?: number | null;
     viewCount?: number;
     followersCount?: number;
     savesCount?: number;
