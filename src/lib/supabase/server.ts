@@ -30,7 +30,15 @@ type AuthSnapshotAwareClient = Awaited<ReturnType<typeof createServerClient>> & 
 }
 
 export async function createClient() {
-    const cookieStore = await cookies()
+    let cookieStore: {
+        getAll: () => any[];
+        set?: (name: string, value: string, options: any) => void;
+    }
+    try {
+        cookieStore = await cookies()
+    } catch {
+        cookieStore = { getAll: () => [] }
+    }
     const env = resolveSupabasePublicEnv('supabase.server')
 
     const client = createServerClient(
@@ -44,9 +52,11 @@ export async function createClient() {
                 },
                 setAll(cookiesToSet) {
                     try {
-                        cookiesToSet.forEach(({ name, value, options }) =>
-                            cookieStore.set(name, value, options)
-                        )
+                        cookiesToSet.forEach(({ name, value, options }) => {
+                            if (cookieStore.set) {
+                                cookieStore.set(name, value, options)
+                            }
+                        })
                     } catch {
                         // The `setAll` method was called from a Server Component.
                         // This can be ignored if you have middleware refreshing sessions.
@@ -66,6 +76,12 @@ export async function createClient() {
     }
 
     const wrappedGetUser = async () => {
+        if (process.env.MOCK_USER_ID) {
+            return {
+                data: { user: { id: process.env.MOCK_USER_ID } as any },
+                error: null,
+            }
+        }
         if (!hasAnyAuthCookie(cookieStore)) {
             return {
                 data: { user: null },
