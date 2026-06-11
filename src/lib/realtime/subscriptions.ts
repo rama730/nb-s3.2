@@ -21,8 +21,10 @@ type ActiveResourceBinding = {
 
 export type ActiveResourceType =
     | 'conversation'
+    | 'message_work_links'
     | 'profile'
     | 'project_files'
+    | 'project_hydration'
     | 'task'
     | 'task_comments'
     | 'task_counts'
@@ -31,14 +33,12 @@ export type ActiveResourceType =
 export type UserNotificationEvent =
     | { kind: 'profile'; payload: DbRealtimePayload }
     | { kind: 'conversation_participant'; payload: DbRealtimePayload }
-    | { kind: 'connection'; payload: DbRealtimePayload }
     | { kind: 'message'; payload: DbRealtimePayload }
     | { kind: 'message_visibility'; payload: DbRealtimePayload }
     | { kind: 'task'; payload: DbRealtimePayload }
 
 export type MessagingNotificationEvent =
     | { kind: 'conversation_participant'; payload: DbRealtimePayload }
-    | { kind: 'connection'; payload: DbRealtimePayload }
     | { kind: 'message_visibility'; payload: DbRealtimePayload }
 
 export type NotificationInboxEvent = {
@@ -125,18 +125,6 @@ export function subscribeUserNotifications(params: {
             },
             {
                 event: '*',
-                table: 'connections',
-                filter: `addressee_id=eq.${userId}`,
-                handler: (payload) => onEvent({ kind: 'connection', payload }),
-            },
-            {
-                event: '*',
-                table: 'connections',
-                filter: `requester_id=eq.${userId}`,
-                handler: (payload) => onEvent({ kind: 'connection', payload }),
-            },
-            {
-                event: '*',
                 table: 'tasks',
                 filter: `assignee_id=eq.${userId}`,
                 handler: (payload) => onEvent({ kind: 'task', payload }),
@@ -170,18 +158,6 @@ export function subscribeMessagingNotifications(params: {
                 table: 'message_hidden_for_users',
                 filter: `user_id=eq.${userId}`,
                 handler: (payload) => onEvent({ kind: 'message_visibility', payload }),
-            },
-            {
-                event: '*',
-                table: 'connections',
-                filter: `addressee_id=eq.${userId}`,
-                handler: (payload) => onEvent({ kind: 'connection', payload }),
-            },
-            {
-                event: '*',
-                table: 'connections',
-                filter: `requester_id=eq.${userId}`,
-                handler: (payload) => onEvent({ kind: 'connection', payload }),
             },
         ],
         onStatus,
