@@ -48,6 +48,7 @@ export type EnqueueProjectNotificationEventInput = ProjectNotificationRecipientC
     sourceEventId?: string | null;
     aggregateCount?: number;
     includeActorRecipient?: boolean;
+    maxRecipients?: number | null;
 };
 
 type ProjectRow = {
@@ -116,6 +117,12 @@ function titleFor(input: EnqueueProjectNotificationEventInput, project: ProjectR
             return `${actorLabel(input)} archived ${displayProjectTitle(project)}`;
         case "security.delete_scheduled":
             return `${actorLabel(input)} scheduled project deletion`;
+        case "updates.published":
+            return `${actorLabel(input)} posted a project update`;
+        case "updates.comment":
+            return `${actorLabel(input)} commented on your project update`;
+        case "updates.follower_digest":
+            return `${displayProjectTitle(project)} has new project updates`;
         default:
             return `${actorLabel(input)}: ${entry.label}`;
     }
@@ -127,6 +134,10 @@ function defaultHref(input: EnqueueProjectNotificationEventInput, project: Proje
     switch (PROJECT_NOTIFICATION_EVENT_REGISTRY[input.eventKey].group) {
         case "files_workspace":
             return `/projects/${encodeURIComponent(slugOrId)}?tab=files`;
+        case "readme":
+            return `/projects/${encodeURIComponent(slugOrId)}?tab=readme`;
+        case "updates":
+            return `/projects/${encodeURIComponent(slugOrId)}?tab=updates`;
         case "project_lifecycle":
             return `/projects/${encodeURIComponent(slugOrId)}?tab=sprints`;
         case "tasks_workflow":
@@ -268,6 +279,19 @@ export async function enqueueProjectNotificationEvent(input: EnqueueProjectNotif
         input,
     });
     if (!project || recipientIds.length === 0) return { enqueued: 0 };
+    const maxRecipients = typeof input.maxRecipients === "number" && Number.isFinite(input.maxRecipients)
+        ? Math.max(0, Math.trunc(input.maxRecipients))
+        : null;
+    const cappedRecipientIds = maxRecipients === null ? recipientIds : recipientIds.slice(0, maxRecipients);
+    if (maxRecipients !== null && recipientIds.length > cappedRecipientIds.length) {
+        logger.warn("project_notifications.recipient_cap_applied", {
+            module: "notifications",
+            projectId: input.projectId,
+            eventKey: input.eventKey,
+            recipients: recipientIds.length,
+            cappedRecipients: cappedRecipientIds.length,
+        });
+    }
 
     const actorId = input.actorUserId ?? null;
     const projectPolicy = normalizeProjectNotificationPolicy(project.notificationPreferences);
@@ -282,7 +306,7 @@ export async function enqueueProjectNotificationEvent(input: EnqueueProjectNotif
     const canNotifyActor =
         input.includeActorRecipient === true &&
         input.eventKey === "members.ownership_transferred";
-    for (const recipientUserId of recipientIds) {
+    for (const recipientUserId of cappedRecipientIds) {
         if (!recipientUserId || (recipientUserId === actorId && !canNotifyActor)) continue;
         const decision = resolveProjectNotificationDecision({
             eventKey: input.eventKey,
