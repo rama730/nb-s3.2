@@ -1,23 +1,19 @@
 'use client';
 
 import Image from 'next/image';
-import { Pause, Play, RotateCcw, X } from 'lucide-react';
+import { Loader2, RotateCcw, X } from 'lucide-react';
 import type { PendingAttachment } from './message-composer-v2-shared';
 
 interface ComposerAttachmentsPanelProps {
     attachments: PendingAttachment[];
-    uploadsPaused: boolean;
     maxUploadRetries: number;
-    onTogglePaused: () => void;
     onRemoveAttachment: (attachmentId: string) => void;
     onRetryAttachment: (attachmentId: string) => void;
 }
 
 export function ComposerAttachmentsPanel({
     attachments,
-    uploadsPaused,
     maxUploadRetries,
-    onTogglePaused,
     onRemoveAttachment,
     onRetryAttachment,
 }: ComposerAttachmentsPanelProps) {
@@ -29,14 +25,6 @@ export function ComposerAttachmentsPanel({
         <div className="mb-3 space-y-2">
             <div className="flex items-center justify-between">
                 <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Attachments</div>
-                <button
-                    type="button"
-                    onClick={onTogglePaused}
-                    className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
-                >
-                    {uploadsPaused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
-                    {uploadsPaused ? 'Resume uploads' : 'Pause uploads'}
-                </button>
             </div>
             <div className="grid gap-2 sm:grid-cols-2">
                 {attachments.map((attachment) => {
@@ -88,20 +76,21 @@ export function ComposerAttachmentsPanel({
                                     />
                                 </div>
                             ) : null}
-                            {attachment.status === 'uploaded' ? (
-                                <div className="mt-2 h-1 w-full rounded-full bg-emerald-500" />
-                            ) : null}
-                            {attachment.status === 'failed' ? (
+                            {attachment.status === 'failed' || (attachment.attempts > 0 && (attachment.status === 'uploading' || attachment.status === 'queued')) ? (
                                 <div className="mt-2 flex items-center gap-2">
                                     <button
                                         type="button"
                                         onClick={() => onRetryAttachment(attachment.id)}
-                                        disabled={!hasRetriesRemaining}
-                                        aria-disabled={!hasRetriesRemaining}
+                                        disabled={!hasRetriesRemaining || attachment.status !== 'failed'}
+                                        aria-disabled={!hasRetriesRemaining || attachment.status !== 'failed'}
                                         className="inline-flex items-center gap-1 rounded-md border border-zinc-200 px-2 py-1 text-xs hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
                                     >
-                                        <RotateCcw className="h-3.5 w-3.5" />
-                                        Retry
+                                        {attachment.status !== 'failed' ? (
+                                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                        ) : (
+                                            <RotateCcw className="h-3.5 w-3.5" />
+                                        )}
+                                        {attachment.status !== 'failed' ? 'Retrying...' : 'Retry'}
                                     </button>
                                     {!hasRetriesRemaining ? (
                                         <span className="text-xs text-amber-600 dark:text-amber-400">
