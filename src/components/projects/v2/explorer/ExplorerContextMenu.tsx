@@ -7,7 +7,7 @@ import {
   bulkRestoreNodes,
   bulkTrashNodes,
   getTrashNodes,
-} from "@/app/actions/files";
+} from "@/app/actions/files/mutations";
 import type { ExplorerOperation } from "./explorerTypes";
 
 /**
