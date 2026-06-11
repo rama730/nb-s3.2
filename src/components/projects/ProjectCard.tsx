@@ -177,33 +177,26 @@ export default memo(function ProjectCard({
                     {!previewMode && (
                         <Link
                             href={projectHref}
-                            className="absolute inset-0 z-0"
+                            className="absolute inset-0 z-10"
                             onClick={() => onOpenProject?.(project.id)}
                             onPointerEnter={() => warmPrefetchRoute(projectHref)}
                         />
                     )}
 
-                    {/* Header */}
-                    <div className="flex items-center justify-between relative z-20 app-density-panel">
-                        <span className="text-[11px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-lg bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300">
-                            {viewModel.category}
-                        </span>
-                        
-                        {totalOpenRoles > 0 && (
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-primary/10 border border-primary/15 text-[10px] font-bold text-primary">
-                                <Sparkles className="w-3 h-3" />
-                                {totalOpenRoles} Open Roles
-                            </span>
-                        )}
-                    </div>
-
                     {/* Main Content */}
-                    <div className="px-[var(--ui-panel-padding)] pb-[var(--ui-panel-padding)] flex-1 flex flex-col">
-                        {/* Title & Tagline */}
+                    <div className="px-[var(--ui-panel-padding)] pt-[var(--ui-panel-padding)] pb-[var(--ui-panel-padding)] flex-1 flex flex-col">
+                        {/* Title & Tagline & Open Roles */}
                         <div className="mb-2.5">
-                            <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 truncate leading-snug group-hover:text-primary transition-colors">
-                                {project.title}
-                            </h3>
+                            <div className="flex items-start justify-between gap-2.5">
+                                <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 truncate leading-snug group-hover:text-primary transition-colors flex-1">
+                                    {project.title}
+                                </h3>
+                                {totalOpenRoles > 0 && (
+                                    <span className="shrink-0 inline-flex items-center px-2 py-0.5 rounded-md bg-primary/10 text-[9px] font-bold text-primary border border-primary/10 select-none">
+                                        {totalOpenRoles} {totalOpenRoles === 1 ? 'Open Role' : 'Open Roles'}
+                                    </span>
+                                )}
+                            </div>
                             {project.shortDescription && (
                                 <p className="text-[13px] font-medium text-zinc-500 dark:text-zinc-400 line-clamp-1 mt-0.5">
                                     {project.shortDescription}
@@ -244,10 +237,38 @@ export default memo(function ProjectCard({
                     </div>
 
                     {/* Footer - Z-index elevated to ensure buttons are clickable over the absolute Link */}
-                    <div className="relative z-20 mt-auto border-t border-zinc-100 dark:border-zinc-800/50 bg-zinc-50/50 dark:bg-zinc-900/50 flex flex-col gap-3 px-[var(--ui-panel-padding)] py-[calc(var(--ui-panel-padding)*0.75)]">
-                        {/* Upper row: Metrics & Actions */}
-                        <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-3 text-xs font-semibold text-zinc-500">
+                    <div className="relative z-20 mt-auto border-t border-zinc-100 dark:border-zinc-800/50 bg-zinc-50/50 dark:bg-zinc-900/50 flex items-center justify-between px-[var(--ui-panel-padding)] py-2.5">
+                        <div className="flex items-center gap-3">
+                            {/* Avatars */}
+                            <div className="flex items-center -space-x-1.5">
+                                {collaborators.slice(0, 3).map((p, i) => {
+                                    const identity = buildIdentityPresentation(p, { fallbackDisplayName: 'Collaborator' });
+                                    return (
+                                        <UserAvatar
+                                            key={i}
+                                            identity={p}
+                                            size={24}
+                                            sizes="24px"
+                                            title={identity.displayName}
+                                            className="border-2 border-white dark:border-zinc-900"
+                                            fallbackClassName="text-[10px] font-bold text-white"
+                                        />
+                                    );
+                                })}
+                                {collaborators.length > 3 && (
+                                    <div className="w-6 h-6 rounded-full border-2 border-white dark:border-zinc-900 bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center text-[9px] font-bold text-zinc-500">
+                                        +{collaborators.length - 3}
+                                    </div>
+                                )}
+                                {collaborators.length === 0 && (
+                                    <div className="w-6 h-6 rounded-full border-2 border-white dark:border-zinc-900 bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center text-[10px] font-bold text-zinc-400">
+                                        <Users className="w-3 h-3" />
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Views & Followers */}
+                            <div className="flex items-center gap-2.5 text-xs font-semibold text-zinc-500 select-none">
                                 <span className="flex items-center gap-1" data-testid={`project-card-views-${project.id}`} title="Views">
                                     <Eye className="w-3.5 h-3.5" /> {project.viewCount || 0}
                                 </span>
@@ -255,56 +276,28 @@ export default memo(function ProjectCard({
                                     <UserPlus className="w-3.5 h-3.5" /> {followersCount}
                                 </span>
                             </div>
-                            
-                            <div className="flex items-center gap-1.5 text-zinc-400">
-                                <button
-                                    onClick={(e) => {
-                                        e.preventDefault();
-                                        e.stopPropagation();
-                                        onQuickView?.(project);
-                                    }}
-                                    className="p-1.5 hover:text-primary hover:bg-white dark:hover:bg-zinc-800 rounded-md transition-colors border border-transparent hover:border-zinc-200 dark:hover:border-zinc-700 shadow-sm"
-                                    title="Quick View"
-                                >
-                                    <Maximize2 className="w-3.5 h-3.5" />
-                                </button>
-                                <button
-                                    onClick={toggleFollow}
-                                    className="p-1.5 hover:text-emerald-600 hover:bg-white dark:hover:bg-zinc-800 rounded-md transition-colors border border-transparent hover:border-zinc-200 dark:hover:border-zinc-700 shadow-sm"
-                                    title={followingProject ? 'Unfollow' : 'Follow'}
-                                    data-testid={`project-card-follow-${project.id}`}
-                                >
-                                    <UserPlus className={`w-3.5 h-3.5 ${followingProject ? 'text-emerald-600 fill-current' : ''}`} />
-                                </button>
-                            </div>
                         </div>
 
-                        {/* Lower row: Avatars */}
-                        <div className="flex items-center -space-x-1.5">
-                            {collaborators.slice(0, 3).map((p, i) => {
-                                const identity = buildIdentityPresentation(p, { fallbackDisplayName: 'Collaborator' });
-                                return (
-                                    <UserAvatar
-                                        key={i}
-                                        identity={p}
-                                        size={24}
-                                        sizes="24px"
-                                        title={identity.displayName}
-                                        className="border-2 border-white dark:border-zinc-900"
-                                        fallbackClassName="text-[10px] font-bold text-white"
-                                    />
-                                );
-                            })}
-                            {collaborators.length > 3 && (
-                                <div className="w-6 h-6 rounded-full border-2 border-white dark:border-zinc-900 bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center text-[9px] font-bold text-zinc-500">
-                                    +{collaborators.length - 3}
-                                </div>
-                            )}
-                            {collaborators.length === 0 && (
-                                <div className="w-6 h-6 rounded-full border-2 border-white dark:border-zinc-900 bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center text-[10px] font-bold text-zinc-400">
-                                    <Users className="w-3 h-3" />
-                                </div>
-                            )}
+                        <div className="flex items-center gap-1.5 text-zinc-400">
+                            <button
+                                onClick={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    onQuickView?.(project);
+                                }}
+                                className="p-1.5 hover:text-primary hover:bg-white dark:hover:bg-zinc-800 rounded-md transition-colors border border-transparent hover:border-zinc-200 dark:hover:border-zinc-700 shadow-sm"
+                                title="Quick View"
+                            >
+                                <Maximize2 className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                                onClick={toggleFollow}
+                                className="p-1.5 hover:text-emerald-600 hover:bg-white dark:hover:bg-zinc-800 rounded-md transition-colors border border-transparent hover:border-zinc-200 dark:hover:border-zinc-700 shadow-sm"
+                                title={followingProject ? 'Unfollow' : 'Follow'}
+                                data-testid={`project-card-follow-${project.id}`}
+                            >
+                                <UserPlus className={`w-3.5 h-3.5 ${followingProject ? 'text-emerald-600 fill-current' : ''}`} />
+                            </button>
                         </div>
                     </div>
                 </div>
