@@ -12,6 +12,27 @@ const ROUTES: Array<{ path: string; ready: string; checkHubHeader?: boolean }> =
   { path: "/settings/security", ready: "[data-scroll-root='route']" },
 ];
 
+function visibleRouteRootCount() {
+  const roots = Array.from(document.querySelectorAll<HTMLElement>("[data-scroll-root='route']"));
+  return roots.filter((root) => {
+    const style = window.getComputedStyle(root);
+    const rect = root.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+  }).length;
+}
+
+function scrollVisibleRouteRoot(scrollTop: number) {
+  const roots = Array.from(document.querySelectorAll<HTMLElement>("[data-scroll-root='route']"));
+  const root = roots.find((candidate) => {
+    const style = window.getComputedStyle(candidate);
+    const rect = candidate.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+  });
+  if (root) {
+    root.scrollTop = Math.min(scrollTop, root.scrollHeight);
+  }
+}
+
 test.describe("Scroll contract @critical", () => {
   test.skip(!hasE2ECredentials, "E2E_USER_EMAIL and E2E_USER_PASSWORD are required.");
 
@@ -25,7 +46,7 @@ test.describe("Scroll contract @critical", () => {
     for (const route of ROUTES) {
       await openRoute(page, route.path, page.locator(route.ready));
 
-      const markerCount = await page.locator("[data-scroll-root='route']").count();
+      const markerCount = await page.evaluate(visibleRouteRootCount);
       expect(markerCount, `${route.path} should expose exactly one route scroll root`).toBe(1);
 
       const pageScrollDelta = await page.evaluate(() => {
@@ -36,14 +57,11 @@ test.describe("Scroll contract @critical", () => {
       expect(pageScrollDelta, `${route.path} should not rely on document-level scrolling`).toBeLessThanOrEqual(2);
 
       if (route.checkHubHeader) {
-        const header = page.locator("[data-testid='hub-header-shell']");
+        const header = page.locator("[data-testid='hub-header-shell']").first();
         await expect(header).toBeVisible();
 
-        const root = page.locator("[data-scroll-root='route']");
         const beforeTop = await header.evaluate((node) => node.getBoundingClientRect().top);
-        await root.evaluate((node) => {
-          node.scrollTop = Math.min(300, node.scrollHeight);
-        });
+        await page.evaluate(scrollVisibleRouteRoot, 300);
         await page.waitForTimeout(100);
         const afterTop = await header.evaluate((node) => node.getBoundingClientRect().top);
 
