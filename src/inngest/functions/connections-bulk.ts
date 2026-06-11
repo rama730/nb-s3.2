@@ -2,7 +2,7 @@ import { inngest } from "../client";
 import { db } from "@/lib/db";
 import { connections } from "@/lib/db/schema";
 import { eq, and, desc, inArray, sql } from "drizzle-orm";
-import { applyConnectionsCountIncrements, invalidateDiscoverCacheForUsers, revalidateConnectionsPaths, syncConnectionsToRedis } from "@/app/actions/connections";
+import { applyConnectionsCountIncrements, invalidateDiscoverCacheForUsers, revalidateConnectionsPaths, syncConnectionsToRedis } from "@/lib/connections/internal-helpers";
 import { queueCounterRefreshBestEffort } from "@/lib/workspace/counter-buffer";
 import { redis } from "@/lib/redis";
 
@@ -57,7 +57,9 @@ export const processBulkConnections = inngest.createFunction(
                                 "total", ARGV[1],
                                 "completed", "0",
                                 "failed", "0",
-                                "status", "running"
+                                "status", "running",
+                                "userId", ARGV[3],
+                                "action", ARGV[4]
                             )
                             redis.call("expire", KEYS[1], ARGV[2])
                             return 1
@@ -65,7 +67,7 @@ export const processBulkConnections = inngest.createFunction(
                         return 0
                     `,
                     [key],
-                    [String(total), "3600"],
+                    [String(total), "3600", String(userId), String(action)],
                 );
             });
         }
@@ -158,10 +160,10 @@ export const processBulkConnections = inngest.createFunction(
                 });
             }
 
-            // Mark job as done in Redis
+            // Mark job as completed in Redis
             if (jobId && redis) {
                 await step.run("finalize-progress", async () => {
-                    await redis!.hset(`bulk_job:${jobId}`, { status: "done" });
+                    await redis!.hset(`bulk_job:${jobId}`, { status: "completed" });
                 });
             }
 
