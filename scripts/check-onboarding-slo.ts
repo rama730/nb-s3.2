@@ -56,6 +56,10 @@ async function main() {
         }
 
         const latest = rows[0]
+        if (!latest) {
+            console.log('No onboarding SLO data yet; skipping failure gate.')
+            return
+        }
         const successRate = Number(latest.submit_success_rate)
         const errors = Number(latest.submit_errors)
         const submitStarts = Number(latest.submit_starts)
