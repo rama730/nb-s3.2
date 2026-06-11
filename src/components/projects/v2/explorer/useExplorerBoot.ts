@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { getTaskLinkCounts } from "@/app/actions/files/links";
+
 import {
   getProjectNodesWithCounts,
   getProjectNodes,
   getProjectBatchNodes,
-  getTaskLinkCounts,
+  
   getProjectTreeFlat,
-} from "@/app/actions/files";
+} from "@/app/actions/files/nodes";
 import { filesParentKey, useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 import type { ProjectNode } from "@/lib/db/schema";
 import { filesFeatureFlags } from "@/lib/features/files";
@@ -13,7 +15,7 @@ import { getErrorMessage } from "./explorerTypes";
 import { FILES_RUNTIME_BUDGETS } from "@/lib/files/runtime-budgets";
 import { recordFilesMetric } from "@/lib/files/observability";
 
-const EMPTY_OBJ = {};
+const EMPTY_OBJ: Record<string, boolean> = {};
 
 
 export function useExplorerBoot(options: {
@@ -48,6 +50,11 @@ export function useExplorerBoot(options: {
   const folderLoadInFlightRef = useRef<Map<string, Promise<void>>>(new Map());
   const prefetchedFolderKeysRef = useRef<Set<string>>(new Set());
   const isActiveRef = useRef(isActive);
+  const expandedFolderIdsRef = useRef(expandedFolderIds);
+
+  useEffect(() => {
+    expandedFolderIdsRef.current = expandedFolderIds;
+  }, [expandedFolderIds]);
 
   useEffect(() => {
     isActiveRef.current = isActive;
@@ -140,7 +147,7 @@ export function useExplorerBoot(options: {
             loaded: true,
           });
 
-          if (mode === "refresh" && nextCursor && parentId && expandedFolderIds[parentId]) {
+          if (mode === "refresh" && nextCursor && parentId && expandedFolderIdsRef.current[parentId]) {
             const prefetchKey = filesParentKey(parentId);
             if (!prefetchedFolderKeysRef.current.has(prefetchKey)) {
               prefetchedFolderKeysRef.current.add(prefetchKey);
@@ -193,7 +200,7 @@ export function useExplorerBoot(options: {
       folderLoadInFlightRef.current.set(requestKey, task);
       await task;
     },
-    [projectId, setNodesAndChildren, setTaskLinkCounts, showToast, expandedFolderIds, upsertNodes]
+    [projectId, setNodesAndChildren, setTaskLinkCounts, showToast, upsertNodes]
   );
 
   // 1. Root Boot (Initial Load)
@@ -211,7 +218,9 @@ export function useExplorerBoot(options: {
 
       try {
         // Materialized Path Flat Tree Load
-        const { nodes: allNodes, isComplete } = await getProjectTreeFlat(projectId);
+        const { nodes: allNodes, isComplete } = await getProjectTreeFlat(projectId, {
+          maxNodes: FILES_RUNTIME_BUDGETS.maxFlatTreeBootNodes,
+        });
         if (!isActiveRef.current) return;
 
         if (isComplete && allNodes && allNodes.length > 0) {
@@ -248,10 +257,10 @@ export function useExplorerBoot(options: {
       if (!isActiveRef.current) return;
 
       const updatedWs = useFilesWorkspaceStore.getState().byProjectId[projectId];
-      const rootChildren = updatedWs.childrenByParentId[filesParentKey(null)] || [];
+      const rootChildren = updatedWs?.childrenByParentId[filesParentKey(null)] || [];
       if (rootChildren.length === 1) {
         const rootId = rootChildren[0];
-        const rootNode = updatedWs.nodesById[rootId];
+        const rootNode = updatedWs?.nodesById[rootId!];
         if (
           rootNode &&
           typeof rootNode.metadata === "object" &&
