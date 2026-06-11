@@ -43,7 +43,7 @@ export type ProjectSettingsMember = {
 
 export type ProjectMemberRole = "owner" | "admin" | "member" | "viewer";
 
-export type ProjectPublicTabId = "dashboard" | "readme" | "sprints" | "tasks" | "analytics" | "files";
+export type ProjectPublicTabId = "dashboard" | "readme" | "updates" | "sprints" | "tasks" | "analytics" | "files";
 
 export type ProjectPublicTabVisibility = Record<ProjectPublicTabId, boolean>;
 
@@ -184,6 +184,7 @@ export const PROJECT_MEMBER_ROLE_CAPABILITIES: Record<ProjectMemberRole, Project
 export const DEFAULT_PROJECT_PUBLIC_TAB_VISIBILITY: ProjectPublicTabVisibility = {
     dashboard: true,
     readme: true,
+    updates: true,
     files: true,
     sprints: false,
     tasks: false,
@@ -193,6 +194,7 @@ export const DEFAULT_PROJECT_PUBLIC_TAB_VISIBILITY: ProjectPublicTabVisibility =
 export const PROJECT_PUBLIC_TAB_LABELS: Record<ProjectPublicTabId, string> = {
     dashboard: "Dashboard",
     readme: "README",
+    updates: "Updates",
     files: "Files",
     sprints: "Sprints",
     tasks: "Tasks",
@@ -202,6 +204,7 @@ export const PROJECT_PUBLIC_TAB_LABELS: Record<ProjectPublicTabId, string> = {
 export const PROJECT_PUBLIC_TAB_DESCRIPTIONS: Record<ProjectPublicTabId, string> = {
     dashboard: "Public project overview, summary, roles, team preview, and high-level progress.",
     readme: "Published project documentation, setup notes, screenshots, commands, and contribution guidance.",
+    updates: "Public progress posts, milestone notes, releases, blockers, and follower-facing discussion.",
     files: "Public project files and shared workspace materials that are safe for visitors.",
     sprints: "Sprint history and planning details, usually best kept member-only.",
     tasks: "Task board and work execution details, usually best kept member-only.",
@@ -235,6 +238,7 @@ export function normalizeProjectPublicTabVisibility(value: unknown): ProjectPubl
     return {
         dashboard: typeof source.dashboard === "boolean" ? source.dashboard : DEFAULT_PROJECT_PUBLIC_TAB_VISIBILITY.dashboard,
         readme: typeof source.readme === "boolean" ? source.readme : DEFAULT_PROJECT_PUBLIC_TAB_VISIBILITY.readme,
+        updates: typeof source.updates === "boolean" ? source.updates : DEFAULT_PROJECT_PUBLIC_TAB_VISIBILITY.updates,
         files: typeof source.files === "boolean" ? source.files : DEFAULT_PROJECT_PUBLIC_TAB_VISIBILITY.files,
         sprints: typeof source.sprints === "boolean" ? source.sprints : DEFAULT_PROJECT_PUBLIC_TAB_VISIBILITY.sprints,
         tasks: typeof source.tasks === "boolean" ? source.tasks : DEFAULT_PROJECT_PUBLIC_TAB_VISIBILITY.tasks,
@@ -439,9 +443,8 @@ export const PROJECT_SETTINGS_SECTIONS: ProjectSettingsSectionDefinition[] = [
     {
         id: "updates",
         label: "Updates",
-        description: "Project update publishing rules for the future Updates tab.",
-        available: false,
-        hiddenReason: "Updates tab is not enforceable yet.",
+        description: "Project update publishing, visibility, follower notifications, and discussion rules.",
+        available: true,
     },
     {
         id: "notifications",
