@@ -14,10 +14,12 @@ export function generateSlug(title: string): string {
 }
 
 /**
- * Generate a unique project ID from title + random suffix
+ * Generate a unique project ID from title + cryptographically secure random suffix
  */
 export function generateProjectId(title: string): string {
     const slug = generateSlug(title);
-    const suffix = Math.random().toString(36).substring(2, 8);
+    const array = new Uint8Array(4);
+    crypto.getRandomValues(array);
+    const suffix = Array.from(array).map(b => b.toString(16).padStart(2, '0')).join('');
     return `${slug}-${suffix}`;
 }
