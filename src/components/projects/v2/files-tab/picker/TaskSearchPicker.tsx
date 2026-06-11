@@ -20,12 +20,21 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { formatTaskId } from "@/lib/project-key";
-import { searchProjectTasks, type SearchableTask } from "@/app/actions/files/links";
 
 // ─── Constants ───────────────────────────────────────────────────────
 
 const DEBOUNCE_MS = 250;
 const MAX_RESULTS = 30;
+
+interface SearchableTask {
+  id: string;
+  title: string;
+  status: string;
+  priority: string;
+  taskNumber: number | null;
+  projectKey: string | null;
+  assigneeName: string | null;
+}
 
 // ─── Props ───────────────────────────────────────────────────────────
 
@@ -69,7 +78,10 @@ export function TaskSearchPicker({
     let cancelled = false;
     setIsLoading(true);
 
-    searchProjectTasks(projectId, debouncedQuery, MAX_RESULTS)
+    import("@/app/actions/files/links")
+      .then(({ searchProjectTasks }) =>
+        searchProjectTasks(projectId, debouncedQuery, MAX_RESULTS),
+      )
       .then((tasks) => {
         if (!cancelled) {
           setResults(tasks);
@@ -94,17 +106,20 @@ export function TaskSearchPicker({
 
   // ── Reset state on open/close ──────────────────────────────────────
   useEffect(() => {
+    let timer: number | undefined;
     if (isOpen) {
       setQuery("");
       setDebouncedQuery("");
       setResults([]);
       setActiveIndex(0);
       // Focus input after dialog animation
-      const timer = window.setTimeout(() => {
+      timer = window.setTimeout(() => {
         inputRef.current?.focus();
       }, 50);
-      return () => window.clearTimeout(timer);
     }
+    return () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
   }, [isOpen]);
 
   // ── Scroll active item into view ──────────────────────────────────
