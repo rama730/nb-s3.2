@@ -386,7 +386,7 @@ export function useRowsToRender(params: {
     }
     if (effectiveMode === "favorites") {
       const ids = Object.keys(favorites).filter((id) => favorites[id]);
-      const nodes = ids.map((id) => nodesById[id]).filter(Boolean);
+      const nodes = ids.map((id) => nodesById[id]).filter((n): n is ProjectNode => !!n);
       return nodes
         .filter((n) => n.type === "folder" || includeFileByMode(n))
         .map(
@@ -401,7 +401,7 @@ export function useRowsToRender(params: {
         );
     }
     if (effectiveMode === "recents") {
-      const nodes = recents.map((id) => nodesById[id]).filter(Boolean);
+      const nodes = recents.map((id) => nodesById[id]).filter((n): n is ProjectNode => !!n);
       return nodes
         .filter((n) => n.type === "folder" || includeFileByMode(n))
         .map(
@@ -631,6 +631,7 @@ export function ExplorerTree({
                   }}
                   itemContent={(index) => {
                     const node = assetNodes[index];
+                    if (!node) return null;
                     return (
                       <FileGridItem
                         node={node}
