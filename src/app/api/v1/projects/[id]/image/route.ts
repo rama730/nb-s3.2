@@ -6,6 +6,7 @@ import { projects } from "@/lib/db/schema";
 import { getProjectAccessById } from "@/lib/data/project-access";
 import { logger } from "@/lib/logger";
 import { createAdminClient, createClient } from "@/lib/supabase/server";
+import { enforceRouteLimit, fetchWithBoundedRetry, jsonError } from "@/app/api/v1/_shared";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,19 +14,22 @@ export const dynamic = "force-dynamic";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function GET(
-    _request: NextRequest,
+    request: NextRequest,
     context: { params: Promise<{ id: string }> },
 ) {
+    const limitResponse = await enforceRouteLimit(request, "api:v1:projects:image", 60, 60);
+    if (limitResponse) return limitResponse;
+
     const { id: projectId } = await context.params;
     if (!UUID_RE.test(projectId)) {
-        return new Response("Not found", { status: 404 });
+        return jsonError("Not found", 404, "NOT_FOUND");
     }
 
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
     const access = await getProjectAccessById(projectId, user?.id ?? null);
     if (!access.project || !access.canRead) {
-        return new Response("Not found", { status: 404 });
+        return jsonError("Not found", 404, "NOT_FOUND");
     }
 
     const [project] = await db
@@ -40,29 +44,52 @@ export async function GET(
         .limit(1);
 
     if (!project?.bucket || !project.key) {
-        return new Response("Not found", { status: 404 });
+        return jsonError("Not found", 404, "NOT_FOUND");
     }
 
     const admin = await createAdminClient();
-    const { data, error } = await admin.storage.from(project.bucket).download(project.key);
-    if (error || !data) {
-        logger.warn("project.image_route_download_failed", {
+    const { data: signedData, error: signError } = await admin.storage
+        .from(project.bucket)
+        .createSignedUrl(project.key, 60);
+
+    if (signError || !signedData?.signedUrl) {
+        logger.warn("project.image_route_presign_failed", {
             module: "projects",
             projectId,
             bucket: project.bucket,
             key: project.key,
-            error: error?.message || "Missing storage object",
+            error: signError?.message || "Missing signed URL",
         });
-        return new Response("Not found", { status: 404 });
+        return jsonError("Not found", 404, "NOT_FOUND");
+    }
+
+    let res: Response;
+    try {
+        res = await fetchWithBoundedRetry(signedData.signedUrl, {
+            timeoutMs: 4_000,
+            maxAttempts: 2,
+        });
+    } catch (error) {
+        logger.warn("project.image_route_fetch_failed", {
+            module: "projects",
+            projectId,
+            bucket: project.bucket,
+            key: project.key,
+            error: error instanceof Error ? error.message : String(error),
+        });
+        return jsonError("Not found", 404, "NOT_FOUND");
+    }
+    if (!res.ok) {
+        return jsonError("Not found", 404, "NOT_FOUND");
     }
 
     const isPublicRequest = !user && access.canRead;
-    return new Response(data, {
+    return new Response(res.body, {
         status: 200,
         headers: {
-            "Content-Type": data.type || "image/jpeg",
+            "Content-Type": res.headers.get("content-type") || "image/jpeg",
             "Cache-Control": isPublicRequest
-                ? "public, max-age=300, s-maxage=300, stale-while-revalidate=86400"
+                ? "public, max-age=300, s-maxage=86400, stale-while-revalidate=3600"
                 : "private, no-store",
             "X-Content-Type-Options": "nosniff",
         },
