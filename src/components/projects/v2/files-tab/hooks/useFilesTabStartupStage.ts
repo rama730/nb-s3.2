@@ -29,7 +29,7 @@
 // `FilesTabRoot` at the component level (tests/unit/files-tab/stage-timeout).
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 export type StartupStage = "explorer" | "main" | "diagnostics";
 
@@ -181,22 +181,41 @@ function defaultOnTimeoutWarn(timedOutStage: StartupStage): void {
  * machine is re-created whenever `projectId` changes so a tab switch between
  * two projects gets a fresh staged boot.
  */
-export function useFilesTabStartupStage(projectId: string): StartupStage {
-  const [stage, setStage] = useState<StartupStage>("explorer");
+export function useFilesTabStartupStage(projectId: string): [StartupStage, (s: StartupStage) => void] {
+  const machineRef = useRef<StartupStageMachine | null>(null);
+  const prevProjectId = useRef<string>(projectId);
+
+  if (!machineRef.current || prevProjectId.current !== projectId) {
+    if (machineRef.current) machineRef.current.dispose();
+    machineRef.current = new StartupStageMachine();
+    prevProjectId.current = projectId;
+  }
+
+  const machine = machineRef.current;
+  const [stage, setStage] = useState<StartupStage>(machine.getStage());
 
   useEffect(() => {
-    // Reset to "explorer" whenever projectId flips. The machine's own
-    // constructor also schedules a fresh 5s timer.
-    setStage("explorer");
-    const machine = new StartupStageMachine();
+    // Sync React state if the machine advanced before the effect ran
+    setStage(machine.getStage());
     const unsubscribe = machine.subscribe(() => {
       setStage(machine.getStage());
     });
     return () => {
       unsubscribe();
-      machine.dispose();
     };
-  }, [projectId]);
+  }, [machine]);
 
-  return stage;
+  useEffect(() => {
+    return () => {
+      if (machineRef.current) {
+        machineRef.current.dispose();
+      }
+    };
+  }, []);
+
+  const signalStageComplete = useCallback((s: StartupStage) => {
+    machineRef.current?.signalStageComplete(s);
+  }, []);
+
+  return [stage, signalStageComplete];
 }
