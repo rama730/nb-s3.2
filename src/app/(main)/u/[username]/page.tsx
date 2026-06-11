@@ -1,7 +1,8 @@
 import { notFound, permanentRedirect } from 'next/navigation';
-import { getProfileDetails, getPublicProfileMeta } from '@/lib/data/profile';
+import { getProfileDetails } from '@/lib/data/profile';
 import { ProfileV2Client } from '@/components/profile/v2/ProfileV2Client';
 import { Metadata } from 'next';
+import { Suspense } from 'react';
 import { resolvePublicUsernameRoute } from '@/lib/usernames/service';
 import { buildRouteMetadata, DEFAULT_ROUTE_OG_IMAGE } from '@/lib/metadata/route-metadata';
 import { getViewerAuthContext } from '@/lib/server/viewer-context';
@@ -38,9 +39,14 @@ export async function generateMetadata({ params }: { params: Promise<{ username:
         });
     }
 
-    const data = await getPublicProfileMeta(route.currentUsername);
+    const viewerAuth = await getViewerAuthContext();
+    const data = await getProfileDetails(route.currentUsername, {
+        viewerUser: viewerAuth.user ?? null,
+        skipHeavyData: true,
+        recordViewEvent: false,
+    });
 
-    if (!data) {
+    if (data.privacyStatus === 'not_found' || !data.profile || data.lockedShell) {
         return buildRouteMetadata({
             title: 'Profile Not Found | Edge',
             description: 'The requested profile could not be found.',
@@ -48,24 +54,25 @@ export async function generateMetadata({ params }: { params: Promise<{ username:
         });
     }
 
+    const profile = data.profile;
     return buildRouteMetadata({
         title: buildPublicProfileTitle({
-            username: data.username,
-            fullName: data.fullName,
+            username: profile.username,
+            fullName: profile.fullName,
         }),
         description: buildProfileMetadataDescription({
-            username: data.username,
-            fullName: data.fullName,
-            headline: data.headline,
-            location: data.location,
-            bio: data.bio,
+            username: profile.username,
+            fullName: profile.fullName,
+            headline: profile.headline,
+            location: profile.location,
+            bio: profile.bio,
         }),
-        path: `/u/${encodeURIComponent(data.username ?? route.currentUsername)}`,
-        image: data.avatarUrl || DEFAULT_ROUTE_OG_IMAGE,
+        path: `/u/${encodeURIComponent(profile.username ?? route.currentUsername)}`,
+        image: profile.avatarUrl || DEFAULT_ROUTE_OG_IMAGE,
     });
 }
 
-export default async function PublicProfilePage({
+async function ResolvedPublicProfile({
     params,
     searchParams,
 }: {
@@ -99,24 +106,37 @@ export default async function PublicProfilePage({
         notFound();
     }
 
-    // Pass data to the Client Component
-    // connectionStatus, isOwner, stats etc are all calculated by getProfileDetails
+    return (
+        <ProfileV2Client
+            profile={data.profile}
+            stats={data.stats}
+            isOwner={data.isOwner}
+            currentUser={data.currentUser}
+            connectionStatus={data.connectionStatus}
+            privacyRelationship={data.privacyRelationship}
+            lockedShell={data.lockedShell}
+            projects={data.projects}
+            collaborationSummary={data.collaborationSummary}
+            viewerPreviewMode={viewerPreviewMode}
+        />
+    );
+}
+
+export default function PublicProfilePage({
+    params,
+    searchParams,
+}: {
+    params: Promise<{ username: string }>;
+    searchParams?: Promise<Record<string, string | string[] | undefined>>;
+}) {
     return (
         <div
             data-scroll-root="route"
             className="h-full min-h-0 overflow-hidden app-scroll app-scroll-y app-scroll-gutter bg-zinc-50 dark:bg-black"
         >
-            <ProfileV2Client
-                profile={data.profile}
-                stats={data.stats}
-                isOwner={data.isOwner}
-                currentUser={data.currentUser}
-                connectionStatus={data.connectionStatus}
-                privacyRelationship={data.privacyRelationship}
-                lockedShell={data.lockedShell}
-                projects={data.projects}
-                viewerPreviewMode={viewerPreviewMode}
-            />
+            <Suspense fallback={<div className="h-full flex items-center justify-center animate-pulse text-zinc-500">Loading profile...</div>}>
+                <ResolvedPublicProfile params={params} searchParams={searchParams} />
+            </Suspense>
         </div>
     );
 }
