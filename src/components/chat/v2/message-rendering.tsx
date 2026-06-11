@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import Image from 'next/image';
 import { toast } from 'sonner';
 import {
@@ -10,11 +11,14 @@ import {
     Copy,
     Download,
     File,
-    PlayCircle,
+    Image as ImageIcon,
+    Volume2,
+    VolumeX,
+    Video,
     X,
 } from 'lucide-react';
-import { normalizeSafeExternalUrl, parseSafeLinkToken } from '@/lib/messages/safe-links';
-import { getMessagePreviewText } from '@/lib/messages/structured';
+import { parseSafeLinkToken } from '@/lib/messages/safe-links';
+import { cn } from '@/lib/utils';
 
 export interface ChatAttachmentV2 {
     id: string;
@@ -29,79 +33,7 @@ export interface ChatAttachmentV2 {
 }
 
 const LINK_OR_MENTION_REGEX = /((?<!\S)@[a-zA-Z0-9_]{2,32}\b|(?:https?:\/\/|www\.)[^\s]+|(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(?:\/[^\s]*)?)/g;
-
-export function MessageTextContentV2({
-    content,
-    isOwn,
-    isApplication = false,
-}: {
-    content: string | null;
-    isOwn: boolean;
-    isApplication?: boolean;
-}) {
-    if (!content) return null;
-
-    if (isApplication) {
-        const lines = content.split(/\r?\n/);
-        return (
-            <div className="min-w-0 max-w-full space-y-1.5">
-                {lines.map((line, index) => {
-                    const trimmed = line.trim();
-                    if (!trimmed) return <div key={`app-space-${index}`} className="h-2" />;
-                    const match = trimmed.match(/^([A-Za-z][A-Za-z ]{1,24}):\s*(.+)$/);
-                    if (!match) {
-                        return (
-                            <p key={`app-line-${index}`} className="msg-message-text leading-relaxed">
-                                {renderTextWithMentions(trimmed, isOwn)}
-                            </p>
-                        );
-                    }
-
-                    const label = match[1].trim();
-                    const value = match[2].trim();
-                    const normalizedUrl = normalizeSafeExternalUrl(value);
-                    return (
-                        <p key={`app-meta-${index}`} className="msg-message-text leading-relaxed">
-                            <span className="font-semibold">{label}: </span>
-                            {normalizedUrl ? (
-                                <a
-                                    href={normalizedUrl}
-                                    target="_blank"
-                                    rel="noopener noreferrer nofollow ugc"
-                                    className={isOwn ? 'break-all underline text-white' : 'break-all underline text-primary'}
-                                >
-                                    {value}
-                                </a>
-                            ) : (
-                                renderTextWithMentions(value, isOwn)
-                            )}
-                        </p>
-                    );
-                })}
-            </div>
-        );
-    }
-
-    const segments = getCachedMessageSegments(content);
-    return (
-        <div className="min-w-0 max-w-full space-y-2">
-            {segments.map((segment, index) =>
-                segment.type === 'code' ? (
-                    <CodeSegmentV2
-                        key={`code-${index}`}
-                        code={segment.content}
-                        language={segment.language}
-                        isOwn={isOwn}
-                    />
-                ) : (
-                    <p key={`text-${index}`} className="msg-message-text leading-relaxed">
-                        {renderTextWithMentions(segment.content, isOwn)}
-                    </p>
-                ),
-            )}
-        </div>
-    );
-}
+export const MESSAGE_TEXT_BASE_CLASS = 'msg-message-text leading-relaxed';
 
 export function MessageAttachmentsV2({
     attachments,
@@ -132,7 +64,7 @@ export function MessageAttachmentsV2({
 
     return (
         <>
-            <div className="mt-2 min-w-0 max-w-full space-y-2">
+            <div className="min-w-0 max-w-[380px] space-y-2">
                 {mediaAttachments.length > 0 && (
                     <MediaAttachmentGridV2
                         attachments={mediaAttachments}
@@ -142,7 +74,7 @@ export function MessageAttachmentsV2({
                 )}
 
                 {fileAttachments.length > 0 && (
-                    <div className="min-w-0 max-w-full overflow-hidden space-y-1">
+                    <div className="min-w-0 max-w-[380px] overflow-hidden space-y-1">
                         {fileAttachments.map((attachment) => (
                             <FileAttachmentCardV2
                                 key={attachment.id}
@@ -167,21 +99,14 @@ export function MessageAttachmentsV2({
     );
 }
 
-export function formatMessagePreview(
-    lastMessage: { content?: string | null; type?: string | null; metadata?: Record<string, unknown> | null } | null | undefined,
-): string {
-    if (!lastMessage) return 'No messages yet';
-    return getMessagePreviewText(lastMessage);
-}
-
-function renderTextWithMentions(text: string, isOwn: boolean) {
+function renderInlineTextWithMentions(text: string, isOwn: boolean, baseKey: string) {
     const parts = text.split(LINK_OR_MENTION_REGEX);
     return parts.map((part, index) => {
         if (part.startsWith('@')) {
             const username = part.slice(1).toLowerCase();
             return (
                 <a
-                    key={`mention-${index}`}
+                    key={`${baseKey}-mention-${index}`}
                     href={`/u/${username}`}
                     className={`font-semibold underline underline-offset-2 ${
                         isOwn ? 'text-white' : 'text-primary'
@@ -195,7 +120,7 @@ function renderTextWithMentions(text: string, isOwn: boolean) {
         const safeLink = parseSafeLinkToken(part);
         if (safeLink) {
             return (
-                <span key={`link-wrap-${index}`}>
+                <span key={`${baseKey}-link-wrap-${index}`}>
                     <a
                         href={safeLink.href}
                         target="_blank"
@@ -209,57 +134,78 @@ function renderTextWithMentions(text: string, isOwn: boolean) {
             );
         }
 
-        return <span key={`txt-${index}`}>{part}</span>;
+        return <span key={`${baseKey}-txt-${index}`}>{part}</span>;
     });
 }
 
-const _parsedContentCache = new Map<string, Array<{ type: 'text' | 'code'; content: string; language: string | null }>>();
-const MAX_PARSED_CACHE_SIZE = 500;
-
-function getCachedMessageSegments(content: string) {
-    const cached = _parsedContentCache.get(content);
-    if (cached) return cached;
-    const parsed = parseMessageSegments(content);
-    if (_parsedContentCache.size >= MAX_PARSED_CACHE_SIZE) {
-        const firstKey = _parsedContentCache.keys().next().value;
-        if (firstKey !== undefined) _parsedContentCache.delete(firstKey);
-    }
-    _parsedContentCache.set(content, parsed);
-    return parsed;
-}
-
-function parseMessageSegments(content: string): Array<{ type: 'text' | 'code'; content: string; language: string | null }> {
-    const segments: Array<{ type: 'text' | 'code'; content: string; language: string | null }> = [];
-    const codeRegex = /```([a-zA-Z0-9_-]+)?\n?([\s\S]*?)```/g;
-    let lastIndex = 0;
-    let match: RegExpExecArray | null;
-
-    while ((match = codeRegex.exec(content)) !== null) {
-        if (match.index > lastIndex) {
-            const textChunk = content.slice(lastIndex, match.index);
-            if (textChunk) segments.push({ type: 'text', content: textChunk, language: null });
+export function renderTextWithMentions(text: string, isOwn: boolean) {
+    const inlineParts = text.split(/(`[^`\n]+`)/g);
+    return inlineParts.map((part, index) => {
+        if (part.length >= 2 && part.startsWith('`') && part.endsWith('`')) {
+            return (
+                <code
+                    key={`inline-code-${index}`}
+                    className={cn(
+                        'rounded px-1.5 py-0.5 font-mono text-[0.9em]',
+                        isOwn
+                            ? 'bg-black/25 text-white'
+                            : 'bg-zinc-200 text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100',
+                    )}
+                >
+                    {part.slice(1, -1)}
+                </code>
+            );
         }
-        segments.push({
-            type: 'code',
-            language: match[1] || null,
-            content: (match[2] || '').trimEnd(),
-        });
-        lastIndex = codeRegex.lastIndex;
-    }
 
-    if (lastIndex < content.length) {
-        const tail = content.slice(lastIndex);
-        if (tail) segments.push({ type: 'text', content: tail, language: null });
-    }
-
-    if (segments.length === 0) {
-        segments.push({ type: 'text', content, language: null });
-    }
-
-    return segments;
+        return renderInlineTextWithMentions(part, isOwn, `inline-text-${index}`);
+    });
 }
 
-function CodeSegmentV2({
+const LANGUAGE_DISPLAY_NAMES: Record<string, string> = {
+    'cpp': 'C++',
+    'cxx': 'C++',
+    'c++': 'C++',
+    'ts': 'TypeScript',
+    'tsx': 'TypeScript (React)',
+    'js': 'JavaScript',
+    'jsx': 'JavaScript (React)',
+    'py': 'Python',
+    'python': 'Python',
+    'sh': 'Bash',
+    'bash': 'Bash',
+    'zsh': 'Bash',
+    'css': 'CSS',
+    'html': 'HTML',
+    'json': 'JSON',
+    'sql': 'SQL',
+    'go': 'Go',
+    'rs': 'Rust',
+    'rust': 'Rust',
+    'java': 'Java',
+    'c': 'C',
+    'cs': 'C#',
+    'csharp': 'C#',
+    'php': 'PHP',
+    'ruby': 'Ruby',
+    'rb': 'Ruby',
+    'swift': 'Swift',
+    'kt': 'Kotlin',
+    'kotlin': 'Kotlin',
+    'dart': 'Dart',
+    'xml': 'XML',
+    'yaml': 'YAML',
+    'yml': 'YAML',
+    'md': 'Markdown',
+    'markdown': 'Markdown',
+};
+
+function getDisplayLanguage(lang: string | null): string {
+    if (!lang) return 'Code';
+    const normalized = lang.toLowerCase();
+    return LANGUAGE_DISPLAY_NAMES[normalized] || lang;
+}
+
+export function CodeSegmentV2({
     code,
     language,
     isOwn,
@@ -298,18 +244,17 @@ function CodeSegmentV2({
 
     return (
         <div
-            className={`msg-rich-content max-w-full min-w-0 overflow-hidden rounded-lg border ${
-                isOwn
-                    ? 'border-white/30 bg-black/25'
-                    : 'border-zinc-300 bg-zinc-900/90 dark:border-zinc-700'
-            }`}
+            className={cn(
+                'msg-rich-content max-w-full min-w-0 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-950/95 shadow-sm',
+                isOwn ? 'text-zinc-100' : 'text-zinc-100',
+            )}
         >
-            <div className="flex items-center justify-between bg-black/30 px-2 py-1 text-[10px] uppercase tracking-wide text-zinc-300">
-                <span>{language || 'code'}</span>
+            <div className="flex items-center justify-between border-b border-white/10 bg-black/50 px-3 py-1.5 text-[11px] font-semibold tracking-wide text-zinc-300">
+                <span>{getDisplayLanguage(language)}</span>
                 <button
                     type="button"
                     onClick={handleCopy}
-                    className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors hover:bg-white/10"
+                    className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30"
                 >
                     {copied ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
                     <span>{copied ? 'Copied' : 'Copy'}</span>
@@ -338,7 +283,10 @@ function MediaAttachmentGridV2({
     const isTriple = visibleAttachments.length === 3;
 
     return (
-        <div className={`${isSingle ? 'grid grid-cols-1' : 'grid grid-cols-2'} w-full max-w-full min-w-0 gap-1`}>
+        <div className={cn(
+            "w-full max-w-full min-w-0 overflow-hidden",
+            isSingle ? "rounded-2xl" : "grid grid-cols-2 gap-[2px] rounded-[18px]"
+        )}>
             {visibleAttachments.map((attachment, index) => (
                 <MediaAttachmentTileV2
                     key={attachment.id}
@@ -370,56 +318,127 @@ function MediaAttachmentTileV2({
     onContentLoad?: () => void;
 }) {
     const [loaded, setLoaded] = useState(false);
+    const [muted, setMuted] = useState(true);
+    const [hasAudioTrack, setHasAudioTrack] = useState<boolean | null>(null);
+    const videoRef = useRef<HTMLVideoElement | null>(null);
     const previewUrl = attachment.thumbnailUrl || attachment.url;
     const [retried, setRetried] = useState(false);
     const [currentUrl, setCurrentUrl] = useState(previewUrl);
-    const aspectRatio = attachment.width && attachment.height && attachment.width > 0 && attachment.height > 0
+    const hasDimensions = Boolean(attachment.width && attachment.height && attachment.width > 0 && attachment.height > 0);
+    const aspectRatio = hasDimensions
         ? `${attachment.width} / ${attachment.height}`
-        : '16 / 10';
+        : undefined;
+
+    useEffect(() => {
+        if (!videoRef.current) return;
+        videoRef.current.muted = muted;
+        if (!muted) {
+            void videoRef.current.play().catch(() => {
+                setMuted(true);
+            });
+        }
+    }, [muted]);
+
+    const updateAudioTrackState = useCallback(() => {
+        if (!videoRef.current) return;
+        const detected = detectVideoAudioTrack(videoRef.current);
+        if (detected !== null) setHasAudioTrack(detected);
+    }, []);
 
     return (
-        <button
-            type="button"
-            onClick={onClick}
-            aria-label={attachment.filename ? `Open media viewer for ${attachment.filename}` : 'Open media viewer'}
-            className={`relative min-w-0 overflow-hidden rounded-lg bg-zinc-100 focus:outline-none focus:ring-2 focus:ring-ring/60 dark:bg-zinc-800 ${isSingle ? 'w-full max-h-80' : 'h-36'} ${spanFull ? 'col-span-2' : ''}`}
-            style={isSingle ? { aspectRatio } : undefined}
+        <div
+            className={cn(
+                "relative min-w-0 overflow-hidden bg-zinc-100 focus:outline-none focus:ring-2 focus:ring-ring/60 dark:bg-zinc-800",
+                isSingle ? (hasDimensions ? 'w-auto max-w-full max-h-[360px] rounded-2xl' : (loaded ? 'w-auto max-w-full max-h-[360px] rounded-2xl' : 'w-auto min-w-[240px] min-h-[240px] max-w-full max-h-[360px] rounded-2xl')) : 'h-[150px] w-full',
+                spanFull ? 'col-span-2 aspect-[21/9] h-auto' : ''
+            )}
+            style={isSingle && hasDimensions ? { aspectRatio } : undefined}
         >
-            {!loaded && <div className="absolute inset-0 animate-pulse bg-zinc-200/80 dark:bg-zinc-700/70" />}
-            <Image
-                src={currentUrl}
-                alt={attachment.filename}
-                width={640}
-                height={360}
-                loading="lazy"
-                unoptimized
-                onLoad={() => {
-                    setLoaded(true);
-                    onContentLoad?.();
-                }}
-                onError={() => {
-                    if (!retried && attachment.url !== previewUrl) {
-                        setRetried(true);
-                        setCurrentUrl(attachment.url);
-                    }
-                }}
-                className={`h-full w-full transition-opacity duration-200 ${
-                    isSingle ? 'object-contain bg-zinc-900/40' : 'object-cover'
-                } ${loaded ? 'opacity-100' : 'opacity-0'}`}
+            <button
+                type="button"
+                onClick={onClick}
+                aria-label={attachment.filename ? `Open media viewer for ${attachment.filename}` : 'Open media viewer'}
+                className="absolute inset-0 z-10 rounded-[inherit] focus:outline-none focus:ring-2 focus:ring-ring/60"
             />
+            <div className={cn(
+                "absolute inset-0 flex items-center justify-center bg-zinc-200 dark:bg-zinc-800/80 transition-opacity duration-300",
+                loaded ? 'opacity-0 pointer-events-none' : 'opacity-100 animate-pulse'
+            )}>
+                {attachment.type === 'video' ? (
+                    <Video className="h-8 w-8 text-zinc-400/50 dark:text-zinc-500/50" />
+                ) : (
+                    <ImageIcon className="h-8 w-8 text-zinc-400/50 dark:text-zinc-500/50" />
+                )}
+            </div>
+            {attachment.type === 'video' ? (
+                <video
+                    ref={videoRef}
+                    src={attachment.url}
+                    autoPlay
+                    muted={muted}
+                    loop
+                    playsInline
+                    preload="metadata"
+                    poster={attachment.thumbnailUrl || undefined}
+                    onLoadedMetadata={updateAudioTrackState}
+                    onLoadedData={() => {
+                        updateAudioTrackState();
+                        setLoaded(true);
+                        onContentLoad?.();
+                    }}
+                    className={cn(
+                        "block object-cover transition-opacity duration-300",
+                        isSingle ? "h-auto w-auto max-h-[360px] max-w-full rounded-2xl" : "h-full w-full",
+                        loaded ? 'opacity-100' : 'opacity-0'
+                    )}
+                />
+            ) : (
+                <Image
+                    src={currentUrl}
+                    alt={attachment.filename}
+                    width={640}
+                    height={360}
+                    loading="lazy"
+                    unoptimized
+                    onLoad={() => {
+                        setLoaded(true);
+                        onContentLoad?.();
+                    }}
+                    onError={() => {
+                        if (!retried && attachment.url !== previewUrl) {
+                            setRetried(true);
+                            setCurrentUrl(attachment.url);
+                        }
+                    }}
+                    className={cn(
+                        "block object-cover transition-opacity duration-300",
+                        isSingle ? "h-auto w-auto max-h-[360px] max-w-full rounded-2xl" : "h-full w-full",
+                        loaded ? 'opacity-100' : 'opacity-0'
+                    )}
+                />
+            )}
 
-            {attachment.type === 'video' && (
-                <div className="absolute inset-0 flex items-center justify-center bg-black/25">
-                    <PlayCircle className="h-10 w-10 text-white/90" />
-                </div>
+            {attachment.type === 'video' && hasAudioTrack !== false && (
+                <button
+                    type="button"
+                    onClick={(event) => {
+                        event.stopPropagation();
+                        setMuted((current) => !current);
+                    }}
+                    className="absolute bottom-2 right-2 z-20 inline-flex h-[18px] w-[22px] items-center justify-center rounded bg-black/60 px-1.5 py-0.5 text-white backdrop-blur-[2px] transition-none hover:bg-black/60 active:bg-black/60 focus:bg-black/60 focus:outline-none focus:ring-0 focus-visible:outline-none focus-visible:ring-0 [-webkit-tap-highlight-color:transparent]"
+                    aria-label={muted ? 'Turn audio on' : 'Turn audio off'}
+                    aria-pressed={!muted}
+                >
+                    {muted ? <VolumeX className="h-3 w-3" /> : <Volume2 className="h-3 w-3" />}
+                </button>
             )}
 
             {overlayLabel && (
-                <div className="absolute inset-0 flex items-center justify-center bg-black/50">
+                <div className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center bg-black/50">
                     <span className="text-xl font-semibold text-white">{overlayLabel}</span>
                 </div>
             )}
-        </button>
+        </div>
     );
 }
 
@@ -488,6 +507,8 @@ function MediaViewerModalV2({
     const [currentIndex, setCurrentIndex] = useState(initialIdx);
     const [zoomLevel, setZoomLevel] = useState(1);
     const [videoSpeed, setVideoSpeed] = useState(1);
+    const [viewerMuted, setViewerMuted] = useState(true);
+    const [viewerHasAudioTrack, setViewerHasAudioTrack] = useState<boolean | null>(null);
     const currentAttachment = attachments[currentIndex] ?? null;
     const currentAttachmentId = currentAttachment?.id ?? null;
     const attachmentCount = attachments.length;
@@ -499,10 +520,26 @@ function MediaViewerModalV2({
     }, [initialIdx]);
 
     useEffect(() => {
+        setViewerMuted(true);
+        setViewerHasAudioTrack(null);
+    }, [currentAttachmentId]);
+
+    useEffect(() => {
         if (!currentAttachmentId) return;
         if (!videoRef.current) return;
         videoRef.current.playbackRate = videoSpeed;
     }, [currentAttachmentId, videoSpeed]);
+
+    useEffect(() => {
+        if (!videoRef.current) return;
+        videoRef.current.muted = viewerMuted;
+    }, [currentAttachmentId, viewerMuted]);
+
+    const updateViewerAudioTrackState = useCallback(() => {
+        if (!videoRef.current) return;
+        const detected = detectVideoAudioTrack(videoRef.current);
+        if (detected !== null) setViewerHasAudioTrack(detected);
+    }, []);
 
     const moveNext = useCallback(() => {
         if (attachmentCount === 0) return;
@@ -525,11 +562,14 @@ function MediaViewerModalV2({
         return () => window.removeEventListener('keydown', onKeyDown);
     }, [hasMultiple, moveNext, movePrev, onClose]);
 
-    if (!currentAttachment) {
+    const [mounted, setMounted] = useState(false);
+    useEffect(() => setMounted(true), []);
+
+    if (!currentAttachment || !mounted) {
         return null;
     }
 
-    return (
+    return createPortal(
         <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/85 p-4 backdrop-blur-sm">
             <button type="button" onClick={onClose} aria-label="Close media viewer" className="absolute inset-0" />
 
@@ -572,18 +612,31 @@ function MediaViewerModalV2({
                             </div>
                         ) : null}
                         {currentAttachment.type === 'video' ? (
-                            <select
-                                value={videoSpeed}
-                                onChange={(event) => setVideoSpeed(Number(event.target.value))}
-                                className="rounded border border-white/20 bg-white/10 px-2 py-1 text-xs text-white"
-                                aria-label="Playback speed"
-                            >
-                                <option value={0.75}>0.75x</option>
-                                <option value={1}>1x</option>
-                                <option value={1.25}>1.25x</option>
-                                <option value={1.5}>1.5x</option>
-                                <option value={2}>2x</option>
-                            </select>
+                            <>
+                                {viewerHasAudioTrack !== false ? (
+                                    <button
+                                        type="button"
+                                        onClick={() => setViewerMuted((current) => !current)}
+                                        className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-white/70"
+                                        aria-label={viewerMuted ? 'Turn audio on' : 'Turn audio off'}
+                                        aria-pressed={!viewerMuted}
+                                    >
+                                        {viewerMuted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+                                    </button>
+                                ) : null}
+                                <select
+                                    value={videoSpeed}
+                                    onChange={(event) => setVideoSpeed(Number(event.target.value))}
+                                    className="rounded border border-white/20 bg-white/10 px-2 py-1 text-xs text-white"
+                                    aria-label="Playback speed"
+                                >
+                                    <option value={0.75}>0.75x</option>
+                                    <option value={1}>1x</option>
+                                    <option value={1.25}>1.25x</option>
+                                    <option value={1.5}>1.5x</option>
+                                    <option value={2}>2x</option>
+                                </select>
+                            </>
                         ) : null}
                         <button
                             type="button"
@@ -601,13 +654,20 @@ function MediaViewerModalV2({
                         <video
                             ref={videoRef}
                             key={currentAttachment.id}
-                            src={currentAttachment.url}
-                            controls
-                            autoPlay
-                            playsInline
-                            preload="metadata"
-                            className="max-h-[82vh] w-auto cursor-pointer rounded-lg bg-black"
-                        />
+	                            src={currentAttachment.url}
+	                            controls
+		                            autoPlay
+	                                muted={viewerMuted}
+		                            playsInline
+		                            preload="metadata"
+                                    onLoadedMetadata={updateViewerAudioTrackState}
+                                    onLoadedData={updateViewerAudioTrackState}
+	                                onVolumeChange={() => {
+	                                    const nextMuted = videoRef.current?.muted ?? true;
+	                                    setViewerMuted((current) => (current === nextMuted ? current : nextMuted));
+                                }}
+	                            className="max-h-[82vh] w-auto cursor-pointer rounded-lg bg-black"
+	                        />
                     ) : currentAttachment.filename.toLowerCase().endsWith('.pdf') ? (
                         <div className="relative h-[82vh] w-full overflow-hidden rounded-lg bg-white">
                             <iframe
@@ -654,7 +714,8 @@ function MediaViewerModalV2({
                     ) : null}
                 </div>
             </div>
-        </div>
+        </div>,
+        document.body
     );
 }
 
@@ -662,4 +723,21 @@ function formatFileSize(bytes: number): string {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function detectVideoAudioTrack(video: HTMLVideoElement): boolean | null {
+    const withAudioTracks = video as HTMLVideoElement & {
+        audioTracks?: { length: number };
+        mozHasAudio?: boolean;
+        webkitAudioDecodedByteCount?: number;
+    };
+
+    if (typeof withAudioTracks.mozHasAudio === 'boolean') return withAudioTracks.mozHasAudio;
+    if (withAudioTracks.audioTracks && typeof withAudioTracks.audioTracks.length === 'number') {
+        return withAudioTracks.audioTracks.length > 0;
+    }
+    if (typeof withAudioTracks.webkitAudioDecodedByteCount === 'number' && withAudioTracks.webkitAudioDecodedByteCount > 0) {
+        return true;
+    }
+    return null;
 }
