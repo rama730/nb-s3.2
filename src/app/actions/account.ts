@@ -25,6 +25,7 @@ import { createSignedJobRequestToken } from '@/lib/security/job-request';
 import { consumeRateLimit } from '@/lib/security/rate-limit';
 import { resolveSecurityStepUp } from '@/lib/security/step-up';
 import { enqueueProjectNotificationEvent } from '@/lib/notifications/project-events';
+import { z } from 'zod';
 
 const UUID_RE =
     /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
@@ -73,11 +74,21 @@ function sanitizeExportedMessages(rows: AccountExportMessageRow[], userId: strin
  * The account is soft-deleted immediately (hidden from pub), and hard-deleted
  * by a background cron job after the grace period expires.
  */
+const scheduleAccountDeletionSchema = z.object({
+    confirmationText: z.string().max(50).optional(),
+    reason: z.string().max(1000).optional(),
+});
+
 export async function scheduleAccountDeletion(
     confirmationText?: string,
     reason?: string,
 ): Promise<{ success: boolean; error?: string; deletionId?: string; hardDeleteAt?: string }> {
     try {
+        const parsed = scheduleAccountDeletionSchema.safeParse({ confirmationText, reason });
+        if (!parsed.success) {
+            return { success: false, error: 'Invalid input: ' + parsed.error.issues.map(i => i.message).join(', ') };
+        }
+
         const supabase = await createClient();
         const { data: { user } } = await supabase.auth.getUser();
 
@@ -85,7 +96,7 @@ export async function scheduleAccountDeletion(
             return { success: false, error: 'Not authenticated' };
         }
 
-        const normalizedConfirmation = (confirmationText || '').trim().toUpperCase();
+        const normalizedConfirmation = (parsed.data.confirmationText || '').trim().toUpperCase();
         if (normalizedConfirmation !== ACCOUNT_DELETE_CONFIRM_TEXT) {
             return { success: false, error: 'Confirmation required' };
         }
@@ -215,7 +226,7 @@ export async function scheduleAccountDeletion(
             // 7. Delete user's profile audit events
             await tx.delete(profileAuditEvents).where(eq(profileAuditEvents.userId, userId));
 
-            return deletion.id;
+            return deletion!.id;
         });
 
         // Counter refresh (outside transaction — non-critical for consistency)
@@ -350,20 +361,29 @@ export async function cancelAccountDeletion(): Promise<{ success: boolean; error
  *   - audit entry on the original owner AND the new owner so either party can
  *     trace the transfer later.
  */
+const transferProjectOwnershipSchema = z.object({
+    projectId: z.string().uuid('projectId must be a valid UUID'),
+    newOwnerId: z.string().uuid('newOwnerId must be a valid UUID'),
+});
+
 export async function transferProjectOwnership(
     projectId: string,
     newOwnerId: string,
 ): Promise<{ success: boolean; error?: string; errorCode?: 'UNAUTHORIZED' | 'STEP_UP_REQUIRED' | 'RATE_LIMITED' | 'VALIDATION_ERROR' | 'NOT_OWNER' | 'NOT_A_MEMBER' | 'PROJECT_NOT_FOUND' | 'INTERNAL_ERROR' }> {
     try {
+        const parsed = transferProjectOwnershipSchema.safeParse({ projectId, newOwnerId });
+        if (!parsed.success) {
+            return { success: false, error: 'Invalid IDs', errorCode: 'VALIDATION_ERROR' };
+        }
+        // Use validated values from here on
+        projectId = parsed.data.projectId;
+        newOwnerId = parsed.data.newOwnerId;
+
         const supabase = await createClient();
         const { data: { user } } = await supabase.auth.getUser();
 
         if (!user) {
             return { success: false, error: 'Not authenticated', errorCode: 'UNAUTHORIZED' };
-        }
-
-        if (!UUID_RE.test(projectId) || !UUID_RE.test(newOwnerId)) {
-            return { success: false, error: 'Invalid IDs', errorCode: 'VALIDATION_ERROR' };
         }
 
         if (newOwnerId === user.id) {
@@ -657,109 +677,115 @@ export async function exportAccountData(): Promise<{
 
         const userId = user.id;
 
-        // Optimized parallel fetching with explicit column selection
-        const [
-            [profile],
-            userProjects,
-            userConnections,
-            userMessages,
-            [{ count: userMessageCount }],
-            userCollections
-        ] = await Promise.all([
-            readDb
-                .select({
-                    email: profiles.email,
-                    username: profiles.username,
-                    fullName: profiles.fullName,
-                    bio: profiles.bio,
-                    headline: profiles.headline,
-                    location: profiles.location,
-                    website: profiles.website,
-                    skills: profiles.skills,
-                    interests: profiles.interests,
-                    experience: profiles.experience,
-                    education: profiles.education,
-                    openTo: profiles.openTo,
-                    socialLinks: profiles.socialLinks,
-                    experienceLevel: profiles.experienceLevel,
-                    pronouns: profiles.pronouns,
-                    createdAt: profiles.createdAt,
-                })
-                .from(profiles)
-                .where(eq(profiles.id, userId))
-                .limit(1),
-            readDb
-                .select({
-                    id: projects.id,
-                    title: projects.title,
-                    slug: projects.slug,
-                    description: projects.description,
-                    category: projects.category,
-                    status: projects.status,
-                    visibility: projects.visibility,
-                    tags: projects.tags,
-                    skills: projects.skills,
-                    createdAt: projects.createdAt,
-                })
-                .from(projects)
-                .where(eq(projects.ownerId, userId))
-                .limit(5_000),
-            readDb
-                .select({
-                    requesterId: connections.requesterId,
-                    addresseeId: connections.addresseeId,
-                    status: connections.status,
-                    createdAt: connections.createdAt,
-                })
-                .from(connections)
-                .where(
-                    or(
-                        eq(connections.requesterId, userId),
-                        eq(connections.addresseeId, userId),
-                    )
+        const [profile] = await readDb
+            .select({
+                email: profiles.email,
+                username: profiles.username,
+                fullName: profiles.fullName,
+                bio: profiles.bio,
+                headline: profiles.headline,
+                location: profiles.location,
+                website: profiles.website,
+                skills: profiles.skills,
+                interests: profiles.interests,
+                experience: profiles.experience,
+                education: profiles.education,
+                openTo: profiles.openTo,
+                socialLinks: profiles.socialLinks,
+                experienceLevel: profiles.experienceLevel,
+                pronouns: profiles.pronouns,
+                createdAt: profiles.createdAt,
+            })
+            .from(profiles)
+            .where(eq(profiles.id, userId))
+            .limit(1);
+
+        await new Promise(resolve => setTimeout(resolve, 10)); // yield to event loop
+
+        const userProjects = await readDb
+            .select({
+                id: projects.id,
+                title: projects.title,
+                slug: projects.slug,
+                description: projects.description,
+                category: projects.category,
+                status: projects.status,
+                visibility: projects.visibility,
+                tags: projects.tags,
+                skills: projects.skills,
+                createdAt: projects.createdAt,
+            })
+            .from(projects)
+            .where(eq(projects.ownerId, userId))
+            .limit(5_000);
+
+        await new Promise(resolve => setTimeout(resolve, 10));
+
+        const userConnections = await readDb
+            .select({
+                requesterId: connections.requesterId,
+                addresseeId: connections.addresseeId,
+                status: connections.status,
+                createdAt: connections.createdAt,
+            })
+            .from(connections)
+            .where(
+                or(
+                    eq(connections.requesterId, userId),
+                    eq(connections.addresseeId, userId),
                 )
-                .limit(50_000),
-            readDb
-                .select({
-                    id: messages.id,
-                    conversationId: messages.conversationId,
-                    content: messages.content,
-                    type: messages.type,
-                    createdAt: messages.createdAt,
-                    senderId: messages.senderId,
-                })
-                .from(messages)
-                .innerJoin(
-                    conversationParticipants,
-                    and(
-                        eq(conversationParticipants.conversationId, messages.conversationId),
-                        eq(conversationParticipants.userId, userId),
-                    ),
-                )
-                .orderBy(desc(messages.createdAt))
-                .limit(ACCOUNT_EXPORT_MESSAGE_LIMIT),
-            readDb
-                .select({
-                    count: sql<number>`count(distinct ${messages.id})::int`,
-                })
-                .from(messages)
-                .innerJoin(
-                    conversationParticipants,
-                    and(
-                        eq(conversationParticipants.conversationId, messages.conversationId),
-                        eq(conversationParticipants.userId, userId),
-                    ),
+            )
+            .limit(50_000);
+
+        await new Promise(resolve => setTimeout(resolve, 10));
+
+        const userMessages = await readDb
+            .select({
+                id: messages.id,
+                conversationId: messages.conversationId,
+                content: messages.content,
+                type: messages.type,
+                createdAt: messages.createdAt,
+                senderId: messages.senderId,
+            })
+            .from(messages)
+            .innerJoin(
+                conversationParticipants,
+                and(
+                    eq(conversationParticipants.conversationId, messages.conversationId),
+                    eq(conversationParticipants.userId, userId),
                 ),
-            readDb
-                .select({
-                    id: collections.id,
-                    name: collections.name,
-                    createdAt: collections.createdAt,
-                })
-                .from(collections)
-                .where(eq(collections.ownerId, userId))
-                .limit(10_000)
-        ]);
+            )
+            .orderBy(desc(messages.createdAt))
+            .limit(ACCOUNT_EXPORT_MESSAGE_LIMIT);
+
+        await new Promise(resolve => setTimeout(resolve, 10));
+
+        const messageCountResult = await readDb
+            .select({
+                count: sql<number>`count(distinct ${messages.id})::int`,
+            })
+            .from(messages)
+            .innerJoin(
+                conversationParticipants,
+                and(
+                    eq(conversationParticipants.conversationId, messages.conversationId),
+                    eq(conversationParticipants.userId, userId),
+                ),
+            );
+        const userMessageCount = messageCountResult[0]?.count ?? 0;
+
+        await new Promise(resolve => setTimeout(resolve, 10));
+
+        const userCollections = await readDb
+            .select({
+                id: collections.id,
+                name: collections.name,
+                createdAt: collections.createdAt,
+            })
+            .from(collections)
+            .where(eq(collections.ownerId, userId))
+            .limit(10_000);
 
         const sanitizedMessages = sanitizeExportedMessages(userMessages, userId);
         const messageNotes: string[] = [];
