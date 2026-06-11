@@ -18,6 +18,7 @@ export default function ProfileShell({ initialData }: ProfileShellProps) {
             privacyRelationship={initialData?.privacyRelationship}
             lockedShell={initialData?.lockedShell}
             projects={initialData?.projects}
+            collaborationSummary={initialData?.collaborationSummary}
         />
     );
 }
