@@ -204,7 +204,12 @@ function sanitizeOnboardingDraftPatch(input: unknown): Partial<DraftPayload> {
         patch.username = typeof source.username === 'string' ? sanitizeUsernameInput(source.username) : undefined
     }
     if ('fullName' in source) patch.fullName = trimOptionalString(source.fullName, MAX_DRAFT_FULL_NAME_CHARS)
-    if ('avatarUrl' in source) patch.avatarUrl = trimOptionalString(source.avatarUrl, 2000)
+    if ('avatarUrl' in source) {
+        const url = typeof source.avatarUrl === 'string' ? source.avatarUrl : undefined;
+        if (url && !url.startsWith('blob:') && !url.startsWith('data:image/')) {
+            patch.avatarUrl = trimOptionalString(url, 2000);
+        }
+    }
     if ('headline' in source) patch.headline = trimOptionalString(source.headline, MAX_DRAFT_HEADLINE_CHARS)
     if ('bio' in source) patch.bio = trimOptionalString(source.bio, MAX_DRAFT_BIO_CHARS)
     if ('location' in source) patch.location = trimOptionalString(source.location, MAX_DRAFT_LOCATION_CHARS)
@@ -510,7 +515,7 @@ async function beginOnboardingSubmission(params: {
         .returning({ id: onboardingSubmissions.id })
 
     if (inserted.length > 0) {
-        return { mode: 'process', submissionId: inserted[0].id }
+        return { mode: 'process', submissionId: inserted[0]!.id }
     }
 
     const existing = await db.query.onboardingSubmissions.findFirst({
@@ -570,7 +575,7 @@ async function beginOnboardingSubmission(params: {
         return { mode: 'in-progress' }
     }
 
-    return { mode: 'process', submissionId: reacquired[0].id }
+    return { mode: 'process', submissionId: reacquired[0]!.id }
 }
 
 async function finalizeOnboardingSubmission(params: {
@@ -971,110 +976,33 @@ export async function saveOnboardingDraft(input: {
             const details = onboardingError('NOT_AUTHENTICATED', 'Not authenticated')
             return { success: false, error: details.message, errorDetails: details }
         }
-        const shell = await ensureOnboardingProfileShell({
-            userId: user.id,
-            userEmail: user.email,
-            metadata: user.user_metadata,
-        })
-        if (!shell.success) {
-            return { success: false, error: shell.error.message, errorDetails: shell.error }
-        }
-
+        // Removed ensureOnboardingProfileShell from auto-save hotpath to prevent N+1 DB load
         const safeStep = clampStep(input.step)
         const incomingDraftPatch = sanitizeOnboardingDraftPatch(input.draft)
+        const fullDraft = sanitizeOnboardingDraft(incomingDraftPatch)
         const updatedAt = new Date()
 
-        const current = await db.query.onboardingDrafts.findFirst({
-            where: eq(onboardingDrafts.userId, user.id),
-            columns: {
-                version: true,
-                step: true,
-                draft: true,
-                updatedAt: true,
-            },
-        })
-
-        if (!current) {
-            const safeDraft = sanitizeOnboardingDraft(incomingDraftPatch)
-            const inserted = await db
-                .insert(onboardingDrafts)
-                .values({
-                    userId: user.id,
-                    step: safeStep,
-                    version: 1,
-                    draft: safeDraft,
-                    updatedAt,
-                })
-                .onConflictDoNothing()
-                .returning({
-                    version: onboardingDrafts.version,
-                    step: onboardingDrafts.step,
-                    draft: onboardingDrafts.draft,
-                    updatedAt: onboardingDrafts.updatedAt,
-                })
-
-            if (inserted.length > 0) {
-                return {
-                    success: true,
-                    version: inserted[0].version,
-                    step: clampStep(inserted[0].step),
-                    draft: sanitizeOnboardingDraft(inserted[0].draft),
-                    updatedAt: inserted[0].updatedAt.toISOString(),
-                }
-            }
-        }
-
-        const latest = current || await db.query.onboardingDrafts.findFirst({
-            where: eq(onboardingDrafts.userId, user.id),
-            columns: {
-                version: true,
-                step: true,
-                draft: true,
-                updatedAt: true,
-            },
-        })
-
-        if (!latest) {
-            const details = onboardingError('DB_ERROR', 'Unable to save onboarding draft', true)
-            return { success: false, error: details.message, errorDetails: details }
-        }
-
-        const expectedVersion = typeof input.expectedVersion === 'number' ? input.expectedVersion : latest.version
-        if (expectedVersion !== latest.version) {
-            const details = onboardingError('DRAFT_CONFLICT', 'Draft changed in another session. Synced latest draft.')
-            return {
-                success: false,
-                error: details.message,
-                errorDetails: details,
-                version: latest.version,
-                step: clampStep(latest.step),
-                draft: sanitizeOnboardingDraft(latest.draft),
-                updatedAt: latest.updatedAt.toISOString(),
-            }
-        }
-
-        const mergedDraftInput: Record<string, unknown> = {
-            ...((latest.draft as Record<string, unknown>) || {}),
-        }
-        for (const key of Object.keys(incomingDraftPatch) as Array<keyof DraftPayload>) {
-            mergedDraftInput[key] = incomingDraftPatch[key]
-        }
-        const safeDraft = sanitizeOnboardingDraft(mergedDraftInput)
-        const nextVersion = latest.version + 1
-        const updated = await db
-            .update(onboardingDrafts)
-            .set({
+        const result = await db
+            .insert(onboardingDrafts)
+            .values({
+                userId: user.id,
                 step: safeStep,
-                draft: safeDraft,
-                version: nextVersion,
+                version: 1,
+                draft: fullDraft,
                 updatedAt,
             })
-            .where(
-                and(
-                    eq(onboardingDrafts.userId, user.id),
-                    eq(onboardingDrafts.version, latest.version)
-                )
-            )
+            .onConflictDoUpdate({
+                target: onboardingDrafts.userId,
+                set: {
+                    step: safeStep,
+                    draft: sql`${onboardingDrafts.draft} || ${incomingDraftPatch}::jsonb`,
+                    version: sql`${onboardingDrafts.version} + 1`,
+                    updatedAt,
+                },
+                where: typeof input.expectedVersion === 'number'
+                    ? eq(onboardingDrafts.version, input.expectedVersion)
+                    : undefined
+            })
             .returning({
                 version: onboardingDrafts.version,
                 step: onboardingDrafts.step,
@@ -1082,34 +1010,36 @@ export async function saveOnboardingDraft(input: {
                 updatedAt: onboardingDrafts.updatedAt,
             })
 
-        if (updated.length === 0) {
-            const currentDraft = await db.query.onboardingDrafts.findFirst({
-                where: eq(onboardingDrafts.userId, user.id),
-                columns: {
-                    version: true,
-                    step: true,
-                    draft: true,
-                    updatedAt: true,
-                },
-            })
-            const details = onboardingError('DRAFT_CONFLICT', 'Draft changed in another session. Synced latest draft.')
+        if (result.length > 0) {
             return {
-                success: false,
-                error: details.message,
-                errorDetails: details,
-                version: currentDraft?.version,
-                step: currentDraft ? clampStep(currentDraft.step) : ONBOARDING_STEP_MIN,
-                draft: sanitizeOnboardingDraft(currentDraft?.draft || {}),
-                updatedAt: currentDraft?.updatedAt.toISOString(),
+                success: true,
+                version: result[0]!.version,
+                step: clampStep(result[0]!.step),
+                draft: sanitizeOnboardingDraft(result[0]!.draft),
+                updatedAt: result[0]!.updatedAt.toISOString(),
             }
         }
 
+        // Conflict: version didn't match
+        const latest = await db.query.onboardingDrafts.findFirst({
+            where: eq(onboardingDrafts.userId, user.id),
+            columns: { version: true, step: true, draft: true, updatedAt: true },
+        })
+
+        if (!latest) {
+            const details = onboardingError('DB_ERROR', 'Unable to save onboarding draft', true)
+            return { success: false, error: details.message, errorDetails: details }
+        }
+
+        const details = onboardingError('DRAFT_CONFLICT', 'Draft changed in another session. Synced latest draft.')
         return {
-            success: true,
-            version: updated[0].version,
-            step: clampStep(updated[0].step),
-            draft: sanitizeOnboardingDraft(updated[0].draft),
-            updatedAt: updated[0].updatedAt.toISOString(),
+            success: false,
+            error: details.message,
+            errorDetails: details,
+            version: latest.version,
+            step: clampStep(latest.step),
+            draft: sanitizeOnboardingDraft(latest.draft),
+            updatedAt: latest.updatedAt.toISOString(),
         }
     } catch (error) {
         console.error('Error saving onboarding draft:', error)
@@ -1151,12 +1081,6 @@ export async function trackOnboardingEvent(input: {
         const parsed = onboardingEventInputSchema.safeParse(input)
         if (!parsed.success) return { success: false }
         const payload = parsed.data
-        const shell = await ensureOnboardingProfileShell({
-            userId: user.id,
-            userEmail: user.email,
-            metadata: user.user_metadata,
-        })
-        if (!shell.success) return { success: false }
 
         const tracked = await writeOnboardingEventBestEffort({
             userId: user.id,
