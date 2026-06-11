@@ -4,7 +4,7 @@ export type FileKind = "folder" | "text" | "image" | "video" | "audio" | "pdf" |
 
 function extOf(name: string) {
   const parts = name.split(".");
-  return parts.length > 1 ? parts[parts.length - 1].toLowerCase() : "";
+  return parts.length > 1 ? (parts[parts.length - 1]?.toLowerCase() || "") : "";
 }
 
 const TEXT_EXTENSIONS = new Set([
