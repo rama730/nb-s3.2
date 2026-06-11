@@ -228,6 +228,36 @@ async function applyMigration(entry: JournalEntry) {
   `;
 }
 
+const PROJECT_UPDATES_REPAIR_BEGIN = "-- project_updates_schema_repair_begin";
+const PROJECT_UPDATES_REPAIR_END = "-- project_updates_schema_repair_end";
+
+async function readProjectUpdatesRepairStatements() {
+  const filePath = resolveWorkspacePath("drizzle", "0063_database_setup_authority_backfill.sql");
+  const source = await readFile(filePath, "utf8");
+  const begin = source.indexOf(PROJECT_UPDATES_REPAIR_BEGIN);
+  const end = source.indexOf(PROJECT_UPDATES_REPAIR_END);
+  if (begin < 0 || end < 0 || end <= begin) {
+    throw new Error("Project updates repair block is missing from drizzle/0063_database_setup_authority_backfill.sql");
+  }
+  return splitMigrationStatements(source.slice(begin + PROJECT_UPDATES_REPAIR_BEGIN.length, end));
+}
+
+async function ensureProjectUpdatesSchema() {
+  const [dependencies] = await sql<{ ready: boolean }[]>`
+    SELECT
+      to_regclass('public.projects') IS NOT NULL
+      AND to_regclass('public.profiles') IS NOT NULL AS ready
+  `;
+
+  if (dependencies?.ready !== true) {
+    return;
+  }
+
+  const statements = await readProjectUpdatesRepairStatements();
+  for (const statement of statements) {
+    await sql.unsafe(statement);
+  }
+}
 async function ensureLatestSchemaRepairs() {
   const preferences = DEFAULT_NOTIFICATION_PREFERENCES.replace(/'/g, "''");
 
@@ -257,6 +287,11 @@ async function ensureLatestSchemaRepairs() {
         WHERE "notification_preferences" IS NOT NULL;
       END IF;
 
+      IF to_regclass('public.projects') IS NOT NULL THEN
+        ALTER TABLE public."projects"
+          ADD COLUMN IF NOT EXISTS "stage_completion_dates" jsonb DEFAULT '{}'::jsonb;
+      END IF;
+
       IF to_regclass('public.user_notifications') IS NOT NULL THEN
         ALTER TABLE public."user_notifications"
           ADD COLUMN IF NOT EXISTS "dismissed_at" timestamp with time zone;
@@ -275,6 +310,8 @@ async function ensureLatestSchemaRepairs() {
       END IF;
     END $$;
   `);
+
+  await ensureProjectUpdatesSchema();
 }
 
 async function setupDatabase() {
