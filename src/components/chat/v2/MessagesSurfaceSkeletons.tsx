@@ -26,11 +26,11 @@ export function InboxListSkeletonV2({
         <div className="flex h-full min-h-0 flex-col overflow-hidden">
             {showSearch ? (
                 <div className={cn(
-                    'border-b border-zinc-100',
+                    'border-b border-zinc-100 dark:border-zinc-800/80',
                     isPopup ? 'px-3 pb-3 pt-2' : 'px-4 pb-4 pt-3',
                 )}>
-                    <div className="rounded-2xl border border-zinc-200/80 bg-white/90 p-1 shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
-                        <div className="flex items-center gap-3 rounded-[18px] bg-zinc-50 px-3 py-2.5">
+                    <div className="rounded-2xl border border-zinc-200/80 bg-white/90 p-1 shadow-[0_1px_2px_rgba(15,23,42,0.03)] dark:border-zinc-800 dark:bg-zinc-900/90">
+                        <div className="flex items-center gap-3 rounded-[18px] bg-zinc-50 px-3 py-2.5 dark:bg-zinc-950">
                             <Skeleton className="h-4 w-4 rounded-full" />
                             <Skeleton className={cn(isPopup ? 'w-32' : 'w-36', 'h-4 rounded-full')} />
                         </div>
@@ -103,10 +103,10 @@ export function ThreadSkeletonV2({
         ];
 
     return (
-        <div className="flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden bg-white">
+        <div className="flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden bg-white dark:bg-zinc-950">
             {showHeader ? (
                 <div className={cn(
-                    'border-b border-zinc-100 bg-white',
+                    'border-b border-zinc-100 bg-white dark:border-zinc-800/80 dark:bg-zinc-950',
                     isPopup ? 'px-3 py-3' : 'px-5 py-4',
                 )}>
                     <div className="flex items-center justify-between gap-3">
@@ -127,7 +127,7 @@ export function ThreadSkeletonV2({
             ) : null}
 
             <div className={cn(
-                'flex-1 min-h-0 overflow-hidden bg-white',
+                'flex-1 min-h-0 overflow-hidden bg-white dark:bg-zinc-950',
                 isPopup ? 'px-3 py-3' : 'px-5 py-4',
             )}>
                 <div className="flex h-full min-h-0 flex-col">
@@ -145,21 +145,23 @@ export function ThreadSkeletonV2({
                                     key={`messages-thread-skeleton-${index}`}
                                     className={cn('flex w-full', isOwn ? 'justify-end' : 'justify-start')}
                                 >
-                                    <div className={cn('flex flex-col space-y-2', isOwn ? 'items-end' : 'items-start')}>
+                                    <div className={cn('flex items-start gap-2 max-w-[70%]', isOwn ? 'flex-row-reverse' : 'flex-row')}>
                                         {!isOwn ? (
-                                            <div className="mb-1 flex items-center gap-2">
-                                                <Skeleton className={cn('rounded-full', isPopup ? 'h-6 w-6' : 'h-7 w-7')} />
-                                                <Skeleton className={cn('h-3 rounded-full', isPopup ? 'w-14' : 'w-16')} />
-                                            </div>
+                                            <Skeleton className="h-8 w-8 shrink-0 rounded-full bg-zinc-200/60 dark:bg-zinc-800" />
                                         ) : null}
-                                        <Skeleton
-                                            className={cn(
-                                                'rounded-[22px]',
-                                                row.bubble,
-                                            )}
-                                        />
-                                        <div className={cn('flex', isOwn ? 'justify-end' : 'justify-start')}>
-                                            <Skeleton className={cn('h-3 rounded-full', row.meta)} />
+                                        <div className={cn('flex flex-col space-y-1', isOwn ? 'items-end' : 'items-start')}>
+                                            <Skeleton
+                                                className={cn(
+                                                    'rounded-2xl',
+                                                    isOwn
+                                                        ? 'rounded-br-[4px] bg-primary/20 dark:bg-primary/25'
+                                                        : 'rounded-bl-[4px] bg-zinc-200/60 dark:bg-zinc-800',
+                                                    row.bubble,
+                                                )}
+                                            />
+                                            <div className={cn('flex', isOwn ? 'justify-end' : 'justify-start')}>
+                                                <Skeleton className={cn('h-3 rounded-full bg-zinc-200/40 dark:bg-zinc-800/40', row.meta)} />
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
@@ -171,11 +173,11 @@ export function ThreadSkeletonV2({
 
             {showComposer ? (
                 <div className={cn(
-                    'border-t border-zinc-100 bg-white',
+                    'border-t border-zinc-100 bg-white dark:border-zinc-800/80 dark:bg-zinc-950',
                     isPopup ? 'px-3 py-3' : 'px-5 py-4',
                 )}>
                     <div className={cn(
-                        'rounded-[30px] border border-zinc-200 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]',
+                        'rounded-[30px] border border-zinc-200 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)] dark:border-zinc-800 dark:bg-zinc-900',
                         isPopup ? 'p-1.5' : 'p-2',
                     )}>
                         <div className="flex items-end gap-2">
