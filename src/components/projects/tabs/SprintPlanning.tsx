@@ -2,11 +2,11 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import dynamic from "next/dynamic";
 import { useQueryClient } from "@tanstack/react-query";
 import { CalendarDays, Plus } from "lucide-react";
 import { toast } from "sonner";
 
-import CreateSprintModal from "@/components/projects/v2/sprints/CreateSprintModal";
 import { SprintDetailDrawer, prefetchSprintDrawerPayload } from "@/components/projects/tabs/sprint/SprintDetailDrawer";
 import { SprintHeader } from "@/components/projects/tabs/sprint/SprintHeader";
 import { SprintLeftRail } from "@/components/projects/tabs/sprint/SprintLeftRail";
@@ -20,7 +20,7 @@ import {
   startSprintAction,
   updateSprintAction,
 } from "@/app/actions/project";
-import { useSprintDetail, SPRINT_DETAIL_QUERY_KEY } from "@/hooks/hub/useProjectData";
+import { useSprintDetail, SPRINT_DETAIL_QUERY_KEY } from "@/hooks/hub/useProjectTasksData";
 import { useSprintViewPreferences } from "@/hooks/hub/useSprintViewPreferences";
 import { queryKeys } from "@/lib/query-keys";
 import {
@@ -54,6 +54,8 @@ import {
   type SprintDeleteImpact,
   type SprintEditorMode,
 } from "@/lib/projects/sprints";
+
+const CreateSprintModal = dynamic(() => import("@/components/projects/v2/sprints/CreateSprintModal"), { ssr: false });
 
 interface SprintPlanningProps {
   projectId: string;
@@ -341,12 +343,12 @@ export default function SprintPlanning({
         queryKey,
         queryFn: async ({ pageParam }: { pageParam: string | undefined }) => {
           const result = await fetchProjectSprintDetailAction({
-            projectId,
+            slugOrId: projectId,
             sprintId,
             cursor: pageParam,
             limit: 24,
           });
-          if (!result.success) throw new Error(result.error);
+          if (!result.success) throw new Error("error" in result ? (result as any).error : result.message);
           return result.data;
         },
         initialPageParam: undefined as string | undefined,
@@ -814,14 +816,16 @@ export default function SprintPlanning({
                 <Plus className="h-4 w-4" />
                 Create Sprint
               </button>
-              <CreateSprintModal
-                projectId={projectId}
-                isOpen={isEditorOpen}
-                mode="create"
-                onClose={() => setEditorState(null)}
-                onSubmit={handleCreateSprint}
-                sprintCount={0}
-              />
+              {isEditorOpen ? (
+                <CreateSprintModal
+                  projectId={projectId}
+                  isOpen={isEditorOpen}
+                  mode="create"
+                  onClose={() => setEditorState(null)}
+                  onSubmit={handleCreateSprint}
+                  sprintCount={0}
+                />
+              ) : null}
             </>
           ) : null}
         </div>
@@ -897,17 +901,19 @@ export default function SprintPlanning({
         </section>
       </div>
 
-      <CreateSprintModal
-        projectId={projectId}
-        isOpen={isEditorOpen}
-        mode={editorState?.mode ?? "create"}
-        onClose={() => setEditorState(null)}
-        onSubmit={editorState?.mode === "edit" ? handleUpdateSprint : handleCreateSprint}
-        onDelete={editorState?.mode === "edit" ? handleDeleteSprint : undefined}
-        sprint={editorState?.sprint ?? null}
-        sprintCount={detail.sprints.length}
-        deleteImpact={deleteImpact}
-      />
+      {isEditorOpen ? (
+        <CreateSprintModal
+          projectId={projectId}
+          isOpen={isEditorOpen}
+          mode={editorState?.mode ?? "create"}
+          onClose={() => setEditorState(null)}
+          onSubmit={editorState?.mode === "edit" ? handleUpdateSprint : handleCreateSprint}
+          onDelete={editorState?.mode === "edit" ? handleDeleteSprint : undefined}
+          sprint={editorState?.sprint ?? null}
+          sprintCount={detail.sprints.length}
+          deleteImpact={deleteImpact}
+        />
+      ) : null}
     </>
   );
 }
