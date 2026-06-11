@@ -82,6 +82,17 @@ export async function deletePushSubscriptionAction(endpoint: string) {
         if (!user) return { success: false as const, error: "Unauthorized" };
         if (typeof endpoint !== "string" || !endpoint) return { success: false as const, error: "Invalid endpoint" };
 
+        const subscription = await db
+            .select({ userId: pushSubscriptions.userId })
+            .from(pushSubscriptions)
+            .where(eq(pushSubscriptions.endpoint, endpoint))
+            .limit(1)
+            .then(res => res[0]);
+
+        if (subscription && subscription.userId !== user.id) {
+            return { success: false as const, error: "Forbidden" };
+        }
+
         await db
             .delete(pushSubscriptions)
             .where(and(
