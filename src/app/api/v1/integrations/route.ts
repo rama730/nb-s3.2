@@ -1,20 +1,19 @@
 import { and, eq, isNotNull, isNull, sql } from "drizzle-orm";
-import { jsonError, jsonSuccess, requireAuthenticatedUser } from "@/app/api/v1/_shared";
+import { jsonError, jsonSuccess, requireAuthenticatedUser, enforceRouteLimit } from "@/app/api/v1/_shared";
 import { db } from "@/lib/db";
 import { projects } from "@/lib/db/schema";
 import { getLatestPasswordChangeAt } from "@/lib/security/audit";
 import { buildIntegrationsData } from "@/lib/settings/integrations";
 
-export async function GET() {
+export async function GET(request: Request) {
     const auth = await requireAuthenticatedUser();
-    if (auth.response) {
-        return auth.response;
+    if (!auth.user || auth.response) {
+        return auth.response || new Response("Unauthorized", { status: 401 });
     }
 
     const { user } = auth;
-    if (!user) {
-        return jsonError("Not authenticated", 401, "UNAUTHORIZED");
-    }
+    const limitResponse = await enforceRouteLimit(request, `api:integrations:${user.id}`, 60, 60);
+    if (limitResponse) return limitResponse;
 
     const githubUsageRows = await db
         .select({
