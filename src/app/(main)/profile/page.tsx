@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation'
 import type { ReactNode } from 'react'
+import { Suspense } from 'react'
 import { getProfileDetails, getUserProfile } from '@/lib/data/profile'
 import ProfileShell from '@/components/profile/ProfileShell'
 import { getViewerAuthContext } from '@/lib/server/viewer-context'
@@ -45,7 +46,7 @@ export async function generateMetadata() {
     })
 }
 
-export default async function ProfilePage() {
+async function ResolvedProfile() {
     const { user } = await getViewerAuthContext()
 
     if (!user) {
@@ -94,12 +95,18 @@ export default async function ProfilePage() {
         content = <ProfileShell initialData={profileData} profileId={profileData.profile.id} />
     }
 
+    return <>{content}</>
+}
+
+export default function ProfilePage({ searchParams }: { searchParams?: Promise<Record<string, string | string[] | undefined>> }) {
     return (
         <div
             data-scroll-root="route"
             className="h-full min-h-0 app-scroll app-scroll-y app-scroll-gutter overscroll-y-contain bg-white dark:bg-zinc-950"
         >
-            {content}
+            <Suspense fallback={<div className="h-full flex items-center justify-center animate-pulse text-zinc-500">Loading profile...</div>}>
+                <ResolvedProfile />
+            </Suspense>
         </div>
     )
 }
