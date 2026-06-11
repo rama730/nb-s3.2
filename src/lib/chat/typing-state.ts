@@ -17,7 +17,7 @@ export function normalizeTrackedConversationIds(
     const seen = new Set<string>();
 
     for (const conversationId of conversationIds) {
-        if (!conversationId || conversationId === 'new' || seen.has(conversationId)) continue;
+        if (!conversationId || conversationId === 'new' || conversationId.startsWith('draft:') || seen.has(conversationId)) continue;
         seen.add(conversationId);
         uniqueIds.push(conversationId);
     }
