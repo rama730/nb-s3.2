@@ -368,6 +368,8 @@ export function MetadataStrip({
         isLinkedTasksPanelOpen={isLinkedTasksPanelOpen}
         projectId={projectId}
         nodeId={node.id}
+        fileName={node.name}
+        mimeType={node.mimeType}
       />
     </div>
   );
