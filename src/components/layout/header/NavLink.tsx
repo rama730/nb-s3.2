@@ -20,7 +20,7 @@ export default function NavLink({ href, icon: Icon, label, isActive, badge, ...p
     return (
         <Link
             href={href}
-            prefetch={true}
+            prefetch={false}
             onPointerEnter={(event) => {
                 warmPrefetchRoute(href);
                 onPointerEnter?.(event);
