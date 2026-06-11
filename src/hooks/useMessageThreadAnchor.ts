@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { VirtuosoHandle } from 'react-virtuoso';
 import type { MessageWithSender } from '@/app/actions/messaging';
 
@@ -23,6 +23,7 @@ interface UseMessageThreadAnchorOptions {
      */
     bottomIndex: number;
     hasFocusTarget: boolean;
+    firstItemIndex: number;
 }
 
 interface LatestMessageChangeOptions {
@@ -163,9 +164,9 @@ export function useMessageThreadAnchor({
     conversationId,
     bottomIndex,
     hasFocusTarget,
+    firstItemIndex,
 }: UseMessageThreadAnchorOptions) {
     const virtuosoRef = useRef<VirtuosoHandle | null>(null);
-    const [firstItemIndex, setFirstItemIndex] = useState(START_INDEX);
     const [anchorState, setAnchorState] = useState(() => createMessageThreadAnchorState(hasFocusTarget));
     const anchorStateRef = useRef(anchorState);
     const previousLatestMessageIdRef = useRef<string | null>(null);
@@ -184,7 +185,6 @@ export function useMessageThreadAnchor({
     // Reset all state when the conversation changes.
     useEffect(() => {
         const nextState = createMessageThreadAnchorState(hasFocusTarget);
-        setFirstItemIndex(START_INDEX);
         anchorStateRef.current = nextState;
         setAnchorState(nextState);
         previousLatestMessageIdRef.current = null;
@@ -196,11 +196,6 @@ export function useMessageThreadAnchor({
             window.cancelAnimationFrame(pendingLatestScrollFrameRef.current);
             pendingLatestScrollFrameRef.current = null;
         }
-    }, []);
-
-    const decrementFirstItemIndex = useCallback((prependedCount: number) => {
-        if (prependedCount <= 0) return;
-        setFirstItemIndex((current) => current - prependedCount);
     }, []);
 
     const scheduleLatestScroll = useCallback((
@@ -290,9 +285,10 @@ export function useMessageThreadAnchor({
         applyAnchorState(reduceUserScrollIntent(anchorStateRef.current, direction));
     }, [applyAnchorState]);
 
-    return {
+    const canLoadOlderMessages = useCallback(() => shouldLoadOlderMessages(anchorStateRef.current), []);
+
+    return useMemo(() => ({
         virtuosoRef,
-        firstItemIndex,
         followBottom: anchorState.followBottom,
         anchorMode: anchorState.mode,
         isAtLatest: anchorState.isAtLatest,
@@ -306,7 +302,19 @@ export function useMessageThreadAnchor({
         handleLatestMessageChange,
         handleRange,
         scrollToLatest,
-        canLoadOlderMessages: () => shouldLoadOlderMessages(anchorStateRef.current),
-        decrementFirstItemIndex,
-    };
+        canLoadOlderMessages,
+    }), [
+        virtuosoRef,
+        anchorState.followBottom,
+        anchorState.mode,
+        anchorState.isAtLatest,
+        anchorState.unreadBelow,
+        noteUserScrollIntent,
+        enterFocusedMode,
+        handleAtBottomChange,
+        handleLatestMessageChange,
+        handleRange,
+        scrollToLatest,
+        canLoadOlderMessages,
+    ]);
 }
