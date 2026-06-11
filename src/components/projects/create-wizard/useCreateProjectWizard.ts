@@ -7,11 +7,12 @@ import { createProjectSchema, type CreateProjectInput, type OpenRoleInput } from
 import { generateSlug, generateProjectId } from '@/lib/utils/project-ids';
 import { toast } from 'sonner';
 import { TOTAL_PHASES, WizardPhaseId } from '@/constants/project-wizard';
-import { createProjectAction } from '@/app/actions/project';
+import { applyProjectReadmeCreationIntentAction, createProjectAction } from '@/app/actions/project';
 import { parseGithubRepo } from '@/lib/github/repo-preview';
 import { fetchGithubImportPreviewFolder, fetchGithubImportPreviewRoot } from '@/lib/github/import-client';
 import { shouldIgnorePath } from '@/lib/import/import-filters';
 import { getLifecycleStagesForProjectType } from '@/lib/projects/lifecycle-templates';
+import { buildProjectReadmeStarterDraft } from '@/lib/projects/readme-create-intent';
 import { buildProjectImportEventId, buildUploadManifestHash } from '@/lib/import/idempotency';
 import { buildProjectFileKey } from '@/lib/storage/project-file-key';
 
@@ -88,6 +89,12 @@ export function useCreateProjectWizard({ onClose, onSuccess, draftId }: UseCreat
                 title: '',
             },
             import_source: { type: 'scratch' },
+            readme: {
+                mode: 'starter',
+                sourcePath: null,
+                publishOnCreate: false,
+                includeRoles: true,
+            },
             metadata: {},
         },
     });
@@ -463,10 +470,58 @@ export function useCreateProjectWizard({ onClose, onSuccess, draftId }: UseCreat
         const importType = data.import_source?.type || 'scratch';
         let createdProjectId: string | null = null;
         let uploadSessionContext: { sessionId?: string; manifestHash?: string } | null = null;
+        const resolvedRoles = openRoles.filter((role) => (role.role || '').trim().length > 0);
+        const readmeIntent = data.readme ?? {
+            mode: 'starter' as const,
+            sourcePath: null,
+            publishOnCreate: false,
+            includeRoles: true,
+        };
+        let readmeApplied = false;
+
+        const applyReadmeSetup = async (projectId: string) => {
+            if (readmeApplied) return;
+            if (readmeIntent.mode === 'skip') {
+                readmeApplied = true;
+                return;
+            }
+
+            try {
+                const starterContent = buildProjectReadmeStarterDraft({
+                    title: data.title,
+                    shortDescription: data.short_description,
+                    description: data.description,
+                    projectType: data.project_type === 'other'
+                        ? data.custom_project_type || data.project_type
+                        : data.project_type,
+                    technologies: data.technologies_used || [],
+                    tags: data.tags || [],
+                    roles: resolvedRoles,
+                    includeRoles: readmeIntent.includeRoles !== false,
+                });
+                const readmeResult = await applyProjectReadmeCreationIntentAction(projectId, {
+                    ...readmeIntent,
+                    starterContent,
+                });
+                readmeApplied = true;
+
+                if (!readmeResult.success) {
+                    console.warn('[create-project] README setup failed', readmeResult.error);
+                    return;
+                }
+
+                if (readmeResult.status === 'not_found') {
+                    toast.info('Project created. README source was not ready yet, so you can import it later from the README tab.');
+                }
+            } catch (error) {
+                console.warn('[create-project] README setup failed', error);
+            }
+        };
+
         try {
             const result = await createProjectAction({
                 ...data,
-                roles: openRoles.filter(r => (r.role || '').trim().length > 0),
+                roles: resolvedRoles,
                 slug: generateSlug(data.title.trim()),
                 project_id: generateProjectId(data.title.trim()),
             });
@@ -602,6 +657,7 @@ export function useCreateProjectWizard({ onClose, onSuccess, draftId }: UseCreat
                     }
                 }
 
+                await applyReadmeSetup(uploadProjectId);
                 setUploadProgress({ percent: 100, currentFile: '', isUploading: false });
 
                 if (!uploadRes.success) {
@@ -610,12 +666,21 @@ export function useCreateProjectWizard({ onClose, onSuccess, draftId }: UseCreat
                     toast.success('Project created and folder imported!');
                 }
             } else {
+                if (createdProjectId) {
+                    await applyReadmeSetup(createdProjectId);
+                }
                 toast.success('Project created successfully!');
+            }
+
+            if (createdProjectId && !readmeApplied) {
+                await applyReadmeSetup(createdProjectId);
             }
 
             const { draftStore } = await import('@/lib/storage/draft-store');
             await draftStore.clear();
-            onSuccess?.(createdProjectId);
+            if (createdProjectId) {
+                onSuccess?.(createdProjectId);
+            }
             onClose();
         } catch (error: any) {
             // If upload import failed after project creation, mark syncStatus=failed so Files tab can show retry UI.
