@@ -29,10 +29,18 @@ export function useConversationTypingIndex(
     const currentUserIdRef = useRef(currentUserId);
     const subscriptionsRef = useRef(new Map<string, ReturnType<typeof subscribePresenceRoom>>());
     const timersRef = useRef(new Map<string, Map<string, ReturnType<typeof setTimeout>>>());
-    const trackedConversationIds = useMemo(
-        () => normalizeTrackedConversationIds(conversationIds),
-        [conversationIds],
-    );
+    const conversationIdsRef = useRef<string[]>([]);
+    const trackedConversationIds = useMemo(() => {
+        const uniqueIds = normalizeTrackedConversationIds(conversationIds);
+        if (
+            conversationIdsRef.current.length === uniqueIds.length &&
+            conversationIdsRef.current.every((id, index) => id === uniqueIds[index])
+        ) {
+            return conversationIdsRef.current;
+        }
+        conversationIdsRef.current = uniqueIds;
+        return uniqueIds;
+    }, [conversationIds]);
 
     const clearConversationTimers = useCallback((conversationId: string) => {
         const conversationTimers = timersRef.current.get(conversationId);
