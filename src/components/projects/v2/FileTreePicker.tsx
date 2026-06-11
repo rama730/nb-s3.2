@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback, memo } from "react";
-import { getProjectNodes } from "@/app/actions/files";
+import { getProjectNodes } from "@/app/actions/files/nodes";
 import { 
     Folder, 
     FolderOpen, 
@@ -46,7 +46,7 @@ export default function FileTreePicker({
             setRootNodes(nodes);
             
             // Auto-expand root folder if only one exists
-            if (nodes.length === 1 && nodes[0].type === 'folder') {
+            if (nodes.length === 1 && nodes[0] && nodes[0].type === 'folder') {
                 const rootId = nodes[0].id;
                 setExpandedNodes(new Set([rootId]));
                 const childRes = await getProjectNodes(projectId, rootId);
