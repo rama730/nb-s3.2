@@ -3,6 +3,7 @@ import { profiles, reservedUsernames, usernameAliases } from '@/lib/db/schema'
 import { logger } from '@/lib/logger'
 import { onboardingError, type OnboardingError } from '@/lib/onboarding/errors'
 import { normalizeUsername, sanitizeUsernameInput, validateUsername } from '@/lib/validations/username'
+import { cache } from 'react'
 
 export type UsernameClaim = {
     username: string
@@ -198,7 +199,7 @@ export async function ensureUsernameClaimable(params: {
     return result.normalizedUsername
 }
 
-export async function resolvePublicUsernameRoute(params: {
+export async function resolvePublicUsernameRouteNoCache(params: {
     username: string
     repo?: UsernameRepository
 }): Promise<PublicUsernameRouteResolution> {
@@ -279,6 +280,22 @@ export async function resolvePublicUsernameRoute(params: {
         userId: claim.userId,
         matchedAlias: normalizedUsername,
     }
+}
+
+const resolvePublicUsernameRouteCached = cache(
+    async (username: string): Promise<PublicUsernameRouteResolution> => {
+        return resolvePublicUsernameRouteNoCache({ username })
+    }
+)
+
+export async function resolvePublicUsernameRoute(params: {
+    username: string
+    repo?: UsernameRepository
+}): Promise<PublicUsernameRouteResolution> {
+    if (params.repo) {
+        return resolvePublicUsernameRouteNoCache(params)
+    }
+    return resolvePublicUsernameRouteCached(params.username)
 }
 
 function deterministicSuffix(seed: string) {
