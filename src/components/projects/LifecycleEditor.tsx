@@ -13,12 +13,42 @@ interface LifecycleEditorProps {
 
 export function LifecycleEditor({ stages, onChange, currentStageIndex = 0 }: LifecycleEditorProps) {
     const [newStage, setNewStage] = useState("");
+    const [errorMsg, setErrorMsg] = useState("");
+
+    const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const val = e.target.value;
+        const cleaned = val.replace(/[^\p{L}\p{N}\s&]/gu, "");
+        
+        let msg = "";
+        if (cleaned !== val) {
+            msg = "Only letters, numbers, spaces, and & are allowed";
+        } else {
+            const trimmed = cleaned.trim().replace(/\s+/g, " ");
+            if (trimmed && stages.some((s) => s.toLowerCase() === trimmed.toLowerCase())) {
+                msg = "Stage name already exists";
+            }
+        }
+        setErrorMsg(msg);
+        setNewStage(cleaned);
+    };
 
     const handleAdd = () => {
-        if (newStage.trim()) {
-            onChange([...stages, newStage.trim()]);
-            setNewStage("");
+        const trimmed = newStage.trim().replace(/\s+/g, " ");
+        if (!trimmed) return;
+
+        if (trimmed.length < 2) {
+            setErrorMsg("Stage name must be at least 2 characters");
+            return;
         }
+
+        if (stages.some((s) => s.toLowerCase() === trimmed.toLowerCase())) {
+            setErrorMsg("Stage name already exists");
+            return;
+        }
+
+        onChange([...stages, trimmed]);
+        setNewStage("");
+        setErrorMsg("");
     };
 
     const handleRemove = (index: number) => {
@@ -39,22 +69,30 @@ export function LifecycleEditor({ stages, onChange, currentStageIndex = 0 }: Lif
 
     return (
         <div className="space-y-4">
-            <div className="flex gap-2">
-                <input
-                    value={newStage}
-                    onChange={(e) => setNewStage(e.target.value)}
-                    onKeyDown={handleKeyDown}
-                    placeholder="Add a stage (e.g. 'Design Review')"
-                    className="flex-1 px-4 py-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-sm focus:ring-2 focus:ring-indigo-500/20 outline-none"
-                />
-                <button
-                    type="button"
-                    onClick={handleAdd}
-                    disabled={!newStage.trim()}
-                    className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                >
-                    <Plus className="w-4 h-4" />
-                </button>
+            <div className="space-y-1.5">
+                <div className="flex gap-2">
+                    <input
+                        value={newStage}
+                        onChange={handleChange}
+                        onKeyDown={handleKeyDown}
+                        maxLength={35}
+                        placeholder="Add a stage (e.g. 'Design Review')"
+                        className="flex-1 px-4 py-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-sm focus:ring-2 focus:ring-indigo-500/20 outline-none"
+                    />
+                    <button
+                        type="button"
+                        onClick={handleAdd}
+                        disabled={!newStage.trim() || !!errorMsg}
+                        className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    >
+                        <Plus className="w-4 h-4" />
+                    </button>
+                </div>
+                {errorMsg && (
+                    <p className="text-xs text-red-500 font-medium px-1 animate-in slide-in-from-top-1 duration-200">
+                        {errorMsg}
+                    </p>
+                )}
             </div>
 
             <Reorder.Group axis="y" values={stages} onReorder={handleReorder} className="space-y-2">
