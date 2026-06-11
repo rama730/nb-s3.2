@@ -3,6 +3,7 @@ export type ProjectDetailMetadataSource = {
   title?: string | null;
   shortDescription?: string | null;
   description?: string | null;
+  readmeExcerpt?: string | null;
   coverImage?: string | null;
   coverImageWidth?: number | null;
   coverImageHeight?: number | null;
@@ -41,6 +42,7 @@ export function buildProjectDetailMetadataInput(
   const description =
     project?.shortDescription?.trim()
     || project?.description?.trim()
+    || project?.readmeExcerpt?.trim()
     || `Explore ${resolvedTitle} on Edge.`;
   const projectImage = project?.coverImage?.trim() || null;
   const imageWidth = projectImage ? normalizeImageDimension(project?.coverImageWidth, 1200) : 1200;
