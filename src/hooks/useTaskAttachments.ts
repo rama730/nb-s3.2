@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { ProjectNode } from "@/lib/db/schema";
-import { getTaskAttachments } from "@/app/actions/files";
+import { getTaskAttachments } from "@/app/actions/files/links";
 import { useRealtime } from "@/components/providers/RealtimeProvider";
 import { subscribeTaskResource } from "@/lib/realtime/task-resource";
 import { createVisibilityAwareInterval } from "@/lib/utils/visibility";
