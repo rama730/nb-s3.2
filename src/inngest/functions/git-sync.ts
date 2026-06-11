@@ -2,12 +2,14 @@ import { inngest } from "../client";
 import simpleGit from "simple-git";
 import { db } from "@/lib/db";
 import { projects, projectNodes, projectNodeEvents, projectNodeLocks } from "@/lib/db/schema";
-import { eq, and, isNull, lt, sql } from "drizzle-orm";
+import { eq, and, isNull, lt, sql, inArray } from "drizzle-orm";
 import { createAdminClient } from "@/lib/supabase/server";
 import { tmpdir } from "os";
-import { mkdtemp, rm, readFile, writeFile, mkdir } from "fs/promises";
+import { mkdtemp, rm, readFile, writeFile, mkdir, readdir, stat } from "fs/promises";
 import { join, relative, dirname } from "path";
-import { lstatSync, readdirSync } from "fs";
+import { pipeline } from "stream/promises";
+import { createWriteStream, createReadStream } from "fs";
+import { Readable } from "stream";
 import { createHash, randomUUID } from "crypto";
 import { buildProjectFileKey } from "@/lib/storage/project-file-key";
 import { appendSafePathSegment, resolvePathUnderRoot } from "@/lib/security/path-safety";
@@ -46,20 +48,18 @@ function computeFileHash(content: Buffer): string {
     return createHash("sha256").update(content).digest("hex");
 }
 
-function walkDir(dir: string, base: string = dir): string[] {
-    const results: string[] = [];
-    for (const entry of readdirSync(dir)) {
-        if (entry === ".git") continue;
-        const full = appendSafePathSegment(dir, entry, "repository entry");
-        const stat = lstatSync(full);
-        if (stat.isSymbolicLink()) continue;
-        if (stat.isDirectory()) {
-            results.push(...walkDir(full, base));
+async function* walkDir(dir: string, base: string = dir): AsyncGenerator<string> {
+    const entries = await readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+        if (entry.name === ".git") continue;
+        const full = appendSafePathSegment(dir, entry.name, "repository entry");
+        if (entry.isSymbolicLink()) continue;
+        if (entry.isDirectory()) {
+            yield* walkDir(full, base);
         } else {
-            results.push(relative(base, full));
+            yield relative(base, full);
         }
     }
-    return results;
 }
 
 function buildNodePath(
@@ -214,6 +214,7 @@ export const gitPush = inngest.createFunction(
                 try {
                     await cloneRepository(project.githubRepoUrl!, tempDir, branch, access.token);
                     assertRepositoryWithinBudgets(tempDir, { job: "git push", projectId });
+                    const adminClient = await createAdminClient();
 
                     const activeNodes = await db
                         .select({
@@ -235,8 +236,10 @@ export const gitPush = inngest.createFunction(
                     const nodesById = new Map(
                         activeNodes.map((n) => [n.id, { name: n.name, parentId: n.parentId }]),
                     );
-                    const adminClient = await createAdminClient();
-                    const repoFiles = new Set(walkDir(tempDir));
+                    const repoFiles = new Set<string>();
+                    for await (const file of walkDir(tempDir)) {
+                        repoFiles.add(file);
+                    }
 
                     const fileNodes = activeNodes.filter((n) => n.type === "file" && n.s3Key);
                     await runWithConcurrency(fileNodes, GITHUB_WORKER_BUDGETS.applyConcurrency, async (node) => {
@@ -269,19 +272,21 @@ export const gitPush = inngest.createFunction(
                             return;
                         }
 
-                        const buffer = Buffer.from(await data.arrayBuffer());
-                        const workspaceHash = computeFileHash(buffer);
-
+                        let existingHash: string | null = null;
                         try {
-                            const existingBuffer = await readFile(targetPath);
-                            if (computeFileHash(existingBuffer) === workspaceHash) {
-                                return;
-                            }
+                            const hashStream = createHash("sha256");
+                            await pipeline(createReadStream(targetPath), hashStream);
+                            existingHash = hashStream.digest("hex");
                         } catch {
-                            // Missing or unreadable file should be rewritten from workspace state.
+                            // Missing or unreadable file
                         }
 
-                        await writeFile(targetPath, buffer);
+                        if (existingHash === node.gitHash) {
+                            return; // Already matched database version
+                        }
+
+                        const writeStream = createWriteStream(targetPath);
+                        await pipeline(Readable.fromWeb(data.stream() as any), writeStream);
                     });
 
                     await runWithConcurrency(
@@ -428,7 +433,10 @@ export const gitPull = inngest.createFunction(
                     await cloneRepository(project.githubRepoUrl!, tempDir, branch, access.token);
                     assertRepositoryWithinBudgets(tempDir, { job: "git pull", projectId });
 
-                    const repoFiles = walkDir(tempDir);
+                    const repoFiles: string[] = [];
+                    for await (const file of walkDir(tempDir)) {
+                        repoFiles.push(file);
+                    }
 
                     const existingNodes = await db
                         .select({
@@ -492,12 +500,19 @@ export const gitPull = inngest.createFunction(
                             })
                             .returning({ id: projectNodes.id });
 
+                        if (!created) {
+                            throw new Error("Failed to create folder node");
+                        }
                         folderCache.set(folderPath, created.id);
                         return created.id;
                     }
 
                     let newCount = 0;
                     let updatedCount = 0;
+                    let deletedCount = 0;
+
+                    const nodesToUpsert: any[] = [];
+                    const s3UploadPromises: Promise<any>[] = [];
 
                     for (const filePath of repoFiles) {
                         seenPaths.add(filePath);
@@ -514,50 +529,55 @@ export const gitPull = inngest.createFunction(
                             let nextS3Key = existingNode.s3Key ?? null;
 
                             if (nextS3Key) {
-                                const { error: updateError } = await adminClient.storage
-                                    .from("project-files")
-                                    .update(nextS3Key, content, {
-                                        contentType: "application/octet-stream",
-                                        upsert: true,
-                                    });
-                                if (updateError) {
-                                    logger.warn("github.sync.pull.storage.update_failed", {
-                                        projectId,
-                                        s3Key: nextS3Key,
-                                        hash,
-                                        error: updateError.message,
-                                    });
-                                    continue;
-                                }
+                                s3UploadPromises.push((async () => {
+                                    const { error: updateError } = await adminClient.storage
+                                        .from("project-files")
+                                        .update(nextS3Key, content, {
+                                            contentType: "application/octet-stream",
+                                            upsert: true,
+                                        });
+                                    if (updateError) {
+                                        logger.warn("github.sync.pull.storage.update_failed", {
+                                            projectId,
+                                            s3Key: nextS3Key,
+                                            hash,
+                                            error: updateError.message,
+                                        });
+                                    }
+                                })());
                             } else {
                                 const createdS3Key = buildProjectFileKey(projectId, `${randomUUID()}/${fileName}`);
-                                const { error: uploadError } = await adminClient.storage
-                                    .from("project-files")
-                                    .upload(createdS3Key, content, {
-                                        contentType: "application/octet-stream",
-                                    });
-                                if (uploadError) {
-                                    logger.warn("github.sync.pull.storage.upload_failed_missing_key", {
-                                        projectId,
-                                        s3Key: createdS3Key,
-                                        hash,
-                                        nodeId: existingNode.id,
-                                        error: uploadError.message,
-                                    });
-                                    continue;
-                                }
+                                s3UploadPromises.push((async () => {
+                                    const { error: uploadError } = await adminClient.storage
+                                        .from("project-files")
+                                        .upload(createdS3Key, content, {
+                                            contentType: "application/octet-stream",
+                                        });
+                                    if (uploadError) {
+                                        logger.warn("github.sync.pull.storage.upload_failed_missing_key", {
+                                            projectId,
+                                            s3Key: createdS3Key,
+                                            hash,
+                                            nodeId: existingNode.id,
+                                            error: uploadError.message,
+                                        });
+                                    }
+                                })());
                                 nextS3Key = createdS3Key;
                             }
 
-                            await db
-                                .update(projectNodes)
-                                .set({
-                                    s3Key: nextS3Key,
-                                    gitHash: hash,
-                                    size: content.length,
-                                    updatedAt: new Date(),
-                                })
-                                .where(eq(projectNodes.id, existingNode.id));
+                            nodesToUpsert.push({
+                                id: existingNode.id,
+                                projectId,
+                                parentId: existingNode.parentId,
+                                type: "file",
+                                name: fileName,
+                                s3Key: nextS3Key,
+                                size: content.length,
+                                gitHash: hash,
+                                createdBy: userId,
+                                updatedAt: new Date(),
+                            });
                             updatedCount++;
                         } else {
                             const dir = dirname(filePath);
@@ -565,23 +585,25 @@ export const gitPull = inngest.createFunction(
                             const fileName = filePath.split("/").pop() ?? filePath;
 
                             const s3Key = buildProjectFileKey(projectId, `${randomUUID()}/${fileName}`);
-                            const { error: uploadError } = await adminClient.storage
-                                .from("project-files")
-                                .upload(s3Key, content, {
-                                    contentType: "application/octet-stream",
-                                });
+                            s3UploadPromises.push((async () => {
+                                const { error: uploadError } = await adminClient.storage
+                                    .from("project-files")
+                                    .upload(s3Key, content, {
+                                        contentType: "application/octet-stream",
+                                    });
 
-                            if (uploadError) {
-                                logger.warn("github.sync.pull.storage.upload_failed", {
-                                    projectId,
-                                    s3Key,
-                                    hash,
-                                    error: uploadError.message,
-                                });
-                                continue;
-                            }
+                                if (uploadError) {
+                                    logger.warn("github.sync.pull.storage.upload_failed", {
+                                        projectId,
+                                        s3Key,
+                                        hash,
+                                        error: uploadError.message,
+                                    });
+                                }
+                            })());
 
-                            await db.insert(projectNodes).values({
+                            nodesToUpsert.push({
+                                id: randomUUID(),
                                 projectId,
                                 parentId,
                                 type: "file",
@@ -595,17 +617,39 @@ export const gitPull = inngest.createFunction(
                         }
                     }
 
-                    let deletedCount = 0;
+                    // Await all parallel uploads
+                    await Promise.all(s3UploadPromises);
+
+                    // Bulk upsert new and updated nodes
+                    if (nodesToUpsert.length > 0) {
+                        await db.insert(projectNodes)
+                            .values(nodesToUpsert)
+                            .onConflictDoUpdate({
+                                target: projectNodes.id,
+                                set: {
+                                    s3Key: sql`excluded.s3_key`,
+                                    gitHash: sql`excluded.git_hash`,
+                                    size: sql`excluded.size`,
+                                    updatedAt: sql`excluded.updated_at`,
+                                }
+                            });
+                    }
+
+                    const idsToDelete: string[] = [];
                     for (const node of existingNodes) {
                         if (node.type !== "file") continue;
                         const path = buildNodePath(node.id, nodesById);
                         if (!seenPaths.has(path)) {
-                            await db
-                                .update(projectNodes)
-                                .set({ deletedAt: new Date(), deletedBy: userId })
-                                .where(eq(projectNodes.id, node.id));
-                            deletedCount += 1;
+                            idsToDelete.push(node.id);
                         }
+                    }
+
+                    if (idsToDelete.length > 0) {
+                        await db
+                            .update(projectNodes)
+                            .set({ deletedAt: new Date(), deletedBy: userId })
+                            .where(inArray(projectNodes.id, idsToDelete));
+                        deletedCount = idsToDelete.length;
                     }
 
                     const latestSha = await readLatestCommitSha(tempDir);
