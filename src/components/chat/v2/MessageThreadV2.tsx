@@ -13,7 +13,7 @@ import { useDeliveryAcks } from '@/hooks/useDeliveryAcks';
 import { useMessageWorkLinks } from '@/hooks/useMessageWorkLinks';
 import { useMessageThreadAnchor } from '@/hooks/useMessageThreadAnchor';
 import { formatMessageCalendarLabel } from '@/lib/messages/date-buckets';
-import { buildMessageThreadModel } from '@/lib/messages/thread-items';
+import { buildMessageThreadModel, type MessageThreadItem } from '@/lib/messages/thread-items';
 import { MessageBubbleV2 } from './MessageBubbleV2';
 import { BulkActionsBar } from './BulkActionsBar';
 import { ScrollToBottomFab } from './ScrollToBottomFab';
@@ -51,11 +51,18 @@ interface MessageThreadV2Props {
     onClearFocusTarget?: () => void;
     onDismissContextJumpState?: () => void;
     onBulkDelete?: (messageIds: string[]) => void;
+    conversationType?: 'dm' | 'group' | 'project_group';
 }
 
 const EMPTY_PINNED_MESSAGES: MessageWithSender[] = [];
 const EMPTY_TYPING_USERS: TypingUser[] = [];
 const OLDER_MESSAGES_PRELOAD_THRESHOLD = 6;
+const LINKED_WORK_RECENT_MESSAGE_COUNT = 80;
+
+function areStringArraysEqual(left: readonly string[], right: readonly string[]) {
+    if (left.length !== right.length) return false;
+    return left.every((value, index) => value === right[index]);
+}
 
 function messageOrderTime(message: MessageWithSender) {
     const value = message.createdAt instanceof Date ? message.createdAt : new Date(message.createdAt);
@@ -71,6 +78,7 @@ function compareMessageOrder(left: MessageWithSender, right: MessageWithSender) 
 
 export function MessageThreadV2({
     conversationId,
+    conversationType = 'dm',
     messages,
     pinnedMessages = EMPTY_PINNED_MESSAGES,
     typingUsers = EMPTY_TYPING_USERS,
@@ -120,22 +128,78 @@ export function MessageThreadV2({
     const { ackDelivery } = useDeliveryAcks(viewerId, conversationId);
     const { markRead } = useMarkMessagesRead(conversationId, viewerId);
     const ackedMessageIdsRef = useRef<Set<string>>(new Set());
-    const threadModel = useMemo(() => buildMessageThreadModel({
-        conversationId,
-        messages,
-        viewerId,
-        viewerUnreadCount: 0,
-    }), [conversationId, messages, viewerId]);
+    const items = useMemo(() => {
+        return buildMessageThreadModel({
+            conversationId,
+            messages,
+            viewerId,
+            viewerUnreadCount: 0,
+        }).items;
+    }, [conversationId, messages, viewerId]);
+
+    const prevMessagesRef = useRef(messages);
+    const prevConversationIdRef = useRef(conversationId);
+    const prevItemsLengthRef = useRef(items.length);
+    const [firstItemIndex, setFirstItemIndex] = useState(1_000_000);
+    const [justLoadedOlderMessages, setJustLoadedOlderMessages] = useState(false);
+
+    if (conversationId !== prevConversationIdRef.current) {
+        prevConversationIdRef.current = conversationId;
+        prevMessagesRef.current = messages;
+        prevItemsLengthRef.current = items.length;
+        setFirstItemIndex(1_000_000);
+        setJustLoadedOlderMessages(false);
+    } else if (messages !== prevMessagesRef.current) {
+        const prevMessages = prevMessagesRef.current;
+        prevMessagesRef.current = messages;
+
+        const prevFirstMsgId = prevMessages[0]?.id ?? null;
+        const currentFirstMsg = messages[0] ?? null;
+        const loadedOlderMessages = Boolean(
+            prevFirstMsgId
+            && currentFirstMsg
+            && prevFirstMsgId !== currentFirstMsg.id
+            && compareMessageOrder(currentFirstMsg, prevMessages[0]!) < 0
+        );
+
+        const prependedCount = items.length - prevItemsLengthRef.current;
+        prevItemsLengthRef.current = items.length;
+
+        if (loadedOlderMessages && prependedCount > 0) {
+            setFirstItemIndex(prev => prev - prependedCount);
+            setJustLoadedOlderMessages(true);
+        }
+    }
+
+    const orderedMessages = messages;
+
     const canonicalUnreadModel = useMemo(() => buildMessageThreadModel({
         conversationId,
         messages,
         viewerId,
         viewerUnreadCount,
     }), [conversationId, messages, viewerId, viewerUnreadCount]);
-    const orderedMessages = threadModel.messages;
-    const messageIds = useMemo(() => orderedMessages.map((message) => message.id), [orderedMessages]);
-    const linkedWorkQuery = useMessageWorkLinks(conversationId, messageIds);
+    const recentLinkedWorkMessageIds = useMemo(
+        () => orderedMessages.slice(-LINKED_WORK_RECENT_MESSAGE_COUNT).map((message) => message.id),
+        [orderedMessages],
+    );
+    const [visibleLinkedWorkMessageIds, setVisibleLinkedWorkMessageIds] = useState<string[]>([]);
+    const linkedWorkMessageIds = useMemo(() => {
+        const result: string[] = [];
+        const seen = new Set<string>();
+        for (const id of [...visibleLinkedWorkMessageIds, ...recentLinkedWorkMessageIds]) {
+            if (seen.has(id)) continue;
+            seen.add(id);
+            result.push(id);
+        }
+        return result;
+    }, [recentLinkedWorkMessageIds, visibleLinkedWorkMessageIds]);
+    const linkedWorkQuery = useMessageWorkLinks(conversationId, linkedWorkMessageIds);
     const linkedWorkByMessageId = linkedWorkQuery.data ?? {};
+
+    useEffect(() => {
+        setVisibleLinkedWorkMessageIds([]);
+    }, [conversationId]);
 
     // When the messages prop changes, ack delivery for any newly-seen messages
     // that are NOT from the viewer. This runs exactly once per message.
@@ -158,7 +222,6 @@ export function MessageThreadV2({
         ackedMessageIdsRef.current.clear();
     }, [conversationId]);
 
-    const items = threadModel.items;
     const unreadMessageIdSet = useMemo(
         () => new Set(canonicalUnreadModel.unreadMessageIds),
         [canonicalUnreadModel.unreadMessageIds],
@@ -239,7 +302,6 @@ export function MessageThreadV2({
     const bottomIndex = items.length - 1;
     const {
         virtuosoRef,
-        firstItemIndex,
         followBottom,
         isAtLatest,
         unreadBelow,
@@ -250,40 +312,23 @@ export function MessageThreadV2({
         handleRange,
         scrollToLatest,
         canLoadOlderMessages,
-        decrementFirstItemIndex,
     } = useMessageThreadAnchor({
         conversationId,
         bottomIndex,
         hasFocusTarget,
+        firstItemIndex,
     });
 
-    // When older messages are prepended, decrement firstItemIndex by the
-    // rendered flat-row delta so Virtuoso keeps the viewport anchored.
     const initialLatestAnchorConversationRef = useRef<string | null>(null);
-    const previousItemsLengthRef = useRef(items.length);
-    const previousFirstMessageRef = useRef<MessageWithSender | null>(orderedMessages[0] ?? null);
-    useEffect(() => {
-        const previousLength = previousItemsLengthRef.current;
-        const previousFirstMessage = previousFirstMessageRef.current;
-        const nextLength = items.length;
-        const nextFirstMessage = orderedMessages[0] ?? null;
-        previousItemsLengthRef.current = nextLength;
-        previousFirstMessageRef.current = nextFirstMessage;
 
-        if (previousLength === 0 || nextLength <= previousLength) return;
-        const loadedOlderMessages = Boolean(
-            previousFirstMessage
-            && nextFirstMessage
-            && previousFirstMessage.id !== nextFirstMessage.id
-            && compareMessageOrder(nextFirstMessage, previousFirstMessage) < 0,
-        );
-        if (loadedOlderMessages) {
-            decrementFirstItemIndex(nextLength - previousLength);
+    useEffect(() => {
+        if (justLoadedOlderMessages) {
+            setJustLoadedOlderMessages(false);
             if (!hasFocusTarget && followBottom) {
                 scrollToLatest('auto', 3);
             }
         }
-    }, [decrementFirstItemIndex, followBottom, hasFocusTarget, items.length, orderedMessages, scrollToLatest]);
+    }, [justLoadedOlderMessages, followBottom, hasFocusTarget, scrollToLatest]);
     const focusMessage = useCallback(async (
         messageId: string,
         source: MessageFocusSource = 'external',
@@ -319,7 +364,11 @@ export function MessageThreadV2({
             return true;
         }
 
-        return onRequestMessageContext(messageId);
+        const loadedContext = await onRequestMessageContext(messageId);
+        if (!loadedContext) {
+            toast.error('Original message is unavailable');
+        }
+        return loadedContext;
     }, [enterFocusedMode, firstItemIndex, messageDataIndexById, onRequestMessageContext, virtuosoRef]);
 
     useEffect(() => {
@@ -341,6 +390,15 @@ export function MessageThreadV2({
         olderMessagesRequestInFlightRef.current = true;
         onLoadMore();
     }, [canLoadOlderMessages, hasMore, isFetchingMore, onLoadMore]);
+
+    const handleSelectMessage = useCallback((message: MessageWithSender) => {
+        setIsSelectMode(true);
+        setSelectedMessageIds((current) => {
+            const next = new Set(current);
+            next.add(message.id);
+            return next;
+        });
+    }, []);
 
     useEffect(() => {
         const observedUnreadNodes = unreadVisibilityNodeByMessageIdRef.current;
@@ -456,32 +514,50 @@ export function MessageThreadV2({
         virtuosoRef.current?.autoscrollToBottom();
     }, [followBottom, hasFocusTarget, virtuosoRef]);
 
+    useEffect(() => {
+        const element = rootRef.current;
+        if (!element) return;
+
+        const handleTouchStart = (event: TouchEvent) => {
+            touchYRef.current = event.touches[0]?.clientY ?? null;
+        };
+
+        const handleTouchMove = (event: TouchEvent) => {
+            const nextY = event.touches[0]?.clientY ?? null;
+            const previousY = touchYRef.current;
+            touchYRef.current = nextY;
+            if (previousY === null || nextY === null) return;
+            const delta = nextY - previousY;
+            if (Math.abs(delta) < 4) return;
+            userInteractedAfterOpenRef.current = true;
+            noteUserScrollIntent(delta > 0 ? 'up' : 'down');
+        };
+
+        const handleWheel = (event: WheelEvent) => {
+            if (Math.abs(event.deltaY) < 4) return;
+            userInteractedAfterOpenRef.current = true;
+            noteUserScrollIntent(event.deltaY < 0 ? 'up' : 'down');
+        };
+
+        element.addEventListener('touchstart', handleTouchStart, { passive: true });
+        element.addEventListener('touchmove', handleTouchMove, { passive: true });
+        element.addEventListener('wheel', handleWheel, { passive: true });
+
+        return () => {
+            element.removeEventListener('touchstart', handleTouchStart);
+            element.removeEventListener('touchmove', handleTouchMove);
+            element.removeEventListener('wheel', handleWheel);
+        };
+    }, [noteUserScrollIntent]);
+
     return (
         <div
             ref={rootRef}
             className="relative flex min-h-0 flex-1 flex-col overflow-hidden"
-            onTouchStartCapture={(event) => {
-                touchYRef.current = event.touches[0]?.clientY ?? null;
-            }}
-            onTouchMoveCapture={(event) => {
-                const nextY = event.touches[0]?.clientY ?? null;
-                const previousY = touchYRef.current;
-                touchYRef.current = nextY;
-                if (previousY === null || nextY === null) return;
-                const delta = nextY - previousY;
-                if (Math.abs(delta) < 4) return;
-                userInteractedAfterOpenRef.current = true;
-                noteUserScrollIntent(delta > 0 ? 'up' : 'down');
-            }}
-            onWheelCapture={(event) => {
-                if (Math.abs(event.deltaY) < 4) return;
-                userInteractedAfterOpenRef.current = true;
-                noteUserScrollIntent(event.deltaY < 0 ? 'up' : 'down');
-            }}
         >
             {pinnedMessages.length > 0 && (
                 <div className={`border-b border-zinc-100 bg-zinc-50/80 dark:border-zinc-800 dark:bg-zinc-900/70 ${
-                    isPopup ? 'px-3 py-2' : 'px-5 py-2.5'
+                    isPopup ? 'px-3 py-2' : 'px-3 py-2'
                 }`}>
                     <div className="flex flex-wrap items-center gap-2">
                         <span className="whitespace-nowrap text-[11px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
@@ -507,7 +583,7 @@ export function MessageThreadV2({
             ) : (
                 <>
                     {contextJumpState ? (
-                        <div className={isPopup ? 'px-3 pt-2' : 'px-5 pt-3'}>
+                        <div className={isPopup ? 'px-3 pt-2' : 'px-3 pt-2'}>
                             <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-primary/15 bg-primary/5 px-3 py-2 text-xs text-primary">
                                 <span className="font-semibold uppercase tracking-wide">Viewing original message</span>
                                 <span className="text-primary/80">
@@ -540,11 +616,15 @@ export function MessageThreadV2({
                             </div>
                         </div>
                     ) : null}
-                    <div className="min-h-0 flex-1 overflow-hidden">
+	                    <div
+	                        className="msg-thread-mask min-h-0 flex-1 overflow-hidden"
+	                        data-surface={surface}
+	                    >
                         <Virtuoso
                             ref={virtuosoRef}
                             style={{ height: '100%', overscrollBehavior: 'contain', overflowX: 'hidden' }}
                             data={items}
+                            overscan={200}
                             firstItemIndex={firstItemIndex}
                             alignToBottom
                             initialTopMostItemIndex={
@@ -553,7 +633,6 @@ export function MessageThreadV2({
                                     : 0
                             }
                             atBottomThreshold={120}
-                            increaseViewportBy={isPopup ? { top: 80, bottom: 80 } : { top: 80, bottom: 80 }}
                             computeItemKey={(index, item) => item?.id ?? `message-thread-item-${index}`}
                             atBottomStateChange={handleAtBottomChange}
                             startReached={() => {
@@ -570,12 +649,14 @@ export function MessageThreadV2({
                                 // Wave 1: mark visible messages (from other senders) as read.
                                 // The hook dedups + batches, so pushing on every range
                                 // change is safe and cheap.
+                                const visibleMessageIdsForLinks: string[] = [];
                                 if (viewerId) {
                                     const visible: Array<{ id: string; senderId: string | null }> = [];
                                     let latestVisibleUnreadMessageId: string | null = null;
                                     for (let i = startDataIndex; i <= endDataIndex; i += 1) {
                                         const item = items[i];
                                         if (item?.type === 'message') {
+                                            visibleMessageIdsForLinks.push(item.message.id);
                                             visible.push({ id: item.message.id, senderId: item.message.senderId });
                                             if (unreadMessageIdSet.has(item.message.id)) {
                                                 latestVisibleUnreadMessageId = item.message.id;
@@ -589,31 +670,65 @@ export function MessageThreadV2({
                                         onVisibleReadWatermark?.(latestVisibleUnreadMessageId);
                                     }
                                 }
+                                if (!viewerId) {
+                                    for (let i = startDataIndex; i <= endDataIndex; i += 1) {
+                                        const item = items[i];
+                                        if (item?.type === 'message') {
+                                            visibleMessageIdsForLinks.push(item.message.id);
+                                        }
+                                    }
+                                }
+                                setVisibleLinkedWorkMessageIds((current) =>
+                                    areStringArraysEqual(current, visibleMessageIdsForLinks)
+                                        ? current
+                                        : visibleMessageIdsForLinks,
+                                );
                             }}
                             components={{
                                 Header: () =>
                                     isFetchingMore ? (
                                         <OlderMessagesLoader />
-                                    ) : null,
+                                    ) : (
+                                        <div className="h-8 shrink-0" aria-hidden="true" />
+                                    ),
                             }}
-                            itemContent={(_, item) => {
+                            itemContent={(index, item) => {
                                 if (item.type === 'date') {
                                     return <ThreadDateGroupHeader label={formatMessageCalendarLabel(item.dateKey)} />;
                                 }
                                 if (item.type === 'bottom-sentinel') {
-                                    return <ThreadBottomSentinel typingVisible={typingUsers.length > 0} />;
+                                    return <ThreadBottomSentinel typingVisible={typingUsers.length > 0} isPopup={isPopup} />;
+                                }
+                                if (item.type === 'unread-divider') {
+                                    return <ThreadUnreadDivider count={item.count} />;
                                 }
                                 if (item.type !== 'message') return null;
-                                return (
-                                    <div
+
+                                const dataIndex = index - firstItemIndex;
+                                const prevItem = items[dataIndex - 1];
+                                const nextItem = items[dataIndex + 1];
+                                const isConsecutiveFromPrev = prevItem?.type === 'message' && prevItem.message.senderId === item.message.senderId;
+                                const isConsecutiveToNext = nextItem?.type === 'message' && nextItem.message.senderId === item.message.senderId;
+
+                                const ptClass = isConsecutiveFromPrev ? 'pt-[2px]' : 'pt-2';
+                                const pbClass = isConsecutiveToNext ? 'pb-[2px]' : 'pb-2';
+
+                                const nextMessageSameSenderWithinTime = nextItem?.type === 'message'
+                                    && nextItem.message.senderId === item.message.senderId
+                                    && (new Date(nextItem.message.createdAt).getTime() - new Date(item.message.createdAt).getTime()) < 5 * 60 * 1000;
+	                                const showTimestamp = !nextMessageSameSenderWithinTime;
+                                    const canSelectMessage = !item.message.id.startsWith('temp-');
+
+	                                return (
+	                                    <div
                                         ref={unreadMessageIdSet.has(item.message.id)
                                             ? (node) => registerUnreadMessageRow(item.message.id, node)
                                             : undefined}
                                         id={`msg-${item.message.id}`}
-                                        className={`msg-message-row flex w-full max-w-full min-w-0 items-start gap-2 rounded-md py-1 ${isPopup ? 'px-3' : 'px-5'}`}
+                                        className={`msg-message-row flex w-full min-w-0 items-start gap-2 rounded-md ${ptClass} ${pbClass} px-3`}
                                     >
-                                        {isSelectMode && (
-                                            <input
+	                                        {isSelectMode && canSelectMessage && (
+	                                            <input
                                                 type="checkbox"
                                                 checked={selectedMessageIds.has(item.message.id)}
                                                 onChange={() => {
@@ -633,13 +748,18 @@ export function MessageThreadV2({
                                                 message={item.message}
                                                 linkedWork={linkedWorkByMessageId[item.message.id] ?? []}
                                                 showAvatar={item.showAvatar}
-                                                surface={surface}
-                                                onReply={onReply}
-                                                onTogglePin={onTogglePin}
+	                                                surface={surface}
+	                                                onReply={onReply}
+                                                    onSelectMessage={handleSelectMessage}
+	                                                onTogglePin={onTogglePin}
                                                 onFocusMessage={handleFocusMessage}
                                                 onContentLoad={handleContentLoad}
                                                 isFocusedReplyTarget={focusedMessage?.id === item.message.id}
-                                                focusSource={focusedMessage?.id === item.message.id ? focusedMessage.source : null}
+                                                focusSource={focusedMessage?.id === item.message.id ? focusedMessage?.source : null}
+                                                showTimestamp={showTimestamp}
+                                                conversationType={conversationType}
+                                                isConsecutiveFromPrev={isConsecutiveFromPrev}
+                                                isConsecutiveToNext={isConsecutiveToNext}
                                             />
                                         </div>
                                     </div>
@@ -660,7 +780,7 @@ export function MessageThreadV2({
             />
             <div aria-live="polite" className="sr-only">
                 {orderedMessages.length > 0 && orderedMessages[orderedMessages.length - 1]?.sender
-                    ? `${orderedMessages[orderedMessages.length - 1].sender?.fullName || 'Someone'}: ${orderedMessages[orderedMessages.length - 1].content || 'sent a message'}`
+                    ? `${orderedMessages[orderedMessages.length - 1]!.sender?.fullName || 'Someone'}: ${orderedMessages[orderedMessages.length - 1]!.content || 'sent a message'}`
                     : ''}
             </div>
             {isSelectMode && selectedMessageIds.size > 0 && (
@@ -700,7 +820,7 @@ function ThreadBottomDock({
 }) {
     return (
         <div
-            className={`pointer-events-none absolute bottom-0 left-0 right-0 z-10 h-14 ${isPopup ? 'px-3 pb-1 pt-1' : 'px-5 pb-1 pt-1'}`}
+            className={`pointer-events-none absolute bottom-2 left-0 right-0 z-10 flex flex-col justify-end ${isPopup ? 'px-3' : 'px-4'}`}
             aria-live="polite"
         >
             {typingUsers.length > 0 ? (
@@ -710,19 +830,38 @@ function ThreadBottomDock({
     );
 }
 
+function ThreadUnreadDivider({ count }: { count: number }) {
+    return (
+        <div className="flex justify-center px-4 py-3 relative">
+            <div className="absolute inset-x-6 top-1/2 -mt-px border-t border-primary/20" />
+            <span className="relative rounded-full border border-primary/20 bg-background/90 px-3 py-1 text-xs font-semibold text-primary shadow-sm backdrop-blur-sm">
+                {count} Unread Message{count === 1 ? '' : 's'}
+            </span>
+        </div>
+    );
+}
+
 function ThreadDateGroupHeader({ label }: { label: string }) {
     return (
-        <div className="msg-date-group-header flex justify-center px-4 py-2">
+        <div className="msg-date-group-header flex justify-center px-4 py-1">
             <span className="msg-date-pill shadow-sm">{label}</span>
         </div>
     );
 }
 
-function ThreadBottomSentinel({ typingVisible }: { typingVisible: boolean }) {
+function ThreadBottomSentinel({
+    typingVisible,
+    isPopup,
+}: {
+    typingVisible: boolean;
+    isPopup: boolean;
+}) {
+    const baseHeight = isPopup ? 84 : 92;
+    const height = typingVisible ? baseHeight + 28 : baseHeight;
     return (
         <div
             aria-hidden="true"
-            className={typingVisible ? 'h-14' : 'h-5'}
+            style={{ height: `${height}px` }}
         />
     );
 }
