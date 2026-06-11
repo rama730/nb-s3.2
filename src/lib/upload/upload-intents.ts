@@ -272,16 +272,17 @@ export async function finalizeUploadIntents(paramsList: Array<{
   expectedScope?: UploadIntentScope;
   expectedKind?: UploadIntentKind;
 }>) {
-  if (paramsList.length === 0) return [];
+  const firstParam = paramsList[0];
+  if (!firstParam) return;
 
   const keys = paramsList.map(p => p.storageKey);
-  const bucket = paramsList[0].bucket;
+  const bucket = firstParam.bucket;
 
   const intents = await db.query.uploadIntents.findMany({
     where: and(
       eq(uploadIntents.bucket, bucket),
       inArray(uploadIntents.storageKey, keys),
-      eq(uploadIntents.userId, paramsList[0].userId)
+      eq(uploadIntents.userId, firstParam.userId)
     )
   });
 
