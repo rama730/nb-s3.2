@@ -9,7 +9,7 @@ import type { getProjectGroupsPageV2 } from '@/app/actions/messaging/v2';
 import { cn } from '@/lib/utils';
 import { useProjectGroups } from '@/hooks/useMessagesV2';
 import { StackedAvatars } from '@/components/ui/StackedAvatars';
-import { formatMessagePreview } from './message-rendering';
+import { formatMessagePreview } from '@/lib/messages/preview';
 import { InboxListSkeletonV2 } from './MessagesSurfaceSkeletons';
 
 interface ProjectGroupsListV2Props {
