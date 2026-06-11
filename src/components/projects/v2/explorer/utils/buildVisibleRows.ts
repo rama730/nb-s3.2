@@ -108,7 +108,7 @@ export function buildVisibleRows(params: BuildVisibleRowsParams): VisibleRow[] {
     }
 
     for (let i = 0; i < sorted.length; i += 1) {
-      const id = sorted[i];
+      const id = sorted[i]!;
       const meta = folderMeta[filesParentKey(parentId)];
       const hasMore = !!meta?.hasMore;
       const isLastFile = i === sorted.length - 1;
