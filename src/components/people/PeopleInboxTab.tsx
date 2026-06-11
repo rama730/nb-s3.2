@@ -55,7 +55,7 @@ export default function PeopleInboxTab({ inboxPromise }: PeopleInboxTabProps) {
         toast.promise(acceptRequest.mutateAsync(id), {
             loading: 'Accepting...',
             success: 'Connection accepted',
-            error: 'Failed to accept'
+            error: (err) => err instanceof Error ? err.message : 'Failed to accept'
         });
     };
 
