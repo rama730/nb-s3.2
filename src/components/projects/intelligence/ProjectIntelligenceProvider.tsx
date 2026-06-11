@@ -32,7 +32,7 @@ export function ProjectIntelligenceProvider({ children, enableTranslation = fals
     // Mock detection of browser locale
     useEffect(() => {
         if (typeof window !== 'undefined') {
-            const browserLocale = navigator.language.split('-')[0];
+            const browserLocale = navigator.language.split('-')[0] || 'en';
             setLocale(browserLocale);
         }
     }, []);
