@@ -22,8 +22,8 @@ function normalizeTypedLinkLine(rawValue: string) {
     if (!trimmed) return null;
     const labeledMatch = trimmed.match(LABELED_URL_LINE_REGEX);
     if (labeledMatch) {
-        const label = labeledMatch[1].trim();
-        const normalizedValue = normalizeSafeExternalUrl(labeledMatch[2]);
+        const label = (labeledMatch[1] || "").trim();
+        const normalizedValue = normalizeSafeExternalUrl(labeledMatch[2] || "");
         if (!normalizedValue) return null;
         return `${label}: ${normalizedValue}`;
     }
@@ -89,10 +89,12 @@ export function normalizeApplicationMessageText(raw: string) {
 }
 
 export function resolveLifecycleStatus(
-    status: 'accepted' | 'rejected' | 'pending',
+    status: 'accepted' | 'rejected' | 'pending' | 'withdrawn' | 'proposed',
     decisionReason?: string | null,
 ): ApplicationLifecycleStatus {
     if (status === 'pending') return 'pending';
+    if (status === 'proposed') return 'proposed';
+    if (status === 'withdrawn') return 'withdrawn';
     if (status === 'accepted') return 'accepted';
     if (decisionReason === 'withdrawn_by_applicant') return 'withdrawn';
     if (decisionReason === 'role_filled') return 'role_filled';
