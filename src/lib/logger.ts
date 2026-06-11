@@ -11,7 +11,7 @@ interface LogContext {
 }
 
 const REDACT_KEY_PATTERN = /password|token|secret|authorization/i
-const ALLOWED_CONTEXT_KEY_PATTERN = /^(module|userId|viewerUserId|subjectUserId|targetUserId|actorUserId|requestId|sampleRate|route|action|status|success|errorCode|error|reason|failureReason|eventType|event|type|kind|scope|conversationId|projectId|taskId|nodeId|attachmentId|sessionId|uploadIntentId|deliveryId|durationMs|count|remainingCount|sizeBytes|generatedCount|requestedCount|available|blocked|canViewProfile|visibilityReason|connectionState|currentPercent|targetPercent|runId|metric|normalizedUsername|bucket|storageKey|contentType|limit|offset|cursor|attempt|allowed|routePath|path|code|routeId|subjectCount|viewerCount|finalized|removedObjects|expiredIntents|nextCursor|hasMore|version|createdAt|updatedAt|finalizedAt|redeemedAt|expiresAt|remaining|statusCode|method|_type)$/;
+const ALLOWED_CONTEXT_KEY_PATTERN = /^(module|userId|viewerUserId|subjectUserId|targetUserId|actorUserId|requestId|sampleRate|route|action|status|success|errorCode|error|message|failureKind|reason|failureReason|eventType|event|type|kind|scope|conversationId|projectId|taskId|nodeId|attachmentId|sessionId|uploadIntentId|deliveryId|durationMs|count|remainingCount|sizeBytes|generatedCount|requestedCount|available|blocked|canViewProfile|visibilityReason|connectionState|currentPercent|targetPercent|runId|metric|normalizedUsername|bucket|storageKey|contentType|limit|offset|cursor|attempt|allowed|routePath|path|code|routeId|subjectCount|viewerCount|finalized|removedObjects|expiredIntents|nextCursor|hasMore|version|createdAt|updatedAt|finalizedAt|redeemedAt|expiresAt|remaining|statusCode|method|_type)$/;
 
 const LEVEL_ORDER: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2, error: 3 }
 
@@ -84,6 +84,9 @@ function sanitizeValue(key: string, value: unknown): unknown {
     if (Array.isArray(value)) {
         return value.slice(0, 20).map((item) => sanitizeValue(key, item))
     }
+    if (value instanceof Error) {
+        return { message: value.message, stack: value.stack, name: value.name }
+    }
     if (value && typeof value === 'object') {
         const entries = Object.entries(value as Record<string, unknown>)
             .filter(([childKey]) => ALLOWED_CONTEXT_KEY_PATTERN.test(childKey) && !REDACT_KEY_PATTERN.test(childKey))
@@ -104,7 +107,13 @@ export const logger = {
     debug: (message: string, context?: LogContext) => emit('debug', message, context),
     info:  (message: string, context?: LogContext) => emit('info', message, context),
     warn:  (message: string, context?: LogContext) => emit('warn', message, context),
-    error: (message: string, context?: LogContext) => emit('error', message, context),
+    error: (message: string | Error, context?: LogContext) => {
+        if (message instanceof Error) {
+            emit('error', message.message, { ...context, error: message })
+        } else {
+            emit('error', message, context)
+        }
+    },
     metric: (metric: string, payload: Record<string, unknown>) => {
         recordOtlpMetric(metric, payload)
         emit('info', metric, { ...payload, _type: 'metric' })
