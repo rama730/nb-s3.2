@@ -6,7 +6,8 @@ type ApplicationEventName =
     | 'apply_withdrawn'
     | 'apply_accepted'
     | 'apply_rejected'
-    | 'apply_reopened';
+    | 'apply_reopened'
+    | 'apply_proposed';
 
 type ApplicationEventPayload = {
     applicationId: string;
