@@ -14,6 +14,7 @@ import AccountDetailsSection from "@/components/settings/AccountDetailsSection";
 import AccountDeletionWizard from "@/components/settings/AccountDeletionWizard";
 import PendingDeletionBanner from "@/components/settings/PendingDeletionBanner";
 import { getAccountDeletionStatus } from "@/app/actions/account";
+import { useAuth } from "@/lib/hooks/use-auth";
 
 export default function AccountPage() {
     const { showToast } = useToast();
@@ -24,7 +25,7 @@ export default function AccountPage() {
     }>({ pending: false });
     const [loadingStatus, setLoadingStatus] = useState(true);
     const router = useRouter();
-    const supabase = useMemo(() => createSupabaseBrowserClient(), []);
+    const { signOut } = useAuth();
 
     const loadDeletionStatus = useCallback(async () => {
         try {
@@ -42,9 +43,8 @@ export default function AccountPage() {
     }, [loadDeletionStatus]);
 
     const handleSignOut = async () => {
-        await supabase.auth.signOut();
+        await signOut();
         showToast("Signed out successfully", "info");
-        router.push("/login");
     };
 
     const handleDeleted = () => {
