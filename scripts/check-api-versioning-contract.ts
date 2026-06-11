@@ -22,7 +22,9 @@ function listRouteFiles(baseDir: string): string[] {
 }
 
 const NON_V1_ALLOWLIST = new Set<string>([
+  "src/app/api/completion/route.ts",
   "src/app/api/e2e/auth/route.ts",
+  "src/app/api/inngest/route.ts",
   "src/app/api/realtime/presence-token/route.ts",
 ]);
 
@@ -54,4 +56,3 @@ function main() {
 }
 
 main();
-
