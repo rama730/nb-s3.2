@@ -27,7 +27,6 @@ const PhaseLoadingPlaceholder = () => (
 );
 
 const Phase1SourceSelection = dynamic(() => import('./phases/Phase1SourceSelection'), { loading: PhaseLoadingPlaceholder, ssr: false });
-const Phase1TypeSelection = dynamic(() => import('./phases/Phase1TypeSelection'), { loading: PhaseLoadingPlaceholder, ssr: false });
 const Phase2Information = dynamic(() => import('./phases/Phase2Information'), { loading: PhaseLoadingPlaceholder, ssr: false });
 const Phase3TeamRoles = dynamic(() => import('./phases/Phase3TeamRoles'), { loading: PhaseLoadingPlaceholder, ssr: false });
 const Phase4Settings = dynamic(() => import('./phases/Phase4Settings'), { loading: PhaseLoadingPlaceholder, ssr: false });
@@ -85,11 +84,10 @@ export default function CreateProjectWizard({ onClose, onSuccess, draftId, initi
 
     // OPTIMIZATION: Prefetch next phase component to eliminate loading delay
     useEffect(() => {
-        if (phase === 1) import('./phases/Phase1TypeSelection');
-        else if (phase === 2) import('./phases/Phase2Information');
-        else if (phase === 3) import('./phases/Phase3TeamRoles');
-        else if (phase === 4) import('./phases/Phase4Settings');
-        else if (phase === 5) import('./phases/Phase5Review');
+        if (phase === 1) import('./phases/Phase2Information');
+        else if (phase === 2) import('./phases/Phase3TeamRoles');
+        else if (phase === 3) import('./phases/Phase4Settings');
+        else if (phase === 4) import('./phases/Phase5Review');
     }, [phase]);
 
     useEffect(() => {
@@ -195,6 +193,11 @@ export default function CreateProjectWizard({ onClose, onSuccess, draftId, initi
                             <form
                                 id="create-project-form"
                                 onSubmit={handleSubmit(onSubmit as any)}
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter' && e.target instanceof HTMLInputElement && e.target.type !== 'submit') {
+                                        e.preventDefault();
+                                    }
+                                }}
                                 className="space-y-8"
                             >
                                 <AnimatePresence mode="wait" initial={!reduceMotion}>
@@ -218,11 +221,10 @@ export default function CreateProjectWizard({ onClose, onSuccess, draftId, initi
                                                 onSourceChange={onSourceChange}
                                             />
                                         )}
-                                        {phase === 2 && <Phase1TypeSelection />}
-                                        {phase === 3 && <Phase2Information />}
-                                        {phase === 4 && <Phase3TeamRoles wizardContext={wizardContext} />}
-                                        {phase === 5 && <Phase4Settings />}
-                                        {phase === 6 && <Phase5Review wizardContext={wizardContext} goToPhase={goToPhase} />}
+                                        {phase === 2 && <Phase2Information />}
+                                        {phase === 3 && <Phase3TeamRoles wizardContext={wizardContext} />}
+                                        {phase === 4 && <Phase4Settings />}
+                                        {phase === 5 && <Phase5Review wizardContext={wizardContext} goToPhase={goToPhase} />}
                                     </motion.div>
                                 </AnimatePresence>
                             </form>
@@ -269,7 +271,7 @@ export default function CreateProjectWizard({ onClose, onSuccess, draftId, initi
                         <div className="flex-shrink-0">
                             <WizardFooter
                                 phase={phase}
-                                totalPhases={6}
+                                totalPhases={TOTAL_PHASES}
                                 onNext={handleNext}
                                 onBack={handleBack}
                                 onSaveDraft={() => saveDraft()}
