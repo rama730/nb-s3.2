@@ -8,7 +8,20 @@ function normalizePresenceUrl(value: string | null | undefined) {
 
 function isLocalHostname(hostname: string | null | undefined) {
     if (!hostname) return false
-    return hostname === 'localhost' || hostname === '127.0.0.1'
+    return hostname === 'localhost'
+        || hostname === '127.0.0.1'
+        || hostname === '0.0.0.0'
+        || hostname === '::1'
+        || hostname === '[::1]'
+}
+
+function isLocalWebSocketUrl(value: string) {
+    try {
+        const parsed = new URL(value)
+        return parsed.protocol === 'ws:' && isLocalHostname(parsed.hostname)
+    } catch {
+        return false
+    }
 }
 
 function hasDisabledPlaceholderHostname(value: string | null | undefined) {
@@ -28,6 +41,8 @@ export function resolvePresenceWebSocketUrl(params?: {
 }) {
     const env = params?.env ?? process.env
     const isProduction = env.NODE_ENV === 'production'
+    const hostname = params?.hostname ?? null
+    const isLocalRequest = isLocalHostname(hostname)
     const preferred = normalizePresenceUrl(params?.preferredUrl)
     if (preferred) {
         if (hasDisabledPlaceholderHostname(preferred)) {
@@ -35,7 +50,7 @@ export function resolvePresenceWebSocketUrl(params?: {
                 return null
             }
         } else {
-            if (isProduction && !preferred.startsWith('wss://')) {
+            if (isProduction && !preferred.startsWith('wss://') && !(isLocalRequest && isLocalWebSocketUrl(preferred))) {
                 throw new Error('Presence websocket URLs must use wss:// in production')
             }
             return preferred
@@ -53,7 +68,7 @@ export function resolvePresenceWebSocketUrl(params?: {
                 return null
             }
         } else {
-            if (isProduction && !configured.startsWith('wss://')) {
+            if (isProduction && !configured.startsWith('wss://') && !(isLocalRequest && isLocalWebSocketUrl(configured))) {
                 throw new Error('Presence websocket URLs must use wss:// in production')
             }
             return configured
@@ -62,7 +77,6 @@ export function resolvePresenceWebSocketUrl(params?: {
 
     const explicitPort = Number(env.PRESENCE_SERVICE_PORT || DEFAULT_LOCAL_PRESENCE_PORT)
     const port = Number.isFinite(explicitPort) && explicitPort > 0 ? explicitPort : DEFAULT_LOCAL_PRESENCE_PORT
-    const hostname = params?.hostname ?? null
     if (!isProduction || isLocalHostname(hostname)) {
         return `ws://127.0.0.1:${port}/ws`
     }
