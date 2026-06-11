@@ -19,6 +19,7 @@ interface EditProfileModalProps {
     profile: any;
     onOptimisticUpdate?: (updates: any) => void;
     initialSection?: EditProfileSection;
+    projects?: any[];
 }
 
 type SaveState = "idle" | "saving" | "success" | "error";
@@ -31,7 +32,7 @@ function toIsoTimestamp(value: unknown): string {
     return new Date().toISOString();
 }
 
-export function EditProfileModal({ open, onOpenChange, profile, onOptimisticUpdate, initialSection = "general" }: EditProfileModalProps) {
+export function EditProfileModal({ open, onOpenChange, profile, onOptimisticUpdate, initialSection = "general", projects = [] }: EditProfileModalProps) {
     const { showToast } = useToast();
     const queryClient = useQueryClient();
     const { refreshProfile } = useAuth();
@@ -41,6 +42,7 @@ export function EditProfileModal({ open, onOpenChange, profile, onOptimisticUpda
     const [hasChanges, setHasChanges] = useState(false);
     const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
     const [activeSection, setActiveSection] = useState<EditProfileSection>(initialSection);
+    const [pendingSection, setPendingSection] = useState<EditProfileSection | null>(null);
     const inFlightRef = useRef(false);
     const wasOpenRef = useRef(false);
     const lastKnownUpdatedAtRef = useRef<string>(
@@ -267,6 +269,7 @@ export function EditProfileModal({ open, onOpenChange, profile, onOptimisticUpda
 
     const handleOpenChange = (openValue: boolean) => {
         if (!openValue && hasChanges && !showDiscardConfirm) {
+            setPendingSection(null);
             setShowDiscardConfirm(true);
             return;
         }
@@ -274,6 +277,32 @@ export function EditProfileModal({ open, onOpenChange, profile, onOptimisticUpda
             setShowDiscardConfirm(false);
         }
         onOpenChange(openValue);
+    };
+
+    const handleSectionChange = (section: EditProfileSection) => {
+        if (hasChanges && !showDiscardConfirm) {
+            setPendingSection(section);
+            setShowDiscardConfirm(true);
+            return;
+        }
+        setActiveSection(section);
+    };
+
+    const handleDiscard = () => {
+        setFormState(baseProfileRef.current);
+        setHasChanges(false);
+        setShowDiscardConfirm(false);
+        if (pendingSection) {
+            setActiveSection(pendingSection);
+            setPendingSection(null);
+        } else {
+            onOpenChange(false);
+        }
+    };
+
+    const handleKeepEditing = () => {
+        setShowDiscardConfirm(false);
+        setPendingSection(null);
     };
 
     const usernameChanged = Boolean(
@@ -299,11 +328,6 @@ export function EditProfileModal({ open, onOpenChange, profile, onOptimisticUpda
                             style={{ width: `${completion.score}%` }}
                         />
                     </div>
-                    {usernameChanged ? (
-                        <p className="text-xs text-amber-600 dark:text-amber-400 mt-2">
-                            Changing username can break old profile links and mentions. Username changes are rate limited.
-                        </p>
-                    ) : null}
                 </DialogHeader>
 
                 <form className="flex-1 min-h-0 flex flex-col" onSubmit={handleSubmit} aria-label="Edit profile form">
@@ -312,7 +336,7 @@ export function EditProfileModal({ open, onOpenChange, profile, onOptimisticUpda
                             profile={formState || profile}
                             originalUsername={originalUsernameRef.current}
                             section={activeSection}
-                            onSectionChange={setActiveSection}
+                            onSectionChange={handleSectionChange}
                             onChange={(updates) => {
                                 setFormState(updates);
                                 setHasChanges(true);
@@ -321,6 +345,7 @@ export function EditProfileModal({ open, onOpenChange, profile, onOptimisticUpda
                                     setSaveErrorMessage(null);
                                 }
                             }}
+                            projects={projects}
                         />
                     </div>
 
@@ -330,10 +355,10 @@ export function EditProfileModal({ open, onOpenChange, profile, onOptimisticUpda
                                 <p className="mr-auto text-sm font-medium text-zinc-900 dark:text-zinc-100 flex items-center">
                                     Discard unsaved changes?
                                 </p>
-                                <Button type="button" variant="ghost" onClick={() => setShowDiscardConfirm(false)}>
+                                <Button type="button" variant="ghost" onClick={handleKeepEditing}>
                                     Keep Editing
                                 </Button>
-                                <Button type="button" variant="danger" onClick={() => handleOpenChange(false)}>
+                                <Button type="button" variant="danger" onClick={handleDiscard}>
                                     Discard
                                 </Button>
                             </>
