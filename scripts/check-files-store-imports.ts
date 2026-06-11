@@ -51,7 +51,7 @@ for (const file of files) {
     let match: RegExpExecArray | null = null;
     while ((match = importRegex.exec(line)) !== null) {
       const specifier = match[1];
-      if (!specifier.startsWith("@/stores/files")) continue;
+      if (!specifier || !specifier.startsWith("@/stores/files")) continue;
       if (isAllowedSpecifier(specifier)) continue;
       violations.push({
         file: path.relative(ROOT, file),
