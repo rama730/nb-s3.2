@@ -50,7 +50,7 @@ function isPrivateIpv4(address: string) {
     return true;
   }
 
-  const [a, b, c] = octets;
+  const [a = 0, b = 0, c = 0] = octets;
   if (a === 0) return true;
   if (a === 10) return true;
   if (a === 127) return true;
