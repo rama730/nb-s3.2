@@ -111,6 +111,7 @@ const parseHubCursor = (cursor?: string): ParsedCursor => {
 
     if (cursor.startsWith('s:')) {
         const [, payload] = cursor.split('s:');
+        if (!payload) return null;
         const [scoreRaw, createdAt, id] = payload.split('|');
         const score = Number(scoreRaw);
         if (Number.isFinite(score) && createdAt && id) {
@@ -121,6 +122,7 @@ const parseHubCursor = (cursor?: string): ParsedCursor => {
 
     if (cursor.startsWith('h:')) {
         const [, payload] = cursor.split('h:');
+        if (!payload) return null;
         const [scoreRaw, id] = payload.split('|');
         const score = Number(scoreRaw);
         if (Number.isFinite(score) && id) {
@@ -131,6 +133,7 @@ const parseHubCursor = (cursor?: string): ParsedCursor => {
 
     if (cursor.startsWith('t:')) {
         const [, payload] = cursor.split('t:');
+        if (!payload) return null;
         const [createdAt, id] = payload.split('|');
         if (createdAt && id) {
             return { kind: 'time', createdAt, id };
@@ -411,6 +414,7 @@ const applyDiversityRerank = (
 
         for (let index = 0; index < remaining.length; index += 1) {
             const item = remaining[index];
+            if (!item) continue;
             let adjusted = item.score;
 
             if (lastOwnerId && item.ownerId === lastOwnerId) {
