@@ -6,7 +6,7 @@ import { CSRF_COOKIE_NAME, DEV_CSRF_SECRET_FALLBACK, MINIMUM_CSRF_SECRET_LENGTH 
 
 const CSP_NONCE_HEADER = "x-nonce";
 const CSRF_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 12;
-const AUTH_PROTECTED_PREFIXES = ["/hub", "/settings", "/messages", "/profile", "/people", "/workspace", "/monitor", "/u/", "/onboarding"];
+const AUTH_PROTECTED_PREFIXES = ["/hub", "/settings", "/messages", "/profile", "/people", "/workspace", "/monitor", "/u/", "/onboarding", "/projects", "/admin"];
 const AUTH_PROTECTED_EXACT = new Set(["/", "/login", "/signup", "/verify-email"]);
 
 function toBase64Url(buffer: ArrayBuffer) {
@@ -69,7 +69,11 @@ function shouldResolveAuthSession(pathname: string) {
 
 function isLocalHostname(hostname: string | null | undefined) {
   if (!hostname) return false;
-  return hostname === "localhost" || hostname === "127.0.0.1";
+  return hostname === "localhost"
+    || hostname === "127.0.0.1"
+    || hostname === "0.0.0.0"
+    || hostname === "::1"
+    || hostname === "[::1]";
 }
 
 function buildCsp(nonce: string, request: NextRequest) {
@@ -83,8 +87,19 @@ function buildCsp(nonce: string, request: NextRequest) {
     ...(isProduction ? [] : ["'unsafe-eval'"]),
   ];
 
+  const localConnectDirectives = [
+    "ws://localhost:*",
+    "ws://127.0.0.1:*",
+    "ws://0.0.0.0:*",
+  ];
+
   const connectDirectives = isProduction
-    ? ["'self'", "https:", "wss:"]
+    ? [
+        "'self'",
+        "https:",
+        "wss:",
+        ...(isLocalHostname(request.nextUrl.hostname) ? localConnectDirectives : []),
+      ]
     : ["'self'", "https:", "wss:", "http:", "ws:"];
 
   const directives = [
@@ -140,6 +155,7 @@ export async function middleware(request: NextRequest) {
 
   response.headers.set("Content-Security-Policy", buildCsp(nonce, request));
   response.headers.set(CSP_NONCE_HEADER, nonce);
+  response.headers.set("X-WAF-Edge-Protected", "1");
 
   const csrfCookie = request.cookies.get(CSRF_COOKIE_NAME)?.value?.trim() || "";
   if (!csrfCookie || !csrfCookie.includes(".")) {
