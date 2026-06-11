@@ -1,11 +1,11 @@
 "use client";
 
-import { Share2, CheckCircle, ArrowRight, Lock, Github, ExternalLink, Zap } from "lucide-react";
+import { Share2, Lock, Github, ExternalLink, Zap, X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { motion } from "framer-motion";
-import Link from "next/link";
-import { memo } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { memo, useState, useEffect, useRef } from "react";
 import { useReducedMotionPreference } from "@/components/providers/theme-provider";
+import JourneyTimeline from "./JourneyTimeline";
 
 interface ProjectOverviewCardProps {
     project: any;
@@ -16,6 +16,110 @@ interface ProjectOverviewCardProps {
     lifecycleStages: { name: string; status: string }[];
     currentStageIndex: number;
     onAdvanceStage: () => void;
+    onRedoStage?: () => void;
+    timelineHasAnimated: boolean;
+    setTimelineHasAnimated: (val: boolean) => void;
+}
+
+interface TextOverflowBoxProps {
+    title: string;
+    content: string;
+    type: "problem" | "solution";
+    onShowMore: () => void;
+}
+
+const TextOverflowBox = memo(function TextOverflowBox({ title, content, type, onShowMore }: TextOverflowBoxProps) {
+    const textRef = useRef<HTMLDivElement>(null);
+    const [hasOverflow, setHasOverflow] = useState(false);
+
+    useEffect(() => {
+        const el = textRef.current;
+        if (el) {
+            setHasOverflow(el.scrollHeight > el.clientHeight);
+        }
+    }, [content]);
+
+    const isProblem = type === "problem";
+    const bgClass = isProblem
+        ? "bg-rose-50/50 dark:bg-rose-900/10 border-rose-100 dark:border-rose-900/20"
+        : "bg-emerald-50/50 dark:bg-emerald-900/10 border-emerald-100 dark:border-emerald-900/20";
+    const titleColor = isProblem ? "text-rose-900 dark:text-rose-100" : "text-emerald-900 dark:text-emerald-100";
+    const fadeBgClass = isProblem
+        ? "from-[#fff8f9] via-[#fff8f9]/50 dark:from-[#23181e] dark:via-[#23181e]/50 to-transparent"
+        : "from-[#f6fefa] via-[#f6fefa]/50 dark:from-[#161d1e] dark:via-[#161d1e]/50 to-transparent";
+
+    const hoverBorderClass = isProblem
+        ? "hover:border-rose-300 dark:hover:border-rose-800/60"
+        : "hover:border-emerald-300 dark:hover:border-emerald-800/60";
+
+    return (
+        <div
+            onClick={onShowMore}
+            className={cn(
+                "relative p-6 rounded-2xl border flex flex-col h-[220px] overflow-hidden cursor-pointer transition-all duration-300 hover:scale-[1.01] hover:shadow-md select-none",
+                bgClass,
+                hoverBorderClass
+            )}
+        >
+            <h3 className={cn("text-sm font-bold mb-3 shrink-0", titleColor)}>{title}</h3>
+            <div ref={textRef} className="flex-1 overflow-hidden relative">
+                <p className={cn("text-zinc-600 dark:text-zinc-300 text-sm leading-relaxed whitespace-pre-line", isProblem && "italic")}>
+                    {content}
+                </p>
+                {hasOverflow && (
+                    <div className={cn("absolute bottom-0 left-0 right-0 h-24 bg-gradient-to-t to-transparent pointer-events-none z-10", fadeBgClass)} />
+                )}
+            </div>
+        </div>
+    );
+});
+
+function renderFormattedText(text: string) {
+    if (!text) return null;
+    const lines = text.split("\n");
+    const rendered: React.ReactNode[] = [];
+    let currentList: React.ReactNode[] = [];
+    let listKey = 0;
+
+    lines.forEach((line, index) => {
+        const trimmed = line.trim();
+        const isBullet = trimmed.startsWith("•") || trimmed.startsWith("-") || trimmed.startsWith("*");
+        
+        if (isBullet) {
+            const content = trimmed.substring(1).trim();
+            currentList.push(
+                <li key={`li-${index}`} className="ml-4 list-disc pl-1 text-sm text-zinc-600 dark:text-zinc-300 leading-relaxed">
+                    {content}
+                </li>
+            );
+        } else {
+            if (currentList.length > 0) {
+                rendered.push(
+                    <ul key={`list-${listKey++}`} className="space-y-1.5 my-3">
+                        {currentList}
+                    </ul>
+                );
+                currentList = [];
+            }
+            if (trimmed) {
+                rendered.push(
+                    <p key={`p-${index}`} className="text-sm text-zinc-600 dark:text-zinc-300 leading-relaxed mb-3">
+                        {line}
+                    </p>
+                );
+            }
+        }
+    });
+
+    if (currentList.length > 0) {
+        rendered.push(
+            <ul key={`list-${listKey++}`} className="space-y-1.5 my-3">
+                {currentList}
+            </ul>
+        );
+    }
+
+    return rendered;
 }
 
 const ProjectOverviewCard = memo(function ProjectOverviewCard({
@@ -27,8 +131,26 @@ const ProjectOverviewCard = memo(function ProjectOverviewCard({
     lifecycleStages,
     currentStageIndex,
     onAdvanceStage,
+    onRedoStage,
+    timelineHasAnimated,
+    setTimelineHasAnimated,
 }: ProjectOverviewCardProps) {
     const reduceMotion = useReducedMotionPreference();
+    const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
+
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.key === "Escape") {
+                setIsDetailModalOpen(false);
+            }
+        };
+        if (isDetailModalOpen) {
+            window.addEventListener("keydown", handleKeyDown);
+        }
+        return () => {
+            window.removeEventListener("keydown", handleKeyDown);
+        };
+    }, [isDetailModalOpen]);
 
     const projectStages =
         Array.isArray(project?.lifecycleStages) && project.lifecycleStages.length > 0
@@ -47,6 +169,8 @@ const ProjectOverviewCard = memo(function ProjectOverviewCard({
             "Launch & Iterate",
         ]);
 
+
+
     const statusColors: Record<string, string> = {
         planning: "bg-zinc-100 text-zinc-700 border-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:border-zinc-700",
         in_progress: "bg-primary/10 text-primary border-primary/15",
@@ -60,45 +184,45 @@ const ProjectOverviewCard = memo(function ProjectOverviewCard({
     };
 
     return (
-        <motion.div
-            className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-sm overflow-hidden flex flex-col h-fit"
-            initial={false}
-            animate={{ opacity: 1, y: 0 }}
-            transition={reduceMotion ? { duration: 0 } : { duration: 0.4 }}
-        >
+        <>
+            <motion.div
+                className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-sm overflow-hidden flex flex-col h-fit"
+                initial={false}
+                animate={{ opacity: 1, y: 0 }}
+                transition={reduceMotion ? { duration: 0 } : { duration: 0.4 }}
+            >
             <div className="p-8">
-                {/* Header: Type & Status */}
-                <div className="flex items-center gap-3 mb-6">
-                    <span className={cn(
-                        "rounded-full px-3 py-1 text-xs font-semibold border",
-                        statusColors[project?.status?.toLowerCase()] || statusColors.planning
-                    )}>
-                        {statusLabels[project?.status?.toLowerCase()] || "Planning"}
-                    </span>
-                    {(project?.category || project?.project_type || project?.custom_project_type) && (
-                        <span className="px-3 py-1 text-xs font-medium rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700">
-                            {project.category || project.custom_project_type || project.project_type}
-                        </span>
-                    )}
-                    {project?.visibility === "private" && (
-                        <span className="flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700">
-                            <Lock className="w-3 h-3" />
-                            Private
-                        </span>
-                    )}
-                </div>
-
-                {/* Hero Section: Title & Tagline */}
-                <div className="mb-8">
-                    <h1 className="text-4xl font-extrabold text-zinc-900 dark:text-zinc-50 mb-4 tracking-tight leading-tight">
+                {/* Header: Title & Badges */}
+                <div className="flex items-start justify-between gap-4 mb-4 relative z-10">
+                    <h1 className="text-3xl font-extrabold text-zinc-900 dark:text-zinc-50 tracking-tight leading-tight flex-1 truncate">
                         {project?.title}
                     </h1>
-                    {project?.shortDescription && (
-                        <p className="text-xl text-zinc-500 dark:text-zinc-400 font-medium leading-relaxed max-w-3xl">
+                    <div className="flex items-center gap-2 shrink-0">
+                        {(project?.category || project?.project_type || project?.custom_project_type) && (
+                            <span className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-zinc-100 dark:bg-zinc-800 text-zinc-650 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700 select-none">
+                                {String(project.category || project.custom_project_type || project.project_type)
+                                    .split(/[_-]+/)
+                                    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+                                    .join(" ")}
+                            </span>
+                        )}
+                        {project?.visibility === "private" && (
+                            <span className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold bg-zinc-100 dark:bg-zinc-800 text-zinc-650 dark:text-zinc-405 border border-zinc-200 dark:border-zinc-700">
+                                <Lock className="w-3 h-3" />
+                                Private
+                            </span>
+                        )}
+                    </div>
+                </div>
+
+                {/* Hero Section: Tagline */}
+                {project?.shortDescription && (
+                    <div className="mb-8">
+                        <p className="text-base text-zinc-500 dark:text-zinc-400 font-medium leading-relaxed max-w-3xl">
                             {project.shortDescription}
                         </p>
-                    )}
-                </div>
+                    </div>
+                )}
 
                 {/* Action Bar */}
                 {!hideActionBar && (
@@ -115,67 +239,20 @@ const ProjectOverviewCard = memo(function ProjectOverviewCard({
 
                 {/* Content Tabs / Sections */}
                 <div className="grid grid-cols-1 gap-8">
-                    {/* Project Journey (Timeline) */}
-                    <section className="bg-zinc-50 dark:bg-zinc-900/50 rounded-xl p-5 border border-zinc-100 dark:border-zinc-800 mb-2">
-                        <div className="flex items-center justify-between mb-4">
-                            <h3 className="text-sm font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 flex items-center gap-2">
-                                <span className="w-5 h-5 rounded-full bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center">
-                                    <CheckCircle className="w-3 h-3 text-zinc-500" />
-                                </span>
-                                Project Journey
-                            </h3>
-                            {isCreator && onAdvanceStage && currentStageIndex < stages.length - 1 && (
-                                <button
-                                    onClick={onAdvanceStage}
-                                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-md app-accent-solid text-[10px] font-semibold hover:bg-primary/90 transition-[background-color,box-shadow]"
-                                >
-                                    Advance
-                                    <ArrowRight className="w-3 h-3" />
-                                </button>
-                            )}
-                        </div>
-                        <div className="relative">
-                            <div className="absolute top-3 left-0 right-0 h-0.5 bg-zinc-200 dark:bg-zinc-800 hidden md:block" />
-                            <div className="flex flex-col md:flex-row justify-between gap-4 md:gap-0">
-                                {stages.map((stage: string, index: number) => {
-                                    const isCompleted = index < currentStageIndex;
-                                    const isCurrent = index === currentStageIndex;
-
-                                    return (
-                                        <div key={index} className="relative z-10 flex md:flex-col items-center md:text-center gap-3 md:gap-2 flex-1">
-                                            <div className={cn(
-                                                "w-6 h-6 rounded-full flex items-center justify-center border-[3px] transition-all duration-300",
-                                                isCompleted
-                                                    ? "bg-emerald-500 border-emerald-500"
-                                                    : isCurrent
-                                                        ? "bg-white dark:bg-zinc-900 border-primary ring-4 ring-primary/10"
-                                                        : "bg-white dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700"
-                                            )}>
-                                                {isCompleted ? (
-                                                    <CheckCircle className="w-3.5 h-3.5 text-white" />
-                                                ) : isCurrent ? (
-                                                    <div
-                                                        className={cn(
-                                                            "w-2 h-2 rounded-full bg-primary motion-reduce:animate-none",
-                                                            !reduceMotion && "motion-safe:animate-pulse",
-                                                        )}
-                                                    />
-                                                ) : null}
-                                            </div>
-                                            <p className={cn(
-                                                "text-xs font-semibold",
-                                                isCompleted ? "text-emerald-600 dark:text-emerald-400" :
-                                                    isCurrent ? "text-primary" :
-                                                        "text-zinc-400 dark:text-zinc-600"
-                                            )}>
-                                                {stage}
-                                            </p>
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        </div>
-                    </section>
+                    {/* Journey (Timeline) */}
+                    {/* Journey (Timeline) */}
+                    <JourneyTimeline
+                        stages={stages}
+                        currentStageIndex={currentStageIndex}
+                        isCreator={isCreator}
+                        onAdvanceStage={onAdvanceStage}
+                        onRedoStage={onRedoStage}
+                        createdAt={project?.createdAt}
+                        updatedAt={project?.updatedAt}
+                        stageCompletionDates={project?.stageCompletionDates}
+                        hasAnimated={timelineHasAnimated}
+                        onAnimationComplete={() => setTimelineHasAnimated(true)}
+                    />
 
                     {/* The Vision (Description) */}
                     {project?.description && (
@@ -196,20 +273,20 @@ const ProjectOverviewCard = memo(function ProjectOverviewCard({
                     {(project?.problemStatement || project?.solutionStatement) && (
                         <div className="grid md:grid-cols-2 gap-6">
                             {project.problemStatement && (
-                                <div className="h-full p-6 rounded-2xl bg-rose-50/50 dark:bg-rose-900/10 border border-rose-100 dark:border-rose-900/20">
-                                    <h3 className="text-sm font-bold text-rose-900 dark:text-rose-100 mb-3">The Problem</h3>
-                                    <p className="text-zinc-600 dark:text-zinc-300 text-sm leading-relaxed italic">
-                                        {project.problemStatement}
-                                    </p>
-                                </div>
+                                <TextOverflowBox
+                                    title="The Problem"
+                                    content={project.problemStatement}
+                                    type="problem"
+                                    onShowMore={() => setIsDetailModalOpen(true)}
+                                />
                             )}
                             {project.solutionStatement && (
-                                <div className="h-full p-6 rounded-2xl bg-emerald-50/50 dark:bg-emerald-900/10 border border-emerald-100 dark:border-emerald-900/20">
-                                    <h3 className="text-sm font-bold text-emerald-900 dark:text-emerald-100 mb-3">The Solution</h3>
-                                    <p className="text-zinc-600 dark:text-zinc-300 text-sm leading-relaxed">
-                                        {project.solutionStatement}
-                                    </p>
-                                </div>
+                                <TextOverflowBox
+                                    title="The Solution"
+                                    content={project.solutionStatement}
+                                    type="solution"
+                                    onShowMore={() => setIsDetailModalOpen(true)}
+                                />
                             )}
                         </div>
                     )}
@@ -266,6 +343,69 @@ const ProjectOverviewCard = memo(function ProjectOverviewCard({
                 </div>
             </div>
         </motion.div>
+
+        <AnimatePresence>
+            {isDetailModalOpen && (
+                <div className="fixed inset-0 z-[150] flex items-center justify-center p-4 md:p-6 overflow-hidden">
+                    {/* Backdrop */}
+                    <motion.div
+                        className="absolute inset-0 bg-black/60 backdrop-blur-md"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        onClick={() => setIsDetailModalOpen(false)}
+                    />
+
+                    {/* Modal Container */}
+                    <motion.div
+                        className="relative z-10 w-full max-w-4xl max-h-[85vh] rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-2xl flex flex-col overflow-hidden"
+                        initial={reduceMotion ? { opacity: 0 } : { scale: 0.95, opacity: 0 }}
+                        animate={reduceMotion ? { opacity: 1 } : { scale: 1, opacity: 1 }}
+                        exit={reduceMotion ? { opacity: 0 } : { scale: 0.95, opacity: 0 }}
+                        transition={{ duration: 0.2, ease: "easeOut" }}
+                    >
+                        {/* Header */}
+                        <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-200 dark:border-zinc-800 shrink-0">
+                            <div>
+                                <h2 className="text-lg font-bold text-zinc-900 dark:text-zinc-100">Problem & Solution Statements</h2>
+                            </div>
+                            <button
+                                onClick={() => setIsDetailModalOpen(false)}
+                                className="p-2 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-500 hover:text-zinc-850 dark:hover:text-zinc-200 transition-colors"
+                            >
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+
+                        {/* Scrollable Content */}
+                        <div className="flex-1 overflow-y-auto p-6 md:p-8 space-y-6">
+                            <div className="flex flex-col gap-6 max-w-3xl mx-auto">
+                                {/* Problem Box */}
+                                {project?.problemStatement && (
+                                    <div className="p-6 rounded-2xl bg-rose-50/50 dark:bg-rose-900/10 border border-rose-100 dark:border-rose-900/20 w-full">
+                                        <h3 className="text-xs font-bold text-rose-900 dark:text-rose-100 mb-3 uppercase tracking-wider">The Problem</h3>
+                                        <div className="italic">
+                                            {renderFormattedText(project.problemStatement)}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Solution Box */}
+                                {project?.solutionStatement && (
+                                    <div className="p-6 rounded-2xl bg-emerald-50/50 dark:bg-emerald-900/10 border border-emerald-100 dark:border-emerald-900/20 w-full">
+                                        <h3 className="text-xs font-bold text-emerald-900 dark:text-emerald-100 mb-3 uppercase tracking-wider">The Solution</h3>
+                                        <div>
+                                            {renderFormattedText(project.solutionStatement)}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </motion.div>
+                </div>
+            )}
+        </AnimatePresence>
+    </>
     );
 });
 
