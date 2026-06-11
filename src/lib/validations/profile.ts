@@ -13,6 +13,7 @@ export const SOCIAL_LINK_PLATFORMS = [
     'twitter',
     'linkedin',
     'website',
+    'portfolio',
     'dribbble',
     'instagram',
     'bluesky',
@@ -21,6 +22,7 @@ export const SOCIAL_LINK_PLATFORMS = [
     'twitch',
     'threads',
     'facebook',
+    'other',
 ] as const
 export type SocialLinkPlatform = (typeof SOCIAL_LINK_PLATFORMS)[number]
 const SOCIAL_LINK_PLATFORM_SET = new Set<string>(SOCIAL_LINK_PLATFORMS)
@@ -43,6 +45,49 @@ const optionalTrimmedString = (maxLength: number) =>
         .transform((value) => value.trim())
         .pipe(z.string().max(maxLength))
         .optional()
+
+const boundedHistoryString = z
+    .string()
+    .transform((value) => value.trim())
+    .pipe(z.string().max(500))
+    .optional()
+
+const profileHistoryEntrySchema = z.preprocess((raw) => {
+    const value = raw && typeof raw === 'object' && !Array.isArray(raw)
+        ? raw as Record<string, unknown>
+        : {}
+    return {
+        id: typeof value.id === 'string' ? value.id.trim().slice(0, 80) : undefined,
+        title: typeof value.title === 'string' ? value.title : undefined,
+        company: typeof value.company === 'string' ? value.company : undefined,
+
+
+        startDate: typeof value.startDate === 'string' ? value.startDate : undefined,
+        endDate: typeof value.endDate === 'string' ? value.endDate : undefined,
+        description: typeof value.description === 'string' ? value.description : undefined,
+        currentlyActive: typeof value.currentlyActive === 'boolean' ? value.currentlyActive : undefined,
+        projectUrl: typeof value.projectUrl === 'string' ? value.projectUrl : undefined,
+        repoUrl: typeof value.repoUrl === 'string' ? value.repoUrl : undefined,
+        projectId: typeof value.projectId === 'string' ? value.projectId : undefined,
+        techTags: Array.isArray(value.techTags) ? value.techTags : undefined,
+        link: typeof value.link === 'string' ? value.link : undefined,
+    }
+}, z.object({
+        id: z.string().max(80).optional(),
+        title: boundedHistoryString,
+        company: boundedHistoryString,
+
+
+        startDate: z.string().trim().max(20).optional(),
+        endDate: z.string().trim().max(20).optional(),
+        description: boundedHistoryString,
+        currentlyActive: z.boolean().optional(),
+        projectUrl: z.string().max(200).optional(),
+        repoUrl: z.string().max(200).optional(),
+        projectId: z.string().max(100).optional(),
+        techTags: z.array(z.string().max(50)).max(20).optional(),
+        link: z.string().max(200).optional(),
+    }))
 
 export const profileUpdateSchema = z.object({
     username: z
@@ -102,8 +147,8 @@ export const profileUpdateSchema = z.object({
     hoursPerWeek: z.enum(['lt_5', 'h_5_10', 'h_10_20', 'h_20_40', 'h_40_plus']).nullable().optional(),
     genderIdentity: z.enum(['male', 'female', 'non_binary', 'prefer_not_to_say', 'other']).nullable().optional(),
     pronouns: z.string().trim().max(60).nullable().optional(),
-    experience: z.array(z.unknown()).optional(),
-    education: z.array(z.unknown()).optional(),
+    experience: z.array(profileHistoryEntrySchema).max(PROFILE_LIMITS.listMaxItems).optional(),
+
     expectedUpdatedAt: z.string().datetime().optional(),
 })
 
