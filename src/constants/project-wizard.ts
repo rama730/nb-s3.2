@@ -5,11 +5,10 @@
 
 export const WIZARD_PHASES = [
     { id: 1, label: 'Start', description: 'Source Selection' },
-    { id: 2, label: 'Type', description: 'Project Category' },
-    { id: 3, label: 'Info', description: 'Basic Information' },
-    { id: 4, label: 'Team', description: 'Roles & Skills' },
-    { id: 5, label: 'Settings', description: 'Privacy & Terms' },
-    { id: 6, label: 'Review', description: 'Final Preview' },
+    { id: 2, label: 'Info', description: 'Basic Information' },
+    { id: 3, label: 'Team', description: 'Roles & Skills' },
+    { id: 4, label: 'Settings', description: 'Privacy & Terms' },
+    { id: 5, label: 'Review', description: 'Final Preview' },
 ] as const;
 
 export type WizardPhaseId = typeof WIZARD_PHASES[number]['id'];
