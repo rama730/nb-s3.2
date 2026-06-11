@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { hasE2ECredentials, login } from "./_helpers/auth";
+import { switchMessagesTab } from "./_helpers/messages";
 import { attachPageMonitoring } from "./_helpers/monitoring";
 
 test.describe("Messages tabs matrix @critical", () => {
@@ -14,14 +15,14 @@ test.describe("Messages tabs matrix @critical", () => {
     await page.goto("/messages", { waitUntil: "domcontentloaded" });
     await expect(page.getByRole("button", { name: /open messages/i })).toHaveCount(0);
 
-    await page.getByTestId("messages-tab-chats").click();
-    await expect(page.getByText(/No messages yet|Search messages|Connect to start messaging/i).first()).toBeVisible({ timeout: 15000 });
+    await switchMessagesTab(page, "chats");
+    await expect(page.getByText(/No messages yet|Search messages|Connect to start messaging|Seeded conversation/i).first()).toBeVisible({ timeout: 15000 });
 
-    await page.getByTestId("messages-tab-applications").click();
-    await expect(page.getByText(/No applications|Applying for|Applied for/i).first()).toBeVisible({ timeout: 15000 });
+    await switchMessagesTab(page, "applications");
+    await expect(page.getByText(/No applications|Applying for|Applied for|Search applications/i).first()).toBeVisible({ timeout: 15000 });
 
-    await page.getByTestId("messages-tab-projects").click();
-    await expect(page.getByText(/No projects|Project|Workspace/i).first()).toBeVisible({ timeout: 15000 });
+    await switchMessagesTab(page, "projects");
+    await expect(page.getByText(/No project groups|Project|Workspace|Search groups/i).first()).toBeVisible({ timeout: 15000 });
 
     await monitor.assertNoViolations();
     monitor.detach();
