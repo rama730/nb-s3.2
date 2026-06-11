@@ -60,7 +60,9 @@ async function migrateFiles() {
                         VALUES (${projectId}, NULL, 'folder', 'Task Attachments', now(), now())
                         RETURNING id
                     `
-                    projectRootFolders.set(projectId, created.id)
+                    if (created) {
+                        projectRootFolders.set(projectId, created.id)
+                    }
                 }
             }
             const rootId = projectRootFolders.get(projectId)!
@@ -79,7 +81,9 @@ async function migrateFiles() {
                         VALUES (${projectId}, ${rootId}, 'folder', ${file.task_title}, now(), now())
                         RETURNING id
                     `
-                    taskFolders.set(taskId, created.id)
+                    if (created) {
+                        taskFolders.set(taskId, created.id)
+                    }
                 }
             }
             const folderId = taskFolders.get(taskId)!
