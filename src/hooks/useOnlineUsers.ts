@@ -47,9 +47,17 @@ interface RoomTracker {
 export function useOnlineUsers(userIds: string[]): OnlineMap {
     // Sort+dedupe so the dependency for the main effect is stable across
     // renders that pass the same set in different order.
+    const userIdsRef = useRef<string[]>([]);
     const stableIds = useMemo(() => {
         const deduped = Array.from(new Set(userIds.filter(Boolean)));
         deduped.sort();
+        if (
+            userIdsRef.current.length === deduped.length &&
+            userIdsRef.current.every((id, index) => id === deduped[index])
+        ) {
+            return userIdsRef.current;
+        }
+        userIdsRef.current = deduped;
         return deduped;
     }, [userIds]);
 
