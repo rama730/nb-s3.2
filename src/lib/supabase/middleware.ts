@@ -80,6 +80,45 @@ function hasAnyAuthCookie(request: NextRequest): boolean {
     return false
 }
 
+async function resolveProfileOnboardingComplete(
+    supabase: ReturnType<typeof createServerClient>,
+    params: {
+        userId: string
+        requestId: string
+        pathname: string
+        routeClass: string
+    },
+): Promise<boolean> {
+    try {
+        const { data, error } = await supabase
+            .from('profiles')
+            .select('username')
+            .eq('id', params.userId)
+            .maybeSingle()
+
+        if (error) {
+            logger.warn('[middleware] profile onboarding fallback failed', {
+                requestId: params.requestId,
+                path: params.pathname,
+                routeClass: params.routeClass,
+                message: error.message,
+            })
+            return false
+        }
+
+        const username = typeof data?.username === 'string' ? data.username.trim() : ''
+        return username.length > 0
+    } catch (error) {
+        logger.warn('[middleware] profile onboarding fallback threw', {
+            requestId: params.requestId,
+            path: params.pathname,
+            routeClass: params.routeClass,
+            message: error instanceof Error ? error.message : String(error),
+        })
+        return false
+    }
+}
+
 function clearAuthCookies(request: NextRequest, response: NextResponse): number {
     const cookieNames = request.cookies.getAll().map((cookie) => cookie.name)
     let cleared = 0
@@ -251,6 +290,26 @@ export async function updateSession(request: NextRequest, options: UpdateSession
     }
 
     const url = request.nextUrl.clone()
+    const shouldVerifyOnboardingFromProfile =
+        Boolean(user)
+        && emailVerified
+        && !onboardingComplete
+        && (
+            isProtectedAppRoute(pathname)
+            || isOnboardingRoute(pathname)
+            || isAuthOnlyRoute(pathname)
+            || pathname === '/'
+            || pathname === '/verify-email'
+        )
+
+    if (shouldVerifyOnboardingFromProfile && user) {
+        onboardingComplete = await resolveProfileOnboardingComplete(supabase, {
+            userId: user.id,
+            requestId,
+            pathname,
+            routeClass,
+        })
+    }
 
     if (!user && isProtectedAppRoute(pathname)) {
         if (authLookupDegraded && shouldResolveAuth) {
