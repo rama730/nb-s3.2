@@ -201,6 +201,7 @@ async function main() {
 
   for (let i = 0; i < files.length; i++) {
     const f = files[i];
+    if (!f) continue;
     const idx = `${i + 1}/${files.length}`;
     try {
       const existingNodeId = await alreadyMigrated(f.project_id, f.id);
