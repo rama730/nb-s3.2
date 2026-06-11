@@ -1,4 +1,5 @@
 import { eq } from "drizzle-orm";
+import { z } from "zod";
 import {
   enforceRouteLimit,
   getRequestId,
@@ -27,10 +28,17 @@ export async function POST(request: Request) {
     return auth.response ?? jsonError("Not authenticated", 401, "UNAUTHORIZED");
   }
 
+  const blockUserSchema = z.object({
+    userId: z.string().uuid("userId must be a valid UUID"),
+  });
+
   try {
     const body = await request.json().catch(() => null);
-    const targetUserId = typeof body?.userId === "string" ? body.userId : null;
-    if (!targetUserId) return jsonError("User is required", 400, "BAD_REQUEST");
+    const parseResult = blockUserSchema.safeParse(body);
+    if (!parseResult.success) {
+      return jsonError(parseResult.error.issues[0]?.message ?? "User is required", 400, "BAD_REQUEST");
+    }
+    const targetUserId = parseResult.data.userId;
     if (targetUserId === auth.user.id) return jsonError("Cannot block yourself", 400, "BAD_REQUEST");
 
     const [target] = await db
