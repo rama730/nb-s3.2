@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { useAuth as useAuthContext } from '@/lib/hooks/use-auth';
 
 /**
@@ -6,8 +7,11 @@ import { useAuth as useAuthContext } from '@/lib/hooks/use-auth';
  */
 export function useAuth() {
     const auth = useAuthContext();
-    const hydratedUser = auth.user && auth.profile
-        ? {
+    
+    const hydratedUser = useMemo(() => {
+        if (!auth.user) return null;
+        if (!auth.profile) return auth.user;
+        return {
             ...auth.user,
             user_metadata: {
                 ...(auth.user.user_metadata || {}),
@@ -15,12 +19,13 @@ export function useAuth() {
                 full_name: auth.profile.fullName || undefined,
                 avatar_url: auth.profile.avatarUrl || undefined,
             },
-        }
-        : auth.user;
+        };
+    }, [auth.user, auth.profile]);
 
-    return {
+    return useMemo(() => ({
         ...auth,
         user: hydratedUser,
         isSignedIn: auth.isAuthenticated,
-    };
+    }), [auth, hydratedUser]);
 }
+
