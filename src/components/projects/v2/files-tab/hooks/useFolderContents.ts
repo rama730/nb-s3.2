@@ -48,7 +48,7 @@ export interface FolderContents {
 
 export type LoadFolderContent = (
   parentId: string | null,
-  mode: "refresh" | "append",
+  mode?: "refresh" | "append",
 ) => Promise<void>;
 
 /**
@@ -59,6 +59,10 @@ export type LoadFolderContent = (
  */
 export interface FilesTabBootContextValue {
   loadFolderContent: LoadFolderContent;
+  isBooting: boolean;
+  accessError: string | null;
+  handleToggleFolder: (node: ProjectNode) => Promise<void>;
+  handleLoadMore: (folderId: string | null) => void;
 }
 
 export const FilesTabBootContext = createContext<FilesTabBootContextValue | null>(null);
