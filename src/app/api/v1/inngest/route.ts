@@ -4,5 +4,5 @@ import { getRegisteredInngestFunctions } from "@/inngest/registry";
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
-  functions: getRegisteredInngestFunctions("web"),
+  functions: getRegisteredInngestFunctions(),
 });
