@@ -61,7 +61,7 @@ function isPrivateIpv6(host: string): boolean {
   if (h.startsWith("fe80:")) return true; // link-local
   // IPv4-mapped IPv6: ::ffff:a.b.c.d — check the embedded v4
   const mapped = h.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
-  if (mapped) return isPrivateIpv4(mapped[1]);
+  if (mapped && mapped[1]) return isPrivateIpv4(mapped[1]);
   return false;
 }
 
