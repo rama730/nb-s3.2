@@ -11,7 +11,8 @@ import {
     dmPairs,
     conversationParticipants,
     messages,
-    profiles
+    profiles,
+    messageWorkflowItems
 } from '@/lib/db/schema';
 import { eq, and, sql, or, inArray, desc, lt } from 'drizzle-orm';
 import { createClient } from '@/lib/supabase/server';
@@ -29,6 +30,7 @@ import {
     normalizeApplicationMessageText,
     resolveLifecycleStatus,
 } from '@/lib/applications/utils';
+import type { ApplicationCoreStatus, ApplicationLifecycleStatusWithNone } from '@/lib/applications/status';
 import { isApplicationReviewerRole } from '@/lib/applications/authorization';
 import { enqueueProjectNotificationEvent } from '@/lib/notifications/project-events';
 import type {
@@ -46,7 +48,7 @@ import { computeProjectReadAccess } from '@/lib/data/project-access';
 // ============================================================================
 // TYPES
 // ============================================================================
-type ApplicationDecisionStatus = 'accepted' | 'rejected';
+type ApplicationDecisionStatus = 'accepted' | 'rejected' | 'withdrawn' | 'proposed';
 
 // ============================================================================
 // COOLDOWN HELPER (24 hours)
@@ -108,6 +110,34 @@ function normalizeCursorPaginationInput(
 
 function encodeApplicationCursor(row: { createdAt: Date; id: string }): string {
     return Buffer.from(`${row.createdAt.toISOString()}:::${row.id}`, 'utf8').toString('base64');
+}
+
+interface CompoundCursor {
+    source: 'app' | 'invite';
+    createdAt: Date;
+    id: string;
+}
+
+function parseCompoundCursor(rawCursor?: string | null): CompoundCursor | null {
+    if (!rawCursor) return null;
+    try {
+        const decoded = Buffer.from(rawCursor, 'base64').toString('utf8');
+        const [source, iso, id] = decoded.split(':::');
+        if ((source !== 'app' && source !== 'invite') || !iso || !id) {
+            return null;
+        }
+        const createdAt = new Date(iso);
+        if (Number.isNaN(createdAt.getTime())) {
+            return null;
+        }
+        return { source: source as 'app' | 'invite', createdAt, id };
+    } catch {
+        return null;
+    }
+}
+
+function encodeCompoundCursor(source: 'app' | 'invite', createdAt: Date, id: string): string {
+    return Buffer.from(`${source}:::${createdAt.toISOString()}:::${id}`, 'utf8').toString('base64');
 }
 
 function resolveApplicationTraceId(
@@ -188,6 +218,12 @@ function resolveDecisionMessage(
     if (trimmedCustom) return trimmedCustom;
     if (status === 'accepted') {
         return 'Welcome to the project.';
+    }
+    if (status === 'withdrawn') {
+        return 'Application withdrawn by applicant';
+    }
+    if (status === 'proposed') {
+        return 'Role change proposed by project lead';
     }
     const reasonKey = normalizeDecisionReasonCode(reason);
     return APPLICATION_DECISION_REASON_TEMPLATES[reasonKey];
@@ -831,23 +867,32 @@ async function sendApplicationStatusUpdateInternal(
     roleId: string,
     projectTitle: string,
     roleTitle: string,
-    status: 'accepted' | 'rejected' | 'pending',
+    status: 'accepted' | 'rejected' | 'pending' | 'withdrawn' | 'proposed',
     customMessage?: string,
     reason?: string,
-    applicationTraceId?: string
+    applicationTraceId?: string,
+    originalRoleTitle?: string
 ): Promise<void> {
     const statusText =
-        status === 'accepted' ? 'Accepted' : status === 'rejected' ? 'Not Accepted' : 'Reopened';
+        status === 'accepted'
+            ? 'Accepted'
+            : status === 'rejected'
+            ? 'Not Accepted'
+            : status === 'withdrawn'
+            ? 'Withdrawn'
+            : status === 'proposed'
+            ? 'Role Change Proposed'
+            : 'Reopened';
     const messageText = `Application ${statusText}`;
     const decisionAt = new Date().toISOString();
     const resolvedMessage =
         status === 'pending'
             ? (customMessage || '').trim() || 'Application reopened for review.'
-            : resolveDecisionMessage(status, customMessage, reason);
+            : resolveDecisionMessage(status as ApplicationDecisionStatus, customMessage, reason);
     const clientMessageId =
         status === 'pending'
             ? buildApplicationReopenClientMessageId(applicationId)
-            : buildApplicationDecisionClientMessageId(applicationId, status);
+            : buildApplicationDecisionClientMessageId(applicationId, status as ApplicationDecisionStatus);
     const decisionMetadata = {
         kind: 'application_update',
         isApplicationUpdate: true,
@@ -857,6 +902,7 @@ async function sendApplicationStatusUpdateInternal(
         roleId,
         projectTitle,
         roleTitle,
+        originalRoleTitle: originalRoleTitle || null,
         status,
         applicationTraceId: applicationTraceId || null,
         ...(status === 'pending'
@@ -1046,65 +1092,131 @@ export async function getApplicationStatusAction(projectId: string): Promise<App
                     columns: { role: true, title: true }
                 }
             },
-            columns: { id: true, status: true, roleId: true, updatedAt: true, decisionBy: true }
+            columns: { id: true, status: true, roleId: true, proposedRoleId: true, updatedAt: true, decisionBy: true }
         });
 
-        if (!application) {
-            return { status: 'none' };
-        }
+        if (application) {
+            if (application.status === 'proposed') {
+                const proposedRole = application.proposedRoleId
+                    ? await db.query.projectOpenRoles.findFirst({
+                        where: eq(projectOpenRoles.id, application.proposedRoleId),
+                        columns: { role: true, title: true }
+                    })
+                    : null;
+                const proposedRoleTitle = proposedRole?.title || proposedRole?.role || 'Unknown Role';
+                return {
+                    status: 'proposed',
+                    roleId: application.proposedRoleId || undefined,
+                    roleTitle: proposedRoleTitle,
+                    applicationId: application.id,
+                    proposedRoleId: application.proposedRoleId || undefined,
+                    proposedRoleTitle,
+                    updatedAt: application.updatedAt,
+                };
+            }
 
-        const roleTitle = application.role?.title || application.role?.role || 'Unknown Role';
-        const decisionMap = await getDecisionMetadataMap([application.id]);
-        const decisionReasonRaw = decisionMap.get(application.id)?.reasonCode || null;
-        const decisionReason = decisionReasonRaw
-            ? normalizeApplicationDecisionReason(decisionReasonRaw, 'other')
-            : null;
-        const lifecycleStatus = resolveLifecycleStatus(application.status, decisionReason);
+            if (application.status === 'rejected' || application.status === 'withdrawn') {
+                const pendingInvite = await db.query.messageWorkflowItems.findFirst({
+                    where: and(
+                        eq(messageWorkflowItems.projectId, projectId),
+                        eq(messageWorkflowItems.assigneeUserId, user.id),
+                        eq(messageWorkflowItems.kind, 'project_invite'),
+                        eq(messageWorkflowItems.status, 'pending')
+                    ),
+                    orderBy: desc(messageWorkflowItems.createdAt)
+                });
+                if (pendingInvite) {
+                    return {
+                        status: 'proposed',
+                        roleId: (pendingInvite.payload.roleId as string) || undefined,
+                        roleTitle: (pendingInvite.payload.roleTitle as string) || 'Collaborator',
+                        workflowItemId: pendingInvite.id,
+                        proposedRoleId: (pendingInvite.payload.roleId as string) || undefined,
+                        proposedRoleTitle: (pendingInvite.payload.roleTitle as string) || 'Collaborator',
+                        updatedAt: pendingInvite.updatedAt,
+                    };
+                }
+            }
 
-        if (application.status === 'rejected') {
-            if (application.decisionBy === user.id) {
+            const roleTitle = application.role?.title || application.role?.role || 'Unknown Role';
+            const decisionMap = await getDecisionMetadataMap([application.id]);
+            const decisionReasonRaw = decisionMap.get(application.id)?.reasonCode || null;
+            const decisionReason = decisionReasonRaw
+                ? normalizeApplicationDecisionReason(decisionReasonRaw, 'other')
+                : null;
+            const lifecycleStatus = resolveLifecycleStatus(application.status, decisionReason);
+
+            if (application.status === 'rejected') {
+                if (application.decisionBy === user.id) {
+                    return {
+                        status: 'rejected',
+                        roleId: application.roleId,
+                        roleTitle,
+                        decisionReason,
+                        lifecycleStatus,
+                        canReapply: true,
+                        updatedAt: application.updatedAt,
+                    };
+                }
+                const { canApply, waitTime } = calculateCooldown(application.updatedAt);
                 return {
                     status: 'rejected',
                     roleId: application.roleId,
                     roleTitle,
                     decisionReason,
                     lifecycleStatus,
-                    canReapply: true,
-                    updatedAt: application.updatedAt,
+                    canReapply: canApply,
+                    waitTime,
+                    updatedAt: application.updatedAt
                 };
             }
-            const { canApply, waitTime } = calculateCooldown(application.updatedAt);
+
+            const activeMembership = application.status === 'accepted'
+                ? await db.query.projectMembers.findFirst({
+                    where: and(
+                        eq(projectMembers.projectId, projectId),
+                        eq(projectMembers.userId, user.id),
+                    ),
+                    columns: { id: true },
+                })
+                : null;
+
             return {
-                status: 'rejected',
+                status: application.status as ApplicationCoreStatus,
                 roleId: application.roleId,
                 roleTitle,
                 decisionReason,
                 lifecycleStatus,
-                canReapply: canApply,
-                waitTime,
-                updatedAt: application.updatedAt
+                updatedAt: application.updatedAt,
+                membershipEnded: application.status === 'accepted' && !activeMembership,
+                applicationId: application.id,
             };
         }
 
-        const activeMembership = application.status === 'accepted'
-            ? await db.query.projectMembers.findFirst({
-                where: and(
-                    eq(projectMembers.projectId, projectId),
-                    eq(projectMembers.userId, user.id),
-                ),
-                columns: { id: true },
-            })
-            : null;
+        // Check for direct invitations when there is no application record
+        const pendingInvite = await db.query.messageWorkflowItems.findFirst({
+            where: and(
+                eq(messageWorkflowItems.projectId, projectId),
+                eq(messageWorkflowItems.assigneeUserId, user.id),
+                eq(messageWorkflowItems.kind, 'project_invite'),
+                eq(messageWorkflowItems.status, 'pending')
+            ),
+            orderBy: desc(messageWorkflowItems.createdAt)
+        });
 
-        return {
-            status: application.status as 'pending' | 'accepted',
-            roleId: application.roleId,
-            roleTitle,
-            decisionReason,
-            lifecycleStatus,
-            updatedAt: application.updatedAt,
-            membershipEnded: application.status === 'accepted' && !activeMembership,
-        };
+        if (pendingInvite) {
+            return {
+                status: 'proposed',
+                roleId: (pendingInvite.payload.roleId as string) || undefined,
+                roleTitle: (pendingInvite.payload.roleTitle as string) || 'Collaborator',
+                workflowItemId: pendingInvite.id,
+                proposedRoleId: (pendingInvite.payload.roleId as string) || undefined,
+                proposedRoleTitle: (pendingInvite.payload.roleTitle as string) || 'Collaborator',
+                updatedAt: pendingInvite.updatedAt,
+            };
+        }
+
+        return { status: 'none' };
     } catch (error) {
         console.error('Failed to get application status:', error);
         return { status: 'none' };
@@ -1317,15 +1429,15 @@ export async function applyToRoleAction(
                     project.title || 'Project',
                     roleTitleText,
                     trimmedMessage,
-                    newApp.id,
+                    newApp!.id,
                     traceId
                 );
 
                 await tx.update(roleApplications)
                     .set({ conversationId, updatedAt: new Date() })
-                    .where(eq(roleApplications.id, newApp.id));
+                    .where(eq(roleApplications.id, newApp!.id));
 
-                return { applicationId: newApp.id, conversationId };
+                return { applicationId: newApp!.id, conversationId };
             });
 
             revalidatePath(`/projects/${project.slug || projectId}`);
@@ -1839,14 +1951,14 @@ export async function withdrawApplicationAction(
         if (!application) return toApplicationFailure(traceId, 'NOT_FOUND', 'Application not found');
         if (application.applicantId !== user.id) return toApplicationFailure(traceId, 'FORBIDDEN', 'Only the applicant can withdraw this application');
         if (application.status === 'accepted') return toApplicationFailure(traceId, 'INVALID_STATE', 'Accepted applications cannot be withdrawn');
-        if (application.status === 'rejected') {
+        if (application.status === 'withdrawn' || application.status === 'rejected') {
             return toApplicationSuccess(traceId, { applicationId, idempotent: true });
         }
 
         await db.transaction(async (tx) => {
             const transitioned = await transitionApplicationDecisionInternal(tx, {
                 applicationId,
-                status: 'rejected',
+                status: 'withdrawn',
                 decisionBy: user.id,
             });
 
@@ -1857,7 +1969,7 @@ export async function withdrawApplicationAction(
             await syncCanonicalApplicationMessageDecisionInternal(tx, {
                 applicationId,
                 conversationId: application.conversationId,
-                status: 'rejected',
+                status: 'withdrawn',
                 decisionBy: user.id,
                 reason: 'withdrawn_by_applicant',
                 applicationTraceId: traceId,
@@ -1873,7 +1985,7 @@ export async function withdrawApplicationAction(
                     application.roleId,
                     application.project?.title || 'Project',
                     application.role?.title || application.role?.role || 'Role',
-                    'rejected',
+                    'withdrawn',
                     (message || '').trim() || 'Application withdrawn by applicant',
                     'withdrawn_by_applicant',
                     traceId
@@ -2082,18 +2194,38 @@ export async function getMyApplicationsAction(
             };
         }
 
-        const { safeLimit, cursor } = normalizeCursorPaginationInput(pagination);
+        const compCursor = parseCompoundCursor(pagination.cursor);
+        const oldCursorResult = normalizeCursorPaginationInput(pagination);
+        const safeLimit = oldCursorResult.safeLimit;
+        const cursorDate = compCursor ? compCursor.createdAt : oldCursorResult.cursor?.createdAt;
+        const cursorId = compCursor ? compCursor.id : oldCursorResult.cursor?.id;
 
-        const applications = await db.query.roleApplications.findMany({
-            where: cursor
-                ? and(
-                    eq(roleApplications.applicantId, user.id),
-                    or(
-                        lt(roleApplications.createdAt, cursor.createdAt),
-                        and(eq(roleApplications.createdAt, cursor.createdAt), lt(roleApplications.id, cursor.id))
-                    )
+        const appWhere = cursorDate && cursorId
+            ? and(
+                eq(roleApplications.applicantId, user.id),
+                or(
+                    lt(roleApplications.createdAt, cursorDate),
+                    and(eq(roleApplications.createdAt, cursorDate), lt(roleApplications.id, cursorId))
                 )
-                : eq(roleApplications.applicantId, user.id),
+            )
+            : eq(roleApplications.applicantId, user.id);
+
+        const inviteWhere = cursorDate && cursorId
+            ? and(
+                eq(messageWorkflowItems.creatorId, user.id),
+                eq(messageWorkflowItems.kind, 'project_invite'),
+                or(
+                    lt(messageWorkflowItems.createdAt, cursorDate),
+                    and(eq(messageWorkflowItems.createdAt, cursorDate), lt(messageWorkflowItems.id, cursorId))
+                )
+            )
+            : and(
+                eq(messageWorkflowItems.creatorId, user.id),
+                eq(messageWorkflowItems.kind, 'project_invite')
+            );
+
+        const roleApps = await db.query.roleApplications.findMany({
+            where: appWhere,
             with: {
                 project: {
                     columns: { id: true, title: true, slug: true, coverImage: true }
@@ -2117,52 +2249,123 @@ export async function getMyApplicationsAction(
             limit: safeLimit + 1,
         });
 
-        const hasMore = applications.length > safeLimit;
-        const slicedApplications = applications.slice(0, safeLimit);
-        const nextCursor = hasMore && slicedApplications.length > 0
-            ? encodeApplicationCursor({
-                createdAt: slicedApplications[slicedApplications.length - 1].createdAt,
-                id: slicedApplications[slicedApplications.length - 1].id,
-            })
-            : null;
+        const invites = await db.query.messageWorkflowItems.findMany({
+            where: inviteWhere,
+            with: {
+                project: {
+                    columns: { id: true, title: true, slug: true, coverImage: true }
+                },
+                assignee: {
+                    columns: { id: true, username: true, fullName: true, avatarUrl: true }
+                }
+            },
+            columns: {
+                id: true,
+                projectId: true,
+                assigneeUserId: true,
+                status: true,
+                payload: true,
+                createdAt: true,
+                updatedAt: true,
+                conversationId: true,
+            },
+            orderBy: (items, { desc }) => [desc(items.createdAt), desc(items.id)],
+            limit: safeLimit + 1,
+        });
 
-        const decisionMap = await getDecisionMetadataMap(slicedApplications.map((app) => app.id));
+        const decisionMap = await getDecisionMetadataMap(roleApps.map((app) => app.id));
+
+        const mappedApps = roleApps.map((app) => {
+            const decisionMeta = decisionMap.get(app.id);
+            const decisionReasonRaw = decisionMeta?.reasonCode || null;
+            const decisionReason = decisionReasonRaw
+                ? normalizeApplicationDecisionReason(decisionReasonRaw, 'other')
+                : null;
+            const lifecycleStatus = resolveLifecycleStatus(app.status, decisionReason);
+            const canSkipCooldown = app.decisionBy === user.id;
+            const cooldownMeta =
+                app.status === 'rejected'
+                    ? (canSkipCooldown ? { canApply: true } : calculateCooldown(app.updatedAt))
+                    : {};
+            return {
+                id: app.id,
+                projectId: app.projectId,
+                projectTitle: app.project?.title || 'Unknown Project',
+                projectSlug: app.project?.slug,
+                projectCover: app.project?.coverImage,
+                roleTitle: app.role?.title || app.role?.role || 'Unknown Role',
+                message: app.message,
+                status: app.status,
+                lifecycleStatus,
+                decisionReason,
+                createdAt: app.createdAt,
+                updatedAt: app.updatedAt,
+                decisionAt: decisionMeta?.decisionAt || toISODate(app.updatedAt),
+                conversationId: app.conversationId,
+                canEdit:
+                    app.status === 'pending' &&
+                    Date.now() - new Date(app.createdAt).getTime() <= APPLICATION_EDIT_WINDOW_MS,
+                ...cooldownMeta
+            };
+        });
+
+        const mappedInvites = invites.map((invite) => {
+            let status: 'pending' | 'accepted' | 'rejected' | 'withdrawn' = 'pending';
+            let decisionReason: string | null = null;
+            if (invite.status === 'declined') {
+                status = 'rejected';
+            } else if (invite.status === 'canceled') {
+                status = 'withdrawn';
+            } else if (invite.status === 'expired') {
+                status = 'rejected';
+                decisionReason = 'role_filled';
+            } else if (invite.status === 'accepted') {
+                status = 'accepted';
+            }
+
+            const lifecycleStatus = resolveLifecycleStatus(status, decisionReason);
+
+            return {
+                id: invite.id,
+                isWorkflowItem: true,
+                projectId: invite.projectId,
+                projectTitle: invite.project?.title || (invite.payload?.projectTitle as string) || 'Unknown Project',
+                projectSlug: invite.project?.slug || (invite.payload?.projectSlug as string),
+                projectCover: invite.project?.coverImage || null,
+                roleTitle: (invite.payload?.roleTitle as string) || 'Collaborator',
+                message: invite.payload?.note as string | null,
+                status,
+                lifecycleStatus,
+                decisionReason,
+                createdAt: invite.createdAt,
+                updatedAt: invite.updatedAt,
+                decisionAt: toISODate(invite.updatedAt),
+                conversationId: invite.conversationId,
+                canEdit: false,
+            };
+        });
+
+        const combined = [
+            ...mappedApps.map(item => ({ ...item, _source: 'app' as const })),
+            ...mappedInvites.map(item => ({ ...item, _source: 'invite' as const }))
+        ].sort((a, b) => {
+            const timeDiff = new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+            if (timeDiff !== 0) return timeDiff;
+            return b.id.localeCompare(a.id);
+        });
+
+        const hasMore = combined.length > safeLimit;
+        const sliced = combined.slice(0, safeLimit);
+
+        let nextCursor = null;
+        if (hasMore && sliced.length > 0) {
+            const lastItem = sliced[sliced.length - 1]!;
+            nextCursor = encodeCompoundCursor(lastItem._source, lastItem.createdAt, lastItem.id);
+        }
 
         return {
             success: true,
-            applications: slicedApplications.map((app) => {
-                const decisionMeta = decisionMap.get(app.id);
-                const decisionReasonRaw = decisionMeta?.reasonCode || null;
-                const decisionReason = decisionReasonRaw
-                    ? normalizeApplicationDecisionReason(decisionReasonRaw, 'other')
-                    : null;
-                const lifecycleStatus = resolveLifecycleStatus(app.status, decisionReason);
-                const canSkipCooldown = app.decisionBy === user.id;
-                const cooldownMeta =
-                    app.status === 'rejected'
-                        ? (canSkipCooldown ? { canApply: true } : calculateCooldown(app.updatedAt))
-                        : {};
-                return {
-                    id: app.id,
-                    projectId: app.projectId,
-                    projectTitle: app.project?.title || 'Unknown Project',
-                    projectSlug: app.project?.slug,
-                    projectCover: app.project?.coverImage,
-                    roleTitle: app.role?.title || app.role?.role || 'Unknown Role',
-                    message: app.message,
-                    status: app.status,
-                    lifecycleStatus,
-                    decisionReason,
-                    createdAt: app.createdAt,
-                    updatedAt: app.updatedAt,
-                    decisionAt: decisionMeta?.decisionAt || toISODate(app.updatedAt),
-                    conversationId: app.conversationId,
-                    canEdit:
-                        app.status === 'pending' &&
-                        Date.now() - new Date(app.createdAt).getTime() <= APPLICATION_EDIT_WINDOW_MS,
-                    ...cooldownMeta
-                };
-            }),
+            applications: sliced.map(({ _source, ...rest }) => rest),
             hasMore,
             nextCursor,
         };
@@ -2208,21 +2411,56 @@ export async function getIncomingApplicationsAction(
         const { safeLimit, safeOffset } = legacyMode
             ? normalizeApplicationListPagination(paginationOrLimit, offset)
             : normalizeApplicationListPagination(paginationOrLimit.limit, 0);
-        const { cursor } = legacyMode
-            ? { cursor: null }
-            : normalizeCursorPaginationInput(paginationOrLimit);
 
-        const applications = await db.query.roleApplications.findMany({
-            where: and(
+        let cursorDate: Date | undefined;
+        let cursorId: string | undefined;
+
+        if (!legacyMode) {
+            const compCursor = parseCompoundCursor(paginationOrLimit.cursor);
+            if (compCursor) {
+                cursorDate = compCursor.createdAt;
+                cursorId = compCursor.id;
+            } else {
+                const oldCursorResult = normalizeCursorPaginationInput(paginationOrLimit);
+                if (oldCursorResult.cursor) {
+                    cursorDate = oldCursorResult.cursor.createdAt;
+                    cursorId = oldCursorResult.cursor.id;
+                }
+            }
+        }
+
+        const appWhere = cursorDate && cursorId
+            ? and(
                 eq(roleApplications.creatorId, user.id),
                 eq(roleApplications.status, 'pending'),
-                ...(cursor
-                    ? [or(
-                        lt(roleApplications.createdAt, cursor.createdAt),
-                        and(eq(roleApplications.createdAt, cursor.createdAt), lt(roleApplications.id, cursor.id))
-                    )]
-                    : [])
-            ),
+                or(
+                    lt(roleApplications.createdAt, cursorDate),
+                    and(eq(roleApplications.createdAt, cursorDate), lt(roleApplications.id, cursorId))
+                )
+            )
+            : and(
+                eq(roleApplications.creatorId, user.id),
+                eq(roleApplications.status, 'pending')
+            );
+
+        const inviteWhere = cursorDate && cursorId
+            ? and(
+                eq(messageWorkflowItems.assigneeUserId, user.id),
+                eq(messageWorkflowItems.kind, 'project_invite'),
+                eq(messageWorkflowItems.status, 'pending'),
+                or(
+                    lt(messageWorkflowItems.createdAt, cursorDate),
+                    and(eq(messageWorkflowItems.createdAt, cursorDate), lt(messageWorkflowItems.id, cursorId))
+                )
+            )
+            : and(
+                eq(messageWorkflowItems.assigneeUserId, user.id),
+                eq(messageWorkflowItems.kind, 'project_invite'),
+                eq(messageWorkflowItems.status, 'pending')
+            );
+
+        const roleApps = await db.query.roleApplications.findMany({
+            where: appWhere,
             with: {
                 project: {
                     columns: { id: true, title: true, slug: true }
@@ -2236,39 +2474,110 @@ export async function getIncomingApplicationsAction(
             },
             columns: { id: true, projectId: true, status: true, createdAt: true, conversationId: true },
             orderBy: (apps, { desc }) => [desc(apps.createdAt), desc(apps.id)],
-            limit: safeLimit + 1,
-            offset: cursor ? 0 : safeOffset
+            limit: legacyMode ? safeOffset + safeLimit + 1 : safeLimit + 1,
         });
 
-        const hasMore = applications.length > safeLimit;
-        const slicedApplications = applications.slice(0, safeLimit);
-        const nextCursor = hasMore && slicedApplications.length > 0
-            ? encodeApplicationCursor({
-                createdAt: slicedApplications[slicedApplications.length - 1].createdAt,
-                id: slicedApplications[slicedApplications.length - 1].id,
-            })
-            : null;
+        const invites = await db.query.messageWorkflowItems.findMany({
+            where: inviteWhere,
+            with: {
+                project: {
+                    columns: { id: true, title: true, slug: true }
+                },
+                creator: {
+                    columns: { id: true, username: true, fullName: true, avatarUrl: true, skills: true, headline: true }
+                }
+            },
+            columns: {
+                id: true,
+                projectId: true,
+                status: true,
+                payload: true,
+                createdAt: true,
+                updatedAt: true,
+                conversationId: true,
+            },
+            orderBy: (items, { desc }) => [desc(items.createdAt), desc(items.id)],
+            limit: legacyMode ? safeOffset + safeLimit + 1 : safeLimit + 1,
+        });
+
+        const mappedApps = roleApps.map((app) => ({
+            id: app.id,
+            projectId: app.projectId,
+            projectTitle: app.project?.title || 'Unknown Project',
+            projectSlug: app.project?.slug,
+            roleTitle: app.role?.title || app.role?.role || 'Unknown Role',
+            applicant: {
+                id: app.applicant?.id,
+                username: app.applicant?.username,
+                fullName: app.applicant?.fullName,
+                avatarUrl: app.applicant?.avatarUrl,
+                skills: app.applicant?.skills ?? [],
+                headline: app.applicant?.headline ?? null,
+            },
+            status: app.status as 'pending' | 'accepted' | 'rejected' | 'withdrawn',
+            createdAt: app.createdAt,
+            conversationId: app.conversationId,
+            isWorkflowItem: false,
+        }));
+
+        const mappedInvites = invites.map((invite) => {
+            let status: 'pending' | 'accepted' | 'rejected' | 'withdrawn' = 'pending';
+            if (invite.status === 'declined') {
+                status = 'rejected';
+            } else if (invite.status === 'canceled') {
+                status = 'withdrawn';
+            } else if (invite.status === 'expired') {
+                status = 'rejected';
+            } else if (invite.status === 'accepted') {
+                status = 'accepted';
+            }
+
+            return {
+                id: invite.id,
+                projectId: invite.projectId,
+                projectTitle: invite.project?.title || (invite.payload?.projectTitle as string) || 'Unknown Project',
+                projectSlug: invite.project?.slug || (invite.payload?.projectSlug as string),
+                roleTitle: (invite.payload?.roleTitle as string) || 'Collaborator',
+                applicant: {
+                    id: invite.creator?.id,
+                    username: invite.creator?.username,
+                    fullName: invite.creator?.fullName,
+                    avatarUrl: invite.creator?.avatarUrl,
+                    skills: invite.creator?.skills ?? [],
+                    headline: invite.creator?.headline ?? null,
+                },
+                status,
+                createdAt: invite.createdAt,
+                conversationId: invite.conversationId,
+                isWorkflowItem: true,
+            };
+        });
+
+        const combined = [
+            ...mappedApps.map(item => ({ ...item, _source: 'app' as const })),
+            ...mappedInvites.map(item => ({ ...item, _source: 'invite' as const }))
+        ].sort((a, b) => {
+            const timeDiff = new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+            if (timeDiff !== 0) return timeDiff;
+            return b.id.localeCompare(a.id);
+        });
+
+        const sliced = legacyMode
+            ? combined.slice(safeOffset, safeOffset + safeLimit)
+            : combined.slice(0, safeLimit);
+        const hasMore = legacyMode
+            ? combined.length > safeOffset + safeLimit
+            : combined.length > safeLimit;
+
+        let nextCursor = null;
+        if (!legacyMode && hasMore && sliced.length > 0) {
+            const lastItem = sliced[sliced.length - 1]!;
+            nextCursor = encodeCompoundCursor(lastItem._source, lastItem.createdAt, lastItem.id);
+        }
 
         return {
             success: true,
-            applications: slicedApplications.map(app => ({
-                id: app.id,
-                projectId: app.projectId,
-                projectTitle: app.project?.title || 'Unknown Project',
-                projectSlug: app.project?.slug,
-                roleTitle: app.role?.title || app.role?.role || 'Unknown Role',
-                applicant: {
-                    id: app.applicant?.id,
-                    username: app.applicant?.username,
-                    fullName: app.applicant?.fullName,
-                    avatarUrl: app.applicant?.avatarUrl,
-                    skills: app.applicant?.skills ?? [],
-                    headline: app.applicant?.headline ?? null,
-                },
-                status: app.status,
-                createdAt: app.createdAt,
-                conversationId: app.conversationId,
-            })),
+            applications: sliced.map(({ _source, ...rest }) => rest),
             hasMore,
             nextCursor,
         };
@@ -2302,10 +2611,10 @@ export async function getInboxApplicationsAction(
         }
         const { safeLimit, safeOffset } = normalizeApplicationListPagination(limit, offset);
 
-        // Fetch applications where:
-        // 1. User is Creator AND status is 'pending' (Incoming)
-        // 2. User is Applicant (Outgoing - see all active)
-        const applications = await db.query.roleApplications.findMany({
+        // 1. Fetch role applications where:
+        // - User is project owner (Incoming pending applications)
+        // - User is applicant (Outgoing applications)
+        const roleApps = await db.query.roleApplications.findMany({
             where: or(
                 and(
                     eq(roleApplications.creatorId, user.id),
@@ -2335,17 +2644,48 @@ export async function getInboxApplicationsAction(
                 updatedAt: true,
                 conversationId: true,
             },
-            orderBy: (apps, { desc }) => [desc(apps.createdAt)],
-            limit: safeLimit + 1,
-            offset: safeOffset
         });
 
-        const hasMore = applications.length > safeLimit;
-        const slicedApplications = applications.slice(0, safeLimit);
-        const decisionMap = await getDecisionMetadataMap(slicedApplications.map((app) => app.id));
-        const conversationIds = slicedApplications
-            .map((app) => app.conversationId)
-            .filter((conversationId): conversationId is string => typeof conversationId === 'string' && conversationId.length > 0);
+        // 2. Fetch project invitations (messageWorkflowItems of kind project_invite) where:
+        // - User is Lead/creator (Outgoing project invites)
+        // - User is candidate/assignee (Incoming project invites)
+        const invites = await db.query.messageWorkflowItems.findMany({
+            where: and(
+                eq(messageWorkflowItems.kind, 'project_invite'),
+                or(
+                    eq(messageWorkflowItems.assigneeUserId, user.id),
+                    eq(messageWorkflowItems.creatorId, user.id)
+                )
+            ),
+            with: {
+                project: {
+                    columns: { id: true, title: true, slug: true, ownerId: true }
+                },
+                creator: {
+                    columns: { id: true, username: true, fullName: true, avatarUrl: true }
+                },
+                assignee: {
+                    columns: { id: true, username: true, fullName: true, avatarUrl: true }
+                }
+            },
+            columns: {
+                id: true,
+                projectId: true,
+                creatorId: true,
+                assigneeUserId: true,
+                status: true,
+                payload: true,
+                createdAt: true,
+                updatedAt: true,
+                conversationId: true,
+            }
+        });
+
+        const decisionMap = await getDecisionMetadataMap(roleApps.map((app) => app.id));
+        const conversationIds = [
+            ...roleApps.map((app) => app.conversationId),
+            ...invites.map((inv) => inv.conversationId)
+        ].filter((conversationId): conversationId is string => typeof conversationId === 'string' && conversationId.length > 0);
 
         const unreadCounts = conversationIds.length > 0
             ? await db
@@ -2366,8 +2706,7 @@ export async function getInboxApplicationsAction(
         );
 
         // Fetch creator profiles for outgoing applications
-        // We need to fetch profiles for creators of projects we applied to
-        const creatorIds = slicedApplications
+        const creatorIds = roleApps
             .filter(app => app.applicantId === user.id) // Outgoing
             .map(app => app.project?.ownerId || app.creatorId)
             .filter(Boolean) as string[];
@@ -2384,65 +2723,144 @@ export async function getInboxApplicationsAction(
             creatorsMap = new Map(creators.map(c => [c.id, c]));
         }
 
+        // Map applications
+        const mappedApps = roleApps.map((app) => {
+            const isIncoming = app.creatorId === user.id;
+            const decisionMeta = decisionMap.get(app.id);
+            const decisionReasonRaw = decisionMeta?.reasonCode || null;
+            const decisionReason = decisionReasonRaw
+                ? normalizeApplicationDecisionReason(decisionReasonRaw, 'other')
+                : null;
+            const lifecycleStatus = resolveLifecycleStatus(app.status, decisionReason);
+
+            let displayUser: {
+                id?: string;
+                username?: string | null;
+                fullName?: string | null;
+                avatarUrl?: string | null;
+                type: 'applicant' | 'creator';
+            };
+
+            if (isIncoming) {
+                displayUser = {
+                    id: app.applicant?.id,
+                    username: app.applicant?.username,
+                    fullName: app.applicant?.fullName,
+                    avatarUrl: app.applicant?.avatarUrl,
+                    type: 'applicant',
+                };
+            } else {
+                const creatorId = app.project?.ownerId || app.creatorId;
+                const creator = creatorsMap.get(creatorId);
+                displayUser = {
+                    id: creatorId,
+                    username: creator?.username,
+                    fullName: creator?.fullName,
+                    avatarUrl: creator?.avatarUrl,
+                    type: 'creator',
+                };
+            }
+
+            return {
+                id: app.id,
+                isWorkflowItem: false,
+                type: isIncoming ? 'incoming' : 'outgoing',
+                projectId: app.projectId,
+                projectTitle: app.project?.title || 'Unknown Project',
+                projectSlug: app.project?.slug,
+                roleTitle: app.role?.title || app.role?.role || 'Unknown Role',
+                displayUser,
+                status: app.status,
+                lifecycleStatus,
+                decisionReason,
+                decisionAt: decisionMeta?.decisionAt || toISODate(app.updatedAt),
+                createdAt: app.createdAt,
+                conversationId: app.conversationId,
+                coverLetter: app.message,
+                unreadCount: app.conversationId
+                    ? unreadCountByConversationId.get(app.conversationId) ?? 0
+                    : 0,
+            };
+        });
+
+        // Map invitations
+        const mappedInvites = invites.map((invite) => {
+            const isIncoming = invite.assigneeUserId === user.id;
+
+            let status: 'pending' | 'accepted' | 'rejected' | 'withdrawn' = 'pending';
+            let decisionReason: string | null = null;
+            if (invite.status === 'declined') {
+                status = 'rejected';
+            } else if (invite.status === 'canceled') {
+                status = 'withdrawn';
+            } else if (invite.status === 'expired') {
+                status = 'rejected';
+                decisionReason = 'role_filled';
+            } else if (invite.status === 'accepted') {
+                status = 'accepted';
+            }
+
+            const lifecycleStatus = resolveLifecycleStatus(status, decisionReason);
+
+            let displayUser: {
+                id?: string;
+                username?: string | null;
+                fullName?: string | null;
+                avatarUrl?: string | null;
+                type: 'applicant' | 'creator';
+            };
+
+            if (isIncoming) {
+                displayUser = {
+                    id: invite.creator?.id,
+                    username: invite.creator?.username,
+                    fullName: invite.creator?.fullName,
+                    avatarUrl: invite.creator?.avatarUrl,
+                    type: 'creator',
+                };
+            } else {
+                displayUser = {
+                    id: invite.assignee?.id,
+                    username: invite.assignee?.username,
+                    fullName: invite.assignee?.fullName,
+                    avatarUrl: invite.assignee?.avatarUrl,
+                    type: 'applicant',
+                };
+            }
+
+            return {
+                id: invite.id,
+                isWorkflowItem: true,
+                type: isIncoming ? 'incoming' : 'outgoing',
+                projectId: invite.projectId,
+                projectTitle: invite.project?.title || (invite.payload?.projectTitle as string) || 'Unknown Project',
+                projectSlug: invite.project?.slug || (invite.payload?.projectSlug as string),
+                roleTitle: (invite.payload?.roleTitle as string) || 'Collaborator',
+                displayUser,
+                status,
+                lifecycleStatus,
+                decisionReason,
+                decisionAt: toISODate(invite.updatedAt),
+                createdAt: invite.createdAt,
+                conversationId: invite.conversationId,
+                coverLetter: invite.payload?.note as string | null,
+                unreadCount: invite.conversationId
+                    ? unreadCountByConversationId.get(invite.conversationId) ?? 0
+                    : 0,
+            };
+        });
+
+        // Merge both collections, sort by createdAt DESC
+        const combined = [...mappedApps, ...mappedInvites].sort(
+            (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        );
+
+        const hasMore = combined.length > safeOffset + safeLimit;
+        const sliced = combined.slice(safeOffset, safeOffset + safeLimit);
+
         const payload = {
             success: true,
-            applications: slicedApplications.map((app) => {
-                const isIncoming = app.creatorId === user.id;
-                const decisionMeta = decisionMap.get(app.id);
-                const decisionReasonRaw = decisionMeta?.reasonCode || null;
-                const decisionReason = decisionReasonRaw
-                    ? normalizeApplicationDecisionReason(decisionReasonRaw, 'other')
-                    : null;
-                const lifecycleStatus = resolveLifecycleStatus(app.status, decisionReason);
-
-                let displayUser: {
-                    id?: string;
-                    username?: string | null;
-                    fullName?: string | null;
-                    avatarUrl?: string | null;
-                    type: 'applicant' | 'creator';
-                };
-
-                if (isIncoming) {
-                    displayUser = {
-                        id: app.applicant?.id,
-                        username: app.applicant?.username,
-                        fullName: app.applicant?.fullName,
-                        avatarUrl: app.applicant?.avatarUrl,
-                        type: 'applicant',
-                    };
-                } else {
-                    const creatorId = app.project?.ownerId || app.creatorId;
-                    const creator = creatorsMap.get(creatorId);
-                    displayUser = {
-                        id: creatorId,
-                        username: creator?.username,
-                        fullName: creator?.fullName,
-                        avatarUrl: creator?.avatarUrl,
-                        type: 'creator',
-                    };
-                }
-
-                return {
-                    id: app.id,
-                    type: isIncoming ? 'incoming' : 'outgoing',
-                    projectId: app.projectId,
-                    projectTitle: app.project?.title || 'Unknown Project',
-                    projectSlug: app.project?.slug,
-                    roleTitle: app.role?.title || app.role?.role || 'Unknown Role',
-                    displayUser,
-                    status: app.status,
-                    lifecycleStatus,
-                    decisionReason,
-                    decisionAt: decisionMeta?.decisionAt || toISODate(app.updatedAt),
-                    createdAt: app.createdAt,
-                    conversationId: app.conversationId,
-                    coverLetter: app.message,
-                    unreadCount: app.conversationId
-                        ? unreadCountByConversationId.get(app.conversationId) ?? 0
-                        : 0,
-                };
-            }),
+            applications: sliced,
             hasMore,
         };
         const elapsedMs = Date.now() - startedAtMs;
@@ -2583,5 +3001,562 @@ export async function getApplicationRequestHistory(limit: number = 80): Promise<
     } catch (error) {
         console.error('Failed to load application request history:', error);
         return { success: false, items: [], error: 'Failed to load history' };
+    }
+}
+
+// ============================================================================
+// PROPOSE ROLE CHANGE (Reviewer/Lead only)
+// ============================================================================
+export async function proposeApplicationRoleChangeAction(
+    applicationId: string,
+    newRoleId: string,
+    message?: string,
+    options?: ApplicationActionOptions
+): Promise<ApplicationActionResult> {
+    const traceId = resolveApplicationTraceId('propose', 'anon', applicationId, options);
+    try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+            return toApplicationFailure(traceId, 'UNAUTHORIZED', 'Unauthorized');
+        }
+
+        const proposeRate = await consumeRateLimit(`applications:propose:${user.id}`, 20, 60);
+        if (!proposeRate.allowed) {
+            return toApplicationFailure(traceId, 'RATE_LIMITED', 'Too many requests. Please wait a moment.');
+        }
+
+        const application = await db.query.roleApplications.findFirst({
+            where: eq(roleApplications.id, applicationId),
+            with: {
+                project: { columns: { title: true, slug: true, ownerId: true } },
+                role: { columns: { title: true, role: true } },
+            },
+            columns: {
+                id: true,
+                applicantId: true,
+                projectId: true,
+                roleId: true,
+                status: true,
+                creatorId: true,
+                conversationId: true,
+            },
+        });
+
+        if (!application) return toApplicationFailure(traceId, 'NOT_FOUND', 'Application not found');
+
+        if (application.applicantId === user.id) {
+            return toApplicationFailure(traceId, 'FORBIDDEN', 'You cannot propose a role change for your own application');
+        }
+
+        const canReview = await canReviewProjectApplicationInternal(
+            db,
+            application.projectId,
+            user.id,
+            application.project?.ownerId || application.creatorId
+        );
+        if (!canReview) {
+            return toApplicationFailure(traceId, 'FORBIDDEN', 'Only project owner or admins can propose role changes');
+        }
+
+        if (application.status !== 'pending' && application.status !== 'proposed') {
+            return toApplicationFailure(traceId, 'INVALID_STATE', 'Only pending applications can have role changes proposed');
+        }
+
+        const newRole = await db.query.projectOpenRoles.findFirst({
+            where: and(
+                eq(projectOpenRoles.id, newRoleId),
+                eq(projectOpenRoles.projectId, application.projectId)
+            ),
+        });
+
+        if (!newRole) {
+            return toApplicationFailure(traceId, 'ROLE_NOT_FOUND', 'Proposed role not found for this project');
+        }
+
+        if (newRole.filled >= newRole.count) {
+            return toApplicationFailure(traceId, 'ROLE_FULL', 'The proposed role is already filled');
+        }
+
+        await db.transaction(async (tx) => {
+            await tx
+                .update(roleApplications)
+                .set({
+                    status: 'proposed',
+                    proposedRoleId: newRoleId,
+                    decisionBy: user.id,
+                    updatedAt: new Date(),
+                })
+                .where(eq(roleApplications.id, applicationId));
+
+            await syncCanonicalApplicationMessageDecisionInternal(tx, {
+                applicationId,
+                conversationId: application.conversationId,
+                status: 'proposed',
+                decisionBy: user.id,
+                reason: 'role_proposed_by_reviewer',
+                applicationTraceId: traceId,
+            });
+
+            if (application.conversationId) {
+                await sendApplicationStatusUpdateInternal(
+                    tx,
+                    application.conversationId,
+                    user.id,
+                    applicationId,
+                    application.projectId,
+                    application.roleId,
+                    application.project?.title || 'Project',
+                    newRole.title || newRole.role || 'Proposed Role',
+                    'proposed',
+                    (message || '').trim() || `I think your profile fits our ${newRole.title || newRole.role} role better.`,
+                    'role_proposed_by_reviewer',
+                    traceId,
+                    application.role?.title || application.role?.role || 'Original Role'
+                );
+            }
+        });
+
+        const slugOrId = application.project?.slug || application.projectId;
+        revalidatePath(`/projects/${slugOrId}`);
+        revalidatePath('/messages');
+        revalidatePath('/people');
+
+        trackApplicationEvent('apply_proposed', {
+            applicationId,
+            projectId: application.projectId,
+            roleId: application.roleId,
+            actorId: user.id,
+            source: 'messages',
+            applicationTraceId: traceId,
+        });
+
+        return toApplicationSuccess(traceId, { applicationId });
+    } catch (error) {
+        console.error('Failed to propose role change:', error);
+        return toApplicationFailure(traceId, 'INTERNAL_ERROR', 'Failed to propose role change');
+    }
+}
+
+// ============================================================================
+// ACCEPT PROPOSED ROLE CHANGE (Applicant only)
+// ============================================================================
+export async function acceptProposedRoleAction(
+    applicationId: string,
+    options?: ApplicationActionOptions
+): Promise<ApplicationActionResult> {
+    const traceId = resolveApplicationTraceId('accept_proposed', 'anon', applicationId, options);
+    try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+            return toApplicationFailure(traceId, 'UNAUTHORIZED', 'Unauthorized');
+        }
+
+        const acceptProposedRate = await consumeRateLimit(`applications:accept_proposed:${user.id}`, 20, 60);
+        if (!acceptProposedRate.allowed) {
+            return toApplicationFailure(traceId, 'RATE_LIMITED', 'Too many requests. Please wait a moment.');
+        }
+
+        const application = await db.query.roleApplications.findFirst({
+            where: eq(roleApplications.id, applicationId),
+            with: {
+                project: { columns: { title: true, slug: true } },
+                role: { columns: { title: true, role: true } },
+            },
+            columns: {
+                id: true,
+                applicantId: true,
+                projectId: true,
+                roleId: true,
+                proposedRoleId: true,
+                status: true,
+                conversationId: true,
+                decisionBy: true,
+            },
+        });
+
+        if (!application) return toApplicationFailure(traceId, 'NOT_FOUND', 'Application not found');
+
+        if (application.applicantId !== user.id) {
+            return toApplicationFailure(traceId, 'FORBIDDEN', 'Only the applicant can accept a proposed role change');
+        }
+
+        if (application.status !== 'proposed') {
+            return toApplicationFailure(traceId, 'INVALID_STATE', 'This application does not have a proposed role change to accept');
+        }
+
+        if (!application.proposedRoleId) {
+            return toApplicationFailure(traceId, 'INVALID_STATE', 'No proposed role found on this application');
+        }
+
+        // Verify if user is already a member of the project:
+        const isMember = await db.query.projectMembers.findFirst({
+            where: and(
+                eq(projectMembers.projectId, application.projectId),
+                eq(projectMembers.userId, user.id)
+            ),
+        });
+        if (isMember) {
+            return toApplicationFailure(traceId, 'ALREADY_MEMBER', 'You are already a member of this project');
+        }
+
+        const updatedProposedRoleId = application.proposedRoleId;
+        let pRoleTitle = '';
+        await db.transaction(async (tx) => {
+            // Pessimistic lock
+            const [proposedRole] = await tx
+                .select()
+                .from(projectOpenRoles)
+                .where(eq(projectOpenRoles.id, updatedProposedRoleId))
+                .for('update');
+
+            if (!proposedRole) {
+                throw new Error('Proposed role not found');
+            }
+
+            pRoleTitle = proposedRole.title || proposedRole.role || 'Role';
+
+            if (proposedRole.filled >= proposedRole.count) {
+                throw new Error('Proposed role is already full');
+            }
+
+            // Update application
+            await tx
+                .update(roleApplications)
+                .set({
+                    status: 'accepted',
+                    roleId: updatedProposedRoleId,
+                    proposedRoleId: null,
+                    decisionAt: new Date(),
+                    decisionBy: application.decisionBy || user.id,
+                    updatedAt: new Date(),
+                })
+                .where(eq(roleApplications.id, applicationId));
+
+            // Add project member
+            await addProjectMemberInternal(tx, {
+                projectId: application.projectId,
+                userId: user.id,
+                role: 'member',
+                actorId: user.id,
+                source: 'application_accept',
+                roleId: updatedProposedRoleId,
+                incrementRoleCapacity: true,
+            });
+
+            await syncCanonicalApplicationMessageDecisionInternal(tx, {
+                applicationId,
+                conversationId: application.conversationId,
+                status: 'accepted',
+                decisionBy: user.id,
+                reason: 'proposal_accepted_by_applicant',
+                applicationTraceId: traceId,
+            });
+
+            if (application.conversationId) {
+                await sendApplicationStatusUpdateInternal(
+                    tx,
+                    application.conversationId,
+                    user.id,
+                    applicationId,
+                    application.projectId,
+                    updatedProposedRoleId,
+                    application.project?.title || 'Project',
+                    pRoleTitle,
+                    'accepted',
+                    'Proposed role accepted by applicant.',
+                    'proposal_accepted_by_applicant',
+                    traceId
+                );
+            }
+        });
+
+        const slugOrId = application.project?.slug || application.projectId;
+        revalidatePath(`/projects/${slugOrId}`);
+        revalidatePath('/messages');
+        revalidatePath('/people');
+
+        trackApplicationEvent('apply_accepted', {
+            applicationId,
+            projectId: application.projectId,
+            roleId: updatedProposedRoleId,
+            actorId: user.id,
+            reasonCode: 'proposal_accepted_by_applicant',
+            source: 'messages',
+            applicationTraceId: traceId,
+        });
+
+        return toApplicationSuccess(traceId, { applicationId });
+    } catch (error) {
+        console.error('Failed to accept proposed role change:', error);
+        if (error instanceof Error && error.message === 'Proposed role is already full') {
+            return toApplicationFailure(traceId, 'ROLE_FULL', 'The proposed role has already been filled');
+        }
+        return toApplicationFailure(traceId, 'INTERNAL_ERROR', 'Failed to accept proposed role change');
+    }
+}
+
+// ============================================================================
+// DECLINE PROPOSED ROLE CHANGE (Applicant only)
+// ============================================================================
+export async function declineProposedRoleAction(
+    applicationId: string,
+    options?: ApplicationActionOptions
+): Promise<ApplicationActionResult> {
+    const traceId = resolveApplicationTraceId('decline_proposed', 'anon', applicationId, options);
+    try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+            return toApplicationFailure(traceId, 'UNAUTHORIZED', 'Unauthorized');
+        }
+
+        const declineProposedRate = await consumeRateLimit(`applications:decline_proposed:${user.id}`, 20, 60);
+        if (!declineProposedRate.allowed) {
+            return toApplicationFailure(traceId, 'RATE_LIMITED', 'Too many requests. Please wait a moment.');
+        }
+
+        const application = await db.query.roleApplications.findFirst({
+            where: eq(roleApplications.id, applicationId),
+            with: {
+                project: { columns: { title: true, slug: true } },
+                role: { columns: { title: true, role: true } },
+            },
+            columns: {
+                id: true,
+                applicantId: true,
+                projectId: true,
+                roleId: true,
+                status: true,
+                conversationId: true,
+            },
+        });
+
+        if (!application) return toApplicationFailure(traceId, 'NOT_FOUND', 'Application not found');
+
+        if (application.applicantId !== user.id) {
+            return toApplicationFailure(traceId, 'FORBIDDEN', 'Only the applicant can decline a proposed role change');
+        }
+
+        if (application.status !== 'proposed') {
+            return toApplicationFailure(traceId, 'INVALID_STATE', 'This application does not have a proposed role change to decline');
+        }
+
+        await db.transaction(async (tx) => {
+            // Revert back to pending, clear proposedRoleId
+            await tx
+                .update(roleApplications)
+                .set({
+                    status: 'pending',
+                    proposedRoleId: null,
+                    decisionBy: null,
+                    decisionAt: null,
+                    updatedAt: new Date(),
+                })
+                .where(eq(roleApplications.id, applicationId));
+
+            await syncCanonicalApplicationMessageDecisionInternal(tx, {
+                applicationId,
+                conversationId: application.conversationId,
+                status: 'pending',
+                decisionBy: user.id,
+                reason: 'proposal_declined_by_applicant',
+                applicationTraceId: traceId,
+            });
+
+            if (application.conversationId) {
+                await sendApplicationStatusUpdateInternal(
+                    tx,
+                    application.conversationId,
+                    user.id,
+                    applicationId,
+                    application.projectId,
+                    application.roleId,
+                    application.project?.title || 'Project',
+                    application.role?.title || application.role?.role || 'Original Role',
+                    'pending',
+                    'Applicant declined the proposed role change. Reverted to original role application.',
+                    'proposal_declined_by_applicant',
+                    traceId
+                );
+            }
+        });
+
+        const slugOrId = application.project?.slug || application.projectId;
+        revalidatePath(`/projects/${slugOrId}`);
+        revalidatePath('/messages');
+        revalidatePath('/people');
+
+        trackApplicationEvent('apply_reopened', {
+            applicationId,
+            projectId: application.projectId,
+            roleId: application.roleId,
+            actorId: user.id,
+            source: 'messages',
+            applicationTraceId: traceId,
+        });
+
+        return toApplicationSuccess(traceId, { applicationId });
+    } catch (error) {
+        console.error('Failed to decline proposed role change:', error);
+        return toApplicationFailure(traceId, 'INTERNAL_ERROR', 'Failed to decline proposed role change');
+    }
+}
+
+// ============================================================================
+// GET PROJECT INVITE OPTIONS (For Lead Invite Modal)
+// ============================================================================
+export async function getProjectInviteOptionsAction(projectId: string): Promise<{
+    success: boolean;
+    error?: string;
+    connections: {
+        id: string;
+        username: string | null;
+        fullName: string | null;
+        avatarUrl: string | null;
+        headline: string | null;
+        pendingApplicationId: string | null;
+        pendingApplicationRoleId: string | null;
+        pendingApplicationRoleTitle: string | null;
+        pendingInvitations: { id: string; roleId: string | null; roleTitle: string | null }[];
+    }[];
+    openRoles: {
+        id: string;
+        title: string;
+        role: string;
+        filled: number;
+        count: number;
+    }[];
+}> {
+    try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return { success: false, error: 'Unauthorized', connections: [], openRoles: [] };
+
+        // 1. Fetch project open roles that are not fully filled
+        const openRoles = await db.query.projectOpenRoles.findMany({
+            where: and(
+                eq(projectOpenRoles.projectId, projectId),
+                sql`${projectOpenRoles.filled} < ${projectOpenRoles.count}`
+            ),
+        });
+
+        // 2. Fetch all project member user IDs (to exclude them from connections list)
+        const members = await db.query.projectMembers.findMany({
+            where: eq(projectMembers.projectId, projectId),
+            columns: { userId: true },
+        });
+        const memberUserIds = new Set(members.map((m) => m.userId));
+
+        // 3. Fetch all pending applications for this project
+        const pendingApps = await db
+            .select({
+                id: roleApplications.id,
+                applicantId: roleApplications.applicantId,
+                roleId: roleApplications.roleId,
+                roleTitle: projectOpenRoles.title,
+            })
+            .from(roleApplications)
+            .leftJoin(projectOpenRoles, eq(projectOpenRoles.id, roleApplications.roleId))
+            .where(and(
+                eq(roleApplications.projectId, projectId),
+                eq(roleApplications.status, 'pending')
+            ));
+
+        const pendingAppsByApplicant = new Map(
+            pendingApps.map((app) => [app.applicantId, app])
+        );
+
+        // 3b. Fetch all pending invitations for this project
+        const pendingInvites = await db
+            .select({
+                id: messageWorkflowItems.id,
+                assigneeUserId: messageWorkflowItems.assigneeUserId,
+                roleId: sql<string | null>`${messageWorkflowItems.payload}->>'roleId'`,
+                roleTitle: sql<string | null>`${messageWorkflowItems.payload}->>'roleTitle'`,
+            })
+            .from(messageWorkflowItems)
+            .where(and(
+                eq(messageWorkflowItems.projectId, projectId),
+                eq(messageWorkflowItems.kind, 'project_invite'),
+                eq(messageWorkflowItems.status, 'pending')
+            ));
+
+        const pendingInvitesByAssignee = new Map<string, Array<{ id: string; roleId: string | null; roleTitle: string | null }>>();
+        for (const invite of pendingInvites) {
+            if (invite.assigneeUserId) {
+                const list = pendingInvitesByAssignee.get(invite.assigneeUserId) || [];
+                list.push({ id: invite.id, roleId: invite.roleId, roleTitle: invite.roleTitle });
+                pendingInvitesByAssignee.set(invite.assigneeUserId, list);
+            }
+        }
+
+        // 4. Fetch all accepted connections of the user
+        const connectionRows = await db
+            .select({
+                id: connections.id,
+                requesterId: connections.requesterId,
+                addresseeId: connections.addresseeId,
+                profileId: profiles.id,
+                username: profiles.username,
+                fullName: profiles.fullName,
+                avatarUrl: profiles.avatarUrl,
+                headline: profiles.headline,
+            })
+            .from(connections)
+            .innerJoin(
+                profiles,
+                or(
+                    and(
+                        eq(connections.requesterId, user.id),
+                        eq(connections.addresseeId, profiles.id)
+                    ),
+                    and(
+                        eq(connections.addresseeId, user.id),
+                        eq(connections.requesterId, profiles.id)
+                    )
+                )
+            )
+            .where(
+                and(
+                    eq(connections.status, 'accepted'),
+                    or(eq(connections.requesterId, user.id), eq(connections.addresseeId, user.id))
+                )
+            );
+
+        // Map and filter out existing members
+        const filteredConnections = connectionRows
+            .filter((row) => !memberUserIds.has(row.profileId))
+            .map((row) => {
+                const pendingApp = pendingAppsByApplicant.get(row.profileId);
+                const connectionPendingInvites = pendingInvitesByAssignee.get(row.profileId) || [];
+                return {
+                    id: row.profileId,
+                    username: row.username,
+                    fullName: row.fullName,
+                    avatarUrl: row.avatarUrl,
+                    headline: row.headline,
+                    pendingApplicationId: pendingApp?.id || null,
+                    pendingApplicationRoleId: pendingApp?.roleId || null,
+                    pendingApplicationRoleTitle: pendingApp?.roleTitle || null,
+                    pendingInvitations: connectionPendingInvites,
+                };
+            });
+
+        return {
+            success: true,
+            connections: filteredConnections,
+            openRoles: openRoles.map((r) => ({
+                id: r.id,
+                title: r.title || r.role || 'Role',
+                role: r.role || 'member',
+                filled: r.filled || 0,
+                count: r.count || 0,
+            })),
+        };
+    } catch (error) {
+        console.error('Failed to fetch project invite options:', error);
+        return { success: false, error: 'Internal server error', connections: [], openRoles: [] };
     }
 }
