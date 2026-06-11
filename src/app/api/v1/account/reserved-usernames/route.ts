@@ -1,6 +1,6 @@
 import { db } from '@/lib/db'
 import { reservedUsernames } from '@/lib/db/schema'
-import { getRequestId, jsonError, jsonSuccess, logApiRoute } from '@/app/api/v1/_shared'
+import { getRequestId, jsonError, jsonSuccess, logApiRoute, enforceRouteLimit } from '@/app/api/v1/_shared'
 import { logger } from '@/lib/logger'
 import { consumeRateLimit } from '@/lib/security/rate-limit'
 import { isAdminUser } from '@/lib/security/admin'
@@ -8,6 +8,7 @@ import { validateCsrf } from '@/lib/security/csrf'
 import { createClient } from '@/lib/supabase/server'
 import { CORE_RESERVED_USERNAMES, normalizeUsername } from '@/lib/validations/username'
 import { asc, eq } from 'drizzle-orm'
+import { z } from 'zod'
 
 const USERNAME_PATTERN = /^[a-z0-9_]{3,20}$/
 const CORE_RESERVED_SET = new Set<string>(CORE_RESERVED_USERNAMES)
@@ -92,9 +93,12 @@ export async function POST(request: Request) {
         return jsonError(admin.message, admin.status, admin.errorCode)
     }
 
-    let body: { username?: string; reason?: string }
+    const limitResponse = await enforceRouteLimit(request, `admin-reserved-usernames:${admin.user.id}`, 30, 60);
+    if (limitResponse) return limitResponse;
+
+    let body;
     try {
-        body = (await request.json()) as { username?: string; reason?: string }
+        body = await request.json();
     } catch {
         logApiRoute(request, {
             requestId,
@@ -108,8 +112,13 @@ export async function POST(request: Request) {
         return jsonError('Malformed JSON', 400, 'BAD_REQUEST')
     }
 
-    const username = normalizeUsername(body.username || '')
-    if (!USERNAME_PATTERN.test(username)) {
+    const postSchema = z.object({
+        username: z.string().min(3).max(20).regex(USERNAME_PATTERN),
+        reason: z.string().trim().max(120).optional(),
+    });
+
+    const parsed = postSchema.safeParse(body);
+    if (!parsed.success) {
         logApiRoute(request, {
             requestId,
             action: 'account.reservedUsernames.post',
@@ -126,7 +135,8 @@ export async function POST(request: Request) {
         )
     }
 
-    const reason = (body.reason || '').trim().slice(0, 120) || 'admin'
+    const username = normalizeUsername(parsed.data.username);
+    const reason = parsed.data.reason || 'admin';
 
     await db
         .insert(reservedUsernames)
@@ -176,9 +186,12 @@ export async function DELETE(request: Request) {
         return jsonError(admin.message, admin.status, admin.errorCode)
     }
 
-    let body: { username?: string }
+    const limitResponse = await enforceRouteLimit(request, `admin-reserved-usernames:${admin.user.id}`, 30, 60);
+    if (limitResponse) return limitResponse;
+
+    let body;
     try {
-        body = (await request.json()) as { username?: string }
+        body = await request.json();
     } catch {
         logApiRoute(request, {
             requestId,
@@ -192,8 +205,12 @@ export async function DELETE(request: Request) {
         return jsonError('Malformed JSON', 400, 'BAD_REQUEST')
     }
 
-    const username = normalizeUsername(body.username || '')
-    if (!username) {
+    const deleteSchema = z.object({
+        username: z.string().min(1),
+    });
+
+    const parsed = deleteSchema.safeParse(body);
+    if (!parsed.success) {
         logApiRoute(request, {
             requestId,
             action: 'account.reservedUsernames.delete',
@@ -205,6 +222,8 @@ export async function DELETE(request: Request) {
         })
         return jsonError('Username is required', 400, 'BAD_REQUEST')
     }
+
+    const username = normalizeUsername(parsed.data.username);
     if (CORE_RESERVED_SET.has(username)) {
         logApiRoute(request, {
             requestId,
