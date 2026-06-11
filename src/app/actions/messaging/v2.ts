@@ -25,7 +25,6 @@ import {
     convertMessageToTaskActionV2,
     deleteMessage,
     editMessage,
-    getConversationById,
     getConversations,
     hydrateConversationLastMessageDeliveryMetadata,
     getMessagingStructuredCatalogV2,
@@ -65,7 +64,7 @@ export interface ConversationCapabilityV2 {
     isApplicant?: boolean;
     isCreator?: boolean;
     activeApplicationId?: string | null;
-    activeApplicationStatus?: 'pending' | 'accepted' | 'rejected' | 'project_deleted' | null;
+    activeApplicationStatus?: 'pending' | 'accepted' | 'rejected' | 'withdrawn' | 'proposed' | 'project_deleted' | null;
     activeProjectId?: string | null;
 }
 
@@ -400,12 +399,127 @@ async function getConversationSummarySourceV2(
     viewerId: string,
     conversationId: string,
 ): Promise<ConversationWithDetails | null> {
-    const base = await getConversationById(conversationId);
-    if (base.success && base.conversation) {
-        return base.conversation;
+    const summaries = await getConversationSummarySourcesV2(viewerId, [conversationId]);
+    return summaries[0] ?? null;
+}
+
+async function getConversationSummarySourcesV2(
+    viewerId: string,
+    conversationIds: string[],
+): Promise<ConversationWithDetails[]> {
+    const normalizedIds = Array.from(new Set(conversationIds.filter(Boolean))).slice(0, 50);
+    if (normalizedIds.length === 0) return [];
+
+    const rows = Array.from(await db.execute<{
+        id: string;
+        type: 'dm' | 'group' | 'project_group';
+        updated_at: Date;
+        archived_at: Date | null;
+        muted: boolean | null;
+        unread_count: number;
+        last_read_at: Date | null;
+        last_read_message_id: string | null;
+        last_message_id: string | null;
+        last_message_preview: string | null;
+        last_message_sender_id: string | null;
+        last_message_at: Date | null;
+        last_message_type: string | null;
+    }>(sql`
+        SELECT
+            c.id,
+            c.type,
+            c.updated_at,
+            cp.archived_at,
+            cp.muted,
+            cp.unread_count,
+            cp.last_read_at,
+            cp.last_read_message_id,
+            cp.last_message_id,
+            cp.last_message_preview,
+            cp.last_message_sender_id,
+            cp.last_message_at,
+            cp.last_message_type
+        FROM ${conversations} c
+        INNER JOIN ${conversationParticipants} cp
+            ON cp.conversation_id = c.id
+           AND cp.user_id = ${viewerId}
+        WHERE c.id IN ${normalizedIds}
+    `));
+
+    const nonProjectRows = rows.filter((row) => row.type !== 'project_group');
+    const nonProjectIds = nonProjectRows.map((row) => row.id);
+    const participantRows = nonProjectIds.length > 0
+        ? await db
+            .select({
+                conversationId: conversationParticipants.conversationId,
+                userId: conversationParticipants.userId,
+                username: profiles.username,
+                fullName: profiles.fullName,
+                avatarUrl: profiles.avatarUrl,
+            })
+            .from(conversationParticipants)
+            .innerJoin(profiles, eq(profiles.id, conversationParticipants.userId))
+            .where(inArray(conversationParticipants.conversationId, nonProjectIds))
+        : [];
+
+    const participantMap = new Map<string, typeof participantRows>();
+    for (const participant of participantRows) {
+        if (!participantMap.has(participant.conversationId)) {
+            participantMap.set(participant.conversationId, []);
+        }
+        if (participant.userId !== viewerId) {
+            participantMap.get(participant.conversationId)!.push(participant);
+        }
     }
 
-    return getProjectGroupConversationById(viewerId, conversationId);
+    const nonProjectConversations: ConversationWithDetails[] = nonProjectRows.map((row) => ({
+        id: row.id,
+        type: row.type,
+        updatedAt: row.last_message_at ?? row.updated_at,
+        lifecycleState: row.archived_at ? 'archived' : row.last_message_id ? 'active' : 'draft',
+        muted: Boolean(row.muted),
+        participants: (participantMap.get(row.id) ?? []).map((participant) => ({
+            id: participant.userId,
+            username: participant.username,
+            fullName: participant.fullName,
+            avatarUrl: participant.avatarUrl,
+        })),
+        lastMessage: row.last_message_id
+            ? {
+                id: row.last_message_id,
+                content: row.last_message_preview,
+                senderId: row.last_message_sender_id,
+                createdAt: row.last_message_at ?? row.updated_at,
+                type: row.last_message_type,
+            }
+            : null,
+        unreadCount: row.unread_count || 0,
+        lastReadAt: row.last_read_at ?? null,
+        lastReadMessageId: row.last_read_message_id ?? null,
+    }));
+
+    const hydratedNonProject = await hydrateConversationLastMessageDeliveryMetadata(
+        viewerId,
+        nonProjectConversations,
+    );
+    const projectGroupIds = rows
+        .filter((row) => row.type === 'project_group')
+        .map((row) => row.id);
+    const projectGroupConversations = await Promise.all(
+        projectGroupIds.map((conversationId) => getProjectGroupConversationById(viewerId, conversationId)),
+    );
+
+    const byId = new Map<string, ConversationWithDetails>();
+    for (const conversation of hydratedNonProject) {
+        byId.set(conversation.id, conversation);
+    }
+    for (const conversation of projectGroupConversations) {
+        if (conversation) byId.set(conversation.id, conversation);
+    }
+
+    return normalizedIds
+        .map((conversationId) => byId.get(conversationId) ?? null)
+        .filter((conversation): conversation is ConversationWithDetails => conversation !== null);
 }
 
 async function hydrateConversationSummariesV2(
@@ -470,6 +584,23 @@ export async function getConversationSummaryV2(
     }
 }
 
+export async function getConversationSummariesV2(
+    conversationIds: string[],
+): Promise<{ success: boolean; error?: string; conversations?: InboxConversationV2[] }> {
+    try {
+        const user = await getAuthUser();
+        if (!user) return { success: false, error: 'Not authenticated' };
+
+        const summaries = await getConversationSummarySourcesV2(user.id, conversationIds);
+        const conversations = await hydrateConversationSummariesV2(user.id, summaries);
+
+        return { success: true, conversations };
+    } catch (error) {
+        console.error('Error fetching conversation summaries v2:', error);
+        return { success: false, error: 'Failed to fetch conversation summaries' };
+    }
+}
+
 async function getConversationSummaryV2Internal(
     viewerId: string,
     conversationId: string,
@@ -508,8 +639,8 @@ export async function getConversationThreadPageV2(
         return {
             success: true,
             page: {
-                conversation,
-                capability: conversation.capability,
+                conversation: conversation!,
+                capability: conversation!.capability,
                 messages: messageResult.messages ?? [],
                 pinnedMessages,
                 hasMore: Boolean(messageResult.hasMore),
@@ -591,30 +722,22 @@ export async function ensureDirectConversationV2(
             return { success: false, error: 'User not found' };
         }
 
-        // Return a draft conversation object without creating a database record.
-        // The actual DB record is created in sendConversationMessageV2 when the
-        // first message is sent.
-        const draftId = `draft:${targetUserId}`;
-        const draftConversation: ConversationWithDetails = {
-            id: draftId,
-            type: 'dm',
-            updatedAt: new Date(),
-            lifecycleState: 'draft',
-            participants: [{
-                id: targetProfile.id,
-                username: targetProfile.username,
-                fullName: targetProfile.fullName,
-                avatarUrl: targetProfile.avatarUrl,
-            }],
-            lastMessage: null,
-            unreadCount: 0,
-            lastReadAt: null,
-            lastReadMessageId: null,
-        };
+        const ensured = await getOrCreateDMConversation(targetProfile.id);
+        if (!ensured.success || !ensured.conversationId) {
+            return { success: false, error: ensured.error || 'Failed to open conversation' };
+        }
 
-        // Hydrate with capabilities using getConversationSummarySourceV2 pattern
-        const [conversation] = await hydrateConversationSummariesV2(user.id, [draftConversation]);
-        return { success: true, conversationId: draftId, conversation };
+        const conversationSummary = await getConversationSummarySourceV2(user.id, ensured.conversationId);
+        if (!conversationSummary) {
+            return { success: false, error: 'Conversation not found' };
+        }
+
+        const [conversation] = await hydrateConversationSummariesV2(user.id, [conversationSummary]);
+        if (!conversation) {
+            return { success: false, error: 'Failed to load conversation' };
+        }
+
+        return { success: true, conversationId: ensured.conversationId, conversation };
     } catch (error) {
         console.error('Error ensuring direct conversation v2:', error);
         return { success: false, error: 'Failed to open conversation' };
