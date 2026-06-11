@@ -1,11 +1,14 @@
 import '@/styles/onboarding-tokens.css';
 import { AuthRouteProviders } from '@/components/providers/AuthRouteProviders';
 
-export default function OnboardingLayout({
+import { getViewerProfileContext } from '@/lib/server/viewer-context';
+
+export default async function OnboardingLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  return <AuthRouteProviders>{children}</AuthRouteProviders>;
+  const { user, profile } = await getViewerProfileContext();
+  return <AuthRouteProviders initialUser={user} initialProfile={profile}>{children}</AuthRouteProviders>;
 }
 
