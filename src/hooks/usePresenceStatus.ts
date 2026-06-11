@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 interface PresenceEntry {
     online: boolean;
@@ -14,17 +14,41 @@ const HEARTBEAT_INTERVAL_MS = 4 * 60_000; // 4 minutes (server debounces to 5 mi
 const _presenceMap = new Map<string, PresenceEntry>();
 
 export function usePresenceStatus(userIds: string[]): Map<string, PresenceEntry> {
+    const userIdsStr = JSON.stringify(userIds);
+    const stableUserIds = useMemo(() => userIds, [userIdsStr]);
+
     const [status, setStatus] = useState<Map<string, PresenceEntry>>(() => new Map());
     const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
     const refresh = useCallback(() => {
-        const next = new Map<string, PresenceEntry>();
-        for (const id of userIds) {
-            const entry = _presenceMap.get(id);
-            next.set(id, entry ?? { online: false, lastSeen: null });
-        }
-        setStatus(next);
-    }, [userIds]);
+        setStatus((prev) => {
+            let changed = false;
+            if (prev.size !== stableUserIds.length) {
+                changed = true;
+            } else {
+                for (const id of stableUserIds) {
+                    const prevEntry = prev.get(id);
+                    const currEntry = _presenceMap.get(id) ?? { online: false, lastSeen: null };
+                    if (
+                        !prevEntry ||
+                        prevEntry.online !== currEntry.online ||
+                        prevEntry.lastSeen?.getTime() !== currEntry.lastSeen?.getTime()
+                    ) {
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+            if (!changed) return prev;
+
+            const next = new Map<string, PresenceEntry>();
+            for (const id of stableUserIds) {
+                const entry = _presenceMap.get(id);
+                next.set(id, entry ?? { online: false, lastSeen: null });
+            }
+            return next;
+        });
+    }, [stableUserIds]);
 
     useEffect(() => {
         refresh();
