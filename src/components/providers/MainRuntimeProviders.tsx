@@ -3,7 +3,6 @@
 import dynamic from 'next/dynamic';
 import { useEffect, useState } from 'react';
 import type { User } from '@supabase/supabase-js';
-import { AuthProvider } from '@/components/providers/AuthProvider';
 import { PeopleNotificationsProvider } from '@/components/providers/PeopleNotificationsProvider';
 import { RealtimeProvider } from '@/components/providers/RealtimeProvider';
 import { startPresenceHeartbeat, stopPresenceHeartbeat } from '@/hooks/usePresenceStatus';
@@ -28,7 +27,6 @@ function PresencePublisher() {
 export function MainRuntimeProviders({
   children,
   initialUser,
-  initialProfile,
 }: MainRuntimeProvidersProps) {
   const [enableChatRuntime, setEnableChatRuntime] = useState(false);
 
@@ -64,7 +62,7 @@ export function MainRuntimeProviders({
   }, []);
 
   return (
-    <AuthProvider initialUser={initialUser} initialProfile={initialProfile}>
+    <>
       <PresencePublisher />
       <RealtimeProvider>
         <PeopleNotificationsProvider>
@@ -72,6 +70,6 @@ export function MainRuntimeProviders({
           {enableChatRuntime ? <LazyChatProvider /> : null}
         </PeopleNotificationsProvider>
       </RealtimeProvider>
-    </AuthProvider>
+    </>
   );
 }
