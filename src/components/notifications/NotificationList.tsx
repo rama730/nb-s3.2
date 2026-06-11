@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, type KeyboardEvent, type ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
 import { NotificationBundleRow } from "@/components/notifications/NotificationBundleRow";
@@ -48,10 +48,20 @@ export function NotificationList(props: {
         isLoadingMore,
         onLoadMore,
     } = props;
-    const filteredItems = filterNotifications(items, filter);
-    const importantItems = filteredItems.filter((item) => item.importance === "important");
-    const regularItems = filteredItems.filter((item) => item.importance !== "important");
-    const grouped = groupNotificationsByTime(regularItems);
+    const filteredItems = useMemo(() => filterNotifications(items, filter), [items, filter]);
+    const importantItems = useMemo(() => filteredItems.filter((item) => item.importance === "important"), [filteredItems]);
+    const regularItems = useMemo(() => filteredItems.filter((item) => item.importance !== "important"), [filteredItems]);
+    const grouped = useMemo(() => groupNotificationsByTime(regularItems), [regularItems]);
+
+    const importantBundles = useMemo(() => bundleNotifications(importantItems), [importantItems]);
+    const groupBundles = useMemo(() => {
+        return {
+            new: bundleNotifications(grouped.new),
+            today: bundleNotifications(grouped.today),
+            earlier: bundleNotifications(grouped.earlier),
+        };
+    }, [grouped]);
+
     const containerRef = useRef<HTMLDivElement | null>(null);
 
     useEffect(() => {
@@ -149,7 +159,7 @@ export function NotificationList(props: {
                         Important
                     </div>
                     <div role="list" className="divide-y divide-zinc-100 dark:divide-zinc-900">
-                        {bundleNotifications(importantItems).map((bundle) => (
+                        {importantBundles.map((bundle) => (
                             <div role="listitem" key={bundle.key + ":" + bundle.lead.id}>
                                 {bundle.items.length > 1 ? (
                                     <NotificationBundleRow
@@ -184,7 +194,7 @@ export function NotificationList(props: {
                             {GROUP_LABELS[group]}
                         </div>
                         <div role="list" className="divide-y divide-zinc-100 dark:divide-zinc-900">
-                            {bundleNotifications(groupItems).map((bundle) => (
+                            {groupBundles[group].map((bundle) => (
                                 <div role="listitem" key={bundle.key + ":" + bundle.lead.id}>
                                     {bundle.items.length > 1 ? (
                                         <NotificationBundleRow
