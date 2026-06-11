@@ -45,7 +45,9 @@ export const queryKeys = {
   profile: {
     root: () => ["profile"] as const,
     byTarget: (targetKey: string) => ["profile", targetKey] as const,
+    collaborationSummary: (userId: string) => ["profile", "collaboration-summary", userId] as const,
     projects: (userId: string) => ["profile", "projects", userId] as const,
+    inviteOptions: (userId: string) => ["profile", "project-invite-options", userId] as const,
     stats: (userId: string) => ["profile", "stats", userId] as const,
   },
   project: {
@@ -72,6 +74,41 @@ export const queryKeys = {
         ["project", projectId, "detail", "sprint-detail", asNullable(sprintId), "timeline"] as const,
       sprints: (projectId: string) => ["project", projectId, "detail", "sprints"] as const,
       analytics: (projectId: string) => ["project", projectId, "detail", "analytics"] as const,
+      analyticsOverview: (projectId: string, filters?: Record<string, unknown> | null) =>
+        ["project", projectId, "detail", "analytics", "overview", filters ?? null] as const,
+      analyticsMembers: (projectId: string, filters?: Record<string, unknown> | null) =>
+        ["project", projectId, "detail", "analytics", "members", filters ?? null] as const,
+      analyticsMember: (projectId: string, memberId: string | null | undefined) =>
+        ["project", projectId, "detail", "analytics", "member", asNullable(memberId)] as const,
+      analyticsWorkflow: (projectId: string, filters?: Record<string, unknown> | null) =>
+        ["project", projectId, "detail", "analytics", "workflow", filters ?? null] as const,
+      analyticsSprints: (projectId: string, filters?: Record<string, unknown> | null) =>
+        ["project", projectId, "detail", "analytics", "sprints", filters ?? null] as const,
+      analyticsFiles: (projectId: string, filters?: Record<string, unknown> | null) =>
+        ["project", projectId, "detail", "analytics", "files", filters ?? null] as const,
+      analyticsRisks: (projectId: string, filters?: Record<string, unknown> | null) =>
+        ["project", projectId, "detail", "analytics", "risks", filters ?? null] as const,
+      analyticsSnapshot: (projectId: string, filters?: Record<string, unknown> | null) =>
+        ["project", projectId, "detail", "analytics", "snapshot", filters ?? null] as const,
+      analyticsTimeline: (projectId: string, filters: Record<string, unknown> | null | undefined) =>
+        ["project", projectId, "detail", "analytics", "timeline", filters ?? null] as const,
+      readme: (projectId: string) => ["project", projectId, "detail", "readme"] as const,
+      readmeDraft: (projectId: string) => ["project", projectId, "detail", "readme", "draft"] as const,
+      readmeVersions: (projectId: string) => ["project", projectId, "detail", "readme", "versions"] as const,
+      readmeSettings: (projectId: string) => ["project", projectId, "detail", "readme", "settings"] as const,
+      readmeReferences: (projectId: string, kind: string, query: string) =>
+        ["project", projectId, "detail", "readme", "references", kind, query] as const,
+      readmeImportCandidates: (projectId: string, query: string) =>
+        ["project", projectId, "detail", "readme", "import-candidates", query] as const,
+      readmeSmartBlockPreviews: (projectId: string, blockSignature: string) =>
+        ["project", projectId, "detail", "readme", "smart-block-previews", blockSignature] as const,
+      updates: (projectId: string) => ["project", projectId, "detail", "updates"] as const,
+      updateContextOptions: (projectId: string, kind: string, query: string) =>
+        ["project", projectId, "detail", "updates", "context-options", kind, query] as const,
+      updateDraft: (projectId: string, userId: string) =>
+        ["project", projectId, "detail", "updates", "draft", userId] as const,
+      updateComments: (projectId: string, updateId: string | null | undefined) =>
+        ["project", projectId, "detail", "updates", asNullable(updateId), "comments"] as const,
       members: (projectId: string) => ["project", projectId, "detail", "members"] as const,
       filesNodes: (projectId: string, parentId?: string | null) =>
         ["project", projectId, "detail", "files-nodes", asNullable(parentId)] as const,
@@ -83,6 +120,8 @@ export const queryKeys = {
     security: () => ["settings", "security"] as const,
     privacy: () => ["settings", "privacy"] as const,
     integrations: () => ["settings", "integrations"] as const,
+    mfaFactors: () => ["settings", "security", "mfa-factors"] as const,
+    loginHistory: () => ["settings", "security", "login-history"] as const,
   },
   notifications: {
     root: () => ["notifications"] as const,
