@@ -13,7 +13,7 @@ function readPositiveEnv(name: string, fallback: number) {
 }
 
 export const GITHUB_WORKER_BUDGETS = {
-    maxFiles: readPositiveEnv('GITHUB_SYNC_MAX_FILES', 15_000),
+    maxFiles: readPositiveEnv('GITHUB_SYNC_MAX_FILES', 30_000),
     maxBytes: readPositiveEnv('GITHUB_SYNC_MAX_BYTES', 512 * 1024 * 1024),
     maxSingleFileBytes: readPositiveEnv('GITHUB_SYNC_MAX_FILE_BYTES', 10 * 1024 * 1024),
     applyConcurrency: readPositiveEnv('GITHUB_SYNC_APPLY_CONCURRENCY', 8),
