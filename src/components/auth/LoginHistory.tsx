@@ -1,9 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import Button from "@/components/ui-custom/Button";
 import { Loader2, MapPin } from "lucide-react";
 import { parseUserAgent } from "@/lib/utils/device";
+import { queryKeys } from "@/lib/query-keys";
 import type { LoginHistoryEntry } from "@/lib/types/settingsTypes";
 
 interface LoginHistoryProps {
@@ -14,42 +16,19 @@ const DEFAULT_VISIBLE_ITEMS = 5;
 
 export default function LoginHistory({ initialHistory }: LoginHistoryProps) {
     const hasInitialHistory = Array.isArray(initialHistory);
-    const [history, setHistory] = useState<LoginHistoryEntry[]>(initialHistory ?? []);
-    const [loading, setLoading] = useState(!hasInitialHistory);
-    const [showAll, setShowAll] = useState(false);
-
-    useEffect(() => {
-        if (Array.isArray(initialHistory)) {
-            setHistory(initialHistory);
-            setLoading(false);
-        }
-    }, [initialHistory]);
-
-    const loadHistory = useCallback(async () => {
-        try {
+    const { data: history = initialHistory ?? [], isLoading: historyLoading } = useQuery<LoginHistoryEntry[]>({
+        queryKey: queryKeys.settings.loginHistory(),
+        queryFn: async () => {
             const res = await fetch("/api/v1/auth/login-history");
-            const contentType = res.headers.get("content-type") || "";
-            if (!contentType.includes("application/json")) {
-                throw new Error(`Failed to load login history (${res.status})`);
-            }
+            if (!res.ok) throw new Error("Failed to load login history");
             const json = await res.json();
-            if (!res.ok || json?.success === false) {
-                throw new Error(json?.message || `Failed to load login history (${res.status})`);
-            }
-            setHistory(json?.data?.history || []);
-        } catch (error) {
-            console.warn("[settings] login history fetch failed", error);
-            setHistory([]);
-        } finally {
-            setLoading(false);
-        }
-    }, []);
+            return json?.data?.history || [];
+        },
+        initialData: hasInitialHistory ? initialHistory : undefined,
+    });
 
-    useEffect(() => {
-        if (!hasInitialHistory) {
-            void loadHistory();
-        }
-    }, [hasInitialHistory, loadHistory]);
+    const loading = !hasInitialHistory && historyLoading;
+    const [showAll, setShowAll] = useState(false);
 
     if (loading) {
         return (
