@@ -1,12 +1,12 @@
 "use client";
 
-import { memo, useMemo, useState, useCallback } from "react";
+import { memo, useMemo, useState, useCallback, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Users, Plus } from "lucide-react";
 import { profileHref } from "@/lib/routing/identifiers";
+import { useRouteWarmPrefetch } from "@/hooks/useRouteWarmPrefetch";
 import DashboardCard from "./DashboardCard";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { AvatarGroup, AvatarGroupTooltip } from "@/components/animate-ui/components/animate/avatar-group";
 import { buildProjectPersonReference } from "@/lib/projects/settings-policies";
 
 /* ── Typed project shape consumed by TeamCard ────────────────── */
@@ -74,8 +74,7 @@ const toInitials = (label: string) =>
         .join("") || "?";
 
 const shortenRoleLabel = (label: string) => {
-    const clean = (label || "").trim() || "Team Member";
-    return clean.length > 28 ? `${clean.slice(0, 25)}...` : clean;
+    return (label || "").trim() || "Team Member";
 };
 
 /* ── Component ───────────────────────────────────────────────── */
@@ -90,12 +89,54 @@ const TeamCard = memo(function TeamCard({
     loadingMembers,
 }: TeamCardProps) {
     const router = useRouter();
-    const [isOverflowTooltipOpen, setIsOverflowTooltipOpen] = useState(false);
+    const prefetch = useRouteWarmPrefetch();
+    const [failedImageIds, setFailedImageIds] = useState<Record<string, boolean>>({});
+
+    const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const navigateToProfile = useCallback((avatar: AvatarEntry) => {
         if (!avatar.username) return;
         router.push(profileHref({ username: avatar.username, id: avatar.id }));
     }, [router]);
+
+    const handleMouseEnter = useCallback((avatar: AvatarEntry) => {
+        if (hoverTimerRef.current) {
+            clearTimeout(hoverTimerRef.current);
+        }
+        if (!avatar.username) return;
+        hoverTimerRef.current = setTimeout(() => {
+            prefetch(profileHref({ username: avatar.username!, id: avatar.id }));
+        }, 80);
+    }, [prefetch]);
+
+    const handleFocus = useCallback((avatar: AvatarEntry) => {
+        if (hoverTimerRef.current) {
+            clearTimeout(hoverTimerRef.current);
+        }
+        if (!avatar.username) return;
+        hoverTimerRef.current = setTimeout(() => {
+            prefetch(profileHref({ username: avatar.username!, id: avatar.id }));
+        }, 80);
+    }, [prefetch]);
+
+    const handleMouseLeave = useCallback(() => {
+        if (hoverTimerRef.current) {
+            clearTimeout(hoverTimerRef.current);
+            hoverTimerRef.current = null;
+        }
+    }, []);
+
+    const handleImageError = useCallback((id: string) => {
+        setFailedImageIds((prev) => ({ ...prev, [id]: true }));
+    }, []);
+
+    useEffect(() => {
+        return () => {
+            if (hoverTimerRef.current) {
+                clearTimeout(hoverTimerRef.current);
+            }
+        };
+    }, []);
 
     const rawLeadFocus = project?.importSource?.metadata?.leadFocus;
     const leadFocus = typeof rawLeadFocus === "string" ? rawLeadFocus.trim() : "";
@@ -154,12 +195,9 @@ const TeamCard = memo(function TeamCard({
         return [...ownerEntry, ...collaborators];
     }, [leadFocus, members, project]);
 
-    const MAX_VISIBLE = 6;
-    const visibleAvatars = avatars.slice(0, MAX_VISIBLE);
-    const hiddenAvatars = avatars.slice(MAX_VISIBLE);
-    const hiddenCount = hiddenAvatars.length;
-    const hiddenPreview = hiddenAvatars.slice(0, 5);
-    const hiddenRemaining = Math.max(0, hiddenCount - hiddenPreview.length);
+    const visibleAvatars = useMemo(() => avatars.slice(0, 5), [avatars]);
+    const showMoreCount = avatars.length - 5;
+    const hasOverflow = showMoreCount > 0 || hasNextMembers;
 
     return (
         <DashboardCard
@@ -177,106 +215,73 @@ const TeamCard = memo(function TeamCard({
                 </button>
             )}
         >
-            <div className="py-2 overflow-visible">
+            <div className="py-1 flex flex-col gap-1">
                 {loadingMembers && avatars.length === 0 ? (
-                    <div className="flex justify-center -space-x-3">
-                        {Array.from({ length: 4 }).map((_, idx) => (
-                            <div
-                                key={idx}
-                                className="size-12 rounded-full border-3 border-background bg-zinc-200 dark:bg-zinc-800 animate-pulse"
-                            />
-                        ))}
+                    <div className="max-h-[260px] overflow-y-auto pr-1 flex flex-col gap-1">
+                        <div className="space-y-1">
+                            {Array.from({ length: 5 }).map((_, idx) => (
+                                <div key={idx} className="flex items-center gap-2.5 py-1.5 px-2">
+                                    <div className="w-9 h-9 rounded-full bg-zinc-200 dark:bg-zinc-800/60 animate-pulse shrink-0" />
+                                    <div className="flex-grow min-w-0 flex items-center gap-2">
+                                        <div className="h-3.5 w-20 bg-zinc-200 dark:bg-zinc-800/60 rounded animate-pulse shrink-0" />
+                                        <span className="text-zinc-300 dark:text-zinc-800/40 shrink-0 select-none">·</span>
+                                        <div className="h-3 w-28 bg-zinc-200 dark:bg-zinc-800/60 rounded animate-pulse truncate" />
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
                     </div>
                 ) : avatars.length === 0 ? (
-                    <div className="flex flex-col items-center gap-2">
-                        <Avatar className="size-12 border-3 border-background">
-                            <AvatarFallback className="text-xs font-semibold">--</AvatarFallback>
-                        </Avatar>
+                    <div className="flex flex-col items-center gap-2 py-4">
+                        <Users className="w-8 h-8 text-zinc-300 dark:text-zinc-700" />
                         <p className="text-xs text-zinc-500 dark:text-zinc-400">No team members yet</p>
                     </div>
                 ) : (
-                    <AvatarGroup className="w-full justify-center">
-                        {visibleAvatars.map((avatar) => (
-                            <div
-                                key={avatar.id}
-                                onClick={() => navigateToProfile(avatar)}
-                                className="group relative inline-flex size-12 shrink-0 cursor-pointer items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-                                role="button"
-                                tabIndex={0}
-                                onKeyDown={(e) => {
-                                    if (e.key === "Enter" || e.key === " ") {
-                                        e.preventDefault();
-                                        navigateToProfile(avatar);
-                                    }
-                                }}
-                                aria-label={`${avatar.name} profile`}
-                            >
-                                <Avatar
-                                    className="absolute inset-0 size-12 border-3 border-background transition-transform duration-200 ease-out group-hover:-translate-y-1.5 group-hover:z-10"
+                    <div className="max-h-[260px] overflow-y-auto pr-1 flex flex-col gap-1">
+                        <div className="space-y-1">
+                            {visibleAvatars.map((avatar) => (
+                                <button
+                                    key={avatar.id}
+                                    type="button"
+                                    onClick={() => navigateToProfile(avatar)}
+                                    onMouseEnter={() => handleMouseEnter(avatar)}
+                                    onMouseLeave={handleMouseLeave}
+                                    onFocus={() => handleFocus(avatar)}
+                                    onBlur={handleMouseLeave}
+                                    className="w-full text-left flex items-center gap-2.5 py-1.5 px-2 rounded-xl cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:bg-zinc-50 dark:focus-visible:bg-zinc-800/40 transition-all duration-150 group"
+                                    aria-label={`${avatar.name} profile`}
                                 >
-                                    <AvatarImage src={avatar.src || undefined} />
-                                    <AvatarFallback>{avatar.fallback}</AvatarFallback>
-                                </Avatar>
-                                <AvatarGroupTooltip>
-                                    <div className="flex flex-col items-center gap-0.5">
-                                        <span className="font-semibold text-white">{avatar.name}</span>
-                                        <span className="text-[11px] text-white/70">{avatar.role}</span>
+                                    <Avatar className="size-9 border border-zinc-200 dark:border-zinc-800 shrink-0">
+                                        <AvatarImage
+                                            src={failedImageIds[avatar.id] ? undefined : (avatar.src || undefined)}
+                                            onError={() => handleImageError(avatar.id)}
+                                        />
+                                        <AvatarFallback className="text-[10px] font-semibold bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400">
+                                            {avatar.fallback}
+                                        </AvatarFallback>
+                                    </Avatar>
+                                    <div className="flex-grow min-w-0 flex items-center gap-2 text-sm">
+                                        <span className="font-semibold text-zinc-850 dark:text-zinc-200 group-hover:text-primary transition-colors shrink-0">
+                                            {avatar.name}
+                                        </span>
+                                        <span className="text-zinc-400 dark:text-zinc-500 shrink-0 select-none">·</span>
+                                        <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400 truncate">
+                                            {avatar.role}
+                                        </span>
                                     </div>
-                                </AvatarGroupTooltip>
-                            </div>
-                        ))}
-
-                        {hiddenCount > 0 && (
-                            <Avatar
-                                tabIndex={0}
-                                role="button"
-                                aria-haspopup="true"
-                                aria-expanded={isOverflowTooltipOpen}
-                                aria-label={`Show hidden team members (${hiddenCount})`}
-                                onFocus={() => setIsOverflowTooltipOpen(true)}
-                                onBlur={() => setIsOverflowTooltipOpen(false)}
-                                onKeyDown={(e) => {
-                                    if (e.key === "Enter" || e.key === " ") {
-                                        e.preventDefault();
-                                        setIsOverflowTooltipOpen((o) => !o);
-                                    }
-                                    if (e.key === "Escape") {
-                                        e.preventDefault();
-                                        setIsOverflowTooltipOpen(false);
-                                    }
-                                }}
-                                className="size-12 border-3 border-background bg-zinc-100 dark:bg-zinc-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-                            >
-                                <AvatarFallback className="text-xs font-semibold">+{hiddenCount}</AvatarFallback>
-                                <AvatarGroupTooltip open={isOverflowTooltipOpen} onOpenChange={setIsOverflowTooltipOpen}>
-                                    <div className="w-52 max-h-44 overflow-y-auto text-left leading-tight pr-1 text-white" role="status" aria-live="polite">
-                                        <p className="font-medium">+{hiddenCount} more team member{hiddenCount === 1 ? "" : "s"}</p>
-                                        <ul className="mt-1.5 space-y-1 text-[11px]">
-                                            {hiddenPreview.map((a) => (
-                                                <li key={a.id} className="truncate">
-                                                    <span className="font-medium text-white">{a.name}</span>
-                                                    <span className="text-white/60"> · {a.role}</span>
-                                                </li>
-                                            ))}
-                                        </ul>
-                                        {hiddenRemaining > 0 && (
-                                            <p className="mt-1 text-[11px] text-white/80">and {hiddenRemaining} more</p>
-                                        )}
-                                    </div>
-                                </AvatarGroupTooltip>
-                            </Avatar>
-                        )}
-                    </AvatarGroup>
+                                </button>
+                            ))}
+                        </div>
+                    </div>
                 )}
 
-                {hasNextMembers && fetchNextMembers && (
-                    <div className="mt-3 flex justify-center">
+                {hasOverflow && (
+                    <div className="mt-1.5 pt-1.5 border-t border-zinc-100 dark:border-zinc-800/60 flex justify-center">
                         <button
-                            onClick={fetchNextMembers}
-                            disabled={loadingMembers}
-                            className="px-2 py-1 text-[10px] font-semibold text-primary border border-primary/15 rounded-md hover:bg-primary/10 transition-colors disabled:opacity-60"
+                            onClick={onInvite}
+                            className="px-2.5 py-1 text-[11px] font-bold text-primary hover:underline transition-colors"
                         >
-                            {loadingMembers ? "Loading..." : "Load more"}
+                            {showMoreCount > 0 ? `+ ${showMoreCount} more ${showMoreCount === 1 ? "member" : "members"}` : "View more members"}
                         </button>
                     </div>
                 )}
