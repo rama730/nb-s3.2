@@ -61,6 +61,7 @@ export async function analyzeGitHubRepo(repoUrl: string, token?: string, signal?
     if (!match) return result;
 
     const [, owner, repo] = match;
+    if (!owner || !repo) return result;
     const cleanRepo = repo.replace(/\.git$/, '');
 
     // Default title from repo name
@@ -81,10 +82,10 @@ export async function analyzeGitHubRepo(repoUrl: string, token?: string, signal?
         fetch(`https://api.github.com/repos/${owner}/${cleanRepo}/readme`, { headers: rawHeaders, signal }),
     ]);
 
-    // Process package.json (Raw text)
+    // Process package.json
     if (pkgResult.status === 'fulfilled' && pkgResult.value.ok) {
         try {
-            const pkg = JSON.parse(await pkgResult.value.text());
+            const pkg = await pkgResult.value.json();
             const deps = { ...pkg.dependencies, ...pkg.devDependencies };
 
             // Detect technologies & framework in a single pass
@@ -102,7 +103,7 @@ export async function analyzeGitHubRepo(repoUrl: string, token?: string, signal?
 
             for (const key of frameworkOrder) {
                 if (deps[key]) {
-                    result.detectedFramework = frameworkNames[key];
+                    result.detectedFramework = frameworkNames[key] ?? null;
                     break;
                 }
             }
