@@ -6,8 +6,9 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { motion, AnimatePresence } from "framer-motion";
 import { LifecycleEditor } from "@/components/projects/LifecycleEditor";
+import { ProjectRolesEditor, normalizeProjectRoleFormValues } from "@/components/projects/settings/ProjectRolesEditor";
 import {
-    Layout, FileText, Layers, Users, X, Sparkles, Plus, Trash2,
+    Layout, FileText, Layers, Users, X, Sparkles,
     Check, Info, ChevronRight, CheckCircle
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -128,19 +129,14 @@ export default function EditProjectModal({ project, isOpen, onClose, onSaved }: 
             // Use defaults ONLY if both are null/undefined, effectively initializing new/legacy projects
             lifecycleStages: project.lifecycleStages ?? ["Concept", "Team Formation", "MVP", "Beta", "Launch"],
             currentStageIndex: project.currentStageIndex ?? 0,
-            roles: project.openRoles?.map((r: any) => ({
-                id: r.id,
-                role: r.role,
-                count: r.count,
-                description: r.description,
-                skills: r.skills
-            })) || [],
+            roles: normalizeProjectRoleFormValues(project.openRoles),
         }
     });
 
     const { fields: roleFields, append: appendRole, remove: removeRole } = useFieldArray({
         control,
-        name: "roles"
+        name: "roles",
+        keyName: "fieldKey",
     });
 
     const [deletedRoleIds, setDeletedRoleIds] = useState<string[]>([]);
@@ -409,7 +405,7 @@ export default function EditProjectModal({ project, isOpen, onClose, onSaved }: 
                                     {activeTab === "journey" && (
                                         <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-300">
                                             <div>
-                                                <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 mb-2">Project Journey</h3>
+                                                <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 mb-2">Journey</h3>
                                                 <p className="text-sm text-zinc-500 mb-6">Customize the stages your project will progress through.</p>
                                                 
                                                 <div className="bg-zinc-50 dark:bg-zinc-900/50 p-6 rounded-xl border border-zinc-200 dark:border-zinc-800">
@@ -433,71 +429,15 @@ export default function EditProjectModal({ project, isOpen, onClose, onSaved }: 
 
                                     {/* ROLES */}
                                     {activeTab === "roles" && (
-                                        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                                            <div className="flex items-center justify-between">
-                                                <div>
-                                                    <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-100">Project Roles</h3>
-                                                    <p className="text-sm text-zinc-500">Define open positions for collaborators</p>
-                                                </div>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => appendRole({ role: "New Role", count: 1, description: "", skills: [] })}
-                                                    className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium transition-colors shadow-sm"
-                                                >
-                                                    <Plus className="w-4 h-4" />
-                                                    Add Role
-                                                </button>
-                                            </div>
-
-                                            <div className="grid gap-4">
-                                                {roleFields.length === 0 ? (
-                                                    <div className="p-8 text-center border-2 border-dashed border-zinc-200 dark:border-zinc-800 rounded-xl text-zinc-400 text-sm">
-                                                        No open roles listed. Add one to invite collaborators.
-                                                    </div>
-                                                ) : (
-                                                    roleFields.map((field, index) => (
-                                                        <div key={field.id} className="p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-sm animate-in zoom-in-95 duration-200">
-                                                            <div className="flex gap-4 items-start">
-                                                                <div className="flex-1 space-y-1.5">
-                                                                    <label className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Role Title</label>
-                                                                    <input
-                                                                        {...register(`roles.${index}.role`)}
-                                                                        placeholder="e.g. Frontend Developer"
-                                                                        className="w-full px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-transparent text-sm focus:ring-2 focus:ring-indigo-500/20 outline-none"
-                                                                    />
-                                                                    {errors.roles?.[index]?.role && (
-                                                                        <p className="text-red-500 text-xs">{errors.roles[index]?.role?.message}</p>
-                                                                    )}
-                                                                </div>
-                                                            <div className="w-24 space-y-1.5">
-                                                                    <label className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Count</label>
-                                                                    <input
-                                                                        type="number"
-                                                                        {...register(`roles.${index}.count`, { valueAsNumber: true })}
-                                                                        className="w-full px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-transparent text-sm focus:ring-2 focus:ring-indigo-500/20 outline-none"
-                                                                    />
-                                                                </div>
-                                                                <button
-                                                                    type="button"
-                                                                    onClick={() => handleDeleteRole(index, field.id)}
-                                                                    className="mt-6 p-2 text-zinc-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 rounded-lg transition-colors"
-                                                                >
-                                                                    <Trash2 className="w-5 h-5" />
-                                                                </button>
-                                                            </div>
-                                                            <div className="mt-4">
-                                                                <label className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Description (Optional)</label>
-                                                                <textarea
-                                                                    {...register(`roles.${index}.description`)}
-                                                                    placeholder="Describe the responsibilities and requirements..."
-                                                                    className="w-full mt-1.5 px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-transparent text-sm focus:ring-2 focus:ring-indigo-500/20 outline-none min-h-[80px]"
-                                                                />
-                                                            </div>
-                                                        </div>
-                                                    ))
-                                                )}
-                                            </div>
-                                        </div>
+                                        <ProjectRolesEditor
+                                            fields={roleFields}
+                                            register={register}
+                                            errors={errors}
+                                            disabled={isPending}
+                                            className="animate-in fade-in slide-in-from-bottom-2 duration-300"
+                                            onAddRole={() => appendRole({ role: "New Role", count: 1, description: "", skills: [] })}
+                                            onRemoveRole={handleDeleteRole}
+                                        />
                                     )}
                                 </div>
                             </form>
