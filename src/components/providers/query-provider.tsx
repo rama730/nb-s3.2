@@ -1,7 +1,7 @@
 'use client'
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { useState, type ReactNode } from 'react'
+import { useState, useEffect, type ReactNode } from 'react'
 import { QUERY_DEFAULTS } from '@/lib/query-defaults'
 
 interface QueryProviderProps {
@@ -25,6 +25,14 @@ export function QueryProvider({ children }: QueryProviderProps) {
                 },
             })
     )
+
+    useEffect(() => {
+        const handleSignOut = () => {
+            queryClient.clear();
+        };
+        window.addEventListener('auth:signout', handleSignOut);
+        return () => window.removeEventListener('auth:signout', handleSignOut);
+    }, [queryClient]);
 
     return (
         <QueryClientProvider client={queryClient}>
