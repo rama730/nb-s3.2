@@ -5,6 +5,12 @@ type RouteDescriptor = {
     routeClass: RouteClass
 }
 
+type SpecialRouteDescriptor = {
+    routeClass: RouteClass
+    protected: boolean
+    matches: (pathname: string) => boolean
+}
+
 const ACTIVE_SURFACE_ROUTES: RouteDescriptor[] = [
     { pathname: '/messages', routeClass: 'active_surface' },
     { pathname: '/workspace', routeClass: 'active_surface' },
@@ -30,17 +36,41 @@ const PUBLIC_CACHED_ROUTES: RouteDescriptor[] = [
 
 const ALL_ROUTES = [...ACTIVE_SURFACE_ROUTES, ...USER_SHELL_ROUTES, ...PUBLIC_CACHED_ROUTES]
 
+const SPECIAL_ROUTES: SpecialRouteDescriptor[] = [
+    {
+        routeClass: 'user_shell',
+        protected: true,
+        matches: (pathname) => pathname === '/projects/new' || pathname.startsWith('/projects/new/'),
+    },
+    {
+        routeClass: 'user_shell',
+        protected: false,
+        matches: (pathname) => /^\/projects\/[^/]+\/sprints\/[^/]+(?:\/|$)/.test(pathname),
+    },
+    {
+        routeClass: 'user_shell',
+        protected: true,
+        matches: (pathname) => pathname === '/admin/notifications' || pathname.startsWith('/admin/notifications/'),
+    },
+]
+
 function matchesRoutePrefix(pathname: string, routePath: string) {
     if (routePath === '/') return pathname === '/'
     return pathname === routePath || pathname.startsWith(`${routePath}/`)
 }
 
 export function classifyRoute(pathname: string): RouteClass {
+    const specialMatch = SPECIAL_ROUTES.find((route) => route.matches(pathname))
+    if (specialMatch) return specialMatch.routeClass
+
     const match = ALL_ROUTES.find((route) => matchesRoutePrefix(pathname, route.pathname))
     return match?.routeClass ?? 'public_cached'
 }
 
 export function isProtectedAppRoute(pathname: string) {
+    const specialMatch = SPECIAL_ROUTES.find((route) => route.matches(pathname))
+    if (specialMatch) return specialMatch.protected
+
     return ACTIVE_SURFACE_ROUTES.some((route) => matchesRoutePrefix(pathname, route.pathname))
         || USER_SHELL_ROUTES.some((route) => matchesRoutePrefix(pathname, route.pathname) && route.pathname !== '/onboarding')
 }
