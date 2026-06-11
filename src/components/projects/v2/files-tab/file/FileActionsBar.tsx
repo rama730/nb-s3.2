@@ -13,17 +13,25 @@
 "use client";
 
 import * as React from "react";
-import { Download, FileCode2, Link2, ListTodo, Pencil, RefreshCw } from "lucide-react";
+import { BookOpenText, Download, FileCode2, Link2, ListTodo, Pencil, RefreshCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/components/ui-custom/Toast";
-import { linkNodeToTask } from "@/app/actions/files";
 import { logger } from "@/lib/logger";
-import { useFileVersions, type LockConflictInfo } from "@/hooks/useFileVersions";
+import { useQueryClient } from "@tanstack/react-query";
+import {
+    useProjectReadmeDraft,
+    PROJECT_README_DRAFT_QUERY_KEY,
+    PROJECT_README_QUERY_KEY,
+} from "@/hooks/hub/useProjectReadmeData";
 
 import { FilesTabRoleContext } from "../FilesTabRoleContext";
 import { TaskSearchPicker } from "../picker/TaskSearchPicker";
+
+interface LockConflictInfo {
+  lockedBy: { userId: string; displayName: string; lockedAt: string };
+}
 
 export interface FileActionsBarProps {
   onRaw: () => void;
@@ -37,6 +45,8 @@ export interface FileActionsBarProps {
   projectId?: string;
   /** Node ID — required for "Attach to task…" and "Replace…" actions. */
   nodeId?: string;
+  fileName?: string;
+  mimeType?: string | null;
   className?: string;
 }
 
@@ -48,6 +58,8 @@ export function FileActionsBar({
   isLinkedTasksPanelOpen = false,
   projectId,
   nodeId,
+  fileName,
+  mimeType,
   className,
 }: FileActionsBarProps): React.JSX.Element {
   const roleCtx = React.useContext(FilesTabRoleContext);
@@ -55,19 +67,19 @@ export function FileActionsBar({
   // stays hidden rather than defaulting to a mutation-capable state.
   const canEdit = roleCtx?.canEdit ?? false;
 
+  const queryClient = useQueryClient();
+  const { data: readmeDraft } = useProjectReadmeDraft(projectId || "", Boolean(projectId));
+  const isLinked = readmeDraft?.linkedNodeId === nodeId;
+
   const { showToast } = useToast();
   const [isTaskPickerOpen, setIsTaskPickerOpen] = React.useState(false);
   const [isLinking, setIsLinking] = React.useState(false);
+  const [isImportingReadme, setIsImportingReadme] = React.useState(false);
 
   // ── Replace… state (Req 11.1–11.6) ──────────────────────────────────
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const [isReplacing, setIsReplacing] = React.useState(false);
   const [lockConflict, setLockConflict] = React.useState<LockConflictInfo | null>(null);
-
-  const { saveAsNewVersion } = useFileVersions(
-    projectId ?? "",
-    nodeId ?? "",
-  );
 
   // "Attach to task…" is only available when projectId and nodeId are provided
   // and the user has edit permissions (Req 9.1, 9.2, 24.1).
@@ -76,6 +88,16 @@ export function FileActionsBar({
   // "Replace…" is only available when projectId and nodeId are provided
   // and the user has edit permissions (Req 11.1, 11.2, 24.1).
   const canReplace = canEdit && Boolean(projectId) && Boolean(nodeId);
+  const isReadmeLikeFile = React.useMemo(() => {
+    const name = (fileName || "").toLowerCase();
+    const mime = (mimeType || "").toLowerCase();
+    return /\.(md|mdx|markdown|mdown)$/i.test(name)
+      || /^readme(\.|$)/i.test(name)
+      || mime.includes("markdown")
+      || mime === "text/x-markdown"
+      || mime === "text/markdown";
+  }, [fileName, mimeType]);
+  const canUseAsReadme = canEdit && Boolean(projectId) && Boolean(nodeId) && isReadmeLikeFile;
 
   const handleOpenTaskPicker = React.useCallback(() => {
     setIsTaskPickerOpen(true);
@@ -93,6 +115,7 @@ export function FileActionsBar({
 
       setIsLinking(true);
       try {
+        const { linkNodeToTask } = await import("@/app/actions/files/links");
         await linkNodeToTask(taskId, nodeId);
         // On success: close picker (Req 9.4). TaskLinkChip updates via
         // realtime Project_Channel (Req 9.6).
@@ -109,6 +132,41 @@ export function FileActionsBar({
     },
     [nodeId, isLinking, showToast],
   );
+
+  const handleUseAsReadme = React.useCallback(async () => {
+    if (!projectId || !nodeId || isImportingReadme) return;
+    setIsImportingReadme(true);
+    try {
+      if (isLinked) {
+        // Unlink the file
+        const { unlinkProjectReadmeAction } = await import("@/app/actions/project/readme");
+        const result = await unlinkProjectReadmeAction(projectId);
+        if (!result.success) {
+          showToast(result.error || "Failed to unlink file from README", "error");
+          return;
+        }
+        showToast("File unlinked from README successfully", "success");
+      } else {
+        // Link the file
+        const { linkProjectReadmeAction } = await import("@/app/actions/project/readme");
+        const result = await linkProjectReadmeAction(projectId, nodeId);
+        if (!result.success) {
+          showToast(result.error || "Failed to link file to README", "error");
+          return;
+        }
+        showToast("File linked to README successfully", "success");
+      }
+
+      // Invalidate queries to refresh link status
+      void queryClient.invalidateQueries({ queryKey: PROJECT_README_DRAFT_QUERY_KEY(projectId) });
+      void queryClient.invalidateQueries({ queryKey: PROJECT_README_QUERY_KEY(projectId) });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to toggle README link";
+      showToast(message, "error");
+    } finally {
+      setIsImportingReadme(false);
+    }
+  }, [isImportingReadme, isLinked, nodeId, projectId, showToast, queryClient]);
 
   // ── Replace… handlers (Req 11.3–11.6) ───────────────────────────────
 
@@ -129,7 +187,16 @@ export function FileActionsBar({
       setLockConflict(null);
 
       try {
-        const result = await saveAsNewVersion(file);
+        const [{ saveFileAsNewVersion }, { createClient }] = await Promise.all([
+          import("@/hooks/useFileVersions"),
+          import("@/lib/supabase/client"),
+        ]);
+        const result = await saveFileAsNewVersion({
+          projectId,
+          nodeId,
+          file,
+          supabase: createClient(),
+        });
 
         if (result.success) {
           // On success: MetadataStrip updates via realtime patchNodeVersion (Req 11.6).
@@ -157,7 +224,7 @@ export function FileActionsBar({
         setIsReplacing(false);
       }
     },
-    [projectId, nodeId, saveAsNewVersion, showToast],
+    [projectId, nodeId, showToast],
   );
 
   return (
@@ -223,6 +290,21 @@ export function FileActionsBar({
             data-testid="files-tab-file-actions-replace-input"
           />
         </>
+      )}
+      {canUseAsReadme && (
+        <Button
+          type="button"
+          variant={isLinked ? "secondary" : "outline"}
+          size="sm"
+          onClick={handleUseAsReadme}
+          disabled={isImportingReadme}
+          aria-label={isLinked ? "Unlink this file from README" : "Use this file as the project README"}
+          className={cn(isLinked && "border-green-600/50 bg-green-500/10 text-green-700 hover:bg-green-500/20 dark:border-green-500/30 dark:bg-green-500/20 dark:text-green-400 dark:hover:bg-green-500/30")}
+          data-testid="files-tab-file-actions-use-as-readme"
+        >
+          <BookOpenText aria-hidden="true" className={cn(isImportingReadme && "animate-pulse")} />
+          {isLinked ? "Using as README" : "Use as README"}
+        </Button>
       )}
       {/* Lock conflict indicator (Req 5.2, 11.5) */}
       {lockConflict && (
