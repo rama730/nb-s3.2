@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 
 import {
   WORKER_ONLY_FUNCTION_IDS,
@@ -80,5 +82,23 @@ test("getRegisteredInngestFunctions throws in production when INNGEST_EXECUTION_
   assert.throws(
     () => getRegisteredInngestFunctions(),
     /INNGEST_EXECUTION_ROLE must be explicitly set in production\./,
+  );
+});
+
+test("Inngest API route honors the configured execution role", () => {
+  const routeSource = readFileSync(
+    path.resolve(__dirname, "../../src/app/api/v1/inngest/route.ts"),
+    "utf8",
+  );
+
+  assert.match(
+    routeSource,
+    /functions:\s*getRegisteredInngestFunctions\(\s*\)/,
+    "the Inngest route must use the configured/default execution role",
+  );
+  assert.doesNotMatch(
+    routeSource,
+    /getRegisteredInngestFunctions\(\s*["']web["']\s*\)/,
+    "the Inngest route must not hard-code the web role and drop worker functions",
   );
 });
