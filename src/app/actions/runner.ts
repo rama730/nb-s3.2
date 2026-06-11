@@ -150,7 +150,7 @@ export async function upsertProjectRunProfileAction(
                 isDefault: !!input.isDefault,
                 createdBy: userId,
             }).returning({ id: projectRunProfiles.id });
-            targetProfileId = created.id;
+            targetProfileId = created!.id;
         }
 
         if (input.isDefault) {
@@ -412,7 +412,7 @@ export async function runProjectProfileAction(
             };
         }
 
-        const session = sessionCreate.session;
+        const session = sessionCreate.session!;
 
         const startedAtMs = new Date(session.startedAt).getTime();
         const result = await runLocalAnalyzer({
