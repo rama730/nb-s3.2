@@ -11,7 +11,7 @@ import {
   createFolder,
   renameNode,
   bulkCreateFolderTree,
-} from "@/app/actions/files";
+} from "@/app/actions/files/mutations";
 import { getBatchUploadUrls, getUploadPresignedUrl } from "@/app/actions/upload";
 import { filesParentKey, useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 import type { ExplorerOperation } from "./explorerTypes";
@@ -170,7 +170,7 @@ export function useExplorerMutations({
         }
         const siblingIds = childrenByParentId[filesParentKey(parentId)] || [];
         const siblings = siblingIds.map((id) => nodesById[id]).filter(Boolean);
-        const dup = siblings.some((s) => s.name.toLowerCase() === name.toLowerCase());
+        const dup = siblings.some((s) => s?.name.toLowerCase() === name.toLowerCase());
         if (dup) throw new Error("A file/folder with that name already exists here.");
 
         if (createDialog.kind === "folder") {
@@ -353,7 +353,7 @@ export function useExplorerMutations({
           if (!result) return;
           const { createdNodes, failed } = result;
           if (createdNodes.length > 0) {
-            onOpenFile(createdNodes[0]);
+            onOpenFile(createdNodes[0]!);
             const msg =
               failed > 0
                 ? `Uploaded ${createdNodes.length} file(s), ${failed} failed`
@@ -596,7 +596,7 @@ export function useExplorerMutations({
     const duplicateSibling = siblingIds
       .map((id) => nodesById[id])
       .filter(Boolean)
-      .some((s) => s.id !== node.id && s.name.toLowerCase() === nextName.toLowerCase());
+      .some((s) => s?.id !== node.id && s?.name.toLowerCase() === nextName.toLowerCase());
     if (duplicateSibling) {
       showToast("A file/folder with that name already exists here.", "error");
       return;
@@ -1061,7 +1061,7 @@ export function useExplorerMutations({
         if (!result) return;
         const { createdNodes, failed } = result;
         if (createdNodes.length > 0) {
-          onOpenFile(createdNodes[0]);
+          onOpenFile(createdNodes[0]!);
           const msg =
             failed > 0
               ? `Uploaded ${createdNodes.length} file(s), ${failed} failed`
