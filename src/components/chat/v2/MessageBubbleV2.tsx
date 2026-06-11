@@ -50,9 +50,13 @@ import {
 } from '@/components/ui/dropdown-menu';
 import {
     MessageAttachmentsV2,
-    MessageTextContentV2,
+    CodeSegmentV2,
+    MESSAGE_TEXT_BASE_CLASS,
+    renderTextWithMentions,
     type ChatAttachmentV2,
 } from './message-rendering';
+import { ApplicationSystemCardV2 } from './ApplicationSystemCardV2';
+import { parseMessageSegments, type MessageSegment } from '@/lib/messages/code-snippets';
 import {
     getReplyFocusLabel,
     getReplyPreviewBadge,
@@ -62,6 +66,7 @@ import {
     getMessageContextChipsFromMetadata,
     getPrivateFollowUpFromMetadata,
     getStructuredMessageFromMetadata,
+    type WorkflowResolutionAction,
 } from '@/lib/messages/structured';
 import { areMessageDeliveryRenderStatesEqual } from '@/lib/messages/v2-render-state';
 import { ReactionQuickBar } from './ReactionQuickBar';
@@ -96,6 +101,11 @@ interface MessageBubbleV2Props {
     onContentLoad?: () => void;
     isFocusedReplyTarget?: boolean;
     focusSource?: 'reply' | 'pin' | 'external' | null;
+    isConsecutiveFromPrev?: boolean;
+    isConsecutiveToNext?: boolean;
+    onSelectMessage?: (message: MessageWithSender) => void;
+    showTimestamp?: boolean;
+    conversationType?: 'dm' | 'group' | 'project_group';
 }
 
 function createPendingLinkPreview(url: string): LinkPreview | null {
@@ -119,14 +129,23 @@ function getApplicationStatusLabel(status: string | null) {
     return 'Pending';
 }
 
+function isOnlyEmojis(text: string): boolean {
+    const trimmed = text.trim();
+    if (!trimmed) return false;
+    const emojiRegex = /^[\s\p{Emoji_Presentation}\p{Extended_Pictographic}\u200d\u20e3\ufe0f\u200b\u200c\u200d]+$/u;
+    const hasAlphanumeric = /[a-zA-Z0-9]/;
+    return emojiRegex.test(trimmed) && !hasAlphanumeric.test(trimmed);
+}
+
+
 function areReactionSummariesEqual(
     left: ReturnType<typeof normalizeMessageReactionSummary>,
     right: ReturnType<typeof normalizeMessageReactionSummary>,
 ) {
     if (left.length !== right.length) return false;
     for (let index = 0; index < left.length; index += 1) {
-        const current = left[index];
-        const next = right[index];
+        const current = left[index]!;
+        const next = right[index]!;
         if (
             current.emoji !== next.emoji
             || current.count !== next.count
@@ -141,8 +160,8 @@ function areReactionSummariesEqual(
 function areContextChipsEqual(left: ReturnType<typeof getMessageContextChipsFromMetadata>, right: ReturnType<typeof getMessageContextChipsFromMetadata>) {
     if (left.length !== right.length) return false;
     for (let index = 0; index < left.length; index += 1) {
-        const current = left[index];
-        const next = right[index];
+        const current = left[index]!;
+        const next = right[index]!;
         if (
             current.kind !== next.kind
             || current.id !== next.id
@@ -245,8 +264,8 @@ function areLinkedWorkEqual(left: readonly MessageLinkedWorkSummary[] | undefine
     const rightItems = right ?? [];
     if (leftItems.length !== rightItems.length) return false;
     for (let index = 0; index < leftItems.length; index += 1) {
-        const current = leftItems[index];
-        const next = rightItems[index];
+        const current = leftItems[index]!;
+        const next = rightItems[index]!;
         if (
             current.id !== next.id
             || current.label !== next.label
@@ -279,8 +298,8 @@ function areAttachmentsEqual(left: ChatAttachmentV2[], right: ChatAttachmentV2[]
     if (left === right) return true;
     if (left.length !== right.length) return false;
     for (let index = 0; index < left.length; index += 1) {
-        const current = left[index];
-        const next = right[index];
+        const current = left[index]!;
+        const next = right[index]!;
         if (
             current.id !== next.id
             || current.type !== next.type
@@ -309,6 +328,11 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
     onContentLoad,
     isFocusedReplyTarget = false,
     focusSource = null,
+    isConsecutiveFromPrev = false,
+    isConsecutiveToNext = false,
+    onSelectMessage,
+    showTimestamp = false,
+    conversationType = 'dm',
 }: MessageBubbleV2Props) {
     const queryClient = useQueryClient();
     const router = useRouter();
@@ -322,10 +346,10 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
         [message.metadata],
     );
     const isPinned = Boolean(metadata.pinned);
-    const isApplication = metadata.isApplication === true;
+    const structured = useMemo(() => getStructuredMessageFromMetadata(metadata), [metadata]);
+    const isApplication = metadata.isApplication === true || structured?.kind === 'project_invite';
     const applicationStatus = typeof metadata.status === 'string' ? metadata.status : null;
     const deliveryState = typeof metadata.deliveryState === 'string' ? metadata.deliveryState : undefined;
-    const structured = useMemo(() => getStructuredMessageFromMetadata(metadata), [metadata]);
     const contextChips = useMemo(() => getMessageContextChipsFromMetadata(metadata), [metadata]);
     const privateFollowUp = useMemo(() => getPrivateFollowUpFromMetadata(metadata), [metadata]);
     const [isEditing, setIsEditing] = useState(false);
@@ -380,6 +404,42 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
         () => (message.attachments || []) as ChatAttachmentV2[],
         [message.attachments],
     );
+    const parsedSegments = useMemo(() => {
+        if (!message.content) return [];
+        return parseMessageSegments(message.content);
+    }, [message.content]);
+
+    const hasTextBubbleContent = useMemo(() => {
+        return Boolean(
+            message.content ||
+            message.replyTo ||
+            isPinned ||
+            isApplication ||
+            structured ||
+            privateFollowUp
+        );
+    }, [message.content, message.replyTo, isPinned, isApplication, structured, privateFollowUp]);
+
+    const segmentsToRender = useMemo(() => {
+        if (parsedSegments.length > 0) return parsedSegments;
+        if (hasTextBubbleContent) {
+            return [{ type: 'text', content: '', language: null } as MessageSegment];
+        }
+        return [];
+    }, [parsedSegments, hasTextBubbleContent]);
+
+    const isMessageEmojiOnly = useMemo(() => {
+        return segmentsToRender.length === 1 && segmentsToRender[0]!.type === 'text' && segmentsToRender[0]!.content && isOnlyEmojis(segmentsToRender[0]!.content);
+    }, [segmentsToRender]);
+
+    const hasInlineTimestamp = useMemo(() => {
+        if (!isOwn || !hasTextBubbleContent || isMessageEmojiOnly) return false;
+        if (!message.content || !message.content.trim()) return false;
+        const lastSegment = segmentsToRender[segmentsToRender.length - 1]!;
+        if (!lastSegment || lastSegment.type !== 'text' || !lastSegment.content) return false;
+        return true;
+    }, [isOwn, hasTextBubbleContent, isMessageEmojiOnly, message.content, segmentsToRender]);
+
     const canEditMessage = isOwn && !isDeleted && Boolean(message.content);
     const canReply = !isDeleted;
     const isPopup = surface === 'popup';
@@ -392,7 +452,6 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
         || privateFollowUp
         || contextChips.length > 0
         || linkedWork.length > 0
-        || attachments.length > 0
         || renderedLinkPreview,
     );
 
@@ -450,7 +509,7 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
     }, [message.conversationId, queryClient]);
 
     const handleResolveWorkflow = useCallback(async (
-        action: 'accept' | 'decline' | 'complete' | 'needs_changes' | 'available' | 'busy' | 'offline' | 'focusing',
+        action: WorkflowResolutionAction,
     ) => {
         const workflowItemId = structured?.workflowItemId;
         if (!workflowItemId || workflowActionLoading) {
@@ -644,7 +703,7 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
         }
     }, [message.conversationId, message.id, queryClient, syncAfterMessageAction]);
 
-    if (message.type === 'system' && !structured) {
+    if (message.type === 'system' && !structured && !isApplication) {
         return (
             <div className="my-4 flex w-full justify-center">
                 <span className="flex items-center gap-2 rounded-full border border-zinc-200 bg-zinc-100 px-3 py-1 text-xs font-medium text-zinc-500 dark:border-zinc-800 dark:bg-zinc-800/60 dark:text-zinc-400">
@@ -677,128 +736,28 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
             className={`msg-bubble-lane flex w-full ${isOwn ? 'justify-end' : 'justify-start'}`}
             style={isOptimistic ? { animation: 'message-appear 250ms ease-out' } : undefined}
         >
-            <div className={`group/message flex w-full min-w-0 items-end gap-2 ${isOwn ? 'flex-row-reverse' : 'flex-row'}`}>
-                {!isOwn && showAvatar ? (
-                    <UserAvatar
-                        identity={message.sender}
-                        size={32}
-                        unoptimized
-                        className="shrink-0"
-                        fallbackClassName="text-xs font-medium text-white"
-                    />
-                ) : !isOwn && !showAvatar ? (
-                    <div className="w-8 shrink-0" />
-                ) : null}
-
+            <div className={`group flex w-full min-w-0 items-end gap-2 ${isOwn ? 'flex-row-reverse' : 'flex-row'}`}>
                 <div
                     className={`msg-bubble-stack relative flex min-w-0 flex-col ${isOwn ? 'items-end' : 'items-start'}`}
                     data-surface={isPopup ? 'popup' : 'page'}
                     data-own={isOwn ? 'true' : 'false'}
                 >
-                        <div
-                            data-pending={isOptimistic ? 'true' : undefined}
-                            data-rich={hasRichContent ? 'true' : undefined}
-                            className={cn(
-                                'msg-bubble-shell',
-                                isOwn ? 'msg-bubble-own' : 'msg-bubble-peer',
-                                showAvatar && (isOwn ? 'rounded-br-[var(--msg-tail-radius)]' : 'rounded-bl-[var(--msg-tail-radius)]'),
-                                !isOwn && 'border border-border/60',
-                                'transition-[transform,box-shadow,ring-color] duration-300 ease-out',
-                                isFocusedReplyTarget && (
+                        {isApplication ? (
+                            <ApplicationSystemCardV2
+                                message={message}
+                                conversationId={message.conversationId}
+                            />
+                        ) : isEditing ? (
+                            <div
+                                className={cn(
+                                    'msg-bubble-shell my-1',
+                                    isOwn ? 'msg-bubble-own' : 'msg-bubble-peer',
                                     isOwn
-                                        ? 'ring-2 ring-white/45 shadow-[0_16px_40px_-22px_rgba(59,130,246,0.9)]'
-                                        : 'ring-2 ring-primary/45 shadow-[0_16px_40px_-22px_rgba(59,130,246,0.55)]'
-                                ),
-                            )}
-                            style={{
-                                boxShadow: isFocusedReplyTarget ? undefined : 'var(--msg-shadow)',
-                                ...(isFocusedReplyTarget ? { animation: 'message-focus-pulse 1250ms cubic-bezier(0.22,1,0.36,1)' } : {}),
-                            }}
-                        >
-                            {isFocusedReplyTarget ? (
-                                <>
-                                    <div
-                                        className={cn(
-                                            'absolute inset-y-3 w-1 rounded-full',
-                                            isOwn ? '-right-2 bg-white/70' : '-left-2 bg-primary/70',
-                                        )}
-                                    />
-                                    <div className="mb-2 flex items-center gap-2">
-                                        <span
-                                            className={cn(
-                                                'inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide',
-                                                isOwn
-                                                    ? 'border-white/20 bg-white/10 text-white/90'
-                                                    : 'border-primary/20 bg-primary/5 text-primary',
-                                            )}
-                                        >
-                                            {getReplyFocusLabel(focusSource || 'external')}
-                                        </span>
-                                    </div>
-                                </>
-                            ) : null}
-                            {message.replyTo ? (
-                                <button
-                                    type="button"
-                                    onClick={() => onFocusMessage?.(message.replyTo!.id, 'reply')}
-                                    className={cn(
-                                        'mb-2 w-full rounded-xl border px-2.5 py-2 text-left text-xs transition-colors duration-200',
-                                        isOwn
-                                            ? 'border-white/15 bg-white/10 text-primary-foreground/90 hover:bg-white/14'
-                                            : 'border-zinc-200 bg-zinc-50/90 text-zinc-500 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800/60 dark:text-zinc-300 dark:hover:bg-zinc-800',
-                                    )}
-                                    title={replyPreviewText || 'Open original message'}
-                                    aria-label="Jump to original replied message"
-                                >
-                                    <div className="flex items-start gap-2">
-                                        <div className={cn('mt-0.5 w-1 self-stretch rounded-full', isOwn ? 'bg-white/55' : 'bg-primary/55')} />
-                                        <div className="min-w-0 flex-1">
-                                            <div className="flex items-center gap-2">
-                                                <div className="truncate font-semibold">
-                                                    {message.replyTo.senderName || 'Reply'}
-                                                </div>
-                                                {replyPreviewBadge ? (
-                                                    <span
-                                                        className={cn(
-                                                            'shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide',
-                                                            isOwn
-                                                                ? 'bg-white/10 text-white/80'
-                                                                : 'bg-primary/10 text-primary',
-                                                        )}
-                                                    >
-                                                        {replyPreviewBadge}
-                                                    </span>
-                                                ) : null}
-                                            </div>
-                                            <div className="mt-0.5 line-clamp-2 break-words opacity-90">
-                                                {replyPreviewText}
-                                            </div>
-                                        </div>
-                                    </div>
-                                </button>
-                            ) : null}
-
-                            {(isPinned || isApplication || privateFollowUp) ? (
-                                <div className="mb-1 flex items-center gap-2">
-                                    {isPinned ? (
-                                        <span className={`text-[10px] font-bold uppercase ${isOwn ? 'text-white/80' : 'text-amber-600 dark:text-amber-400'}`}>
-                                            Pinned
-                                        </span>
-                                    ) : null}
-                                    {isApplication ? (
-                                        <span className={`text-[10px] font-bold uppercase opacity-70 ${isOwn ? 'text-white' : 'text-zinc-500 dark:text-zinc-300'}`}>
-                                            Application status: {getApplicationStatusLabel(applicationStatus)}
-                                        </span>
-                                    ) : null}
-                                    {privateFollowUp ? (
-                                        <span className={`text-[10px] font-bold uppercase ${isOwn ? 'text-white/80' : 'text-emerald-600 dark:text-emerald-400'}`}>
-                                            Follow up{privateFollowUp.dueAt ? ` · ${format(new Date(privateFollowUp.dueAt), 'MMM d')}` : ''}
-                                        </span>
-                                    ) : null}
-                                </div>
-                            ) : null}
-
-                            {isEditing ? (
+                                        ? cn('rounded-2xl', (showAvatar || isConsecutiveToNext) && 'rounded-br-sm', isConsecutiveFromPrev && 'rounded-tr-sm')
+                                        : cn('rounded-2xl', (showAvatar || isConsecutiveToNext) && 'rounded-bl-sm', isConsecutiveFromPrev && 'rounded-tl-sm'),
+                                    !isOwn && 'border border-border/60'
+                                )}
+                            >
                                 <div className="rounded-xl border border-zinc-200 bg-white p-2 dark:border-zinc-700 dark:bg-zinc-900">
                                     <textarea
                                         value={draftContent}
@@ -829,101 +788,267 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
                                         </button>
                                     </div>
                                 </div>
-                            ) : (
-                                <>
-                                    {structured ? (
-                                        <StructuredMessageCardV2
-                                            structured={structured}
-                                            isOwn={isOwn}
-                                            currentUserId={user?.id ?? null}
-                                            creatorId={message.senderId ?? null}
-                                            isActionLoading={workflowActionLoading}
-                                            onResolveAction={structured.workflowItemId ? handleResolveWorkflow : undefined}
-                                        />
-                                    ) : null}
-                                    {!structured && contextChips.length > 0 ? (
-                                        <MessageContextChipRowV2
-                                            chips={contextChips}
-                                            tone={isOwn ? 'inverted' : 'default'}
-                                            compact
-                                        />
-                                    ) : null}
-                                    {linkedWork.length > 0 ? (
-                                        <div className="mb-2 flex min-w-0 max-w-full flex-wrap items-center gap-1.5 overflow-hidden">
-                                            {visibleLinkedWork.map((link) => {
-                                                const label = getLinkedWorkDisplayLabel(link);
-                                                return (
-                                                    <button
-                                                        key={link.id}
-                                                        type="button"
-                                                        disabled={!link.href || link.status === 'unavailable'}
-                                                        onClick={() => {
-                                                            if (!link.href || link.status === 'unavailable') {
-                                                                toast.info('Linked destination is unavailable');
-                                                                return;
-                                                            }
-                                                            router.push(link.href);
-                                                        }}
+                            </div>
+                        ) : (
+                            <>
+                                {segmentsToRender.map((segment, index, arr) => {
+                                    const isFirst = index === 0;
+                                    const isLast = index === arr.length - 1;
+
+                                    const renderPrefix = () => (
+                                        <>
+                                            {isFocusedReplyTarget ? (
+                                                <>
+                                                    <div
                                                         className={cn(
-                                                            'inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-full border px-2 py-1 text-[11px] font-semibold transition-colors sm:max-w-[220px]',
-                                                            isOwn
-                                                                ? 'border-white/15 bg-white/10 text-white/90 hover:bg-white/15 disabled:text-white/45'
-                                                                : 'border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 disabled:border-zinc-200 disabled:bg-zinc-100 disabled:text-zinc-400 dark:border-blue-900/60 dark:bg-blue-950/40 dark:text-blue-200 dark:hover:bg-blue-950/65 dark:disabled:border-zinc-800 dark:disabled:bg-zinc-900',
+                                                            'absolute inset-y-3 w-1 rounded-full',
+                                                            isOwn ? '-right-2 bg-white/70' : '-left-2 bg-primary/70',
                                                         )}
-                                                        title={link.subtitle ?? label}
-                                                    >
-                                                        {link.isPrivate ? <Lock className="h-3 w-3 shrink-0" /> : <BriefcaseBusiness className="h-3 w-3 shrink-0" />}
-                                                        <span className="shrink-0 opacity-75">{link.badge}</span>
-                                                        <span className="truncate">{label}</span>
-                                                        {link.status !== 'active' && link.status !== 'pending' ? (
-                                                            <span className="shrink-0 rounded-full bg-current/10 px-1 uppercase opacity-80">
-                                                                {link.status}
-                                                            </span>
-                                                        ) : null}
-                                                        {link.href ? <ExternalLink className="h-3 w-3 shrink-0 opacity-60" /> : null}
-                                                    </button>
-                                                );
-                                            })}
-                                            {linkedWork.length > 2 ? (
+                                                    />
+                                                    <div className="mb-2 flex items-center gap-2">
+                                                        <span
+                                                            className={cn(
+                                                                'inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide',
+                                                                isOwn
+                                                                    ? 'border-white/20 bg-white/10 text-white/90'
+                                                                    : 'border-primary/20 bg-primary/5 text-primary',
+                                                            )}
+                                                        >
+                                                            {getReplyFocusLabel(focusSource || 'external')}
+                                                        </span>
+                                                    </div>
+                                                </>
+                                            ) : null}
+                                            {message.replyTo ? (
                                                 <button
                                                     type="button"
-                                                    onClick={() => setLinkedWorkExpanded((current) => !current)}
+                                                    onClick={() => onFocusMessage?.(message.replyTo!.id, 'reply')}
                                                     className={cn(
-                                                        'inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-semibold',
-                                                        isOwn ? 'bg-white/10 text-white/80 hover:bg-white/15' : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700',
+                                                        'mb-2 w-full rounded-xl border px-2.5 py-2 text-left text-xs transition-colors duration-200',
+                                                        isOwn
+                                                            ? 'border-white/15 bg-white/10 text-primary-foreground/90 hover:bg-white/14'
+                                                            : 'border-zinc-200 bg-zinc-50/90 text-zinc-500 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800/60 dark:text-zinc-300 dark:hover:bg-zinc-800',
                                                     )}
+                                                    title={replyPreviewText || 'Open original message'}
+                                                    aria-label="Jump to original replied message"
                                                 >
-                                                    {linkedWorkExpanded ? 'Show less' : `${linkedWork.length - 2} linked items`}
-                                                    <ChevronDown className={cn('h-3 w-3 transition-transform', linkedWorkExpanded && 'rotate-180')} />
+                                                    <div className="flex items-start gap-2">
+                                                        <div className={cn('mt-0.5 w-1 self-stretch rounded-full', isOwn ? 'bg-white/55' : 'bg-primary/55')} />
+                                                        <div className="min-w-0 flex-1">
+                                                            <div className="flex items-center gap-2">
+                                                                <div className="truncate font-semibold">
+                                                                    {message.replyTo.senderName || 'Reply'}
+                                                                </div>
+                                                                {replyPreviewBadge ? (
+                                                                    <span
+                                                                        className={cn(
+                                                                            'shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide',
+                                                                            isOwn
+                                                                                ? 'bg-white/10 text-white/80'
+                                                                                : 'bg-primary/10 text-primary',
+                                                                        )}
+                                                                    >
+                                                                        {replyPreviewBadge}
+                                                                    </span>
+                                                                ) : null}
+                                                            </div>
+                                                            <div className="mt-0.5 line-clamp-2 break-words opacity-90">
+                                                                {replyPreviewText}
+                                                            </div>
+                                                        </div>
+                                                    </div>
                                                 </button>
                                             ) : null}
+
+                                            {(isPinned || privateFollowUp) ? (
+                                                <div className="mb-1 flex items-center gap-2">
+                                                    {isPinned ? (
+                                                        <span className={`text-[10px] font-bold uppercase ${isOwn ? 'text-white/80' : 'text-amber-600 dark:text-amber-400'}`}>
+                                                            Pinned
+                                                        </span>
+                                                    ) : null}
+                                                    {privateFollowUp ? (
+                                                        <span className={`text-[10px] font-bold uppercase ${isOwn ? 'text-white/80' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                                                            Follow up{privateFollowUp.dueAt ? ` · ${format(new Date(privateFollowUp.dueAt), 'MMM d')}` : ''}
+                                                        </span>
+                                                    ) : null}
+                                                </div>
+                                            ) : null}
+                                        </>
+                                    );
+
+                                    const renderSuffix = () => (
+                                        <>
+                                            {structured ? (
+                                                <StructuredMessageCardV2
+                                                    structured={structured}
+                                                    isOwn={isOwn}
+                                                    currentUserId={user?.id ?? null}
+                                                    creatorId={message.senderId ?? null}
+                                                    isActionLoading={workflowActionLoading}
+                                                    onResolveAction={structured.workflowItemId ? handleResolveWorkflow : undefined}
+                                                />
+                                            ) : null}
+                                            {!structured && contextChips.length > 0 ? (
+                                                <MessageContextChipRowV2
+                                                    chips={contextChips}
+                                                    tone={isOwn ? 'inverted' : 'default'}
+                                                    compact
+                                                />
+                                            ) : null}
+                                            {linkedWork.length > 0 ? (
+                                                <div className="mb-2 flex min-w-0 max-w-full flex-wrap items-center gap-1.5 overflow-hidden">
+                                                    {visibleLinkedWork.map((link) => {
+                                                        const label = getLinkedWorkDisplayLabel(link);
+                                                        return (
+                                                            <button
+                                                                key={link.id}
+                                                                type="button"
+                                                                disabled={!link.href || link.status === 'unavailable'}
+                                                                onClick={() => {
+                                                                    if (!link.href || link.status === 'unavailable') {
+                                                                        toast.info('Linked destination is unavailable');
+                                                                        return;
+                                                                    }
+                                                                    router.push(link.href);
+                                                                }}
+                                                                className={cn(
+                                                                    'inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-full border px-2 py-1 text-[11px] font-semibold transition-colors sm:max-w-[220px]',
+                                                                    isOwn
+                                                                        ? 'border-white/15 bg-white/10 text-white/90 hover:bg-white/15 disabled:text-white/45'
+                                                                        : 'border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 disabled:border-zinc-200 disabled:bg-zinc-100 disabled:text-zinc-400 dark:border-blue-900/60 dark:bg-blue-950/40 dark:text-blue-200 dark:hover:bg-blue-950/65 dark:disabled:border-zinc-800 dark:disabled:bg-zinc-900',
+                                                                )}
+                                                                title={link.subtitle ?? label}
+                                                            >
+                                                                {link.isPrivate ? <Lock className="h-3 w-3 shrink-0" /> : <BriefcaseBusiness className="h-3 w-3 shrink-0" />}
+                                                                <span className="shrink-0 opacity-75">{link.badge}</span>
+                                                                <span className="truncate">{label}</span>
+                                                                {link.status !== 'active' && link.status !== 'pending' ? (
+                                                                    <span className="shrink-0 rounded-full bg-current/10 px-1 uppercase opacity-80">
+                                                                        {link.status}
+                                                                    </span>
+                                                                ) : null}
+                                                                {link.href ? <ExternalLink className="h-3 w-3 shrink-0 opacity-60" /> : null}
+                                                            </button>
+                                                        );
+                                                    })}
+                                                    {linkedWork.length > 2 ? (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setLinkedWorkExpanded((current) => !current)}
+                                                            className={cn(
+                                                                'inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-semibold',
+                                                                isOwn ? 'bg-white/10 text-white/80 hover:bg-white/15' : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700',
+                                                            )}
+                                                        >
+                                                            {linkedWorkExpanded ? 'Show less' : `${linkedWork.length - 2} linked items`}
+                                                            <ChevronDown className={cn('h-3 w-3 transition-transform', linkedWorkExpanded && 'rotate-180')} />
+                                                        </button>
+                                                    ) : null}
+                                                </div>
+                                            ) : null}
+                                            {renderedLinkPreview ? (
+                                                <div className="mt-2 w-full">
+                                                    <LinkPreviewCard
+                                                        preview={renderedLinkPreview}
+                                                        isOwn={isOwn}
+                                                        loading={!linkPreview}
+                                                        onContentLoad={onContentLoad}
+                                                    />
+                                                </div>
+                                            ) : null}
+                                        </>
+                                    );
+
+                                    if (segment.type === 'code') {
+                                        return (
+                                            <React.Fragment key={index}>
+                                                {isFirst && (isFocusedReplyTarget || message.replyTo || isPinned || privateFollowUp) && (
+                                                    <div className="msg-bubble-shell !bg-transparent !border-0 !shadow-none !p-0 my-1">
+                                                        {renderPrefix()}
+                                                    </div>
+                                                )}
+                                                <div className="my-1.5 w-full">
+                                                    <CodeSegmentV2
+                                                        code={segment.content}
+                                                        language={segment.language as string | null}
+                                                        isOwn={isOwn}
+                                                    />
+                                                </div>
+                                                {isLast && (structured || contextChips.length > 0 || linkedWork.length > 0) && (
+                                                    <div className="msg-bubble-shell !bg-transparent !border-0 !shadow-none !p-0 my-1">
+                                                        {renderSuffix()}
+                                                    </div>
+                                                )}
+                                            </React.Fragment>
+                                        );
+                                    }
+
+                                    // Text or empty segment
+                                    const isEmojiOnly = segment.type === 'text' && segment.content && isOnlyEmojis(segment.content);
+
+                                    return (
+                                        <div
+                                            key={index}
+                                            data-pending={isOptimistic ? 'true' : undefined}
+                                            data-rich={hasRichContent ? 'true' : undefined}
+                                            className={cn(
+                                                'msg-bubble-shell my-1',
+                                                isOwn ? 'msg-bubble-own' : 'msg-bubble-peer',
+                                                isOwn
+                                                    ? cn('rounded-2xl', (showAvatar || (isLast && isConsecutiveToNext)) && 'rounded-br-sm', isFirst && isConsecutiveFromPrev && 'rounded-tr-sm')
+                                                    : cn('rounded-2xl', (showAvatar || (isLast && isConsecutiveToNext)) && 'rounded-bl-sm', isFirst && isConsecutiveFromPrev && 'rounded-tl-sm'),
+                                                !isOwn && 'border border-border/60',
+                                                isEmojiOnly && '!bg-transparent !bg-none !border-0 !shadow-none !p-0',
+                                                'transition-[transform,box-shadow,ring-color] duration-300 ease-out',
+                                                isFocusedReplyTarget && isFirst && (
+                                                    isOwn
+                                                        ? 'ring-2 ring-white/45 shadow-[0_16px_40px_-22px_rgba(59,130,246,0.9)]'
+                                                        : 'ring-2 ring-primary/45 shadow-[0_16px_40px_-22px_rgba(59,130,246,0.55)]'
+                                                )
+                                            )}
+                                            style={{
+                                                boxShadow: (isFocusedReplyTarget && isFirst && !isEmojiOnly) ? undefined : (isEmojiOnly ? 'none' : 'var(--msg-shadow)'),
+                                                ...((isFocusedReplyTarget && isFirst) ? { animation: 'message-focus-pulse 1250ms cubic-bezier(0.22,1,0.36,1)' } : {}),
+                                            }}
+                                        >
+                                            {isFirst && renderPrefix()}
+
+                                            {segment.content ? (
+                                                <div className="min-w-0 max-w-full">
+                                                    <p className={cn(
+                                                        isEmojiOnly 
+                                                            ? "text-[32px] sm:text-[40px] leading-tight select-none py-1" 
+                                                            : `${MESSAGE_TEXT_BASE_CLASS} whitespace-pre-wrap break-words inline-block`,
+                                                        isOwn ? "text-white" : "text-zinc-900 dark:text-zinc-100"
+                                                    )}>
+                                                        {renderTextWithMentions(segment.content, isOwn)}
+                                                    </p>
+                                                    {isLast && hasInlineTimestamp && (
+                                                        <span className="float-right mt-1.5 ml-2 shrink-0 select-none text-[10px] text-white/60 flex items-center gap-0.5 font-medium">
+                                                            {format(new Date(message.createdAt), 'p')}
+                                                            {message.editedAt ? <span className="opacity-75">(edited)</span> : null}
+                                                            <DeliveryIndicator deliveryState={deliveryState} className="h-3 w-3 text-white/70" />
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            ) : null}
+
+                                            {isLast && renderSuffix()}
                                         </div>
-                                    ) : null}
-                                    {message.content ? (
-                                        <MessageTextContentV2
-                                            content={message.content}
-                                            isOwn={isOwn}
-                                            isApplication={isApplication}
-                                        />
-                                    ) : null}
-                                    {attachments.length > 0 ? (
+                                    );
+                                })}
+
+                                {attachments.length > 0 && (
+                                    <div className="mt-1.5 w-full">
                                         <MessageAttachmentsV2
                                             attachments={attachments}
                                             onContentLoad={onContentLoad}
                                         />
-                                    ) : null}
-                                    {renderedLinkPreview ? (
-                                        <LinkPreviewCard
-                                            preview={renderedLinkPreview}
-                                            isOwn={isOwn}
-                                            loading={!linkPreview}
-                                            onContentLoad={onContentLoad}
-                                        />
-                                    ) : null}
-                                </>
-                            )}
-
-                        </div>
+                                    </div>
+                                )}
+                            </>
+                        )}
 
                     {showReactionBar && (
                         <ReactionQuickBar
@@ -942,144 +1067,147 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
                         />
                     )}
 
-                    <div className={`mt-1 flex items-center gap-1 px-1 text-[11px] text-zinc-400 ${isOwn ? 'flex-row-reverse' : 'flex-row'}`}>
-                        <span title={new Date(message.createdAt).toLocaleString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' })}>
-                            {format(new Date(message.createdAt), 'p')}
-                        </span>
-                        {isOwn ? (
-                            deliveryState === 'failed' && message.clientMessageId ? (
+                    {showTimestamp && !hasInlineTimestamp && (
+                        <div className={`mt-1 flex items-center gap-1 px-1 text-[11px] text-zinc-400 ${isOwn ? 'flex-row-reverse' : 'flex-row'}`}>
+                            <span title={new Date(message.createdAt).toLocaleString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' })}>
+                                {format(new Date(message.createdAt), 'p')}
+                            </span>
+                            {isOwn ? (
+                                deliveryState === 'failed' && message.clientMessageId ? (
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            // Wave 4 Step 16: requeue the outbox item so the
+                                            // sync loop retries immediately (nextRetryAt=now).
+                                            const clientMessageId = message.clientMessageId;
+                                            if (!clientMessageId) return;
+                                            const { items, markItem } = useMessagesV2OutboxStore.getState();
+                                            const item = items.find((entry) => entry.clientMessageId === clientMessageId);
+                                            if (!item) return;
+                                            markItem(clientMessageId, {
+                                                state: 'queued',
+                                                attempts: 0,
+                                                nextRetryAt: Date.now(),
+                                                error: undefined,
+                                            });
+                                        }}
+                                        className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[11px] font-medium text-red-500 transition-colors hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 dark:hover:bg-red-950/40"
+                                        aria-label="Retry sending message"
+                                    >
+                                        <DeliveryIndicator deliveryState={deliveryState} />
+                                        <span>Retry</span>
+                                    </button>
+                                ) : (
+                                    <DeliveryIndicator deliveryState={deliveryState} />
+                                )
+                            ) : null}
+                            {message.editedAt ? <span>(edited)</span> : null}
+                        </div>
+                    )}
+                    <div
+                        className={cn(
+                            'msg-action-rail pointer-events-none absolute z-20 flex items-center gap-0.5 opacity-0 transition-opacity focus-within:pointer-events-auto focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100',
+                            isOwn ? 'msg-action-rail-own flex-row-reverse' : 'msg-action-rail-peer',
+                        )}
+                    >
+                        <button
+                            type="button"
+                            onClick={() => setShowReactionBar((prev) => !prev)}
+                            className="rounded-full bg-background/90 p-1 text-zinc-400 shadow-sm ring-1 ring-border/60 backdrop-blur transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:bg-zinc-950/90 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+                            aria-label="Add reaction"
+                        >
+                            <SmilePlus className="h-4 w-4" />
+                        </button>
+
+                        <DropdownMenu modal={false}>
+                            <DropdownMenuTrigger asChild>
                                 <button
                                     type="button"
-                                    onClick={() => {
-                                        // Wave 4 Step 16: requeue the outbox item so the
-                                        // sync loop retries immediately (nextRetryAt=now).
-                                        const clientMessageId = message.clientMessageId;
-                                        if (!clientMessageId) return;
-                                        const { items, markItem } = useMessagesV2OutboxStore.getState();
-                                        const item = items.find((entry) => entry.clientMessageId === clientMessageId);
-                                        if (!item) return;
-                                        markItem(clientMessageId, {
-                                            state: 'queued',
-                                            attempts: 0,
-                                            nextRetryAt: Date.now(),
-                                            error: undefined,
-                                        });
-                                    }}
-                                    className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[11px] font-medium text-red-500 transition-colors hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 dark:hover:bg-red-950/40"
-                                    aria-label="Retry sending message"
+                                    className="rounded-full bg-background/90 p-1 text-zinc-400 shadow-sm ring-1 ring-border/60 backdrop-blur transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:bg-zinc-950/90 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+                                    aria-label="Message actions"
+                                    disabled={isActionLoading}
                                 >
-                                    <DeliveryIndicator deliveryState={deliveryState} />
-                                    <span>Retry</span>
+                                    <MoreVertical className="h-4 w-4" />
                                 </button>
-                            ) : (
-                                <DeliveryIndicator deliveryState={deliveryState} />
-                            )
-                        ) : null}
-                        {message.editedAt ? <span>(edited)</span> : null}
-                    </div>
-                </div>
-                <div
-                    className={cn(
-                        'msg-action-rail pointer-events-none relative z-10 flex items-center gap-0.5 opacity-0 transition-opacity focus-within:pointer-events-auto focus-within:opacity-100 group-hover/message:pointer-events-auto group-hover/message:opacity-100',
-                        isOwn ? 'flex-row-reverse justify-end' : 'justify-start',
-                    )}
-                >
-                    <button
-                        type="button"
-                        onClick={() => setShowReactionBar((prev) => !prev)}
-                        className="rounded-full bg-background/90 p-1 text-zinc-400 shadow-sm ring-1 ring-border/60 backdrop-blur transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:bg-zinc-950/90 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
-                        aria-label="Add reaction"
-                    >
-                        <SmilePlus className="h-4 w-4" />
-                    </button>
-
-                    <DropdownMenu modal={false}>
-                        <DropdownMenuTrigger asChild>
-                            <button
-                                type="button"
-                                className="rounded-full bg-background/90 p-1 text-zinc-400 shadow-sm ring-1 ring-border/60 backdrop-blur transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:bg-zinc-950/90 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
-                                aria-label="Message actions"
-                                disabled={isActionLoading}
-                            >
-                                <MoreVertical className="h-4 w-4" />
-                            </button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align={isOwn ? 'end' : 'start'}>
-                            {canEditMessage ? (
-                                <DropdownMenuItem onClick={() => setIsEditing(true)} disabled={isActionLoading}>
-                                    <Pencil className="mr-2 h-4 w-4" />
-                                    Edit
-                                </DropdownMenuItem>
-                            ) : null}
-                            {onReply && canReply ? (
-                                <DropdownMenuItem onClick={() => onReply(message)} disabled={isActionLoading}>
-                                    <CornerUpLeft className="mr-2 h-4 w-4" />
-                                    Reply
-                                </DropdownMenuItem>
-                            ) : null}
-                            <DropdownMenuItem
-                                onClick={async () => {
-                                    try {
-                                        await navigator.clipboard.writeText(message.content || '');
-                                        toast.success('Copied message');
-                                    } catch (error) {
-                                        console.error('[messages-v2] copy message failed', error);
-                                        toast.error('Failed to copy message');
-                                    }
-                                }}
-                            >
-                                <Copy className="mr-2 h-4 w-4" />
-                                Copy
-                            </DropdownMenuItem>
-                            {onTogglePin ? (
-                                <DropdownMenuItem onClick={() => onTogglePin(message.id, !isPinned)} disabled={isActionLoading}>
-                                    {isPinned ? <PinOff className="mr-2 h-4 w-4" /> : <Pin className="mr-2 h-4 w-4" />}
-                                    {isPinned ? 'Unpin' : 'Pin'}
-                                </DropdownMenuItem>
-                            ) : null}
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem disabled className="text-[11px] font-semibold uppercase tracking-wide opacity-60">
-                                Create linked work
-                            </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => setTaskDialogOpen(true)} disabled={isActionLoading}>
-                                <PlusCircle className="mr-2 h-4 w-4" />
-                                Task from message
-                            </DropdownMenuItem>
-                            {privateFollowUpsEnabled ? (
-                                <DropdownMenuItem onClick={() => setFollowUpDialogOpen(true)} disabled={isActionLoading}>
-                                    <Clock3 className="mr-2 h-4 w-4" />
-                                    Private follow-up
-                                </DropdownMenuItem>
-                            ) : null}
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem onClick={() => void handleDeleteForMe()} disabled={isActionLoading}>
-                                <Trash2 className="mr-2 h-4 w-4" />
-                                Delete for me
-                            </DropdownMenuItem>
-                            {!isOwn && (
-                                <DropdownMenuItem onClick={() => setReportOpen(true)} className="text-red-600 dark:text-red-400">
-                                    <Flag className="mr-2 h-4 w-4" />
-                                    Report
-                                </DropdownMenuItem>
-                            )}
-                            {isOwn ? (
-                                <>
-                                    <DropdownMenuSeparator />
-                                    <DropdownMenuItem
-                                        onClick={() => void handleUnsendForEveryone()}
-                                        disabled={isActionLoading}
-                                        className="text-red-600 dark:text-red-400"
-                                    >
-                                        <Trash2 className="mr-2 h-4 w-4" />
-                                        Unsend for everyone
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align={isOwn ? 'end' : 'start'}>
+                                {canEditMessage ? (
+                                    <DropdownMenuItem onClick={() => setIsEditing(true)} disabled={isActionLoading}>
+                                        <Pencil className="mr-2 h-4 w-4" />
+                                        Edit
                                     </DropdownMenuItem>
-                                </>
-                            ) : null}
-                        </DropdownMenuContent>
-                    </DropdownMenu>
+                                ) : null}
+                                {onReply && canReply ? (
+                                    <DropdownMenuItem onClick={() => onReply(message)} disabled={isActionLoading}>
+                                        <CornerUpLeft className="mr-2 h-4 w-4" />
+                                        Reply
+                                    </DropdownMenuItem>
+                                ) : null}
+                                <DropdownMenuItem
+                                    onClick={async () => {
+                                        try {
+                                            await navigator.clipboard.writeText(message.content || '');
+                                            toast.success('Copied message');
+                                        } catch (error) {
+                                            console.error('[messages-v2] copy message failed', error);
+                                            toast.error('Failed to copy message');
+                                        }
+                                    }}
+                                >
+                                    <Copy className="mr-2 h-4 w-4" />
+                                    Copy
+                                </DropdownMenuItem>
+                                {onTogglePin ? (
+                                    <DropdownMenuItem onClick={() => onTogglePin(message.id, !isPinned)} disabled={isActionLoading}>
+                                        {isPinned ? <PinOff className="mr-2 h-4 w-4" /> : <Pin className="mr-2 h-4 w-4" />}
+                                        {isPinned ? 'Unpin' : 'Pin'}
+                                    </DropdownMenuItem>
+                                ) : null}
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem disabled className="text-[11px] font-semibold uppercase tracking-wide opacity-60">
+                                    Create linked work
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => setTaskDialogOpen(true)} disabled={isActionLoading}>
+                                    <PlusCircle className="mr-2 h-4 w-4" />
+                                    Task from message
+                                </DropdownMenuItem>
+                                {privateFollowUpsEnabled ? (
+                                    <DropdownMenuItem onClick={() => setFollowUpDialogOpen(true)} disabled={isActionLoading}>
+                                        <Clock3 className="mr-2 h-4 w-4" />
+                                        Private follow-up
+                                    </DropdownMenuItem>
+                                ) : null}
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem onClick={() => void handleDeleteForMe()} disabled={isActionLoading}>
+                                    <Trash2 className="mr-2 h-4 w-4" />
+                                    Delete for me
+                                </DropdownMenuItem>
+                                {!isOwn && (
+                                    <DropdownMenuItem onClick={() => setReportOpen(true)} className="text-red-600 dark:text-red-400">
+                                        <Flag className="mr-2 h-4 w-4" />
+                                        Report
+                                    </DropdownMenuItem>
+                                )}
+                                {isOwn ? (
+                                    <>
+                                        <DropdownMenuSeparator />
+                                        <DropdownMenuItem
+                                            onClick={() => void handleUnsendForEveryone()}
+                                            disabled={isActionLoading}
+                                            className="text-red-600 dark:text-red-400"
+                                        >
+                                            <Trash2 className="mr-2 h-4 w-4" />
+                                            Unsend for everyone
+                                        </DropdownMenuItem>
+                                    </>
+                                ) : null}
+                            </DropdownMenuContent>
+                        </DropdownMenu>
+                    </div>
                 </div>
             </div>
         </div>
+        {taskDialogOpen && (
         <Dialog open={taskDialogOpen} onOpenChange={setTaskDialogOpen}>
             <DialogContent className="sm:max-w-lg">
                 <DialogHeader>
@@ -1177,7 +1305,9 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
                 </DialogFooter>
             </DialogContent>
         </Dialog>
-        <Dialog open={privateFollowUpsEnabled && followUpDialogOpen} onOpenChange={setFollowUpDialogOpen}>
+        )}
+        {privateFollowUpsEnabled && followUpDialogOpen && (
+        <Dialog open={followUpDialogOpen} onOpenChange={setFollowUpDialogOpen}>
             <DialogContent className="sm:max-w-md">
                 <DialogHeader>
                     <DialogTitle>Add follow-up</DialogTitle>
@@ -1220,6 +1350,7 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
                 </DialogFooter>
             </DialogContent>
         </Dialog>
+        )}
         {reportOpen && <ReportMessageDialog messageId={message.id} isOpen={reportOpen} onClose={() => setReportOpen(false)} />}
         </>
     );
@@ -1258,34 +1389,39 @@ export function areMessageBubblePropsEqual(
         prev.onFocusMessage === next.onFocusMessage &&
         prev.onContentLoad === next.onContentLoad &&
         prev.isFocusedReplyTarget === next.isFocusedReplyTarget &&
-        prev.focusSource === next.focusSource
+        prev.focusSource === next.focusSource &&
+        prev.isConsecutiveFromPrev === next.isConsecutiveFromPrev &&
+        prev.isConsecutiveToNext === next.isConsecutiveToNext &&
+        prev.onSelectMessage === next.onSelectMessage &&
+        prev.showTimestamp === next.showTimestamp &&
+        prev.conversationType === next.conversationType
     );
 }
 
-export function DeliveryIndicator({ deliveryState }: { deliveryState?: string }) {
+export function DeliveryIndicator({ deliveryState, className }: { deliveryState?: string; className?: string }) {
     if (!deliveryState) return null;
     if (deliveryState === 'sending') {
         return (
             <SendHorizonal
-                className="h-3.5 w-3.5 text-zinc-400"
+                className={cn("h-3.5 w-3.5 text-zinc-400", className)}
                 style={{ animation: 'delivery-pulse 1.5s ease-in-out infinite' }}
             />
         );
     }
     if (deliveryState === 'queued') {
-        return <Clock3 className="h-3.5 w-3.5 text-zinc-400" />;
+        return <Clock3 className={cn("h-3.5 w-3.5 text-zinc-400", className)} />;
     }
     if (deliveryState === 'failed') {
-        return <AlertCircle className="h-3.5 w-3.5 text-red-500" />;
+        return <AlertCircle className={cn("h-3.5 w-3.5 text-red-500", className)} />;
     }
     if (deliveryState === 'read') {
-        return <CheckCheck className="h-3.5 w-3.5 text-blue-500" />;
+        return <CheckCheck className={cn("h-3.5 w-3.5 text-blue-500", className)} />;
     }
     if (deliveryState === 'delivered') {
-        return <CheckCheck className="h-3.5 w-3.5 text-zinc-400" />;
+        return <CheckCheck className={cn("h-3.5 w-3.5 text-zinc-400", className)} />;
     }
     if (deliveryState === 'sent') {
-        return <Check className="h-3.5 w-3.5 text-zinc-400" />;
+        return <Check className={cn("h-3.5 w-3.5 text-zinc-400", className)} />;
     }
-    return <Check className="h-3.5 w-3.5" />;
+    return <Check className={cn("h-3.5 w-3.5", className)} />;
 }
