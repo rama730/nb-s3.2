@@ -24,15 +24,16 @@ function createMember(overrides: Partial<PresenceMemberState>): PresenceMemberSt
 }
 
 test('normalizeTrackedConversationIds keeps unique visible conversations without a hard cap', () => {
-  const ids = normalizeTrackedConversationIds([
-    'conversation-1',
-    'conversation-2',
-    'conversation-2',
-    null,
-    undefined,
-    'new',
-    ...Array.from({ length: 20 }, (_, index) => `conversation-extra-${index}`),
-  ]);
+    const ids = normalizeTrackedConversationIds([
+        'conversation-1',
+        'conversation-2',
+        'conversation-2',
+        null,
+        undefined,
+        'new',
+        'draft:user-1',
+        ...Array.from({ length: 20 }, (_, index) => `conversation-extra-${index}`),
+    ]);
 
   assert.equal(ids[0], 'conversation-1');
   assert.equal(ids[1], 'conversation-2');
