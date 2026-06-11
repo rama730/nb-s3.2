@@ -46,14 +46,14 @@ function getInitials(comment: Pick<TaskDiscussionComment, "author">) {
 function formatTypingLabel(users: TaskDiscussionTypingUser[], reply = false) {
   if (users.length === 0) return null;
   if (users.length === 1) {
-    return `${users[0].fullName || users[0].username || "Someone"} is typing${reply ? " a reply" : ""}…`;
+    return `${users[0]?.fullName || users[0]?.username || "Someone"} is typing${reply ? " a reply" : ""}…`;
   }
   if (users.length === 2) {
-    const first = users[0].fullName || users[0].username || "Someone";
-    const second = users[1].fullName || users[1].username || "Someone";
+    const first = users[0]?.fullName || users[0]?.username || "Someone";
+    const second = users[1]?.fullName || users[1]?.username || "Someone";
     return `${first} and ${second} are typing${reply ? " replies" : ""}…`;
   }
-  const first = users[0].fullName || users[0].username || "Someone";
+  const first = users[0]?.fullName || users[0]?.username || "Someone";
   return `${first} and ${users.length - 1} others are typing${reply ? " replies" : ""}…`;
 }
 
