@@ -3,6 +3,7 @@
 import { useState, useMemo, memo, useEffect, useCallback, useRef } from 'react';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
+import { useRouteWarmPrefetch } from '@/hooks/useRouteWarmPrefetch';
 import { motion } from 'framer-motion';
 import { Search, Sparkles, Filter, CheckSquare, X } from 'lucide-react';
 import { useToast } from '@/components/ui-custom/Toast';
@@ -101,6 +102,7 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
     const { showToast } = useToast();
     const { user } = useAuth();
     const router = useRouter();
+    const prefetch = useRouteWarmPrefetch();
     const searchParams = useSearchParams();
     const reduceMotion = useReducedMotionPreference();
     const handledCreateProjectRequestRef = useRef<string | null>(null);
@@ -268,7 +270,7 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
 
         let rafId: number | null = null;
         const updateSticky = () => {
-            const nextSticky = scrollContainer.scrollTop > 10;
+            const nextSticky = scrollContainer.scrollTop > 20;
             setIsSticky((prev) => (prev === nextSticky ? prev : nextSticky));
         };
 
@@ -299,7 +301,7 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
         queryClient.invalidateQueries({ queryKey: queryKeys.hub.projectsSimpleRoot() });
         showToast('Project created successfully!', 'success');
         if (projectId) {
-            router.push(`/projects/${projectId}?tab=files`);
+            router.push(`/projects/${projectId}`);
         }
     }, [queryClient, router, showToast]);
 
@@ -363,9 +365,9 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
                     </div>
                 )}
 
-                <div className="max-w-[1600px] mx-auto flex h-full w-full min-h-0">
+                <div className="w-full mx-auto flex h-full min-h-0">
                     {/* Sidebar */}
-                    <AppScrollArea axis="y" className="hidden lg:block w-64 flex-shrink-0 h-full py-8 pl-8 pr-8">
+                    <AppScrollArea axis="y" className="hidden lg:block w-60 flex-shrink-0 h-full py-8 pl-6 pr-4">
                         <HubNavigation
                             currentUser={currentUser}
                             activeView={filterView}
@@ -375,41 +377,53 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
 
                     {/* Main Content */}
                     <div className="flex-1 min-w-0 h-full min-h-0 flex flex-col overflow-hidden">
-                        <div data-testid="hub-header-shell" className="px-4 sm:px-6 lg:px-8 pt-8 pb-4 shrink-0">
-                            <div className={`bg-white dark:bg-zinc-900 p-4 rounded-2xl border border-zinc-200 dark:border-zinc-800 transition-shadow duration-300 ${isSticky ? 'shadow-md' : 'shadow-sm'}`}>
-                                <HubHeader
-                                    filterView={filterView}
-                                    onApplyFilters={(newFilters) => {
-                                        updateUrlFilters({
-                                            status: newFilters.status as ProjectStatus,
-                                            type: newFilters.type as ProjectType,
-                                            sort: newFilters.sort as SortOption,
-                                            tech: newFilters.tech,
-                                            hideOpened: newFilters.hideOpened ?? false,
-                                        });
-                                    }}
-                                    onCreateProject={() => {
-                                        persistCreateProjectModalState({ open: true, source: null });
-                                        setCreateModalInitialSource(null);
-                                        setShowCreateModal(true);
-                                    }}
-                                    onPreloadModal={() => import('@/components/projects/create-wizard/CreateProjectWizard')}
-                                    filters={currentFilters}
-                                    viewMode={viewMode}
-                                    onViewModeChange={setViewMode}
-                                />
-                            </div>
-                        </div>
-
                         <AppScrollArea
                             axis="y"
-                            dataScrollRoot
                             ref={scrollContainerRef}
                             id="hub-scroll-container"
                             data-testid="hub-feed-scroll"
-                            className="flex-1 min-h-0 px-4 sm:px-6 lg:px-8 pb-8"
+                            data-scroll-root="route"
+                            className="flex-1 min-h-0 px-4 sm:px-6 lg:pl-4 lg:pr-6 pb-8 relative"
                         >
-                            <div className="flex flex-col gap-6">
+                            <div className="flex flex-col">
+                                {/* Spacer to allow scrolling up before sticking */}
+                                <div className="h-8 shrink-0" aria-hidden="true" />
+                                
+                                <div 
+                                    data-testid="hub-header-shell" 
+                                    className="sticky z-30 mb-6 -mx-4 sm:mx-0 px-4 sm:px-0 transition-all duration-200"
+                                    style={{ top: "12px" }}
+                                >
+                                    <div className={`p-4 rounded-2xl border transition-shadow duration-300 ${
+                                        isSticky 
+                                            ? 'shadow-md border-zinc-200 dark:border-zinc-800 bg-white/95 dark:bg-zinc-950/95 backdrop-blur supports-[backdrop-filter]:bg-white/80 supports-[backdrop-filter]:dark:bg-zinc-950/80' 
+                                            : 'shadow-sm border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900'
+                                    }`}>
+                                        <HubHeader
+                                            filterView={filterView}
+                                            onApplyFilters={(newFilters) => {
+                                                updateUrlFilters({
+                                                    status: newFilters.status as ProjectStatus,
+                                                    type: newFilters.type as ProjectType,
+                                                    sort: newFilters.sort as SortOption,
+                                                    tech: newFilters.tech,
+                                                    hideOpened: newFilters.hideOpened ?? false,
+                                                });
+                                            }}
+                                            onCreateProject={() => {
+                                                persistCreateProjectModalState({ open: true, source: null });
+                                                setCreateModalInitialSource(null);
+                                                setShowCreateModal(true);
+                                            }}
+                                            onPreloadModal={() => import('@/components/projects/create-wizard/CreateProjectWizard')}
+                                            filters={currentFilters}
+                                            viewMode={viewMode}
+                                            onViewModeChange={setViewMode}
+                                        />
+                                    </div>
+                                </div>
+
+                                <div className="flex flex-col gap-6">
 
                             {showProfileChecklist && profileChecklistItems.length > 0 && (
                                 <div className="rounded-2xl border border-emerald-200 bg-emerald-50/70 dark:border-emerald-800 dark:bg-emerald-950/30 p-4">
@@ -426,6 +440,8 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
                                             </ul>
                                             <Link
                                                 href="/profile"
+                                                onMouseEnter={() => prefetch('/profile')}
+                                                onFocus={() => prefetch('/profile')}
                                                 className="inline-flex items-center rounded-md border border-emerald-300 bg-white px-3 py-1.5 text-xs font-medium text-emerald-800 hover:bg-emerald-100 dark:border-emerald-700 dark:bg-emerald-950 dark:text-emerald-200"
                                             >
                                                 Complete profile details
@@ -513,7 +529,7 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
                                             itemContent={(_, project) => (
                                                 <ProjectCard
                                                     project={project}
-                                                    viewModel={projectViewModels[project.id]}
+                                                    viewModel={projectViewModels[project.id]!}
                                                     viewMode={viewMode}
                                                     onQuickView={setSelectedProject}
                                                     isFollowing={myFollowedProjects?.has(project.id)}
@@ -527,6 +543,7 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
                                 </div>
                             )}
                             </div>
+                            </div>
                         </AppScrollArea>
 
                         {/* Modals & Drawers */}
@@ -536,11 +553,11 @@ const SimpleHubClient = memo(function SimpleHubClient({ returnUserData, initialP
                             onClose={() => setSelectedProject(null)}
                             onNext={() => {
                                 const idx = visibleProjects.findIndex(p => p.id === selectedProject?.id);
-                                if (idx >= 0 && idx < visibleProjects.length - 1) setSelectedProject(visibleProjects[idx + 1]);
+                                if (idx >= 0 && idx < visibleProjects.length - 1) setSelectedProject(visibleProjects[idx + 1]!);
                             }}
                             onPrevious={() => {
                                 const idx = visibleProjects.findIndex(p => p.id === selectedProject?.id);
-                                if (idx > 0) setSelectedProject(visibleProjects[idx - 1]);
+                                if (idx > 0) setSelectedProject(visibleProjects[idx - 1]!);
                             }}
                             hasNext={visibleProjects.findIndex(p => p.id === selectedProject?.id) < visibleProjects.length - 1}
                             hasPrevious={visibleProjects.findIndex(p => p.id === selectedProject?.id) > 0}
