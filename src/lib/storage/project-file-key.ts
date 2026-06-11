@@ -43,23 +43,27 @@ export function parseProjectFileKey(key: string): ParsedProjectFileKey | null {
   const parts = clean.split("/").filter(Boolean);
   if (parts.length < 2) return null;
 
+  const firstPart = parts[0];
+  if (!firstPart) return null;
+
   // Canonical: <projectId>/<path...>
-  if (UUID_RE.test(parts[0])) {
+  if (UUID_RE.test(firstPart)) {
     const relativePath = parts.slice(1).join("/");
     if (hasUnsafePathSegment(relativePath)) return null;
     return {
-      projectId: parts[0],
+      projectId: firstPart,
       relativePath,
       format: "canonical",
     };
   }
 
   // Legacy: projects/<projectId>/<path...>
-  if (parts[0] === LEGACY_PROJECT_FILES_PREFIX && parts.length >= 3 && UUID_RE.test(parts[1])) {
+  const secondPart = parts[1];
+  if (firstPart === LEGACY_PROJECT_FILES_PREFIX && parts.length >= 3 && secondPart && UUID_RE.test(secondPart)) {
     const relativePath = parts.slice(2).join("/");
     if (hasUnsafePathSegment(relativePath)) return null;
     return {
-      projectId: parts[1],
+      projectId: secondPart,
       relativePath,
       format: "legacy",
     };
