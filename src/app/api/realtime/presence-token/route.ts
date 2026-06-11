@@ -24,8 +24,10 @@ const requestSchema = z.object({
   role: z.enum(["viewer", "editor"]).optional(),
 });
 
-function resolvePresenceWsUrl() {
-  return resolvePresenceWebSocketUrl();
+function resolvePresenceWsUrl(request: Request) {
+  return resolvePresenceWebSocketUrl({
+    hostname: new URL(request.url).hostname,
+  });
 }
 
 async function assertPresenceRoomAccess(input: {
@@ -225,10 +227,10 @@ export async function POST(request: Request) {
 
     const rateLimit = await consumeRateLimitPolicy({
       scope: "presence-token",
-      burst: 30,
-      refillRate: 0.5,
+      burst: 120,
+      refillRate: 2,
       keyParts: [auth.userId, parsed.data.roomType, parsed.data.roomId, getRequestIp(request)],
-      failMode: "fail_closed",
+      failMode: "allow",
     });
 
     if (!rateLimit.allowed) {
@@ -256,7 +258,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const wsUrl = resolvePresenceWsUrl();
+    const wsUrl = resolvePresenceWsUrl(request);
     const role: PresenceRoomRole =
       parsed.data.role === "viewer"
         ? "viewer"
