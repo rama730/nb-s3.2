@@ -1,12 +1,13 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 const STORAGE_KEY = 'hub-session-seen-projects';
 
 export function useHubSessionSeen() {
     const [seenIds, setSeenIds] = useState<Set<string>>(new Set());
     const [hideSeen, setHideSeen] = useState(false);
+    const initializedRef = useRef(false);
 
     useEffect(() => {
         try {
@@ -17,25 +18,27 @@ export function useHubSessionSeen() {
         } catch {
             // no-op
         }
+        initializedRef.current = true;
     }, []);
 
-    const persist = useCallback((next: Set<string>) => {
+    // Persist seenIds to sessionStorage whenever they change (after initialization)
+    useEffect(() => {
+        if (!initializedRef.current) return;
         try {
-            sessionStorage.setItem(STORAGE_KEY, JSON.stringify(Array.from(next).slice(-500)));
+            sessionStorage.setItem(STORAGE_KEY, JSON.stringify(Array.from(seenIds).slice(-500)));
         } catch {
             // no-op
         }
-    }, []);
+    }, [seenIds]);
 
     const markSeen = useCallback((projectId: string) => {
         setSeenIds((prev) => {
             if (prev.has(projectId)) return prev;
             const next = new Set(prev);
             next.add(projectId);
-            persist(next);
             return next;
         });
-    }, [persist]);
+    }, []);
 
     const clearSeen = useCallback(() => {
         setSeenIds(new Set());
