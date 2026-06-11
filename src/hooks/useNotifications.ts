@@ -229,7 +229,7 @@ export function useNotifications(limit: number = DEFAULT_LIMIT) {
 
     const unreadCountQuery = useQuery<UnreadCounts>({
         queryKey: unreadCountQueryKey,
-        enabled: Boolean(isAuthenticated && user?.id),
+        enabled: false,
         queryFn: async () => {
             const result = await readNotificationUnreadCountAction();
             if (!result.success) {
@@ -748,9 +748,26 @@ export function useNotifications(limit: number = DEFAULT_LIMIT) {
             if (!result.success) throw new Error(result.error || "Failed to pause notifications");
             return result.preferences;
         },
-        onError: (error) => {
+        onMutate: async (pausedUntil) => {
+            await queryClient.cancelQueries({ queryKey: queryKeys.settings.notifications() });
+            const previous = queryClient.getQueryData<any>(queryKeys.settings.notifications());
+            if (previous) {
+                queryClient.setQueryData(queryKeys.settings.notifications(), {
+                    ...previous,
+                    pause: { ...previous.pause, pausedUntil },
+                });
+            }
+            return { previous };
+        },
+        onError: (error, _variables, context) => {
+            if (context?.previous) {
+                queryClient.setQueryData(queryKeys.settings.notifications(), context.previous);
+            }
             toast.error(error instanceof Error ? error.message : "Failed to pause notifications");
         },
+        onSuccess: (preferences) => {
+            queryClient.setQueryData(queryKeys.settings.notifications(), preferences);
+        }
     });
 
     const items = useMemo(
@@ -760,7 +777,21 @@ export function useNotifications(limit: number = DEFAULT_LIMIT) {
     const unreadCounts = unreadCountQuery.data ?? deriveUnreadCounts(query.data);
     const unreadCount = unreadCounts.total;
     const unreadImportantCount = unreadCounts.important;
-    return {
+    const openTray = useCallback(() => setIsTrayOpen(true), []);
+    const closeTray = useCallback(() => setIsTrayOpen(false), []);
+    const loadMore = useCallback(() => query.fetchNextPage(), [query]);
+    const refresh = useCallback(() => query.refetch(), [query]);
+    const markRead = useCallback((notificationId: string) => markReadMutation.mutateAsync(notificationId), [markReadMutation]);
+    const markUnread = useCallback((notificationId: string) => markUnreadMutation.mutateAsync(notificationId), [markUnreadMutation]);
+    const markAllRead = useCallback(() => markAllReadMutation.mutateAsync(), [markAllReadMutation]);
+    const dismiss = useCallback((notificationId: string) => dismissMutation.mutateAsync(notificationId), [dismissMutation]);
+    const muteScope = useCallback((scope: NotificationMuteScope) => muteMutation.mutateAsync(scope), [muteMutation]);
+    const muteItemType = useCallback((item: NotificationItem) => muteMutation.mutateAsync(getNarrowestNotificationMuteScope(item)), [muteMutation]);
+    const pause = useCallback((pausedUntil: string | null) => pauseMutation.mutateAsync(pausedUntil), [pauseMutation]);
+    const snooze = useCallback((notificationId: string, snoozedUntil: string) =>
+        snoozeMutation.mutateAsync({ notificationId, snoozedUntil }), [snoozeMutation]);
+
+    return useMemo(() => ({
         items,
         unreadCount,
         unreadImportantCount,
@@ -773,20 +804,44 @@ export function useNotifications(limit: number = DEFAULT_LIMIT) {
         activeFilter,
         setActiveFilter,
         isTrayOpen,
-        openTray: () => setIsTrayOpen(true),
-        closeTray: () => setIsTrayOpen(false),
+        openTray,
+        closeTray,
         setTrayOpen: setIsTrayOpen,
-        loadMore: () => query.fetchNextPage(),
-        refresh: () => query.refetch(),
-        markRead: (notificationId: string) => markReadMutation.mutateAsync(notificationId),
-        markUnread: (notificationId: string) => markUnreadMutation.mutateAsync(notificationId),
-        markAllRead: () => markAllReadMutation.mutateAsync(),
-        dismiss: (notificationId: string) => dismissMutation.mutateAsync(notificationId),
-        muteScope: (scope: NotificationMuteScope) => muteMutation.mutateAsync(scope),
-        muteItemType: (item: NotificationItem) => muteMutation.mutateAsync(getNarrowestNotificationMuteScope(item)),
-        pause: (pausedUntil: string | null) => pauseMutation.mutateAsync(pausedUntil),
-        snooze: (notificationId: string, snoozedUntil: string) =>
-            snoozeMutation.mutateAsync({ notificationId, snoozedUntil }),
+        loadMore,
+        refresh,
+        markRead,
+        markUnread,
+        markAllRead,
+        dismiss,
+        muteScope,
+        muteItemType,
+        pause,
+        snooze,
         openItem,
-    };
+    }), [
+        items,
+        unreadCount,
+        unreadImportantCount,
+        query.isLoading,
+        query.isFetching,
+        isRealtimeHealthy,
+        isIdle,
+        query.hasNextPage,
+        query.isFetchingNextPage,
+        activeFilter,
+        isTrayOpen,
+        openTray,
+        closeTray,
+        loadMore,
+        refresh,
+        markRead,
+        markUnread,
+        markAllRead,
+        dismiss,
+        muteScope,
+        muteItemType,
+        pause,
+        snooze,
+        openItem,
+    ]);
 }
