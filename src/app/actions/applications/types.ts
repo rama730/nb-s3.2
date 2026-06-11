@@ -43,6 +43,10 @@ export type ApplicationStatusResult = {
     waitTime?: string;
     updatedAt?: Date;
     membershipEnded?: boolean;
+    applicationId?: string;
+    proposedRoleId?: string;
+    proposedRoleTitle?: string;
+    workflowItemId?: string;
 };
 
 export interface ApplicationRequestHistoryItem {
