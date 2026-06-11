@@ -53,6 +53,7 @@ export async function analyzeUploadedFolder(files: FileList, signal?: AbortSigna
     for (let i = 0; i < files.length; i++) {
         if (signal?.aborted) return result;
         const file = files[i];
+        if (!file) continue;
         const name = file.name.toLowerCase();
 
         if (name === 'package.json') {
