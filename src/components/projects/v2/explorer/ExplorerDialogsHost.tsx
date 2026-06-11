@@ -20,7 +20,7 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import type { ProjectNode } from "@/lib/db/schema";
-import { getProjectNodes } from "@/app/actions/files";
+import { getProjectNodes } from "@/app/actions/files/nodes";
 
 // --- FolderPicker (standalone sub-component) ---
 
