@@ -1,10 +1,24 @@
 import { createClient } from '@/lib/supabase/server'
 import { isAdminUser } from '@/lib/security/admin'
-import { getRequestId, jsonSuccess, jsonError, logApiRoute } from '@/app/api/v1/_shared'
+import { enforceRouteLimit, getRequestId, jsonSuccess, jsonError, logApiRoute } from '@/app/api/v1/_shared'
 
 export async function GET(request: Request) {
     const startedAt = Date.now()
     const requestId = getRequestId(request)
+
+    const limitResponse = await enforceRouteLimit(request, "api:v1:cleanup:orphan", 10, 60);
+    if (limitResponse) {
+        logApiRoute(request, {
+            requestId,
+            action: 'cleanupOrphan.get',
+            startedAt,
+            status: 429,
+            success: false,
+            errorCode: 'RATE_LIMITED',
+        })
+        return limitResponse;
+    }
+
     const supabase = await createClient()
     const { data: { user } } = await supabase.auth.getUser()
 
