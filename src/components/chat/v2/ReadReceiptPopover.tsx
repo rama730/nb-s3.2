@@ -41,7 +41,7 @@ export function ReadReceiptPopover({ readBy, totalParticipants }: ReadReceiptPop
                                     {user.avatarUrl ? (
                                         <Image src={user.avatarUrl} alt="" width={20} height={20} unoptimized className="h-full w-full object-cover" />
                                     ) : (
-                                        <span className="text-[8px] font-medium">{(user.fullName || user.username || '?')[0].toUpperCase()}</span>
+                                        <span className="text-[8px] font-medium">{(user.fullName || user.username || '?')[0]!.toUpperCase()}</span>
                                     )}
                                 </div>
                                 <span className="truncate text-xs text-zinc-700 dark:text-zinc-300">{user.fullName || user.username}</span>
