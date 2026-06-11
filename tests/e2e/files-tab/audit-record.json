@@ -12,5 +12,75 @@
     "timestamp": "2026-05-10T17:59:29.708Z",
     "testerId": "e2e-runner",
     "justification": "V3 Files Tab root (data-testid='files-tab-root') was not rendered — the V3 permanent-delete flow cannot be exercised."
+  },
+  {
+    "area": "soft delete",
+    "result": "not_applicable",
+    "timestamp": "2026-05-31T18:50:38.998Z",
+    "testerId": "e2e-runner",
+    "justification": "Could not provision a disposable child node in the seeded 'workspace' folder (context menu did not expose a usable 'New file' affordance). The soft-delete path depends on the creation surface covered by Task 12.2."
+  },
+  {
+    "area": "permanent delete",
+    "result": "not_applicable",
+    "timestamp": "2026-05-31T18:50:46.085Z",
+    "testerId": "e2e-runner",
+    "justification": "Req 7.5 was reconciled with design.md § Open Question 3: the Files tab ships only the soft-delete 'Move to trash' flow; a separate trash UI (outside the Files tab) owns the permanent-delete confirmation. Recording not_applicable by design — this is the expected outcome and should remain not_applicable indefinitely."
+  },
+  {
+    "area": "soft delete",
+    "result": "not_applicable",
+    "timestamp": "2026-05-31T19:07:47.753Z",
+    "testerId": "e2e-runner",
+    "justification": "Could not provision a disposable child node in the seeded 'workspace' folder (context menu did not expose a usable 'New file' affordance). The soft-delete path depends on the creation surface covered by Task 12.2."
+  },
+  {
+    "area": "permanent delete",
+    "result": "not_applicable",
+    "timestamp": "2026-05-31T19:07:54.917Z",
+    "testerId": "e2e-runner",
+    "justification": "Req 7.5 was reconciled with design.md § Open Question 3: the Files tab ships only the soft-delete 'Move to trash' flow; a separate trash UI (outside the Files tab) owns the permanent-delete confirmation. Recording not_applicable by design — this is the expected outcome and should remain not_applicable indefinitely."
+  },
+  {
+    "area": "soft delete",
+    "result": "not_applicable",
+    "timestamp": "2026-05-31T19:42:16.507Z",
+    "testerId": "e2e-runner",
+    "justification": "Could not provision a disposable child node in the seeded 'workspace' folder (context menu did not expose a usable 'New file' affordance). The soft-delete path depends on the creation surface covered by Task 12.2."
+  },
+  {
+    "area": "permanent delete",
+    "result": "not_applicable",
+    "timestamp": "2026-05-31T19:42:22.635Z",
+    "testerId": "e2e-runner",
+    "justification": "Req 7.5 was reconciled with design.md § Open Question 3: the Files tab ships only the soft-delete 'Move to trash' flow; a separate trash UI (outside the Files tab) owns the permanent-delete confirmation. Recording not_applicable by design — this is the expected outcome and should remain not_applicable indefinitely."
+  },
+  {
+    "area": "soft delete",
+    "result": "not_applicable",
+    "timestamp": "2026-05-31T20:20:13.818Z",
+    "testerId": "e2e-runner",
+    "justification": "Could not provision a disposable child node in the seeded 'workspace' folder (context menu did not expose a usable 'New file' affordance). The soft-delete path depends on the creation surface covered by Task 12.2."
+  },
+  {
+    "area": "permanent delete",
+    "result": "not_applicable",
+    "timestamp": "2026-05-31T20:20:20.663Z",
+    "testerId": "e2e-runner",
+    "justification": "Req 7.5 was reconciled with design.md § Open Question 3: the Files tab ships only the soft-delete 'Move to trash' flow; a separate trash UI (outside the Files tab) owns the permanent-delete confirmation. Recording not_applicable by design — this is the expected outcome and should remain not_applicable indefinitely."
+  },
+  {
+    "area": "soft delete",
+    "result": "not_applicable",
+    "timestamp": "2026-05-31T20:24:44.119Z",
+    "testerId": "e2e-runner",
+    "justification": "Could not provision a disposable child node in the seeded 'workspace' folder (context menu did not expose a usable 'New file' affordance). The soft-delete path depends on the creation surface covered by Task 12.2."
+  },
+  {
+    "area": "permanent delete",
+    "result": "not_applicable",
+    "timestamp": "2026-05-31T20:24:50.264Z",
+    "testerId": "e2e-runner",
+    "justification": "Req 7.5 was reconciled with design.md § Open Question 3: the Files tab ships only the soft-delete 'Move to trash' flow; a separate trash UI (outside the Files tab) owns the permanent-delete confirmation. Recording not_applicable by design — this is the expected outcome and should remain not_applicable indefinitely."
   }
 ]
