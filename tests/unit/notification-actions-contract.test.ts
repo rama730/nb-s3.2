@@ -38,3 +38,13 @@ test('message notifications are delivered inline when no transaction executor is
     const messageNotificationCalls = messagingActions.match(/emitMessageBurstNotifications\(\{/g) ?? [];
     assert.equal(messageNotificationCalls.length, 2);
 });
+
+test('notification fanout falls back to inline delivery when event enqueue fails', () => {
+    const fanout = readProjectFile('src/lib/notifications/fanout.ts');
+
+    assert.match(fanout, /import \{ db \} from ["']@\/lib\/db["']/);
+    assert.match(fanout, /catch \(error\) \{[\s\S]*deliverNotificationFanout\(\{[\s\S]*inline-fallback[\s\S]*\}, db\)/);
+    assert.match(fanout, /mode: "inline-fallback"/);
+    assert.match(fanout, /notifications\.fanout_enqueue_failed/);
+    assert.match(fanout, /inline fallback threw/);
+});
