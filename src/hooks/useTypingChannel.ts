@@ -27,6 +27,10 @@ interface UseTypingChannelReturn {
 // does not flicker off while the sender is still typing bursty input.
 const TYPING_VISIBLE_TTL_MS = 5_500;
 
+function isPresenceEligibleConversationId(conversationId: string | null): conversationId is string {
+    return Boolean(conversationId && conversationId !== 'new' && !conversationId.startsWith('draft:'));
+}
+
 export function useTypingChannel(
     conversationId: string | null,
     options: { listen?: boolean; enabled?: boolean } = { listen: true, enabled: true },
@@ -102,7 +106,7 @@ export function useTypingChannel(
     }, [emitTypingState, isVisible]);
 
     useEffect(() => {
-        if (!enabled || !conversationId || conversationId === 'new') {
+        if (!enabled || !isPresenceEligibleConversationId(conversationId)) {
             if (requestedTypingStateRef.current) {
                 emitTypingState(false);
             }
@@ -220,7 +224,7 @@ export function useTypingChannel(
     }, [currentUserProfile]);
 
     const sendTyping = useCallback(async (isTyping: boolean) => {
-        if (!enabled || !conversationId || conversationId === 'new' || !isVisible) return;
+        if (!enabled || !isPresenceEligibleConversationId(conversationId) || !isVisible) return;
         // throttle: skip rapid isTyping=true events
         if (isTyping) {
             const now = Date.now();
