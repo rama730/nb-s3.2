@@ -9,6 +9,7 @@ import { jsonError, jsonSuccess } from "@/app/api/v1/_envelope";
 import { normalizeGithubRepoUrl } from "@/lib/github/repo-validation";
 import { getRedisClient } from "@/lib/redis";
 import { createSignedJobRequestToken } from "@/lib/security/job-request";
+import { enforceRouteLimit } from "@/app/api/v1/_shared";
 
 const WEBHOOK_SECRET = process.env.GITHUB_WEBHOOK_SECRET;
 const MIN_SYNC_INTERVAL_MS = 30_000;
@@ -134,7 +135,40 @@ function logWebhookRequest(
 export async function POST(request: NextRequest) {
     const startedAt = Date.now();
     const requestId = getRequestId(request);
-    const body = await request.text();
+
+    const limitResponse = await enforceRouteLimit(request, "api:v1:webhooks:github", 120, 60);
+    if (limitResponse) {
+        logWebhookRequest(request, {
+            requestId,
+            startedAt,
+            status: 429,
+            success: false,
+            errorCode: "RATE_LIMITED",
+        });
+        return limitResponse;
+    }
+
+    let body = "";
+    if (request.body) {
+        const reader = request.body.getReader();
+        const decoder = new TextDecoder();
+        let bytesRead = 0;
+        try {
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                bytesRead += value.length;
+                if (bytesRead > 5 * 1024 * 1024) { // 5MB limit
+                    logWebhookRequest(request, { requestId, startedAt, status: 413, success: false, errorCode: "BAD_REQUEST" });
+                    return jsonError("Payload too large", 413, "BAD_REQUEST");
+                }
+                body += decoder.decode(value, { stream: true });
+            }
+            body += decoder.decode();
+        } finally {
+            reader.releaseLock();
+        }
+    }
     const signature = request.headers.get("x-hub-signature-256");
 
     if (!verifySignature(body, signature)) {
