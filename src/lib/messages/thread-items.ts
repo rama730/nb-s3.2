@@ -114,15 +114,15 @@ export function buildMessageThreadModel({
                 return item;
             }
 
-            const nextItem = group.items[index + 1];
-            const nextMessageFromSameSender = nextItem?.type === 'message'
-                && nextItem.message.senderId === item.message.senderId;
+            const prevItem = group.items[index - 1];
+            const prevMessageFromSameSender = prevItem?.type === 'message'
+                && prevItem.message.senderId === item.message.senderId;
             const isPeerMessage = Boolean(item.message.senderId)
                 && (!viewerId || item.message.senderId !== viewerId);
 
             return {
                 ...item,
-                showAvatar: isPeerMessage && !nextMessageFromSameSender,
+                showAvatar: isPeerMessage && !prevMessageFromSameSender,
             };
         }),
     }));
