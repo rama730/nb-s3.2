@@ -182,6 +182,7 @@ function main() {
 
   for (const [key, values] of grouped.entries()) {
     const [metricRaw, routeId] = key.split(":");
+    if (!routeId) continue;
     const metric = metricRaw as RouteMetric;
     const baseline = baselineByRoute.get(routeId);
     if (!baseline) continue;
