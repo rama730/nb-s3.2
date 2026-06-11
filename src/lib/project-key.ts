@@ -3,21 +3,26 @@ export function generateProjectKey(title: string): string {
     const clean = title.replace(/[^a-zA-Z0-9\s]/g, "").trim().toUpperCase();
 
     // 2. Split into words
-    const words = clean.split(/\s+/);
+    const words = clean.split(/\s+/).filter(Boolean);
+
+    const firstWord = words[0];
+    if (!firstWord) return "PRJ";
 
     if (words.length === 1) {
         // Single word: use first 2 chars (e.g., "APP" -> "AP") or 3 if short
-        const word = words[0];
-        if (word.length <= 2) return word;
-        return word.substring(0, 2);
+        if (firstWord.length <= 2) return firstWord;
+        return firstWord.substring(0, 2);
     } else {
         // Multiple words: use first letter of each word (e.g., "Next Board" -> "NB")
         // Limit to 3 chars max for readability
         let key = "";
         for (let i = 0; i < Math.min(words.length, 3); i++) {
-            key += words[i][0];
+            const w = words[i];
+            if (w && w[0]) {
+                key += w[0];
+            }
         }
-        return key;
+        return key || "PRJ";
     }
 }
 
