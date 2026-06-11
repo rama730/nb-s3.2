@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { createClient } from "@/lib/supabase/client";
-import { countTaskAttachments, getTaskAttachments } from "@/app/actions/files";
+import { countTaskAttachments, getTaskAttachments } from "@/app/actions/files/links";
 import { getProjectTaskActivityAction } from "@/app/actions/project";
 import { createSubtaskAction, deleteSubtaskAction, toggleSubtaskAction } from "@/app/actions/subtask";
 import { useRealtime } from "@/components/providers/RealtimeProvider";
@@ -607,7 +607,38 @@ export function useTaskPanelResource(params: {
     return { success: true as const };
   }, [clearError, loadActivity, projectId, subtasks]);
 
-  return {
+  const commentTyping = useMemo(() => ({
+    topLevel: discussion.topLevelTypingUsers,
+    repliesByParentId: discussion.replyTypingUsersByParentId,
+  }), [discussion.topLevelTypingUsers, discussion.replyTypingUsersByParentId]);
+
+  const fileMutations = useMemo(() => ({
+    uploadQueue: uploadQueue as TaskFileUploadStatus[],
+    isUploading,
+    uploadFiles,
+    uploadFolders,
+    attachExisting,
+    unlinkAttachment,
+    pendingResolution,
+    resolvePendingResolution,
+    saveAsNewVersion,
+    clearPendingFileWarnings,
+    downloadAttachment,
+  }), [
+    uploadQueue,
+    isUploading,
+    uploadFiles,
+    uploadFolders,
+    attachExisting,
+    unlinkAttachment,
+    pendingResolution,
+    resolvePendingResolution,
+    saveAsNewVersion,
+    clearPendingFileWarnings,
+    downloadAttachment,
+  ]);
+
+  return useMemo(() => ({
     task,
     counts,
     comments: discussion.comments as TaskDiscussionComment[],
@@ -623,10 +654,7 @@ export function useTaskPanelResource(params: {
     discussionPresenceConnected: discussion.isPresenceConnected,
     commentNextCursor: discussion.nextCursor,
     commentLoadingMore: discussion.isLoadingMore,
-    commentTyping: {
-      topLevel: discussion.topLevelTypingUsers,
-      repliesByParentId: discussion.replyTypingUsersByParentId,
-    },
+    commentTyping,
     ensureTabLoaded,
     clearError,
     taskMutations,
@@ -642,18 +670,39 @@ export function useTaskPanelResource(params: {
     loadSubtasks,
     loadAttachments,
     loadActivity,
-    fileMutations: {
-      uploadQueue: uploadQueue as TaskFileUploadStatus[],
-      isUploading,
-      uploadFiles,
-      uploadFolders,
-      attachExisting,
-      unlinkAttachment,
-      pendingResolution,
-      resolvePendingResolution,
-      saveAsNewVersion,
-      clearPendingFileWarnings,
-      downloadAttachment,
-    },
-  };
+    fileMutations,
+  }), [
+    task,
+    counts,
+    discussion.comments,
+    subtasks,
+    attachments,
+    activity,
+    fileWarningState.warnings,
+    fileWarningState.summary,
+    loading,
+    errors,
+    loadedTabs,
+    isConnected,
+    discussion.isPresenceConnected,
+    discussion.nextCursor,
+    discussion.isLoadingMore,
+    commentTyping,
+    ensureTabLoaded,
+    clearError,
+    taskMutations,
+    discussion.addComment,
+    discussion.toggleLike,
+    discussion.deleteComment,
+    addSubtask,
+    toggleSubtask,
+    removeSubtask,
+    discussion.loadDiscussion,
+    discussion.loadOlderComments,
+    discussion.sendTyping,
+    loadSubtasks,
+    loadAttachments,
+    loadActivity,
+    fileMutations,
+  ]);
 }
