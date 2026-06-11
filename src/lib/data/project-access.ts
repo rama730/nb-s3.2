@@ -4,7 +4,7 @@ import {
     isProjectPubliclyReadableVisibility,
     type ProjectVisibilityInput,
 } from "@/lib/projects/project-visibility";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, inArray } from "drizzle-orm";
 
 // `projects.visibility` has a database default but is not declared NOT NULL,
 // so DB-selected values must remain nullable-safe and fail closed downstream.
@@ -104,4 +104,53 @@ export async function getProjectAccessById(projectId: string, userId: string | n
         canRead,
         canWrite,
     };
+}
+
+export async function getProjectAccessByIds(projectIds: string[], userId: string | null): Promise<Record<string, ProjectAccess>> {
+    if (projectIds.length === 0) return {};
+    
+    const projectsData = await db
+        .select({
+            id: projects.id,
+            ownerId: projects.ownerId,
+            visibility: projects.visibility,
+            status: projects.status,
+            slug: projects.slug,
+        })
+        .from(projects)
+        .where(and(inArray(projects.id, projectIds), isNull(projects.deletedAt)));
+
+    const projectMemberships = userId ? await db
+        .select({ projectId: projectMembers.projectId, role: projectMembers.role })
+        .from(projectMembers)
+        .where(and(inArray(projectMembers.projectId, projectIds), eq(projectMembers.userId, userId))) : [];
+
+    const membershipsByProject = Object.fromEntries(projectMemberships.map(m => [m.projectId, m]));
+
+    const result: Record<string, ProjectAccess> = {};
+    for (const project of projectsData) {
+        let isOwner = false;
+        let isMember = false;
+        let memberRole: MemberRole = null;
+
+        if (userId) {
+            isOwner = project.ownerId === userId;
+            if (!isOwner) {
+                const member = membershipsByProject[project.id];
+                if (member) {
+                    isMember = true;
+                    memberRole = (member.role as MemberRole) || "member";
+                }
+            }
+        }
+        result[project.id] = {
+            project,
+            isOwner,
+            isMember,
+            memberRole,
+            canRead: computeProjectReadAccess(project.visibility, project.status, isOwner, isMember),
+            canWrite: computeProjectWriteAccess(isOwner, memberRole),
+        };
+    }
+    return result;
 }
