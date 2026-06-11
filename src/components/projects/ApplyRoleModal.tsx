@@ -5,6 +5,7 @@ import { Briefcase, Clock3, Info, Link2, Loader2, Sparkles, Users } from "lucide
 import { toast } from "sonner";
 import { applyToRoleAction } from "@/app/actions/applications";
 import { logger } from "@/lib/logger";
+import { get, set, del } from "idb-keyval";
 import {
     Dialog,
     DialogContent,
@@ -13,7 +14,6 @@ import {
     DialogHeader,
     DialogTitle,
 } from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
 
 type ProjectRef = {
     id: string;
@@ -67,6 +67,7 @@ function formatTypedLinkLine(rawValue: string) {
     if (!trimmed) return null;
 
     const firstToken = trimmed.split(/\s+/)[0];
+    if (!firstToken) return null;
     const candidate = /^https?:\/\//i.test(firstToken) ? firstToken : `https://${firstToken}`;
 
     try {
@@ -79,13 +80,27 @@ function formatTypedLinkLine(rawValue: string) {
     }
 }
 
-function hashText(input: string) {
-    let hash = 2166136261;
-    for (let i = 0; i < input.length; i += 1) {
-        hash ^= input.charCodeAt(i);
-        hash = Math.imul(hash, 16777619);
+function fnv1a(str: string): string {
+    let hash = 0x811c9dc5;
+    for (let i = 0; i < str.length; i++) {
+        hash ^= str.charCodeAt(i);
+        hash = (hash * 0x01000193) >>> 0;
     }
-    return (hash >>> 0).toString(16);
+    return hash.toString(16).padStart(8, "0");
+}
+
+async function sha256(messageText: string): Promise<string> {
+    if (typeof window !== "undefined" && window.crypto?.subtle) {
+        try {
+            const msgBuffer = new TextEncoder().encode(messageText);
+            const hashBuffer = await window.crypto.subtle.digest("SHA-256", msgBuffer);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+        } catch (e) {
+            console.warn("WebCrypto digest failed, falling back to FNV-1a", e);
+        }
+    }
+    return fnv1a(messageText);
 }
 
 export default function ApplyRoleModal({
@@ -102,8 +117,11 @@ export default function ApplyRoleModal({
     const [availability, setAvailability] = useState("");
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [keyboardInset, setKeyboardInset] = useState(0);
+    const [roleSearch, setRoleSearch] = useState("");
+    const [showAllRoles, setShowAllRoles] = useState(false);
     const messageRef = useRef<HTMLTextAreaElement | null>(null);
     const hasUserSelectedRole = useRef(false);
+    const lastLineCount = useRef(0);
     const draftStorageKey = useMemo(() => `apply-role-draft:${project.id}`, [project.id]);
 
     const roleOptions = useMemo(() => {
@@ -121,14 +139,38 @@ export default function ApplyRoleModal({
         });
     }, [roles]);
 
+    const filteredRoles = useMemo(() => {
+        const query = roleSearch.trim().toLowerCase();
+        if (!query) return roleOptions;
+        return roleOptions.filter((role) =>
+            getRoleLabel(role).toLowerCase().includes(query)
+        );
+    }, [roleOptions, roleSearch]);
+
+    const visibleRoles = useMemo(() => {
+        if (showAllRoles || roleSearch.trim()) {
+            return filteredRoles;
+        }
+        const initial = filteredRoles.slice(0, 5);
+        if (roleId && !initial.some((r) => r.id === roleId)) {
+            const selected = filteredRoles.find((r) => r.id === roleId);
+            if (selected) {
+                initial.push(selected);
+            }
+        }
+        return initial;
+    }, [filteredRoles, showAllRoles, roleSearch, roleId]);
+
     const selectedRole = useMemo(() => {
         return roleOptions.find((role) => role.id === roleId) || null;
     }, [roleId, roleOptions]);
+
     const messageWordCount = useMemo(() => {
         const normalized = message.trim();
         if (!normalized) return 0;
         return normalized.split(/\s+/).length;
     }, [message]);
+
     const qualityHint = useMemo(() => {
         if (messageWordCount === 0) return "Add a concise intro, relevant skills, and expected contribution.";
         if (messageWordCount < 12) return "Too short. Add specific outcomes and execution details.";
@@ -159,34 +201,49 @@ export default function ApplyRoleModal({
         setRoleId(firstOpenRole?.id || "");
     }, [isOpen, preselectedRoleId, roleOptions]);
 
+    // Asynchronous draft loading from IndexedDB
     useEffect(() => {
-        if (!isOpen || typeof window === "undefined") return;
-        try {
-            const raw = window.localStorage.getItem(draftStorageKey);
-            if (!raw) return;
-            const parsed = JSON.parse(raw) as {
-                roleId?: string;
-                message?: string;
-                portfolioUrl?: string;
-                availability?: string;
-                savedAt?: number;
-            };
-            if (!parsed?.savedAt || Date.now() - parsed.savedAt > DRAFT_STORAGE_TTL_MS) {
-                window.localStorage.removeItem(draftStorageKey);
-                return;
-            }
-            if (!preselectedRoleId && parsed.roleId) {
-                hasUserSelectedRole.current = true;
-                setRoleId(parsed.roleId);
-            }
-            if (parsed.message) setMessage(parsed.message.slice(0, MAX_MESSAGE_LENGTH));
-            if (parsed.portfolioUrl) setPortfolioUrl(parsed.portfolioUrl);
-            if (parsed.availability) setAvailability(parsed.availability);
-        } catch {
-            window.localStorage.removeItem(draftStorageKey);
-        }
-    }, [draftStorageKey, isOpen, preselectedRoleId]);
+        if (!isOpen) return;
+        let isMounted = true;
 
+        async function loadDraft() {
+            try {
+                const raw = await get(draftStorageKey);
+                if (!raw || !isMounted) return;
+                const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+                if (!parsed?.savedAt || Date.now() - parsed.savedAt > DRAFT_STORAGE_TTL_MS) {
+                    await del(draftStorageKey);
+                    return;
+                }
+                if (!preselectedRoleId && parsed.roleId) {
+                    // Stale draft role ID check: verify role exists and is not disabled
+                    const isValidRole = roleOptions.some((r) => r.id === parsed.roleId && !r.disabled);
+                    if (isValidRole) {
+                        hasUserSelectedRole.current = true;
+                        setRoleId(parsed.roleId);
+                    } else {
+                        const firstOpenRole = roleOptions.find((role) => !role.disabled);
+                        setRoleId(firstOpenRole?.id || "");
+                    }
+                }
+                if (parsed.message) setMessage(parsed.message.slice(0, MAX_MESSAGE_LENGTH));
+                if (parsed.portfolioUrl) setPortfolioUrl(parsed.portfolioUrl);
+                if (parsed.availability) setAvailability(parsed.availability);
+            } catch (err) {
+                console.error("Failed to load draft:", err);
+                try {
+                    await del(draftStorageKey);
+                } catch {}
+            }
+        }
+
+        loadDraft();
+        return () => {
+            isMounted = false;
+        };
+    }, [draftStorageKey, isOpen, preselectedRoleId, roleOptions]);
+
+    // Focus handler with synchronous timer cleanup
     useEffect(() => {
         if (!isOpen) return;
         const timer = window.setTimeout(() => {
@@ -197,17 +254,32 @@ export default function ApplyRoleModal({
     }, [isOpen, adjustMessageHeight]);
 
     useEffect(() => {
-        adjustMessageHeight();
+        const lineCount = message.split("\n").length;
+        if (lineCount !== lastLineCount.current) {
+            lastLineCount.current = lineCount;
+            adjustMessageHeight();
+        }
     }, [message, adjustMessageHeight]);
 
+    // Viewport resize calculations throttled using requestAnimationFrame
     useEffect(() => {
         if (!isOpen) return;
         if (typeof window === "undefined" || !window.visualViewport) return;
 
+        // Only register visual viewport listeners on mobile screens to save desktop CPU cycles
+        const isMobileScreen = window.innerWidth < 640 || ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
+        if (!isMobileScreen) return;
+
         const viewport = window.visualViewport;
+        let rafId: number | null = null;
+
         const onViewportChange = () => {
-            const offset = Math.max(0, Math.round(window.innerHeight - viewport.height - viewport.offsetTop));
-            setKeyboardInset(offset > 70 ? offset : 0);
+            if (rafId !== null) return;
+            rafId = requestAnimationFrame(() => {
+                rafId = null;
+                const offset = Math.max(0, Math.round(window.innerHeight - viewport.height - viewport.offsetTop));
+                setKeyboardInset(offset > 70 ? offset : 0);
+            });
         };
 
         onViewportChange();
@@ -216,47 +288,59 @@ export default function ApplyRoleModal({
         return () => {
             viewport.removeEventListener("resize", onViewportChange);
             viewport.removeEventListener("scroll", onViewportChange);
+            if (rafId !== null) {
+                cancelAnimationFrame(rafId);
+            }
             setKeyboardInset(0);
         };
     }, [isOpen]);
 
+    // Asynchronous draft persistence with 1500ms debounce
     useEffect(() => {
-        if (!isOpen || typeof window === "undefined") return;
-        const timeoutId = window.setTimeout(() => {
+        if (!isOpen) return;
+        const timeoutId = window.setTimeout(async () => {
             const hasAnyValue = !!(message.trim() || portfolioUrl.trim() || availability.trim());
             if (!hasAnyValue) {
-                window.localStorage.removeItem(draftStorageKey);
+                try {
+                    await del(draftStorageKey);
+                } catch {}
                 return;
             }
-            window.localStorage.setItem(
-                draftStorageKey,
-                JSON.stringify({
-                    roleId,
-                    message: message.slice(0, MAX_MESSAGE_LENGTH),
-                    portfolioUrl,
-                    availability,
-                    savedAt: Date.now(),
-                })
-            );
-        }, 280);
+            try {
+                await set(
+                    draftStorageKey,
+                    {
+                        roleId,
+                        message: message.slice(0, MAX_MESSAGE_LENGTH),
+                        portfolioUrl,
+                        availability,
+                        savedAt: Date.now(),
+                    }
+                );
+            } catch (err) {
+                console.error("Failed to save draft:", err);
+            }
+        }, 1500);
+
         return () => window.clearTimeout(timeoutId);
     }, [availability, draftStorageKey, isOpen, message, portfolioUrl, roleId]);
 
-    const resetState = () => {
+    const resetState = useCallback(async () => {
         hasUserSelectedRole.current = false;
         setRoleId("");
         setMessage("");
         setPortfolioUrl("");
         setAvailability("");
-        if (typeof window !== "undefined") {
-            window.localStorage.removeItem(draftStorageKey);
-        }
-    };
+        setShowAllRoles(false);
+        try {
+            await del(draftStorageKey);
+        } catch {}
+    }, [draftStorageKey]);
 
-    const resetAndClose = () => {
+    const resetAndClose = useCallback(() => {
         resetState();
         onClose();
-    };
+    }, [resetState, onClose]);
 
     const appendPrompt = (prompt: string) => {
         setMessage((previous) => {
@@ -304,8 +388,25 @@ export default function ApplyRoleModal({
         const requestId = `apply-submit:${project.id}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
         setIsSubmitting(true);
         try {
-            const idempotencyKey = `apply:${project.id}:${roleId}:${hashText(finalMessage)}`;
-            const result = await applyToRoleAction(project.id, roleId, finalMessage, { idempotencyKey });
+            const finalMessageHash = await sha256(finalMessage);
+            const idempotencyKey = `apply:${project.id}:${roleId}:${finalMessageHash}`;
+            
+            // Introduce a 15-second client-side submission timeout race
+            let timeoutId: ReturnType<typeof setTimeout> | undefined;
+            const timeoutPromise = new Promise<never>((_, reject) => {
+                timeoutId = setTimeout(() => {
+                    reject(new Error("Request timed out. Please check your network connection and try again."));
+                }, 15000);
+            });
+
+            const result = await Promise.race([
+                applyToRoleAction(project.id, roleId, finalMessage, { idempotencyKey }),
+                timeoutPromise
+            ]);
+
+            if (timeoutId) {
+                clearTimeout(timeoutId);
+            }
             if (!result.success) {
                 const durationMs = Math.round(performance.now() - startedAt);
                 logger.metric("applications.apply.result", {
@@ -386,11 +487,11 @@ export default function ApplyRoleModal({
                 if (!open && !isSubmitting) resetAndClose();
             }}
         >
-            <DialogContent className="w-full max-w-[calc(100%-2rem)] sm:max-w-[1120px] gap-0 overflow-hidden border-zinc-200 bg-white p-0 text-zinc-900 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-100 top-[50%] left-[50%] -translate-x-1/2 -translate-y-1/2 rounded-2xl max-sm:top-auto max-sm:bottom-0 max-sm:w-[calc(100%-1rem)] max-sm:max-w-none max-sm:-translate-y-0 max-sm:rounded-t-2xl max-sm:rounded-b-none">
+            <DialogContent className="w-full max-w-[calc(100%-2rem)] sm:max-w-[1120px] gap-0 overflow-hidden border-zinc-200 bg-white p-0 text-zinc-900 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-100 top-[50%] left-[50%] -translate-x-1/2 -translate-y-1/2 rounded-2xl max-sm:top-auto max-sm:bottom-0 max-sm:w-[calc(100%-1rem)] max-sm:max-w-none max-sm:-translate-y-0 max-sm:rounded-t-2xl max-sm:rounded-b-none">
                 <div className="flex h-[80vh] flex-col sm:h-[650px]">
-                    <DialogHeader className="border-b border-zinc-200 px-3 py-3 text-left dark:border-zinc-800 sm:px-5 sm:py-4">
+                    <DialogHeader className="border-b border-zinc-200 px-3 py-3.5 text-left dark:border-zinc-800 sm:px-5 sm:py-4.5">
                         <div className="flex items-start gap-3">
-                            <div className="mt-0.5 rounded-lg bg-indigo-500/10 p-1.5 text-indigo-600 dark:bg-indigo-500/20 dark:text-indigo-300">
+                            <div className="mt-0.5 rounded-lg p-1.5 text-primary bg-primary/10">
                                 <Briefcase className="h-4 w-4" />
                             </div>
                             <div className="min-w-0">
@@ -403,13 +504,24 @@ export default function ApplyRoleModal({
                     </DialogHeader>
 
                     <div className="min-h-0 flex-1 sm:grid sm:grid-cols-12">
-                        <aside className="hidden border-r border-zinc-200 bg-zinc-50/70 dark:border-zinc-800 dark:bg-zinc-950/40 sm:col-span-5 sm:flex sm:min-h-0 sm:flex-col">
-                            <div className="border-b border-zinc-200 p-3 dark:border-zinc-800">
-                                <p className="text-sm font-semibold">Open Roles</p>
-                                <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">Select the role that best matches your contribution.</p>
+                        <aside className="hidden border-r border-zinc-200 bg-zinc-50/70 dark:border-zinc-800 dark:bg-zinc-950/20 sm:col-span-5 sm:flex sm:min-h-0 sm:flex-col">
+                            <div className="border-b border-zinc-200 p-3.5 dark:border-zinc-800 flex flex-col gap-2">
+                                <div>
+                                    <p className="text-sm font-semibold text-zinc-850 dark:text-zinc-200">Open Roles</p>
+                                    <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">Select the role that best matches your contribution.</p>
+                                </div>
+                                {roleOptions.length > 5 && (
+                                    <input
+                                        type="text"
+                                        placeholder="Search roles..."
+                                        value={roleSearch}
+                                        onChange={(e) => setRoleSearch(e.target.value)}
+                                        className="w-full text-xs px-2.5 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-950 focus:outline-none focus:border-primary/60 focus:ring-1 focus:ring-primary/20"
+                                    />
+                                )}
                             </div>
-                            <div className="min-h-0 space-y-2 overflow-y-auto p-3">
-                                {roleOptions.map((role) => {
+                            <div className="min-h-0 divide-y divide-zinc-100 dark:divide-zinc-800/60 overflow-y-auto px-2 py-1">
+                                {visibleRoles.map((role) => {
                                     const isActive = role.id === roleId;
                                     return (
                                         <button
@@ -420,24 +532,37 @@ export default function ApplyRoleModal({
                                                 setRoleId(role.id);
                                             }}
                                             disabled={role.disabled || isSubmitting}
-                                            className={`w-full rounded-xl border px-3 py-2.5 text-left transition ${
+                                            className={`w-full flex flex-col justify-start py-3 px-3.5 text-left border-l-2 transition-all duration-150 ${
                                                 isActive
-                                                    ? "border-indigo-500 bg-indigo-500/5"
-                                                    : "border-zinc-200 bg-white hover:border-zinc-300 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:border-zinc-600"
+                                                    ? "border-primary bg-primary/5 dark:bg-primary/10"
+                                                    : "border-transparent hover:bg-zinc-50 dark:hover:bg-zinc-800/40"
                                             } ${role.disabled ? "cursor-not-allowed opacity-50" : ""}`}
                                         >
-                                            <div className="flex items-start justify-between gap-3">
-                                                <p className="text-sm font-semibold">{getRoleLabel(role)}</p>
-                                                <span className="rounded-full border border-zinc-300 px-2 py-0.5 text-[11px] text-zinc-600 dark:border-zinc-700 dark:text-zinc-300">
+                                            <div className="flex items-start justify-between gap-3 w-full">
+                                                <p className={`text-sm font-semibold transition-colors ${
+                                                    isActive ? "text-primary" : "text-zinc-850 dark:text-zinc-200"
+                                                }`}>{getRoleLabel(role)}</p>
+                                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 border border-zinc-200/60 dark:border-zinc-700/60 shrink-0">
                                                     {role.remaining} open
                                                 </span>
                                             </div>
                                             {role.description && (
-                                                <p className="mt-1 line-clamp-2 text-xs text-zinc-500 dark:text-zinc-400">{role.description}</p>
+                                                <p className="mt-1 line-clamp-1 text-xs text-zinc-500 dark:text-zinc-400 w-full">{role.description}</p>
                                             )}
                                         </button>
                                     );
                                 })}
+                                {filteredRoles.length > visibleRoles.length && (
+                                    <div className="py-2.5 px-3.5 flex justify-center border-t border-zinc-100 dark:border-zinc-800/60 bg-zinc-50/20 dark:bg-zinc-950/10">
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowAllRoles(true)}
+                                            className="text-xs font-bold text-primary hover:underline transition-colors"
+                                        >
+                                            + {filteredRoles.length - visibleRoles.length} more roles
+                                        </button>
+                                    </div>
+                                )}
                             </div>
                         </aside>
 
@@ -453,7 +578,7 @@ export default function ApplyRoleModal({
                                         hasUserSelectedRole.current = true;
                                         setRoleId(event.target.value);
                                     }}
-                                    className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-950"
+                                    className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-950 focus:outline-none focus:border-primary/60 focus:ring-2 focus:ring-primary/20"
                                     disabled={isSubmitting}
                                 >
                                     {roleOptions.length === 0 && <option value="">No open roles</option>}
@@ -465,22 +590,23 @@ export default function ApplyRoleModal({
                                 </select>
                             </div>
 
-                            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-3 py-3 sm:px-5 sm:py-4">
+                            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-3 py-3 sm:px-5 sm:py-4.5">
                                 {selectedRole ? (
-                                    <div key={selectedRole.id} className="rounded-xl border border-zinc-200 bg-zinc-50/60 p-3 animate-in fade-in slide-in-from-bottom-1 duration-200 dark:border-zinc-700 dark:bg-zinc-950/40">
-                                        <div className="flex items-center justify-between gap-3">
-                                            <p className="text-sm font-semibold">{getRoleLabel(selectedRole)}</p>
-                                            <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-600 dark:text-emerald-300">
+                                    <div key={selectedRole.id} className="py-1 animate-in fade-in slide-in-from-bottom-1 duration-200">
+                                        <div className="flex items-center gap-2 mb-1.5">
+                                            <p className="text-sm font-semibold text-zinc-850 dark:text-zinc-100">{getRoleLabel(selectedRole)}</p>
+                                            <span className="text-zinc-400 dark:text-zinc-500 shrink-0 select-none">·</span>
+                                            <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400">
                                                 {selectedRole.remaining} slot{selectedRole.remaining === 1 ? "" : "s"} available
                                             </span>
                                         </div>
                                         {selectedRole.description && (
-                                            <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">{selectedRole.description}</p>
+                                            <p className="text-xs text-zinc-500 dark:text-zinc-400 mb-2">{selectedRole.description}</p>
                                         )}
                                         {!!selectedRole.skills?.length && (
-                                            <div className="mt-3 flex flex-wrap gap-1.5">
+                                            <div className="flex flex-wrap gap-1.5">
                                                 {selectedRole.skills.slice(0, 6).map((skill) => (
-                                                    <span key={skill} className="rounded-full border border-zinc-300 px-2 py-0.5 text-[11px] text-zinc-600 dark:border-zinc-700 dark:text-zinc-300">
+                                                    <span key={skill} className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 border border-zinc-200/60 dark:border-zinc-700/60 transition-colors">
                                                         {skill}
                                                     </span>
                                                 ))}
@@ -488,13 +614,13 @@ export default function ApplyRoleModal({
                                         )}
                                     </div>
                                 ) : (
-                                    <div className="rounded-xl border border-amber-300/50 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+                                    <div className="rounded-xl border border-amber-250 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
                                         No available role to apply right now.
                                     </div>
                                 )}
 
                                 <div className="space-y-2">
-                                    <label htmlFor="apply-message" className="text-sm font-medium">
+                                    <label htmlFor="apply-message" className="text-sm font-semibold text-zinc-800 dark:text-zinc-200">
                                         Why are you a fit?
                                     </label>
                                     <textarea
@@ -504,17 +630,17 @@ export default function ApplyRoleModal({
                                         onChange={(event) => setMessage(event.target.value.slice(0, MAX_MESSAGE_LENGTH))}
                                         placeholder="Describe your relevant skills, your execution style, and how you will contribute in the first week."
                                         rows={6}
-                                        className="w-full max-h-[200px] min-h-[112px] resize-none rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm transition-colors focus:border-indigo-400 focus:ring-2 focus:ring-indigo-200/60 dark:border-zinc-700 dark:bg-zinc-950 dark:focus:border-indigo-500 dark:focus:ring-indigo-500/20"
+                                        className="w-full max-h-[200px] min-h-[112px] resize-none rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm transition-colors focus:border-primary/60 focus:ring-2 focus:ring-primary/20 dark:border-zinc-700 dark:bg-zinc-950 dark:focus:border-primary/50 dark:focus:ring-primary/20 focus:outline-none"
                                         disabled={isSubmitting}
                                     />
                                     <div className="flex items-center justify-between">
                                         <span
-                                            className={`text-[11px] ${
+                                            className={`text-[11px] font-medium ${
                                                 messageWordCount >= 20
                                                     ? "text-emerald-600 dark:text-emerald-400"
                                                     : messageWordCount >= 12
                                                         ? "text-zinc-500 dark:text-zinc-400"
-                                                        : "text-amber-600 dark:text-amber-400"
+                                                        : "text-amber-600 dark:text-amber-450"
                                             }`}
                                         >
                                             {qualityHint}
@@ -524,11 +650,11 @@ export default function ApplyRoleModal({
                                 </div>
 
                                 <div className="space-y-2">
-                                    <div className="flex items-center gap-2 text-xs font-medium text-zinc-600 dark:text-zinc-300">
+                                    <div className="flex items-center gap-2 text-xs font-semibold text-zinc-600 dark:text-zinc-350">
                                         <Sparkles className="h-3.5 w-3.5" />
                                         Quick prompts
                                     </div>
-                                    <div className="flex flex-wrap gap-2">
+                                    <div className="flex flex-wrap gap-1.5">
                                         {MESSAGE_PROMPTS.map((prompt) => (
                                             <button
                                                 key={prompt}
@@ -536,7 +662,7 @@ export default function ApplyRoleModal({
                                                 title={prompt}
                                                 onClick={() => appendPrompt(prompt)}
                                                 disabled={isSubmitting}
-                                                className="rounded-full border border-zinc-300 px-2.5 py-1 text-[11px] text-zinc-600 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                                                className="rounded-full border border-zinc-250 bg-zinc-50/50 hover:bg-zinc-100 hover:border-zinc-350 dark:border-zinc-800 dark:bg-zinc-900/40 dark:hover:bg-zinc-800 px-2.5 py-1 text-[11px] text-zinc-650 dark:text-zinc-400 dark:hover:text-zinc-300 transition-all duration-150"
                                             >
                                                 {prompt.length > 40 ? `${prompt.slice(0, 40)}…` : prompt}
                                             </button>
@@ -546,7 +672,7 @@ export default function ApplyRoleModal({
 
                                 <div className="grid gap-3 sm:grid-cols-2">
                                     <div className="space-y-1.5">
-                                        <label htmlFor="apply-portfolio" className="flex items-center gap-1.5 text-xs font-medium text-zinc-600 dark:text-zinc-300">
+                                        <label htmlFor="apply-portfolio" className="flex items-center gap-1.5 text-xs font-semibold text-zinc-600 dark:text-zinc-350">
                                             <Link2 className="h-3.5 w-3.5" /> Portfolio / GitHub (optional)
                                         </label>
                                         <input
@@ -554,12 +680,12 @@ export default function ApplyRoleModal({
                                             value={portfolioUrl}
                                             onChange={(event) => setPortfolioUrl(event.target.value)}
                                             placeholder="https://..."
-                                            className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-950"
+                                            className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm focus:border-primary/60 focus:ring-2 focus:ring-primary/20 dark:border-zinc-700 dark:bg-zinc-950 dark:focus:border-primary/50 dark:focus:ring-primary/20 focus:outline-none"
                                             disabled={isSubmitting}
                                         />
                                     </div>
                                     <div className="space-y-1.5">
-                                        <label htmlFor="apply-availability" className="flex items-center gap-1.5 text-xs font-medium text-zinc-600 dark:text-zinc-300">
+                                        <label htmlFor="apply-availability" className="flex items-center gap-1.5 text-xs font-semibold text-zinc-600 dark:text-zinc-350">
                                             <Clock3 className="h-3.5 w-3.5" /> Availability (optional)
                                         </label>
                                         <input
@@ -567,15 +693,15 @@ export default function ApplyRoleModal({
                                             value={availability}
                                             onChange={(event) => setAvailability(event.target.value)}
                                             placeholder="e.g. 15 hrs/week, evenings"
-                                            className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-950"
+                                            className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm focus:border-primary/60 focus:ring-2 focus:ring-primary/20 dark:border-zinc-700 dark:bg-zinc-950 dark:focus:border-primary/50 dark:focus:ring-primary/20 focus:outline-none"
                                             disabled={isSubmitting}
                                         />
                                     </div>
                                 </div>
 
-                                <div className="rounded-lg border border-zinc-200 bg-zinc-50/80 px-3 py-2 text-[11px] text-zinc-500 dark:border-zinc-700 dark:bg-zinc-950/40 dark:text-zinc-400">
+                                <div className="px-1 py-1 text-[11px] text-zinc-500 dark:text-zinc-400">
                                     <div className="flex items-start gap-2">
-                                        <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                                        <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-zinc-455 dark:text-zinc-500" />
                                         <p>
                                             Your application will be sent to the project owner/admin team and mirrored in your direct conversation thread.
                                         </p>
@@ -586,30 +712,36 @@ export default function ApplyRoleModal({
                     </div>
 
                     <DialogFooter
-                        className="border-t border-zinc-200 bg-zinc-50/70 px-3 py-2.5 dark:border-zinc-800 dark:bg-zinc-950/40 sm:px-5 sm:py-3"
+                        className="border-t border-zinc-200 bg-zinc-50/50 px-3 py-2.5 dark:border-zinc-800 dark:bg-zinc-950/20 sm:px-5 sm:py-3.5"
                         style={keyboardInset > 0 ? { paddingBottom: `calc(${keyboardInset}px + env(safe-area-inset-bottom))` } : undefined}
                     >
-                        <div className="flex w-full items-center justify-end gap-2">
-                            <Button type="button" variant="outline" onClick={resetAndClose} disabled={isSubmitting}>
+                        <div className="flex w-full items-center justify-end gap-2.5">
+                            <button
+                                type="button"
+                                onClick={resetAndClose}
+                                disabled={isSubmitting}
+                                className="px-4 py-2 text-xs font-semibold rounded-lg border border-zinc-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-all duration-150 disabled:opacity-50"
+                            >
                                 Cancel
-                            </Button>
-                            <Button
+                            </button>
+                            <button
                                 type="button"
                                 onClick={handleSubmit}
                                 disabled={isSubmitting || !selectedRole || !message.trim()}
+                                className="px-4 py-2 text-xs font-semibold rounded-lg bg-primary text-primary-foreground hover:brightness-110 transition-all duration-150 disabled:opacity-50 flex items-center gap-1.5 shadow-sm"
                             >
                                 {isSubmitting ? (
                                     <>
-                                        <Loader2 className="h-4 w-4 animate-spin" />
+                                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
                                         Submitting...
                                     </>
                                 ) : (
                                     <>
-                                        <Users className="h-4 w-4" />
+                                        <Users className="h-3.5 w-3.5" />
                                         Submit Application
                                     </>
                                 )}
-                            </Button>
+                            </button>
                         </div>
                     </DialogFooter>
                 </div>
