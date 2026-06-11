@@ -1,16 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import {
-  getTaskLinksForNode,
-  linkNodeToTask,
-  unlinkNodeFromTask,
-  updateTaskNodeLink,
-  type LinkedTask,
-} from "@/app/actions/files/links";
-
-export type { LinkedTask };
+export interface LinkedTask {
+  taskId: string;
+  title: string;
+  status: string;
+  priority: string;
+  assigneeId: string | null;
+  assigneeName: string | null;
+  annotation: string | null;
+  linkedAt: string;
+}
 
 export interface UseTaskLinksReturn {
   tasks: LinkedTask[];
@@ -32,6 +33,7 @@ export function useTaskLinks(projectId: string, nodeId: string): UseTaskLinksRet
   const fetchLinks = useCallback(async () => {
     if (!projectId || !nodeId) return;
     try {
+      const { getTaskLinksForNode } = await import("@/app/actions/files/links");
       const result = await getTaskLinksForNode(projectId, nodeId);
       if (mountedRef.current) {
         setTasks(result);
@@ -67,6 +69,7 @@ export function useTaskLinks(projectId: string, nodeId: string): UseTaskLinksRet
   const link = useCallback(
     async (taskId: string): Promise<{ success: boolean; error?: string }> => {
       try {
+        const { linkNodeToTask } = await import("@/app/actions/files/links");
         await linkNodeToTask(taskId, nodeId);
         await fetchLinks();
         return { success: true };
@@ -81,6 +84,7 @@ export function useTaskLinks(projectId: string, nodeId: string): UseTaskLinksRet
   const unlink = useCallback(
     async (taskId: string): Promise<{ success: boolean; error?: string }> => {
       try {
+        const { unlinkNodeFromTask } = await import("@/app/actions/files/links");
         await unlinkNodeFromTask(taskId, nodeId);
         await fetchLinks();
         return { success: true };
@@ -95,6 +99,7 @@ export function useTaskLinks(projectId: string, nodeId: string): UseTaskLinksRet
   const updateAnnotation = useCallback(
     async (taskId: string, annotation: string): Promise<{ success: boolean; error?: string }> => {
       try {
+        const { updateTaskNodeLink } = await import("@/app/actions/files/links");
         await updateTaskNodeLink(taskId, nodeId, { annotation });
         await fetchLinks();
         return { success: true };
@@ -106,7 +111,7 @@ export function useTaskLinks(projectId: string, nodeId: string): UseTaskLinksRet
     [nodeId, fetchLinks],
   );
 
-  return {
+  return useMemo(() => ({
     tasks,
     count: tasks.length,
     isLoading,
@@ -115,5 +120,5 @@ export function useTaskLinks(projectId: string, nodeId: string): UseTaskLinksRet
     unlink,
     updateAnnotation,
     refresh,
-  };
+  }), [tasks, isLoading, error, link, unlink, updateAnnotation, refresh]);
 }
