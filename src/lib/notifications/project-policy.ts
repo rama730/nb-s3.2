@@ -11,6 +11,8 @@ export type ProjectNotificationGroupId =
     | "project_lifecycle"
     | "tasks_workflow"
     | "files_workspace"
+    | "readme"
+    | "updates"
     | "security_audit"
     | "future";
 export type ProjectNotificationRecipientGroup =
@@ -120,8 +122,10 @@ export const PROJECT_NOTIFICATION_GROUPS: Array<{
     { id: "project_lifecycle", title: "Project Lifecycle", description: "Sprint and lifecycle changes that affect project momentum.", visible: true },
     { id: "tasks_workflow", title: "Tasks & Workflow", description: "Assignments, mentions, status attention, and workflow responsibility.", visible: true },
     { id: "files_workspace", title: "Files & Workspace", description: "Uploads, versions, reviews, organization, and sync status.", visible: true },
+    { id: "readme", title: "README", description: "Documentation publishing and major documentation changes.", visible: true },
+    { id: "updates", title: "Updates", description: "Project progress posts, follower notifications, and update discussions.", visible: true },
     { id: "security_audit", title: "Security & Audit", description: "Protected actions, exports, archive/delete, and access-sensitive events.", visible: true },
-    { id: "future", title: "Future Surfaces", description: "README, Updates, and follower digest triggers hidden until enforceable.", visible: false },
+    { id: "future", title: "Future Surfaces", description: "Updates and follower digest triggers hidden until enforceable.", visible: false },
 ];
 
 const E = (entry: ProjectNotificationRegistryEntry) => entry;
@@ -744,9 +748,9 @@ export const PROJECT_NOTIFICATION_EVENT_REGISTRY = {
     }),
     "readme.published": E({
         key: "readme.published",
-        group: "future",
+        group: "readme",
         label: "README published",
-        description: "Future README publication notification.",
+        description: "Notify followers and members when a project README is published.",
         category: "projects",
         notificationKind: "project_update_activity",
         defaultEnabled: false,
@@ -755,13 +759,13 @@ export const PROJECT_NOTIFICATION_EVENT_REGISTRY = {
         allowMemberOverride: true,
         mandatory: false,
         aggregate: "none",
-        visible: false,
+        visible: true,
     }),
     "readme.major_edited": E({
         key: "readme.major_edited",
-        group: "future",
+        group: "readme",
         label: "README major edit",
-        description: "Future README major-change notification.",
+        description: "Notify followers and members when the README receives a major update.",
         category: "projects",
         notificationKind: "project_update_activity",
         defaultEnabled: false,
@@ -770,43 +774,43 @@ export const PROJECT_NOTIFICATION_EVENT_REGISTRY = {
         allowMemberOverride: true,
         mandatory: false,
         aggregate: "digest_only",
-        visible: false,
+        visible: true,
     }),
     "updates.published": E({
         key: "updates.published",
-        group: "future",
+        group: "updates",
         label: "Project update published",
-        description: "Future project update notification.",
+        description: "Notify followers and members when a project member publishes an update.",
         category: "projects",
         notificationKind: "project_update_activity",
-        defaultEnabled: false,
+        defaultEnabled: true,
         defaultImportance: "more",
         defaultRecipients: ["followers", "members"],
         allowMemberOverride: true,
         mandatory: false,
         aggregate: "none",
-        visible: false,
+        visible: true,
     }),
     "updates.comment": E({
         key: "updates.comment",
-        group: "future",
+        group: "updates",
         label: "Update comment",
-        description: "Future project update comment notification.",
+        description: "Notify an update author when someone comments on their project update.",
         category: "mentions",
         notificationKind: "project_update_activity",
-        defaultEnabled: false,
+        defaultEnabled: true,
         defaultImportance: "more",
         defaultRecipients: ["affected_member"],
         allowMemberOverride: true,
         mandatory: false,
         aggregate: "none",
-        visible: false,
+        visible: true,
     }),
     "updates.follower_digest": E({
         key: "updates.follower_digest",
-        group: "future",
+        group: "updates",
         label: "Follower digest",
-        description: "Future follower digest notification.",
+        description: "Digest-ready trigger for grouped follower-facing project updates.",
         category: "projects",
         notificationKind: "project_update_activity",
         defaultEnabled: false,
@@ -815,7 +819,7 @@ export const PROJECT_NOTIFICATION_EVENT_REGISTRY = {
         allowMemberOverride: true,
         mandatory: false,
         aggregate: "digest_only",
-        visible: false,
+        visible: true,
     }),
 } as const satisfies Record<ProjectNotificationEventKey, ProjectNotificationRegistryEntry>;
 
