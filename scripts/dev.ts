@@ -67,6 +67,12 @@ startProcess({
 })
 
 startProcess({
+    name: 'yjs',
+    command: 'npm',
+    args: ['run', 'yjs:dev'],
+})
+
+startProcess({
     name: 'next',
     command: 'next',
     args: ['dev', '--webpack'],
