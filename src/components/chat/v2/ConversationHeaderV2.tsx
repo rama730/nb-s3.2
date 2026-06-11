@@ -3,12 +3,15 @@
 import { useMemo } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
-import { MoreVertical, ArrowLeft, Archive, Bell, BellOff, Ban, Send } from 'lucide-react';
+import { MoreVertical, ArrowLeft, Archive, Bell, BellOff, Ban, Maximize2, ChevronDown } from 'lucide-react';
+import { useMessagesV2UiStore } from '@/stores/messagesV2UiStore';
 import type { TypingUser } from '@/hooks/useTypingChannel';
 import type { InboxConversationV2 } from '@/hooks/useMessagesV2';
 import { useOnlineUsers } from '@/hooks/useOnlineUsers';
 import { OnlineIndicator } from '@/components/ui/OnlineIndicator';
+import { UserAvatar } from '@/components/ui/UserAvatar';
 import { getTypingStatusText } from '@/lib/chat/typing-display';
+import type { ApplicationBannerStatus } from '@/lib/chat/application-events';
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -19,6 +22,7 @@ import {
 
 interface ConversationHeaderV2Props {
     conversation: InboxConversationV2;
+    latestApplicationStatus?: ApplicationBannerStatus | null;
     surface?: 'page' | 'popup';
     compact?: boolean;
     actionLoading?: boolean;
@@ -32,6 +36,7 @@ interface ConversationHeaderV2Props {
 
 export function ConversationHeaderV2({
     conversation,
+    latestApplicationStatus,
     surface = 'page',
     compact = false,
     actionLoading = false,
@@ -44,7 +49,6 @@ export function ConversationHeaderV2({
 }: ConversationHeaderV2Props) {
     const otherParticipant = conversation.participants[0];
     const isDirectMessage = conversation.type === 'dm';
-    const canInvite = isDirectMessage && conversation.capability.canInvite && otherParticipant?.username;
     const isPopup = surface === 'popup';
 
     // Wave 2 — Presence & online dot. Only observe the DM counterpart; group /
@@ -70,10 +74,10 @@ export function ConversationHeaderV2({
     })();
 
     return (
-        <div className={`flex shrink-0 items-center justify-between border-b border-border/60 bg-card ${
+        <div className={`pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center justify-between ${
             isPopup ? 'h-14 px-3' : 'h-16 px-5'
         }`}>
-            <div className="flex min-w-0 items-center gap-3">
+            <div className="pointer-events-auto flex min-w-0 items-center gap-3">
                 {compact && onBack && (
                     <button
                         type="button"
@@ -90,68 +94,48 @@ export function ConversationHeaderV2({
                     onViewProfile ? (
                         <button type="button" onClick={onViewProfile} className="flex min-w-0 items-center gap-3 hover:opacity-80 transition-opacity">
                             <div className="relative">
-                                <div className={`flex shrink-0 items-center justify-center overflow-hidden rounded-full app-accent-gradient ${
-                                    isPopup ? 'h-9 w-9' : 'h-10 w-10'
-                                }`}>
-                                    {otherParticipant.avatarUrl ? (
-                                        <Image
-                                            src={otherParticipant.avatarUrl}
-                                            alt={otherParticipant.fullName || ''}
-                                            width={isPopup ? 36 : 40}
-                                            height={isPopup ? 36 : 40}
-                                            unoptimized
-                                            className="h-full w-full object-cover"
-                                        />
-                                    ) : (
-                                        <span className="text-sm font-semibold text-white">
-                                            {(otherParticipant.fullName || otherParticipant.username || '?')[0].toUpperCase()}
-                                        </span>
-                                    )}
-                                </div>
-                                <OnlineIndicator online={peerOnline} size="md" />
+                                <UserAvatar
+                                    identity={otherParticipant}
+                                    className={isPopup ? 'h-9 w-9' : 'h-10 w-10'}
+                                    fallbackClassName="text-sm font-semibold text-white"
+                                    sizes={isPopup ? '36px' : '40px'}
+                                />
+                                <OnlineIndicator online={peerOnline} size="sm" />
                             </div>
                             <div className="min-w-0 text-left">
-                                <div className={`truncate font-semibold text-zinc-900 dark:text-zinc-100 ${
+                                <div className={`flex items-center gap-2 truncate font-semibold text-zinc-900 dark:text-zinc-100 ${
                                     isPopup ? 'text-[13px]' : 'text-sm'
                                 }`}>
-                                    {otherParticipant.fullName || otherParticipant.username || 'Unknown'}
-                                </div>
-                                <div className="truncate text-xs text-zinc-500 dark:text-zinc-400">
-                                    {statusLine}
+                                    <span className="truncate">{otherParticipant.fullName || otherParticipant.username || 'Unknown'}</span>
+                                    {latestApplicationStatus === 'pending' && (
+                                        <span className="shrink-0 rounded-full bg-indigo-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-400">
+                                            Pending Request
+                                        </span>
+                                    )}
                                 </div>
                             </div>
                         </button>
                     ) : (
                         <>
                             <div className="relative">
-                                <div className={`flex shrink-0 items-center justify-center overflow-hidden rounded-full app-accent-gradient ${
-                                    isPopup ? 'h-9 w-9' : 'h-10 w-10'
-                                }`}>
-                                    {otherParticipant.avatarUrl ? (
-                                        <Image
-                                            src={otherParticipant.avatarUrl}
-                                            alt={otherParticipant.fullName || ''}
-                                            width={isPopup ? 36 : 40}
-                                            height={isPopup ? 36 : 40}
-                                            unoptimized
-                                            className="h-full w-full object-cover"
-                                        />
-                                    ) : (
-                                        <span className="text-sm font-semibold text-white">
-                                            {(otherParticipant.fullName || otherParticipant.username || '?')[0].toUpperCase()}
-                                        </span>
-                                    )}
-                                </div>
-                                <OnlineIndicator online={peerOnline} size="md" />
+                                <UserAvatar
+                                    identity={otherParticipant}
+                                    className={isPopup ? 'h-9 w-9' : 'h-10 w-10'}
+                                    fallbackClassName="text-sm font-semibold text-white"
+                                    sizes={isPopup ? '36px' : '40px'}
+                                />
+                                <OnlineIndicator online={peerOnline} size="sm" />
                             </div>
                             <div className="min-w-0">
-                                <div className={`truncate font-semibold text-zinc-900 dark:text-zinc-100 ${
+                                <div className={`flex items-center gap-2 truncate font-semibold text-zinc-900 dark:text-zinc-100 ${
                                     isPopup ? 'text-[13px]' : 'text-sm'
                                 }`}>
-                                    {otherParticipant.fullName || otherParticipant.username || 'Unknown'}
-                                </div>
-                                <div className="truncate text-xs text-zinc-500 dark:text-zinc-400">
-                                    {statusLine}
+                                    <span className="truncate">{otherParticipant.fullName || otherParticipant.username || 'Unknown'}</span>
+                                    {latestApplicationStatus === 'pending' && (
+                                        <span className="shrink-0 rounded-full bg-indigo-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-400">
+                                            Pending Request
+                                        </span>
+                                    )}
                                 </div>
                             </div>
                         </>
@@ -161,24 +145,29 @@ export function ConversationHeaderV2({
                         <div className="truncate text-sm font-semibold text-zinc-900 dark:text-zinc-100">
                             {conversation.type === 'project_group' ? 'Project group' : 'Conversation'}
                         </div>
-                        <div className="truncate text-xs text-zinc-500 dark:text-zinc-400">
-                            {conversation.type === 'project_group' ? 'Shared team thread' : 'Shared conversation'}
-                        </div>
                     </div>
                 )}
             </div>
 
-            <div className="flex items-center gap-2">
-                {canInvite && (
-                    <Link
-                        href={`/u/${otherParticipant!.username}#collaboration`}
-                        className={`inline-flex items-center gap-1 rounded-full border border-zinc-200 bg-white text-xs font-medium text-zinc-600 transition-colors hover:bg-zinc-50 hover:text-zinc-900 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-300 dark:hover:bg-zinc-900 dark:hover:text-zinc-100 ${
-                            isPopup ? 'px-2.5 py-1.5' : 'px-3 py-2'
-                        }`}
-                    >
-                        <Send className="h-3.5 w-3.5" />
-                        Invite
-                    </Link>
+            <div className="pointer-events-auto flex items-center gap-2">
+                {isPopup && (
+                    <>
+                        <Link
+                            href={`/messages?conversationId=${conversation.id}`}
+                            className="rounded-full text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:hover:bg-zinc-800 dark:hover:text-zinc-100 p-1.5"
+                            aria-label="Open in fullscreen"
+                        >
+                            <Maximize2 className="h-4 w-4" />
+                        </Link>
+                        <button
+                            type="button"
+                            onClick={() => useMessagesV2UiStore.getState().setPopupMinimized(true)}
+                            className="rounded-full text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:hover:bg-zinc-800 dark:hover:text-zinc-100 p-1.5"
+                            aria-label="Collapse messages"
+                        >
+                            <ChevronDown className="h-4 w-4" />
+                        </button>
+                    </>
                 )}
                 <DropdownMenu modal={false}>
                     <DropdownMenuTrigger asChild>
