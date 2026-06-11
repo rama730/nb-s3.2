@@ -129,6 +129,7 @@ export function MentionAutocomplete({
             role="listbox"
             aria-label="Mention teammate"
             data-testid="mention-autocomplete"
+            data-composer-portal="true"
             className="fixed z-[1000] overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-lg dark:border-zinc-800 dark:bg-zinc-900"
             style={{ top, left: clampedLeft, width: MENU_WIDTH }}
             // Don't let a pointer drag in the menu steal focus from the composer.
