@@ -102,8 +102,9 @@ export function groupLinkedWorkByMessage(
     links: MessageLinkedWorkSummary[],
 ): Record<string, MessageLinkedWorkSummary[]> {
     return links.reduce<Record<string, MessageLinkedWorkSummary[]>>((acc, link) => {
-        if (!acc[link.sourceMessageId]) acc[link.sourceMessageId] = [];
-        acc[link.sourceMessageId].push(link);
+        const arr = acc[link.sourceMessageId] ?? [];
+        arr.push(link);
+        acc[link.sourceMessageId] = arr;
         return acc;
     }, {});
 }
