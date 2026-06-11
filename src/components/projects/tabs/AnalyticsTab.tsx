@@ -1,221 +1,252 @@
-import { useMemo, useState } from "react";
-import { BarChart3, TrendingUp, CheckCircle2, Clock, Users, Activity } from "lucide-react";
-import { useProjectAnalytics } from "@/hooks/hub/useProjectData";
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import dynamic from "next/dynamic";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import type { ProjectAnalyticsTabId } from "@/lib/projects/analytics";
+import { useProjectAnalyticsMembers, useProjectAnalyticsOverview } from "@/hooks/hub/useProjectAnalyticsData";
+import {
+    ANALYTICS_DATE_RANGE_OPTIONS,
+    ANALYTICS_TAB_COPY,
+    AnalyticsEmptyState,
+    AnalyticsLoadingState,
+    AnalyticsShellCard,
+    defaultAnalyticsContext,
+    isAnalyticsContextDefault,
+} from "@/components/projects/analytics/AnalyticsShared";
+
+const AnalyticsFiles = dynamic(
+    () => import("@/components/projects/analytics/AnalyticsFiles").then((mod) => mod.AnalyticsFiles),
+    { loading: () => <AnalyticsLoadingState />, ssr: false },
+);
+const AnalyticsMembers = dynamic(
+    () => import("@/components/projects/analytics/AnalyticsMembers").then((mod) => mod.AnalyticsMembers),
+    { loading: () => <AnalyticsLoadingState />, ssr: false },
+);
+const AnalyticsOverview = dynamic(
+    () => import("@/components/projects/analytics/AnalyticsOverview").then((mod) => mod.AnalyticsOverview),
+    { loading: () => <AnalyticsLoadingState />, ssr: false },
+);
+const AnalyticsRisks = dynamic(
+    () => import("@/components/projects/analytics/AnalyticsRisks").then((mod) => mod.AnalyticsRisks),
+    { loading: () => <AnalyticsLoadingState />, ssr: false },
+);
+const AnalyticsSprints = dynamic(
+    () => import("@/components/projects/analytics/AnalyticsSprints").then((mod) => mod.AnalyticsSprints),
+    { loading: () => <AnalyticsLoadingState />, ssr: false },
+);
+const AnalyticsTimeline = dynamic(
+    () => import("@/components/projects/analytics/AnalyticsTimeline").then((mod) => mod.AnalyticsTimeline),
+    { loading: () => <AnalyticsLoadingState />, ssr: false },
+);
+const AnalyticsWorkflow = dynamic(
+    () => import("@/components/projects/analytics/AnalyticsWorkflow").then((mod) => mod.AnalyticsWorkflow),
+    { loading: () => <AnalyticsLoadingState />, ssr: false },
+);
 
 interface AnalyticsTabProps {
     projectId: string;
     project: any;
 }
 
+const ANALYTICS_TABS: ProjectAnalyticsTabId[] = [
+    "overview",
+    "members",
+    "workflow",
+    "sprints",
+    "files",
+    "risks",
+    "timeline",
+];
+
+const SOURCE_FILTERS = [
+    { id: "all", label: "All surfaces" },
+    { id: "tasks", label: "Tasks" },
+    { id: "sprints", label: "Sprints" },
+    { id: "files", label: "Files" },
+    { id: "members", label: "Members" },
+    { id: "applications", label: "Applications" },
+    { id: "workflow", label: "Workflow" },
+    { id: "settings", label: "Settings" },
+] as const;
+
+const isAnalyticsTabId = (value: string | null): value is ProjectAnalyticsTabId =>
+    Boolean(value && ANALYTICS_TABS.includes(value as ProjectAnalyticsTabId));
+
+const isAnalyticsSource = (value: string | null): value is typeof defaultAnalyticsContext.source =>
+    Boolean(value && SOURCE_FILTERS.some((source) => source.id === value));
+
+const isAnalyticsDateRange = (value: string | null): value is typeof defaultAnalyticsContext.dateRange =>
+    Boolean(value && ANALYTICS_DATE_RANGE_OPTIONS.some((range) => range.id === value));
+
 export default function AnalyticsTab({ projectId, project }: AnalyticsTabProps) {
-    const { data: analytics, isLoading } = useProjectAnalytics(projectId);
-    const [windowDays, setWindowDays] = useState<7 | 30 | 90>(30);
-
-    // Final stats to display
-    const stats = useMemo(() => {
-        if (!analytics) return {
-            totalTasks: 0,
-            completedTasks: 0,
-            inProgressTasks: 0,
-            overdueTasks: 0,
-            completionRate: 0,
-            activityByWindow: {
-                7: { tasksCreated: 0, tasksCompleted: 0 },
-                30: { tasksCreated: 0, tasksCompleted: 0 },
-                90: { tasksCreated: 0, tasksCompleted: 0 },
-            },
-            membersCount: (project?.collaborators?.length || 0),
-            viewCount: project?.viewCount || 0,
-        };
-
+    const router = useRouter();
+    const pathname = usePathname();
+    const searchParams = useSearchParams();
+    const lastUrlRef = useRef<string | null>(null);
+    const initialAnalyticsTab = searchParams.get("analyticsTab");
+    const initialSelectedMember = searchParams.get("memberId");
+    const initialContextMember = searchParams.get("analyticsMember");
+    const initialSource = searchParams.get("analyticsSource");
+    const initialDateRange = searchParams.get("analyticsWindow");
+    const [activeTab, setActiveTab] = useState<ProjectAnalyticsTabId>(() => {
+        return isAnalyticsTabId(initialAnalyticsTab) ? initialAnalyticsTab : "overview";
+    });
+    const [selectedMemberId, setSelectedMemberId] = useState<string | null>(() => initialSelectedMember);
+    const [context, setContext] = useState(() => {
         return {
-            ...analytics,
-            membersCount: (project?.collaborators?.length || 0),
-            viewCount: project?.viewCount || 0,
+            memberId: initialContextMember,
+            source: isAnalyticsSource(initialSource) ? initialSource : defaultAnalyticsContext.source,
+            dateRange: isAnalyticsDateRange(initialDateRange) ? initialDateRange : defaultAnalyticsContext.dateRange,
         };
-    }, [analytics, project]);
+    });
+    const [memberFilterOpen, setMemberFilterOpen] = useState(() => Boolean(initialContextMember));
+    const overviewQuery = useProjectAnalyticsOverview(projectId, context);
+    const membersQuery = useProjectAnalyticsMembers(projectId, null, memberFilterOpen);
+    const selectedContextMember = membersQuery.data?.find((member) => member.person.id === context.memberId) ?? null;
 
-    const statCards = useMemo(() => [
-        {
-            label: "Total Tasks",
-            value: stats.totalTasks,
-            icon: Activity,
-            color: "text-indigo-500",
-            bgColor: "bg-indigo-50 dark:bg-indigo-900/20",
-        },
-        {
-            label: "Completed",
-            value: stats.completedTasks,
-            icon: CheckCircle2,
-            color: "text-emerald-500",
-            bgColor: "bg-emerald-50 dark:bg-emerald-900/20",
-        },
-        {
-            label: "In Progress",
-            value: stats.inProgressTasks,
-            icon: TrendingUp,
-            color: "text-blue-500",
-            bgColor: "bg-blue-50 dark:bg-blue-900/20",
-        },
-        {
-            label: "Overdue",
-            value: stats.overdueTasks,
-            icon: Clock,
-            color: "text-rose-500",
-            bgColor: "bg-rose-50 dark:bg-rose-900/20",
-        },
-    ], [stats.totalTasks, stats.completedTasks, stats.inProgressTasks, stats.overdueTasks]);
+    useEffect(() => {
+        const params = new URLSearchParams(searchParams.toString());
+        params.set("tab", "analytics");
+        params.set("analyticsTab", activeTab);
 
-    const trendSummary = useMemo(() => {
-        const safeWindow = Math.max(1, windowDays);
-        const windowActivity = stats.activityByWindow?.[windowDays];
-        const tasksCreatedInWindow = typeof windowActivity?.tasksCreated === "number"
-            ? windowActivity.tasksCreated
-            : null;
-        const tasksCompletedInWindow = typeof windowActivity?.tasksCompleted === "number"
-            ? windowActivity.tasksCompleted
-            : null;
-        const tasksPerDay = tasksCreatedInWindow !== null
-            ? tasksCreatedInWindow / safeWindow
-            : null;
-        const completionPerDay = tasksCompletedInWindow !== null
-            ? tasksCompletedInWindow / safeWindow
-            : null;
-        return {
-            tasksPerDay: tasksPerDay !== null && Number.isFinite(tasksPerDay) ? tasksPerDay.toFixed(1) : "N/A",
-            completionPerDay: completionPerDay !== null && Number.isFinite(completionPerDay) ? completionPerDay.toFixed(1) : "N/A",
-        };
-    }, [stats.activityByWindow, windowDays]);
+        if (activeTab === "members" && selectedMemberId) params.set("memberId", selectedMemberId);
+        else params.delete("memberId");
 
-    if (isLoading) {
-        return (
-            <div className="space-y-6 animate-pulse">
-                <div className="h-8 w-48 bg-zinc-100 dark:bg-zinc-800 rounded" />
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    {[1, 2, 3, 4].map(i => <div key={i} className="h-24 bg-zinc-100 dark:bg-zinc-800 rounded-xl" />)}
-                </div>
-                <div className="h-40 bg-zinc-100 dark:bg-zinc-800 rounded-xl" />
-            </div>
-        );
-    }
+        if (context.memberId) params.set("analyticsMember", context.memberId);
+        else params.delete("analyticsMember");
+
+        if (context.source !== defaultAnalyticsContext.source) params.set("analyticsSource", context.source);
+        else params.delete("analyticsSource");
+
+        if (context.dateRange !== defaultAnalyticsContext.dateRange) params.set("analyticsWindow", context.dateRange);
+        else params.delete("analyticsWindow");
+
+        const nextUrl = `${pathname}?${params.toString()}`;
+        if (lastUrlRef.current === nextUrl) return;
+        lastUrlRef.current = nextUrl;
+        router.replace(nextUrl, { scroll: false });
+    }, [activeTab, context.dateRange, context.memberId, context.source, pathname, router, searchParams, selectedMemberId]);
+
+    const renderTab = () => {
+        if (activeTab === "overview") {
+            if (overviewQuery.isLoading) return <AnalyticsLoadingState />;
+            if (!overviewQuery.data) {
+                return (
+                    <AnalyticsShellCard>
+                        <AnalyticsEmptyState title="Project intelligence unavailable" description="We could not load the project intelligence overview." />
+                    </AnalyticsShellCard>
+                );
+            }
+            return <AnalyticsOverview overview={overviewQuery.data} context={context} memberName={selectedContextMember?.person.name ?? null} />;
+        }
+        if (activeTab === "members") {
+            return (
+                <AnalyticsMembers
+                    projectId={projectId}
+                    context={context}
+                    selectedMemberId={selectedMemberId}
+                    onSelectMember={setSelectedMemberId}
+                    onBack={() => setSelectedMemberId(null)}
+                />
+            );
+        }
+        if (activeTab === "workflow") return <AnalyticsWorkflow projectId={projectId} context={context} memberName={selectedContextMember?.person.name ?? null} />;
+        if (activeTab === "sprints") return <AnalyticsSprints projectId={projectId} context={context} memberName={selectedContextMember?.person.name ?? null} />;
+        if (activeTab === "files") return <AnalyticsFiles projectId={projectId} context={context} memberName={selectedContextMember?.person.name ?? null} />;
+        if (activeTab === "risks") return <AnalyticsRisks projectId={projectId} context={context} memberName={selectedContextMember?.person.name ?? null} />;
+        return <AnalyticsTimeline projectId={projectId} context={context} onContextChange={setContext} />;
+    };
 
     return (
-        <div className="space-y-6">
-            {/* Header */}
-            <div>
-                <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">Analytics</h2>
-                <p className="text-sm text-zinc-500 dark:text-zinc-400">
-                    Project performance insights and metrics
-                </p>
-                <div className="mt-3 inline-flex items-center rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-1">
-                    {[7, 30, 90].map((days) => (
+        <div className="space-y-3">
+            <AnalyticsShellCard className="overflow-hidden">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="max-w-4xl">
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.28em] text-blue-500">Analytics</p>
+                        <h2 className="mt-1.5 text-xl font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">Project Intelligence</h2>
+                        <p className="mt-2 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
+                            A quiet read on next moves, support signals, workflow, sprints, files, risks, and recent movement for {project?.title || "this project"}.
+                        </p>
+                    </div>
+                </div>
+                <div className="mt-3 flex gap-1.5 overflow-x-auto pb-1">
+                    {ANALYTICS_TABS.map((tab) => (
                         <button
-                            key={days}
-                            onClick={() => setWindowDays(days as 7 | 30 | 90)}
-                            className={`px-2.5 py-1 text-xs rounded-md transition-colors ${
-                                windowDays === days
-                                    ? "bg-indigo-600 text-white"
-                                    : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                            key={tab}
+                            type="button"
+                            onClick={() => {
+                                setActiveTab(tab);
+                                if (tab !== "members") setSelectedMemberId(null);
+                            }}
+                            className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-semibold transition ${
+                                activeTab === tab
+                                    ? "bg-zinc-950 text-white dark:bg-white dark:text-zinc-950"
+                                    : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
                             }`}
+                            aria-pressed={activeTab === tab}
                         >
-                            {days}d
+                            {ANALYTICS_TAB_COPY[tab]}
                         </button>
                     ))}
                 </div>
-            </div>
-
-            {/* Stat Cards */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                {statCards.map((stat) => (
-                    <div
-                        key={stat.label}
-                        className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4"
-                    >
-                        <div className="flex items-center gap-3">
-                            <div className={`p-2 rounded-lg ${stat.bgColor}`}>
-                                <stat.icon className={`w-5 h-5 ${stat.color}`} />
-                            </div>
-                            <div>
-                                <p className="text-2xl font-bold text-zinc-900 dark:text-zinc-100">{stat.value}</p>
-                                <p className="text-xs text-zinc-500 dark:text-zinc-400">{stat.label}</p>
-                            </div>
-                        </div>
+                <div className="mt-3 grid gap-2 rounded-2xl border border-zinc-200 bg-zinc-50 p-2.5 dark:border-zinc-800 dark:bg-zinc-900/50 lg:grid-cols-[1.2fr_1fr_1fr_auto]">
+                    <label className="space-y-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300">
+                        <span>Member focus</span>
+                        <select
+                            value={context.memberId ?? "all"}
+                            onFocus={() => setMemberFilterOpen(true)}
+                            onPointerDown={() => setMemberFilterOpen(true)}
+                            onChange={(event) => setContext((current) => ({
+                                ...current,
+                                memberId: event.target.value === "all" ? null : event.target.value,
+                            }))}
+                            className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs dark:border-zinc-800 dark:bg-zinc-950"
+                        >
+                            <option value="all">All members</option>
+                            {(membersQuery.data ?? []).map((member) => (
+                                <option key={member.person.id} value={member.person.id}>{member.person.name}</option>
+                            ))}
+                        </select>
+                    </label>
+                    <label className="space-y-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300">
+                        <span>Surface</span>
+                        <select
+                            value={context.source ?? "all"}
+                            onChange={(event) => setContext((current) => ({ ...current, source: event.target.value as typeof context.source }))}
+                            className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs dark:border-zinc-800 dark:bg-zinc-950"
+                        >
+                            {SOURCE_FILTERS.map((source) => (
+                                <option key={source.id} value={source.id}>{source.label}</option>
+                            ))}
+                        </select>
+                    </label>
+                    <label className="space-y-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300">
+                        <span>Window</span>
+                        <select
+                            value={context.dateRange}
+                            onChange={(event) => setContext((current) => ({ ...current, dateRange: event.target.value as typeof context.dateRange }))}
+                            className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs dark:border-zinc-800 dark:bg-zinc-950"
+                        >
+                            {ANALYTICS_DATE_RANGE_OPTIONS.map((range) => (
+                                <option key={range.id} value={range.id}>{range.label}</option>
+                            ))}
+                        </select>
+                    </label>
+                    <div className="flex items-end">
+                        <button
+                            type="button"
+                            onClick={() => setContext(defaultAnalyticsContext)}
+                            disabled={isAnalyticsContextDefault(context)}
+                            className="w-full rounded-xl border border-zinc-200 px-3 py-2 text-xs font-semibold text-zinc-600 transition hover:border-blue-300 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-800 dark:text-zinc-300"
+                        >
+                            Reset
+                        </button>
                     </div>
-                ))}
-            </div>
+                </div>
+            </AnalyticsShellCard>
 
-            {/* Completion Progress */}
-            <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6">
-                <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-                        Overall Progress
-                    </h3>
-                    <span className="text-2xl font-bold text-indigo-600 dark:text-indigo-400">
-                        {stats.completionRate}%
-                    </span>
-                </div>
-                <div className="h-3 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden">
-                    <div
-                        className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 rounded-full transition-all duration-500"
-                        style={{ width: `${stats.completionRate}%` }}
-                    />
-                </div>
-                <div className="flex justify-between mt-2 text-xs text-zinc-500 dark:text-zinc-400">
-                    <span>{stats.completedTasks} completed</span>
-                    <span>{stats.totalTasks - stats.completedTasks} remaining</span>
-                </div>
-                <div className="mt-3 border-t border-zinc-100 dark:border-zinc-800 pt-3 grid grid-cols-2 gap-3 text-xs text-zinc-500 dark:text-zinc-400">
-                    <div>
-                        <p className="uppercase tracking-wide">Avg tasks/day ({windowDays}d)</p>
-                        <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">{trendSummary.tasksPerDay}</p>
-                    </div>
-                    <div>
-                        <p className="uppercase tracking-wide">Avg completed/day</p>
-                        <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">{trendSummary.completionPerDay}</p>
-                    </div>
-                </div>
-            </div>
-
-            {/* Project Info */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6">
-                    <div className="flex items-center gap-3 mb-4">
-                        <Users className="w-5 h-5 text-indigo-500" />
-                        <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-                            Team Size
-                        </h3>
-                    </div>
-                    <p className="text-3xl font-bold text-zinc-900 dark:text-zinc-100">
-                        {stats.membersCount}
-                    </p>
-                    <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
-                        Active members
-                    </p>
-                </div>
-
-                <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6">
-                    <div className="flex items-center gap-3 mb-4">
-                        <BarChart3 className="w-5 h-5 text-indigo-500" />
-                        <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-                            Total Views
-                        </h3>
-                    </div>
-                    <p className="text-3xl font-bold text-zinc-900 dark:text-zinc-100">
-                        {stats.viewCount}
-                    </p>
-                    <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
-                        Project page views
-                    </p>
-                </div>
-            </div>
-
-            {/* Placeholder for charts */}
-            <div className="rounded-xl border border-dashed border-zinc-300 dark:border-zinc-700 bg-zinc-50/50 dark:bg-zinc-800/20 p-8 text-center">
-                <BarChart3 className="w-12 h-12 text-zinc-300 dark:text-zinc-600 mx-auto mb-3" />
-                <p className="text-sm text-zinc-500 dark:text-zinc-400">
-                    Detailed charts and trends coming soon
-                </p>
-            </div>
+            {renderTab()}
         </div>
     );
 }
