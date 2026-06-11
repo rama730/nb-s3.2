@@ -61,7 +61,7 @@ export default function PostCard({ post, author }: PostCardProps) {
             {mediaUrls.length > 0 && (
                 <div className="rounded-lg overflow-hidden mb-4">
                     <Image
-                        src={mediaUrls[0]}
+                        src={mediaUrls[0]!}
                         alt="Post media"
                         width={600}
                         height={400}
