@@ -10,7 +10,10 @@ export async function runWithConcurrency<T>(
     Array.from({ length: workerCount }).map(async () => {
       while (cursor < items.length) {
         const index = cursor++;
-        await run(items[index]);
+        const item = items[index];
+        if (item !== undefined) {
+          await run(item);
+        }
       }
     })
   );
