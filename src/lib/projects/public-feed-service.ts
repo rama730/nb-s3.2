@@ -209,14 +209,27 @@ export async function queryAndCachePublicProjectsFeed(limit: number, cursor: Pub
         nextCursor,
     }
 
+    const cacheKey = buildPublicProjectsCacheKey(limit, cursor)
     await cacheStaleableData(
-        buildPublicProjectsCacheKey(limit, cursor),
+        cacheKey,
         payload,
         {
             freshTtlSeconds: PUBLIC_PROJECTS_FEED_FRESH_TTL_SECONDS,
             staleTtlSeconds: PUBLIC_PROJECTS_FEED_STALE_TTL_SECONDS,
         },
     )
+
+    if (redis) {
+        try {
+            await redis.sadd('projects:public:feed_keys', cacheKey)
+            await redis.expire('projects:public:feed_keys', 86400)
+        } catch (error) {
+            logger.warn('public-feed.cache_key_tracking_failed', {
+                module: 'public-feed-service',
+                error: error instanceof Error ? error.message : String(error),
+            })
+        }
+    }
 
     return payload
 }
@@ -227,18 +240,13 @@ export async function invalidatePublicProjectsFeedCache(projectId?: string | nul
 
     if (redis) {
         try {
-            let cursor = '0'
-            do {
-                const [nextCursor, keys] = await redis.scan(cursor, {
-                    match: `${PUBLIC_PROJECTS_FEED_CACHE_PREFIX}*`,
-                    count: 100,
-                })
-                cursor = String(nextCursor)
-                if (keys.length > 0) {
-                    await redis.del(...keys)
-                    redisDeleted += keys.length
-                }
-            } while (cursor !== '0')
+            const setKey = 'projects:public:feed_keys'
+            const keys = await redis.smembers(setKey)
+            if (keys.length > 0) {
+                await redis.del(...keys)
+                redisDeleted += keys.length
+            }
+            await redis.del(setKey)
         } catch (error) {
             logger.warn('public-feed.cache_invalidation_failed', {
                 module: 'public-feed-service',
