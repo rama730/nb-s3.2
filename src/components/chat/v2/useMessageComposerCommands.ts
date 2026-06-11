@@ -340,7 +340,7 @@ export function useMessageComposerCommands({
         const textBeforeCursor = nextValue.slice(0, cursorPos);
         const mentionMatch = textBeforeCursor.match(/@(\w*)$/);
         if (mentionMatch && participants && participants.length > 0) {
-            setMentionQuery(mentionMatch[1]);
+            setMentionQuery(mentionMatch[1]!);
         } else {
             setMentionQuery(null);
         }
