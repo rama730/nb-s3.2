@@ -73,7 +73,7 @@ export function MentionDropdown({ query, participants, onSelect, onClose }: Ment
                         {participant.avatarUrl ? (
                             <Image src={participant.avatarUrl} alt="" width={24} height={24} unoptimized className="h-full w-full object-cover" />
                         ) : (
-                            <span className="text-[10px] font-medium">{(participant.fullName || participant.username || '?')[0].toUpperCase()}</span>
+                            <span className="text-[10px] font-medium">{(participant.fullName || participant.username || '?')[0]!.toUpperCase()}</span>
                         )}
                     </div>
                     <div className="min-w-0">
