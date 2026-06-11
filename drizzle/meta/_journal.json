@@ -582,6 +582,13 @@
       "when": 1780768200000,
       "tag": "0080_profile_write_privilege_hardening",
       "breakpoints": true
+    },
+    {
+      "idx": 83,
+      "version": "7",
+      "when": 1781102400000,
+      "tag": "0084_team_invite_collaboration_status",
+      "breakpoints": true
     }
   ]
 }
