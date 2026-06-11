@@ -22,7 +22,6 @@ import { useScrollShadow } from "@/hooks/useScrollShadow";
 import { useAuth } from "@/lib/hooks/use-auth";
 import { useNotifications } from "@/hooks/useNotifications";
 import { usePeopleNotifications } from "@/hooks/usePeopleNotifications";
-
 import { ROUTES } from "@/constants/routes";
 import { logger } from "@/lib/logger";
 import { resolveTopNavAuthUiState } from "./topnav-auth-state";
@@ -31,7 +30,7 @@ export default function TopNav() {
     const pathname = usePathname();
     const router = useRouter();
     const supabase = useMemo(() => createSupabaseBrowserClient(), []);
-    const { isAuthenticated: isSignedIn, isLoading: authLoading, profile } = useAuth();
+    const { isAuthenticated: isSignedIn, isLoading: authLoading, profile, signOut } = useAuth();
 
     const notifications = useNotifications();
     const { totalPending } = usePeopleNotifications();
@@ -81,7 +80,6 @@ export default function TopNav() {
         window.addEventListener("keydown", handleKeyDown);
         return () => window.removeEventListener("keydown", handleKeyDown);
     }, [showCommandPalette]);
-
     // Listen for custom event to open command palette
     useEffect(() => {
         const handleOpenCommandPalette = (e: CustomEvent<{ query?: string; context?: string }>) => {
@@ -98,20 +96,6 @@ export default function TopNav() {
         return () => window.removeEventListener("open-command-palette", handleOpenCommandPalette as EventListener);
     }, []);
 
-    const signOut = useCallback(async () => {
-        try {
-            await supabase.auth.signOut();
-            router.push(ROUTES.LOGIN);
-            router.refresh();
-        } catch (error) {
-            logger.error("[topnav] sign out failed", {
-                module: "navigation",
-                error: error instanceof Error ? error.message : String(error),
-                stack: error instanceof Error ? error.stack : undefined,
-            });
-        }
-    }, [supabase, router]);
-
     const navItems = useMemo(
         () => [
             { href: ROUTES.HUB, label: "Hub", icon: LayoutGrid },
@@ -122,13 +106,6 @@ export default function TopNav() {
         []
     );
 
-    useEffect(() => {
-        if (!mounted || !isSignedIn) return;
-        const prefetchTargets = [ROUTES.HUB, ROUTES.PEOPLE, ROUTES.MESSAGES, ROUTES.WORKSPACE, ROUTES.SETTINGS];
-        for (const target of prefetchTargets) {
-            router.prefetch(target);
-        }
-    }, [mounted, isSignedIn, router]);
 
     useEffect(() => {
         document.documentElement.style.setProperty("--header-height", "var(--ui-topnav-height)");
@@ -184,7 +161,7 @@ export default function TopNav() {
                 </nav>
 
                 <div className="flex items-center gap-2">
-                    {mounted && authUiState === "signed-in" && (
+                    {authUiState === "signed-in" && (
                         <Suspense fallback={<div className="hidden md:block w-9 h-9 bg-zinc-100 dark:bg-zinc-800 rounded-full animate-pulse" />}>
                             <GlobalSearch
                                 condensed={false}
@@ -197,7 +174,7 @@ export default function TopNav() {
                         </Suspense>
                     )}
 
-                    {mounted && authUiState === "signed-in" && (
+                    {authUiState === "signed-in" && (
                         <NotificationPreview
                             unreadCount={notifications.unreadCount}
                             unreadImportantCount={notifications.unreadImportantCount}
@@ -253,7 +230,7 @@ export default function TopNav() {
                         </div>
                     )}
 
-                    {mounted && authUiState === "signed-in" && (
+                    {authUiState === "signed-in" && (
                         <button
                             onClick={() => setShowMobileMenu(true)}
                             className="md:hidden p-2 rounded-lg hover:bg-zinc-100 dark:bg-zinc-900 dark:hover:bg-zinc-800 transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 dark:focus:ring-offset-zinc-900"
