@@ -19,8 +19,9 @@ import {
     rejectApplicationAction,
     editPendingApplicationAction,
 } from "@/app/actions/applications";
+import { resolveMessageWorkflowActionV2 } from "@/app/actions/messaging";
 import ApplicationReviewModal from "./ApplicationReviewModal";
-import { PROJECT_MEMBERS_QUERY_KEY } from "@/hooks/hub/useProjectData";
+import { PROJECT_MEMBERS_QUERY_KEY } from "@/hooks/hub/useProjectMembers";
 import { getApplicationDecisionReasonLabel } from "@/lib/applications/reasons";
 import { logger } from "@/lib/logger";
 import { cn } from "@/lib/utils";
@@ -47,14 +48,15 @@ interface ProjectApplicationsProps {
 
 export interface MyApplication {
     id: string;
-    projectId: string;
+    isWorkflowItem?: boolean;
+    projectId: string | null;
     projectTitle: string;
     projectSlug?: string | null;
     projectCover?: string | null;
     roleTitle: string;
     message?: string | null;
     status: string;
-    lifecycleStatus?: "pending" | "accepted" | "rejected" | "withdrawn" | "role_filled";
+    lifecycleStatus?: "pending" | "accepted" | "rejected" | "withdrawn" | "role_filled" | "proposed";
     decisionReason?: string | null;
     decisionAt?: string | null;
     conversationId?: string | null;
@@ -68,7 +70,8 @@ export interface MyApplication {
 
 export interface IncomingApplication {
     id: string;
-    projectId: string;
+    isWorkflowItem?: boolean;
+    projectId: string | null;
     projectTitle: string;
     projectSlug?: string | null;
     roleTitle: string;
@@ -217,7 +220,9 @@ function IncomingApplicationRow({
                     >
                         {applicantName}
                     </Link>
-                    <span className="text-xs text-zinc-400">applied for</span>
+                    <span className="text-xs text-zinc-400">
+                        {app.isWorkflowItem ? "invited you as" : "applied for"}
+                    </span>
                     <span className="text-xs font-medium text-primary truncate">{app.roleTitle}</span>
                 </div>
                 <div className="flex items-center gap-3 mt-1 text-xs text-zinc-400 dark:text-zinc-500">
@@ -265,10 +270,12 @@ function MyApplicationRow({
     app,
     isProcessing,
     onEdit,
+    onCancelInvite,
 }: {
     app: MyApplication;
     isProcessing: boolean;
     onEdit: () => void;
+    onCancelInvite?: (id: string) => void;
 }) {
     const lifecycle = app.lifecycleStatus || app.status;
     const config = getLifecycleStatusStyle(lifecycle);
@@ -313,7 +320,7 @@ function MyApplicationRow({
                 </p>
 
                 <div className="flex items-center gap-3 mt-1.5 text-xs text-zinc-400 dark:text-zinc-500">
-                    <span>Applied {formatDistanceToNow(new Date(app.createdAt), { addSuffix: true })}</span>
+                    <span>{app.isWorkflowItem ? "Sent" : "Applied"} {formatDistanceToNow(new Date(app.createdAt), { addSuffix: true })}</span>
                     {app.decisionAt && (
                         <>
                             <span className="w-px h-3 bg-zinc-200 dark:bg-zinc-700" />
@@ -331,7 +338,7 @@ function MyApplicationRow({
 
             {/* Actions */}
             <div className="flex items-center gap-2 flex-shrink-0">
-                {lifecycle === "pending" && (
+                {lifecycle === "pending" && !app.isWorkflowItem && (
                     <button
                         type="button"
                         onClick={onEdit}
@@ -341,6 +348,18 @@ function MyApplicationRow({
                         aria-label="Edit application"
                     >
                         <Pencil className="w-4 h-4" />
+                    </button>
+                )}
+                {lifecycle === "pending" && app.isWorkflowItem && (
+                    <button
+                        type="button"
+                        onClick={() => onCancelInvite?.(app.id)}
+                        disabled={isProcessing}
+                        className="p-2 rounded-xl text-zinc-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors disabled:opacity-50"
+                        title="Cancel invitation"
+                        aria-label="Cancel invitation"
+                    >
+                        <Ban className="w-4 h-4" />
                     </button>
                 )}
                 {app.conversationId && (
@@ -403,6 +422,7 @@ export default function ProjectApplicationsSection({ initialUser, initialApplica
         mode: "accept" | "reject";
         applicantName: string;
         roleTitle: string;
+        isWorkflowItem?: boolean;
     }>({
         isOpen: false,
         applicationId: null,
@@ -410,6 +430,7 @@ export default function ProjectApplicationsSection({ initialUser, initialApplica
         mode: "accept",
         applicantName: "",
         roleTitle: "",
+        isWorkflowItem: false,
     });
 
     // ── Data fetching ───────────────────────────────────────────────
@@ -535,6 +556,7 @@ export default function ProjectApplicationsSection({ initialUser, initialApplica
             mode: "accept",
             applicantName: app.applicant.fullName || app.applicant.username || "User",
             roleTitle: app.roleTitle,
+            isWorkflowItem: app.isWorkflowItem,
         });
     }, []);
 
@@ -546,11 +568,12 @@ export default function ProjectApplicationsSection({ initialUser, initialApplica
             mode: "reject",
             applicantName: app.applicant.fullName || app.applicant.username || "User",
             roleTitle: app.roleTitle,
+            isWorkflowItem: app.isWorkflowItem,
         });
     }, []);
 
     const handleConfirmReview = async (message: string, reason?: string) => {
-        const { applicationId, projectId, mode } = reviewModalState;
+        const { applicationId, projectId, mode, isWorkflowItem } = reviewModalState;
         if (!applicationId) return;
 
         const startedAt = performance.now();
@@ -558,10 +581,17 @@ export default function ProjectApplicationsSection({ initialUser, initialApplica
         setProcessingId(applicationId);
         try {
             let result;
-            if (mode === "accept") {
-                result = await acceptApplicationAction(applicationId, message);
+            if (isWorkflowItem) {
+                result = await resolveMessageWorkflowActionV2({
+                    workflowItemId: applicationId,
+                    action: mode === "accept" ? "accept" : "decline",
+                });
             } else {
-                result = await rejectApplicationAction(applicationId, message, reason);
+                if (mode === "accept") {
+                    result = await acceptApplicationAction(applicationId, message);
+                } else {
+                    result = await rejectApplicationAction(applicationId, message, reason);
+                }
             }
 
             if (result.success) {
@@ -571,7 +601,7 @@ export default function ProjectApplicationsSection({ initialUser, initialApplica
                     mode,
                     applicationId,
                     projectId: projectId || null,
-                    applicationTraceId: result.applicationTraceId || null,
+                    applicationTraceId: (result as any).applicationTraceId || null,
                     result: "success",
                     durationMs,
                     requestId,
@@ -581,12 +611,12 @@ export default function ProjectApplicationsSection({ initialUser, initialApplica
                     mode,
                     applicationId,
                     projectId: projectId || null,
-                    applicationTraceId: result.applicationTraceId || null,
+                    applicationTraceId: (result as any).applicationTraceId || null,
                     requestId,
                     durationMs,
                     result: "success",
                 });
-                toast.success(mode === "accept" ? "Application accepted!" : "Application rejected");
+                toast.success(mode === "accept" ? (isWorkflowItem ? "Invitation accepted!" : "Application accepted!") : (isWorkflowItem ? "Invitation declined" : "Application rejected"));
                 setIncomingApplications(prev => prev.filter(a => a.id !== applicationId));
 
                 if (projectId) {
@@ -602,8 +632,8 @@ export default function ProjectApplicationsSection({ initialUser, initialApplica
                     mode,
                     applicationId,
                     projectId: projectId || null,
-                    applicationTraceId: result.applicationTraceId || null,
-                    errorCode: result.errorCode || "UNKNOWN",
+                    applicationTraceId: (result as any).applicationTraceId || null,
+                    errorCode: (result as any).errorCode || "UNKNOWN",
                     result: "failure",
                     durationMs,
                     requestId,
@@ -613,11 +643,11 @@ export default function ProjectApplicationsSection({ initialUser, initialApplica
                     mode,
                     applicationId,
                     projectId: projectId || null,
-                    applicationTraceId: result.applicationTraceId || null,
+                    applicationTraceId: (result as any).applicationTraceId || null,
                     requestId,
                     durationMs,
                     result: "failure",
-                    errorCode: result.errorCode || "UNKNOWN",
+                    errorCode: (result as any).errorCode || "UNKNOWN",
                 });
                 toast.error(result.error || `Failed to ${mode}`);
             }
@@ -724,6 +754,26 @@ export default function ProjectApplicationsSection({ initialUser, initialApplica
         }
     }, [closeEditModal, editModalState.applicationId, editModalState.draft, editModalState.projectId, queryClient]);
 
+    const handleCancelInvite = useCallback(async (id: string) => {
+        setProcessingId(id);
+        try {
+            const result = await resolveMessageWorkflowActionV2({
+                workflowItemId: id,
+                action: "cancel",
+            });
+            if (result.success) {
+                toast.success("Invitation canceled");
+                setMyApplications((prev) => prev.filter((a) => a.id !== id));
+            } else {
+                toast.error(result.error || "Failed to cancel invitation");
+            }
+        } catch {
+            toast.error("Failed to cancel invitation");
+        } finally {
+            setProcessingId(null);
+        }
+    }, []);
+
     // ── Render ──────────────────────────────────────────────────────
 
     if (!initialUser) return null;
@@ -818,6 +868,7 @@ export default function ProjectApplicationsSection({ initialUser, initialApplica
                                     app={app}
                                     isProcessing={processingId === app.id}
                                     onEdit={() => openEditModal(app)}
+                                    onCancelInvite={handleCancelInvite}
                                 />
                             ))}
                             {hasMoreMy && (
