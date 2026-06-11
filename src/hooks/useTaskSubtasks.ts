@@ -100,5 +100,5 @@ export function useTaskSubtasks(taskId: string) {
         return cleanup;
     }, [fetchSubtasks, isConnected, resourceConnected, taskId]);
 
-    return { subtasks, isLoading };
+    return useMemo(() => ({ subtasks, isLoading }), [subtasks, isLoading]);
 }
