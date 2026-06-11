@@ -53,7 +53,7 @@ import { cn } from "@/lib/utils";
 import {
   getProjectFileContent,
   updateProjectFileStats,
-} from "@/app/actions/files";
+} from "@/app/actions/files/content";
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 
 // Dynamic import keeps `@uiw/react-codemirror` (and its `@codemirror/*`
@@ -67,12 +67,6 @@ const CodeMirrorEditor = dynamic(
     ssr: false,
     loading: () => <EditorLoading />,
   },
-);
-
-// Lazy-load the dark theme extension alongside the editor to avoid
-// shipping it in the initial chunk.
-const oneDarkPromise = import("@codemirror/theme-one-dark").then(
-  (mod) => mod.oneDark,
 );
 
 // ---------------------------------------------------------------------------
@@ -144,14 +138,18 @@ export function TextViewer({
   >(null);
 
   React.useEffect(() => {
+    if (mode !== "edit" || resolvedTheme !== "dark") {
+      setOneDarkTheme(null);
+      return;
+    }
     let cancelled = false;
-    void oneDarkPromise.then((ext) => {
+    void import("@codemirror/theme-one-dark").then((mod) => mod.oneDark).then((ext) => {
       if (!cancelled) setOneDarkTheme(ext);
     });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [mode, resolvedTheme]);
 
   // ── Fetch-on-demand ────────────────────────────────────────────────
   // Per task: no per-tab dirty-buffer store. We fetch the content every
