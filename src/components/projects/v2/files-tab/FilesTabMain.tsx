@@ -131,7 +131,6 @@ export function FilesTabMain({
     const breadcrumbTerminalId = chain.at(-1)?.id ?? null;
     const treeHighlightId = currentLocationId;
     if (breadcrumbTerminalId !== treeHighlightId) {
-      // eslint-disable-next-line no-console -- dev-mode only per Req 6.4
       console.warn("[files-tab] tree ⇄ breadcrumb disagreement", {
         breadcrumbTerminalId,
         treeHighlightId,
