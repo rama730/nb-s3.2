@@ -42,13 +42,17 @@ export function ConfirmDialog({
 }: ConfirmDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
+      <DialogContent className="flex max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] flex-col gap-0 overflow-hidden p-0 sm:max-h-[86dvh] sm:max-w-2xl">
+        <DialogHeader className="shrink-0 px-6 pb-4 pr-12 pt-6">
           <DialogTitle>{title}</DialogTitle>
           {description && <DialogDescription>{description}</DialogDescription>}
         </DialogHeader>
-        {children ? <div className="py-2">{children}</div> : null}
-        <DialogFooter className="gap-2 sm:gap-0">
+        {children ? (
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 py-4">
+            {children}
+          </div>
+        ) : null}
+        <DialogFooter className="shrink-0 gap-2 border-t bg-background px-6 py-4 sm:gap-0">
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={loading}>
             {cancelLabel}
           </Button>
