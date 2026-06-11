@@ -25,6 +25,18 @@ const APPEARANCE_CACHE_HEADERS = {
     Vary: "Cookie",
 } as const;
 
+function appearanceSyncDegradedSuccess(userId: string, snapshot: AppearanceSnapshot, message: string) {
+    return jsonSuccess(
+        {
+            userId,
+            snapshot,
+            remoteSynced: false,
+        },
+        message,
+        { status: 202 },
+    );
+}
+
 function readUserMetadata(user: { user_metadata?: unknown }) {
     return user.user_metadata && typeof user.user_metadata === "object"
         ? (user.user_metadata as Record<string, unknown>)
@@ -130,24 +142,34 @@ export async function PUT(request: Request) {
                 },
             }),
             "Appearance update",
-        );
+        ).catch((error) => {
+            logger.error("[api/v1/appearance] update degraded", { module: 'api', error: error instanceof Error ? error.message : String(error) });
+            return null;
+        });
+
+        if (!updateResult) {
+            logApiRoute(request, {
+                requestId,
+                action: "appearance.put.degraded",
+                userId: auth.user.id,
+                startedAt,
+                success: true,
+                status: 202,
+            });
+            return appearanceSyncDegradedSuccess(auth.user.id, snapshot, "Appearance saved locally; account sync is delayed");
+        }
 
         if (updateResult.error) {
             logger.error("[api/v1/appearance] update failed", { module: 'api', error: updateResult.error instanceof Error ? updateResult.error.message : String(updateResult.error) });
             logApiRoute(request, {
                 requestId,
-                action: "appearance.put",
+                action: "appearance.put.degraded",
                 userId: auth.user.id,
                 startedAt,
-                success: false,
-                status: 500,
-                errorCode: "INTERNAL_ERROR",
+                success: true,
+                status: 202,
             });
-            // SEC-L6: never echo the raw upstream error message to the client.
-            // Supabase error strings can include schema, column, or constraint
-            // details that we don't want to advertise. Map to a stable,
-            // user-safe string and keep the detail in the server log above.
-            return jsonError("Failed to update appearance settings", 500, "INTERNAL_ERROR");
+            return appearanceSyncDegradedSuccess(auth.user.id, snapshot, "Appearance saved locally; account sync is delayed");
         }
 
         const savedSnapshot =
@@ -208,21 +230,34 @@ export async function DELETE(request: Request) {
                 },
             }),
             "Appearance reset",
-        );
+        ).catch((error) => {
+            logger.error("[api/v1/appearance] reset degraded", { module: 'api', error: error instanceof Error ? error.message : String(error) });
+            return null;
+        });
+
+        if (!updateResult) {
+            logApiRoute(request, {
+                requestId,
+                action: "appearance.delete.degraded",
+                userId: auth.user.id,
+                startedAt,
+                success: true,
+                status: 202,
+            });
+            return appearanceSyncDegradedSuccess(auth.user.id, snapshot, "Appearance reset locally; account sync is delayed");
+        }
 
         if (updateResult.error) {
             logger.error("[api/v1/appearance] reset failed", { module: 'api', error: updateResult.error instanceof Error ? updateResult.error.message : String(updateResult.error) });
             logApiRoute(request, {
                 requestId,
-                action: "appearance.delete",
+                action: "appearance.delete.degraded",
                 userId: auth.user.id,
                 startedAt,
-                success: false,
-                status: 500,
-                errorCode: "INTERNAL_ERROR",
+                success: true,
+                status: 202,
             });
-            // SEC-L6: never echo the raw upstream error message to the client.
-            return jsonError("Failed to reset appearance settings", 500, "INTERNAL_ERROR");
+            return appearanceSyncDegradedSuccess(auth.user.id, snapshot, "Appearance reset locally; account sync is delayed");
         }
 
         logApiRoute(request, {
