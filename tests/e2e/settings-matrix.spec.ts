@@ -24,55 +24,56 @@ test.describe("Settings matrix @critical", () => {
       "settings-card-integrations",
     ];
 
+    const main = page.getByRole("main");
     for (const card of cards) {
-      await expect(page.getByTestId(card)).toBeVisible();
+      await expect(main.getByTestId(card).first()).toBeVisible();
     }
 
     await page.goto("/settings/account");
     await expect(page.getByRole("heading", { name: "Account" })).toBeVisible();
-    await expect(page.getByText("Account Details")).toBeVisible();
-    await expect(page.getByText("Cache Management")).toBeVisible();
-    await expect(page.getByText("Danger Zone")).toBeVisible();
+    await expect(main.getByText("Account Details").first()).toBeVisible();
+    await expect(main.getByText("Cache Management").first()).toBeVisible();
+    await expect(main.getByText("Danger Zone").first()).toBeVisible();
 
     // Test deletion wizard opens with multi-step UI
     await page.getByRole("button", { name: "Delete" }).click();
-    await expect(page.getByText("Delete Account").first()).toBeVisible();
-    await expect(page.getByText("Step 1 of 5")).toBeVisible();
-    await expect(page.getByText("Summary")).toBeVisible();
+    await expect(main.getByText("Delete Account").first()).toBeVisible();
+    await expect(main.getByText("Step 1 of 5").first()).toBeVisible();
+    await expect(main.getByText("Summary").first()).toBeVisible();
 
     // Verify data summary is shown (Step 1)
-    await expect(page.getByText("Projects").first()).toBeVisible();
-    await expect(page.getByText("Connections").first()).toBeVisible();
+    await expect(main.getByText("Projects").first()).toBeVisible();
+    await expect(main.getByText("Connections").first()).toBeVisible();
 
     // Navigate to Step 2 (Export)
     await page.getByRole("button", { name: "Continue" }).click();
-    await expect(page.getByText("Step 2 of 5")).toBeVisible();
-    await expect(page.getByText("Download Your Data")).toBeVisible();
+    await expect(main.getByText("Step 2 of 5").first()).toBeVisible();
+    await expect(main.getByText("Download Your Data").first()).toBeVisible();
 
     // Navigate to Step 3 (Transfer)
     await page.getByRole("button", { name: "Continue" }).click();
-    await expect(page.getByText("Step 3 of 5")).toBeVisible();
+    await expect(main.getByText("Step 3 of 5").first()).toBeVisible();
 
     // Navigate to Step 4 (Consequences)
     await page.getByRole("button", { name: "Continue" }).click();
-    await expect(page.getByText("Step 4 of 5")).toBeVisible();
-    await expect(page.getByText("30-Day Grace Period")).toBeVisible();
+    await expect(main.getByText("Step 4 of 5").first()).toBeVisible();
+    await expect(main.getByText("30-Day Grace Period").first()).toBeVisible();
 
     // Navigate to Step 5 (Confirm)
     await page.getByRole("button", { name: "Continue" }).click();
-    await expect(page.getByText("Step 5 of 5")).toBeVisible();
+    await expect(main.getByText("Step 5 of 5").first()).toBeVisible();
     await expect(page.getByPlaceholder("Type DELETE")).toBeVisible();
 
     // Go back to verify Back button works
     await page.getByRole("button", { name: "Back" }).click();
-    await expect(page.getByText("Step 4 of 5")).toBeVisible();
+    await expect(main.getByText("Step 4 of 5").first()).toBeVisible();
 
     // Cancel the wizard
     await page.getByRole("button", { name: "Cancel" }).click();
 
     await page.goto("/settings/security");
     await expect(page.getByRole("heading", { name: "Security" })).toBeVisible();
-    await expect(page.getByText("Security Overview")).toBeVisible();
+    await expect(main.getByText("Security Overview").first()).toBeVisible();
     await expect(page.getByTestId("security-authenticator-section")).toBeVisible();
     await expect(page.getByTestId("security-password-section")).toBeVisible();
     await expect(page.getByTestId("security-active-sessions-section")).toBeVisible();
@@ -110,9 +111,9 @@ test.describe("Settings matrix @critical", () => {
 
     await page.goto("/settings/integrations");
     await expect(page.getByRole("heading", { name: "Integrations", level: 1 })).toBeVisible();
-    await expect(page.getByText("Account Connections")).toBeVisible();
-    await expect(page.getByText("External Services")).toBeVisible();
-    await expect(page.getByText(/^Account created with$/i)).toBeVisible();
+    await expect(main.getByText("Account Connections").first()).toBeVisible();
+    await expect(main.getByText("External Services").first()).toBeVisible();
+    await expect(main.getByText(/^Account created with$/i).first()).toBeVisible();
 
     await monitor.assertNoViolations();
     monitor.detach();
