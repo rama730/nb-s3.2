@@ -14,6 +14,8 @@ import "./globals.css";
 import { buildThemePrehydrateScript } from "@/lib/theme/appearance";
 import { RoutePerformanceObserver } from "@/components/observability/RoutePerformanceObserver";
 import { resolveAuthBaseUrl } from "@/lib/auth/redirects";
+import { AuthProvider } from "@/components/providers/AuthProvider";
+import { getViewerProfileContext, toClientViewer } from "@/lib/server/viewer-context";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -40,7 +42,6 @@ export const metadata: Metadata = {
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",
-    title: "Edge",
   },
   formatDetection: {
     telephone: false,
@@ -58,14 +59,43 @@ export const viewport: import("next").Viewport = {
   viewportFit: "cover",
 };
 
+async function I18nAndThemeProviders({
+  children,
+  nonce,
+}: {
+  children: React.ReactNode;
+  nonce?: string;
+}) {
+  const messages = await getMessages();
+
+  return (
+    <NextIntlClientProvider messages={messages}>
+      <ThemeProvider nonce={nonce}>
+        <QueryProvider>
+          <RoutePerformanceObserver />
+          {children}
+          <Toaster position="top-right" />
+          {SHOULD_RENDER_VERCEL_ANALYTICS ? <Analytics /> : null}
+        </QueryProvider>
+      </ThemeProvider>
+    </NextIntlClientProvider>
+  );
+}
+
+import { Suspense } from 'react';
+
 export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
   const headerStore = await headers();
-  const messages = await getMessages();
   const nonce = headerStore.get("x-nonce") || undefined;
+  
+  const authContext = await getViewerProfileContext();
+  const clientViewer = toClientViewer(authContext);
+  const initialUser = clientViewer.userId ? { id: clientViewer.userId } as any : null;
+  const initialProfile = authContext.profile;
 
   return (
     <html lang="en" data-scroll-behavior="smooth" data-csp-nonce={nonce} suppressHydrationWarning>
@@ -77,16 +107,13 @@ export default async function RootLayout({
       </head>
       <body className={`${geistSans.variable} ${geistMono.variable} font-sans antialiased`}>
         <SecurityRuntimeProvider nonce={nonce ?? null}>
-          <NextIntlClientProvider messages={messages}>
-            <ThemeProvider nonce={nonce ?? undefined}>
-              <QueryProvider>
-                <RoutePerformanceObserver />
+          <Suspense fallback={<div className="min-h-screen w-full bg-zinc-50 dark:bg-zinc-950" />}>
+            <AuthProvider initialUser={initialUser} initialProfile={initialProfile}>
+              <I18nAndThemeProviders nonce={nonce ?? undefined}>
                 {children}
-                <Toaster position="bottom-right" />
-                {SHOULD_RENDER_VERCEL_ANALYTICS ? <Analytics /> : null}
-              </QueryProvider>
-            </ThemeProvider>
-          </NextIntlClientProvider>
+              </I18nAndThemeProviders>
+            </AuthProvider>
+          </Suspense>
         </SecurityRuntimeProvider>
       </body>
     </html>
