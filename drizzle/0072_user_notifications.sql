@@ -376,7 +376,12 @@ CREATE TABLE IF NOT EXISTS "job_heartbeats" (
 -- Project settings governance
 -- ============================================================================
 ALTER TABLE "projects"
-  ADD COLUMN IF NOT EXISTS "public_tab_visibility" jsonb NOT NULL DEFAULT '{"dashboard":true,"files":true,"sprints":false,"tasks":false,"analytics":false}'::jsonb;
+  ADD COLUMN IF NOT EXISTS "public_tab_visibility" jsonb NOT NULL DEFAULT '{"dashboard":true,"readme":true,"files":true,"sprints":false,"tasks":false,"analytics":false}'::jsonb;
+--> statement-breakpoint
+
+UPDATE "projects"
+SET "public_tab_visibility" = COALESCE("public_tab_visibility", '{}'::jsonb) || '{"readme":true}'::jsonb
+WHERE NOT (COALESCE("public_tab_visibility", '{}'::jsonb) ? 'readme');
 --> statement-breakpoint
 
 ALTER TABLE "projects"
@@ -393,3 +398,170 @@ ALTER TABLE "project_members"
 
 CREATE INDEX IF NOT EXISTS "project_members_file_upload_idx"
   ON "project_members" ("project_id", "file_upload_enabled");
+--> statement-breakpoint
+
+-- ============================================================================
+-- Project README: draft, immutable versions, and managed media
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS "project_readmes" (
+  "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+  "project_id" uuid NOT NULL,
+  "draft_content" text DEFAULT '' NOT NULL,
+  "draft_updated_by" uuid,
+  "draft_updated_at" timestamp with time zone,
+  "published_version_id" uuid,
+  "settings" jsonb NOT NULL DEFAULT '{"version":1,"editPolicy":"leaders","publicVisibility":"inherit_project","mediaUploads":true,"externalImages":false,"projectBlocks":true,"notifyOnPublish":false}'::jsonb,
+  "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+  "updated_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+
+CREATE TABLE IF NOT EXISTS "project_readme_versions" (
+  "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+  "project_id" uuid NOT NULL,
+  "version_number" integer NOT NULL,
+  "content" text NOT NULL,
+  "excerpt" text,
+  "headings" jsonb NOT NULL DEFAULT '[]'::jsonb,
+  "quality_report" jsonb NOT NULL DEFAULT '{"score":0,"issues":[],"sectionPresence":{},"contentBytes":0}'::jsonb,
+  "content_hash" text NOT NULL,
+  "change_summary" text,
+  "created_by" uuid,
+  "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+  "deleted_at" timestamp with time zone
+);
+--> statement-breakpoint
+
+ALTER TABLE "project_readme_versions"
+  ADD COLUMN IF NOT EXISTS "deleted_at" timestamp with time zone;
+--> statement-breakpoint
+
+CREATE TABLE IF NOT EXISTS "project_readme_assets" (
+  "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+  "project_id" uuid NOT NULL,
+  "version_id" uuid,
+  "bucket" text NOT NULL,
+  "storage_key" text NOT NULL,
+  "mime_type" text NOT NULL,
+  "size_bytes" integer NOT NULL,
+  "width" integer,
+  "height" integer,
+  "alt_text" text,
+  "status" text DEFAULT 'draft' NOT NULL,
+  "created_by" uuid,
+  "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+  "deleted_at" timestamp with time zone
+);
+--> statement-breakpoint
+
+DO $$ BEGIN
+  ALTER TABLE "project_readmes"
+    ADD CONSTRAINT "project_readmes_project_id_projects_id_fk"
+    FOREIGN KEY ("project_id") REFERENCES "projects"("id") ON DELETE CASCADE;
+EXCEPTION
+  WHEN duplicate_object THEN null;
+END $$;
+--> statement-breakpoint
+
+DO $$ BEGIN
+  ALTER TABLE "project_readmes"
+    ADD CONSTRAINT "project_readmes_draft_updated_by_profiles_id_fk"
+    FOREIGN KEY ("draft_updated_by") REFERENCES "profiles"("id") ON DELETE SET NULL;
+EXCEPTION
+  WHEN duplicate_object THEN null;
+END $$;
+--> statement-breakpoint
+
+DO $$ BEGIN
+  ALTER TABLE "project_readmes"
+    ADD CONSTRAINT "project_readmes_published_version_id_project_readme_versions_id_fk"
+    FOREIGN KEY ("published_version_id") REFERENCES "project_readme_versions"("id") ON DELETE SET NULL;
+EXCEPTION
+  WHEN duplicate_object THEN null;
+END $$;
+--> statement-breakpoint
+
+DO $$ BEGIN
+  ALTER TABLE "project_readme_versions"
+    ADD CONSTRAINT "project_readme_versions_project_id_projects_id_fk"
+    FOREIGN KEY ("project_id") REFERENCES "projects"("id") ON DELETE CASCADE;
+EXCEPTION
+  WHEN duplicate_object THEN null;
+END $$;
+--> statement-breakpoint
+
+DO $$ BEGIN
+  ALTER TABLE "project_readme_versions"
+    ADD CONSTRAINT "project_readme_versions_created_by_profiles_id_fk"
+    FOREIGN KEY ("created_by") REFERENCES "profiles"("id") ON DELETE SET NULL;
+EXCEPTION
+  WHEN duplicate_object THEN null;
+END $$;
+--> statement-breakpoint
+
+DO $$ BEGIN
+  ALTER TABLE "project_readme_assets"
+    ADD CONSTRAINT "project_readme_assets_project_id_projects_id_fk"
+    FOREIGN KEY ("project_id") REFERENCES "projects"("id") ON DELETE CASCADE;
+EXCEPTION
+  WHEN duplicate_object THEN null;
+END $$;
+--> statement-breakpoint
+
+DO $$ BEGIN
+  ALTER TABLE "project_readme_assets"
+    ADD CONSTRAINT "project_readme_assets_version_id_project_readme_versions_id_fk"
+    FOREIGN KEY ("version_id") REFERENCES "project_readme_versions"("id") ON DELETE SET NULL;
+EXCEPTION
+  WHEN duplicate_object THEN null;
+END $$;
+--> statement-breakpoint
+
+DO $$ BEGIN
+  ALTER TABLE "project_readme_assets"
+    ADD CONSTRAINT "project_readme_assets_created_by_profiles_id_fk"
+    FOREIGN KEY ("created_by") REFERENCES "profiles"("id") ON DELETE SET NULL;
+EXCEPTION
+  WHEN duplicate_object THEN null;
+END $$;
+--> statement-breakpoint
+
+CREATE UNIQUE INDEX IF NOT EXISTS "project_readmes_project_unique"
+  ON "project_readmes" ("project_id");
+--> statement-breakpoint
+
+CREATE INDEX IF NOT EXISTS "project_readmes_project_idx"
+  ON "project_readmes" ("project_id");
+--> statement-breakpoint
+
+CREATE INDEX IF NOT EXISTS "project_readmes_draft_updated_idx"
+  ON "project_readmes" ("project_id", "draft_updated_at" DESC);
+--> statement-breakpoint
+
+CREATE UNIQUE INDEX IF NOT EXISTS "project_readme_versions_project_version_unique"
+  ON "project_readme_versions" ("project_id", "version_number");
+--> statement-breakpoint
+
+CREATE INDEX IF NOT EXISTS "project_readme_versions_project_created_idx"
+  ON "project_readme_versions" ("project_id", "created_at" DESC);
+--> statement-breakpoint
+
+CREATE INDEX IF NOT EXISTS "project_readme_versions_project_hash_idx"
+  ON "project_readme_versions" ("project_id", "content_hash");
+--> statement-breakpoint
+
+CREATE INDEX IF NOT EXISTS "project_readme_versions_project_deleted_idx"
+  ON "project_readme_versions" ("project_id", "deleted_at");
+--> statement-breakpoint
+
+CREATE UNIQUE INDEX IF NOT EXISTS "project_readme_assets_bucket_storage_unique"
+  ON "project_readme_assets" ("bucket", "storage_key");
+--> statement-breakpoint
+
+CREATE INDEX IF NOT EXISTS "project_readme_assets_project_created_idx"
+  ON "project_readme_assets" ("project_id", "created_at" DESC);
+--> statement-breakpoint
+
+CREATE INDEX IF NOT EXISTS "project_readme_assets_status_idx"
+  ON "project_readme_assets" ("project_id", "status")
+  WHERE "deleted_at" IS NULL;
