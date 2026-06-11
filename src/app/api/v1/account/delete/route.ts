@@ -5,6 +5,12 @@ import { validateCsrf } from '@/lib/security/csrf';
 import { checkIdempotencyKey, saveIdempotencyResult } from '@/lib/security/idempotency';
 import { consumeRateLimit } from '@/lib/security/rate-limit';
 import { createClient } from '@/lib/supabase/server';
+import { z } from 'zod';
+
+const deleteAccountBodySchema = z.object({
+    confirmationText: z.string().max(50),
+    reason: z.string().max(1000).optional(),
+});
 
 function toStatusCode(error?: string) {
     if (!error) return 500;
@@ -131,12 +137,25 @@ export async function DELETE(request: Request) {
         let confirmationText = '';
         let reason: string | undefined;
         try {
-            const body = await request.json();
-            if (typeof body?.confirmationText === 'string') {
-                confirmationText = body.confirmationText;
-            }
-            if (typeof body?.reason === 'string') {
-                reason = body.reason;
+            const rawBody = await request.json();
+            const bodyParse = deleteAccountBodySchema.safeParse(rawBody);
+            if (bodyParse.success) {
+                confirmationText = bodyParse.data.confirmationText;
+                reason = bodyParse.data.reason;
+            } else {
+                logApiRoute(request, {
+                    requestId,
+                    action: 'account.delete',
+                    startedAt,
+                    success: false,
+                    status: 400,
+                    errorCode: 'BAD_REQUEST',
+                });
+                return jsonError(
+                    bodyParse.error.issues[0]?.message ?? 'Invalid request body',
+                    400,
+                    'BAD_REQUEST',
+                );
             }
         } catch {
             confirmationText = '';
