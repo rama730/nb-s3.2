@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import Image from "next/image";
-import { Loader2, Camera, Plus, X, Trash2, CheckCircle2, AlertTriangle } from "lucide-react";
+import { Loader2, Camera, Plus, X, Trash2, CheckCircle2, AlertTriangle, Briefcase, Calendar, Link as LinkIcon, Code, Github } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
 import { createProfileImageUploadUrlAction, finalizeProfileImageUploadAction } from "@/app/actions/profile";
 import { useToast } from "@/components/ui-custom/Toast";
 import Input from "@/components/ui-custom/Input";
@@ -23,6 +24,7 @@ interface EditProfileTabsProps {
     section: EditProfileSection;
     onSectionChange: (section: EditProfileSection) => void;
     onChange: (updates: any) => void;
+    projects?: any[];
 }
 
 export function EditProfileTabs({
@@ -31,6 +33,7 @@ export function EditProfileTabs({
     section,
     onSectionChange,
     onChange,
+    projects = [],
 }: EditProfileTabsProps) {
     const { showToast } = useToast();
     const [avatarUploading, setAvatarUploading] = useState(false);
@@ -107,10 +110,7 @@ export function EditProfileTabs({
                         General Properties
                     </TabsTrigger>
                     <TabsTrigger value="experience" className="w-full justify-start px-3 py-2 text-sm font-medium data-[state=active]:bg-zinc-100 dark:data-[state=active]:bg-zinc-800 data-[state=active]:shadow-none rounded-lg text-zinc-600 data-[state=active]:text-zinc-900 dark:text-zinc-400 dark:data-[state=active]:text-zinc-100">
-                        Work Experience
-                    </TabsTrigger>
-                    <TabsTrigger value="education" className="w-full justify-start px-3 py-2 text-sm font-medium data-[state=active]:bg-zinc-100 dark:data-[state=active]:bg-zinc-800 data-[state=active]:shadow-none rounded-lg text-zinc-600 data-[state=active]:text-zinc-900 dark:text-zinc-400 dark:data-[state=active]:text-zinc-100">
-                        Education History
+                        Project Contributions
                     </TabsTrigger>
                     <TabsTrigger value="skills" className="w-full justify-start px-3 py-2 text-sm font-medium data-[state=active]:bg-zinc-100 dark:data-[state=active]:bg-zinc-800 data-[state=active]:shadow-none rounded-lg text-zinc-600 data-[state=active]:text-zinc-900 dark:text-zinc-400 dark:data-[state=active]:text-zinc-100">
                         Skills & Expertise
@@ -297,22 +297,20 @@ export function EditProfileTabs({
                     </TabsContent>
 
                     <TabsContent value="experience" className="space-y-6 mt-0">
-                        <h2 className="text-xl font-semibold text-zinc-900 dark:text-white">Work Experience</h2>
-                        <HistoryList
+                        <h2 className="text-xl font-semibold text-zinc-900 dark:text-white">Project Contributions</h2>
+                        <ProjectContributionsList
                             items={profile.experience ?? []}
                             onChange={(items) => updateForm("experience", items)}
-                            type="experience"
+                            projects={projects}
+                            profile={profile}
+                            onTechStackAdd={(tags) => {
+                                const newSkills = [...new Set([...(profile.skills || []), ...tags])];
+                                updateForm("skills", newSkills);
+                            }}
                         />
                     </TabsContent>
 
-                    <TabsContent value="education" className="space-y-6 mt-0">
-                        <h2 className="text-xl font-semibold text-zinc-900 dark:text-white">Education History</h2>
-                        <HistoryList
-                            items={profile.education ?? []}
-                            onChange={(items) => updateForm("education", items)}
-                            type="education"
-                        />
-                    </TabsContent>
+
 
                     <TabsContent value="skills" className="space-y-6 mt-0">
                         <h2 className="text-xl font-semibold text-zinc-900 dark:text-white">Skills & Expertise</h2>
@@ -335,24 +333,36 @@ export function EditProfileTabs({
     );
 }
 
-function HistoryList({ items, onChange, type }: { items: any[]; onChange: (items: any[]) => void; type: "experience" | "education" }) {
-    const isEducation = type === "education";
-    const [isAdding, setIsAdding] = useState(false);
-    const [newItem, setNewItem] = useState<any>({ currentlyActive: false });
-    const checkboxId = `${type}-current-${newItem.id || "new"}`;
-
-    const handleAdd = () => {
-        const hasRequiredFields = isEducation
-            ? Boolean(newItem.school?.trim() || newItem.degree?.trim())
-            : Boolean(newItem.title?.trim() || newItem.company?.trim());
-        if (!hasRequiredFields) return;
+function ProjectContributionsList({ items, onChange, projects = [], profile, onTechStackAdd }: { items: any[]; onChange: (items: any[]) => void; projects?: any[]; profile?: any; onTechStackAdd?: (tags: string[]) => void }) {
+    const handleAdd = (isPlatform: boolean) => {
         onChange([...items, {
-            ...newItem,
             id: crypto.randomUUID(),
-            endDate: newItem.currentlyActive ? "" : newItem.endDate || "",
+            company: "",
+            title: "",
+            startDate: "",
+            endDate: "",
+            projectUrl: "",
+            repoUrl: "",
+            techTags: "",
+            description: "",
+            currentlyActive: false,
+            isPlatform
         }]);
-        setNewItem({ currentlyActive: false });
-        setIsAdding(false);
+    };
+
+    const updateItem = (index: number, updates: any) => {
+        const next = [...items];
+        next[index] = { ...next[index], ...updates };
+        
+        // If updating tech tags, we can extract them
+        if (updates.techTags && typeof updates.techTags === 'string') {
+            const parsedTags = updates.techTags.split(",").map((s: string) => s.trim()).filter(Boolean);
+            if (parsedTags.length > 0 && onTechStackAdd) {
+                onTechStackAdd(parsedTags);
+            }
+        }
+        
+        onChange(next);
     };
 
     const handleDelete = (index: number) => {
@@ -362,113 +372,212 @@ function HistoryList({ items, onChange, type }: { items: any[]; onChange: (items
     };
 
     return (
-        <div className="space-y-4">
+        <div className="space-y-10">
             <div className="flex justify-between items-center">
-                <h3 className="text-sm font-medium text-zinc-900 dark:text-zinc-100">{isEducation ? "Education" : "Work Experience"}</h3>
-                <Button type="button" variant="outline" size="sm" onClick={() => setIsAdding(true)} disabled={isAdding}>
-                    <Plus className="w-4 h-4 mr-1" /> Add
-                </Button>
+                <h3 className="text-sm font-medium text-zinc-900 dark:text-zinc-100">Your Contributions</h3>
+                <div className="flex gap-2">
+                    <Button type="button" variant="outline" size="sm" onClick={() => handleAdd(true)}>
+                        <Plus className="w-4 h-4 mr-1" /> Add Platform Project
+                    </Button>
+                    <Button type="button" variant="ghost" size="sm" onClick={() => handleAdd(false)}>
+                        Add External Project
+                    </Button>
+                </div>
             </div>
 
-            <div className="space-y-3">
-                {items.map((item, index) => (
-                    <div key={item.id || index} className="p-3 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 flex justify-between items-start group">
-                        <div>
-                            <div className="font-semibold text-sm text-zinc-900 dark:text-zinc-100">{item.title || item.degree || "Untitled"}</div>
-                            <div className="text-xs text-zinc-500">{item.company || item.school}</div>
-                            <div className="text-xs text-zinc-400 mt-1">{item.startDate || "Start"} — {item.endDate || "Present"}</div>
-                        </div>
-                        <button type="button" onClick={() => handleDelete(index)} className="text-zinc-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity p-1">
-                            <Trash2 className="w-4 h-4" />
-                        </button>
-                    </div>
-                ))}
-            </div>
+            <div className="space-y-12">
+                {items.map((item, index) => {
+                    const checkboxId = `experience-current-${item.id || index}`;
+                    
+                    return (
+                        <div key={item.id || index} className="space-y-5 relative">
+                            <div className="flex justify-between items-center pb-2 border-b border-zinc-200 dark:border-zinc-800">
+                                <h4 className="font-semibold text-zinc-900 dark:text-white">Project {index + 1}</h4>
+                                <Button type="button" variant="ghost" size="sm" onClick={() => handleDelete(index)} className="text-zinc-500 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 h-8 px-2">
+                                    <Trash2 className="w-4 h-4 mr-1.5" /> Remove
+                                </Button>
+                            </div>
 
-            {isAdding ? (
-                <div className="p-4 rounded-xl border border-dashed border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-900/50 space-y-3">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        <div>
-                            <Label htmlFor={`${type}-org`}>{isEducation ? "School / University" : "Company"}</Label>
-                            <Input
-                                id={`${type}-org`}
-                                name={isEducation ? "school" : "company"}
-                                maxLength={80}
-                                value={newItem[isEducation ? "school" : "company"] || ""}
-                                onChange={(e) => setNewItem({ ...newItem, [isEducation ? "school" : "company"]: e.target.value })}
-                                className="mt-1"
-                            />
-                        </div>
-                        <div>
-                            <Label htmlFor={`${type}-role`}>{isEducation ? "Degree / Field" : "Job Title"}</Label>
-                            <Input
-                                id={`${type}-role`}
-                                name={isEducation ? "degree" : "title"}
-                                maxLength={80}
-                                value={newItem[isEducation ? "degree" : "title"] || ""}
-                                onChange={(e) => setNewItem({ ...newItem, [isEducation ? "degree" : "title"]: e.target.value })}
-                                className="mt-1"
-                            />
-                        </div>
-                    </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        <div>
-                            <Label htmlFor={`${type}-start-date`}>Start Date</Label>
-                            <Input
-                                id={`${type}-start-date`}
-                                name="startDate"
-                                type="month"
-                                value={newItem.startDate || ""}
-                                onChange={(e) => setNewItem({ ...newItem, startDate: e.target.value })}
-                                className="mt-1"
-                            />
-                        </div>
-                        <div>
-                            <Label htmlFor={`${type}-end-date`}>End Date</Label>
-                            <Input
-                                id={`${type}-end-date`}
-                                name="endDate"
-                                type="month"
-                                disabled={Boolean(newItem.currentlyActive)}
-                                aria-disabled={Boolean(newItem.currentlyActive)}
-                                value={newItem.endDate || ""}
-                                onChange={(e) => setNewItem({ ...newItem, endDate: e.target.value })}
-                                className="mt-1"
-                            />
-                            <div className="flex items-center gap-2 mt-1">
-                                <input
-                                    type="checkbox"
-                                    id={checkboxId}
-                                    checked={Boolean(newItem.currentlyActive)}
-                                    onChange={(e) => setNewItem({
-                                        ...newItem,
-                                        currentlyActive: e.target.checked,
-                                        endDate: e.target.checked ? "" : newItem.endDate || "",
-                                    })}
+                            {item.isPlatform && (
+                                <div className="bg-indigo-50/50 dark:bg-indigo-900/10 p-4 rounded-xl border border-indigo-100 dark:border-indigo-800/30">
+                                    <Label htmlFor={`proj-select-${index}`} className="text-indigo-700 dark:text-indigo-300 flex items-center gap-2 mb-2 font-semibold">
+                                        <Briefcase className="w-4 h-4" />
+                                        Link an Existing Platform Project
+                                    </Label>
+                                    <select
+                                        id={`proj-select-${index}`}
+                                        className="w-full h-11 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-950 px-3 text-sm outline-none focus:ring-2 focus:ring-indigo-500 transition-shadow"
+                                        value={item.projectId || ""}
+                                        onChange={(e) => {
+                                            const pid = e.target.value;
+                                            if (!pid) {
+                                                updateItem(index, { projectId: "" });
+                                                return;
+                                            }
+                                            const proj = projects?.find(p => p.id === pid);
+                                            if (proj) {
+                                                let startDateStr = "";
+                                                if (proj.joinedAt) {
+                                                    const d = new Date(proj.joinedAt);
+                                                    startDateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+                                                } else if (proj.createdAt) {
+                                                    const d = new Date(proj.createdAt);
+                                                    startDateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+                                                }
+                                                updateItem(index, {
+                                                    projectId: proj.id,
+                                                    company: proj.title || "",
+                                                    title: proj.userRole || "Contributor",
+                                                    startDate: startDateStr,
+                                                    projectUrl: proj.url || "",
+                                                    repoUrl: "",
+                                                    techTags: (proj.skills || []).join(", "),
+                                                });
+                                            }
+                                        }}
+                                    >
+                                        <option value="">-- Choose a project --</option>
+                                        {projects?.map(p => (
+                                            <option key={p.id} value={p.id}>{p.title}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                            )}
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <Label htmlFor={`org-${index}`} className="flex items-center gap-1.5 text-zinc-600 dark:text-zinc-400">
+                                        <Briefcase className="w-3.5 h-3.5" /> Project Name
+                                    </Label>
+                                    <Input
+                                        id={`org-${index}`}
+                                        maxLength={80}
+                                        value={item.company || ""}
+                                        onChange={(e) => updateItem(index, { company: e.target.value })}
+                                        className="mt-1.5 bg-zinc-50 dark:bg-zinc-900 focus:bg-white dark:focus:bg-zinc-950 transition-colors h-10"
+                                        placeholder="e.g. Supabase, Vercel"
+                                    />
+                                </div>
+                                <div>
+                                    <Label htmlFor={`role-${index}`} className="flex items-center gap-1.5 text-zinc-600 dark:text-zinc-400">
+                                        <Code className="w-3.5 h-3.5" /> Your Role
+                                    </Label>
+                                    <Input
+                                        id={`role-${index}`}
+                                        maxLength={80}
+                                        value={item.title || ""}
+                                        onChange={(e) => updateItem(index, { title: e.target.value })}
+                                        className="mt-1.5 bg-zinc-50 dark:bg-zinc-900 focus:bg-white dark:focus:bg-zinc-950 transition-colors h-10"
+                                        placeholder="e.g. Core Maintainer, Creator"
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <Label htmlFor={`start-date-${index}`} className="flex items-center gap-1.5 text-zinc-600 dark:text-zinc-400">
+                                        <Calendar className="w-3.5 h-3.5" /> Start Date
+                                    </Label>
+                                    <Input
+                                        id={`start-date-${index}`}
+                                        type="date"
+                                        value={item.startDate || ""}
+                                        onChange={(e) => updateItem(index, { startDate: e.target.value })}
+                                        className="mt-1.5 bg-zinc-50 dark:bg-zinc-900 focus:bg-white dark:focus:bg-zinc-950 transition-colors h-10 text-zinc-900 dark:text-zinc-100"
+                                    />
+                                </div>
+                                <div>
+                                    <Label htmlFor={`end-date-${index}`} className="flex items-center gap-1.5 text-zinc-600 dark:text-zinc-400">
+                                        <Calendar className="w-3.5 h-3.5" /> End Date
+                                    </Label>
+                                    <div className="relative mt-1.5">
+                                        <Input
+                                            id={`end-date-${index}`}
+                                            type={item.currentlyActive ? "text" : "date"}
+                                            disabled={Boolean(item.currentlyActive)}
+                                            value={item.currentlyActive ? "Present" : (item.endDate || "")}
+                                            onChange={(e) => updateItem(index, { endDate: e.target.value })}
+                                            className={item.currentlyActive ? "h-10 text-emerald-600 font-medium bg-emerald-50 dark:bg-emerald-900/10 border-emerald-200 dark:border-emerald-800" : "h-10 bg-zinc-50 dark:bg-zinc-900 focus:bg-white dark:focus:bg-zinc-950 transition-colors text-zinc-900 dark:text-zinc-100"}
+                                        />
+                                    </div>
+                                    <div className="flex items-center gap-2 mt-2 ml-1">
+                                        <input
+                                            type="checkbox"
+                                            id={checkboxId}
+                                            checked={Boolean(item.currentlyActive)}
+                                            onChange={(e) => updateItem(index, {
+                                                currentlyActive: e.target.checked,
+                                                endDate: e.target.checked ? "" : item.endDate || "",
+                                            })}
+                                            className="w-4 h-4 rounded border-zinc-300 text-indigo-600 focus:ring-indigo-500"
+                                        />
+                                        <label htmlFor={checkboxId} className="text-xs font-medium text-zinc-600 dark:text-zinc-400 cursor-pointer">
+                                            I am currently working on this
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <Label htmlFor={`proj-url-${index}`} className="flex items-center gap-1.5 text-zinc-600 dark:text-zinc-400">
+                                        <LinkIcon className="w-3.5 h-3.5" /> Project URL
+                                    </Label>
+                                    <Input
+                                        id={`proj-url-${index}`}
+                                        type={item.projectId ? "text" : "url"}
+                                        readOnly={!!item.projectId}
+                                        disabled={!!item.projectId}
+                                        value={item.projectUrl || ""}
+                                        onChange={(e) => updateItem(index, { projectUrl: e.target.value })}
+                                        className="mt-1.5 bg-zinc-50 dark:bg-zinc-900 focus:bg-white dark:focus:bg-zinc-950 transition-colors h-10 disabled:opacity-70 disabled:bg-zinc-100 dark:disabled:bg-zinc-800/50"
+                                        placeholder="https://"
+                                    />
+                                </div>
+                                <div>
+                                    <Label htmlFor={`repo-url-${index}`} className="flex items-center gap-1.5 text-zinc-600 dark:text-zinc-400">
+                                        <Github className="w-3.5 h-3.5" /> Repository URL
+                                    </Label>
+                                    <Input
+                                        id={`repo-url-${index}`}
+                                        type="url"
+                                        value={item.repoUrl || ""}
+                                        onChange={(e) => updateItem(index, { repoUrl: e.target.value })}
+                                        className="mt-1.5 bg-zinc-50 dark:bg-zinc-900 focus:bg-white dark:focus:bg-zinc-950 transition-colors h-10"
+                                        placeholder="https://github.com/..."
+                                    />
+                                </div>
+                            </div>
+
+                            <div>
+                                <Label htmlFor={`tech-tags-${index}`} className="flex items-center gap-1.5 text-zinc-600 dark:text-zinc-400">
+                                    <Code className="w-3.5 h-3.5" /> Tech Stack
+                                </Label>
+                                <Input
+                                    id={`tech-tags-${index}`}
+                                    value={typeof item.techTags === 'string' ? item.techTags : (item.techTags || []).join(', ')}
+                                    onChange={(e) => updateItem(index, { techTags: e.target.value })}
+                                    className="mt-1.5 bg-zinc-50 dark:bg-zinc-900 focus:bg-white dark:focus:bg-zinc-950 transition-colors h-10"
+                                    placeholder="React, TypeScript, Tailwind"
                                 />
-                                <label htmlFor={checkboxId} className="text-xs text-zinc-500">
-                                    {isEducation ? "I currently study here" : "I currently work here"}
-                                </label>
+                                <p className="text-[11px] text-zinc-400 mt-1 ml-1">Comma separated</p>
+                            </div>
+
+                            <div>
+                                <Label htmlFor={`description-${index}`} className="text-zinc-600 dark:text-zinc-400">Description</Label>
+                                <textarea
+                                    id={`description-${index}`}
+                                    maxLength={500}
+                                    className="w-full mt-1.5 min-h-[80px] rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 focus:bg-white dark:focus:bg-zinc-950 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-indigo-500 transition-all resize-none"
+                                    value={item.description || ""}
+                                    onChange={(e) => updateItem(index, { description: e.target.value })}
+                                    placeholder="Briefly describe your contributions..."
+                                />
                             </div>
                         </div>
-                    </div>
-                    <div>
-                        <Label htmlFor={`${type}-description`}>Description</Label>
-                        <textarea
-                            id={`${type}-description`}
-                            name="description"
-                            maxLength={500}
-                            className="w-full mt-1 min-h-[60px] rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent px-3 py-2 text-sm outline-none"
-                            value={newItem.description || ""}
-                            onChange={(e) => setNewItem({ ...newItem, description: e.target.value })}
-                        />
-                    </div>
-                    <div className="flex justify-end gap-2 pt-2">
-                        <Button type="button" variant="ghost" size="sm" onClick={() => setIsAdding(false)}>Cancel</Button>
-                        <Button type="button" size="sm" onClick={handleAdd}>Add Item</Button>
-                    </div>
-                </div>
-            ) : null}
+                    );
+                })}
+            </div>
         </div>
     );
 }
@@ -521,7 +630,7 @@ function SkillsEditor({ skills, onChange }: { skills: string[]; onChange: (skill
 function SocialLinksEditor({ links, onChange }: { links: Record<string, string>; onChange: (links: Record<string, string>) => void }) {
     const entries = Object.entries(links);
     const platforms = ["Twitter", "GitHub", "LinkedIn", "Instagram", "Website", "Portfolio", "Other"];
-    const [newPlatform, setNewPlatform] = useState(platforms[0]);
+    const [newPlatform, setNewPlatform] = useState(platforms[0]!);
     const [newUrl, setNewUrl] = useState("");
     const isValidSocialUrl = (url: string) => /^https?:\/\/.+/.test(url);
     const trimmedNewUrl = newUrl.trim();
