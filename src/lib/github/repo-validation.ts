@@ -26,8 +26,9 @@ export function normalizeGithubRepoUrl(raw: string): string | null {
   const parts = url.pathname.split("/").filter(Boolean);
   if (parts.length < 2) return null;
 
-  const owner = parts[0];
-  const repo = parts[1].replace(/\.git$/i, "");
+  const [owner, repoRaw] = parts;
+  if (!owner || !repoRaw) return null;
+  const repo = repoRaw.replace(/\.git$/i, "");
 
   if (!/^[A-Za-z0-9_.-]+$/.test(owner)) return null;
   if (!/^[A-Za-z0-9_.-]+$/.test(repo)) return null;
