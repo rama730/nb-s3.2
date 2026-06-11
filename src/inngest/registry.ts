@@ -4,6 +4,7 @@ export type InngestExecutionRole = "web" | "worker";
 
 export const WORKER_ONLY_FUNCTION_IDS = [
   "project-import",
+  "project-import-hydrate",
   "git-push",
   "git-pull",
   "lock-cleanup",
@@ -23,6 +24,7 @@ export const WORKER_ONLY_FUNCTION_IDS = [
   "notifications-retention-watchdog",
   "notification-fanout",
   "notification-delivery-refresh",
+  "data-archival-cron",
 ] as const;
 
 function getWorkerOnlyFunctions() {
@@ -33,6 +35,7 @@ function getWorkerOnlyFunctions() {
   const { reconcileProjectFiles } = loadModule("./functions/project-files-reconciliation");
   const { onboardingClaimsRepair } = loadModule("./functions/onboarding-claims-repair");
   const { projectImport } = loadModule("./functions/project-import");
+  const { projectImportHydrate } = loadModule("./functions/project-import-hydrate");
   const { projectImportStaleReconcile } = loadModule("./functions/project-import-reconcile");
   const { reconcileWorkspaceProfileCounters } = loadModule("./functions/workspace-counter-reconcile");
   const { workspaceCountersRefresh } = loadModule("./functions/workspace-counter-refresh");
@@ -44,9 +47,11 @@ function getWorkerOnlyFunctions() {
   const { notificationsRetention } = loadModule("./functions/notifications-retention");
   const { notificationsRetentionWatchdog } = loadModule("./functions/notifications-retention-watchdog");
   const { notificationFanout, notificationDeliveryRefresh } = loadModule("./functions/notification-fanout");
+  const { dataArchivalCron } = loadModule("./functions/data-archival");
 
   return [
     projectImport,
+    projectImportHydrate,
     gitPush,
     gitPull,
     lockCleanup,
@@ -66,6 +71,7 @@ function getWorkerOnlyFunctions() {
     notificationsRetentionWatchdog,
     notificationFanout,
     notificationDeliveryRefresh,
+    dataArchivalCron,
   ] as const;
 }
 
@@ -79,7 +85,7 @@ export function getInngestExecutionRole(): InngestExecutionRole {
     throw new Error('INNGEST_EXECUTION_ROLE must be either "web" or "worker".');
   }
 
-  if (process.env.NODE_ENV === "production") {
+  if (process.env.NODE_ENV === "production" && process.env.NEXT_PHASE !== "phase-production-build") {
     throw new Error('INNGEST_EXECUTION_ROLE must be explicitly set in production.');
   }
 
