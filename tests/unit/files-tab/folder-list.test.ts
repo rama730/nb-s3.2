@@ -349,12 +349,12 @@ describe("FolderListView — Retry re-invokes loadFolderContent (Req 4.10)", () 
     );
   });
 
-  it("pulls `loadFolderContent` from `useExplorerBoot` (the loader Retry re-invokes)", () => {
+  it("pulls `loadFolderContent` from `FilesTabBootContext` (the loader Retry re-invokes)", () => {
     // folder.retry → runFolderLoad({ load: boot.loadFolderContent })
     assert.match(
       VIEW_SOURCE,
-      /loadFolderContent\s*\}\s*=\s*useExplorerBoot/,
-      "FolderListView must read loadFolderContent from useExplorerBoot",
+      /loadFolderContent\s*\}\s*=\s*(?:bootContext|React\.useContext\(FilesTabBootContext\))/,
+      "FolderListView must read loadFolderContent from FilesTabBootContext",
     );
   });
 
