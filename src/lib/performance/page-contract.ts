@@ -238,6 +238,16 @@ export const PAGE_PERFORMANCE_CONTRACTS: Record<string, PagePerformanceContract>
     maxInitialPayloadKb: 320,
     allowForceDynamic: true,
   }),
+  "/admin/notifications": buildUserShellContract("/admin/notifications", "src/app/admin/notifications/page.tsx", {
+    renderingMode: "dynamic",
+    cacheStrategy: "none",
+    cacheTtlSeconds: 0,
+    invalidationOwner: "none",
+    hydrationBoundary: "minimal",
+    bootstrapReadModel: "server_query",
+    maxInitialPayloadKb: 240,
+    allowForceDynamic: true,
+  }),
   "/profile": buildUserShellContract("/profile", "src/app/(main)/profile/page.tsx", {
     renderingMode: "revalidate",
     cacheTtlSeconds: 60,
