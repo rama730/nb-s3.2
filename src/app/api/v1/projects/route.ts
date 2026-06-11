@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { z } from 'zod'
 
 import { jsonError, jsonSuccess } from '@/app/api/v1/_envelope'
 import { consumeRateLimitForRoute } from '@/lib/security/rate-limit'
@@ -95,14 +96,26 @@ function logProjectsRequest(
     })
 }
 
+const projectsQuerySchema = z.object({
+    limit: z
+        .string()
+        .optional()
+        .transform((v) => (v ? Number(v) : PUBLIC_PROJECTS_FEED_DEFAULT_LIMIT))
+        .pipe(z.number().int().min(1).max(PUBLIC_PROJECTS_FEED_MAX_LIMIT)),
+    cursor: z.string().optional(),
+})
+
 export async function GET(request: Request) {
     const startedAt = Date.now()
     const requestId = getRequestId(request)
     const { searchParams } = new URL(request.url)
-    const parsedLimit = parsePositiveInt(searchParams.get('limit'), PUBLIC_PROJECTS_FEED_DEFAULT_LIMIT)
-    const cursor = decodePublicProjectsCursor(searchParams.get('cursor'))
 
-    if (!parsedLimit.ok) {
+    const queryParse = projectsQuerySchema.safeParse({
+        limit: searchParams.get('limit') ?? undefined,
+        cursor: searchParams.get('cursor') ?? undefined,
+    })
+
+    if (!queryParse.success) {
         logProjectsRequest(request, {
             requestId,
             startedAt,
@@ -114,7 +127,8 @@ export async function GET(request: Request) {
         return jsonError('Invalid pagination parameters', 400, 'BAD_REQUEST')
     }
 
-    const limit = Math.min(Math.max(1, parsedLimit.value), PUBLIC_PROJECTS_FEED_MAX_LIMIT)
+    const limit = queryParse.data.limit
+    const cursor = decodePublicProjectsCursor(queryParse.data.cursor ?? null)
     const cached = await readPublicProjectsFeedCache(limit, cursor)
     const freshCache = cached.fresh
     const staleCache = cached.stale
