@@ -1,10 +1,23 @@
-import { jsonError, jsonSuccess, logApiRoute } from '@/app/api/v1/_shared';
+import { enforceRouteLimit, jsonError, jsonSuccess, logApiRoute } from '@/app/api/v1/_shared';
 import { logger } from '@/lib/logger';
 import { getGithubImportAccessState } from '@/lib/github/import-access-state';
 
 export async function GET(request: Request) {
   const startedAt = Date.now();
   const requestId = crypto.randomUUID();
+
+  const limitResponse = await enforceRouteLimit(request, "api:v1:github:import:accessState", 60, 60);
+  if (limitResponse) {
+    logApiRoute(request, {
+      requestId,
+      action: 'github.import.access_state',
+      startedAt,
+      success: false,
+      status: 429,
+      errorCode: 'RATE_LIMITED',
+    });
+    return limitResponse;
+  }
 
   try {
     const result = await getGithubImportAccessState();
