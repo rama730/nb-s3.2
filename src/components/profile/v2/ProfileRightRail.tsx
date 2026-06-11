@@ -85,18 +85,18 @@ export const ProfileRightRail = React.memo(function ProfileRightRail({
     isOwner,
     socialLinks,
     onInvite,
+    onInviteIntent,
     onConnectionsClick,
     onEditSection,
-    publicProfileHref,
 }: {
     profile: any
     stats: ProfileStats
     isOwner: boolean
     socialLinks: any
-    onInvite: () => void
+    onInvite?: () => void
+    onInviteIntent?: () => void
     onConnectionsClick: () => void
-    onEditSection?: (section: "general" | "experience" | "education" | "skills" | "social") => void
-    publicProfileHref?: string | null
+    onEditSection?: (section: "general" | "experience" | "skills" | "social") => void
 }) {
     const vm = normalizeProfileVM(profile)
     const openTo = vm.openTo
@@ -150,10 +150,12 @@ export const ProfileRightRail = React.memo(function ProfileRightRail({
                         <div className="text-sm text-zinc-500 dark:text-zinc-400">No collaboration preferences yet.</div>
                     )}
 
-                    {!isOwner ? (
+                    {!isOwner && onInvite ? (
                         <button
                             type="button"
                             onClick={onInvite}
+                            onMouseEnter={onInviteIntent}
+                            onFocus={onInviteIntent}
                             className="w-full mt-2 inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold bg-zinc-900 text-white hover:bg-zinc-800 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-200"
                         >
                             <Briefcase className="w-4 h-4" />
@@ -263,14 +265,6 @@ export const ProfileRightRail = React.memo(function ProfileRightRail({
                             >
                                 My projects
                             </Link>
-                            {publicProfileHref ? (
-                                <Link
-                                    href={publicProfileHref}
-                                    className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-800 px-3 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700"
-                                >
-                                    Public profile
-                                </Link>
-                            ) : null}
                         </>
                     ) : (
                         <>
