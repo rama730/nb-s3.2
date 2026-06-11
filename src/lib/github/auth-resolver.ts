@@ -139,14 +139,25 @@ async function fetchGithubJson<T>(
         },
       });
 
-      const bodyText = await response.text();
+      const contentType = response.headers.get("content-type") || "";
       let body: unknown = null;
-      if (bodyText.trim().length > 0) {
-        try {
-          body = JSON.parse(bodyText);
-        } catch {
-          body = bodyText;
+      
+      try {
+        if (contentType.includes("json")) {
+          body = await response.json();
+        } else {
+          const bodyText = await response.text();
+          if (bodyText.trim().length > 0) {
+            try {
+              body = JSON.parse(bodyText);
+            } catch {
+              body = bodyText;
+            }
+          }
         }
+      } catch (err) {
+        // Fallback for empty or malformed JSON
+        body = null;
       }
 
       if (response.ok) {
