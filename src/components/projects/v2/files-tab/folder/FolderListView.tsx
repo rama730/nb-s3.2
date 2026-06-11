@@ -39,13 +39,12 @@ import { cn } from "@/lib/utils";
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 
 import { EMPTY_ARRAY, EMPTY_OBJECT } from "../../explorer/explorerTypes";
-import { useExplorerBoot } from "../../explorer/useExplorerBoot";
 import { useExplorerDragDrop } from "../../explorer/useExplorerDragDrop";
 import { useExplorerMutations } from "../../explorer/useExplorerMutations";
 import { useExplorerOperationLog } from "../../explorer/useExplorerOperationLog";
 import { ExplorerDialogsHost } from "../../explorer/ExplorerDialogsHost";
 
-import { useFolderContents } from "../hooks/useFolderContents";
+import { useFolderContents, FilesTabBootContext } from "../hooks/useFolderContents";
 import { useNavigateTo } from "../hooks/useNavigateTo";
 import { FolderListHeader } from "./FolderListHeader";
 import {
@@ -150,13 +149,11 @@ export function FolderListView({
   const navigateTo = useNavigateTo(projectId);
 
   // ── Explorer boot (provides loadFolderContent + handlers) ─────────
-  const { loadFolderContent } = useExplorerBoot({
-    projectId,
-    canEdit,
-    isActive,
-    syncStatus,
-    showToast,
-  });
+  const bootContext = React.useContext(FilesTabBootContext);
+  if (!bootContext) {
+    throw new Error("FolderListView must be used within FilesTabBootContext");
+  }
+  const { loadFolderContent } = bootContext;
 
   // ── Folder contents (status / children / retry) ───────────────────
   const folder = useFolderContents(projectId, folderId);
