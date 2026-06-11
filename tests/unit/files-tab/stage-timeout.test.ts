@@ -367,12 +367,12 @@ describe("Stage timeout — FilesTabRoot integration wiring", () => {
     // one *runtime* invocation — double-calling would start two timer
     // chains and two console warnings on a hung stage.
     const callRe =
-      /const\s+stage\s*=\s*useFilesTabStartupStage\s*\(\s*projectId\s*\)\s*;/g;
+      /const\s+(?:stage|\[\s*stage\s*\])\s*=\s*useFilesTabStartupStage\s*\(\s*projectId\s*\)\s*;/g;
     const matches = FILES_TAB_ROOT_SRC.match(callRe) ?? [];
     assert.equal(
       matches.length,
       1,
-      `Expected exactly one 'const stage = useFilesTabStartupStage(projectId);' call site in FilesTabRoot.tsx, found ${matches.length}`,
+      `Expected exactly one 'const [stage] = useFilesTabStartupStage(projectId);' call site in FilesTabRoot.tsx, found ${matches.length}`,
     );
   });
 
@@ -389,3 +389,5 @@ describe("Stage timeout — FilesTabRoot integration wiring", () => {
     );
   });
 });
+
+
