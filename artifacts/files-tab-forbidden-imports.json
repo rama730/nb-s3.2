@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-05-14T18:57:03.717Z",
+  "generatedAt": "2026-06-10T17:28:07.338Z",
   "entry": "src/components/projects/v2/files-tab/FilesTabRoot.tsx",
-  "reachableFileCount": 130,
+  "reachableFileCount": 194,
   "notes": "Static import-graph scan: top-level `import`/`export-from` edges only. `import(...)` expressions (including the inner `import()` inside `next/dynamic(() => import(...))` loaders) are NOT traversed because those code paths do not load at mount time. See Task 11.3 and design § Coexistence.",
   "summary": {
     "forbiddenTargetsTotal": 15,
