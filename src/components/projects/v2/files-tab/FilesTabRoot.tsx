@@ -83,6 +83,7 @@ import {
 import { FilesTabSidebar } from "./FilesTabSidebar";
 import { FilesTabMain } from "./FilesTabMain";
 import { QuickOpenDialog } from "./quick-open/QuickOpenDialog";
+import { HydrationProgressBanner } from "@/components/projects/HydrationProgressBanner";
 import { FilesTabBootContext } from "./hooks/useFolderContents";
 import { useFilesTabStartupStage } from "./hooks/useFilesTabStartupStage";
 import { useDeepLinkResolver } from "./hooks/useDeepLinkResolver";
@@ -158,7 +159,7 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
   const canEdit = role !== "Role_Viewer";
 
   // ── 3. Three-stage startup machine (Req 16.4) ─────────────────────
-  const stage = useFilesTabStartupStage(projectId);
+  const [stage] = useFilesTabStartupStage(projectId);
 
   // ── 4. Single explorer boot + FilesTabBootContext provision ───────
   //
@@ -170,7 +171,7 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
   // `FolderListView` still call `useExplorerBoot` themselves — that is a
   // pre-existing audit item flagged in tasks.md § 8.1, to be reconciled
   // in follow-up tasks.
-  const { loadFolderContent } = useExplorerBoot({
+  const { isBooting, accessError, loadFolderContent, handleToggleFolder, handleLoadMore } = useExplorerBoot({
     projectId,
     canEdit,
     isActive,
@@ -178,8 +179,8 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
     showToast,
   });
   const bootContextValue = useMemo(
-    () => ({ loadFolderContent }),
-    [loadFolderContent],
+    () => ({ isBooting, accessError, loadFolderContent, handleToggleFolder, handleLoadMore }),
+    [isBooting, accessError, loadFolderContent, handleToggleFolder, handleLoadMore],
   );
 
   // ── 5. Deep-link snapshot: captured ONCE at mount ─────────────────
@@ -358,8 +359,9 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
         <div
           data-testid="files-tab-root"
           data-startup-stage={stage}
-          className="flex h-full min-h-0 w-full"
+          className="relative flex h-full min-h-0 w-full"
         >
+          <HydrationProgressBanner projectId={projectId} />
           <FilesTabSidebar
             projectId={projectId}
             role={role}
