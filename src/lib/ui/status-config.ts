@@ -19,7 +19,9 @@ export type AvailabilityPresentation = {
 };
 
 export function getAvailabilityPresentation(status: string | null | undefined): AvailabilityPresentation {
-    return AVAILABILITY_CONFIG[status || ''] ?? AVAILABILITY_CONFIG.available;
+    const config = AVAILABILITY_CONFIG[status || ''];
+    if (config) return config;
+    return { color: 'text-emerald-500', label: 'Available' };
 }
 
 export function getAvailabilityLabel(status: string | null | undefined): string {
@@ -124,5 +126,11 @@ const LIFECYCLE_STATUS_STYLES: Record<string, LifecycleStatusStyle> = {
 const FALLBACK_LIFECYCLE_STATUS = LIFECYCLE_STATUS_STYLES.pending;
 
 export function getLifecycleStatusStyle(status: string): LifecycleStatusStyle {
-    return LIFECYCLE_STATUS_STYLES[status] ?? FALLBACK_LIFECYCLE_STATUS;
+    const style = LIFECYCLE_STATUS_STYLES[status];
+    if (style) return style;
+    return {
+        label: "Pending",
+        dotColor: "bg-amber-500",
+        textColor: "text-amber-600 dark:text-amber-400",
+    };
 }
