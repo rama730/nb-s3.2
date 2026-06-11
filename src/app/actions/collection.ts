@@ -7,7 +7,8 @@ import { runInFlightDeduped } from "@/lib/async/inflight-dedupe";
 import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { getProjectAccessById } from "@/lib/data/project-access";
+import { consumeRateLimit } from "@/lib/security/rate-limit";
+import { getProjectAccessById, getProjectAccessByIds } from "@/lib/data/project-access";
 
 const addProjectsInputSchema = z.object({
     collectionId: z.string().uuid(),
@@ -22,6 +23,9 @@ export async function createCollectionAction(name: string) {
         if (!user) {
             return { success: false, error: "Unauthorized" };
         }
+
+        const { allowed } = await consumeRateLimit(`collection:create:${user.id}`, 30, 60);
+        if (!allowed) return { success: false, error: "Rate limit exceeded" };
 
         const [newCollection] = await db.insert(collections).values({
             name,
@@ -74,6 +78,9 @@ export async function addProjectsToCollectionAction(collectionId: string, projec
             return { success: false, error: "Unauthorized" };
         }
 
+        const { allowed } = await consumeRateLimit(`collection:add:${user.id}`, 30, 60);
+        if (!allowed) return { success: false, error: "Rate limit exceeded" };
+
         const validated = addProjectsInputSchema.parse({
             collectionId,
             projectIds,
@@ -88,15 +95,9 @@ export async function addProjectsToCollectionAction(collectionId: string, projec
             return { success: false, error: "Collection not found or unauthorized" };
         }
 
-        const accessByProject = await Promise.all(
-            validated.projectIds.map(async (projectId) => ({
-                projectId,
-                access: await getProjectAccessById(projectId, user.id),
-            }))
-        );
-        const readableProjectIds = accessByProject
-            .filter(({ access }) => access.canRead)
-            .map(({ projectId }) => projectId);
+        const accessByProject = await getProjectAccessByIds(validated.projectIds, user.id);
+        const readableProjectIds = validated.projectIds
+            .filter(projectId => accessByProject[projectId]?.canRead);
 
         if (!readableProjectIds.length) {
             return { success: false, error: "No readable projects were provided" };
@@ -158,6 +159,9 @@ export async function deleteCollectionAction(collectionId: string) {
         if (!user) {
             return { success: false, error: "Unauthorized" };
         }
+
+        const { allowed } = await consumeRateLimit(`collection:delete:${user.id}`, 20, 60);
+        if (!allowed) return { success: false, error: "Rate limit exceeded" };
 
         await db.delete(collections)
             .where(and(eq(collections.id, collectionId), eq(collections.ownerId, user.id)));
