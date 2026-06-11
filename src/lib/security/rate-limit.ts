@@ -103,6 +103,7 @@ export type RateLimitScopePolicy = {
 export const RATE_LIMIT_SCOPE_POLICIES: RateLimitScopePolicy[] = [
     // Credential / auth surface — never allow during an outage.
     { prefix: 'auth:', failMode: 'fail_closed', category: 'sensitive' },
+    { prefix: 'api:v1:auth:', failMode: 'fail_closed', category: 'sensitive' },
     { prefix: 'login:', failMode: 'fail_closed', category: 'sensitive' },
     { prefix: 'signup:', failMode: 'fail_closed', category: 'sensitive' },
     { prefix: 'password:', failMode: 'fail_closed', category: 'sensitive' },
@@ -113,6 +114,7 @@ export const RATE_LIMIT_SCOPE_POLICIES: RateLimitScopePolicy[] = [
     { prefix: 'onboarding:', failMode: 'fail_closed', category: 'sensitive' },
     { prefix: 'upload:', failMode: 'fail_closed', category: 'sensitive' },
     { prefix: 'admin-', failMode: 'fail_closed', category: 'sensitive' },
+    { prefix: 'api:v1:cleanup:', failMode: 'fail_closed', category: 'sensitive' },
     { prefix: 'connections-send', failMode: 'fail_closed', category: 'sensitive' },
     // Hot paths where blocking every user on Redis hiccup is worse than the
     // short window of unchecked traffic. The local bucket in dev avoids
@@ -120,9 +122,13 @@ export const RATE_LIMIT_SCOPE_POLICIES: RateLimitScopePolicy[] = [
     { prefix: 'presence:', failMode: 'stale_or_shed', category: 'soft' },
     { prefix: 'typing:', failMode: 'stale_or_shed', category: 'soft' },
     { prefix: 'realtime:', failMode: 'stale_or_shed', category: 'soft' },
+    { prefix: 'api:v1:projects:', failMode: 'stale_or_shed', category: 'soft' },
+    { prefix: 'api:v1:files:', failMode: 'stale_or_shed', category: 'soft' },
+    { prefix: 'api:v1:github:', failMode: 'stale_or_shed', category: 'soft' },
     // Public, unauthenticated read endpoints: fail open so the site stays up.
     { prefix: 'health:', failMode: 'allow', category: 'public' },
     { prefix: 'ready:', failMode: 'allow', category: 'public' },
+    { prefix: 'api:v1:webhooks:', failMode: 'allow', category: 'public' },
 ]
 
 export function resolveScopeFailMode(identifier: string): RateLimitFailMode | undefined {
