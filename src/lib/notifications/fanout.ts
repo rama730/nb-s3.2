@@ -1,4 +1,5 @@
 import { inngest } from "@/inngest/client";
+import { db } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import {
     createNotification,
@@ -11,6 +12,7 @@ import type {
 } from "@/lib/notifications/types";
 
 type NotificationWriteExecutor = Parameters<typeof createNotification>[1];
+const NOTIFICATION_FANOUT_EVENT_CHUNK_SIZE = 100;
 
 function normalizeWrites(writes: NotificationFanoutWrite[]): NotificationFanoutWrite[] {
     return writes.filter((write) => write.input.recipientUserId && write.input.dedupeKey);
@@ -24,7 +26,10 @@ export type NotificationFanoutDeliveryResult = {
 
 export type NotificationFanoutEnqueueResult = {
     enqueued: number;
+    delivered?: number;
+    failed?: number;
     error?: string;
+    mode?: "queued" | "inline-fallback" | "failed";
 };
 
 export async function enqueueNotificationFanout(event: NotificationFanoutEvent): Promise<NotificationFanoutEnqueueResult> {
@@ -42,17 +47,60 @@ export async function enqueueNotificationFanout(event: NotificationFanoutEvent):
             name: "notification/fanout",
             data: payload,
         });
-        return { enqueued: writes.length };
+        return { enqueued: writes.length, mode: "queued" };
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        logger.error("notifications.fanout_enqueue_failed", {
-            module: "notifications",
-            source: event.source ?? null,
-            traceId: event.traceId ?? null,
-            count: writes.length,
-            error: errorMessage,
-        });
-        return { enqueued: 0, error: errorMessage };
+        try {
+            const fallback = await deliverNotificationFanout({
+                ...payload,
+                source: `${payload.source ?? "notification"}:inline-fallback`,
+            }, db);
+            if (fallback.failed === 0) {
+                logger.info("notifications.fanout_enqueue_inline_fallback", {
+                    module: "notifications",
+                    source: event.source ?? null,
+                    traceId: event.traceId ?? null,
+                    count: writes.length,
+                    error: errorMessage,
+                });
+                return {
+                    enqueued: 0,
+                    delivered: fallback.delivered,
+                    failed: 0,
+                    mode: "inline-fallback",
+                };
+            }
+
+            logger.error("notifications.fanout_enqueue_failed", {
+                module: "notifications",
+                source: event.source ?? null,
+                traceId: event.traceId ?? null,
+                count: writes.length,
+                error: `${errorMessage}; inline fallback failed ${fallback.failed}/${writes.length}`,
+            });
+            return {
+                enqueued: 0,
+                delivered: fallback.delivered,
+                failed: fallback.failed,
+                error: errorMessage,
+                mode: "failed",
+            };
+        } catch (fallbackError) {
+            const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+            logger.error("notifications.fanout_enqueue_failed", {
+                module: "notifications",
+                source: event.source ?? null,
+                traceId: event.traceId ?? null,
+                count: writes.length,
+                error: `${errorMessage}; inline fallback threw: ${fallbackMessage}`,
+            });
+            return {
+                enqueued: 0,
+                failed: writes.length,
+                error: errorMessage,
+                mode: "failed",
+            };
+        }
     }
 }
 
@@ -118,5 +166,24 @@ export async function emitNotificationWrites(
     if (executor) {
         return deliverNotificationFanout({ writes: normalized, source: "inline" }, executor);
     }
-    return enqueueNotificationFanout({ writes: normalized, source: "source-action" });
+    if (normalized.length <= NOTIFICATION_FANOUT_EVENT_CHUNK_SIZE) {
+        return enqueueNotificationFanout({ writes: normalized, source: "source-action" });
+    }
+
+    const chunks: NotificationFanoutWrite[][] = [];
+    for (let index = 0; index < normalized.length; index += NOTIFICATION_FANOUT_EVENT_CHUNK_SIZE) {
+        chunks.push(normalized.slice(index, index + NOTIFICATION_FANOUT_EVENT_CHUNK_SIZE));
+    }
+
+    const results = await Promise.all(chunks.map((chunk, index) =>
+        enqueueNotificationFanout({
+            writes: chunk,
+            source: `source-action:batch:${index + 1}/${chunks.length}`,
+        }),
+    ));
+
+    return {
+        enqueued: results.reduce((total, result) => total + result.enqueued, 0),
+        error: results.find((result) => result.error)?.error,
+    };
 }
