@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils'
 export interface StepTransitionProps {
   children: React.ReactNode
   step: number
+  transitionKey?: string | number
   direction: 'forward' | 'backward' | 'section'
 }
 
@@ -53,11 +54,11 @@ export const ENTER_DURATION = 200
  * Respects `prefers-reduced-motion` and `data-reduce-motion` — instant swap when enabled.
  * Moves focus to [data-step-header] after transition completes.
  */
-export function StepTransition({ children, step, direction }: StepTransitionProps) {
+export function StepTransition({ children, step, transitionKey = step, direction }: StepTransitionProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [displayedChildren, setDisplayedChildren] = useState(children)
   const [phase, setPhase] = useState<'idle' | 'exit' | 'enter-start' | 'enter-active'>('idle')
-  const prevStepRef = useRef(step)
+  const previousKeyRef = useRef(transitionKey)
   const animationRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const rafRef = useRef<number | null>(null)
 
@@ -79,12 +80,12 @@ export function StepTransition({ children, step, direction }: StepTransitionProp
 
   useEffect(() => {
     // No transition on initial render
-    if (prevStepRef.current === step) {
+    if (previousKeyRef.current === transitionKey) {
       setDisplayedChildren(children)
       return
     }
 
-    prevStepRef.current = step
+    previousKeyRef.current = transitionKey
 
     // Instant swap when reduced motion is preferred
     if (prefersReducedMotion()) {
@@ -122,7 +123,7 @@ export function StepTransition({ children, step, direction }: StepTransitionProp
         })
       })
     }, EXIT_DURATION)
-  }, [step, children, moveFocusToHeader])
+  }, [children, moveFocusToHeader, transitionKey])
 
   // Compute inline styles based on current phase
   const style: React.CSSProperties = (() => {
@@ -157,9 +158,9 @@ export function StepTransition({ children, step, direction }: StepTransitionProp
   return (
     <div
       ref={containerRef}
-      className={cn('will-change-[opacity,transform]')}
+      className={cn(phase !== 'idle' && 'will-change-[opacity,transform]')}
       style={style}
-      aria-live="polite"
+      aria-busy={phase !== 'idle'}
     >
       {displayedChildren}
     </div>
