@@ -1,4 +1,4 @@
-import type { ProjectReadmeQualityReport } from "@/lib/projects/readme";
+import type { ProjectDocQualityReport } from "@/lib/projects/doc";
 
 const SECTION_PATTERNS = {
     overview: /(^|\n)#{1,3}\s+(overview|about|introduction)\b/i,
@@ -15,7 +15,7 @@ const MARKDOWN_IMAGE_PATTERN = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+["'][^"']*["'])?\)
 const HTML_IMAGE_PATTERN = /<img\b[^>]*>/gi;
 const TABLE_ROW_PATTERN = /^\s*\|.+\|\s*$/gm;
 const QUALITY_CACHE_LIMIT = 24;
-const qualityCache = new Map<string, ProjectReadmeQualityReport>();
+const qualityCache = new Map<string, ProjectDocQualityReport>();
 
 function stableQualityCacheKey(content: string) {
     let hash = 2166136261;
@@ -26,7 +26,7 @@ function stableQualityCacheKey(content: string) {
     return `${content.length}:${hash >>> 0}`;
 }
 
-function rememberQualityReport(key: string, report: ProjectReadmeQualityReport) {
+function rememberQualityReport(key: string, report: ProjectDocQualityReport) {
     if (qualityCache.has(key)) qualityCache.delete(key);
     qualityCache.set(key, report);
     while (qualityCache.size > QUALITY_CACHE_LIMIT) {
@@ -110,7 +110,7 @@ function analyzeReadmeVisuals(content: string) {
     };
 }
 
-export function evaluateProjectReadmeQuality(content: string): ProjectReadmeQualityReport {
+export function evaluateProjectDocQuality(content: string): ProjectDocQualityReport {
     const cacheKey = stableQualityCacheKey(content);
     const cached = qualityCache.get(cacheKey);
     if (cached) return cached;
@@ -119,7 +119,7 @@ export function evaluateProjectReadmeQuality(content: string): ProjectReadmeQual
     const sectionPresence = Object.fromEntries(
         Object.entries(SECTION_PATTERNS).map(([key, pattern]) => [key, pattern.test(content)])
     );
-    const issues: ProjectReadmeQualityReport["issues"] = [];
+    const issues: ProjectDocQualityReport["issues"] = [];
 
     const add = (id: string, severity: "info" | "warning" | "error", label: string, description: string) => {
         issues.push({ id, severity, label, description });
@@ -135,14 +135,14 @@ export function evaluateProjectReadmeQuality(content: string): ProjectReadmeQual
 
     const visuals = analyzeReadmeVisuals(content);
     if (visuals.missingAltSources.length) add("image-missing-alt", "warning", "Image missing alt text", `Add short alt text for ${visuals.missingAltSources.slice(0, 2).join(", ")} so images remain useful for screen readers and broken-image states.`);
-    if (visuals.externalImageSources.length) add("external-image", "warning", "External image source", `Check ${visuals.externalImageSources.slice(0, 2).join(", ")} or use managed README media when privacy and availability matter.`);
-    if (visuals.unboundedImageSources.length) add("image-unbounded-size", "info", "Image without display size", `Set a sensible width for ${visuals.unboundedImageSources.slice(0, 2).join(", ")} so large visuals do not overpower the README.`);
-    if (visuals.oversizedImageSources.length) add("image-oversized", "warning", "Oversized image dimensions", `Reduce explicit dimensions for ${visuals.oversizedImageSources.slice(0, 2).join(", ")} to stay near GitHub README width.`);
+    if (visuals.externalImageSources.length) add("external-image", "warning", "External image source", `Check ${visuals.externalImageSources.slice(0, 2).join(", ")} or use managed Doc media when privacy and availability matter.`);
+    if (visuals.unboundedImageSources.length) add("image-unbounded-size", "info", "Image without display size", `Set a sensible width for ${visuals.unboundedImageSources.slice(0, 2).join(", ")} so large visuals do not overpower the Doc.`);
+    if (visuals.oversizedImageSources.length) add("image-oversized", "warning", "Oversized image dimensions", `Reduce explicit dimensions for ${visuals.oversizedImageSources.slice(0, 2).join(", ")} to stay near GitHub Doc width.`);
     if (visuals.imageInTable) add("image-table-layout", "info", "Image inside table", "Use smaller before/after widths in table cells so comparisons stay readable on narrow screens.");
 
     const projectLinks = Array.from(content.matchAll(PROJECT_LINK_PATTERN));
     if (projectLinks.length > 20) add("many-project-links", "info", "Many project links", "Consider grouping project links into an Important Links section.");
-    if (bytes > 500 * 1024) add("too-large", "error", "README too large", "Keep README content under 500 KiB and move long docs into files.");
+    if (bytes > 500 * 1024) add("too-large", "error", "Doc too large", "Keep Doc content under 500 KiB and move long docs into files.");
 
     const score = Math.max(0, 100 - issues.reduce((total, issue) => {
         if (issue.severity === "error") return total + 35;
