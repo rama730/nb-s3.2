@@ -4,7 +4,7 @@ import { useCallback, useMemo, useState } from "react";
 
 import { createClient } from "@/lib/supabase/client";
 import type { FileVersion, ProjectNode } from "@/lib/db/schema";
-import { listFileVersions, replaceNodeWithNewVersion, restoreFileVersion } from "@/app/actions/files/versions";
+import { listFileVersions, replaceNodeWithNewVersion, restoreFileVersion, deleteFileVersionAction } from "@/app/actions/files/versions";
 import { getUploadPresignedUrl } from "@/app/actions/upload";
 import { buildProjectFileKey } from "@/lib/storage/project-file-key";
 import { computeContentHash } from "@/lib/files/content-hash";
@@ -17,11 +17,16 @@ export interface LockConflictInfo {
   lockedBy: { userId: string; displayName: string; lockedAt: string };
 }
 
+export type FileVersionWithProfile = FileVersion & {
+  uploadedByName?: string | null;
+  uploadedByUsername?: string | null;
+};
+
 export interface UseFileVersionsReturn {
-  versions: FileVersion[];
+  versions: FileVersionWithProfile[];
   isLoading: boolean;
   error: string | null;
-  listVersions: () => Promise<FileVersion[]>;
+  listVersions: () => Promise<FileVersionWithProfile[]>;
   saveAsNewVersion: (
     file: File,
     options?: { comment?: string | null },
@@ -30,7 +35,11 @@ export interface UseFileVersionsReturn {
     | { success: false; error: string; lockConflict?: LockConflictInfo }
   >;
   restoreVersion: (versionNumber: number) => Promise<
-    | { success: true; version: FileVersion }
+    | { success: true; version: FileVersion; node: ProjectNode }
+    | { success: false; error: string }
+  >;
+  deleteVersion: (versionNumber: number) => Promise<
+    | { success: true; nextActiveVersion?: number | null; node?: ProjectNode }
     | { success: false; error: string }
   >;
 }
@@ -196,14 +205,14 @@ export async function saveFileAsNewVersion(params: {
  */
 export function useFileVersions(projectId: string, nodeId: string): UseFileVersionsReturn {
   const supabase = useMemo(() => createClient(), []);
-  const [versions, setVersions] = useState<FileVersion[]>([]);
+  const [versions, setVersions] = useState<FileVersionWithProfile[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // -------------------------------------------------------------------------
   // listVersions — fetches all versions sorted by versionNumber descending
   // -------------------------------------------------------------------------
-  const listVersions = useCallback(async (): Promise<FileVersion[]> => {
+  const listVersions = useCallback(async (): Promise<FileVersionWithProfile[]> => {
     setIsLoading(true);
     setError(null);
     try {
@@ -259,21 +268,48 @@ export function useFileVersions(projectId: string, nodeId: string): UseFileVersi
     async (
       versionNumber: number,
     ): Promise<
-      | { success: true; version: FileVersion }
+      | { success: true; version: FileVersion; node: ProjectNode }
       | { success: false; error: string }
     > => {
       setError(null);
       try {
         const result = await restoreFileVersion(projectId, nodeId, versionNumber);
 
-        // Update local versions cache — prepend the new version row
-        setVersions((prev) => [result.version, ...prev]);
-
-        return { success: true, version: result.version };
+        return { success: true, version: result.version, node: result.node as ProjectNode };
       } catch (err) {
         const message = err instanceof Error ? err.message : "Restore failed";
         setError(message);
         return { success: false, error: message };
+      }
+    },
+    [projectId, nodeId],
+  );
+
+  // -------------------------------------------------------------------------
+  // deleteVersion — deletes a specific historical version
+  // -------------------------------------------------------------------------
+  const deleteVersion = useCallback(
+    async (
+      versionNumber: number,
+    ): Promise<
+      | { success: true; nextActiveVersion?: number | null; node?: ProjectNode }
+      | { success: false; error: string }
+    > => {
+      setError(null);
+      setIsLoading(true);
+      try {
+        const result = await deleteFileVersionAction(projectId, nodeId, versionNumber);
+        if (result.success) {
+          // Optimistically update local versions list by filtering out the deleted version
+          setVersions((prev) => prev.filter((v) => v.version !== versionNumber));
+        }
+        return { success: true, nextActiveVersion: result.nextActiveVersion, node: result.node as ProjectNode | undefined };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Delete failed";
+        setError(message);
+        return { success: false, error: message };
+      } finally {
+        setIsLoading(false);
       }
     },
     [projectId, nodeId],
@@ -286,5 +322,6 @@ export function useFileVersions(projectId: string, nodeId: string): UseFileVersi
     listVersions,
     saveAsNewVersion,
     restoreVersion,
-  }), [versions, isLoading, error, listVersions, saveAsNewVersion, restoreVersion]);
+    deleteVersion,
+  }), [versions, isLoading, error, listVersions, saveAsNewVersion, restoreVersion, deleteVersion]);
 }
