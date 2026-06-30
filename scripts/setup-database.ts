@@ -4,6 +4,7 @@
  */
 
 import { readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import postgres from "postgres";
 import * as dotenv from "dotenv";
@@ -19,19 +20,44 @@ type JournalFile = {
   entries: JournalEntry[];
 };
 
+type AppliedMigration = {
+  tag: string;
+  checksum: string | null;
+  status: "applying" | "completed" | "failed";
+};
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: join(__dirname, "..", ".env.local") });
 
 const DATABASE_URL = process.env.DATABASE_URL;
+const DRY_RUN = process.argv.includes("--dry-run") || process.env.MIGRATION_DRY_RUN === "1";
 const JOURNAL_TABLE = "app_migration_journal";
 const MIGRATION_LOCK_KEY = "nb-s3:migration-setup";
+const NON_TRANSACTIONAL_MIGRATIONS = new Set([
+  "0006_messages_performance_indexes",
+  "0039_files_workspace_scale_indexes",
+  "0087_non_transactional_indexes",
+  "0092_project_updates_performance_indexes",
+  "0099_schema_lineage_and_fk_indexes",
+]);
+const REQUIRED_REALTIME_PUBLICATION_TABLES = [
+  "profiles",
+  "projects",
+  "tasks",
+  "task_comments",
+  "task_subtasks",
+  "task_comment_likes",
+  "task_node_links",
+  "project_updates",
+  "project_update_comments",
+] as const;
 
-if (!DATABASE_URL) {
+if (!DATABASE_URL && !DRY_RUN) {
   console.error("❌ DATABASE_URL not found in .env.local");
   process.exit(1);
 }
 
-const sql = postgres(DATABASE_URL, {
+const sql = postgres(DATABASE_URL || "postgres://dry-run.invalid/unused", {
   prepare: false,
   ssl: "require",
 });
@@ -52,6 +78,14 @@ function resolveWorkspacePath(...parts: string[]) {
   return path.join(process.cwd(), ...parts);
 }
 
+function sqlLiteral(value: string) {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+function sqlTextArray(values: readonly string[]) {
+  return `ARRAY[${values.map(sqlLiteral).join(", ")}]`;
+}
+
 async function readJournal(): Promise<JournalFile> {
   const source = await readFile(resolveWorkspacePath("drizzle", "meta", "_journal.json"), "utf8");
   return JSON.parse(source) as JournalFile;
@@ -61,8 +95,52 @@ async function ensureJournalTable() {
   await sql.unsafe(`
     CREATE TABLE IF NOT EXISTS public.${JOURNAL_TABLE} (
       tag text PRIMARY KEY,
-      applied_at timestamptz NOT NULL DEFAULT now()
-    )
+      applied_at timestamptz NOT NULL DEFAULT now(),
+      checksum text,
+      status text NOT NULL DEFAULT 'completed',
+      started_at timestamptz,
+      completed_at timestamptz,
+      error_message text
+    );
+
+    ALTER TABLE public.${JOURNAL_TABLE}
+      ADD COLUMN IF NOT EXISTS checksum text,
+      ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'completed',
+      ADD COLUMN IF NOT EXISTS started_at timestamptz,
+      ADD COLUMN IF NOT EXISTS completed_at timestamptz,
+      ADD COLUMN IF NOT EXISTS error_message text;
+
+    UPDATE public.${JOURNAL_TABLE}
+    SET status = 'completed',
+        completed_at = COALESCE(completed_at, applied_at)
+    WHERE status IS NULL OR status NOT IN ('applying', 'completed', 'failed');
+
+    DO $journal_constraint$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conrelid = 'public.${JOURNAL_TABLE}'::regclass
+          AND conname = 'app_migration_journal_status_check'
+      ) THEN
+        ALTER TABLE public.${JOURNAL_TABLE}
+          ADD CONSTRAINT app_migration_journal_status_check
+          CHECK (status IN ('applying', 'completed', 'failed'));
+      END IF;
+    END
+    $journal_constraint$;
+  `);
+}
+
+async function ensureAuthUidHelper() {
+  await sql.unsafe(`
+    CREATE OR REPLACE FUNCTION public.get_auth_uid()
+    RETURNS uuid
+    LANGUAGE sql STABLE
+    SET search_path = ''
+    AS $$
+      SELECT nullif(current_setting('request.jwt.claim.sub', true), '')::uuid;
+    $$;
   `);
 }
 
@@ -74,13 +152,13 @@ async function releaseMigrationLock() {
   await sql`SELECT pg_advisory_unlock(hashtext(${MIGRATION_LOCK_KEY}))`;
 }
 
-async function readAppliedTags() {
-  const rows = await sql<{ tag: string }[]>`
-    SELECT tag
+async function readAppliedMigrations() {
+  const rows = await sql<AppliedMigration[]>`
+    SELECT tag, checksum, status
     FROM public.app_migration_journal
     ORDER BY applied_at ASC, tag ASC
   `;
-  return new Set(rows.map((row) => row.tag));
+  return new Map(rows.map((row) => [row.tag, row]));
 }
 
 function splitMigrationStatements(source: string) {
@@ -88,6 +166,40 @@ function splitMigrationStatements(source: string) {
     .split("--> statement-breakpoint")
     .map((statement) => statement.trim())
     .filter(Boolean);
+}
+
+async function readMigration(tag: string) {
+  const filePath = resolveWorkspacePath("drizzle", `${tag}.sql`);
+  const source = await readFile(filePath, "utf8");
+  return {
+    checksum: createHash("sha256").update(source).digest("hex"),
+    statements: splitMigrationStatements(source),
+  };
+}
+
+async function readMigrationStatements(tag: string) {
+  return (await readMigration(tag)).statements;
+}
+
+async function validateMigrationSources(entries: JournalEntry[]) {
+  const seenIndexes = new Set<number>();
+  const seenTags = new Set<string>();
+
+  for (const entry of [...entries].sort((a, b) => a.idx - b.idx)) {
+    if (seenIndexes.has(entry.idx)) throw new Error(`Duplicate migration index: ${entry.idx}`);
+    if (seenTags.has(entry.tag)) throw new Error(`Duplicate migration tag: ${entry.tag}`);
+    seenIndexes.add(entry.idx);
+    seenTags.add(entry.tag);
+
+    const { statements } = await readMigration(entry.tag);
+    if (statements.length === 0) throw new Error(`Migration ${entry.tag} has no executable statements.`);
+    const containsConcurrentOperation = statements.some((statement) => /\bCONCURRENTLY\b/i.test(statement));
+    if (containsConcurrentOperation && !NON_TRANSACTIONAL_MIGRATIONS.has(entry.tag)) {
+      throw new Error(
+        `Migration ${entry.tag} contains a concurrent operation but is not allowlisted as non-transactional.`,
+      );
+    }
+  }
 }
 
 async function databaseHasExistingApplicationSchema() {
@@ -203,29 +315,123 @@ function inferBootstrapEntries(entries: JournalEntry[], signals: ExistingSchemaS
 
 async function bootstrapAppliedTags(entries: JournalEntry[]) {
   for (const entry of entries) {
+    const { checksum } = await readMigration(entry.tag);
     await sql`
-      INSERT INTO public.app_migration_journal (tag)
-      VALUES (${entry.tag})
+      INSERT INTO public.app_migration_journal (
+        tag,
+        checksum,
+        status,
+        started_at,
+        completed_at
+      )
+      VALUES (${entry.tag}, ${checksum}, 'completed', now(), now())
       ON CONFLICT (tag) DO NOTHING
     `;
   }
 }
 
 async function applyMigration(entry: JournalEntry) {
-  const filePath = resolveWorkspacePath("drizzle", `${entry.tag}.sql`);
-  const source = await readFile(filePath, "utf8");
-  const statements = splitMigrationStatements(source);
+  const { checksum, statements } = await readMigration(entry.tag);
+  const isNonTransactional = NON_TRANSACTIONAL_MIGRATIONS.has(entry.tag);
 
-  console.log(`📦 Applying migration ${entry.tag} (${statements.length} statement${statements.length === 1 ? "" : "s"})`);
-  for (const statement of statements) {
-    await sql.unsafe(statement);
+  const containsConcurrentOperation = statements.some((statement) => /\bCONCURRENTLY\b/i.test(statement));
+  if (containsConcurrentOperation && !isNonTransactional) {
+    throw new Error(
+      `Migration ${entry.tag} contains a concurrent operation but is not allowlisted as non-transactional.`,
+    );
   }
 
+  console.log(
+    `📦 Applying migration ${entry.tag} (${statements.length} statement${statements.length === 1 ? "" : "s"}, ${isNonTransactional ? "non-transactional" : "transactional"})`,
+  );
+
   await sql`
-    INSERT INTO public.app_migration_journal (tag)
-    VALUES (${entry.tag})
-    ON CONFLICT (tag) DO NOTHING
+    INSERT INTO public.app_migration_journal (
+      tag,
+      checksum,
+      status,
+      started_at,
+      completed_at,
+      error_message
+    )
+    VALUES (${entry.tag}, ${checksum}, 'applying', now(), null, null)
+    ON CONFLICT (tag) DO UPDATE
+    SET checksum = EXCLUDED.checksum,
+        status = 'applying',
+        started_at = now(),
+        completed_at = null,
+        error_message = null
   `;
+
+  try {
+    if (isNonTransactional) {
+      for (const statement of statements) {
+        await sql.unsafe(statement);
+      }
+      await sql`
+        UPDATE public.app_migration_journal
+        SET status = 'completed',
+            applied_at = now(),
+            completed_at = now(),
+            error_message = null
+        WHERE tag = ${entry.tag}
+      `;
+      return;
+    }
+
+    await sql.begin(async (transaction) => {
+      for (const statement of statements) {
+        await transaction.unsafe(statement);
+      }
+      await transaction.unsafe(
+        `UPDATE public.app_migration_journal
+         SET status = 'completed',
+             applied_at = now(),
+             completed_at = now(),
+             error_message = null
+         WHERE tag = $1`,
+        [entry.tag],
+      );
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await sql`
+      UPDATE public.app_migration_journal
+      SET status = 'failed',
+          completed_at = now(),
+          error_message = ${message.slice(0, 2000)}
+      WHERE tag = ${entry.tag}
+    `;
+    throw error;
+  }
+}
+
+async function validateAndBackfillChecksums(
+  entries: JournalEntry[],
+  appliedMigrations: Map<string, AppliedMigration>,
+) {
+  for (const entry of entries) {
+    const applied = appliedMigrations.get(entry.tag);
+    if (!applied || applied.status !== "completed") continue;
+
+    const { checksum } = await readMigration(entry.tag);
+    if (applied.checksum && applied.checksum !== checksum) {
+      throw new Error(
+        `Checksum mismatch for applied migration ${entry.tag}. Applied migrations are immutable; create a new migration instead.`,
+      );
+    }
+
+    if (!applied.checksum) {
+      await sql`
+        UPDATE public.app_migration_journal
+        SET checksum = ${checksum},
+            completed_at = COALESCE(completed_at, applied_at),
+            status = 'completed'
+        WHERE tag = ${entry.tag}
+      `;
+      appliedMigrations.set(entry.tag, { ...applied, checksum });
+    }
+  }
 }
 
 const PROJECT_UPDATES_REPAIR_BEGIN = "-- project_updates_schema_repair_begin";
@@ -258,6 +464,86 @@ async function ensureProjectUpdatesSchema() {
     await sql.unsafe(statement);
   }
 }
+
+async function ensureProjectUpdateDraftsRls() {
+  const [dependencies] = await sql<{ ready: boolean }[]>`
+    SELECT
+      to_regclass('public.project_update_drafts') IS NOT NULL
+      AND to_regclass('public.projects') IS NOT NULL
+      AND to_regclass('public.project_members') IS NOT NULL AS ready
+  `;
+
+  if (dependencies?.ready !== true) {
+    return;
+  }
+
+  const statements = await readMigrationStatements("0083_project_update_drafts_rls");
+  for (const statement of statements) {
+    await sql.unsafe(statement);
+  }
+}
+
+async function ensureRealtimePublicationCoverage() {
+  await sql.unsafe(`
+    DO $repair$
+    DECLARE
+      realtime_table text;
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'supabase_realtime') THEN
+        RETURN;
+      END IF;
+
+      FOREACH realtime_table IN ARRAY ${sqlTextArray(REQUIRED_REALTIME_PUBLICATION_TABLES)} LOOP
+        IF to_regclass(format('public.%I', realtime_table)) IS NULL THEN
+          CONTINUE;
+        END IF;
+
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_publication_tables
+          WHERE pubname = 'supabase_realtime'
+            AND schemaname = 'public'
+            AND tablename = realtime_table
+        ) THEN
+          EXECUTE format('ALTER PUBLICATION supabase_realtime ADD TABLE public.%I', realtime_table);
+        END IF;
+      END LOOP;
+    END
+    $repair$;
+  `);
+}
+
+async function ensureProjectUpdateMediaStorage() {
+  const [dependencies] = await sql<{ ready: boolean }[]>`
+    SELECT
+      to_regclass('storage.buckets') IS NOT NULL
+      AND to_regclass('public.projects') IS NOT NULL
+      AND to_regclass('public.project_members') IS NOT NULL AS ready
+  `;
+
+  if (dependencies?.ready !== true) {
+    return;
+  }
+
+  const statements = await readMigrationStatements("0085_project_update_media_storage");
+  for (const statement of statements) {
+    await sql.unsafe(statement);
+  }
+}
+
+async function cleanupOrphanTypingIndicatorFunctions() {
+  await sql.unsafe(`
+    DO $repair$
+    BEGIN
+      IF to_regclass('public.typing_indicators') IS NULL THEN
+        DROP FUNCTION IF EXISTS public.cleanup_old_typing_indicators();
+        DROP FUNCTION IF EXISTS public.update_typing_timestamp();
+      END IF;
+    END
+    $repair$;
+  `);
+}
+
 async function ensureLatestSchemaRepairs() {
   const preferences = DEFAULT_NOTIFICATION_PREFERENCES.replace(/'/g, "''");
 
@@ -312,19 +598,37 @@ async function ensureLatestSchemaRepairs() {
   `);
 
   await ensureProjectUpdatesSchema();
+  await ensureProjectUpdateDraftsRls();
+  await ensureRealtimePublicationCoverage();
+  await ensureProjectUpdateMediaStorage();
+  await cleanupOrphanTypingIndicatorFunctions();
 }
 
 async function setupDatabase() {
   console.log("🚀 Starting database setup via Drizzle migrations...\n");
   const journal = await readJournal();
+  await validateMigrationSources(journal.entries);
+
+  if (DRY_RUN) {
+    console.log(`✅ Validated ${journal.entries.length} migration sources without connecting to the database.`);
+    await sql.end();
+    return;
+  }
 
   await ensureJournalTable();
   await acquireMigrationLock();
   try {
-    let appliedTags = await readAppliedTags();
+    await ensureAuthUidHelper();
+    let appliedMigrations = await readAppliedMigrations();
     const hasExistingSchema = await databaseHasExistingApplicationSchema();
 
-    if (appliedTags.size === 0 && hasExistingSchema) {
+    if (appliedMigrations.size === 0 && hasExistingSchema) {
+      if (process.env.ALLOW_MIGRATION_JOURNAL_BOOTSTRAP !== "1") {
+        throw new Error(
+          "Database contains application tables without migration lineage. " +
+          "Refusing to infer applied migrations; set ALLOW_MIGRATION_JOURNAL_BOOTSTRAP=1 only for an approved one-time legacy adoption.",
+        );
+      }
       const schemaSignals = await readExistingSchemaSignals();
       if (!schemaSignals.hasLegacyCoreSchema) {
         throw new Error(
@@ -338,17 +642,24 @@ async function setupDatabase() {
         `🔁 Existing schema detected without migration journal; backfilling ${inferredEntries.length} inferred migration tag(s).`,
       );
       await bootstrapAppliedTags(inferredEntries);
-      appliedTags = await readAppliedTags();
+      appliedMigrations = await readAppliedMigrations();
     }
+
+    await validateAndBackfillChecksums(journal.entries, appliedMigrations);
 
     let appliedCount = 0;
     for (const entry of journal.entries.sort((a, b) => a.idx - b.idx)) {
-      if (appliedTags.has(entry.tag)) {
+      const applied = appliedMigrations.get(entry.tag);
+      if (applied?.status === "completed") {
         continue;
       }
       await applyMigration(entry);
       appliedCount += 1;
-      appliedTags.add(entry.tag);
+      appliedMigrations.set(entry.tag, {
+        tag: entry.tag,
+        checksum: (await readMigration(entry.tag)).checksum,
+        status: "completed",
+      });
     }
 
     if (appliedCount === 0) {
@@ -357,8 +668,10 @@ async function setupDatabase() {
       console.log(`✅ Applied ${appliedCount} migration${appliedCount === 1 ? "" : "s"} from the journal.`);
     }
 
-    await ensureLatestSchemaRepairs();
-    console.log("✅ Verified latest idempotent schema repairs.");
+    if (process.env.ALLOW_LEGACY_SCHEMA_REPAIRS === "1") {
+      await ensureLatestSchemaRepairs();
+      console.log("✅ Applied explicitly enabled legacy schema repairs.");
+    }
   } finally {
     await releaseMigrationLock().catch(() => undefined);
     await sql.end();
