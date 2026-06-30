@@ -1,9 +1,11 @@
 # System Map
 
+Subsystem maps: [Messaging system](./messaging-system.md).
+
 ## Request Path
 
-1. Requests enter middleware in [middleware.ts](/Users/chrama/Downloads/nb-s3/src/lib/supabase/middleware.ts).
-2. Middleware classifies the route as `public_cached`, `user_shell`, or `active_surface`.
+1. Requests enter the repository root [middleware.ts](/Users/chrama/Downloads/nb-s3/middleware.ts), which owns CSP and delegates auth/session work to [Supabase middleware](/Users/chrama/Downloads/nb-s3/src/lib/supabase/middleware.ts).
+2. Middleware classifies the route as `public_cached`, `user_shell`, or `active_surface`; CSP has a single owner and is not duplicated in `next.config.ts`.
 3. Protected shells resolve local JWT-backed auth snapshots instead of remote auth lookups.
 4. Page contracts in [page-contract.ts](/Users/chrama/Downloads/nb-s3/src/lib/performance/page-contract.ts) define cache strategy, bootstrap read model, overload mode, and background-channel budget.
 
@@ -49,3 +51,17 @@ The boundary is intentional: cursor, typing, and heartbeats never persist into P
 4. Capacity audit: [check-capacity-audit.ts](/Users/chrama/Downloads/nb-s3/scripts/check-capacity-audit.ts)
 5. Rollout readiness: [check-production-rollout-readiness.ts](/Users/chrama/Downloads/nb-s3/scripts/check-production-rollout-readiness.ts)
 6. Final readiness gate: [check-1m-readiness.ts](/Users/chrama/Downloads/nb-s3/scripts/check-1m-readiness.ts)
+
+All three readiness checks run in strict mode. Missing load, capacity, or rollout evidence is a blocking result rather than an implicit approval.
+
+## Database Change Path
+
+1. Add an append-only numbered SQL file under `drizzle/` and register it in both the Drizzle journal and SQL governance manifest.
+2. Run `npm run check:db:migration-sources` for checksum, tag, ordering, and transactional-boundary validation without touching a database.
+3. Replay twice against an explicit disposable `DATABASE_URL_FRESH`; the replay tooling never provisions or falls back to the primary database.
+4. Run `npm run check:db:live-lineage` read-only against the target environment before rollout.
+
+Applied migration checksums are immutable. A changed checksum or a partially applied migration is a hard failure.
+Legacy journal inference and out-of-band schema repairs are disabled by default and require explicit one-time adoption flags.
+
+Domain-facing schema barrels live under `src/lib/db/schema/domains`. New modules should use the narrow identity, projects, files, messaging, or extension barrel; the root schema export remains a legacy compatibility surface.
