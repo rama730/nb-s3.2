@@ -4,15 +4,17 @@ interface MobileProgressBarProps {
   currentStep: number
   totalSteps: number
   stepLabels: string[]
+  completedThrough: number
+  justCompletedStep?: number | null
 }
 
 export function MobileProgressBar({
   currentStep,
   totalSteps,
   stepLabels,
+  completedThrough,
+  justCompletedStep = null,
 }: MobileProgressBarProps) {
-  const completionPercentage = Math.round(((currentStep - 1) / totalSteps) * 100)
-
   return (
     <div
       className={cn(
@@ -20,6 +22,11 @@ export function MobileProgressBar({
         'bg-muted dark:bg-card border-b border-border',
         'md:hidden'
       )}
+      role="progressbar"
+      aria-label="Onboarding progress"
+      aria-valuemin={0}
+      aria-valuemax={totalSteps}
+      aria-valuenow={completedThrough}
     >
       {/* Current step label */}
       <span className="text-[13px] font-medium text-foreground">
@@ -30,9 +37,10 @@ export function MobileProgressBar({
       <div className="flex items-center gap-0">
         {Array.from({ length: totalSteps }, (_, i) => {
           const step = i + 1
-          const isCompleted = step < currentStep
+          const isCompleted = step <= completedThrough && step !== currentStep
           const isCurrent = step === currentStep
-          const isPending = step > currentStep
+          const showAcknowledgedCheck = isCurrent && justCompletedStep === step
+          const isPending = !isCompleted && !isCurrent
 
           return (
             <div key={step} className="flex items-center">
@@ -41,31 +49,31 @@ export function MobileProgressBar({
                 <div
                   className={cn(
                     'h-[2px] w-4',
-                    isCompleted || isCurrent ? 'bg-primary' : 'bg-border'
+                    completedThrough >= step - 1 ? 'bg-primary' : 'bg-border'
                   )}
                 />
               )}
 
-              {/* Dot */}
-              {isCompleted && (
-                <div className="h-2 w-2 rounded-full bg-primary" />
-              )}
-              {isCurrent && (
-                <div className="flex h-2 w-2 items-center justify-center rounded-full ring-2 ring-primary/20">
+              <div className="flex h-6 w-6 shrink-0 items-center justify-center">
+                {(isCompleted || showAcknowledgedCheck) && (
                   <div className="h-2 w-2 rounded-full bg-primary" />
-                </div>
-              )}
-              {isPending && (
-                <div className="h-2 w-2 rounded-full bg-muted-foreground/30" />
-              )}
+                )}
+                {isCurrent && !showAcknowledgedCheck && (
+                  <div className="flex h-6 w-6 items-center justify-center rounded-full border-2 border-primary bg-primary/10">
+                    <span className="text-[10px] font-semibold text-primary tabular-nums">{step}</span>
+                  </div>
+                )}
+                {isPending && (
+                  <div className="h-2 w-2 rounded-full bg-muted-foreground/30" />
+                )}
+              </div>
             </div>
           )
         })}
       </div>
 
-      {/* Completion percentage */}
-      <span className="text-[13px] font-medium text-muted-foreground">
-        {completionPercentage}%
+      <span className="text-[13px] font-medium text-muted-foreground tabular-nums">
+        Step {currentStep} of {totalSteps}
       </span>
     </div>
   )
