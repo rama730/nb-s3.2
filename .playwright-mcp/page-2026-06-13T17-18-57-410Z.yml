@@ -1,0 +1,252 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e3]:
+    - generic [ref=e4]:
+      - banner [ref=e6]:
+        - generic [ref=e7]:
+          - generic [ref=e8]:
+            - link "Supabase" [ref=e9] [cursor=pointer]:
+              - /url: /dashboard/organizations
+              - img "Supabase" [ref=e10]
+            - img [ref=e14]
+            - button "Connect" [disabled] [ref=e18]:
+              - img [ref=e20]
+              - generic [ref=e22]: Connect
+          - generic [ref=e23]:
+            - generic [ref=e25] [cursor=pointer]: Feedback
+            - generic [ref=e26]:
+              - button "Search..." [ref=e27]:
+                - generic [ref=e28]:
+                  - img [ref=e29]
+                  - paragraph [ref=e32]: Search...
+                - generic [ref=e34]: ⌘K
+              - button "Help" [ref=e35] [cursor=pointer]:
+                - generic [ref=e36]:
+                  - img [ref=e37]
+                  - generic [ref=e40]: Help
+              - button "Advisor Center" [ref=e42] [cursor=pointer]:
+                - generic [ref=e43]:
+                  - img [ref=e44]
+                  - generic [ref=e46]: Advisor Center
+              - button "SQL Editor" [ref=e47] [cursor=pointer]:
+                - generic [ref=e48]:
+                  - img [ref=e49]
+                  - generic [ref=e51]: SQL Editor
+              - button "AI Assistant" [ref=e52] [cursor=pointer]:
+                - generic [ref=e53]:
+                  - img [ref=e56]
+                  - generic [ref=e59]: AI Assistant
+            - button [ref=e60] [cursor=pointer]:
+              - img [ref=e63]
+      - generic [ref=e65]:
+        - generic [ref=e69]:
+          - list [ref=e72]:
+            - generic [ref=e73]:
+              - listitem [ref=e74]:
+                - link "Project Overview" [ref=e75] [cursor=pointer]:
+                  - /url: /dashboard/project/iutauehhgdymtpzrnzcy
+                  - img [ref=e76]
+                  - generic: Project Overview
+              - listitem [ref=e78]:
+                - button "Table Editor" [disabled]:
+                  - img
+                  - generic: Table Editor
+              - listitem [ref=e79]:
+                - button "SQL Editor" [disabled]:
+                  - img
+                  - generic: SQL Editor
+            - generic [ref=e80]:
+              - listitem [ref=e81]:
+                - button "Database" [disabled]:
+                  - img
+                  - generic: Database
+              - listitem [ref=e82]:
+                - button "Authentication" [disabled]:
+                  - img
+                  - generic: Authentication
+              - listitem [ref=e83]:
+                - button "Storage" [disabled]:
+                  - img
+                  - generic: Storage
+              - listitem [ref=e84]:
+                - link "Edge Functions" [ref=e85] [cursor=pointer]:
+                  - /url: /dashboard/project/iutauehhgdymtpzrnzcy/functions
+                  - img [ref=e86]
+                  - generic: Edge Functions
+              - listitem [ref=e91]:
+                - button "Realtime" [disabled]:
+                  - img
+                  - generic: Realtime
+            - generic [ref=e92]:
+              - listitem [ref=e94]:
+                - button "Advisors" [disabled]:
+                  - img
+                  - generic: Advisors
+              - listitem [ref=e95]:
+                - button "Observability" [disabled]:
+                  - img
+                  - generic: Observability
+              - listitem [ref=e96]:
+                - link "Logs" [ref=e97] [cursor=pointer]:
+                  - /url: /dashboard/project/iutauehhgdymtpzrnzcy/logs/explorer
+                  - img [ref=e98]
+                  - generic: Logs
+              - listitem [ref=e99]:
+                - button "Integrations" [disabled]:
+                  - img
+                  - generic: Integrations
+            - listitem [ref=e101]:
+              - link "Project Settings" [ref=e102] [cursor=pointer]:
+                - /url: /dashboard/project/iutauehhgdymtpzrnzcy/settings/general
+                - img [ref=e103]
+                - generic: Project Settings
+          - button "Sidebar control" [ref=e108] [cursor=pointer]:
+            - img [ref=e110]
+        - generic [ref=e117]:
+          - generic [ref=e121]:
+            - heading "Database" [level=4] [ref=e123]
+            - menu "Sidebar" [disabled] [ref=e126]:
+              - list [ref=e127]:
+                - generic [ref=e130]:
+                  - generic [ref=e134]: Database Management
+                  - generic [ref=e135]:
+                    - link "Schema Visualizer" [disabled] [ref=e136] [cursor=pointer]:
+                      - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/schemas
+                      - menuitem "Schema Visualizer" [disabled] [ref=e137]:
+                        - generic [ref=e141]: Schema Visualizer
+                    - link "Tables" [disabled] [ref=e142] [cursor=pointer]:
+                      - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/tables
+                      - menuitem "Tables" [disabled] [ref=e143]:
+                        - generic [ref=e147]: Tables
+                    - link "Functions" [disabled] [ref=e148] [cursor=pointer]:
+                      - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/functions
+                      - menuitem "Functions" [disabled] [ref=e149]:
+                        - generic [ref=e153]: Functions
+                    - link "Triggers" [disabled] [ref=e154] [cursor=pointer]:
+                      - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/triggers/data
+                      - menuitem "Triggers" [disabled] [ref=e155]:
+                        - generic [ref=e159]: Triggers
+                    - link "Enumerated Types" [disabled] [ref=e160] [cursor=pointer]:
+                      - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/types
+                      - menuitem "Enumerated Types" [disabled] [ref=e161]:
+                        - generic [ref=e165]: Enumerated Types
+                    - link "Extensions" [disabled] [ref=e166] [cursor=pointer]:
+                      - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/extensions
+                      - menuitem "Extensions" [disabled] [ref=e167]:
+                        - generic [ref=e171]: Extensions
+                    - link "Indexes" [disabled] [ref=e172] [cursor=pointer]:
+                      - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/indexes
+                      - menuitem "Indexes" [disabled] [ref=e173]:
+                        - generic [ref=e177]: Indexes
+                    - link "Publications" [disabled] [ref=e178] [cursor=pointer]:
+                      - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/publications
+                      - menuitem "Publications" [disabled] [ref=e179]:
+                        - generic [ref=e183]: Publications
+                - generic [ref=e187]:
+                  - generic [ref=e191]: Configuration
+                  - generic [ref=e192]:
+                    - link "Roles" [disabled] [ref=e193] [cursor=pointer]:
+                      - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/roles
+                      - menuitem "Roles" [disabled] [ref=e194]:
+                        - generic [ref=e198]: Roles
+                    - link "Policies" [disabled] [ref=e199] [cursor=pointer]:
+                      - /url: /dashboard/project/iutauehhgdymtpzrnzcy/auth/policies
+                      - menuitem "Policies" [disabled] [ref=e200]:
+                        - generic [ref=e202]:
+                          - generic "Policies" [ref=e203]:
+                            - generic [ref=e204]: Policies
+                          - img [ref=e206]
+                    - link "Settings" [disabled] [ref=e209] [cursor=pointer]:
+                      - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/settings
+                      - menuitem "Settings" [disabled] [ref=e210]:
+                        - generic [ref=e214]: Settings
+                - generic [ref=e218]:
+                  - generic [ref=e222]: Platform
+                  - generic [ref=e223]:
+                    - link "Replication" [disabled] [ref=e224] [cursor=pointer]:
+                      - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/replication
+                      - menuitem "Replication" [disabled] [ref=e225]:
+                        - generic [ref=e229]: Replication
+                    - link "Backups" [disabled] [ref=e230] [cursor=pointer]:
+                      - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/backups/scheduled
+                      - menuitem "Backups" [disabled] [ref=e231]:
+                        - generic [ref=e235]: Backups
+                    - link "Migrations" [disabled] [ref=e236] [cursor=pointer]:
+                      - /url: /dashboard/project/iutauehhgdymtpzrnzcy/database/migrations
+                      - menuitem "Migrations" [disabled] [ref=e237]:
+                        - generic [ref=e241]: Migrations
+                    - link "Wrappers" [disabled] [ref=e242] [cursor=pointer]:
+                      - /url: /dashboard/project/iutauehhgdymtpzrnzcy/integrations?category=wrapper
+                      - menuitem "Wrappers" [disabled] [ref=e243]:
+                        - generic [ref=e245]:
+                          - generic "Wrappers" [ref=e246]:
+                            - generic [ref=e247]: Wrappers
+                          - img [ref=e249]
+                - generic [ref=e255]:
+                  - generic [ref=e259]: Tools
+                  - generic [ref=e260]:
+                    - link "Security Advisor" [disabled] [ref=e261] [cursor=pointer]:
+                      - /url: /dashboard/project/iutauehhgdymtpzrnzcy/advisors/security
+                      - menuitem "Security Advisor" [disabled] [ref=e262]:
+                        - generic [ref=e264]:
+                          - generic "Security Advisor" [ref=e265]:
+                            - generic [ref=e266]: Security Advisor
+                          - img [ref=e268]
+                    - link "Performance Advisor" [disabled] [ref=e271] [cursor=pointer]:
+                      - /url: /dashboard/project/iutauehhgdymtpzrnzcy/advisors/performance
+                      - menuitem "Performance Advisor" [disabled] [ref=e272]:
+                        - generic [ref=e274]:
+                          - generic "Performance Advisor" [ref=e275]:
+                            - generic [ref=e276]: Performance Advisor
+                          - img [ref=e278]
+                    - link "Query Performance" [disabled] [ref=e281] [cursor=pointer]:
+                      - /url: /dashboard/project/iutauehhgdymtpzrnzcy/observability/query-performance
+                      - menuitem "Query Performance" [disabled] [ref=e282]:
+                        - generic [ref=e284]:
+                          - generic "Query Performance" [ref=e285]:
+                            - generic [ref=e286]: Query Performance
+                          - img [ref=e288]
+          - separator [disabled] [ref=e291]:
+            - img [ref=e293]
+          - main [ref=e302]:
+            - generic [ref=e303]:
+              - heading "Database Tables" [level=1] [ref=e310]
+              - generic [ref=e312]:
+                - generic [ref=e314]:
+                  - generic [ref=e315]:
+                    - img [ref=e317]
+                    - generic [ref=e320]:
+                      - paragraph [ref=e321]: Auto-enable RLS for new tables
+                      - paragraph [ref=e322]: Create an event trigger that enables Row Level Security on all new tables
+                  - generic [ref=e323]:
+                    - button "Learn more" [ref=e324] [cursor=pointer]:
+                      - generic [ref=e325]: Learn more
+                    - button [ref=e326] [cursor=pointer]:
+                      - img [ref=e328]
+                - generic [ref=e333]:
+                  - generic [ref=e334]:
+                    - generic [ref=e335]:
+                      - button [disabled]
+                    - button [ref=e336] [cursor=pointer]:
+                      - img [ref=e338]
+                  - generic [ref=e340]:
+                    - group [ref=e341]:
+                      - textbox "Search for a table" [ref=e342]
+                      - group [ref=e343]:
+                        - img [ref=e344]
+                    - button "New table" [disabled] [ref=e347]:
+                      - img [ref=e349]
+                      - generic [ref=e350]: New table
+    - generic [ref=e358]:
+      - generic:
+        - img "Background pattern"
+      - generic [ref=e359]:
+        - button "Close banner" [ref=e361] [cursor=pointer]:
+          - img [ref=e363]
+        - generic [ref=e366]:
+          - generic [ref=e367]: Notice
+          - generic [ref=e368]:
+            - paragraph [ref=e369]: We've updated our Terms of Service
+            - paragraph [ref=e370]: Updates define the responsibilities of both you and Supabase in the use of AI.
+          - button "Learn more" [ref=e371] [cursor=pointer]:
+            - generic [ref=e372]: Learn more
+  - alert [ref=e373]: Tables | Database | Supabase
