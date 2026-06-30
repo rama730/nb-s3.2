@@ -1,7 +1,7 @@
 "use server";
 
 import { db } from "@/lib/db";
-import { projectNodes } from "@/lib/db/schema";
+import { projectNodes, fileVersions, profiles } from "@/lib/db/schema";
 import type { ProjectNode } from "@/lib/db/schema";
 import { eq, and, inArray } from "drizzle-orm";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
@@ -83,21 +83,47 @@ export async function getProjectFileContent(projectId: string, nodeId: string) {
             throw new Error("File too large for inline download. Use a signed URL instead.");
         }
 
-        // Use admin client to bypass RLS for public viewers
-        const adminClient = await createAdminClient();
-        const { data, error } = await adminClient.storage.from("project-files").download(node.s3Key);
+        let fileData: Blob;
+        try {
+            const adminClient = await createAdminClient();
+            const { data, error } = await adminClient.storage.from("project-files").download(node.s3Key);
+            if (error) throw error;
+            if (!data) throw new Error("No data returned from storage");
+            fileData = data;
+        } catch (downloadError) {
+            console.error(`[getProjectFileContent] S3 download failed for key ${node.s3Key}:`, downloadError);
+            
+            // Try to recover from GitHub contents by path
+            const recoveredText = await tryRecoverFromGitHub(projectId, node.path);
+            if (recoveredText !== null) {
+                try {
+                    const adminClient = await createAdminClient();
+                    const buffer = Buffer.from(recoveredText, 'utf8');
+                    await adminClient.storage.from('project-files').upload(node.s3Key, buffer, {
+                        contentType: 'text/plain',
+                        upsert: true
+                    });
+                    console.log(`[getProjectFileContent] Successfully healed missing storage file for key ${node.s3Key}`);
+                } catch (uploadErr) {
+                    console.error("[getProjectFileContent] Healing S3 upload failed:", uploadErr);
+                }
+                return recoveredText;
+            }
+            
+            // Recovery failed/unavailable — return empty string to prevent blocking UI editor
+            return "";
+        }
 
-        if (error) throw error;
         const actualSize =
-            data && typeof data.size === "number" && Number.isFinite(data.size) ? data.size : null;
+            fileData && typeof fileData.size === "number" && Number.isFinite(fileData.size) ? fileData.size : null;
         if ((actualSize !== null && actualSize > MAX_INLINE_BYTES) || (!hasKnownSize && actualSize === null)) {
             throw new Error("File too large for inline download. Use a signed URL instead.");
         }
-        return await data.text();
+        return await fileData.text();
     });
 }
 
-export async function getProjectFileSignedUrl(projectId: string, nodeId: string, ttlSeconds: number = 300) {
+export async function getProjectFileSignedUrl(projectId: string, nodeId: string, ttlSeconds: number = 300, download: boolean = false) {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
     const actorId = user?.id ?? null;
@@ -183,7 +209,7 @@ export async function getProjectFileSignedUrl(projectId: string, nodeId: string,
         const adminClient = await createAdminClient();
         const { data, error } = await adminClient.storage
             .from("project-files")
-            .createSignedUrl(currentS3Key, clampedTtl);
+            .createSignedUrl(currentS3Key, clampedTtl, { download });
 
         if (error) throw error;
         if (!data?.signedUrl) throw new Error("Failed to create signed URL");
@@ -333,8 +359,34 @@ export async function updateProjectFileStats(projectId: string, nodeId: string, 
             })
             .where(and(eq(projectNodes.id, nodeId), eq(projectNodes.projectId, projectId)))
             .returning();
+
+        if (updated) {
+            const versionNumber = updated.currentVersion ?? 1;
+            await tx.update(fileVersions)
+                .set({
+                    size: size,
+                    uploadedBy: user.id,
+                    uploadedAt: new Date()
+                })
+                .where(and(eq(fileVersions.nodeId, nodeId), eq(fileVersions.version, versionNumber)));
+        }
+
         return updated;
     });
+
+    if (node) {
+        const profile = await db.query.profiles.findFirst({
+            where: eq(profiles.id, user.id),
+            columns: { fullName: true, username: true, avatarUrl: true }
+        });
+        Object.assign(node, {
+            updatedById: user.id,
+            updatedByName: profile?.fullName ?? null,
+            updatedByUsername: profile?.username ?? null,
+            updatedByAvatarUrl: profile?.avatarUrl ?? null,
+            versionUpdatedAt: node.updatedAt,
+        });
+    }
 
     revalidatePath(`/projects/${projectId}`);
     return node;
@@ -356,4 +408,42 @@ export async function updateProjectFileStatsSafe(
             message: error instanceof Error ? error.message : "Failed to update file stats",
         };
     }
+}
+
+async function tryRecoverFromGitHub(projectId: string, nodePath: string | null): Promise<string | null> {
+    if (!nodePath) return null;
+    try {
+        const { projects } = await import("@/lib/db/schema");
+        const project = await db.query.projects.findFirst({
+            where: eq(projects.id, projectId),
+            columns: { importSource: true }
+        });
+        const importSource = project?.importSource as any;
+        if (importSource && importSource.type === "github" && importSource.repoUrl) {
+            const urlParts = importSource.repoUrl.replace(/\/$/, '').split('/');
+            const repoName = urlParts.pop();
+            const ownerName = urlParts.pop();
+            const branch = importSource.branch || "main";
+            const cleanPath = nodePath.startsWith("/") ? nodePath.slice(1) : nodePath;
+            const apiUrl = `https://api.github.com/repos/${ownerName}/${repoName}/contents/${encodeURIComponent(cleanPath)}?ref=${branch}`;
+
+            let headers: Record<string, string> = { 'Accept': 'application/vnd.github.v3+json' };
+            const token = importSource.metadata?.importAuth || importSource.metadata?.githubToken;
+            if (token) headers['Authorization'] = `Bearer ${token}`;
+
+            const res = await fetch(apiUrl, { headers });
+            if (res.ok) {
+                const data = await res.json();
+                if (data.content) {
+                    if (data.encoding === 'base64') {
+                        return Buffer.from(data.content, 'base64').toString('utf8');
+                    }
+                    return data.content;
+                }
+            }
+        }
+    } catch (err) {
+        console.error(`[tryRecoverFromGitHub] Recovery failed for path ${nodePath}:`, err);
+    }
+    return null;
 }
