@@ -73,6 +73,7 @@ import { useToast } from "@/components/ui-custom/Toast";
 import { createClient } from "@/lib/supabase/client";
 import { subscribeProjectFilesChannel } from "@/lib/realtime/project-files-channel";
 import { getTaskLinkCounts } from "@/app/actions/files/links";
+import { getNodeMetadataBatch } from "@/app/actions/files/nodes";
 
 import { useExplorerBoot } from "../explorer/useExplorerBoot";
 
@@ -82,12 +83,14 @@ import {
 } from "./FilesTabRoleContext";
 import { FilesTabSidebar } from "./FilesTabSidebar";
 import { FilesTabMain } from "./FilesTabMain";
+import { GitHubSyncDrawer } from "./navigation/GitHubSyncDrawer";
 import { QuickOpenDialog } from "./quick-open/QuickOpenDialog";
 import { HydrationProgressBanner } from "@/components/projects/HydrationProgressBanner";
 import { FilesTabBootContext } from "./hooks/useFolderContents";
 import { useFilesTabStartupStage } from "./hooks/useFilesTabStartupStage";
 import { useDeepLinkResolver } from "./hooks/useDeepLinkResolver";
 import { useFilesTabUrlSync } from "./hooks/useFilesTabUrlSync";
+import { useNavigateTo } from "./hooks/useNavigateTo";
 
 // ─── Public API ──────────────────────────────────────────────────────
 
@@ -121,7 +124,16 @@ export interface FilesTabRootProps {
    * dropped — V3 has no line targeting.
    */
   initialOpenPath?: string | null;
+  /**
+   * Stable file-node deep link. Used by project update mentions so a file
+   * attachment opens the exact file after the workspace cache is hydrated,
+   * while `initialOpenPath` remains the readable/fallback URL contract.
+   */
+  initialOpenFileId?: string | null;
 }
+
+// Module-level global registry to prevent duplicate project subscriptions.
+const ACTIVE_SUBSCRIPTIONS = new Set<string>();
 
 // ─── Component ───────────────────────────────────────────────────────
 
@@ -134,6 +146,7 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
     isActive = true,
     syncStatus,
     initialOpenPath,
+    initialOpenFileId,
   } = props;
 
   const { showToast } = useToast();
@@ -159,7 +172,7 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
   const canEdit = role !== "Role_Viewer";
 
   // ── 3. Three-stage startup machine (Req 16.4) ─────────────────────
-  const [stage] = useFilesTabStartupStage(projectId);
+  const [stage, signalStageComplete] = useFilesTabStartupStage(projectId);
 
   // ── 4. Single explorer boot + FilesTabBootContext provision ───────
   //
@@ -178,6 +191,9 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
     syncStatus,
     showToast,
   });
+  useEffect(() => {
+    if (!isBooting) signalStageComplete("explorer");
+  }, [isBooting, signalStageComplete]);
   const bootContextValue = useMemo(
     () => ({ isBooting, accessError, loadFolderContent, handleToggleFolder, handleLoadMore }),
     [isBooting, accessError, loadFolderContent, handleToggleFolder, handleLoadMore],
@@ -216,8 +232,8 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
     if (initialOpenPath && initialOpenPath.length > 0) {
       const encoded = initialOpenPath
         .split("/")
-        .filter((seg) => seg.length > 0)
-        .map((seg) => encodeURIComponent(seg))
+        .filter((seg: string) => seg.length > 0)
+        .map((seg: string) => encodeURIComponent(seg))
         .join("/");
       if (encoded.length > 0) {
         // Preserve any other query params the real URL may carry.
@@ -254,7 +270,7 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
 
   // ── 6. Deep-link resolver (gated on stage === "main") ─────────────
   useDeepLinkResolver(projectId, {
-    stage,
+    stage: initialOpenFileId ? "diagnostics" : stage,
     window: deepLinkWindow,
     onError: (failure) => {
       // The hook already logs the failure to `console.log`. Surface a
@@ -270,6 +286,90 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
       showToast(reason, "error");
     },
   });
+
+  const navigateToInitialFile = useNavigateTo(projectId);
+  const upsertInitialFileNodes = useFilesWorkspaceStore((s) => s.upsertNodes);
+  const initialOpenFileExists = useFilesWorkspaceStore((s) =>
+    Boolean(
+      initialOpenFileId &&
+        s.byProjectId[projectId]?.nodesById[initialOpenFileId]?.type === "file",
+    ),
+  );
+  const handledInitialFileIdRef = useRef<string | null>(null);
+  const resolvingInitialFileIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!initialOpenFileId) {
+      handledInitialFileIdRef.current = null;
+      resolvingInitialFileIdRef.current = null;
+    }
+  }, [initialOpenFileId]);
+
+  useEffect(() => {
+    if (!initialOpenFileId || !initialOpenFileExists) return;
+    if (handledInitialFileIdRef.current === initialOpenFileId) return;
+    handledInitialFileIdRef.current = initialOpenFileId;
+    navigateToInitialFile(initialOpenFileId);
+  }, [initialOpenFileExists, initialOpenFileId, navigateToInitialFile]);
+
+  useEffect(() => {
+    if (!initialOpenFileId || initialOpenFileExists) return;
+    if (handledInitialFileIdRef.current === initialOpenFileId) return;
+    if (resolvingInitialFileIdRef.current === initialOpenFileId) return;
+
+    let cancelled = false;
+    resolvingInitialFileIdRef.current = initialOpenFileId;
+
+    void getNodeMetadataBatch(projectId, [initialOpenFileId], { includeBreadcrumbs: true })
+      .then((result) => {
+        if (cancelled) return;
+        if (!result.success) {
+          showToast(result.message || "The requested file is not available.", "error");
+          return;
+        }
+
+        const node = result.data.nodes.find((candidate) => candidate.id === initialOpenFileId);
+        if (!node || node.type !== "file") {
+          showToast("The requested file is not available or you do not have access.", "error");
+          return;
+        }
+
+        upsertInitialFileNodes(projectId, result.data.nodes);
+        handledInitialFileIdRef.current = initialOpenFileId;
+        navigateToInitialFile(initialOpenFileId);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        console.warn("[files-tab] failed to hydrate initial file target", {
+          projectId,
+          fileId: initialOpenFileId,
+          error,
+        });
+        showToast("The requested file is not available or you do not have access.", "error");
+      })
+      .finally(() => {
+        if (resolvingInitialFileIdRef.current === initialOpenFileId) {
+          resolvingInitialFileIdRef.current = null;
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    initialOpenFileExists,
+    initialOpenFileId,
+    navigateToInitialFile,
+    projectId,
+    showToast,
+    upsertInitialFileNodes,
+  ]);
+
+  useEffect(() => {
+    if (stage !== "main" || isBooting) return;
+    const raf = requestAnimationFrame(() => signalStageComplete("main"));
+    return () => cancelAnimationFrame(raf);
+  }, [isBooting, signalStageComplete, stage]);
 
   // ── 7. URL sync (replaceState mirror + popstate handler) ──────────
   useFilesTabUrlSync(projectId, {
@@ -289,6 +389,8 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
 
   useEffect(() => {
     if (!isActive) return;
+    if (ACTIVE_SUBSCRIPTIONS.has(projectId)) return;
+    ACTIVE_SUBSCRIPTIONS.add(projectId);
 
     const supabase = createClient();
 
@@ -309,6 +411,7 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
     });
 
     return () => {
+      ACTIVE_SUBSCRIPTIONS.delete(projectId);
       channel.unsubscribe();
     };
   }, [projectId, isActive, setTaskLinkCounts, patchNodeVersion]);
@@ -316,6 +419,7 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
   // ── 9. Quick Open state + ⌘P / Ctrl+P toggle (Req 9.1) ────────────
   const [quickOpenOpen, setQuickOpenOpen] = useState(false);
   const [quickOpenQuery, setQuickOpenQuery] = useState("");
+  const [githubSyncOpen, setGithubSyncOpen] = useState(false);
 
   const handleQuickOpenChange = useCallback((next: boolean) => {
     setQuickOpenOpen(next);
@@ -339,6 +443,13 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
       // content-editable region or a form field outside Quick Open. This
       // matches the legacy WorkspaceKeyboard behaviour which the browser
       // default (print dialog) also overrides.
+      const target = e.target as HTMLElement | null;
+      if (target) {
+        const isInput = target.tagName === "INPUT" || target.tagName === "TEXTAREA";
+        const isEditable = target.isContentEditable || target.getAttribute("contenteditable") === "true";
+        if (isInput || isEditable) return;
+      }
+
       e.preventDefault();
       const wasOpen = quickOpenOpenRef.current;
       if (wasOpen) {
@@ -375,7 +486,14 @@ export function FilesTabRoot(props: FilesTabRootProps): React.JSX.Element {
             projectName={projectName}
             isActive={isActive}
             syncStatus={syncStatus}
+            onToggleGitHubSync={() => setGithubSyncOpen((open) => !open)}
           />
+          {githubSyncOpen && (
+            <GitHubSyncDrawer
+              projectId={projectId}
+              onClose={() => setGithubSyncOpen(false)}
+            />
+          )}
           <QuickOpenDialog
             projectId={projectId}
             open={quickOpenOpen}
