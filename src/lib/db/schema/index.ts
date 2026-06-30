@@ -31,13 +31,13 @@ type ProjectUpdateMediaItem = {
 };
 type ProjectNotificationPreferencesRecord = Record<string, unknown>;
 type ProjectMemberNotificationPreferencesRecord = Record<string, unknown>;
-type ProjectReadmeSettingsRecord = Record<string, unknown>;
-type ProjectReadmeHeadingRecord = {
+type ProjectDocSettingsRecord = Record<string, unknown>;
+type ProjectDocHeadingRecord = {
     id: string;
     level: number;
     text: string;
 };
-type ProjectReadmeQualityRecord = Record<string, unknown>;
+type ProjectDocQualityRecord = Record<string, unknown>;
 type NotificationPreferencesRecord = {
     messages: boolean;
     mentions: boolean;
@@ -87,7 +87,8 @@ type MessageWorkLinkMetadata = Record<string, unknown>;
 export const statusJobEnum = pgEnum('status_job', ['processing', 'completed', 'failed'])
 export const statusConnectionEnum = pgEnum('status_connection', ['pending', 'accepted', 'rejected', 'cancelled', 'disconnected', 'blocked'])
 export const statusProjectEnum = pgEnum('status_project', ['draft', 'active', 'completed', 'archived'])
-export const statusReadmeAssetEnum = pgEnum('status_readme_asset', ['draft', 'published', 'orphaned'])
+// The SQL enum keeps its historical name for migration compatibility; app code uses Docs terminology.
+export const statusDocAssetEnum = pgEnum('status_readme_asset', ['draft', 'published', 'orphaned'])
 export const statusRoleAppEnum = pgEnum('status_role_app', ['pending', 'accepted', 'rejected', 'withdrawn', 'proposed'])
 export const statusSprintEnum = pgEnum('status_sprint', ['planning', 'active', 'completed'])
 export const statusTaskEnum = pgEnum('status_task', ['todo', 'in_progress', 'done', 'blocked'])
@@ -125,6 +126,9 @@ export const profiles = pgTable('profiles', {
     visibility: text('visibility', { enum: ['public', 'connections', 'private'] }).default('public'),
     messagePrivacy: text('message_privacy', { enum: ['everyone', 'connections'] }).default('connections'),
     connectionPrivacy: text('connection_privacy', { enum: ['everyone', 'mutuals_only', 'nobody'] }).default('everyone'),
+    onboardingStatus: text('onboarding_status', { enum: ['not_started', 'in_progress', 'completed'] }).default('not_started').notNull(),
+    onboardingCompletedAt: timestamp('onboarding_completed_at', { withTimezone: true }),
+    onboardingVersion: integer('onboarding_version').default(1).notNull(),
     notificationPreferences: jsonb('notification_preferences').$type<NotificationPreferencesRecord>().default({
         messages: true,
         mentions: true,
@@ -194,6 +198,7 @@ export const profiles = pgTable('profiles', {
     workspaceInProgressCountIdx: index('profiles_workspace_in_progress_count_idx').on(t.workspaceInProgressCount),
     // Index for "Active today/this week" filtering in discover
     lastActiveAtIdx: index('profiles_last_active_at_idx').on(t.lastActiveAt),
+    onboardingStatusIdx: index('profiles_onboarding_status_idx').on(t.onboardingStatus, t.updatedAt),
 }))
 
 export const profileSecurityStates = pgTable('profile_security_states', {
@@ -274,11 +279,18 @@ export const profileCounters = pgTable('profile_counters', {
 export const onboardingDrafts = pgTable('onboarding_drafts', {
     userId: uuid('user_id').primaryKey().references(() => profiles.id, { onDelete: 'cascade' }),
     step: integer('step').default(1).notNull(),
+    completedThrough: integer('completed_through').default(0).notNull(),
+    activeSection: text('active_section').default('identity').notNull(),
     version: integer('version').default(1).notNull(),
+    schemaVersion: integer('schema_version').default(3).notNull(),
     draft: jsonb('draft').$type<Record<string, unknown>>().default({}).notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true })
+        .default(sql`now() + interval '30 days'`)
+        .notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
     updatedAtIdx: index('onboarding_drafts_updated_at_idx').on(t.updatedAt),
+    expiresAtIdx: index('onboarding_drafts_expires_at_idx').on(t.expiresAt),
 }))
 
 export const onboardingEvents = pgTable('onboarding_events', {
@@ -361,6 +373,7 @@ export const connectionSuggestionDismissals = pgTable('connection_suggestion_dis
 }, (t) => ({
     userDismissedUniqueIdx: uniqueIndex('connection_suggestion_dismissals_user_profile_uidx').on(t.userId, t.dismissedProfileId),
     userCreatedIdx: index('connection_suggestion_dismissals_user_created_idx').on(t.userId, t.createdAt),
+    dismissedProfileIdx: index('connection_suggestion_dismissals_profile_idx').on(t.dismissedProfileId),
 }))
 
 // ============================================================================
@@ -379,6 +392,7 @@ export const connectionSuggestions = pgTable('connection_suggestions', {
     userSuggestionUniqueIdx: uniqueIndex('connection_suggestions_user_suggested_uidx').on(t.userId, t.suggestedUserId),
     userScoreIdx: index('connection_suggestions_user_score_idx').on(t.userId, t.score),
     userScoreKeysetIdx: index('connection_suggestions_user_score_keyset_idx').on(t.userId, t.score.desc(), t.suggestedUserId.desc()),
+    suggestedUserIdx: index('connection_suggestions_suggested_user_idx').on(t.suggestedUserId),
 }))
 
 // ============================================================================
@@ -435,8 +449,10 @@ export const projects = pgTable('projects', {
     // Project Key System
     key: text('key').unique(), // e.g. "NB"
     currentTaskNumber: integer('current_task_number').default(0),
+    currentSequenceNumber: bigint('current_sequence_number', { mode: 'number' }).default(0).notNull(),
 
     lookingForCollaborators: boolean('looking_for_collaborators').default(false),
+    memberUpdatesEnabled: boolean('member_updates_enabled').default(true).notNull(),
     maxCollaborators: text('max_collaborators'),
     lifecycleStages: jsonb('lifecycle_stages').$type<string[]>().default([]),
     currentStageIndex: integer('current_stage_index').default(0),
@@ -555,6 +571,7 @@ export const profileProjectContributions = pgTable('profile_project_contribution
     verifiedIdx: index('profile_project_contributions_verified_idx')
         .on(t.profileId, t.verifiedAt.desc())
         .where(sql`${t.deletedAt} IS NULL AND ${t.verifiedAt} IS NOT NULL`),
+    verifiedByIdx: index('profile_project_contributions_verified_by_idx').on(t.verifiedBy),
 }))
 
 export const profileProjectContributionStages = pgTable('profile_project_contribution_stages', {
@@ -594,6 +611,8 @@ export const profileProjectContributionStages = pgTable('profile_project_contrib
     visibleIdx: index('profile_project_contribution_stages_visible_idx')
         .on(t.profileId, t.visibility, t.startedAt.desc())
         .where(sql`${t.deletedAt} IS NULL`),
+    projectFkIdx: index('profile_contribution_stages_project_idx').on(t.projectId),
+    verifiedByIdx: index('profile_contribution_stages_verified_by_idx').on(t.verifiedBy),
 }))
 
 export const profileCollaborationSummaries = pgTable('profile_collaboration_summaries', {
@@ -623,9 +642,9 @@ export const profileCollaborationSummaries = pgTable('profile_collaboration_summ
 }))
 
 // ============================================================================
-// PROJECT READMES
+// PROJECT MARKDOWNS
 // ============================================================================
-export const projectReadmes = pgTable('project_readmes', {
+export const projectMarkdowns = pgTable('project_markdowns', {
     id: uuid('id').primaryKey().defaultRandom(),
     projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
     draftContent: text('draft_content').default('').notNull(),
@@ -633,10 +652,20 @@ export const projectReadmes = pgTable('project_readmes', {
     draftUpdatedAt: timestamp('draft_updated_at', { withTimezone: true }),
     publishedVersionId: uuid('published_version_id'),
     linkedNodeId: uuid('linked_node_id').references(() => projectNodes.id, { onDelete: 'set null' }),
-    settings: jsonb('settings').$type<ProjectReadmeSettingsRecord>().default({
+    filename: text('filename').default('README.md').notNull(),
+    slug: text('slug').default('readme').notNull(),
+    settings: jsonb('settings').$type<{
+        version: number;
+        editPolicy: 'leaders' | 'members';
+        visibilityOverride: 'inherit_project' | 'public' | 'members_only' | 'leaders_only';
+        mediaUploads: boolean;
+        externalImages: boolean;
+        projectBlocks: boolean;
+        notifyOnPublish: boolean;
+    }>().default({
         version: 1,
         editPolicy: 'leaders',
-        publicVisibility: 'inherit_project',
+        visibilityOverride: 'inherit_project',
         mediaUploads: true,
         externalImages: false,
         projectBlocks: true,
@@ -645,28 +674,33 @@ export const projectReadmes = pgTable('project_readmes', {
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
-    projectUnique: uniqueIndex('project_readmes_project_unique').on(t.projectId),
-    projectIdx: index('project_readmes_project_idx').on(t.projectId),
-    draftUpdatedIdx: index('project_readmes_draft_updated_idx').on(t.projectId, t.draftUpdatedAt),
+    projectSlugUnique: uniqueIndex('project_markdowns_slug_unique').on(t.projectId, t.slug),
+    projectIdx: index('project_markdowns_project_idx').on(t.projectId),
+    draftUpdatedIdx: index('project_markdowns_draft_updated_idx').on(t.projectId, t.draftUpdatedAt),
+    draftUpdatedByIdx: index('project_markdowns_draft_updated_by_idx').on(t.draftUpdatedBy),
+    publishedVersionIdx: index('project_markdowns_published_version_idx').on(t.publishedVersionId),
+    linkedNodeIdx: index('project_markdowns_linked_node_idx').on(t.linkedNodeId),
 }))
 
-export const projectReadmeDraftContributors = pgTable('project_readme_draft_contributors', {
+export const projectMarkdownDraftContributors = pgTable('project_markdown_draft_contributors', {
     projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+    markdownId: uuid('markdown_id').notNull().references(() => projectMarkdowns.id, { onDelete: 'cascade' }),
     userId: uuid('user_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
     lastContributedAt: timestamp('last_contributed_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
-    pk: primaryKey({ columns: [t.projectId, t.userId] }),
-    userIdIdx: index('project_readme_draft_contributors_user_idx').on(t.userId),
+    pk: primaryKey({ columns: [t.markdownId, t.userId] }),
+    userIdIdx: index('project_markdown_draft_contributors_user_idx').on(t.userId),
 }))
 
-export const projectReadmeVersions = pgTable('project_readme_versions', {
+export const projectMarkdownVersions = pgTable('project_markdown_versions', {
     id: uuid('id').primaryKey().defaultRandom(),
     projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+    markdownId: uuid('markdown_id').notNull().references(() => projectMarkdowns.id, { onDelete: 'cascade' }),
     versionNumber: integer('version_number').notNull(),
     content: text('content').notNull(),
     excerpt: text('excerpt'),
-    headings: jsonb('headings').$type<ProjectReadmeHeadingRecord[]>().default([]).notNull(),
-    qualityReport: jsonb('quality_report').$type<ProjectReadmeQualityRecord>().default({}).notNull(),
+    headings: jsonb('headings').$type<ProjectDocHeadingRecord[]>().default([]).notNull(),
+    qualityReport: jsonb('quality_report').$type<ProjectDocQualityRecord>().default({}).notNull(),
     contentHash: text('content_hash').notNull(),
     changeSummary: text('change_summary'),
     coAuthors: jsonb('co_authors').$type<string[]>().default([]).notNull(),
@@ -674,17 +708,18 @@ export const projectReadmeVersions = pgTable('project_readme_versions', {
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
 }, (t) => ({
-    projectVersionUnique: uniqueIndex('project_readme_versions_project_version_unique').on(t.projectId, t.versionNumber),
-    projectCreatedIdx: index('project_readme_versions_project_created_idx').on(t.projectId, t.createdAt),
-    projectHashIdx: index('project_readme_versions_project_hash_idx').on(t.projectId, t.contentHash),
-    projectDeletedIdx: index('project_readme_versions_project_deleted_idx').on(t.projectId, t.deletedAt),
-    createdByIdx: index('project_readme_versions_created_by_idx').on(t.createdBy),
+    markdownVersionUnique: uniqueIndex('project_markdown_versions_markdown_version_unique').on(t.markdownId, t.versionNumber),
+    projectCreatedIdx: index('project_markdown_versions_project_created_idx').on(t.projectId, t.createdAt),
+    projectHashIdx: index('project_markdown_versions_project_hash_idx').on(t.projectId, t.contentHash),
+    projectDeletedIdx: index('project_markdown_versions_project_deleted_idx').on(t.projectId, t.deletedAt),
+    createdByIdx: index('project_markdown_versions_created_by_idx').on(t.createdBy),
 }))
 
-export const projectReadmeAssets = pgTable('project_readme_assets', {
+export const projectMarkdownAssets = pgTable('project_markdown_assets', {
     id: uuid('id').primaryKey().defaultRandom(),
     projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
-    versionId: uuid('version_id').references(() => projectReadmeVersions.id, { onDelete: 'set null' }),
+    markdownId: uuid('markdown_id').notNull().references(() => projectMarkdowns.id, { onDelete: 'cascade' }),
+    versionId: uuid('version_id').references(() => projectMarkdownVersions.id, { onDelete: 'set null' }),
     bucket: text('bucket').notNull(),
     storageKey: text('storage_key').notNull(),
     mimeType: text('mime_type').notNull(),
@@ -692,16 +727,17 @@ export const projectReadmeAssets = pgTable('project_readme_assets', {
     width: integer('width'),
     height: integer('height'),
     altText: text('alt_text'),
-    status: statusReadmeAssetEnum('status').default('draft').notNull(),
+    status: statusDocAssetEnum('status').default('draft').notNull(),
     createdBy: uuid('created_by').references(() => profiles.id, { onDelete: 'set null' }),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
 }, (t) => ({
-    projectCreatedIdx: index('project_readme_assets_project_created_idx').on(t.projectId, t.createdAt),
-    bucketStorageUnique: uniqueIndex('project_readme_assets_bucket_storage_unique').on(t.bucket, t.storageKey),
-    statusIdx: index('project_readme_assets_status_idx').on(t.projectId, t.status),
-    versionIdIdx: index('project_readme_assets_version_id_idx').on(t.versionId),
-    createdByIdx: index('project_readme_assets_created_by_idx').on(t.createdBy),
+    projectCreatedIdx: index('project_markdown_assets_project_created_idx').on(t.projectId, t.createdAt),
+    bucketStorageUnique: uniqueIndex('project_markdown_assets_bucket_storage_unique').on(t.bucket, t.storageKey),
+    statusIdx: index('project_markdown_assets_status_idx').on(t.projectId, t.status),
+    versionIdIdx: index('project_markdown_assets_version_id_idx').on(t.versionId),
+    createdByIdx: index('project_markdown_assets_created_by_idx').on(t.createdBy),
+    markdownIdIdx: index('project_markdown_assets_markdown_idx').on(t.markdownId),
 }))
 
 // ============================================================================
@@ -732,7 +768,7 @@ export const projectOpenRoles = pgTable('project_open_roles', {
 export const roleApplications = pgTable('role_applications', {
     id: uuid('id').primaryKey().defaultRandom(),
     projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
-    roleId: uuid('role_id').notNull().references(() => projectOpenRoles.id, { onDelete: 'cascade' }),
+    roleId: uuid('role_id').references(() => projectOpenRoles.id, { onDelete: 'set null' }),
     applicantId: uuid('applicant_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
     creatorId: uuid('creator_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }), // Denormalized for O(1) creator queries
     message: text('message'), // Application message from user
@@ -757,6 +793,7 @@ export const roleApplications = pgTable('role_applications', {
     uniqueAppIdx: uniqueIndex('role_applications_unique_idx').on(t.projectId, t.applicantId),
     roleIdIdx: index('role_applications_role_id_idx').on(t.roleId),
     decisionByIdx: index('role_applications_decision_by_idx').on(t.decisionBy),
+    proposedRoleIdx: index('role_applications_proposed_role_idx').on(t.proposedRoleId),
 }))
 
 // ============================================================================
@@ -771,6 +808,22 @@ export const projectFollows = pgTable('project_follows', {
     projectIdx: index('project_follows_project_idx').on(t.projectId),
     userIdx: index('project_follows_user_idx').on(t.userId),
     uniqueFollow: uniqueIndex('project_follows_unique_idx').on(t.projectId, t.userId),
+}))
+
+// ============================================================================
+// SAVED PROJECTS TABLE
+// Legacy bookmark table retained for catalog compatibility and old counters.
+// New follower behavior uses project_follows.
+// ============================================================================
+export const savedProjects = pgTable('saved_projects', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
+    projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+    userIdx: index('saved_projects_user_idx').on(t.userId),
+    projectIdx: index('idx_saved_projects_project_id').on(t.projectId),
+    uniqueSave: uniqueIndex('saved_projects_unique_idx').on(t.userId, t.projectId),
 }))
 
 
@@ -809,6 +862,8 @@ export const projectUpdates = pgTable('project_updates', {
         .where(sql`${t.deletedAt} IS NULL`),
     authorCreatedIdx: index('project_updates_author_created_idx').on(t.authorId, t.createdAt.desc()),
     deletedAtIdx: index('project_updates_deleted_at_idx').on(t.deletedAt),
+    coveringFeedIdx: index('project_updates_covering_feed_idx').on(t.projectId, t.visibility, t.isPinned, t.createdAt.desc()),
+    deletedByIdx: index('project_updates_deleted_by_idx').on(t.deletedBy),
 }))
 
 export const projectUpdateDrafts = pgTable('project_update_drafts', {
@@ -825,6 +880,7 @@ export const projectUpdateDrafts = pgTable('project_update_drafts', {
 }, (t) => ({
     pk: primaryKey({ columns: [t.projectId, t.userId] }),
     updatedAtIdx: index('project_update_drafts_updated_at_idx').on(t.updatedAt),
+    userIdx: index('project_update_drafts_user_idx').on(t.userId),
 }))
 
 export const projectUpdateLikes = pgTable('project_update_likes', {
@@ -844,6 +900,7 @@ export const projectUpdateComments = pgTable('project_update_comments', {
     projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
     parentId: uuid('parent_id'),
     userId: uuid('user_id').references(() => profiles.id, { onDelete: 'set null' }),
+    targetUserId: uuid('target_user_id').references(() => profiles.id, { onDelete: 'set null' }),
     content: text('content').notNull(),
     deletedBy: uuid('deleted_by').references(() => profiles.id, { onDelete: 'set null' }),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
@@ -854,8 +911,16 @@ export const projectUpdateComments = pgTable('project_update_comments', {
     updateActiveIdx: index('project_update_comments_update_active_idx')
         .on(t.updateId, t.createdAt)
         .where(sql`${t.deletedAt} IS NULL`),
+    parentIdx: index('project_update_comments_parent_idx')
+        .on(t.parentId)
+        .where(sql`${t.parentId} IS NOT NULL`),
     projectCreatedIdx: index('project_update_comments_project_created_idx').on(t.projectId, t.createdAt.desc()),
     userCreatedIdx: index('project_update_comments_user_created_idx').on(t.userId, t.createdAt.desc()),
+    activeParentIdx: index('project_update_comments_active_parent_idx')
+        .on(t.updateId, t.parentId, t.createdAt.desc())
+        .where(sql`${t.deletedAt} IS NULL`),
+    deletedByIdx: index('project_update_comments_deleted_by_idx').on(t.deletedBy),
+    targetUserIdx: index('project_update_comments_target_user_idx').on(t.targetUserId),
 }))
 
 
@@ -865,6 +930,7 @@ export const projectUpdateComments = pgTable('project_update_comments', {
 export const projectSprints = pgTable('project_sprints', {
     id: uuid('id').primaryKey().defaultRandom(),
     projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+    creatorId: uuid('creator_id').references(() => profiles.id, { onDelete: 'set null' }),
     name: text('name').notNull(),
     goal: text('goal'),
     description: text('description'),
@@ -877,6 +943,7 @@ export const projectSprints = pgTable('project_sprints', {
     projectIdx: index('project_sprints_project_idx').on(t.projectId),
     projectUpdatedIdx: index('project_sprints_project_updated_idx').on(t.projectId, t.updatedAt),
     statusIdx: index('project_sprints_status_idx').on(t.status),
+    creatorIdx: index('project_sprints_creator_idx').on(t.creatorId),
 }))
 
 // ============================================================================
@@ -1101,6 +1168,8 @@ export const projectNodes = pgTable('project_nodes', {
     id: uuid('id').primaryKey().defaultRandom(),
     projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
     parentId: uuid('parent_id'),
+    taskId: uuid('task_id').references(() => tasks.id, { onDelete: 'cascade' }),
+    canonicalNodeId: uuid('canonical_node_id').references((): AnyPgColumn => projectNodes.id, { onDelete: 'set null' }),
     path: text('path').notNull().default('/'),
     // Circular ref handled by foreignKey below
     type: text('type', { enum: ['folder', 'file'] }).notNull(),
@@ -1119,7 +1188,9 @@ export const projectNodes = pgTable('project_nodes', {
     metadata: jsonb('metadata').$type<Record<string, unknown>>().default({}),
 
     // Git tracking
-    gitHash: text('git_hash'),
+    gitHash: text('git_blob_hash'),
+    lastSyncedCommitSha: text('last_synced_commit_sha'),
+    syncStatus: text('sync_status').default('merged').notNull(),
 
     // Audit
     createdBy: uuid('created_by').references(() => profiles.id, { onDelete: 'set null' }),
@@ -1136,11 +1207,16 @@ export const projectNodes = pgTable('project_nodes', {
     // Allows "Index Only Scan" for getProjectNodes which filters by (projectId, parentId) and sorts by (type, name)
     listingIdx: index('project_nodes_listing_idx').on(t.projectId, t.parentId, t.type, t.name),
     projectUpdatedIdx: index('project_nodes_project_updated_idx').on(t.projectId, t.updatedAt),
+    taskStatusIdx: index('project_nodes_task_status_idx').on(t.projectId, t.taskId, t.syncStatus),
+    canonicalIdx: index('project_nodes_canonical_idx').on(t.projectId, t.canonicalNodeId),
+    canonicalNodeFkIdx: index('project_nodes_canonical_node_idx').on(t.canonicalNodeId),
+    taskFkIdx: index('project_nodes_task_idx').on(t.taskId),
+    syncGitIdx: index('project_nodes_sync_git_idx').on(t.projectId, t.syncStatus, t.gitHash),
     activeParentNameIdx: uniqueIndex('project_nodes_active_parent_name_uidx')
-        .on(t.projectId, sql`COALESCE(${t.parentId}, '00000000-0000-0000-0000-000000000000'::uuid)`, sql`LOWER(${t.name})`)
+        .on(t.projectId, sql`COALESCE(${t.parentId}, '00000000-0000-0000-0000-000000000000'::uuid)`, sql`LOWER(${t.name})`, sql`COALESCE(${t.taskId}, '00000000-0000-0000-0000-000000000000'::uuid)`)
         .where(sql`${t.deletedAt} IS NULL`),
     activeProjectPathIdx: uniqueIndex('project_nodes_active_project_path_uidx')
-        .on(t.projectId, t.path)
+        .on(t.projectId, t.path, sql`COALESCE(${t.taskId}, '00000000-0000-0000-0000-000000000000'::uuid)`)
         .where(sql`${t.deletedAt} IS NULL`),
     // Self-referencing FK with cascade
     parentFk: foreignKey({
@@ -1189,7 +1265,7 @@ export const uploadIntents = pgTable('upload_intents', {
     projectId: uuid('project_id').references(() => projects.id, { onDelete: 'cascade' }),
     bucket: text('bucket').notNull(),
     storageKey: text('storage_key').notNull(),
-    scope: text('scope', { enum: ['project_file', 'profile_image'] }).notNull(),
+    scope: text('scope', { enum: ['project_file', 'project_update_media', 'profile_image'] }).notNull(),
     kind: text('kind', { enum: ['file', 'avatar', 'banner'] }).notNull(),
     expectedMimeType: text('expected_mime_type').notNull(),
     expectedSize: bigint('expected_size', { mode: 'number' }).notNull(),
@@ -1260,6 +1336,7 @@ export const projectNodeLocks = pgTable('project_node_locks', {
     nodeId: uuid('node_id').primaryKey().notNull().references(() => projectNodes.id, { onDelete: 'cascade' }),
     projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
     lockedBy: uuid('locked_by').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
+    sessionId: uuid('session_id'),
     acquiredAt: timestamp('acquired_at', { withTimezone: true }).defaultNow().notNull(),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
 }, (t) => ({
@@ -1276,12 +1353,14 @@ export const projectNodeEvents = pgTable('project_node_events', {
     nodeId: uuid('node_id').references(() => projectNodes.id, { onDelete: 'cascade' }),
     actorId: uuid('actor_id').references(() => profiles.id, { onDelete: 'set null' }),
     type: text('type').notNull(),
+    sequenceNumber: bigint('sequence_number', { mode: 'number' }).default(0).notNull(),
     metadata: jsonb('metadata').$type<Record<string, unknown>>().default({}),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
     pk: primaryKey({ columns: [t.id, t.createdAt] }),
     projectIdx: index('project_node_events_project_idx').on(t.projectId, t.createdAt),
     nodeIdx: index('project_node_events_node_idx').on(t.nodeId, t.createdAt),
+    seqIdx: uniqueIndex('project_node_events_seq_idx').on(t.projectId, t.sequenceNumber, t.createdAt),
 }))
 
 // ============================================================================
@@ -1366,6 +1445,7 @@ export const profilesRelations = relations(profiles, ({ many, one }) => ({
     projects: many(projects),
     projectMemberships: many(projectMembers),
     followedProjects: many(projectFollows),
+    savedProjects: many(savedProjects),
     receivedNotifications: many(userNotifications, { relationName: 'notification_recipient' }),
     authoredNotifications: many(userNotifications, { relationName: 'notification_actor' }),
     securityState: one(profileSecurityStates),
@@ -1410,6 +1490,7 @@ export const projectsRelations = relations(projects, ({ one, many }) => ({
     }),
     members: many(projectMembers),
     followers: many(projectFollows),
+    saves: many(savedProjects),
     updates: many(projectUpdates),
 
     sprints: many(projectSprints),
@@ -1419,9 +1500,9 @@ export const projectsRelations = relations(projects, ({ one, many }) => ({
     applications: many(roleApplications),
     profileContributions: many(profileProjectContributions),
     profileContributionStages: many(profileProjectContributionStages),
-    readme: one(projectReadmes),
-    readmeVersions: many(projectReadmeVersions),
-    readmeAssets: many(projectReadmeAssets),
+    markdowns: many(projectMarkdowns),
+    markdownVersions: many(projectMarkdownVersions),
+    markdownAssets: many(projectMarkdownAssets),
     conversation: one(conversations, {
         fields: [projects.conversationId],
         references: [conversations.id],
@@ -1524,59 +1605,73 @@ export const profileCollaborationSummariesRelations = relations(profileCollabora
     }),
 }))
 
-export const projectReadmesRelations = relations(projectReadmes, ({ one }) => ({
+export const projectMarkdownsRelations = relations(projectMarkdowns, ({ one, many }) => ({
     project: one(projects, {
-        fields: [projectReadmes.projectId],
+        fields: [projectMarkdowns.projectId],
         references: [projects.id],
     }),
     draftEditor: one(profiles, {
-        fields: [projectReadmes.draftUpdatedBy],
+        fields: [projectMarkdowns.draftUpdatedBy],
         references: [profiles.id],
     }),
-    publishedVersion: one(projectReadmeVersions, {
-        fields: [projectReadmes.publishedVersionId],
-        references: [projectReadmeVersions.id],
+    publishedVersion: one(projectMarkdownVersions, {
+        fields: [projectMarkdowns.publishedVersionId],
+        references: [projectMarkdownVersions.id],
     }),
     linkedNode: one(projectNodes, {
-        fields: [projectReadmes.linkedNodeId],
+        fields: [projectMarkdowns.linkedNodeId],
         references: [projectNodes.id],
     }),
+    versions: many(projectMarkdownVersions),
+    assets: many(projectMarkdownAssets),
 }))
 
-export const projectReadmeDraftContributorsRelations = relations(projectReadmeDraftContributors, ({ one }) => ({
+export const projectMarkdownDraftContributorsRelations = relations(projectMarkdownDraftContributors, ({ one }) => ({
     project: one(projects, {
-        fields: [projectReadmeDraftContributors.projectId],
+        fields: [projectMarkdownDraftContributors.projectId],
         references: [projects.id],
+    }),
+    markdown: one(projectMarkdowns, {
+        fields: [projectMarkdownDraftContributors.markdownId],
+        references: [projectMarkdowns.id],
     }),
     user: one(profiles, {
-        fields: [projectReadmeDraftContributors.userId],
+        fields: [projectMarkdownDraftContributors.userId],
         references: [profiles.id],
     }),
 }))
 
-export const projectReadmeVersionsRelations = relations(projectReadmeVersions, ({ one, many }) => ({
+export const projectMarkdownVersionsRelations = relations(projectMarkdownVersions, ({ one, many }) => ({
     project: one(projects, {
-        fields: [projectReadmeVersions.projectId],
+        fields: [projectMarkdownVersions.projectId],
         references: [projects.id],
+    }),
+    markdown: one(projectMarkdowns, {
+        fields: [projectMarkdownVersions.markdownId],
+        references: [projectMarkdowns.id],
     }),
     author: one(profiles, {
-        fields: [projectReadmeVersions.createdBy],
+        fields: [projectMarkdownVersions.createdBy],
         references: [profiles.id],
     }),
-    assets: many(projectReadmeAssets),
+    assets: many(projectMarkdownAssets),
 }))
 
-export const projectReadmeAssetsRelations = relations(projectReadmeAssets, ({ one }) => ({
+export const projectMarkdownAssetsRelations = relations(projectMarkdownAssets, ({ one }) => ({
     project: one(projects, {
-        fields: [projectReadmeAssets.projectId],
+        fields: [projectMarkdownAssets.projectId],
         references: [projects.id],
     }),
-    version: one(projectReadmeVersions, {
-        fields: [projectReadmeAssets.versionId],
-        references: [projectReadmeVersions.id],
+    markdown: one(projectMarkdowns, {
+        fields: [projectMarkdownAssets.markdownId],
+        references: [projectMarkdowns.id],
+    }),
+    version: one(projectMarkdownVersions, {
+        fields: [projectMarkdownAssets.versionId],
+        references: [projectMarkdownVersions.id],
     }),
     creator: one(profiles, {
-        fields: [projectReadmeAssets.createdBy],
+        fields: [projectMarkdownAssets.createdBy],
         references: [profiles.id],
     }),
 }))
@@ -1588,6 +1683,17 @@ export const projectFollowsRelations = relations(projectFollows, ({ one }) => ({
     }),
     user: one(profiles, {
         fields: [projectFollows.userId],
+        references: [profiles.id],
+    }),
+}))
+
+export const savedProjectsRelations = relations(savedProjects, ({ one }) => ({
+    project: one(projects, {
+        fields: [savedProjects.projectId],
+        references: [projects.id],
+    }),
+    user: one(profiles, {
+        fields: [savedProjects.userId],
         references: [profiles.id],
     }),
 }))
@@ -1649,6 +1755,10 @@ export const projectSprintsRelations = relations(projectSprints, ({ one, many })
         references: [projects.id],
     }),
     tasks: many(tasks),
+    creator: one(profiles, {
+        fields: [projectSprints.creatorId],
+        references: [profiles.id],
+    }),
 }))
 
 export const tasksRelations = relations(tasks, ({ one, many }) => ({
@@ -1958,6 +2068,7 @@ export const messageWorkLinks = pgTable('message_work_links', {
     projectActiveUpdatedIdx: index('message_work_links_project_active_updated_idx')
         .on(t.targetProjectId, t.updatedAt)
         .where(sql`${t.deletedAt} IS NULL`),
+    createdByIdx: index('message_work_links_created_by_idx').on(t.createdBy),
     sourceTargetUnique: uniqueIndex('message_work_links_source_target_unique')
         .on(t.sourceMessageId, t.targetType, t.targetId)
         .where(sql`${t.deletedAt} IS NULL`),
@@ -2207,6 +2318,8 @@ export type ProjectMember = typeof projectMembers.$inferSelect
 export type NewProjectMember = typeof projectMembers.$inferInsert
 export type ProjectFollow = typeof projectFollows.$inferSelect
 export type NewProjectFollow = typeof projectFollows.$inferInsert
+export type SavedProject = typeof savedProjects.$inferSelect
+export type NewSavedProject = typeof savedProjects.$inferInsert
 export type ProjectUpdate = typeof projectUpdates.$inferSelect
 export type NewProjectUpdate = typeof projectUpdates.$inferInsert
 export type ProjectUpdateLike = typeof projectUpdateLikes.$inferSelect
@@ -2224,7 +2337,9 @@ export const collections = pgTable('collections', {
     name: text('name').notNull(),
     ownerId: uuid('owner_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
-});
+}, (t) => ({
+    ownerIdx: index('collections_owner_id_idx').on(t.ownerId),
+}));
 
 export const collectionProjects = pgTable('collection_projects', {
     collectionId: uuid('collection_id').notNull().references(() => collections.id, { onDelete: 'cascade' }),
@@ -2422,6 +2537,7 @@ export const messageReactions = pgTable('message_reactions', {
         name: 'message_reactions_message_conversation_fkey',
     }).onDelete('cascade'),
     messageUserEmojiUnique: uniqueIndex('message_reactions_message_user_emoji_unique').on(t.messageId, t.userId, t.emoji),
+    messageConversationIdx: index('message_reactions_message_conversation_idx').on(t.messageId, t.conversationId),
     messageIdx: index('message_reactions_message_idx').on(t.messageId),
     conversationIdx: index('message_reactions_conversation_idx').on(t.conversationId),
     userIdx: index('message_reactions_user_idx').on(t.userId),
@@ -2448,6 +2564,7 @@ export const messageReports = pgTable('message_reports', {
         name: 'message_reports_message_conversation_fkey',
     }).onDelete('cascade'),
     messageIdx: index('message_reports_message_idx').on(t.messageId),
+    messageConversationIdx: index('message_reports_message_conversation_idx').on(t.messageId, t.conversationId),
     reporterIdx: index('message_reports_reporter_idx').on(t.reporterId),
     statusIdx: index('message_reports_status_idx').on(t.status, t.createdAt),
     messageReporterUnique: uniqueIndex('message_reports_message_reporter_unique').on(t.messageId, t.reporterId),
@@ -2469,6 +2586,7 @@ export const messageReadReceipts = pgTable('message_read_receipts', {
         name: 'message_read_receipts_message_conversation_fkey',
     }).onDelete('cascade'),
     messageUserUnique: uniqueIndex('message_read_receipts_message_user_unique').on(t.messageId, t.userId),
+    messageConversationIdx: index('message_read_receipts_message_conversation_idx').on(t.messageId, t.conversationId),
     messageIdx: index('message_read_receipts_message_idx').on(t.messageId),
     userIdx: index('message_read_receipts_user_idx').on(t.userId, t.readAt),
     conversationIdx: index('message_read_receipts_conversation_idx').on(t.conversationId, t.readAt),
@@ -2490,6 +2608,7 @@ export const messageDeliveryReceipts = pgTable('message_delivery_receipts', {
         name: 'message_delivery_receipts_message_conversation_fkey',
     }).onDelete('cascade'),
     messageUserUnique: uniqueIndex('message_delivery_receipts_message_user_unique').on(t.messageId, t.userId),
+    messageConversationIdx: index('message_delivery_receipts_message_conversation_idx').on(t.messageId, t.conversationId),
     messageIdx: index('message_delivery_receipts_message_idx').on(t.messageId),
     userIdx: index('message_delivery_receipts_user_idx').on(t.userId, t.deliveredAt),
     conversationIdx: index('message_delivery_receipts_conversation_idx').on(t.conversationId, t.deliveredAt),
@@ -2580,3 +2699,166 @@ export type ProfileProjectContributionStage = typeof profileProjectContributionS
 export type NewProfileProjectContributionStage = typeof profileProjectContributionStages.$inferInsert
 export type ProfileCollaborationSummary = typeof profileCollaborationSummaries.$inferSelect
 export type NewProfileCollaborationSummary = typeof profileCollaborationSummaries.$inferInsert
+
+// ============================================================================
+// EXTENSION DEVICE SESSIONS
+// ============================================================================
+export const extensionDeviceSessions = pgTable('extension_device_sessions', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
+    tokenHash: text('token_hash').unique().notNull(),
+    tokenPrefix: text('token_prefix').notNull(),
+    deviceName: text('device_name').notNull(),
+    clientVersion: text('client_version').notNull(),
+    scopes: jsonb('scopes').default([]),
+    ipAddress: text('ip_address'),
+    userAgent: text('user_agent'),
+    editorHost: text('editor_host'),
+    editorName: text('editor_name'),
+    editorPlatform: text('editor_platform'),
+    editorVersion: text('editor_version'),
+    revocationReason: text('revocation_reason'),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+})
+
+// ============================================================================
+// EXTENSION DEVICE SESSION EVENTS
+// ============================================================================
+export const extensionDeviceSessionEvents = pgTable('extension_device_session_events', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    sessionId: uuid('session_id').notNull().references(() => extensionDeviceSessions.id, { onDelete: 'cascade' }),
+    eventType: text('event_type').notNull(),
+    ipAddress: text('ip_address'),
+    userAgent: text('user_agent'),
+    metadata: jsonb('metadata').default({}),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+    sessionIdx: index('extension_device_session_events_session_idx').on(t.sessionId),
+}))
+
+// ============================================================================
+// PROJECT GIT DELTAS
+// ============================================================================
+export const projectGitDeltas = pgTable('project_git_deltas', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+    taskId: uuid('task_id').references(() => tasks.id, { onDelete: 'set null' }),
+    targetBranch: text('target_branch').notNull(),
+    sequenceNumber: bigint('sequence_number', { mode: 'number' }).notNull(),
+    deltaOrder: integer('delta_order').notNull(),
+    action: text('action').notNull(),
+    nodeId: uuid('node_id').references(() => projectNodes.id, { onDelete: 'set null' }),
+    path: text('path').notNull(),
+    oldPath: text('old_path'),
+    gitBlobHash: text('git_blob_hash'),
+    fileVersionId: uuid('file_version_id').references(() => fileVersions.id, { onDelete: 'set null' }),
+    s3Key: text('s3_key'),
+    status: text('status').default('pending').notNull(),
+    jobId: uuid('job_id'),
+    processedCommitSha: text('processed_commit_sha'),
+    processingError: text('processing_error'),
+    processedAt: timestamp('processed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+    uniqueSeq: unique('project_git_deltas_unique_seq').on(t.projectId, t.targetBranch, t.sequenceNumber, t.deltaOrder),
+    syncIdx: index('project_git_deltas_sync_idx').on(t.projectId, t.targetBranch, t.status, t.sequenceNumber, t.deltaOrder),
+    taskIdx: index('project_git_deltas_task_idx').on(t.taskId),
+    nodeIdx: index('project_git_deltas_node_idx').on(t.nodeId),
+    fileVersionIdx: index('project_git_deltas_file_version_idx').on(t.fileVersionId),
+}))
+
+// ============================================================================
+// IMPORT JOBS
+// ============================================================================
+export const importJobs = pgTable('import_jobs', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+    status: text('status').default('pending').notNull(),
+    totalFiles: integer('total_files').default(0).notNull(),
+    processedFiles: integer('processed_files').default(0).notNull(),
+    manifestS3Key: text('manifest_s3_key'),
+    manifestHash: text('manifest_hash'),
+    errorMessage: text('error_message'),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+    projectIdx: index('import_jobs_project_idx').on(t.projectId),
+}))
+
+// ============================================================================
+// IMPORT JOB FILES
+// ============================================================================
+export const importJobFiles = pgTable('import_job_files', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    jobId: uuid('job_id').notNull().references(() => importJobs.id, { onDelete: 'cascade' }),
+    path: text('path').notNull(),
+    size: bigint('size', { mode: 'number' }).notNull(),
+    checksum: text('checksum').notNull(),
+    status: text('status').default('pending').notNull(),
+    uploadIntentId: uuid('upload_intent_id').references(() => uploadIntents.id, { onDelete: 'set null' }),
+    s3Key: text('s3_key'),
+    errorMessage: text('error_message'),
+    finalizedAt: timestamp('finalized_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+    statusIdx: index('import_job_files_status_idx').on(t.jobId, t.status),
+    uploadIntentIdx: index('import_job_files_upload_intent_idx').on(t.uploadIntentId),
+}))
+
+// ============================================================================
+// PROJECT NODE CONFLICTS
+// ============================================================================
+export const projectNodeConflicts = pgTable('project_node_conflicts', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+    nodeId: uuid('node_id').notNull().references(() => projectNodes.id, { onDelete: 'cascade' }),
+    taskId: uuid('task_id').references(() => tasks.id, { onDelete: 'cascade' }),
+    gitBranch: text('git_branch').notNull(),
+    canonicalContent: text('canonical_content'),
+    incomingContent: text('incoming_content'),
+    mergedContent: text('merged_content'),
+    conflictStatus: text('conflict_status').default('unresolved').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+    nodeIdx: index('project_node_conflicts_node_idx').on(t.nodeId),
+    projectIdx: index('project_node_conflicts_project_idx').on(t.projectId),
+    taskIdx: index('project_node_conflicts_task_idx').on(t.taskId),
+}))
+
+export type ExtensionDeviceSession = typeof extensionDeviceSessions.$inferSelect
+export type NewExtensionDeviceSession = typeof extensionDeviceSessions.$inferInsert
+export type ExtensionDeviceSessionEvent = typeof extensionDeviceSessionEvents.$inferSelect
+export type NewExtensionDeviceSessionEvent = typeof extensionDeviceSessionEvents.$inferInsert
+export type ProjectGitDelta = typeof projectGitDeltas.$inferSelect
+export type NewProjectGitDelta = typeof projectGitDeltas.$inferInsert
+export type ImportJob = typeof importJobs.$inferSelect
+export type NewImportJob = typeof importJobs.$inferInsert
+export type ImportJobFile = typeof importJobFiles.$inferSelect
+export type NewImportJobFile = typeof importJobFiles.$inferInsert
+export type ProjectNodeConflict = typeof projectNodeConflicts.$inferSelect
+export type NewProjectNodeConflict = typeof projectNodeConflicts.$inferInsert
+
+// ============================================================================
+// TASK PUSHES
+// ============================================================================
+export const taskPushes = pgTable('task_pushes', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    taskId: uuid('task_id').notNull().references(() => tasks.id, { onDelete: 'cascade' }),
+    projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+    message: text('message'),
+    filesCount: integer('files_count').default(0).notNull(),
+    pushedBy: uuid('pushed_by').references(() => profiles.id, { onDelete: 'set null' }),
+    pushedAt: timestamp('pushed_at', { withTimezone: true }).defaultNow().notNull(),
+    filesJson: jsonb('files_json').default('[]').notNull(),
+}, (t) => ({
+    taskIdx: index('task_pushes_task_idx').on(t.taskId),
+    taskPushedAtIdx: index('task_pushes_task_pushed_at_idx').on(t.taskId, t.pushedAt.desc()),
+    projectIdx: index('task_pushes_project_idx').on(t.projectId),
+    pushedByIdx: index('task_pushes_pushed_by_idx').on(t.pushedBy),
+}))
+
+export type TaskPush = typeof taskPushes.$inferSelect
+export type NewTaskPush = typeof taskPushes.$inferInsert
