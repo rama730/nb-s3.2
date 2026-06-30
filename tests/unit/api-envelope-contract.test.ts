@@ -46,4 +46,21 @@ describe("check-api-envelope-contract script", () => {
     assert.ok(result.errors.some((line) => line.includes("direct NextResponse.json")));
     assert.ok(result.errors.some((line) => line.includes("must use jsonSuccess/jsonError")));
   });
+
+  it("fails when a public 5xx response exposes a caught error message", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "api-envelope-500-detail-"));
+    write(
+      path.join(tmp, "src/app/api/v1/foo/route.ts"),
+      `
+        import { jsonSuccess, jsonError } from "@/app/api/v1/_shared";
+        export async function GET() {
+          try { return jsonSuccess({ ok: true }); }
+          catch (error) { return jsonError(error.message, 500, "INTERNAL"); }
+        }
+      `,
+    );
+
+    const result = validateApiEnvelopeContract(tmp);
+    assert.ok(result.errors.some((line) => line.includes("must not expose")));
+  });
 });
