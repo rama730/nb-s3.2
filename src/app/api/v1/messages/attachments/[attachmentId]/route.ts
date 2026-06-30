@@ -8,6 +8,7 @@ import {
   messages,
 } from "@/lib/db/schema";
 import { resolvePrivacyRelationship } from "@/lib/privacy/resolver";
+import { MESSAGE_MEDIA_PREVIEW_MAX_WIDTH } from "@/lib/messages/media-metadata";
 import {
   enforceRouteLimit,
   getRequestId,
@@ -191,15 +192,19 @@ export async function GET(
   const download = requestUrl.searchParams.get("download") === "1";
   const preview = requestUrl.searchParams.get("preview") === "1";
   const requestedMimeType = (attachment.mimeType || "").trim();
-  const usePreviewTransform = preview && requestedMimeType.startsWith("image/");
+  const usePreviewTransform = (
+    preview
+    && requestedMimeType.startsWith("image/")
+    && requestedMimeType !== "image/gif"
+  );
 
   const admin = await createAdminClient();
   const { data, error } = usePreviewTransform
     ? await admin.storage.from(ATTACHMENTS_BUCKET).download(storagePath, {
         transform: {
-          width: 480,
-          height: 480,
-          resize: "cover",
+          width: MESSAGE_MEDIA_PREVIEW_MAX_WIDTH,
+          resize: "contain",
+          format: "origin",
         },
       })
     : await admin.storage.from(ATTACHMENTS_BUCKET).download(storagePath);
