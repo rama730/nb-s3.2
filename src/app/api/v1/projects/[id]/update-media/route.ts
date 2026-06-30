@@ -1,9 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { and, eq, isNull } from "drizzle-orm";
 
 import { enforceRouteLimit, jsonError } from "@/app/api/v1/_shared";
-import { db } from "@/lib/db";
-import { projects } from "@/lib/db/schema";
 import { getProjectAccessById } from "@/lib/data/project-access";
 import { logger } from "@/lib/logger";
 import { isProjectTabVisibleToViewer } from "@/lib/projects/settings-policies";
@@ -14,6 +11,9 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const SIGNED_URL_TTL_SECONDS = 15 * 60;
+const PRIVATE_REDIRECT_MAX_AGE_SECONDS = 120;
+const PUBLIC_REDIRECT_MAX_AGE_SECONDS = 5 * 60;
 
 export async function GET(request: NextRequest, context: { params: Promise<{ id: string }> }) {
     const limitResponse = await enforceRouteLimit(request, "api:v1:projects:updateMedia", 180, 60);
@@ -33,28 +33,19 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
     const access = await getProjectAccessById(projectId, user?.id ?? null);
     if (!access.project || !access.canRead) return jsonError("Not found", 404, "NOT_FOUND");
 
-    const [project] = await db
-        .select({
-            id: projects.id,
-            publicTabVisibility: projects.publicTabVisibility,
-        })
-        .from(projects)
-        .where(and(eq(projects.id, projectId), isNull(projects.deletedAt)))
-        .limit(1);
-
     const isOwnerOrMember = access.isOwner || access.isMember;
-    const canReadUpdates = Boolean(project && isProjectTabVisibleToViewer({
+    const canReadUpdates = isProjectTabVisibleToViewer({
         tabId: "updates",
         isOwnerOrMember,
         canManageSettings: access.isOwner,
-        publicTabVisibility: project.publicTabVisibility,
-    }));
+        publicTabVisibility: access.project.publicTabVisibility,
+    });
     if (!canReadUpdates) return jsonError("Not found", 404, "NOT_FOUND");
 
     const admin = await createAdminClient();
     const { data, error } = await admin.storage
         .from(PROJECT_UPDATE_MEDIA_BUCKET)
-        .createSignedUrl(storageKey, 60);
+        .createSignedUrl(storageKey, SIGNED_URL_TTL_SECONDS);
     if (error || !data?.signedUrl) {
         logger.warn("project_updates.media_route_presign_failed", {
             module: "projects",
@@ -67,7 +58,20 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
     }
 
     const response = NextResponse.redirect(data.signedUrl, 302);
-    response.headers.set("Cache-Control", isOwnerOrMember || user ? "private, no-store" : "public, max-age=300, s-maxage=300, stale-while-revalidate=86400");
+    const isPublicAnonymousRead = !user && !isOwnerOrMember;
+    response.headers.set(
+        "Cache-Control",
+        isPublicAnonymousRead
+            ? `public, max-age=${PUBLIC_REDIRECT_MAX_AGE_SECONDS}, s-maxage=${PUBLIC_REDIRECT_MAX_AGE_SECONDS}, stale-while-revalidate=86400`
+            : `private, max-age=${PRIVATE_REDIRECT_MAX_AGE_SECONDS}`,
+    );
+    response.headers.set(
+        "CDN-Cache-Control",
+        isPublicAnonymousRead
+            ? `public, max-age=${PUBLIC_REDIRECT_MAX_AGE_SECONDS}, stale-while-revalidate=86400`
+            : "private, no-store",
+    );
+    response.headers.set("Vary", "Cookie, Authorization");
     response.headers.set("X-Content-Type-Options", "nosniff");
     return response;
 }
