@@ -1,5 +1,3 @@
-import AppearanceSettings from "@/components/settings/AppearanceSettings";
-
-export default function Page() {
-    return <AppearanceSettings />;
+export default function AppearanceSettingsRoute() {
+  return null;
 }
