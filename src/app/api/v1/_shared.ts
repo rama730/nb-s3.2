@@ -74,8 +74,104 @@ export async function enforceRouteLimit(
   return null;
 }
 
+import { headers } from "next/headers";
+import { db } from "@/lib/db";
+import { extensionDeviceSessions } from "@/lib/db/schema";
+import crypto from "crypto";
+import { eq } from "drizzle-orm";
+
+function normalizeSessionHeader(value: string | null, maxLength = 120) {
+  if (!value) return null;
+  const normalized = value
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return normalized ? normalized.slice(0, maxLength) : null;
+}
+
 export async function requireAuthenticatedUser() {
   const supabase = await createClient();
+
+  // 1. Check for Bearer token authentication
+  try {
+    const headerStore = await headers();
+    const authHeader = headerStore.get("authorization")?.trim();
+    if (authHeader && authHeader.toLowerCase().startsWith("bearer ")) {
+      const token = authHeader.substring(7).trim();
+      if (token.startsWith("nb_dev_")) {
+        const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+        const now = new Date();
+        const session = await db.query.extensionDeviceSessions.findFirst({
+          where: (s, { eq, and, isNull, gt }) => and(
+            eq(s.tokenHash, tokenHash),
+            isNull(s.revokedAt),
+            gt(s.expiresAt, now)
+          )
+        });
+
+        if (session) {
+          const profile = await db.query.profiles.findFirst({
+            where: (p, { eq }) => eq(p.id, session.userId),
+            columns: { email: true }
+          });
+
+          const extensionVersion = normalizeSessionHeader(headerStore.get("x-extension-version"), 40);
+          const editorHost = normalizeSessionHeader(headerStore.get("x-editor-host"), 80);
+          const editorName = normalizeSessionHeader(headerStore.get("x-editor-name"), 120);
+          const editorPlatform = normalizeSessionHeader(headerStore.get("x-editor-platform"), 80);
+          const editorVersion = normalizeSessionHeader(headerStore.get("x-editor-version"), 80);
+          const userAgent = normalizeSessionHeader(headerStore.get("user-agent"), 240);
+          const updates: Partial<typeof extensionDeviceSessions.$inferInsert> = { lastSeenAt: now };
+          if (extensionVersion && session.clientVersion !== extensionVersion) {
+            updates.clientVersion = extensionVersion;
+          }
+          if (editorHost && session.editorHost !== editorHost) {
+            updates.editorHost = editorHost;
+          }
+          if (editorName && session.editorName !== editorName) {
+            updates.editorName = editorName;
+          }
+          if (editorPlatform && session.editorPlatform !== editorPlatform) {
+            updates.editorPlatform = editorPlatform;
+          }
+          if (editorVersion && session.editorVersion !== editorVersion) {
+            updates.editorVersion = editorVersion;
+          }
+          if (userAgent && session.userAgent !== userAgent) {
+            updates.userAgent = userAgent;
+          }
+
+          // Update lastSeenAt asynchronously
+          void db
+            .update(extensionDeviceSessions)
+            .set(updates)
+            .where(eq(extensionDeviceSessions.id, session.id))
+            .catch(() => null);
+
+          const mockUser: User = {
+            id: session.userId,
+            email: profile?.email || "",
+            aud: "authenticated",
+            role: "authenticated",
+            app_metadata: {},
+            user_metadata: {},
+            identities: [],
+            factors: [],
+            created_at: session.createdAt.toISOString(),
+            updated_at: session.lastSeenAt.toISOString(),
+          } as any;
+
+          return { supabase, user: mockUser, response: null };
+        }
+      }
+    }
+  } catch (error) {
+    logger.error("api.v1.shared.bearer_auth_failed", {
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+
+  // 2. Fall back to standard session cookie check
   const {
     data: { user },
   } = await supabase.auth.getUser();
