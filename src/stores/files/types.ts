@@ -253,6 +253,17 @@ export type FilesWorkspaceState = {
   setTaskLinkCounts: (projectId: string, counts: Record<string, number>) => void;
   patchNodeVersion: (projectId: string, nodeId: string, currentVersion: number) => void;
   setNodes: (projectId: string, nodes: ProjectNode[]) => void;
+  batchUpdateStore: (
+    projectId: string,
+    payloads: Array<{
+      parentId: string | null;
+      childIds: string[];
+      nextCursor: string | null;
+      hasMore: boolean;
+      loaded: boolean;
+    }>,
+    nodes?: ProjectNode[]
+  ) => void;
   hydrateFromIdb: (
     projectId: string,
     nodesById: Record<string, ProjectNode>,
@@ -431,6 +442,7 @@ export function symbolsEqual(a: EditorSymbol[], b: EditorSymbol[]): boolean {
   for (let i = 0; i < a.length; i += 1) {
     const left = a[i];
     const right = b[i];
+    if (!left || !right) return false;
     if (
       left.name !== right.name ||
       left.kind !== right.kind ||
