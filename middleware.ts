@@ -6,7 +6,7 @@ import { CSRF_COOKIE_NAME, DEV_CSRF_SECRET_FALLBACK, MINIMUM_CSRF_SECRET_LENGTH 
 
 const CSP_NONCE_HEADER = "x-nonce";
 const CSRF_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 12;
-const AUTH_PROTECTED_PREFIXES = ["/hub", "/settings", "/messages", "/profile", "/people", "/workspace", "/monitor", "/u/", "/onboarding", "/projects", "/admin"];
+const AUTH_PROTECTED_PREFIXES = ["/hub", "/settings", "/messages", "/profile", "/people", "/workspace", "/monitor", "/u/", "/onboarding", "/projects", "/admin", "/authorize"];
 const AUTH_PROTECTED_EXACT = new Set(["/", "/login", "/signup", "/verify-email"]);
 
 function toBase64Url(buffer: ArrayBuffer) {
