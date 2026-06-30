@@ -57,7 +57,7 @@ import {
     withMessageContextChipsMetadata,
     withStructuredMessageMetadata,
 } from '@/lib/messages/structured';
-import { toggleReactionV2 } from '@/app/actions/messaging/reactions-v2';
+import { toggleReaction } from '@/app/actions/messaging/features';
 import {
     normalizeMessageReactionSummary,
     toggleMessageReactionSummary,
@@ -838,7 +838,7 @@ export function useToggleReaction(conversationId: string | null) {
 
     return useMutation({
         mutationFn: async (params: { messageId: string; emoji: string }) => {
-            const result = await toggleReactionV2(params.messageId, params.emoji);
+            const result = await toggleReaction(params.messageId, params.emoji);
             if (!result.success) {
                 throw new Error(result.error || 'Failed to toggle reaction');
             }
