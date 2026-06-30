@@ -10,7 +10,7 @@ import {
 
 const DEFAULT_UPLOAD_INTENT_TTL_MS = 60 * 60 * 1000;
 
-export type UploadIntentScope = "project_file" | "profile_image";
+export type UploadIntentScope = "project_file" | "project_update_media" | "profile_image";
 export type UploadIntentKind = "file" | "avatar" | "banner";
 export type UploadIntentStatus = "pending" | "finalized" | "expired" | "failed";
 
