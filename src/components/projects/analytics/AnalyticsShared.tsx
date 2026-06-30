@@ -244,7 +244,7 @@ export function AnalyticsEmptyState({
     );
 }
 
-export function AnalyticsLoadingState({ label = "Loading project intelligence..." }: { label?: string }) {
+export function AnalyticsLoadingState({ label = "Loading project analytics..." }: { label?: string }) {
     return (
         <AnalyticsShellCard>
             <div className="animate-pulse space-y-3" aria-hidden="true">
@@ -270,6 +270,30 @@ export function SeverityPill({ severity }: { severity: ProjectAnalyticsRiskSigna
     return <span className={`rounded-full px-2.5 py-1 text-xs font-semibold capitalize ${className}`}>{severity}</span>;
 }
 
+import { CheckSquare, Timer, FileText, User, UserPlus, Activity, Settings, Info } from "lucide-react";
+import { cn } from "@/lib/utils";
+
+function getEventPresentation(type: ProjectAnalyticsTimelineEvent["type"]) {
+    switch (type) {
+        case "task":
+            return { Icon: CheckSquare, colorClass: "text-blue-500" };
+        case "sprint":
+            return { Icon: Timer, colorClass: "text-indigo-500" };
+        case "file":
+            return { Icon: FileText, colorClass: "text-emerald-500" };
+        case "member":
+            return { Icon: User, colorClass: "text-violet-500" };
+        case "application":
+            return { Icon: UserPlus, colorClass: "text-amber-500" };
+        case "workflow":
+            return { Icon: Activity, colorClass: "text-rose-500" };
+        case "settings":
+            return { Icon: Settings, colorClass: "text-zinc-500" };
+        default:
+            return { Icon: Info, colorClass: "text-zinc-400" };
+    }
+}
+
 export function TimelineEventRow({ event }: { event: ProjectAnalyticsTimelineEvent }) {
     const occurred = new Date(event.occurredAt);
     const occurredLabel = Number.isNaN(occurred.getTime())
@@ -280,39 +304,57 @@ export function TimelineEventRow({ event }: { event: ProjectAnalyticsTimelineEve
             hour: "numeric",
             minute: "2-digit",
         });
+
+    const { Icon, colorClass } = getEventPresentation(event.type);
+
     return (
-        <article className="flex gap-3 border-b border-zinc-200 py-2.5 last:border-b-0 dark:border-zinc-800">
-            <div className="mt-1.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-blue-50 dark:bg-blue-950/50">
-                <div className="h-1.5 w-1.5 rounded-full bg-blue-500" />
+        <article className="relative pl-0 py-3 text-xs">
+            {/* Centered Node Icon/Avatar */}
+            <div className="absolute -left-[38px] top-1.5 z-10 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+                {event.actor ? (
+                    event.actor.avatarUrl ? (
+                        <img
+                            src={event.actor.avatarUrl}
+                            alt={event.actor.name}
+                            className="h-full w-full rounded-full object-cover"
+                        />
+                    ) : (
+                        <div className="flex h-full w-full items-center justify-center rounded-full bg-blue-50 font-semibold text-blue-700 dark:bg-blue-950/50 dark:text-blue-300 text-[10px]">
+                            {event.actor.name.slice(0, 1).toUpperCase()}
+                        </div>
+                    )
+                ) : (
+                    <Icon className={cn("h-3.5 w-3.5", colorClass)} />
+                )}
             </div>
+
             <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-1.5">
-                    <h4 className="truncate text-sm font-semibold text-zinc-950 dark:text-zinc-50">{event.title}</h4>
-                    <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-500 dark:bg-zinc-900 dark:text-zinc-400">
+                <div className="flex flex-wrap items-center gap-2">
+                    <h4 className="text-sm font-semibold text-zinc-950 dark:text-zinc-50">{event.title}</h4>
+                    <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-zinc-500 dark:bg-zinc-900 dark:text-zinc-400">
                         {event.type}
                     </span>
                 </div>
-                <p className="mt-0.5 text-xs leading-5 text-zinc-500 dark:text-zinc-400">{event.description}</p>
+                <p className="mt-1 text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">{event.description}</p>
                 {event.representativeNames?.length ? (
-                    <div className="mt-1.5 flex flex-wrap gap-1.5">
+                    <div className="mt-2 flex flex-wrap gap-1.5">
                         {event.representativeNames.map((name) => (
-                            <span key={name} className="max-w-56 truncate rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-medium text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300">
+                            <span key={name} className="max-w-56 truncate rounded-full bg-zinc-50 border border-zinc-100 px-2 py-0.5 text-[10px] font-medium text-zinc-500 dark:bg-zinc-900/40 dark:border-zinc-800 dark:text-zinc-400">
                                 {name}
                             </span>
                         ))}
                         {event.hiddenCount ? (
-                            <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-semibold text-zinc-500 dark:bg-zinc-900 dark:text-zinc-400">
+                            <span className="rounded-full bg-zinc-50 border border-zinc-100 px-2 py-0.5 text-[10px] font-semibold text-zinc-400 dark:bg-zinc-900/40 dark:border-zinc-800">
                                 +{event.hiddenCount} more
                             </span>
                         ) : null}
                     </div>
                 ) : null}
-                <div className="mt-1.5 flex flex-wrap items-center gap-2.5 text-[11px] text-zinc-500">
+                <div className="mt-2 flex flex-wrap items-center gap-3 text-[11px] text-zinc-450 text-zinc-400 dark:text-zinc-500">
                     <span>{occurredLabel}</span>
                     {event.actor ? (
-                        <span className="inline-flex items-center gap-1.5">
-                            <AnalyticsPersonAvatar person={event.actor} size="xs" />
-                            {event.actor.name}
+                        <span className="inline-flex items-center gap-1.5 font-medium text-zinc-650 text-zinc-500 dark:text-zinc-400">
+                            by {event.actor.name}
                         </span>
                     ) : null}
                     <AnalyticsActionLink link={event.actionLink} />
