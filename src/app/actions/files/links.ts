@@ -19,18 +19,22 @@ export async function getTaskLinkCounts(projectId: string, nodeIds: string[]) {
     const unique = Array.from(new Set(nodeIds)).filter(Boolean);
     if (unique.length === 0) return {} as Record<string, number>;
 
-    const rows = await db
-        .select({
-            nodeId: taskNodeLinks.nodeId,
-            count: sql<number>`count(*)`,
-        })
-        .from(taskNodeLinks)
-        .innerJoin(projectNodes, eq(taskNodeLinks.nodeId, projectNodes.id))
-        .where(and(eq(projectNodes.projectId, projectId), inArray(taskNodeLinks.nodeId, unique)))
-        .groupBy(taskNodeLinks.nodeId);
-
     const out: Record<string, number> = {};
-    for (const r of rows) out[r.nodeId] = Number(r.count) || 0;
+    const chunkSize = 500;
+    for (let i = 0; i < unique.length; i += chunkSize) {
+        const chunk = unique.slice(i, i + chunkSize);
+        const rows = await db
+            .select({
+                nodeId: taskNodeLinks.nodeId,
+                count: sql<number>`count(*)`,
+            })
+            .from(taskNodeLinks)
+            .innerJoin(projectNodes, eq(taskNodeLinks.nodeId, projectNodes.id))
+            .where(and(eq(projectNodes.projectId, projectId), inArray(taskNodeLinks.nodeId, chunk)))
+            .groupBy(taskNodeLinks.nodeId);
+
+        for (const r of rows) out[r.nodeId] = Number(r.count) || 0;
+    }
     return out;
 }
 
