@@ -92,7 +92,7 @@ async function resolveProfileOnboardingComplete(
     try {
         const { data, error } = await supabase
             .from('profiles')
-            .select('username')
+            .select('username, onboarding_status')
             .eq('id', params.userId)
             .maybeSingle()
 
@@ -106,6 +106,8 @@ async function resolveProfileOnboardingComplete(
             return false
         }
 
+        if (data?.onboarding_status === 'completed') return true
+        if (data?.onboarding_status === 'not_started' || data?.onboarding_status === 'in_progress') return false
         const username = typeof data?.username === 'string' ? data.username.trim() : ''
         return username.length > 0
     } catch (error) {
@@ -151,6 +153,16 @@ export async function updateSession(request: NextRequest, options: UpdateSession
 
     if (pathname.startsWith('/_next')) {
         return withRequestId(createPassThroughResponse(options.requestHeaders), requestId, routeClass)
+    }
+
+    // Prevent concurrent refresh token reuse race conditions.
+    // Next.js triggers multiple parallel sub-requests (RSC payloads, prefetches) for a single page.
+    // Parallel updates with the same refresh token trigger a "refresh_token_already_used" error from GoTrue.
+    const isPrefetch = request.headers.get('x-middleware-prefetch') === '1'
+    const isRsc = request.headers.has('rsc') || request.headers.get('rsc') === '1' || request.nextUrl.searchParams.has('_rsc')
+
+    if (isPrefetch || isRsc) {
+        return withRequestId(supabaseResponse, requestId, routeClass)
     }
 
     const canonicalPublicUsernamePath = getCanonicalPublicUsernamePath(pathname)
@@ -350,6 +362,14 @@ export async function updateSession(request: NextRequest, options: UpdateSession
     }
 
     if (user && isAuthOnlyRoute(pathname)) {
+        const rawRedirect = request.nextUrl.searchParams.get('redirect')
+        const redirectPath = rawRedirect ? normalizeAuthNextPath(rawRedirect) : ''
+
+        if (redirectPath && redirectPath !== '/hub') {
+            const redirectUrl = new URL(redirectPath, request.url)
+            return redirectWithRequestId(redirectUrl, requestId, routeClass)
+        }
+
         url.pathname = !emailVerified
             ? '/verify-email'
             : onboardingComplete
@@ -372,7 +392,12 @@ export async function updateSession(request: NextRequest, options: UpdateSession
     }
 
     if (user && isProtectedAppRoute(pathname) && !onboardingComplete) {
+        const returnPath = normalizeAuthNextPath(`${pathname}${request.nextUrl.search}`)
         url.pathname = '/onboarding'
+        url.search = ''
+        if (returnPath !== '/hub' && returnPath !== '/onboarding') {
+            url.searchParams.set('next', returnPath)
+        }
         return redirectWithRequestId(url, requestId, routeClass)
     }
 
