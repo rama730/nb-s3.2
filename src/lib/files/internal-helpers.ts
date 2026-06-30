@@ -331,13 +331,49 @@ export async function assertNotMovingIntoDescendant(
     }
 }
 
-export async function recordNodeEvent(projectId: string, actorId: string | null, nodeId: string | null, type: string, metadata: Record<string, unknown> = {}) {
-    await db.insert(projectNodeEvents).values({
-        projectId,
-        actorId,
-        nodeId,
-        type,
-        metadata,
-        createdAt: new Date(),
+export async function recordNodeEvent(
+    projectId: string,
+    actorId: string | null,
+    nodeId: string | null,
+    type: string,
+    metadata: Record<string, unknown> = {},
+    clientTx?: DbTransaction
+) {
+    const run = async (tx: any) => {
+        const [project] = await tx
+            .update(projects)
+            .set({
+                currentSequenceNumber: sql`${projects.currentSequenceNumber} + 1`
+            })
+            .where(eq(projects.id, projectId))
+            .returning({
+                newSequenceNumber: projects.currentSequenceNumber
+            });
+
+        if (!project) {
+            throw new Error(`Project ${projectId} not found`);
+        }
+
+        const [event] = await tx
+            .insert(projectNodeEvents)
+            .values({
+                projectId,
+                actorId,
+                nodeId,
+                type,
+                sequenceNumber: project.newSequenceNumber,
+                metadata,
+                createdAt: new Date(),
+            })
+            .returning();
+
+        return { sequenceNumber: project.newSequenceNumber, event };
+    };
+
+    if (clientTx) {
+        return await run(clientTx);
+    }
+    return await db.transaction(async (tx) => {
+        return await run(tx);
     });
 }
