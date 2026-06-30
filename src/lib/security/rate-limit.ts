@@ -19,6 +19,7 @@ export interface RateLimitPolicy {
     refillRate: number
     keyParts: string[]
     failMode: RateLimitFailMode
+    cost?: number
     testLocal?: boolean
 }
 
@@ -115,6 +116,7 @@ export const RATE_LIMIT_SCOPE_POLICIES: RateLimitScopePolicy[] = [
     { prefix: 'upload:', failMode: 'fail_closed', category: 'sensitive' },
     { prefix: 'admin-', failMode: 'fail_closed', category: 'sensitive' },
     { prefix: 'api:v1:cleanup:', failMode: 'fail_closed', category: 'sensitive' },
+    { prefix: 'api:v1:completion:', failMode: 'fail_closed', category: 'sensitive' },
     { prefix: 'connections-send', failMode: 'fail_closed', category: 'sensitive' },
     // Hot paths where blocking every user on Redis hiccup is worse than the
     // short window of unchecked traffic. The local bucket in dev avoids
@@ -149,6 +151,8 @@ export type ConsumeRateLimitOptions = {
      * `consumeRateLimit`.
      */
     scope?: string
+    /** Number of tokens consumed by this operation. Defaults to one. */
+    cost?: number
 }
 
 function getRateLimitMode(): RateLimitMode {
@@ -220,6 +224,7 @@ function buildPolicy(
         keyParts: [identifier],
         failMode,
         testLocal,
+        cost: Math.max(1, Math.min(effectiveLimit, Math.trunc(options?.cost ?? 1))),
     }
 }
 
@@ -256,7 +261,7 @@ function resultFromUnavailable(
     }
 }
 
-function consumeTestRateLimit(identifier: string, limit: number, windowSeconds: number): RateLimitResult {
+function consumeTestRateLimit(identifier: string, limit: number, windowSeconds: number, requested = 1): RateLimitResult {
     const now = Date.now()
     const existing = TEST_BUCKETS.get(identifier)
     const refillRate = limit / Math.max(1, windowSeconds)
@@ -272,9 +277,10 @@ function consumeTestRateLimit(identifier: string, limit: number, windowSeconds: 
     bucket.tokens = Math.min(capacity, bucket.tokens + refilledTokens)
     bucket.lastRefillAt = now
 
-    const allowed = bucket.tokens >= 1
+    const cost = Math.max(1, Math.min(capacity, Math.trunc(requested)))
+    const allowed = bucket.tokens >= cost
     if (allowed) {
-        bucket.tokens -= 1
+        bucket.tokens -= cost
     }
 
     TEST_BUCKETS.set(identifier, bucket)
@@ -284,7 +290,7 @@ function consumeTestRateLimit(identifier: string, limit: number, windowSeconds: 
     const msPerToken = refillPerMs > 0 ? 1 / refillPerMs : Infinity
     const resetAt = allowed
         ? now + Math.ceil(Math.max(0, capacity - bucket.tokens) * msPerToken)
-        : now + Math.ceil(Math.max(0, 1 - bucket.tokens) * msPerToken)
+        : now + Math.ceil(Math.max(0, cost - bucket.tokens) * msPerToken)
 
     return {
         allowed,
@@ -302,12 +308,13 @@ export async function consumeRateLimitPolicy(policy: RateLimitPolicy): Promise<R
     const refillRate = Math.max(1 / burst, policy.refillRate)
     const refillPerMs = refillRate / 1000
     const limit = burst
+    const requested = Math.max(1, Math.min(burst, Math.trunc(policy.cost ?? 1)))
     const redisKey = `ratelimit:${policy.scope}:${policy.keyParts.join(':')}`
     const redis = getRedisClient()
 
     if (!redis) {
         if (process.env.NODE_ENV === 'test' && policy.testLocal) {
-            return consumeTestRateLimit(redisKey, limit, Math.ceil(burst / refillRate))
+            return consumeTestRateLimit(redisKey, limit, Math.ceil(burst / refillRate), requested)
         }
 
         if (!hasLoggedRedisUnavailable) {
@@ -334,7 +341,7 @@ export async function consumeRateLimitPolicy(policy: RateLimitPolicy): Promise<R
                 String(burst),
                 String(refillPerMs),
                 String(nowMs),
-                '1',
+                String(requested),
                 String(ttlMs),
             ],
         )
@@ -355,7 +362,7 @@ export async function consumeRateLimitPolicy(policy: RateLimitPolicy): Promise<R
         }
     } catch (error) {
         if (process.env.NODE_ENV === 'test' && policy.testLocal) {
-            return consumeTestRateLimit(redisKey, limit, Math.ceil(burst / refillRate))
+            return consumeTestRateLimit(redisKey, limit, Math.ceil(burst / refillRate), requested)
         }
 
         if (!hasLoggedRedisCommandFailure) {
@@ -381,7 +388,12 @@ export async function consumeRateLimit(
         process.env.NODE_ENV === 'test'
         && !options
     ) {
-        return consumeTestRateLimit(`ratelimit:default:${identifier}`, limit, windowSeconds)
+        return consumeTestRateLimit(
+            `ratelimit:default:${identifier}`,
+            limit,
+            windowSeconds,
+            1,
+        )
     }
 
     const policy = buildPolicy(identifier, limit, windowSeconds, options)
