@@ -795,11 +795,18 @@ WITH CHECK (
 -- STORAGE BUCKET FOR PROJECT UPDATES MEDIA
 -- ============================================================================
 
-INSERT INTO storage.buckets (id, name, public, file_size_limit)
-VALUES ('project-updates-media', 'project-updates-media', true, 104857600) -- 100MB limit for videos/images
+INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+VALUES (
+  'project-updates-media',
+  'project-updates-media',
+  true,
+  104857600,
+  ARRAY['image/jpeg', 'image/png', 'image/webp', 'image/gif']::text[]
+) -- 100MB limit for images
 ON CONFLICT (id) DO UPDATE SET
     public = true,
-    file_size_limit = 104857600;
+    file_size_limit = 104857600,
+    allowed_mime_types = ARRAY['image/jpeg', 'image/png', 'image/webp', 'image/gif']::text[];
 
 DROP POLICY IF EXISTS project_updates_media_public_read ON storage.objects;
 CREATE POLICY project_updates_media_public_read ON storage.objects
@@ -811,12 +818,13 @@ CREATE POLICY project_updates_media_write ON storage.objects
 FOR INSERT
 WITH CHECK (
   bucket_id = 'project-updates-media'
-  AND split_part(name, '/', 1) <> ''
+  AND split_part(name, '/', 1) = 'projects'
+  AND split_part(name, '/', 2) <> ''
   AND (
-    EXISTS (SELECT 1 FROM projects p WHERE p.id::text = split_part(name, '/', 1) AND p.owner_id = public.get_auth_uid())
+    EXISTS (SELECT 1 FROM projects p WHERE p.id::text = split_part(name, '/', 2) AND p.owner_id = public.get_auth_uid())
     OR EXISTS (
       SELECT 1 FROM project_members m
-      WHERE m.project_id::text = split_part(name, '/', 1) AND m.user_id = public.get_auth_uid() AND m.role <> 'viewer'
+      WHERE m.project_id::text = split_part(name, '/', 2) AND m.user_id = public.get_auth_uid() AND m.role <> 'viewer'
     )
   )
 );
@@ -826,12 +834,13 @@ CREATE POLICY project_updates_media_delete ON storage.objects
 FOR DELETE
 USING (
   bucket_id = 'project-updates-media'
-  AND split_part(name, '/', 1) <> ''
+  AND split_part(name, '/', 1) = 'projects'
+  AND split_part(name, '/', 2) <> ''
   AND (
-    EXISTS (SELECT 1 FROM projects p WHERE p.id::text = split_part(name, '/', 1) AND p.owner_id = public.get_auth_uid())
+    EXISTS (SELECT 1 FROM projects p WHERE p.id::text = split_part(name, '/', 2) AND p.owner_id = public.get_auth_uid())
     OR EXISTS (
       SELECT 1 FROM project_members m
-      WHERE m.project_id::text = split_part(name, '/', 1) AND m.user_id = public.get_auth_uid() AND m.role <> 'viewer'
+      WHERE m.project_id::text = split_part(name, '/', 2) AND m.user_id = public.get_auth_uid() AND m.role <> 'viewer'
     )
   )
 );
