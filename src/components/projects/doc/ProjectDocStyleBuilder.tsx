@@ -4,13 +4,13 @@ import { useMemo, useState } from "react";
 import { Check, FileText, Palette } from "lucide-react";
 
 import {
-    buildProjectReadmeStylePresetMarkdown,
-    PROJECT_README_STYLE_PRESETS,
-    type ProjectReadmeStylePresetId,
-} from "@/lib/projects/readme-style";
+    buildProjectDocStylePresetMarkdown,
+    PROJECT_DOC_STYLE_PRESETS,
+    type ProjectDocStylePresetId,
+} from "@/lib/projects/doc-style";
 import { cn } from "@/lib/utils";
 
-export function ProjectReadmeStyleBuilder({
+export function ProjectDocStyleBuilder({
     projectName,
     onInsert,
     onClose,
@@ -19,9 +19,9 @@ export function ProjectReadmeStyleBuilder({
     onInsert: (markdown: string) => void;
     onClose: () => void;
 }) {
-    const [selectedPreset, setSelectedPreset] = useState<ProjectReadmeStylePresetId>("open_source");
+    const [selectedPreset, setSelectedPreset] = useState<ProjectDocStylePresetId>("open_source");
     const markdown = useMemo(
-        () => buildProjectReadmeStylePresetMarkdown(selectedPreset, projectName),
+        () => buildProjectDocStylePresetMarkdown(selectedPreset, projectName),
         [projectName, selectedPreset],
     );
 
@@ -32,7 +32,7 @@ export function ProjectReadmeStyleBuilder({
                     <Palette className="h-4 w-4" />
                 </span>
                 <div>
-                    <p className="text-sm font-semibold text-zinc-950 dark:text-zinc-50">Choose a README style</p>
+                    <p className="text-sm font-semibold text-zinc-950 dark:text-zinc-50">Choose a document style</p>
                     <p className="mt-1 text-xs leading-5 text-zinc-500">
                         Insert a portable Markdown structure that matches the project purpose, then edit the copy in place.
                     </p>
@@ -40,7 +40,7 @@ export function ProjectReadmeStyleBuilder({
             </div>
 
             <div className="grid gap-2 sm:grid-cols-2" data-readme-style-presets="true">
-                {PROJECT_README_STYLE_PRESETS.map((preset) => {
+                {PROJECT_DOC_STYLE_PRESETS.map((preset) => {
                     const active = preset.id === selectedPreset;
                     return (
                         <button
