@@ -3,19 +3,31 @@ import type { Metadata } from 'next';
 import { cache, Suspense } from 'react';
 import ProjectDashboardClient from '@/components/projects/dashboard/ProjectDashboardClient';
 import { readProjectDetailMetadata, readProjectDetailShell, readProjectSprintDetail } from '@/app/actions/project/_all';
-import { readProjectUpdatesAction } from '@/app/actions/project/updates';
 import { isHardeningDomainEnabled } from '@/lib/features/hardening';
 import { getViewerAuthContext, getViewerProfileContext, toClientViewer } from '@/lib/server/viewer-context';
 import { buildRouteMetadata } from '@/lib/metadata/route-metadata';
 import { buildProjectDetailMetadataInput } from '@/lib/projects/project-detail-metadata';
 import { isProjectTabVisibleToViewer } from '@/lib/projects/settings-policies';
+import { readProjectFileMetadataTitle, readProjectTaskMetadataTitle } from '@/lib/projects/project-detail-metadata-lookup';
 
 const readProjectDetailMetadataCached = cache((slugOrId: string, actorUserId: string | null) => readProjectDetailMetadata({ slugOrId, actorUserId }));
 const readProjectDetailShellCached = cache((slugOrId: string, actorUserId: string | null) => readProjectDetailShell({ slugOrId, actorUserId }));
 const readProjectSprintDetailCached = cache((slugOrId: string, actorUserId: string | null, limit?: number) => readProjectSprintDetail({ slugOrId, actorUserId, limit }));
 
-export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
-    const { slug } = await params;
+export async function generateMetadata({
+    params,
+    searchParams,
+}: {
+    params: Promise<{ slug: string }>;
+    searchParams: Promise<{
+        tab?: string;
+        fileId?: string;
+        drawerType?: string;
+        drawerId?: string;
+        panelTab?: string;
+    }>;
+}): Promise<Metadata> {
+    const [{ slug }, _searchParams] = await Promise.all([params, searchParams]);
     const { user } = await getViewerAuthContext();
     const result = await readProjectDetailMetadataCached(slug, user?.id ?? null);
     if (!result.success) {
@@ -26,7 +38,55 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
         });
     }
     const project = result.data;
-    return buildRouteMetadata(buildProjectDetailMetadataInput(slug, project));
+    const metadataInput = buildProjectDetailMetadataInput(slug, project);
+
+    const tab = _searchParams?.tab || "dashboard";
+    let tabTitle = "";
+
+    if (tab === "updates") {
+        tabTitle = "Project Feed";
+    } else if (tab === "files") {
+        tabTitle = "Files";
+        const fileId = _searchParams?.fileId;
+        if (fileId) {
+            try {
+                const fileTitle = await readProjectFileMetadataTitle(project.projectId, fileId);
+                if (fileTitle) {
+                    tabTitle = `${fileTitle} | Files`;
+                }
+            } catch (e) {
+                // Ignore query error, fallback to 'Files'
+            }
+        }
+    } else if (tab === "tasks") {
+        tabTitle = "Tasks";
+        const drawerType = _searchParams?.drawerType;
+        const drawerId = _searchParams?.drawerId;
+        if (drawerType === "task" && drawerId) {
+            try {
+                const taskTitle = await readProjectTaskMetadataTitle(project.projectId, drawerId);
+                if (taskTitle) {
+                    tabTitle = `${taskTitle} | Tasks`;
+                }
+            } catch (e) {
+                // Ignore query error, fallback to 'Tasks'
+            }
+        }
+    } else if (tab === "sprints") {
+        tabTitle = "Sprints";
+    } else if (tab === "analytics") {
+        tabTitle = "Project Analytics";
+    } else if (tab === "settings") {
+        tabTitle = "Settings";
+    } else if (tab === "readme" || tab === "docs") {
+        tabTitle = "Docs";
+    }
+
+    if (tabTitle) {
+        metadataInput.title = `${tabTitle} | ${project.title} | Edge`;
+    }
+
+    return buildRouteMetadata(metadataInput);
 }
 
 async function ResolvedProjectDashboard({
@@ -57,16 +117,8 @@ async function ResolvedProjectDashboard({
         isOwnerOrMember: capabilities.isOwner || capabilities.isMember,
         publicTabVisibility: project.publicTabVisibility,
     });
-    const canViewUpdates = isProjectTabVisibleToViewer({
-        tabId: "updates",
-        isOwnerOrMember: capabilities.isOwner || capabilities.isMember,
-        publicTabVisibility: project.publicTabVisibility,
-    });
     const sprintResult = selectedTab === "sprints" && canViewSprints
         ? await readProjectSprintDetailCached(slug, user?.id ?? null, 24)
-        : null;
-    const updatesResult = selectedTab === "updates" && canViewUpdates
-        ? await readProjectUpdatesAction(project.id)
         : null;
 
     const shellHardeningEnabled = isHardeningDomainEnabled('shellV1', user?.id ?? null);
@@ -90,7 +142,6 @@ async function ResolvedProjectDashboard({
                 isOwner={capabilities.isOwner}
                 isMember={capabilities.isMember}
                 initialSprintData={sprintResult && sprintResult.success ? sprintResult.data : null}
-                initialUpdatesPage={updatesResult && updatesResult.success ? updatesResult.data : null}
             />
         </div>
     );
