@@ -41,7 +41,6 @@ export {
 
     // Members & Social
     ensureProjectGroupExists,
-
     toggleProjectFollowAction,
     getProjectMembersAction,
     getProjectLiveStatsAction,
@@ -53,7 +52,7 @@ export {
     fetchProjectTasksAction,
     fetchProjectSprintsAction,
     readProjectSprintDetail,
-    readProjectSprintDetail as fetchProjectSprintDetailAction,
+    fetchProjectSprintDetailAction,
     fetchProjectSprintTimelinePageAction,
     fetchSprintTasksAction,
     getProjectTaskDetailAction,
@@ -81,48 +80,10 @@ export {
     completeSprintAction,
     moveTaskToSprintAction,
     deleteTaskAction,
-} from './_all'
+} from './_all';
 
-export {
-    readProjectReadmeAction,
-    readProjectReadmeDraftAction,
-    saveProjectReadmeDraftAction,
-    publishProjectReadmeAction,
-    restoreProjectReadmeVersionAction,
-    setProjectReadmePublishedVersionAction,
-    deleteProjectReadmeVersionAction,
-    discardProjectReadmeDraftAction,
-    listProjectReadmeVersionsAction,
-    validateProjectReadmeAction,
-    readProjectReadmeReferenceOptionsAction,
-    readProjectReadmeSmartBlockPreviewsAction,
-    readProjectReadmeImportCandidatesAction,
-    importProjectReadmeFromFileAction,
-    applyProjectReadmeCreationIntentAction,
-    createProjectReadmeAssetUploadUrlAction,
-    finalizeProjectReadmeAssetUploadAction,
-    deleteProjectReadmeAssetAction,
-    readProjectReadmeSettingsAction,
-    updateProjectReadmeSettingsAction,
-} from './readme'
+export { readProjectDocAction, readProjectDocDraftAction, saveProjectDocDraftAction, publishProjectDocAction, restoreProjectDocVersionAction, setProjectDocPublishedVersionAction, deleteProjectDocVersionAction, discardProjectDocDraftAction, listProjectDocVersionsAction, validateProjectDocAction, readProjectDocReferenceOptionsAction, readProjectDocSmartBlockPreviewsAction, readProjectDocImportCandidatesAction, importProjectDocFromFileAction, applyProjectDocCreationIntentAction, createProjectDocAssetUploadUrlAction, finalizeProjectDocAssetUploadAction, deleteProjectDocAssetAction, readProjectDocSettingsAction, updateProjectDocSettingsAction, createProjectMarkdownAction, listProjectMarkdownsAction, readProjectMarkdownSearchAction, unlinkProjectDocAction } from './doc';
 
-export {
-    createProjectUpdateAction,
-    createProjectUpdateCommentAction,
-    deleteProjectUpdateAction,
-    deleteProjectUpdateCommentAction,
-    editProjectUpdateAction,
-    readProjectUpdateAction,
-    readProjectUpdateCommentsAction,
-    readProjectUpdateContextOptionsAction,
-    readProjectUpdatesAction,
-    toggleProjectUpdateLikeAction,
-    toggleProjectUpdatePinAction,
-    readProjectUpdateDraftAction,
-    saveProjectUpdateDraftAction,
-    createProjectUpdateMediaUploadUrlAction,
-    finalizeProjectUpdateMediaUploadAction,
-    type ProjectUpdateCommentView,
-    type ProjectUpdateMovementSummary,
-    type ProjectUpdateView,
-} from './updates'
+export { createProjectUpdateAction, createProjectUpdateCommentAction, deleteProjectUpdateAction, deleteProjectUpdateCommentAction, editProjectUpdateAction, readProjectUpdateAction, readProjectUpdateCommentsAction, readProjectUpdateContextOptionsAction, readProjectUpdatesAction, resolveProjectUpdateMentionTargetAction, toggleProjectUpdateLikeAction, toggleProjectUpdatePinAction, readProjectUpdateDraftAction, saveProjectUpdateDraftAction, createProjectUpdateMediaUploadUrlAction, finalizeProjectUpdateMediaUploadAction, type ProjectUpdateCommentView, type ProjectUpdateMovementSummary, type ProjectUpdateView } from './updates';
+
+export { getSyncPreviewAction } from './sync-preview';
