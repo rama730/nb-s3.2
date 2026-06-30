@@ -16,7 +16,6 @@ const LazyChatProvider = dynamic(
 interface MainRuntimeProvidersProps {
   children: React.ReactNode;
   initialUser: User | null;
-  initialProfile: unknown | null;
 }
 
 function PresencePublisher() {
