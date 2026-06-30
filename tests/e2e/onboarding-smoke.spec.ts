@@ -48,6 +48,7 @@ const FIXTURE_EMAILS = {
     collision: process.env.E2E_ONBOARDING_COLLISION_EMAIL || 'codex.onboarding.collision@example.com',
     rateLimit: process.env.E2E_ONBOARDING_RATELIMIT_EMAIL || 'codex.onboarding.ratelimit@example.com',
     idempotent: process.env.E2E_ONBOARDING_IDEMPOTENT_EMAIL || 'codex.onboarding.idempotent@example.com',
+    resume: process.env.E2E_ONBOARDING_RESUME_EMAIL || 'codex.onboarding.resume@example.com',
 }
 
 const EXISTING_USERNAME = process.env.E2E_ONBOARDING_COLLISION_TARGET || 'e2e_6ff73371'
@@ -78,6 +79,10 @@ async function ensureOnboardingFixture(email: string) {
             email,
             password: onboardingPassword,
             email_confirm: true,
+            app_metadata: {
+                onboarding_complete: false,
+                onboarding_version: 3,
+            },
             user_metadata: {
                 full_name: 'Onboarding Fixture User',
                 onboarded: false,
@@ -95,6 +100,10 @@ async function ensureOnboardingFixture(email: string) {
         const updated = await admin.auth.admin.updateUserById(userId, {
             email,
             password: onboardingPassword,
+            app_metadata: {
+                onboarding_complete: false,
+                onboarding_version: 3,
+            },
             user_metadata: {
                 full_name: 'Onboarding Fixture User',
                 onboarded: false,
@@ -113,6 +122,9 @@ async function ensureOnboardingFixture(email: string) {
             email,
             username: null,
             full_name: 'Onboarding Fixture User',
+            onboarding_status: 'not_started',
+            onboarding_completed_at: null,
+            onboarding_version: 3,
             updated_at: new Date().toISOString(),
         })
     if (upsertError) {
@@ -208,7 +220,7 @@ test.describe('Onboarding smoke', () => {
         await context.close()
     })
 
-    test('legacy local draft key remains compatible', async ({ browser }) => {
+    test('unscoped legacy drafts are discarded instead of crossing accounts', async ({ browser }) => {
         const email = FIXTURE_EMAILS.legacy
         await ensureOnboardingFixture(email)
 
@@ -231,27 +243,37 @@ test.describe('Onboarding smoke', () => {
         })
         await page.reload()
 
-        const currentPath = new URL(page.url()).pathname
-        if (currentPath === '/onboarding') {
-            const pronounsInput = page.getByLabel('Pronouns (optional)')
-            let pronounsVisible = await pronounsInput.isVisible().catch(() => false)
-            if (!pronounsVisible) {
-                const continueButton = page.getByRole('button', { name: 'Continue' })
-                if (await continueButton.isVisible().catch(() => false)) {
-                    await continueButton.click()
-                }
+        await expect(page.getByRole('heading', { name: "Let's set up your profile" })).toBeVisible()
+        await expect(page.getByLabel('Pronouns (optional)')).not.toBeVisible()
+        const legacyValue = await page.evaluate(() => localStorage.getItem('onboarding:draft:v1'))
+        expect(legacyValue).toBeNull()
 
-                const identityTab = page.getByRole('tab', { name: 'Identity' })
-                if (await identityTab.isVisible().catch(() => false)) {
-                    await identityTab.click()
-                }
-                pronounsVisible = await pronounsInput.isVisible().catch(() => false)
-            }
+        await monitor.assertNoViolations()
+        monitor.detach()
+        await context.close()
+    })
 
-            if (pronounsVisible) {
-                await expect(pronounsInput).toHaveValue('they/them')
-            }
-        }
+    test('reload resumes the next server-committed step', async ({ browser }) => {
+        const email = FIXTURE_EMAILS.resume
+        await ensureOnboardingFixture(email)
+
+        const context = await browser.newContext()
+        const page = await context.newPage()
+        const monitor = attachOnboardingMonitoring(page)
+        await login(page, email)
+
+        await page.getByLabel('Full Name').fill('Resume Contract User')
+        const username = scopedName('resume').replace(/[^a-zA-Z0-9_]/g, '').slice(0, 20)
+        await page.locator('#username').fill(username)
+        await expect(page.getByText('Username is available')).toBeVisible({ timeout: 15000 })
+        await page.getByRole('button', { name: 'Continue' }).click()
+        await expect(page.getByRole('heading', { name: 'Tell us about yourself' })).toBeVisible()
+
+        await page.reload()
+
+        await expect(page.getByRole('heading', { name: 'Tell us about yourself' })).toBeVisible()
+        await expect(page.getByText('Step 1 completed')).toBeAttached()
+        await expect(page.locator('[aria-current="step"]')).toContainText('2')
 
         await monitor.assertNoViolations()
         monitor.detach()
