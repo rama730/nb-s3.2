@@ -109,6 +109,19 @@ export async function POST(request: Request) {
       refresh_token: refreshToken,
     });
     if (error) {
+      const { data: { session: currentSession } } = await supabase.auth.getSession();
+      if (currentSession && currentSession.user) {
+        logApiRoute(request, {
+          requestId,
+          action: "auth.session.sync.already_used_recovered",
+          userId: currentSession.user.id,
+          startedAt,
+          success: true,
+          status: 200,
+        });
+        return jsonSuccess({ session: shapeSessionPayload(currentSession) });
+      }
+
       logApiRoute(request, {
         requestId,
         action: "auth.session.sync",
