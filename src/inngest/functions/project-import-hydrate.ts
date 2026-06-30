@@ -9,7 +9,7 @@ import { buildProjectFileKey } from "@/lib/storage/project-file-key";
 const UPLOAD_CONCURRENCY = 5;
 
 export const projectImportHydrate = inngest.createFunction(
-    { id: "project-import-hydrate", concurrency: 2 },
+    { id: "project-import-hydrate", concurrency: 2, retries: 0 },
     { event: "project/import.hydrate" },
     async ({ event, step }) => {
         const { projectId, importSource, userId } = event.data;
