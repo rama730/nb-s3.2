@@ -450,6 +450,7 @@ CREATE TABLE IF NOT EXISTS "project_update_comments" (
     "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
     "update_id" uuid NOT NULL REFERENCES "project_updates"("id") ON DELETE cascade,
     "project_id" uuid NOT NULL REFERENCES "projects"("id") ON DELETE cascade,
+    "parent_id" uuid REFERENCES "project_update_comments"("id") ON DELETE set null,
     "user_id" uuid REFERENCES "profiles"("id") ON DELETE set null,
     "content" text NOT NULL,
     "deleted_by" uuid REFERENCES "profiles"("id") ON DELETE set null,
@@ -464,6 +465,10 @@ CREATE INDEX IF NOT EXISTS "project_update_comments_update_created_idx"
 CREATE INDEX IF NOT EXISTS "project_update_comments_update_active_idx"
     ON "project_update_comments" ("update_id", "created_at")
     WHERE "deleted_at" IS NULL;
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "project_update_comments_parent_idx"
+    ON "project_update_comments" ("parent_id")
+    WHERE "parent_id" IS NOT NULL;
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "project_update_comments_project_created_idx"
     ON "project_update_comments" ("project_id", "created_at" DESC);
