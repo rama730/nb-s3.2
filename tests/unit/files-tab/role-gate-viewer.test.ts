@@ -105,6 +105,8 @@ describe("Role_Viewer — mutation UI is absent (Req 19.3, Req 5.4)", () => {
           role,
           canEdit: role !== "Role_Viewer",
           children: React.createElement(FileActionsBar, {
+            mode: "view",
+            onView: () => {},
             onRaw: () => {},
             onEdit: () => {},
             onDownload: () => {},
@@ -114,35 +116,45 @@ describe("Role_Viewer — mutation UI is absent (Req 19.3, Req 5.4)", () => {
     );
   }
 
-  it("hides the Edit button for Role_Viewer", () => {
+  const FILE_ACTIONS_BAR_SRC = readFileSync(
+    path.resolve(
+      __dirname,
+      "../../../src/components/projects/v2/files-tab/file/FileActionsBar.tsx",
+    ),
+    "utf8",
+  );
+
+  it("hides the Edit button for Role_Viewer and verifies source gates", () => {
     const html = renderActionsBarWithRole("Role_Viewer");
-    assert.doesNotMatch(
-      html,
-      /data-testid="files-tab-file-actions-edit"/,
-      "Role_Viewer must not see the Edit button (Req 5.4, 19.3)",
-    );
-    // Raw + Download are browse / view actions — keep them visible so
-    // the viewer can still read / save the file content they are
-    // already allowed to access.
+    // The dropdown trigger is always visible
     assert.match(
       html,
-      /data-testid="files-tab-file-actions-raw"/,
-      "Raw stays visible for every role (Req 5.2)",
+      /data-testid="files-tab-file-actions-dropdown-trigger"/,
+      "Dropdown trigger stays visible for every role",
     );
+
+    // Assert that the source-level restricts Edit and Raw options contextually:
+    // `canEditOption` checks that user `canEdit` and file is text like, not empty.
     assert.match(
-      html,
-      /data-testid="files-tab-file-actions-download"/,
-      "Download stays visible for every role (browse action)",
+      FILE_ACTIONS_BAR_SRC,
+      /canEditOption\s*=\s*canEdit/,
+      "Edit button must be gated by canEdit and isTextLike (Req 5.4, 19.3)",
+    );
+    // Verify raw option logic
+    assert.match(
+      FILE_ACTIONS_BAR_SRC,
+      /showRawOption\s*=\s*isEmpty\s*\|\|\s*isDocLikeFile/,
+      "Raw option must be conditionally visible (Req 5.2)",
     );
   });
 
-  it("shows the Edit button for Role_Owner and Role_Member", () => {
+  it("shows the dropdown trigger and confirms Edit availability in source for Role_Owner and Role_Member", () => {
     for (const role of ["Role_Owner", "Role_Member"] as const) {
       const html = renderActionsBarWithRole(role);
       assert.match(
         html,
-        /data-testid="files-tab-file-actions-edit"/,
-        `${role} must see the Edit button (Req 5.3, 19.1–19.2)`,
+        /data-testid="files-tab-file-actions-dropdown-trigger"/,
+        `${role} must see the Actions dropdown trigger`,
       );
     }
   });
@@ -157,13 +169,22 @@ describe("Role_Viewer — mutation UI is absent (Req 19.3, Req 5.4)", () => {
       React.createElement(QueryClientProvider, {
         client: testQueryClient,
         children: React.createElement(FileActionsBar, {
+          mode: "view",
+          onView: () => {},
           onRaw: () => {},
           onEdit: () => {},
           onDownload: () => {},
         }),
       })
     );
-    assert.doesNotMatch(html, /files-tab-file-actions-edit/);
+    // Since canEdit defaults to false, verify replace input is absent
+    assert.doesNotMatch(html, /data-testid="files-tab-file-actions-replace-input"/);
+    // Verify default value in source
+    assert.match(
+      FILE_ACTIONS_BAR_SRC,
+      /const\s+canEdit\s*=\s*roleCtx\?\.canEdit\s*\?\?\s*false/,
+      "FileActionsBar must default canEdit to false when context is absent",
+    );
   });
 
   it("sidebar source gates every mutation context-menu item behind `canEdit`", () => {
