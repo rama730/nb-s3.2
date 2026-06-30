@@ -292,10 +292,6 @@ function MyApplicationRow({
                     type="project"
                     size={40}
                 />
-                <div className={cn(
-                    "absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full border-2 border-white dark:border-zinc-900",
-                    config.dotColor,
-                )} />
             </div>
 
             {/* Content */}
