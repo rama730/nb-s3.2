@@ -1,0 +1,4067 @@
+
+> nb-s3@0.1.0 test:unit
+> tsx --test tests/unit/**/*.test.ts
+
+TAP version 13
+# Subtest: recordAudit: appends a pass entry with the full required shape
+ok 1 - recordAudit: appends a pass entry with the full required shape
+  ---
+  duration_ms: 7.922917
+  type: 'test'
+  ...
+# Subtest: recordAudit: second call appends rather than replaces the first entry
+ok 2 - recordAudit: second call appends rather than replaces the first entry
+  ---
+  duration_ms: 0.986292
+  type: 'test'
+  ...
+# Subtest: recordAudit: not_applicable entry persists the justification verbatim
+ok 3 - recordAudit: not_applicable entry persists the justification verbatim
+  ---
+  duration_ms: 0.458625
+  type: 'test'
+  ...
+# Subtest: recordAudit: not_applicable without justification throws (Req 18.3)
+ok 4 - recordAudit: not_applicable without justification throws (Req 18.3)
+  ---
+  duration_ms: 0.365125
+  type: 'test'
+  ...
+# Subtest: recordAudit: rejects invalid result values
+ok 5 - recordAudit: rejects invalid result values
+  ---
+  duration_ms: 0.164625
+  type: 'test'
+  ...
+# Subtest: recordAudit: rejects empty or whitespace-only area
+ok 6 - recordAudit: rejects empty or whitespace-only area
+  ---
+  duration_ms: 0.68525
+  type: 'test'
+  ...
+# Subtest: recordAudit: testerId falls back to 'e2e-runner' when TESTER_ID is unset
+ok 7 - recordAudit: testerId falls back to 'e2e-runner' when TESTER_ID is unset
+  ---
+  duration_ms: 1.262333
+  type: 'test'
+  ...
+# Subtest: recordAudit: concurrent invocations do not lose entries
+ok 8 - recordAudit: concurrent invocations do not lose entries
+  ---
+  duration_ms: 40.306542
+  type: 'test'
+  ...
+# Subtest: readAuditRecord: returns empty array when file does not exist
+ok 9 - readAuditRecord: returns empty array when file does not exist
+  ---
+  duration_ms: 0.995875
+  type: 'test'
+  ...
+# Subtest: BreadcrumbBar — root-only location (Req 3.1, 3.2)
+    # Subtest: renders exactly the synthetic root segment when location is null
+    ok 1 - renders exactly the synthetic root segment when location is null
+      ---
+      duration_ms: 0.567
+      type: 'test'
+      ...
+    # Subtest: renders exactly the synthetic root segment when location is {type: root}
+    ok 2 - renders exactly the synthetic root segment when location is {type: root}
+      ---
+      duration_ms: 0.061666
+      type: 'test'
+      ...
+    # Subtest: lays out the single root segment inline (below the 6-segment budget)
+    ok 3 - lays out the single root segment inline (below the 6-segment budget)
+      ---
+      duration_ms: 0.67125
+      type: 'test'
+      ...
+    # Subtest: exposes BREADCRUMB_ROOT_SEGMENT_ID as the data-attribute marker
+    ok 4 - exposes BREADCRUMB_ROOT_SEGMENT_ID as the data-attribute marker
+      ---
+      duration_ms: 0.044042
+      type: 'test'
+      ...
+    1..4
+ok 10 - BreadcrumbBar — root-only location (Req 3.1, 3.2)
+  ---
+  duration_ms: 906.22225
+  type: 'suite'
+  ...
+# Subtest: BreadcrumbBar — 2-segment folder (Req 3.2)
+    # Subtest: renders [root, folder] for a root-level folder
+    ok 1 - renders [root, folder] for a root-level folder
+      ---
+      duration_ms: 0.221584
+      type: 'test'
+      ...
+    # Subtest: lays the 2-segment breadcrumb out inline (no ellipsis needed)
+    ok 2 - lays the 2-segment breadcrumb out inline (no ellipsis needed)
+      ---
+      duration_ms: 0.11925
+      type: 'test'
+      ...
+    1..2
+ok 11 - BreadcrumbBar — 2-segment folder (Req 3.2)
+  ---
+  duration_ms: 0.504166
+  type: 'suite'
+  ...
+# Subtest: BreadcrumbBar — 5-segment folder, no truncation (Req 3.6)
+    # Subtest: renders root + 4 folders inline when total segments == 5
+    ok 1 - renders root + 4 folders inline when total segments == 5
+      ---
+      duration_ms: 0.104417
+      type: 'test'
+      ...
+    # Subtest: layoutBreadcrumb keeps the 5-segment breadcrumb inline
+    ok 2 - layoutBreadcrumb keeps the 5-segment breadcrumb inline
+      ---
+      duration_ms: 0.064209
+      type: 'test'
+      ...
+    # Subtest: layoutBreadcrumb keeps exactly 6 segments inline (boundary)
+    ok 3 - layoutBreadcrumb keeps exactly 6 segments inline (boundary)
+      ---
+      duration_ms: 0.213125
+      type: 'test'
+      ...
+    1..3
+ok 12 - BreadcrumbBar — 5-segment folder, no truncation (Req 3.6)
+  ---
+  duration_ms: 0.577208
+  type: 'suite'
+  ...
+# Subtest: BreadcrumbBar — 7-segment folder, truncation (Req 3.6)
+    # Subtest: flips to truncated layout when segments.length > 6
+    ok 1 - flips to truncated layout when segments.length > 6
+      ---
+      duration_ms: 0.127792
+      type: 'test'
+      ...
+    # Subtest: the hidden slice contains exactly segments.slice(1, -4) (Req 3.6)
+    ok 2 - the hidden slice contains exactly segments.slice(1, -4) (Req 3.6)
+      ---
+      duration_ms: 0.065541
+      type: 'test'
+      ...
+    # Subtest: scales to deeper trees — visible and hidden partition segments disjointly
+    ok 3 - scales to deeper trees — visible and hidden partition segments disjointly
+      ---
+      duration_ms: 0.066833
+      type: 'test'
+      ...
+    1..3
+ok 13 - BreadcrumbBar — 7-segment folder, truncation (Req 3.6)
+  ---
+  duration_ms: 0.315417
+  type: 'suite'
+  ...
+# Subtest: BreadcrumbBar — file leaf (Req 3.3)
+    # Subtest: derives the file as the terminal segment with kind="file"
+    ok 1 - derives the file as the terminal segment with kind="file"
+      ---
+      duration_ms: 0.069167
+      type: 'test'
+      ...
+    # Subtest: ancestor folders before the file remain kind="folder" (clickable)
+    ok 2 - ancestor folders before the file remain kind="folder" (clickable)
+      ---
+      duration_ms: 0.046334
+      type: 'test'
+      ...
+    1..2
+ok 14 - BreadcrumbBar — file leaf (Req 3.3)
+  ---
+  duration_ms: 0.151375
+  type: 'suite'
+  ...
+# Subtest: BreadcrumbBar — click-fires-navigateTo source contract (Req 3.4, 3.5)
+    # Subtest: builds the click handler through `useNavigateTo(projectId)` (single write path)
+    ok 1 - builds the click handler through `useNavigateTo(projectId)` (single write path)
+      ---
+      duration_ms: 0.086083
+      type: 'test'
+      ...
+    # Subtest: wires folder/root buttons through `onClick={() => onNavigate(...)}`
+    ok 2 - wires folder/root buttons through `onClick={() => onNavigate(...)}`
+      ---
+      duration_ms: 0.140875
+      type: 'test'
+      ...
+    # Subtest: forwards the top-level `navigateTo` callback into every segment via `onNavigate`
+    ok 3 - forwards the top-level `navigateTo` callback into every segment via `onNavigate`
+      ---
+      duration_ms: 0.034167
+      type: 'test'
+      ...
+    # Subtest: the ellipsis dropdown invokes `onNavigate(targetId)` when a hidden segment is clicked
+    ok 4 - the ellipsis dropdown invokes `onNavigate(targetId)` when a hidden segment is clicked
+      ---
+      duration_ms: 0.0335
+      type: 'test'
+      ...
+    # Subtest: the file-segment branch renders a non-clickable <span> (Req 3.3)
+    ok 5 - the file-segment branch renders a non-clickable <span> (Req 3.3)
+      ---
+      duration_ms: 0.102333
+      type: 'test'
+      ...
+    1..5
+ok 15 - BreadcrumbBar — click-fires-navigateTo source contract (Req 3.4, 3.5)
+  ---
+  duration_ms: 0.451916
+  type: 'suite'
+  ...
+# Subtest: BreadcrumbBar — data-breadcrumb-segment-id attribute wiring
+    # Subtest: clickable folder buttons carry their node id as the data-attribute value
+    ok 1 - clickable folder buttons carry their node id as the data-attribute value
+      ---
+      duration_ms: 0.0955
+      type: 'test'
+      ...
+    # Subtest: the ellipsis button carries the sentinel `__ellipsis__`
+    ok 2 - the ellipsis button carries the sentinel `__ellipsis__`
+      ---
+      duration_ms: 0.031792
+      type: 'test'
+      ...
+    1..2
+ok 16 - BreadcrumbBar — data-breadcrumb-segment-id attribute wiring
+  ---
+  duration_ms: 0.159291
+  type: 'suite'
+  ...
+# [audit-checkpoint] audit-record.json is missing entries for 17 Req 18.1 area(s) (informational pre-flip):
+#   - Task 12.2: "single file upload"
+#   - Task 12.2: "drag-and-drop upload onto Sidebar_Tree folders"
+#   - Task 12.2: "drag-and-drop upload onto File_List folder rows"
+#   - Task 12.3: "folder upload"
+#   - Task 12.4: "rename via F2 keyboard"
+#   - Task 12.4: "rename via dialog"
+#   - Task 12.6: "move"
+#   - Task 12.7: "favorites toggle"
+#   - Task 12.8: "Recents list correctness"
+#   - Task 12.9: "version pill display"
+#   - Task 12.10: "git change indicators"
+#   - Task 12.11: "breadcrumb navigation"
+#   - Task 12.12: "sidebar tree"
+#   - Task 12.13: "file view"
+#   - Task 12.14: "deep link"
+#   - Task 12.15: "url sync"
+#   - Task 12.16: "viewer role"
+# Subtest: audit-record.json conforms to the {area,result,timestamp,testerId} shape (Req 18.5)
+ok 17 - audit-record.json conforms to the {area,result,timestamp,testerId} shape (Req 18.5)
+  ---
+  duration_ms: 0.704583
+  type: 'test'
+  ...
+# Subtest: audit-record.json has at least one entry per Req 18.1 area prefix
+ok 18 - audit-record.json has at least one entry per Req 18.1 area prefix
+  ---
+  duration_ms: 0.599125
+  type: 'test'
+  ...
+# Subtest: adaptToV3Props — prop adapter contract
+    # Subtest: drops `initialOpenLine` and `initialOpenColumn` (V3 has no line targeting)
+    ok 1 - drops `initialOpenLine` and `initialOpenColumn` (V3 has no line targeting)
+      ---
+      duration_ms: 1.065292
+      type: 'test'
+      ...
+    # Subtest: drops `initialFileNodes` and `importSourceType` (not on the V3 surface)
+    ok 2 - drops `initialFileNodes` and `importSourceType` (not on the V3 surface)
+      ---
+      duration_ms: 0.174333
+      type: 'test'
+      ...
+    # Subtest: passes `initialOpenPath` through unchanged
+    ok 3 - passes `initialOpenPath` through unchanged
+      ---
+      duration_ms: 0.11375
+      type: 'test'
+      ...
+    # Subtest: normalises a missing `initialOpenPath` to `null` (V3 resolver contract)
+    ok 4 - normalises a missing `initialOpenPath` to `null` (V3 resolver contract)
+      ---
+      duration_ms: 0.153667
+      type: 'test'
+      ...
+    # Subtest: forwards the core identity + role props verbatim
+    ok 5 - forwards the core identity + role props verbatim
+      ---
+      duration_ms: 0.138584
+      type: 'test'
+      ...
+    # Subtest: is pure — repeated calls with the same input produce deep-equal output
+    ok 6 - is pure — repeated calls with the same input produce deep-equal output
+      ---
+      duration_ms: 0.716
+      type: 'test'
+      ...
+    1..6
+ok 19 - adaptToV3Props — prop adapter contract
+  ---
+  duration_ms: 3.58
+  type: 'suite'
+  ...
+# Subtest: ProjectFilesWorkspace — post-rollout source contract
+    # Subtest: declares the V3 FilesTabRoot via `next/dynamic` with `ssr: false`
+    ok 1 - declares the V3 FilesTabRoot via `next/dynamic` with `ssr: false`
+      ---
+      duration_ms: 0.312
+      type: 'test'
+      ...
+    # Subtest: uses exactly one `dynamic()` loader (the WorkspaceShell branch is gone)
+    ok 2 - uses exactly one `dynamic()` loader (the WorkspaceShell branch is gone)
+      ---
+      duration_ms: 0.225333
+      type: 'test'
+      ...
+    # Subtest: does NOT import or reference the deleted WorkspaceShell module
+    ok 3 - does NOT import or reference the deleted WorkspaceShell module
+      ---
+      duration_ms: 0.101708
+      type: 'test'
+      ...
+    # Subtest: does NOT import `isFilesTabV3Enabled` (the flag has been deleted)
+    ok 4 - does NOT import `isFilesTabV3Enabled` (the flag has been deleted)
+      ---
+      duration_ms: 0.152709
+      type: 'test'
+      ...
+    # Subtest: renders `<FilesTabRoot {...adaptToV3Props(props)} />` unconditionally
+    ok 5 - renders `<FilesTabRoot {...adaptToV3Props(props)} />` unconditionally
+      ---
+      duration_ms: 0.077375
+      type: 'test'
+      ...
+    # Subtest: exports `adaptToV3Props` so downstream callers and this test can exercise the adapter
+    ok 6 - exports `adaptToV3Props` so downstream callers and this test can exercise the adapter
+      ---
+      duration_ms: 0.058
+      type: 'test'
+      ...
+    1..6
+ok 20 - ProjectFilesWorkspace — post-rollout source contract
+  ---
+  duration_ms: 1.089875
+  type: 'suite'
+  ...
+# Subtest: FileView / isMarkdownNode (Req 5.5, Req 13.5)
+    # Subtest: recognises .md as markdown
+    ok 1 - recognises .md as markdown
+      ---
+      duration_ms: 0.874084
+      type: 'test'
+      ...
+    # Subtest: recognises .markdown as markdown
+    ok 2 - recognises .markdown as markdown
+      ---
+      duration_ms: 0.215792
+      type: 'test'
+      ...
+    # Subtest: is case-insensitive on the extension
+    ok 3 - is case-insensitive on the extension
+      ---
+      duration_ms: 0.148417
+      type: 'test'
+      ...
+    # Subtest: rejects files that merely contain `md` in the basename
+    ok 4 - rejects files that merely contain `md` in the basename
+      ---
+      duration_ms: 0.1125
+      type: 'test'
+      ...
+    # Subtest: rejects files without an extension
+    ok 5 - rejects files without an extension
+      ---
+      duration_ms: 0.091042
+      type: 'test'
+      ...
+    1..5
+ok 21 - FileView / isMarkdownNode (Req 5.5, Req 13.5)
+  ---
+  duration_ms: 4.452292
+  type: 'suite'
+  ...
+# Subtest: FileView / isEmptyMedia (Req 5.6)
+    # Subtest: flags 0-byte images / videos / audio
+    ok 1 - flags 0-byte images / videos / audio
+      ---
+      duration_ms: 0.090208
+      type: 'test'
+      ...
+    # Subtest: does NOT flag 0-byte PDFs / docs / text / binaries (Req 5.6 scope)
+    ok 2 - does NOT flag 0-byte PDFs / docs / text / binaries (Req 5.6 scope)
+      ---
+      duration_ms: 0.100416
+      type: 'test'
+      ...
+    # Subtest: does NOT flag non-zero-byte media
+    ok 3 - does NOT flag non-zero-byte media
+      ---
+      duration_ms: 0.19375
+      type: 'test'
+      ...
+    # Subtest: treats null / undefined size as non-empty (do not show placeholder for unknown size)
+    ok 4 - treats null / undefined size as non-empty (do not show placeholder for unknown size)
+      ---
+      duration_ms: 0.088625
+      type: 'test'
+      ...
+    1..4
+ok 22 - FileView / isEmptyMedia (Req 5.6)
+  ---
+  duration_ms: 0.775084
+  type: 'suite'
+  ...
+# Subtest: FileView / isAssetKind (Req 13.1-13.4)
+    # Subtest: matches image / video / audio / pdf / doc
+    ok 1 - matches image / video / audio / pdf / doc
+      ---
+      duration_ms: 0.084875
+      type: 'test'
+      ...
+    # Subtest: excludes text / binary / folder
+    ok 2 - excludes text / binary / folder
+      ---
+      duration_ms: 0.041458
+      type: 'test'
+      ...
+    1..2
+ok 23 - FileView / isAssetKind (Req 13.1-13.4)
+  ---
+  duration_ms: 0.166958
+  type: 'suite'
+  ...
+# Subtest: FileView / preview dispatch (Req 13.1-13.5) — fileKind + picker agreement
+    # Subtest: image MIME routes through isAssetKind
+    ok 1 - image MIME routes through isAssetKind
+      ---
+      duration_ms: 0.113583
+      type: 'test'
+      ...
+    # Subtest: video MIME routes through isAssetKind
+    ok 2 - video MIME routes through isAssetKind
+      ---
+      duration_ms: 0.037375
+      type: 'test'
+      ...
+    # Subtest: audio MIME routes through isAssetKind
+    ok 3 - audio MIME routes through isAssetKind
+      ---
+      duration_ms: 0.031417
+      type: 'test'
+      ...
+    # Subtest: PDF MIME routes through isAssetKind
+    ok 4 - PDF MIME routes through isAssetKind
+      ---
+      duration_ms: 0.030875
+      type: 'test'
+      ...
+    # Subtest: Word docs route through isAssetKind (doc kind)
+    ok 5 - Word docs route through isAssetKind (doc kind)
+      ---
+      duration_ms: 0.055541
+      type: 'test'
+      ...
+    # Subtest: Markdown is NOT an asset kind — routed to MarkdownPreview
+    ok 6 - Markdown is NOT an asset kind — routed to MarkdownPreview
+      ---
+      duration_ms: 0.038375
+      type: 'test'
+      ...
+    # Subtest: Plain text is NOT an asset kind — routed to TextViewer
+    ok 7 - Plain text is NOT an asset kind — routed to TextViewer
+      ---
+      duration_ms: 0.033792
+      type: 'test'
+      ...
+    # Subtest: Unknown binary is NOT an asset kind — routed to BinaryFallback
+    ok 8 - Unknown binary is NOT an asset kind — routed to BinaryFallback
+      ---
+      duration_ms: 0.038042
+      type: 'test'
+      ...
+    1..8
+ok 24 - FileView / preview dispatch (Req 13.1-13.5) — fileKind + picker agreement
+  ---
+  duration_ms: 0.451208
+  type: 'suite'
+  ...
+# Subtest: FileView — structural contract (Req 13.6, Req 17.1-17.4)
+    # Subtest: renders MetadataStrip inside FileView (so it stays visible on preview errors — Req 13.6)
+    ok 1 - renders MetadataStrip inside FileView (so it stays visible on preview errors — Req 13.6)
+      ---
+      duration_ms: 0.107375
+      type: 'test'
+      ...
+    # Subtest: wraps the preview region in ComponentErrorBoundary (Req 13.6)
+    ok 2 - wraps the preview region in ComponentErrorBoundary (Req 13.6)
+      ---
+      duration_ms: 0.050666
+      type: 'test'
+      ...
+    # Subtest: imports AssetPreview and MarkdownPreview from the preview folder (reused unchanged)
+    ok 3 - imports AssetPreview and MarkdownPreview from the preview folder (reused unchanged)
+      ---
+      duration_ms: 0.077583
+      type: 'test'
+      ...
+    # Subtest: does NOT import AssetMetadataPanel (replaced structurally by MetadataStrip — Req 17)
+    ok 4 - does NOT import AssetMetadataPanel (replaced structurally by MetadataStrip — Req 17)
+      ---
+      duration_ms: 0.039375
+      type: 'test'
+      ...
+    1..4
+ok 25 - FileView — structural contract (Req 13.6, Req 17.1-17.4)
+  ---
+  duration_ms: 0.368833
+  type: 'suite'
+  ...
+# Subtest: FilesTabMain — structural contract (Req 1.2, 1.3, 1.5-1.8)
+    # Subtest: subscribes to `useCurrentLocation(projectId)` as the read path
+    ok 1 - subscribes to `useCurrentLocation(projectId)` as the read path
+      ---
+      duration_ms: 0.50825
+      type: 'test'
+      ...
+    # Subtest: reads `canEdit` from `useFilesTabRole()` (design § FilesTabRoot)
+    ok 2 - reads `canEdit` from `useFilesTabRole()` (design § FilesTabRoot)
+      ---
+      duration_ms: 0.098375
+      type: 'test'
+      ...
+    # Subtest: uses the prescribed wrapper classes (Req 1.7 full-width main)
+    ok 3 - uses the prescribed wrapper classes (Req 1.7 full-width main)
+      ---
+      duration_ms: 0.093125
+      type: 'test'
+      ...
+    # Subtest: always renders BreadcrumbBar above the body
+    ok 4 - always renders BreadcrumbBar above the body
+      ---
+      duration_ms: 0.075208
+      type: 'test'
+      ...
+    # Subtest: folder branch: location null | root | folder → <FolderListView ...> (Req 1.3)
+    ok 5 - folder branch: location null | root | folder → <FolderListView ...> (Req 1.3)
+      ---
+      duration_ms: 0.086
+      type: 'test'
+      ...
+    # Subtest: file branch: <FileView key={location.id} ...> (Req 1.5, 17.2, 17.4)
+    ok 6 - file branch: <FileView key={location.id} ...> (Req 1.5, 17.2, 17.4)
+      ---
+      duration_ms: 0.049916
+      type: 'test'
+      ...
+    # Subtest: imports the real surfaces (BreadcrumbBar, FolderListView, FileView, ancestorChain)
+    ok 7 - imports the real surfaces (BreadcrumbBar, FolderListView, FileView, ancestorChain)
+      ---
+      duration_ms: 0.112458
+      type: 'test'
+      ...
+    1..7
+ok 26 - FilesTabMain — structural contract (Req 1.2, 1.3, 1.5-1.8)
+  ---
+  duration_ms: 1.552916
+  type: 'suite'
+  ...
+# Subtest: FilesTabMain — dev-mode surface-disagreement assertion (Req 6.4)
+    # Subtest: runs only in development (`process.env.NODE_ENV !== "production"`)
+    ok 1 - runs only in development (`process.env.NODE_ENV !== "production"`)
+      ---
+      duration_ms: 0.215125
+      type: 'test'
+      ...
+    # Subtest: compares `ancestorChain(...).at(-1)?.id` to the tree-highlight id
+    ok 2 - compares `ancestorChain(...).at(-1)?.id` to the tree-highlight id
+      ---
+      duration_ms: 0.123458
+      type: 'test'
+      ...
+    # Subtest: emits a `console.warn` on mismatch (per Req 6.4)
+    ok 3 - emits a `console.warn` on mismatch (per Req 6.4)
+      ---
+      duration_ms: 0.15675
+      type: 'test'
+      ...
+    # Subtest: runs the assertion inside a React.useEffect (Rules-of-Hooks-safe)
+    ok 4 - runs the assertion inside a React.useEffect (Rules-of-Hooks-safe)
+      ---
+      duration_ms: 0.043209
+      type: 'test'
+      ...
+    1..4
+ok 27 - FilesTabMain — dev-mode surface-disagreement assertion (Req 6.4)
+  ---
+  duration_ms: 0.764041
+  type: 'suite'
+  ...
+# Subtest: FilesTabMain — Req 1.8 unresolved-location error indicator
+    # Subtest: renders an inline error surface when currentLocationId is set but unresolved
+    ok 1 - renders an inline error surface when currentLocationId is set but unresolved
+      ---
+      duration_ms: 0.059334
+      type: 'test'
+      ...
+    # Subtest: reads currentLocationId + nodesById from the store to detect the race
+    ok 2 - reads currentLocationId + nodesById from the store to detect the race
+      ---
+      duration_ms: 0.059833
+      type: 'test'
+      ...
+    # Subtest: does NOT render FolderListView / FileView while unresolved
+    ok 3 - does NOT render FolderListView / FileView while unresolved
+      ---
+      duration_ms: 0.059416
+      type: 'test'
+      ...
+    1..3
+ok 28 - FilesTabMain — Req 1.8 unresolved-location error indicator
+  ---
+  duration_ms: 0.220458
+  type: 'suite'
+  ...
+# Subtest: sortFolderListNodes / compareFolderListNodes — Req 4.2
+    # Subtest: places every folder before every file regardless of name
+    ok 1 - places every folder before every file regardless of name
+      ---
+      duration_ms: 1.105542
+      type: 'test'
+      ...
+    # Subtest: sorts within each group by case-insensitive name order
+    ok 2 - sorts within each group by case-insensitive name order
+      ---
+      duration_ms: 8.507083
+      type: 'test'
+      ...
+    # Subtest: breaks name ties by ascending lexicographic id
+    ok 3 - breaks name ties by ascending lexicographic id
+      ---
+      duration_ms: 0.094583
+      type: 'test'
+      ...
+    # Subtest: breaks name ties on files too (same group, same name, different ids)
+    ok 4 - breaks name ties on files too (same group, same name, different ids)
+      ---
+      duration_ms: 0.07675
+      type: 'test'
+      ...
+    # Subtest: does not mutate the input array
+    ok 5 - does not mutate the input array
+      ---
+      duration_ms: 0.095166
+      type: 'test'
+      ...
+    # Subtest: compareFolderListNodes returns a strict total order for identical nodes
+    ok 6 - compareFolderListNodes returns a strict total order for identical nodes
+      ---
+      duration_ms: 0.063042
+      type: 'test'
+      ...
+    1..6
+ok 29 - sortFolderListNodes / compareFolderListNodes — Req 4.2
+  ---
+  duration_ms: 10.528833
+  type: 'suite'
+  ...
+# Subtest: sortFolderListNodes — property suite (Req 4.2)
+    # Subtest: property: folders always precede files (Req 4.2 folders-first)
+    ok 1 - property: folders always precede files (Req 4.2 folders-first)
+      ---
+      duration_ms: 31.980334
+      type: 'test'
+      ...
+    # Subtest: property: each same-type group is alphabetical, case-insensitive, with id tie-break
+    ok 2 - property: each same-type group is alphabetical, case-insensitive, with id tie-break
+      ---
+      duration_ms: 13.703417
+      type: 'test'
+      ...
+    # Subtest: property: sort is a permutation (no node is added / dropped / duplicated)
+    ok 3 - property: sort is a permutation (no node is added / dropped / duplicated)
+      ---
+      duration_ms: 7.2215
+      type: 'test'
+      ...
+    # Subtest: property: sort is idempotent (sorting twice yields the same result)
+    ok 4 - property: sort is idempotent (sorting twice yields the same result)
+      ---
+      duration_ms: 7.83825
+      type: 'test'
+      ...
+    1..4
+ok 30 - sortFolderListNodes — property suite (Req 4.2)
+  ---
+  duration_ms: 61.226792
+  type: 'suite'
+  ...
+# Subtest: FolderListStates — loading / empty / error (Req 4.9, Req 4.10)
+    # Subtest: loading state renders a Loader2 spinner
+    ok 1 - loading state renders a Loader2 spinner
+      ---
+      duration_ms: 0.190583
+      type: 'test'
+      ...
+    # Subtest: loading state marks itself with `role="status"` + `aria-busy="true"` for a11y
+    ok 2 - loading state marks itself with `role="status"` + `aria-busy="true"` for a11y
+      ---
+      duration_ms: 0.042958
+      type: 'test'
+      ...
+    # Subtest: empty state renders the `This folder is empty` indicator (Req 4.9)
+    ok 3 - empty state renders the `This folder is empty` indicator (Req 4.9)
+      ---
+      duration_ms: 0.038125
+      type: 'test'
+      ...
+    # Subtest: error state renders `role="alert"` and an AlertTriangle icon (Req 4.10)
+    ok 4 - error state renders `role="alert"` and an AlertTriangle icon (Req 4.10)
+      ---
+      duration_ms: 0.033292
+      type: 'test'
+      ...
+    # Subtest: error state exposes a Retry button that calls `onRetry` (Req 4.10)
+    ok 5 - error state exposes a Retry button that calls `onRetry` (Req 4.10)
+      ---
+      duration_ms: 0.069875
+      type: 'test'
+      ...
+    1..5
+ok 31 - FolderListStates — loading / empty / error (Req 4.9, Req 4.10)
+  ---
+  duration_ms: 0.444333
+  type: 'suite'
+  ...
+# Subtest: FolderListView — Retry re-invokes loadFolderContent (Req 4.10)
+    # Subtest: wires `<FolderListError onRetry={folder.retry}>` verbatim
+    ok 1 - wires `<FolderListError onRetry={folder.retry}>` verbatim
+      ---
+      duration_ms: 0.081959
+      type: 'test'
+      ...
+    # Subtest: pulls `loadFolderContent` from `FilesTabBootContext` (the loader Retry re-invokes)
+    ok 2 - pulls `loadFolderContent` from `FilesTabBootContext` (the loader Retry re-invokes)
+      ---
+      duration_ms: 0.059583
+      type: 'test'
+      ...
+    # Subtest: retrying via runFolderLoad ends up in the ready state after a transient failure
+    ok 3 - retrying via runFolderLoad ends up in the ready state after a transient failure
+      ---
+      duration_ms: 0.236584
+      type: 'test'
+      ...
+    1..3
+ok 32 - FolderListView — Retry re-invokes loadFolderContent (Req 4.10)
+  ---
+  duration_ms: 0.418708
+  type: 'suite'
+  ...
+# Subtest: FolderListRow — git change badges (Req 12.1, 12.2, 12.5, 12.6)
+    # Subtest: declares M / A / D as the only three badge letters (Req 12.1, 12.6)
+    ok 1 - declares M / A / D as the only three badge letters (Req 12.1, 12.6)
+      ---
+      duration_ms: 0.217292
+      type: 'test'
+      ...
+    # Subtest: binds rendering to the `gitIntegrationEnabled` flag (Req 12.1, 12.2)
+    ok 2 - binds rendering to the `gitIntegrationEnabled` flag (Req 12.1, 12.2)
+      ---
+      duration_ms: 0.152666
+      type: 'test'
+      ...
+    # Subtest: never renders a badge when gitChange is absent (Req 12.5)
+    ok 3 - never renders a badge when gitChange is absent (Req 12.5)
+      ---
+      duration_ms: 0.057208
+      type: 'test'
+      ...
+    # Subtest: never renders a badge on folder rows
+    ok 4 - never renders a badge on folder rows
+      ---
+      duration_ms: 0.04425
+      type: 'test'
+      ...
+    # Subtest: FolderListView gates the entire badge map behind the wave4 flag (Req 12.2)
+    ok 5 - FolderListView gates the entire badge map behind the wave4 flag (Req 12.2)
+      ---
+      duration_ms: 0.087292
+      type: 'test'
+      ...
+    # Subtest: FolderListView passes `gitChange={null}` to rows when the flag is off
+    ok 6 - FolderListView passes `gitChange={null}` to rows when the flag is off
+      ---
+      duration_ms: 0.107167
+      type: 'test'
+      ...
+    1..6
+ok 33 - FolderListRow — git change badges (Req 12.1, 12.2, 12.5, 12.6)
+  ---
+  duration_ms: 0.731208
+  type: 'suite'
+  ...
+# Subtest: VersionPill — render gate (Req 11.1, 11.2, 11.3, 11.4)
+    # Subtest: returns null for null/undefined (Req 11.2)
+    ok 1 - returns null for null/undefined (Req 11.2)
+      ---
+      duration_ms: 0.081042
+      type: 'test'
+      ...
+    # Subtest: returns null for non-finite values (NaN / Infinity — Req 11.2)
+    ok 2 - returns null for non-finite values (NaN / Infinity — Req 11.2)
+      ---
+      duration_ms: 0.05
+      type: 'test'
+      ...
+    # Subtest: returns null for non-integer values (Req 11.2)
+    ok 3 - returns null for non-integer values (Req 11.2)
+      ---
+      duration_ms: 0.048416
+      type: 'test'
+      ...
+    # Subtest: returns null for values <= 1 (Req 11.2: zero / negative / one are forbidden)
+    ok 4 - returns null for values <= 1 (Req 11.2: zero / negative / one are forbidden)
+      ---
+      duration_ms: 0.053166
+      type: 'test'
+      ...
+    # Subtest: renders `v{N}` text exactly when the integer is > 1 (Req 11.1)
+    ok 5 - renders `v{N}` text exactly when the integer is > 1 (Req 11.1)
+      ---
+      duration_ms: 0.054667
+      type: 'test'
+      ...
+    1..5
+ok 34 - VersionPill — render gate (Req 11.1, 11.2, 11.3, 11.4)
+  ---
+  duration_ms: 0.337958
+  type: 'suite'
+  ...
+# Subtest: VersionPill — runtime gate invariants (Req 11.1, 11.2, 11.4)
+    # Subtest: v = null → rendered = false
+    ok 1 - v = null → rendered = false
+      ---
+      duration_ms: 0.07925
+      type: 'test'
+      ...
+    # Subtest: v = undefined → rendered = false
+    ok 2 - v = undefined → rendered = false
+      ---
+      duration_ms: 0.022667
+      type: 'test'
+      ...
+    # Subtest: v = zero → rendered = false
+    ok 3 - v = zero → rendered = false
+      ---
+      duration_ms: 0.027583
+      type: 'test'
+      ...
+    # Subtest: v = negative → rendered = false
+    ok 4 - v = negative → rendered = false
+      ---
+      duration_ms: 0.020584
+      type: 'test'
+      ...
+    # Subtest: v = one (boundary) → rendered = false
+    ok 5 - v = one (boundary) → rendered = false
+      ---
+      duration_ms: 0.02
+      type: 'test'
+      ...
+    # Subtest: v = two (first rendered version) → rendered = true
+    ok 6 - v = two (first rendered version) → rendered = true
+      ---
+      duration_ms: 0.020334
+      type: 'test'
+      ...
+    # Subtest: v = ten → rendered = true
+    ok 7 - v = ten → rendered = true
+      ---
+      duration_ms: 0.019416
+      type: 'test'
+      ...
+    # Subtest: v = NaN → rendered = false
+    ok 8 - v = NaN → rendered = false
+      ---
+      duration_ms: 0.019375
+      type: 'test'
+      ...
+    # Subtest: v = Infinity → rendered = false
+    ok 9 - v = Infinity → rendered = false
+      ---
+      duration_ms: 0.020084
+      type: 'test'
+      ...
+    # Subtest: v = float → rendered = false
+    ok 10 - v = float → rendered = false
+      ---
+      duration_ms: 0.021208
+      type: 'test'
+      ...
+    # Subtest: v = large integer → rendered = true
+    ok 11 - v = large integer → rendered = true
+      ---
+      duration_ms: 0.01925
+      type: 'test'
+      ...
+    # Subtest: FolderListRow delegates the gate to VersionPill (no duplicate guard)
+    ok 12 - FolderListRow delegates the gate to VersionPill (no duplicate guard)
+      ---
+      duration_ms: 0.0985
+      type: 'test'
+      ...
+    # Subtest: VersionPill is only imported — the row never re-implements the gate
+    ok 13 - VersionPill is only imported — the row never re-implements the gate
+      ---
+      duration_ms: 0.098292
+      type: 'test'
+      ...
+    1..13
+ok 35 - VersionPill — runtime gate invariants (Req 11.1, 11.2, 11.4)
+  ---
+  duration_ms: 0.584
+  type: 'suite'
+  ...
+# [forbidden-imports] entry=src/components/projects/v2/files-tab/FilesTabRoot.tsx
+# [forbidden-imports] reachable files=195
+# [forbidden-imports] forbidden targets total=15 cleared=15 reached=0
+# [forbidden-imports] report written to artifacts/files-tab-forbidden-imports.json
+# [forbidden-imports] OK — static graph from FilesTabRoot is clear of every forbidden target.
+# Subtest: forbidden-imports: FilesTabRoot static import graph does not reach forbidden modules
+ok 36 - forbidden-imports: FilesTabRoot static import graph does not reach forbidden modules
+  ---
+  duration_ms: 86.900666
+  type: 'test'
+  ...
+# Subtest: formatBytes: 0 bytes renders as '0 B'
+ok 37 - formatBytes: 0 bytes renders as '0 B'
+  ---
+  duration_ms: 0.632833
+  type: 'test'
+  ...
+# Subtest: formatBytes: 1023 bytes stays in the 'B' unit (boundary - 1)
+ok 38 - formatBytes: 1023 bytes stays in the 'B' unit (boundary - 1)
+  ---
+  duration_ms: 0.061583
+  type: 'test'
+  ...
+# Subtest: formatBytes: 1024 bytes promotes to '1.0 KB' (KB boundary)
+ok 39 - formatBytes: 1024 bytes promotes to '1.0 KB' (KB boundary)
+  ---
+  duration_ms: 0.044
+  type: 'test'
+  ...
+# Subtest: formatBytes: 1536 bytes renders as '1.5 KB' (one decimal mid-unit)
+ok 40 - formatBytes: 1536 bytes renders as '1.5 KB' (one decimal mid-unit)
+  ---
+  duration_ms: 0.03775
+  type: 'test'
+  ...
+# Subtest: formatBytes: 1_048_576 bytes promotes to '1.0 MB' (MB boundary)
+ok 41 - formatBytes: 1_048_576 bytes promotes to '1.0 MB' (MB boundary)
+  ---
+  duration_ms: 0.038625
+  type: 'test'
+  ...
+# Subtest: formatBytes: 1_073_741_824 bytes promotes to '1.0 GB' (GB boundary)
+ok 42 - formatBytes: 1_073_741_824 bytes promotes to '1.0 GB' (GB boundary)
+  ---
+  duration_ms: 0.031416
+  type: 'test'
+  ...
+# Subtest: formatBytes: 1_099_511_627_776 bytes promotes to '1.0 TB' (TB boundary)
+ok 43 - formatBytes: 1_099_511_627_776 bytes promotes to '1.0 TB' (TB boundary)
+  ---
+  duration_ms: 0.086667
+  type: 'test'
+  ...
+# Subtest: formatBytes: folders render as empty string regardless of size
+ok 44 - formatBytes: folders render as empty string regardless of size
+  ---
+  duration_ms: 0.037375
+  type: 'test'
+  ...
+# Subtest: formatRelativeTime: diff === 0 renders '0 seconds ago'
+ok 45 - formatRelativeTime: diff === 0 renders '0 seconds ago'
+  ---
+  duration_ms: 1.124834
+  type: 'test'
+  ...
+# Subtest: formatRelativeTime: 59s ago renders '59 seconds ago' (below minute boundary)
+ok 46 - formatRelativeTime: 59s ago renders '59 seconds ago' (below minute boundary)
+  ---
+  duration_ms: 0.331459
+  type: 'test'
+  ...
+# Subtest: formatRelativeTime: 60s ago renders '1 minute ago' (minute boundary, singular)
+ok 47 - formatRelativeTime: 60s ago renders '1 minute ago' (minute boundary, singular)
+  ---
+  duration_ms: 0.05425
+  type: 'test'
+  ...
+# Subtest: formatRelativeTime: 3599s ago renders '59 minutes ago' (below hour boundary)
+ok 48 - formatRelativeTime: 3599s ago renders '59 minutes ago' (below hour boundary)
+  ---
+  duration_ms: 0.046583
+  type: 'test'
+  ...
+# Subtest: formatRelativeTime: 3600s ago renders '1 hour ago' (hour boundary, singular)
+ok 49 - formatRelativeTime: 3600s ago renders '1 hour ago' (hour boundary, singular)
+  ---
+  duration_ms: 0.031667
+  type: 'test'
+  ...
+# Subtest: formatRelativeTime: 86399s ago renders '23 hours ago' (below day boundary)
+ok 50 - formatRelativeTime: 86399s ago renders '23 hours ago' (below day boundary)
+  ---
+  duration_ms: 0.02975
+  type: 'test'
+  ...
+# Subtest: formatRelativeTime: 86400s ago renders '1 day ago' (day boundary, singular)
+ok 51 - formatRelativeTime: 86400s ago renders '1 day ago' (day boundary, singular)
+  ---
+  duration_ms: 0.031792
+  type: 'test'
+  ...
+# Subtest: formatRelativeTime: missing (undefined) renders '—'
+ok 52 - formatRelativeTime: missing (undefined) renders '—'
+  ---
+  duration_ms: 0.808292
+  type: 'test'
+  ...
+# Subtest: formatRelativeTime: null renders '—'
+ok 53 - formatRelativeTime: null renders '—'
+  ---
+  duration_ms: 0.122875
+  type: 'test'
+  ...
+# Subtest: IDB session key migration — key format logic
+    # Subtest: sessionKey returns only the nodeId (new format)
+    ok 1 - sessionKey returns only the nodeId (new format)
+      ---
+      duration_ms: 0.549416
+      type: 'test'
+      ...
+    # Subtest: legacySessionKey returns nodeId::filename (old format)
+    ok 2 - legacySessionKey returns nodeId::filename (old format)
+      ---
+      duration_ms: 0.105041
+      type: 'test'
+      ...
+    # Subtest: new key format does not contain the filename
+    ok 3 - new key format does not contain the filename
+      ---
+      duration_ms: 0.064583
+      type: 'test'
+      ...
+    # Subtest: legacy key format contains both nodeId and filename separated by ::
+    ok 4 - legacy key format contains both nodeId and filename separated by ::
+      ---
+      duration_ms: 0.268458
+      type: 'test'
+      ...
+    # Subtest: new key format is a prefix of the legacy key format
+    ok 5 - new key format is a prefix of the legacy key format
+      ---
+      duration_ms: 0.185166
+      type: 'test'
+      ...
+    # Subtest: new key format is deterministic for the same nodeId
+    ok 6 - new key format is deterministic for the same nodeId
+      ---
+      duration_ms: 0.238291
+      type: 'test'
+      ...
+    # Subtest: different nodeIds produce different new keys
+    ok 7 - different nodeIds produce different new keys
+      ---
+      duration_ms: 0.060792
+      type: 'test'
+      ...
+    # Subtest: same nodeId with different filenames produces same new key (one session per node)
+    ok 8 - same nodeId with different filenames produces same new key (one session per node)
+      ---
+      duration_ms: 0.095208
+      type: 'test'
+      ...
+    # Subtest: legacy keys for same nodeId but different filenames are distinct
+    ok 9 - legacy keys for same nodeId but different filenames are distinct
+      ---
+      duration_ms: 0.101334
+      type: 'test'
+      ...
+    # Subtest: handles nodeIds with special characters
+    ok 10 - handles nodeIds with special characters
+      ---
+      duration_ms: 0.255
+      type: 'test'
+      ...
+    # Subtest: handles filenames with special characters
+    ok 11 - handles filenames with special characters
+      ---
+      duration_ms: 0.045792
+      type: 'test'
+      ...
+    # Subtest: handles UUID-style nodeIds
+    ok 12 - handles UUID-style nodeIds
+      ---
+      duration_ms: 0.037208
+      type: 'test'
+      ...
+    1..12
+ok 54 - IDB session key migration — key format logic
+  ---
+  duration_ms: 3.110542
+  type: 'suite'
+  ...
+# /Users/chrama/Downloads/nb-s3/src/lib/env.ts:97
+#         throw new Error(`Environment validation failed:\\n${missing}`)
+#               ^
+# Error: Environment validation failed:
+#   DATABASE_URL: Invalid input: expected string, received undefined
+#   NEXT_PUBLIC_SUPABASE_URL: Invalid input: expected string, received undefined
+#   NEXT_PUBLIC_SUPABASE_ANON_KEY: Invalid input: expected string, received undefined
+#   SUPABASE_SERVICE_ROLE_KEY: Invalid input: expected string, received undefined
+#     at validateEnv (/Users/chrama/Downloads/nb-s3/src/lib/env.ts:97:15)
+#     at getEnv (/Users/chrama/Downloads/nb-s3/src/lib/env.ts:107:18)
+#     at postgres (/Users/chrama/Downloads/nb-s3/src/lib/db/index.ts:7:13)
+#     at Object.<anonymous> (/Users/chrama/Downloads/nb-s3/src/lib/db/index.ts:99:23)
+#     at Module._compile (node:internal/modules/cjs/loader:1706:14)
+#     at Object.transformer (/Users/chrama/Downloads/nb-s3/node_modules/tsx/dist/register-D46fvsV_.cjs:3:1104)
+#     at Module.load (node:internal/modules/cjs/loader:1441:32)
+#     at Module._load (node:internal/modules/cjs/loader:1263:12)
+#     at TracingChannel.traceSync (node:diagnostics_channel:328:14)
+#     at wrapModuleLoad (node:internal/modules/cjs/loader:237:24)
+# Node.js v22.22.0
+# Subtest: tests/unit/files-tab/metadata-strip.test.ts
+not ok 11 - tests/unit/files-tab/metadata-strip.test.ts
+  ---
+  duration_ms: 851.654042
+  type: 'test'
+  location: '/Users/chrama/Downloads/nb-s3/tests/unit/files-tab/metadata-strip.test.ts:1:1'
+  failureType: 'testCodeFailure'
+  exitCode: 1
+  signal: ~
+  error: 'test failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+# Subtest: ancestorChain: returns [] for null nodeId (root state)
+ok 56 - ancestorChain: returns [] for null nodeId (root state)
+  ---
+  duration_ms: 1.284208
+  type: 'test'
+  ...
+# Subtest: ancestorChain: returns [] when nodeId is not in nodesById (unresolved)
+ok 57 - ancestorChain: returns [] when nodeId is not in nodesById (unresolved)
+  ---
+  duration_ms: 0.069708
+  type: 'test'
+  ...
+# Subtest: ancestorChain: returns [root-level node] when parentId is null
+ok 58 - ancestorChain: returns [root-level node] when parentId is null
+  ---
+  duration_ms: 0.092542
+  type: 'test'
+  ...
+# Subtest: ancestorChain: returns root-to-node for an intermediate folder
+ok 59 - ancestorChain: returns root-to-node for an intermediate folder
+  ---
+  duration_ms: 0.051542
+  type: 'test'
+  ...
+# Subtest: ancestorChain: returns root-to-file for a leaf file
+ok 60 - ancestorChain: returns root-to-file for a leaf file
+  ---
+  duration_ms: 0.062792
+  type: 'test'
+  ...
+# Subtest: ancestorChain: terminates on missing ancestor without throwing
+ok 61 - ancestorChain: terminates on missing ancestor without throwing
+  ---
+  duration_ms: 0.050916
+  type: 'test'
+  ...
+# Subtest: ancestorChain: tolerates a self-referential cycle
+ok 62 - ancestorChain: tolerates a self-referential cycle
+  ---
+  duration_ms: 0.097083
+  type: 'test'
+  ...
+# Subtest: encodePath: returns empty string for null (root state, no ?path=)
+ok 63 - encodePath: returns empty string for null (root state, no ?path=)
+  ---
+  duration_ms: 0.0575
+  type: 'test'
+  ...
+# Subtest: encodePath: returns empty string when nodeId is unresolved
+ok 64 - encodePath: returns empty string when nodeId is unresolved
+  ---
+  duration_ms: 0.150375
+  type: 'test'
+  ...
+# Subtest: encodePath: encodes a single root-level segment
+ok 65 - encodePath: encodes a single root-level segment
+  ---
+  duration_ms: 0.975584
+  type: 'test'
+  ...
+# Subtest: encodePath: joins root-to-leaf segments with /
+ok 66 - encodePath: joins root-to-leaf segments with /
+  ---
+  duration_ms: 0.050834
+  type: 'test'
+  ...
+# Subtest: encodePath: URI-encodes segments containing spaces and unicode
+ok 67 - encodePath: URI-encodes segments containing spaces and unicode
+  ---
+  duration_ms: 0.053166
+  type: 'test'
+  ...
+# Subtest: encodePath: URI-encodes a reserved `?` character in a filename
+ok 68 - encodePath: URI-encodes a reserved `?` character in a filename
+  ---
+  duration_ms: 0.03725
+  type: 'test'
+  ...
+# Subtest: splitEncoded: returns [] for the empty string
+ok 69 - splitEncoded: returns [] for the empty string
+  ---
+  duration_ms: 0.048625
+  type: 'test'
+  ...
+# Subtest: splitEncoded: decodes a single segment
+ok 70 - splitEncoded: decodes a single segment
+  ---
+  duration_ms: 0.100667
+  type: 'test'
+  ...
+# Subtest: splitEncoded: splits a nested path and decodes each segment
+ok 71 - splitEncoded: splits a nested path and decodes each segment
+  ---
+  duration_ms: 0.03425
+  type: 'test'
+  ...
+# Subtest: splitEncoded: filters empty segments from leading/trailing/duplicate slashes
+ok 72 - splitEncoded: filters empty segments from leading/trailing/duplicate slashes
+  ---
+  duration_ms: 0.029542
+  type: 'test'
+  ...
+# Subtest: splitEncoded: decodeURIComponent is applied per segment
+ok 73 - splitEncoded: decodeURIComponent is applied per segment
+  ---
+  duration_ms: 0.03525
+  type: 'test'
+  ...
+# Subtest: splitEncoded: silently drops malformed percent escapes
+ok 74 - splitEncoded: silently drops malformed percent escapes
+  ---
+  duration_ms: 0.040791
+  type: 'test'
+  ...
+# Subtest: encodePath + splitEncoded round-trip preserves segment order and names
+ok 75 - encodePath + splitEncoded round-trip preserves segment order and names
+  ---
+  duration_ms: 0.090875
+  type: 'test'
+  ...
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# Subtest: patchNodeVersion — patches currentVersion in place (Req 3.5)
+    # Subtest: updates the node's currentVersion to the provided value
+    ok 1 - updates the node's currentVersion to the provided value
+      ---
+      duration_ms: 3.411208
+      type: 'test'
+      ...
+    # Subtest: bumps treeVersion by exactly 1
+    ok 2 - bumps treeVersion by exactly 1
+      ---
+      duration_ms: 0.945542
+      type: 'test'
+      ...
+    # Subtest: does NOT rebuild childrenByParentId
+    ok 3 - does NOT rebuild childrenByParentId
+      ---
+      duration_ms: 2.619667
+      type: 'test'
+      ...
+    # Subtest: does NOT rebuild folderMeta
+    ok 4 - does NOT rebuild folderMeta
+      ---
+      duration_ms: 0.331291
+      type: 'test'
+      ...
+    # Subtest: is a no-op when projectId does not exist
+    ok 5 - is a no-op when projectId does not exist
+      ---
+      duration_ms: 0.338166
+      type: 'test'
+      ...
+    # Subtest: is a no-op when nodeId does not exist in the project
+    ok 6 - is a no-op when nodeId does not exist in the project
+      ---
+      duration_ms: 0.202125
+      type: 'test'
+      ...
+    1..6
+ok 76 - patchNodeVersion — patches currentVersion in place (Req 3.5)
+  ---
+  duration_ms: 9.016667
+  type: 'suite'
+  ...
+# Subtest: setTaskLinkCounts — accepts zero values for unlink (Req 3.7)
+    # Subtest: writes zero values to the store (does not filter them)
+    ok 1 - writes zero values to the store (does not filter them)
+      ---
+      duration_ms: 0.263708
+      type: 'test'
+      ...
+    # Subtest: merges counts without removing existing entries
+    ok 2 - merges counts without removing existing entries
+      ---
+      duration_ms: 0.4815
+      type: 'test'
+      ...
+    # Subtest: is a no-op when projectId does not exist
+    ok 3 - is a no-op when projectId does not exist
+      ---
+      duration_ms: 0.172875
+      type: 'test'
+      ...
+    1..3
+ok 77 - setTaskLinkCounts — accepts zero values for unlink (Req 3.7)
+  ---
+  duration_ms: 1.099333
+  type: 'suite'
+  ...
+# Subtest: LinkedTasksPanel — performance.mark('files-tab:linked-tasks-panel-interactive') (Req 17.1)
+    # Subtest: emits the exact mark name required by Req 17.1
+    ok 1 - emits the exact mark name required by Req 17.1
+      ---
+      duration_ms: 0.474
+      type: 'test'
+      ...
+    # Subtest: guards the mark with `typeof performance !== "undefined"` (SSR-safety)
+    ok 2 - guards the mark with `typeof performance !== "undefined"` (SSR-safety)
+      ---
+      duration_ms: 0.133708
+      type: 'test'
+      ...
+    # Subtest: wraps the mark in a useEffect with a ref-based idempotency guard
+    ok 3 - wraps the mark in a useEffect with a ref-based idempotency guard
+      ---
+      duration_ms: 0.082959
+      type: 'test'
+      ...
+    # Subtest: marks the ref as consumed after emitting
+    ok 4 - marks the ref as consumed after emitting
+      ---
+      duration_ms: 0.063917
+      type: 'test'
+      ...
+    # Subtest: only emits the mark when loading is complete
+    ok 5 - only emits the mark when loading is complete
+      ---
+      duration_ms: 0.06
+      type: 'test'
+      ...
+    1..5
+ok 78 - LinkedTasksPanel — performance.mark('files-tab:linked-tasks-panel-interactive') (Req 17.1)
+  ---
+  duration_ms: 1.324375
+  type: 'suite'
+  ...
+# Subtest: FileVersionHistoryPanel — performance.mark('files-tab:version-history-interactive') (Req 17.2)
+    # Subtest: emits the exact mark name required by Req 17.2
+    ok 1 - emits the exact mark name required by Req 17.2
+      ---
+      duration_ms: 0.069334
+      type: 'test'
+      ...
+    # Subtest: guards the mark with `typeof performance !== "undefined"` (SSR-safety)
+    ok 2 - guards the mark with `typeof performance !== "undefined"` (SSR-safety)
+      ---
+      duration_ms: 0.093834
+      type: 'test'
+      ...
+    # Subtest: wraps the mark in a useEffect with a ref-based idempotency guard
+    ok 3 - wraps the mark in a useEffect with a ref-based idempotency guard
+      ---
+      duration_ms: 1.159875
+      type: 'test'
+      ...
+    # Subtest: marks the ref as consumed after emitting
+    ok 4 - marks the ref as consumed after emitting
+      ---
+      duration_ms: 0.265416
+      type: 'test'
+      ...
+    # Subtest: only emits the mark when loading is complete
+    ok 5 - only emits the mark when loading is complete
+      ---
+      duration_ms: 0.396125
+      type: 'test'
+      ...
+    1..5
+ok 79 - FileVersionHistoryPanel — performance.mark('files-tab:version-history-interactive') (Req 17.2)
+  ---
+  duration_ms: 2.371541
+  type: 'suite'
+  ...
+# Subtest: V3AttachmentPicker — performance.mark('files-tab:picker-interactive') (Req 17.3)
+    # Subtest: emits the exact mark name required by Req 17.3
+    ok 1 - emits the exact mark name required by Req 17.3
+      ---
+      duration_ms: 0.16625
+      type: 'test'
+      ...
+    # Subtest: guards the mark with `typeof performance !== "undefined"` (SSR-safety)
+    ok 2 - guards the mark with `typeof performance !== "undefined"` (SSR-safety)
+      ---
+      duration_ms: 0.090208
+      type: 'test'
+      ...
+    # Subtest: wraps the mark in a useEffect with a ref-based idempotency guard
+    ok 3 - wraps the mark in a useEffect with a ref-based idempotency guard
+      ---
+      duration_ms: 0.166042
+      type: 'test'
+      ...
+    # Subtest: marks the ref as consumed after emitting
+    ok 4 - marks the ref as consumed after emitting
+      ---
+      duration_ms: 0.080375
+      type: 'test'
+      ...
+    # Subtest: only emits the mark when the picker is open
+    ok 5 - only emits the mark when the picker is open
+      ---
+      duration_ms: 0.135458
+      type: 'test'
+      ...
+    1..5
+ok 80 - V3AttachmentPicker — performance.mark('files-tab:picker-interactive') (Req 17.3)
+  ---
+  duration_ms: 0.803959
+  type: 'suite'
+  ...
+# Subtest: Phase 2 performance marks — cross-file invariants
+    # Subtest: each mark name appears exactly once in its source file (no accidental duplication)
+    ok 1 - each mark name appears exactly once in its source file (no accidental duplication)
+      ---
+      duration_ms: 0.206125
+      type: 'test'
+      ...
+    # Subtest: no mark name leaks into another component's source file
+    ok 2 - no mark name leaks into another component's source file
+      ---
+      duration_ms: 0.136375
+      type: 'test'
+      ...
+    1..2
+ok 81 - Phase 2 performance marks — cross-file invariants
+  ---
+  duration_ms: 0.426042
+  type: 'suite'
+  ...
+# Subtest: FilesTabSidebar — performance.mark('files-tab:sidebar-interactive') (Req 16.5)
+    # Subtest: emits the exact mark name required by Req 16.5
+    ok 1 - emits the exact mark name required by Req 16.5
+      ---
+      duration_ms: 0.452209
+      type: 'test'
+      ...
+    # Subtest: guards the mark with `typeof performance !== "undefined"` (SSR-safety)
+    ok 2 - guards the mark with `typeof performance !== "undefined"` (SSR-safety)
+      ---
+      duration_ms: 0.130417
+      type: 'test'
+      ...
+    # Subtest: only emits the mark when the sidebar is not collapsed
+    ok 3 - only emits the mark when the sidebar is not collapsed
+      ---
+      duration_ms: 0.083667
+      type: 'test'
+      ...
+    # Subtest: wraps the mark in a useEffect with a ref-based idempotency guard
+    ok 4 - wraps the mark in a useEffect with a ref-based idempotency guard
+      ---
+      duration_ms: 0.119917
+      type: 'test'
+      ...
+    # Subtest: marks the ref as consumed after emitting
+    ok 5 - marks the ref as consumed after emitting
+      ---
+      duration_ms: 0.061583
+      type: 'test'
+      ...
+    1..5
+ok 82 - FilesTabSidebar — performance.mark('files-tab:sidebar-interactive') (Req 16.5)
+  ---
+  duration_ms: 1.30075
+  type: 'suite'
+  ...
+# Subtest: BreadcrumbBar — performance.mark('files-tab:breadcrumb-interactive') (Req 16.5)
+    # Subtest: emits the exact mark name required by Req 16.5
+    ok 1 - emits the exact mark name required by Req 16.5
+      ---
+      duration_ms: 0.116917
+      type: 'test'
+      ...
+    # Subtest: guards the mark with `typeof performance !== "undefined"` (SSR-safety)
+    ok 2 - guards the mark with `typeof performance !== "undefined"` (SSR-safety)
+      ---
+      duration_ms: 0.089042
+      type: 'test'
+      ...
+    # Subtest: wraps the mark in a useEffect with a ref-based idempotency guard
+    ok 3 - wraps the mark in a useEffect with a ref-based idempotency guard
+      ---
+      duration_ms: 0.229542
+      type: 'test'
+      ...
+    # Subtest: marks the ref as consumed after emitting
+    ok 4 - marks the ref as consumed after emitting
+      ---
+      duration_ms: 0.110416
+      type: 'test'
+      ...
+    1..4
+ok 83 - BreadcrumbBar — performance.mark('files-tab:breadcrumb-interactive') (Req 16.5)
+  ---
+  duration_ms: 0.815709
+  type: 'suite'
+  ...
+# Subtest: performance marks — cross-file invariants
+    # Subtest: each mark name appears exactly once in its source file (no accidental duplication)
+    ok 1 - each mark name appears exactly once in its source file (no accidental duplication)
+      ---
+      duration_ms: 0.111167
+      type: 'test'
+      ...
+    # Subtest: the sidebar mark name does NOT leak into the breadcrumb file and vice versa
+    ok 2 - the sidebar mark name does NOT leak into the breadcrumb file and vice versa
+      ---
+      duration_ms: 0.044833
+      type: 'test'
+      ...
+    1..2
+ok 84 - performance marks — cross-file invariants
+  ---
+  duration_ms: 0.200709
+  type: 'suite'
+  ...
+# Subtest: subscribeProjectFilesChannel — exponential backoff (Req 3.6)
+    # Subtest: first reconnect delay is 800ms
+    ok 1 - first reconnect delay is 800ms
+      ---
+      duration_ms: 0.484709
+      type: 'test'
+      ...
+    # Subtest: second reconnect delay is 1600ms
+    ok 2 - second reconnect delay is 1600ms
+      ---
+      duration_ms: 0.054
+      type: 'test'
+      ...
+    # Subtest: third reconnect delay is 3200ms
+    ok 3 - third reconnect delay is 3200ms
+      ---
+      duration_ms: 0.03975
+      type: 'test'
+      ...
+    # Subtest: delay caps at 10000ms
+    ok 4 - delay caps at 10000ms
+      ---
+      duration_ms: 0.04575
+      type: 'test'
+      ...
+    # Subtest: delay never exceeds cap for any attempt count
+    ok 5 - delay never exceeds cap for any attempt count
+      ---
+      duration_ms: 0.126875
+      type: 'test'
+      ...
+    # Subtest: delay is always >= BACKOFF_START_MS
+    ok 6 - delay is always >= BACKOFF_START_MS
+      ---
+      duration_ms: 0.052292
+      type: 'test'
+      ...
+    1..6
+ok 85 - subscribeProjectFilesChannel — exponential backoff (Req 3.6)
+  ---
+  duration_ms: 1.304042
+  type: 'suite'
+  ...
+# Subtest: subscribeProjectFilesChannel — budget enforcement (Req 3.3)
+    # Subtest: MAX_BACKGROUND_CHANNELS is 2
+    ok 1 - MAX_BACKGROUND_CHANNELS is 2
+      ---
+      duration_ms: 0.09775
+      type: 'test'
+      ...
+    1..1
+ok 86 - subscribeProjectFilesChannel — budget enforcement (Req 3.3)
+  ---
+  duration_ms: 0.283875
+  type: 'suite'
+  ...
+# Subtest: subscribeProjectFilesChannel — event dispatch mapping (Req 3.4, 3.5)
+    # Subtest: task_node_links INSERT event dispatches onTaskLinkChange with nodeId and type INSERT
+    ok 1 - task_node_links INSERT event dispatches onTaskLinkChange with nodeId and type INSERT
+      ---
+      duration_ms: 0.142917
+      type: 'test'
+      ...
+    # Subtest: task_node_links DELETE event dispatches onTaskLinkChange with nodeId and type DELETE
+    ok 2 - task_node_links DELETE event dispatches onTaskLinkChange with nodeId and type DELETE
+      ---
+      duration_ms: 0.106958
+      type: 'test'
+      ...
+    # Subtest: task_node_links UPDATE event is ignored
+    ok 3 - task_node_links UPDATE event is ignored
+      ---
+      duration_ms: 0.157
+      type: 'test'
+      ...
+    # Subtest: file_versions INSERT event dispatches onFileVersionChange with nodeId and newVersion
+    ok 4 - file_versions INSERT event dispatches onFileVersionChange with nodeId and newVersion
+      ---
+      duration_ms: 0.979875
+      type: 'test'
+      ...
+    # Subtest: file_versions INSERT event with missing node_id is ignored
+    ok 5 - file_versions INSERT event with missing node_id is ignored
+      ---
+      duration_ms: 0.143834
+      type: 'test'
+      ...
+    # Subtest: file_versions INSERT event with missing version is ignored
+    ok 6 - file_versions INSERT event with missing version is ignored
+      ---
+      duration_ms: 0.117083
+      type: 'test'
+      ...
+    1..6
+ok 87 - subscribeProjectFilesChannel — event dispatch mapping (Req 3.4, 3.5)
+  ---
+  duration_ms: 1.81725
+  type: 'suite'
+  ...
+# Subtest: subscribeProjectFilesChannel — interface contract (Req 3.1)
+    # Subtest: ProjectFilesChannelOptions requires projectId, onTaskLinkChange, onFileVersionChange
+    ok 1 - ProjectFilesChannelOptions requires projectId, onTaskLinkChange, onFileVersionChange
+      ---
+      duration_ms: 0.136208
+      type: 'test'
+      ...
+    # Subtest: onStatus callback is optional
+    ok 2 - onStatus callback is optional
+      ---
+      duration_ms: 0.083833
+      type: 'test'
+      ...
+    1..2
+ok 88 - subscribeProjectFilesChannel — interface contract (Req 3.1)
+  ---
+  duration_ms: 0.305667
+  type: 'suite'
+  ...
+# Subtest: buildNodePathMap — path joining
+    # Subtest: returns the node's own name for a single root node
+    ok 1 - returns the node's own name for a single root node
+      ---
+      duration_ms: 0.510333
+      type: 'test'
+      ...
+    # Subtest: joins ancestors with '/' for a nested path
+    ok 2 - joins ancestors with '/' for a nested path
+      ---
+      duration_ms: 0.124083
+      type: 'test'
+      ...
+    # Subtest: gracefully falls back to the node's own name when its parent is orphaned
+    ok 3 - gracefully falls back to the node's own name when its parent is orphaned
+      ---
+      duration_ms: 0.059417
+      type: 'test'
+      ...
+    # Subtest: builds paths for every node in the cache, not just leaves
+    ok 4 - builds paths for every node in the cache, not just leaves
+      ---
+      duration_ms: 0.123583
+      type: 'test'
+      ...
+    1..4
+ok 89 - buildNodePathMap — path joining
+  ---
+  duration_ms: 1.348084
+  type: 'suite'
+  ...
+# Subtest: rankFuzzyResults — empty query (Req 9.2 / 9.3)
+    # Subtest: returns [] when the query is empty — Recents path is the caller's job
+    ok 1 - returns [] when the query is empty — Recents path is the caller's job
+      ---
+      duration_ms: 0.758125
+      type: 'test'
+      ...
+    1..1
+ok 90 - rankFuzzyResults — empty query (Req 9.2 / 9.3)
+  ---
+  duration_ms: 0.80825
+  type: 'suite'
+  ...
+# Subtest: rankFuzzyResults — scoring order (Req 9.3)
+    # Subtest: exact name match ranks strictly above startsWith-only match
+    ok 1 - exact name match ranks strictly above startsWith-only match
+      ---
+      duration_ms: 0.18075
+      type: 'test'
+      ...
+    # Subtest: startsWith match ranks strictly above includes-only match
+    ok 2 - startsWith match ranks strictly above includes-only match
+      ---
+      duration_ms: 0.217875
+      type: 'test'
+      ...
+    # Subtest: name-includes match ranks strictly above path-only match
+    ok 3 - name-includes match ranks strictly above path-only match
+      ---
+      duration_ms: 0.128791
+      type: 'test'
+      ...
+    # Subtest: full four-tier ordering: exact > startsWith > includes > path-only
+    ok 4 - full four-tier ordering: exact > startsWith > includes > path-only
+      ---
+      duration_ms: 0.153875
+      type: 'test'
+      ...
+    # Subtest: drops files that score zero (no name OR path match)
+    ok 5 - drops files that score zero (no name OR path match)
+      ---
+      duration_ms: 0.20275
+      type: 'test'
+      ...
+    # Subtest: matches case-insensitively against both name and path (Req 9.3)
+    ok 6 - matches case-insensitively against both name and path (Req 9.3)
+      ---
+      duration_ms: 0.0575
+      type: 'test'
+      ...
+    1..6
+ok 91 - rankFuzzyResults — scoring order (Req 9.3)
+  ---
+  duration_ms: 1.117166
+  type: 'suite'
+  ...
+# Subtest: rankFuzzyResults — 50-result cap (Req 9.3)
+    # Subtest: truncates to at most 50 results when 100 files all match
+    ok 1 - truncates to at most 50 results when 100 files all match
+      ---
+      duration_ms: 22.161333
+      type: 'test'
+      ...
+    # Subtest: honours a caller-supplied limit override
+    ok 2 - honours a caller-supplied limit override
+      ---
+      duration_ms: 0.10975
+      type: 'test'
+      ...
+    1..2
+ok 92 - rankFuzzyResults — 50-result cap (Req 9.3)
+  ---
+  duration_ms: 22.327208
+  type: 'suite'
+  ...
+# Subtest: QuickOpen — ⌘P / Ctrl+P toggle (Req 9.1, source-level)
+    # Subtest: FilesTabRoot registers a window 'keydown' listener
+    ok 1 - FilesTabRoot registers a window 'keydown' listener
+      ---
+      duration_ms: 0.176708
+      type: 'test'
+      ...
+    # Subtest: accepts both ⌘ (metaKey) and Ctrl (ctrlKey) as the toggle modifier
+    ok 2 - accepts both ⌘ (metaKey) and Ctrl (ctrlKey) as the toggle modifier
+      ---
+      duration_ms: 0.476958
+      type: 'test'
+      ...
+    # Subtest: matches the 'p' key case-insensitively
+    ok 3 - matches the 'p' key case-insensitively
+      ---
+      duration_ms: 0.244833
+      type: 'test'
+      ...
+    # Subtest: toggles: open when closed, close-and-discard-input when already open
+    ok 4 - toggles: open when closed, close-and-discard-input when already open
+      ---
+      duration_ms: 0.323833
+      type: 'test'
+      ...
+    # Subtest: handleQuickOpenChange(false) discards the search input
+    ok 5 - handleQuickOpenChange(false) discards the search input
+      ---
+      duration_ms: 0.461875
+      type: 'test'
+      ...
+    1..5
+ok 93 - QuickOpen — ⌘P / Ctrl+P toggle (Req 9.1, source-level)
+  ---
+  duration_ms: 2.4555
+  type: 'suite'
+  ...
+# Subtest: QuickOpen — 20-Recents cap (Req 9.2, source-level)
+    # Subtest: declares MAX_RECENTS = 20 at module scope
+    ok 1 - declares MAX_RECENTS = 20 at module scope
+      ---
+      duration_ms: 0.488292
+      type: 'test'
+      ...
+    # Subtest: breaks out of the Recents loop when the 20-cap is reached
+    ok 2 - breaks out of the Recents loop when the 20-cap is reached
+      ---
+      duration_ms: 0.301208
+      type: 'test'
+      ...
+    # Subtest: filters Recents to files only and skips ids that no longer resolve
+    ok 3 - filters Recents to files only and skips ids that no longer resolve
+      ---
+      duration_ms: 0.235792
+      type: 'test'
+      ...
+    # Subtest: renders the empty-Recents indicator when Recents is empty
+    ok 4 - renders the empty-Recents indicator when Recents is empty
+      ---
+      duration_ms: 0.099375
+      type: 'test'
+      ...
+    1..4
+ok 94 - QuickOpen — 20-Recents cap (Req 9.2, source-level)
+  ---
+  duration_ms: 1.288209
+  type: 'suite'
+  ...
+# Subtest: QuickOpen — 50-result cap (Req 9.3, source-level)
+    # Subtest: declares MAX_RESULTS = 50 at module scope
+    ok 1 - declares MAX_RESULTS = 50 at module scope
+      ---
+      duration_ms: 0.196583
+      type: 'test'
+      ...
+    # Subtest: passes MAX_RESULTS into rankFuzzyResults
+    ok 2 - passes MAX_RESULTS into rankFuzzyResults
+      ---
+      duration_ms: 0.142042
+      type: 'test'
+      ...
+    # Subtest: declares a 200ms debounce for the fuzzy search (Req 9.3)
+    ok 3 - declares a 200ms debounce for the fuzzy search (Req 9.3)
+      ---
+      duration_ms: 0.1855
+      type: 'test'
+      ...
+    # Subtest: enforces the 256-char upper bound on the query (Req 9.3)
+    ok 4 - enforces the 256-char upper bound on the query (Req 9.3)
+      ---
+      duration_ms: 0.137792
+      type: 'test'
+      ...
+    # Subtest: renders the no-results indicator when the ranker returns []
+    ok 5 - renders the no-results indicator when the ranker returns []
+      ---
+      duration_ms: 0.165
+      type: 'test'
+      ...
+    1..5
+ok 95 - QuickOpen — 50-result cap (Req 9.3, source-level)
+  ---
+  duration_ms: 1.582417
+  type: 'suite'
+  ...
+# Subtest: QuickOpen — ArrowDown / ArrowUp wrap (Req 9.4, source-level)
+    # Subtest: ArrowDown wraps from last → first via `(i + 1) % results.length`
+    ok 1 - ArrowDown wraps from last → first via `(i + 1) % results.length`
+      ---
+      duration_ms: 0.156459
+      type: 'test'
+      ...
+    # Subtest: ArrowUp wraps from first → last via `(i - 1 + len) % len`
+    ok 2 - ArrowUp wraps from first → last via `(i - 1 + len) % len`
+      ---
+      duration_ms: 0.102375
+      type: 'test'
+      ...
+    # Subtest: scrolls the focused item into view via scrollIntoView({ block: 'nearest' })
+    ok 3 - scrolls the focused item into view via scrollIntoView({ block: 'nearest' })
+      ---
+      duration_ms: 0.064917
+      type: 'test'
+      ...
+    # Subtest: does nothing on ArrowDown / ArrowUp when the result list is empty
+    ok 4 - does nothing on ArrowDown / ArrowUp when the result list is empty
+      ---
+      duration_ms: 0.107583
+      type: 'test'
+      ...
+    1..4
+ok 96 - QuickOpen — ArrowDown / ArrowUp wrap (Req 9.4, source-level)
+  ---
+  duration_ms: 0.513417
+  type: 'suite'
+  ...
+# Subtest: QuickOpen — Enter + click → navigateTo + close (Req 9.5, source-level)
+    # Subtest: uses `useNavigateTo` as the single write path
+    ok 1 - uses `useNavigateTo` as the single write path
+      ---
+      duration_ms: 0.08725
+      type: 'test'
+      ...
+    # Subtest: Enter fires selectByIndex for the currently active row
+    ok 2 - Enter fires selectByIndex for the currently active row
+      ---
+      duration_ms: 0.068792
+      type: 'test'
+      ...
+    # Subtest: Click on a row fires selectByIndex for that row
+    ok 3 - Click on a row fires selectByIndex for that row
+      ---
+      duration_ms: 0.051625
+      type: 'test'
+      ...
+    # Subtest: after navigateTo, the dialog clears the query and closes
+    ok 4 - after navigateTo, the dialog clears the query and closes
+      ---
+      duration_ms: 0.183125
+      type: 'test'
+      ...
+    1..4
+ok 97 - QuickOpen — Enter + click → navigateTo + close (Req 9.5, source-level)
+  ---
+  duration_ms: 1.475375
+  type: 'suite'
+  ...
+# Subtest: QuickOpen — selected-node-gone error (Req 9.6, source-level)
+    # Subtest: re-reads the cache at commit time via useFilesWorkspaceStore.getState()
+    ok 1 - re-reads the cache at commit time via useFilesWorkspaceStore.getState()
+      ---
+      duration_ms: 0.1175
+      type: 'test'
+      ...
+    # Subtest: displays an inline `missingNodeError` when the fresh lookup fails
+    ok 2 - displays an inline `missingNodeError` when the fresh lookup fails
+      ---
+      duration_ms: 0.384041
+      type: 'test'
+      ...
+    # Subtest: does NOT call navigateTo when the fresh lookup fails (currentLocation unchanged)
+    ok 3 - does NOT call navigateTo when the fresh lookup fails (currentLocation unchanged)
+      ---
+      duration_ms: 0.091292
+      type: 'test'
+      ...
+    # Subtest: renders the error as a role='alert' element inside the dialog
+    ok 4 - renders the error as a role='alert' element inside the dialog
+      ---
+      duration_ms: 0.048625
+      type: 'test'
+      ...
+    # Subtest: does NOT close the dialog when the fresh lookup fails
+    ok 5 - does NOT close the dialog when the fresh lookup fails
+      ---
+      duration_ms: 0.115292
+      type: 'test'
+      ...
+    1..5
+ok 98 - QuickOpen — selected-node-gone error (Req 9.6, source-level)
+  ---
+  duration_ms: 0.843291
+  type: 'suite'
+  ...
+# Subtest: QuickOpen — Escape closes + discards input (Req 9.7, source-level)
+    # Subtest: Escape preventDefault + close() inside the input keydown handler
+    ok 1 - Escape preventDefault + close() inside the input keydown handler
+      ---
+      duration_ms: 0.079875
+      type: 'test'
+      ...
+    # Subtest: close() discards the input via onQueryChange('')
+    ok 2 - close() discards the input via onQueryChange('')
+      ---
+      duration_ms: 0.124625
+      type: 'test'
+      ...
+    # Subtest: close() does NOT call navigateTo — currentLocation is untouched
+    ok 3 - close() does NOT call navigateTo — currentLocation is untouched
+      ---
+      duration_ms: 0.079375
+      type: 'test'
+      ...
+    # Subtest: the backdrop click also routes through close() so discards match Escape
+    ok 4 - the backdrop click also routes through close() so discards match Escape
+      ---
+      duration_ms: 0.07125
+      type: 'test'
+      ...
+    1..4
+ok 99 - QuickOpen — Escape closes + discards input (Req 9.7, source-level)
+  ---
+  duration_ms: 0.401375
+  type: 'suite'
+  ...
+# [removal-audit] searchTool=git-grep targets=89 refs=426
+# [removal-audit] allowed-self=108 allowed-legacy=12 allowed-spec=244 likely-collision=56 unexpected=6
+# [removal-audit] report written to artifacts/files-tab-removal-audit.json
+# Subtest: removal-audit: catalogs references for every to-be-deleted module and store method
+ok 100 - removal-audit: catalogs references for every to-be-deleted module and store method
+  ---
+  duration_ms: 3067.179542
+  type: 'test'
+  ...
+# /Users/chrama/Downloads/nb-s3/src/lib/env.ts:97
+#         throw new Error(`Environment validation failed:\\n${missing}`)
+#               ^
+# Error: Environment validation failed:
+#   DATABASE_URL: Invalid input: expected string, received undefined
+#   NEXT_PUBLIC_SUPABASE_URL: Invalid input: expected string, received undefined
+#   NEXT_PUBLIC_SUPABASE_ANON_KEY: Invalid input: expected string, received undefined
+#   SUPABASE_SERVICE_ROLE_KEY: Invalid input: expected string, received undefined
+#     at validateEnv (/Users/chrama/Downloads/nb-s3/src/lib/env.ts:97:15)
+#     at getEnv (/Users/chrama/Downloads/nb-s3/src/lib/env.ts:107:18)
+#     at postgres (/Users/chrama/Downloads/nb-s3/src/lib/db/index.ts:7:13)
+#     at Object.<anonymous> (/Users/chrama/Downloads/nb-s3/src/lib/db/index.ts:99:23)
+#     at Module._compile (node:internal/modules/cjs/loader:1706:14)
+#     at Object.transformer (/Users/chrama/Downloads/nb-s3/node_modules/tsx/dist/register-D46fvsV_.cjs:3:1104)
+#     at Module.load (node:internal/modules/cjs/loader:1441:32)
+#     at Module._load (node:internal/modules/cjs/loader:1263:12)
+#     at TracingChannel.traceSync (node:diagnostics_channel:328:14)
+#     at wrapModuleLoad (node:internal/modules/cjs/loader:237:24)
+# Node.js v22.22.0
+# Subtest: tests/unit/files-tab/role-gate-viewer.test.ts
+not ok 19 - tests/unit/files-tab/role-gate-viewer.test.ts
+  ---
+  duration_ms: 819.255916
+  type: 'test'
+  location: '/Users/chrama/Downloads/nb-s3/tests/unit/files-tab/role-gate-viewer.test.ts:1:1'
+  failureType: 'testCodeFailure'
+  exitCode: 1
+  signal: ~
+  error: 'test failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# Subtest: sidebar search — empty query returns null so the caller skips filtering (Req 2.3)
+    # Subtest: returns null for a zero-length query
+    ok 1 - returns null for a zero-length query
+      ---
+      duration_ms: 0.505417
+      type: 'test'
+      ...
+    # Subtest: returns null for a whitespace-only query (tabs, spaces, newlines)
+    ok 2 - returns null for a whitespace-only query (tabs, spaces, newlines)
+      ---
+      duration_ms: 0.098875
+      type: 'test'
+      ...
+    # Subtest: returns null independently of the size of the nodesById cache
+    ok 3 - returns null independently of the size of the nodesById cache
+      ---
+      duration_ms: 0.443541
+      type: 'test'
+      ...
+    1..3
+ok 102 - sidebar search — empty query returns null so the caller skips filtering (Req 2.3)
+  ---
+  duration_ms: 1.5075
+  type: 'suite'
+  ...
+# Subtest: sidebar search — non-empty query filters with ancestor retention (Req 2.2)
+    # Subtest: retains the full deep ancestor chain for a match at depth 5
+    ok 1 - retains the full deep ancestor chain for a match at depth 5
+      ---
+      duration_ms: 0.8215
+      type: 'test'
+      ...
+    # Subtest: does NOT leak siblings of ancestor folders into the visible set
+    ok 2 - does NOT leak siblings of ancestor folders into the visible set
+      ---
+      duration_ms: 0.142625
+      type: 'test'
+      ...
+    # Subtest: handles a match at the root level — no ancestors to retain
+    ok 3 - handles a match at the root level — no ancestors to retain
+      ---
+      duration_ms: 0.053625
+      type: 'test'
+      ...
+    # Subtest: retains the entire subtree indirectly when the root folder name itself matches
+    ok 4 - retains the entire subtree indirectly when the root folder name itself matches
+      ---
+      duration_ms: 0.108334
+      type: 'test'
+      ...
+    # Subtest: trims leading and trailing whitespace in the query before matching
+    ok 5 - trims leading and trailing whitespace in the query before matching
+      ---
+      duration_ms: 0.225375
+      type: 'test'
+      ...
+    # Subtest: shares ancestors between multiple matches without double-counting
+    ok 6 - shares ancestors between multiple matches without double-counting
+      ---
+      duration_ms: 0.153375
+      type: 'test'
+      ...
+    1..6
+ok 103 - sidebar search — non-empty query filters with ancestor retention (Req 2.2)
+  ---
+  duration_ms: 1.784833
+  type: 'suite'
+  ...
+# Subtest: sidebar collapse toggle — `toggleSidebar(projectId)` flips `ui.sidebarCollapsed` (Req 2.4, 2.5)
+    # Subtest: flips `ui.sidebarCollapsed` on every toggle and always holds a boolean
+    ok 1 - flips `ui.sidebarCollapsed` on every toggle and always holds a boolean
+      ---
+      duration_ms: 0.833833
+      type: 'test'
+      ...
+    # Subtest: scopes the flip to one project and does not bleed into other workspaces
+    ok 2 - scopes the flip to one project and does not bleed into other workspaces
+      ---
+      duration_ms: 0.171792
+      type: 'test'
+      ...
+    # Subtest: creates a workspace entry for an unknown project on first toggle
+    ok 3 - creates a workspace entry for an unknown project on first toggle
+      ---
+      duration_ms: 0.09925
+      type: 'test'
+      ...
+    1..3
+ok 104 - sidebar collapse toggle — `toggleSidebar(projectId)` flips `ui.sidebarCollapsed` (Req 2.4, 2.5)
+  ---
+  duration_ms: 1.174208
+  type: 'suite'
+  ...
+# Subtest: sidebar width — expanded aside is always 280px (Req 2.6, 15.14)
+    # Subtest: exports `FILES_TAB_SIDEBAR_WIDTH_PX === 280`
+    ok 1 - exports `FILES_TAB_SIDEBAR_WIDTH_PX === 280`
+      ---
+      duration_ms: 0.331959
+      type: 'test'
+      ...
+    # Subtest: exposes the width as a `number` type so CSS-in-JS receives a pixel value
+    ok 2 - exposes the width as a `number` type so CSS-in-JS receives a pixel value
+      ---
+      duration_ms: 0.22325
+      type: 'test'
+      ...
+    1..2
+ok 105 - sidebar width — expanded aside is always 280px (Req 2.6, 15.14)
+  ---
+  duration_ms: 0.662083
+  type: 'suite'
+  ...
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# Subtest: FilesTabSidebar — fixed width constant (Req 2.6, Req 15.14)
+    # Subtest: exposes the 280px width as a named export so runtime + tests never drift
+    ok 1 - exposes the 280px width as a named export so runtime + tests never drift
+      ---
+      duration_ms: 0.880917
+      type: 'test'
+      ...
+    1..1
+ok 106 - FilesTabSidebar — fixed width constant (Req 2.6, Req 15.14)
+  ---
+  duration_ms: 1.674459
+  type: 'suite'
+  ...
+# Subtest: FilesTabSidebar / computeVisibleIdsForSearch — ancestor retention (Req 2.2)
+    # Subtest: returns null for an empty query so the caller skips filtering (Req 2.3)
+    ok 1 - returns null for an empty query so the caller skips filtering (Req 2.3)
+      ---
+      duration_ms: 0.241875
+      type: 'test'
+      ...
+    # Subtest: returns the matching node plus every ancestor in its parent chain
+    ok 2 - returns the matching node plus every ancestor in its parent chain
+      ---
+      duration_ms: 0.762292
+      type: 'test'
+      ...
+    # Subtest: matches multiple disjoint subtrees and unions their ancestor chains
+    ok 3 - matches multiple disjoint subtrees and unions their ancestor chains
+      ---
+      duration_ms: 0.150958
+      type: 'test'
+      ...
+    # Subtest: applies case-insensitive substring match (Req 2.2)
+    ok 4 - applies case-insensitive substring match (Req 2.2)
+      ---
+      duration_ms: 0.067
+      type: 'test'
+      ...
+    # Subtest: returns an empty set when the query matches nothing (no ancestors to retain)
+    ok 5 - returns an empty set when the query matches nothing (no ancestors to retain)
+      ---
+      duration_ms: 0.048167
+      type: 'test'
+      ...
+    # Subtest: does not loop forever on a malformed cyclic parentId graph (safety guard)
+    ok 6 - does not loop forever on a malformed cyclic parentId graph (safety guard)
+      ---
+      duration_ms: 0.089458
+      type: 'test'
+      ...
+    1..6
+ok 107 - FilesTabSidebar / computeVisibleIdsForSearch — ancestor retention (Req 2.2)
+  ---
+  duration_ms: 1.713334
+  type: 'suite'
+  ...
+# Subtest: FilesTabSidebar — collapse toggle store action (Req 2.4, 2.5)
+    # Subtest: `toggleSidebar` flips `ui.sidebarCollapsed` per project
+    ok 1 - `toggleSidebar` flips `ui.sidebarCollapsed` per project
+      ---
+      duration_ms: 0.6755
+      type: 'test'
+      ...
+    1..1
+ok 108 - FilesTabSidebar — collapse toggle store action (Req 2.4, 2.5)
+  ---
+  duration_ms: 0.79375
+  type: 'suite'
+  ...
+# Subtest: FilesTabSidebar — structural contracts (source-level)
+    # Subtest: renders a <input type="text"> for inline search (Req 2.2)
+    ok 1 - renders a <input type="text"> for inline search (Req 2.2)
+      ---
+      duration_ms: 0.155542
+      type: 'test'
+      ...
+    # Subtest: does NOT render a resize handle (Req 15.14)
+    ok 2 - does NOT render a resize handle (Req 15.14)
+      ---
+      duration_ms: 0.260125
+      type: 'test'
+      ...
+    # Subtest: does NOT render multi-select checkboxes (Q1 drop, Req 15.15)
+    ok 3 - does NOT render multi-select checkboxes (Q1 drop, Req 15.15)
+      ---
+      duration_ms: 0.122709
+      type: 'test'
+      ...
+    # Subtest: does NOT toggle any removed sidebar surfaces (Req 15.15–15.18)
+    ok 4 - does NOT toggle any removed sidebar surfaces (Req 15.15–15.18)
+      ---
+      duration_ms: 0.20275
+      type: 'test'
+      ...
+    # Subtest: wires the collapse toggle button to `toggleSidebar(projectId)`
+    ok 5 - wires the collapse toggle button to `toggleSidebar(projectId)`
+      ---
+      duration_ms: 0.040792
+      type: 'test'
+      ...
+    # Subtest: routes row clicks through `useNavigateTo` — the single write path
+    ok 6 - routes row clicks through `useNavigateTo` — the single write path
+      ---
+      duration_ms: 0.036833
+      type: 'test'
+      ...
+    # Subtest: declares the inline-search debounce at 200ms (Req 2.2 + design.md header row)
+    ok 7 - declares the inline-search debounce at 200ms (Req 2.2 + design.md header row)
+      ---
+      duration_ms: 0.037834
+      type: 'test'
+      ...
+    # Subtest: applies `width: 280` (via FILES_TAB_SIDEBAR_WIDTH_PX) when visible and `width: 0` when collapsed
+    ok 8 - applies `width: 280` (via FILES_TAB_SIDEBAR_WIDTH_PX) when visible and `width: 0` when collapsed
+      ---
+      duration_ms: 0.127375
+      type: 'test'
+      ...
+    1..8
+ok 109 - FilesTabSidebar — structural contracts (source-level)
+  ---
+  duration_ms: 1.0845
+  type: 'suite'
+  ...
+# (node:83883) ExperimentalWarning: The MockTimers API is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: Stage timeout — hung fetch exceeds 5s (Req 16.6)
+    # Subtest: auto-advances past a stage whose work never signals complete
+    ok 1 - auto-advances past a stage whose work never signals complete
+      ---
+      duration_ms: 1.588875
+      type: 'test'
+      ...
+    # Subtest: surfaces the warning via the injectable callback (non-blocking, no throw)
+    ok 2 - surfaces the warning via the injectable callback (non-blocking, no throw)
+      ---
+      duration_ms: 0.113834
+      type: 'test'
+      ...
+    # Subtest: the default warn surface calls console.warn (no override supplied)
+    ok 3 - the default warn surface calls console.warn (no override supplied)
+      ---
+      duration_ms: 0.170166
+      type: 'test'
+      ...
+    1..3
+ok 110 - Stage timeout — hung fetch exceeds 5s (Req 16.6)
+  ---
+  duration_ms: 2.417125
+  type: 'suite'
+  ...
+# Subtest: Stage timeout — prior-stage state is not reset (Req 16.6)
+    # Subtest: subscribers registered in 'explorer' keep receiving notifications after the timeout
+    ok 1 - subscribers registered in 'explorer' keep receiving notifications after the timeout
+      ---
+      duration_ms: 0.235334
+      type: 'test'
+      ...
+    # Subtest: stage transitions driven by timeout do not re-run subscribers from any reset listener set
+    ok 2 - stage transitions driven by timeout do not re-run subscribers from any reset listener set
+      ---
+      duration_ms: 0.224292
+      type: 'test'
+      ...
+    # Subtest: no new timer is scheduled once 'diagnostics' has been reached via timeout
+    ok 3 - no new timer is scheduled once 'diagnostics' has been reached via timeout
+      ---
+      duration_ms: 0.090708
+      type: 'test'
+      ...
+    1..3
+ok 111 - Stage timeout — prior-stage state is not reset (Req 16.6)
+  ---
+  duration_ms: 0.648875
+  type: 'suite'
+  ...
+# Subtest: Stage timeout — FilesTabRoot integration wiring
+    # Subtest: imports the hook from the colocated module path
+    ok 1 - imports the hook from the colocated module path
+      ---
+      duration_ms: 0.171125
+      type: 'test'
+      ...
+    # Subtest: invokes useFilesTabStartupStage(projectId) exactly once at runtime
+    ok 2 - invokes useFilesTabStartupStage(projectId) exactly once at runtime
+      ---
+      duration_ms: 0.119792
+      type: 'test'
+      ...
+    # Subtest: exposes the current stage on the root element for E2E assertions
+    ok 3 - exposes the current stage on the root element for E2E assertions
+      ---
+      duration_ms: 0.107542
+      type: 'test'
+      ...
+    1..3
+ok 112 - Stage timeout — FilesTabRoot integration wiring
+  ---
+  duration_ms: 0.710125
+  type: 'suite'
+  ...
+# (node:83952) ExperimentalWarning: The MockTimers API is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: StartupStageMachine
+    # Subtest: starts in the 'explorer' stage
+    ok 1 - starts in the 'explorer' stage
+      ---
+      duration_ms: 4.041792
+      type: 'test'
+      ...
+    # Subtest: advances 'explorer' → 'main' → 'diagnostics' when each stage is signalled complete
+    ok 2 - advances 'explorer' → 'main' → 'diagnostics' when each stage is signalled complete
+      ---
+      duration_ms: 0.796625
+      type: 'test'
+      ...
+    # Subtest: auto-advances when the 5s timeout elapses and emits a non-blocking warning
+    ok 3 - auto-advances when the 5s timeout elapses and emits a non-blocking warning
+      ---
+      duration_ms: 1.695292
+      type: 'test'
+      ...
+    # Subtest: does not emit a warning when a stage is signalled complete before its deadline
+    ok 4 - does not emit a warning when a stage is signalled complete before its deadline
+      ---
+      duration_ms: 0.101792
+      type: 'test'
+      ...
+    # Subtest: does not schedule a further timeout after reaching the terminal 'diagnostics' stage
+    ok 5 - does not schedule a further timeout after reaching the terminal 'diagnostics' stage
+      ---
+      duration_ms: 0.218875
+      type: 'test'
+      ...
+    # Subtest: preserves prior-stage subscribers across timeout-driven advancement
+    ok 6 - preserves prior-stage subscribers across timeout-driven advancement
+      ---
+      duration_ms: 0.145125
+      type: 'test'
+      ...
+    # Subtest: ignores a late signalStageComplete for a stage the machine has already left
+    ok 7 - ignores a late signalStageComplete for a stage the machine has already left
+      ---
+      duration_ms: 3.154583
+      type: 'test'
+      ...
+    # Subtest: dispose() is idempotent and halts pending timers
+    ok 8 - dispose() is idempotent and halts pending timers
+      ---
+      duration_ms: 0.213375
+      type: 'test'
+      ...
+    # Subtest: respects a custom timeoutMs override so tests can drive short windows
+    ok 9 - respects a custom timeoutMs override so tests can drive short windows
+      ---
+      duration_ms: 0.245375
+      type: 'test'
+      ...
+    1..9
+ok 113 - StartupStageMachine
+  ---
+  duration_ms: 11.85275
+  type: 'suite'
+  ...
+# Subtest: TaskLinkChip — interface contract
+    # Subtest: exports TaskLinkChipProps interface
+    ok 1 - exports TaskLinkChipProps interface
+      ---
+      duration_ms: 0.464916
+      type: 'test'
+      ...
+    # Subtest: accepts count prop of type number
+    ok 2 - accepts count prop of type number
+      ---
+      duration_ms: 0.085583
+      type: 'test'
+      ...
+    # Subtest: accepts onClick prop
+    ok 3 - accepts onClick prop
+      ---
+      duration_ms: 0.126916
+      type: 'test'
+      ...
+    # Subtest: accepts optional className prop
+    ok 4 - accepts optional className prop
+      ---
+      duration_ms: 0.057334
+      type: 'test'
+      ...
+    1..4
+ok 114 - TaskLinkChip — interface contract
+  ---
+  duration_ms: 1.17975
+  type: 'suite'
+  ...
+# Subtest: TaskLinkChip — zero-count guard (Req 7.2)
+    # Subtest: returns null when count < 1
+    ok 1 - returns null when count < 1
+      ---
+      duration_ms: 0.134666
+      type: 'test'
+      ...
+    1..1
+ok 115 - TaskLinkChip — zero-count guard (Req 7.2)
+  ---
+  duration_ms: 0.178125
+  type: 'suite'
+  ...
+# Subtest: TaskLinkChip — telemetry (Req 16.2)
+    # Subtest: emits files_tab.task_link_chip_clicked via logger.metric on click
+    ok 1 - emits files_tab.task_link_chip_clicked via logger.metric on click
+      ---
+      duration_ms: 0.163666
+      type: 'test'
+      ...
+    # Subtest: imports logger from @/lib/logger
+    ok 2 - imports logger from @/lib/logger
+      ---
+      duration_ms: 0.273083
+      type: 'test'
+      ...
+    1..2
+ok 116 - TaskLinkChip — telemetry (Req 16.2)
+  ---
+  duration_ms: 0.657291
+  type: 'suite'
+  ...
+# Subtest: TaskLinkChip — rendering (Req 7.1)
+    # Subtest: renders a button element for click interaction
+    ok 1 - renders a button element for click interaction
+      ---
+      duration_ms: 0.086875
+      type: 'test'
+      ...
+    # Subtest: renders the count value
+    ok 2 - renders the count value
+      ---
+      duration_ms: 0.094291
+      type: 'test'
+      ...
+    # Subtest: has a data-testid for testing
+    ok 3 - has a data-testid for testing
+      ---
+      duration_ms: 0.176
+      type: 'test'
+      ...
+    # Subtest: has a data-count attribute for testing
+    ok 4 - has a data-count attribute for testing
+      ---
+      duration_ms: 0.039083
+      type: 'test'
+      ...
+    # Subtest: has an accessible aria-label
+    ok 5 - has an accessible aria-label
+      ---
+      duration_ms: 0.031667
+      type: 'test'
+      ...
+    # Subtest: stops event propagation on click to prevent row navigation
+    ok 6 - stops event propagation on click to prevent row navigation
+      ---
+      duration_ms: 0.030917
+      type: 'test'
+      ...
+    # Subtest: uses cn utility for className merging
+    ok 7 - uses cn utility for className merging
+      ---
+      duration_ms: 0.07525
+      type: 'test'
+      ...
+    1..7
+ok 117 - TaskLinkChip — rendering (Req 7.1)
+  ---
+  duration_ms: 0.630541
+  type: 'suite'
+  ...
+# Subtest: TaskLinkChip — visual indicator
+    # Subtest: renders a link icon from lucide-react
+    ok 1 - renders a link icon from lucide-react
+      ---
+      duration_ms: 0.0395
+      type: 'test'
+      ...
+    # Subtest: imports from lucide-react
+    ok 2 - imports from lucide-react
+      ---
+      duration_ms: 0.22975
+      type: 'test'
+      ...
+    1..2
+ok 118 - TaskLinkChip — visual indicator
+  ---
+  duration_ms: 1.307
+  type: 'suite'
+  ...
+# Subtest: Telemetry — files_tab.picker_opened (Req 16.1)
+    # Subtest: V3AttachmentPicker emits files_tab.picker_opened via logger.metric
+    ok 1 - V3AttachmentPicker emits files_tab.picker_opened via logger.metric
+      ---
+      duration_ms: 0.495292
+      type: 'test'
+      ...
+    # Subtest: fires when isOpen becomes true (useEffect guard)
+    ok 2 - fires when isOpen becomes true (useEffect guard)
+      ---
+      duration_ms: 0.099083
+      type: 'test'
+      ...
+    # Subtest: includes projectId in the telemetry payload
+    ok 3 - includes projectId in the telemetry payload
+      ---
+      duration_ms: 0.068
+      type: 'test'
+      ...
+    1..3
+ok 119 - Telemetry — files_tab.picker_opened (Req 16.1)
+  ---
+  duration_ms: 1.149458
+  type: 'suite'
+  ...
+# Subtest: Telemetry — files_tab.task_link_chip_clicked (Req 16.2)
+    # Subtest: TaskLinkChip emits files_tab.task_link_chip_clicked via logger.metric
+    ok 1 - TaskLinkChip emits files_tab.task_link_chip_clicked via logger.metric
+      ---
+      duration_ms: 0.084292
+      type: 'test'
+      ...
+    # Subtest: includes count in the telemetry payload
+    ok 2 - includes count in the telemetry payload
+      ---
+      duration_ms: 0.045541
+      type: 'test'
+      ...
+    # Subtest: fires inside the click handler
+    ok 3 - fires inside the click handler
+      ---
+      duration_ms: 0.048583
+      type: 'test'
+      ...
+    1..3
+ok 120 - Telemetry — files_tab.task_link_chip_clicked (Req 16.2)
+  ---
+  duration_ms: 0.298167
+  type: 'suite'
+  ...
+# Subtest: Telemetry — files_tab.version_replaced (Req 16.3)
+    # Subtest: FileActionsBar emits files_tab.version_replaced with source: 'files_tab'
+    ok 1 - FileActionsBar emits files_tab.version_replaced with source: 'files_tab'
+      ---
+      duration_ms: 0.152792
+      type: 'test'
+      ...
+    # Subtest: TaskDetailPanel emits files_tab.version_replaced with source: 'task_panel'
+    ok 2 - TaskDetailPanel emits files_tab.version_replaced with source: 'task_panel'
+      ---
+      duration_ms: 0.070875
+      type: 'test'
+      ...
+    # Subtest: both sources include projectId and nodeId in the payload
+    ok 3 - both sources include projectId and nodeId in the payload
+      ---
+      duration_ms: 0.132292
+      type: 'test'
+      ...
+    1..3
+ok 121 - Telemetry — files_tab.version_replaced (Req 16.3)
+  ---
+  duration_ms: 0.662042
+  type: 'suite'
+  ...
+# Subtest: Telemetry — files_tab.version_restored (Req 16.4)
+    # Subtest: FileVersionHistoryPanel emits files_tab.version_restored via logger.metric
+    ok 1 - FileVersionHistoryPanel emits files_tab.version_restored via logger.metric
+      ---
+      duration_ms: 1.059584
+      type: 'test'
+      ...
+    # Subtest: includes projectId and nodeId in the telemetry payload
+    ok 2 - includes projectId and nodeId in the telemetry payload
+      ---
+      duration_ms: 0.233167
+      type: 'test'
+      ...
+    # Subtest: includes restoredFromVersion and newVersion in the payload
+    ok 3 - includes restoredFromVersion and newVersion in the payload
+      ---
+      duration_ms: 0.164958
+      type: 'test'
+      ...
+    # Subtest: fires only on successful restore (inside success branch)
+    ok 4 - fires only on successful restore (inside success branch)
+      ---
+      duration_ms: 0.182166
+      type: 'test'
+      ...
+    1..4
+ok 122 - Telemetry — files_tab.version_restored (Req 16.4)
+  ---
+  duration_ms: 1.801791
+  type: 'suite'
+  ...
+# Subtest: planUrlSync (Task 2.4 — Req 10.1, 10.4, 20.1)
+    # Subtest: emits a URL without `?path=` at all when encodedPath is empty (root state)
+    ok 1 - emits a URL without `?path=` at all when encodedPath is empty (root state)
+      ---
+      duration_ms: 4.577417
+      type: 'test'
+      ...
+    # Subtest: distinguishes 'no path key' from 'empty-value path key' — clearing writes no key
+    ok 2 - distinguishes 'no path key' from 'empty-value path key' — clearing writes no key
+      ---
+      duration_ms: 0.212958
+      type: 'test'
+      ...
+    # Subtest: writes `?path=src%2FApp.tsx` for a nested location
+    ok 3 - writes `?path=src%2FApp.tsx` for a nested location
+      ---
+      duration_ms: 0.143958
+      type: 'test'
+      ...
+    # Subtest: preserves unrelated query params verbatim, placing `path` last
+    ok 4 - preserves unrelated query params verbatim, placing `path` last
+      ---
+      duration_ms: 0.150125
+      type: 'test'
+      ...
+    # Subtest: preserves the URL hash
+    ok 5 - preserves the URL hash
+      ---
+      duration_ms: 2.069583
+      type: 'test'
+      ...
+    # Subtest: returns noop when the URL already matches the encoded path
+    ok 6 - returns noop when the URL already matches the encoded path
+      ---
+      duration_ms: 0.141916
+      type: 'test'
+      ...
+    # Subtest: returns noop at root state when the URL already has no path key
+    ok 7 - returns noop at root state when the URL already has no path key
+      ---
+      duration_ms: 0.098167
+      type: 'test'
+      ...
+    # Subtest: drops a stale `path` key when moving to root even if it appears in the middle of the query
+    ok 8 - drops a stale `path` key when moving to root even if it appears in the middle of the query
+      ---
+      duration_ms: 0.116667
+      type: 'test'
+      ...
+    1..8
+ok 123 - planUrlSync (Task 2.4 — Req 10.1, 10.4, 20.1)
+  ---
+  duration_ms: 8.757459
+  type: 'suite'
+  ...
+# Subtest: syncUrlToLocation (Task 2.4 — Req 10.4 ONLY replaceState)
+    # Subtest: calls history.replaceState and NEVER history.pushState
+    ok 1 - calls history.replaceState and NEVER history.pushState
+      ---
+      duration_ms: 0.230791
+      type: 'test'
+      ...
+    # Subtest: at root state, replaceState removes the `?path=` key entirely (ii)
+    ok 2 - at root state, replaceState removes the `?path=` key entirely (ii)
+      ---
+      duration_ms: 0.207625
+      type: 'test'
+      ...
+    # Subtest: noops when the URL already matches — no spurious replaceState
+    ok 3 - noops when the URL already matches — no spurious replaceState
+      ---
+      duration_ms: 0.056125
+      type: 'test'
+      ...
+    # Subtest: preserves the existing history.state object on replaceState
+    ok 4 - preserves the existing history.state object on replaceState
+      ---
+      duration_ms: 0.048833
+      type: 'test'
+      ...
+    1..4
+ok 124 - syncUrlToLocation (Task 2.4 — Req 10.4 ONLY replaceState)
+  ---
+  duration_ms: 0.64325
+  type: 'suite'
+  ...
+# Subtest: evaluateDeepLinkPath (Task 2.4 — Req 10.5)
+    # Subtest: returns 'none' for a null input (no `?path=` present)
+    ok 1 - returns 'none' for a null input (no `?path=` present)
+      ---
+      duration_ms: 0.149084
+      type: 'test'
+      ...
+    # Subtest: returns error/empty for the empty-value case `?path=`
+    ok 2 - returns error/empty for the empty-value case `?path=`
+      ---
+      duration_ms: 0.039666
+      type: 'test'
+      ...
+    # Subtest: returns error/empty when value is whitespace only
+    ok 3 - returns error/empty when value is whitespace only
+      ---
+      duration_ms: 0.034791
+      type: 'test'
+      ...
+    # Subtest: returns error/empty when value is only slashes
+    ok 4 - returns error/empty when value is only slashes
+      ---
+      duration_ms: 0.051458
+      type: 'test'
+      ...
+    # Subtest: returns error/overlength at exactly 4097 chars
+    ok 5 - returns error/overlength at exactly 4097 chars
+      ---
+      duration_ms: 0.041333
+      type: 'test'
+      ...
+    # Subtest: accepts exactly 4096 chars as the boundary
+    ok 6 - accepts exactly 4096 chars as the boundary
+      ---
+      duration_ms: 0.060583
+      type: 'test'
+      ...
+    # Subtest: returns resolvable for a normal segmented path
+    ok 7 - returns resolvable for a normal segmented path
+      ---
+      duration_ms: 0.03975
+      type: 'test'
+      ...
+    # Subtest: decodes percent-encoded segments
+    ok 8 - decodes percent-encoded segments
+      ---
+      duration_ms: 0.080458
+      type: 'test'
+      ...
+    1..8
+ok 125 - evaluateDeepLinkPath (Task 2.4 — Req 10.5)
+  ---
+  duration_ms: 0.584209
+  type: 'suite'
+  ...
+# Subtest: resolveDeepLinkFromSearch (Task 2.4 — Req 10.5, Req 20.4)
+    # Subtest: returns 'none' when no `?path=` param is present
+    ok 1 - returns 'none' when no `?path=` param is present
+      ---
+      duration_ms: 0.123792
+      type: 'test'
+      ...
+    # Subtest: returns 'empty' for an empty-value `?path=`
+    ok 2 - returns 'empty' for an empty-value `?path=`
+      ---
+      duration_ms: 0.050583
+      type: 'test'
+      ...
+    # Subtest: returns 'overlength' for a >4096-char deep link — (iii)
+    ok 3 - returns 'overlength' for a >4096-char deep link — (iii)
+      ---
+      duration_ms: 0.054
+      type: 'test'
+      ...
+    # Subtest: returns 'ok' with the resolved node id when findNodeByPathAny succeeds
+    ok 4 - returns 'ok' with the resolved node id when findNodeByPathAny succeeds
+      ---
+      duration_ms: 0.067583
+      type: 'test'
+      ...
+    # Subtest: returns 'not_found' when findNodeByPathAny returns null
+    ok 5 - returns 'not_found' when findNodeByPathAny returns null
+      ---
+      duration_ms: 0.064458
+      type: 'test'
+      ...
+    # Subtest: treats a thrown findNodeByPathAny (network/access error) as not_found
+    ok 6 - treats a thrown findNodeByPathAny (network/access error) as not_found
+      ---
+      duration_ms: 0.083542
+      type: 'test'
+      ...
+    1..6
+ok 126 - resolveDeepLinkFromSearch (Task 2.4 — Req 10.5, Req 20.4)
+  ---
+  duration_ms: 0.511625
+  type: 'suite'
+  ...
+# Subtest: handlePopState (Task 2.4 — Req 20.3)
+    # Subtest: re-reads the URL and dispatches navigateTo with the resolved id
+    ok 1 - re-reads the URL and dispatches navigateTo with the resolved id
+      ---
+      duration_ms: 0.199125
+      type: 'test'
+      ...
+    # Subtest: dispatches navigateTo(null) and onError for an overlength URL on back/forward
+    ok 2 - dispatches navigateTo(null) and onError for an overlength URL on back/forward
+      ---
+      duration_ms: 0.269334
+      type: 'test'
+      ...
+    # Subtest: dispatches navigateTo(null) (root) when URL has no `?path=`
+    ok 3 - dispatches navigateTo(null) (root) when URL has no `?path=`
+      ---
+      duration_ms: 0.062625
+      type: 'test'
+      ...
+    # Subtest: dispatches navigateTo(null) + onError for a deep link that no longer exists
+    ok 4 - dispatches navigateTo(null) + onError for a deep link that no longer exists
+      ---
+      duration_ms: 0.086917
+      type: 'test'
+      ...
+    1..4
+ok 127 - handlePopState (Task 2.4 — Req 20.3)
+  ---
+  duration_ms: 0.730834
+  type: 'suite'
+  ...
+# Subtest: useFolderContents / deriveFolderContents — status matrix (Req 4.1, 4.9, 4.10)
+    # Subtest: loading
+        # Subtest: returns loading when loaded === undefined
+        ok 1 - returns loading when loaded === undefined
+          ---
+          duration_ms: 3.351583
+          type: 'test'
+          ...
+        # Subtest: returns loading when loaded === false
+        ok 2 - returns loading when loaded === false
+          ---
+          duration_ms: 0.346292
+          type: 'test'
+          ...
+        # Subtest: returns loading even if cached children exist but loaded is false (refresh in flight)
+        ok 3 - returns loading even if cached children exist but loaded is false (refresh in flight)
+          ---
+          duration_ms: 0.200042
+          type: 'test'
+          ...
+        1..3
+    ok 1 - loading
+      ---
+      duration_ms: 6.709458
+      type: 'suite'
+      ...
+    # Subtest: ready
+        # Subtest: returns ready with an empty list when the folder is loaded but has no children (Req 1.4)
+        ok 1 - returns ready with an empty list when the folder is loaded but has no children (Req 1.4)
+          ---
+          duration_ms: 0.162875
+          type: 'test'
+          ...
+        # Subtest: returns ready with the child ProjectNodes in the given childIds order
+        ok 2 - returns ready with the child ProjectNodes in the given childIds order
+          ---
+          duration_ms: 0.121708
+          type: 'test'
+          ...
+        # Subtest: silently filters out child ids that are not present in nodesById
+        ok 3 - silently filters out child ids that are not present in nodesById
+          ---
+          duration_ms: 0.105
+          type: 'test'
+          ...
+        1..3
+    ok 2 - ready
+      ---
+      duration_ms: 0.533208
+      type: 'suite'
+      ...
+    # Subtest: error
+        # Subtest: returns error when hasError is true (Req 4.10)
+        ok 1 - returns error when hasError is true (Req 4.10)
+          ---
+          duration_ms: 0.213083
+          type: 'test'
+          ...
+        # Subtest: prioritizes error over loaded cached children so the Retry affordance is always reachable (Req 4.10)
+        ok 2 - prioritizes error over loaded cached children so the Retry affordance is always reachable (Req 4.10)
+          ---
+          duration_ms: 0.119042
+          type: 'test'
+          ...
+        # Subtest: prioritizes error over loading (error dominates the status lattice)
+        ok 3 - prioritizes error over loading (error dominates the status lattice)
+          ---
+          duration_ms: 0.094334
+          type: 'test'
+          ...
+        1..3
+    ok 3 - error
+      ---
+      duration_ms: 0.750083
+      type: 'suite'
+      ...
+    # Subtest: retry passthrough
+        # Subtest: exposes the retry callback verbatim on every status
+        ok 1 - exposes the retry callback verbatim on every status
+          ---
+          duration_ms: 0.099
+          type: 'test'
+          ...
+        1..1
+    ok 4 - retry passthrough
+      ---
+      duration_ms: 0.173042
+      type: 'suite'
+      ...
+    1..4
+ok 128 - useFolderContents / deriveFolderContents — status matrix (Req 4.1, 4.9, 4.10)
+  ---
+  duration_ms: 11.172
+  type: 'suite'
+  ...
+# Subtest: useFolderContents / runFolderLoad — retry side effect (Req 4.10)
+    # Subtest: invokes the loader with the given folderId in refresh mode
+    ok 1 - invokes the loader with the given folderId in refresh mode
+      ---
+      duration_ms: 0.239584
+      type: 'test'
+      ...
+    # Subtest: invokes the loader with null folderId for the project root
+    ok 2 - invokes the loader with null folderId for the project root
+      ---
+      duration_ms: 0.095375
+      type: 'test'
+      ...
+    # Subtest: fires onBeforeLoad exactly once, before the loader runs
+    ok 3 - fires onBeforeLoad exactly once, before the loader runs
+      ---
+      duration_ms: 0.066375
+      type: 'test'
+      ...
+    # Subtest: does not fire onError when the loader resolves
+    ok 4 - does not fire onError when the loader resolves
+      ---
+      duration_ms: 0.048791
+      type: 'test'
+      ...
+    # Subtest: fires onError when the loader rejects and the request is still current
+    ok 5 - fires onError when the loader rejects and the request is still current
+      ---
+      duration_ms: 0.072917
+      type: 'test'
+      ...
+    # Subtest: suppresses onError when the folder changed while the load was in flight (stale-request guard)
+    ok 6 - suppresses onError when the folder changed while the load was in flight (stale-request guard)
+      ---
+      duration_ms: 0.059041
+      type: 'test'
+      ...
+    # Subtest: retry restores ready after a transient failure: repeated calls use the fresh loader state
+    ok 7 - retry restores ready after a transient failure: repeated calls use the fresh loader state
+      ---
+      duration_ms: 0.091417
+      type: 'test'
+      ...
+    # Subtest: tolerates a null onBeforeLoad without throwing
+    ok 8 - tolerates a null onBeforeLoad without throwing
+      ---
+      duration_ms: 0.116708
+      type: 'test'
+      ...
+    1..8
+ok 129 - useFolderContents / runFolderLoad — retry side effect (Req 4.10)
+  ---
+  duration_ms: 0.887584
+  type: 'suite'
+  ...
+# Subtest: useTaskLinks — count consistency property (Req 2.9)
+    # Subtest: count equals tasks.length for an empty tasks array
+    ok 1 - count equals tasks.length for an empty tasks array
+      ---
+      duration_ms: 0.434542
+      type: 'test'
+      ...
+    # Subtest: count equals tasks.length for a single task
+    ok 2 - count equals tasks.length for a single task
+      ---
+      duration_ms: 0.907167
+      type: 'test'
+      ...
+    # Subtest: count equals tasks.length for multiple tasks
+    ok 3 - count equals tasks.length for multiple tasks
+      ---
+      duration_ms: 0.0835
+      type: 'test'
+      ...
+    # Subtest: count equals tasks.length for a large set of tasks
+    ok 4 - count equals tasks.length for a large set of tasks
+      ---
+      duration_ms: 0.190833
+      type: 'test'
+      ...
+    1..4
+ok 130 - useTaskLinks — count consistency property (Req 2.9)
+  ---
+  duration_ms: 2.082583
+  type: 'suite'
+  ...
+# Subtest: useTaskLinks — LinkedTask interface contract (Req 2.2)
+    # Subtest: LinkedTask contains all required fields
+    ok 1 - LinkedTask contains all required fields
+      ---
+      duration_ms: 0.077
+      type: 'test'
+      ...
+    # Subtest: LinkedTask supports null assignee and annotation
+    ok 2 - LinkedTask supports null assignee and annotation
+      ---
+      duration_ms: 0.043375
+      type: 'test'
+      ...
+    1..2
+ok 131 - useTaskLinks — LinkedTask interface contract (Req 2.2)
+  ---
+  duration_ms: 0.227917
+  type: 'suite'
+  ...
+# Subtest: useTaskLinks — return shape contract (Req 2.1–2.7)
+    # Subtest: simulated return object has all required fields
+    ok 1 - simulated return object has all required fields
+      ---
+      duration_ms: 0.157875
+      type: 'test'
+      ...
+    # Subtest: link returns success/error shape
+    ok 2 - link returns success/error shape
+      ---
+      duration_ms: 0.060083
+      type: 'test'
+      ...
+    # Subtest: unlink returns success/error shape
+    ok 3 - unlink returns success/error shape
+      ---
+      duration_ms: 0.087875
+      type: 'test'
+      ...
+    # Subtest: updateAnnotation returns success/error shape
+    ok 4 - updateAnnotation returns success/error shape
+      ---
+      duration_ms: 0.17125
+      type: 'test'
+      ...
+    1..4
+ok 132 - useTaskLinks — return shape contract (Req 2.1–2.7)
+  ---
+  duration_ms: 0.66
+  type: 'suite'
+  ...
+# Subtest: useCurrentLocation selector (Task 2.2)
+    # Subtest: returns null when the store has no workspace entry for the project (uninitialized)
+    ok 1 - returns null when the store has no workspace entry for the project (uninitialized)
+      ---
+      duration_ms: 0.442708
+      type: 'test'
+      ...
+    # Subtest: returns { type: 'root' } when currentLocationId is null
+    ok 2 - returns { type: 'root' } when currentLocationId is null
+      ---
+      duration_ms: 0.707709
+      type: 'test'
+      ...
+    # Subtest: returns { type: 'folder', id, node } when currentLocationId resolves to a folder
+    ok 3 - returns { type: 'folder', id, node } when currentLocationId resolves to a folder
+      ---
+      duration_ms: 0.090959
+      type: 'test'
+      ...
+    # Subtest: returns { type: 'file', id, node } when currentLocationId resolves to a file
+    ok 4 - returns { type: 'file', id, node } when currentLocationId resolves to a file
+      ---
+      duration_ms: 0.075709
+      type: 'test'
+      ...
+    # Subtest: falls back to { type: 'root' } when currentLocationId is set but the node is missing (transient race)
+    ok 5 - falls back to { type: 'root' } when currentLocationId is set but the node is missing (transient race)
+      ---
+      duration_ms: 0.049625
+      type: 'test'
+      ...
+    1..5
+ok 133 - useCurrentLocation selector (Task 2.2)
+  ---
+  duration_ms: 2.008334
+  type: 'suite'
+  ...
+# Subtest: parseLockConflictError (internal logic)
+    # Subtest: returns undefined for non-Error values
+    ok 1 - returns undefined for non-Error values
+      ---
+      duration_ms: 0.5
+      type: 'test'
+      ...
+    # Subtest: returns undefined for unrelated errors
+    ok 2 - returns undefined for unrelated errors
+      ---
+      duration_ms: 0.064042
+      type: 'test'
+      ...
+    # Subtest: detects plain-text lock conflict error
+    ok 3 - detects plain-text lock conflict error
+      ---
+      duration_ms: 0.564958
+      type: 'test'
+      ...
+    # Subtest: detects structured JSON lock conflict error
+    ok 4 - detects structured JSON lock conflict error
+      ---
+      duration_ms: 0.113333
+      type: 'test'
+      ...
+    # Subtest: handles structured JSON with missing fields gracefully
+    ok 5 - handles structured JSON with missing fields gracefully
+      ---
+      duration_ms: 0.056125
+      type: 'test'
+      ...
+    # Subtest: returns undefined for JSON that is not a lock_conflict
+    ok 6 - returns undefined for JSON that is not a lock_conflict
+      ---
+      duration_ms: 0.042
+      type: 'test'
+      ...
+    # Subtest: returns undefined for malformed JSON starting with {
+    ok 7 - returns undefined for malformed JSON starting with {
+      ---
+      duration_ms: 0.095292
+      type: 'test'
+      ...
+    1..7
+ok 134 - parseLockConflictError (internal logic)
+  ---
+  duration_ms: 1.947042
+  type: 'suite'
+  ...
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# Subtest: runNavigateTo — pure core (Task 2.3)
+    # Subtest: calls setCurrentLocation with (projectId, nodeId) for a file
+    ok 1 - calls setCurrentLocation with (projectId, nodeId) for a file
+      ---
+      duration_ms: 1.141417
+      type: 'test'
+      ...
+    # Subtest: calls setCurrentLocation with (projectId, null) when navigating to root and skips addRecent
+    ok 2 - calls setCurrentLocation with (projectId, null) when navigating to root and skips addRecent
+      ---
+      duration_ms: 0.110875
+      type: 'test'
+      ...
+    # Subtest: calls setCurrentLocation but NOT addRecent when nodeId resolves to a folder
+    ok 3 - calls setCurrentLocation but NOT addRecent when nodeId resolves to a folder
+      ---
+      duration_ms: 0.111042
+      type: 'test'
+      ...
+    # Subtest: calls setCurrentLocation but NOT addRecent when nodeId is unresolved (cache miss / invalid id)
+    ok 4 - calls setCurrentLocation but NOT addRecent when nodeId is unresolved (cache miss / invalid id)
+      ---
+      duration_ms: 0.049708
+      type: 'test'
+      ...
+    # Subtest: invokes setCurrentLocation BEFORE addRecent so a recents failure cannot block navigation
+    ok 5 - invokes setCurrentLocation BEFORE addRecent so a recents failure cannot block navigation
+      ---
+      duration_ms: 0.185667
+      type: 'test'
+      ...
+    1..5
+ok 135 - runNavigateTo — pure core (Task 2.3)
+  ---
+  duration_ms: 2.116416
+  type: 'suite'
+  ...
+# Subtest: useNavigateTo — React hook (Task 2.3)
+    # Subtest: integrates with the real store: setCurrentLocation and addRecent both fire for a file node
+    ok 1 - integrates with the real store: setCurrentLocation and addRecent both fire for a file node
+      ---
+      duration_ms: 36.14825
+      type: 'test'
+      ...
+    # Subtest: expands every ancestor of a deeply-nested file on navigate
+    ok 2 - expands every ancestor of a deeply-nested file on navigate
+      ---
+      duration_ms: 0.400209
+      type: 'test'
+      ...
+    # Subtest: does NOT record a recent when navigating to a folder
+    ok 3 - does NOT record a recent when navigating to a folder
+      ---
+      duration_ms: 1.212625
+      type: 'test'
+      ...
+    # Subtest: does NOT record a recent when navigating to the root (null)
+    ok 4 - does NOT record a recent when navigating to the root (null)
+      ---
+      duration_ms: 0.400084
+      type: 'test'
+      ...
+    # Subtest: returns a callback whose identity is stable across re-renders (callback stability)
+    ok 5 - returns a callback whose identity is stable across re-renders (callback stability)
+      ---
+      duration_ms: 2.83875
+      type: 'test'
+      ...
+    # Subtest: always reads the freshest nodesById at invocation time (not capture time)
+    ok 6 - always reads the freshest nodesById at invocation time (not capture time)
+      ---
+      duration_ms: 0.39575
+      type: 'test'
+      ...
+    1..6
+ok 136 - useNavigateTo — React hook (Task 2.3)
+  ---
+  duration_ms: 41.692125
+  type: 'suite'
+  ...
+# [v2-explorer-audit] ✓ All 14 V2 explorer modules have zero external callers.
+# [v2-explorer-audit] Scanned 944 source files outside the explorer directory.
+# [v2-explorer-audit] Verdict: SAFE TO DELETE — proceed with task 11.2.
+# [v2-explorer-audit] Report written to artifacts/v2-explorer-import-audit.json
+# Subtest: Task 11.1 — V2 Explorer Module Import-Graph Audit
+    # Subtest: should scan a non-trivial number of source files
+    ok 1 - should scan a non-trivial number of source files
+      ---
+      duration_ms: 0.545708
+      type: 'test'
+      ...
+    # Subtest: ExplorerShell — zero external import references
+    ok 2 - ExplorerShell — zero external import references
+      ---
+      duration_ms: 0.110458
+      type: 'test'
+      ...
+    # Subtest: FileExplorer — zero external import references
+    ok 3 - FileExplorer — zero external import references
+      ---
+      duration_ms: 0.031791
+      type: 'test'
+      ...
+    # Subtest: MultiFileDiffDialog — zero external import references
+    ok 4 - MultiFileDiffDialog — zero external import references
+      ---
+      duration_ms: 0.029917
+      type: 'test'
+      ...
+    # Subtest: MultiSelectActionsBar — zero external import references
+    ok 5 - MultiSelectActionsBar — zero external import references
+      ---
+      duration_ms: 0.026084
+      type: 'test'
+      ...
+    # Subtest: OutlinePanel — zero external import references
+    ok 6 - OutlinePanel — zero external import references
+      ---
+      duration_ms: 0.073208
+      type: 'test'
+      ...
+    # Subtest: SourceControlPanel — zero external import references
+    ok 7 - SourceControlPanel — zero external import references
+      ---
+      duration_ms: 0.025541
+      type: 'test'
+      ...
+    # Subtest: ExplorerCommandPalette — zero external import references
+    ok 8 - ExplorerCommandPalette — zero external import references
+      ---
+      duration_ms: 0.064208
+      type: 'test'
+      ...
+    # Subtest: ExplorerInsightsHost — zero external import references
+    ok 9 - ExplorerInsightsHost — zero external import references
+      ---
+      duration_ms: 0.078834
+      type: 'test'
+      ...
+    # Subtest: ExplorerOperationsHost — zero external import references
+    ok 10 - ExplorerOperationsHost — zero external import references
+      ---
+      duration_ms: 0.224458
+      type: 'test'
+      ...
+    # Subtest: ExplorerSearch — zero external import references
+    ok 11 - ExplorerSearch — zero external import references
+      ---
+      duration_ms: 0.0355
+      type: 'test'
+      ...
+    # Subtest: ExplorerToolbarHost — zero external import references
+    ok 12 - ExplorerToolbarHost — zero external import references
+      ---
+      duration_ms: 0.022292
+      type: 'test'
+      ...
+    # Subtest: ExplorerBatchOps — zero external import references
+    ok 13 - ExplorerBatchOps — zero external import references
+      ---
+      duration_ms: 0.019625
+      type: 'test'
+      ...
+    # Subtest: ExplorerQuickOpen — zero external import references
+    ok 14 - ExplorerQuickOpen — zero external import references
+      ---
+      duration_ms: 0.022
+      type: 'test'
+      ...
+    # Subtest: FileGridItem — zero external import references
+    ok 15 - FileGridItem — zero external import references
+      ---
+      duration_ms: 0.018792
+      type: 'test'
+      ...
+    # Subtest: overall verdict: all modules safe to delete
+    ok 16 - overall verdict: all modules safe to delete
+      ---
+      duration_ms: 0.489375
+      type: 'test'
+      ...
+    1..16
+ok 137 - Task 11.1 — V2 Explorer Module Import-Graph Audit
+  ---
+  duration_ms: 2.532125
+  type: 'suite'
+  ...
+# Subtest: V3AttachmentPicker — forbidden imports (Req 6.7)
+    # Subtest: does NOT import FileExplorer
+    ok 1 - does NOT import FileExplorer
+      ---
+      duration_ms: 1.036333
+      type: 'test'
+      ...
+    # Subtest: does NOT import ExplorerShell
+    ok 2 - does NOT import ExplorerShell
+      ---
+      duration_ms: 0.170542
+      type: 'test'
+      ...
+    1..2
+ok 138 - V3AttachmentPicker — forbidden imports (Req 6.7)
+  ---
+  duration_ms: 1.63975
+  type: 'suite'
+  ...
+# Subtest: V3AttachmentPicker — telemetry (Req 16.1)
+    # Subtest: emits files_tab.picker_opened via logger.metric on mount
+    ok 1 - emits files_tab.picker_opened via logger.metric on mount
+      ---
+      duration_ms: 0.132542
+      type: 'test'
+      ...
+    # Subtest: imports logger from @/lib/logger
+    ok 2 - imports logger from @/lib/logger
+      ---
+      duration_ms: 0.078459
+      type: 'test'
+      ...
+    1..2
+ok 139 - V3AttachmentPicker — telemetry (Req 16.1)
+  ---
+  duration_ms: 0.27825
+  type: 'suite'
+  ...
+# Subtest: V3AttachmentPicker — performance mark (Req 17.3)
+    # Subtest: records performance.mark('files-tab:picker-interactive')
+    ok 1 - records performance.mark('files-tab:picker-interactive')
+      ---
+      duration_ms: 0.800166
+      type: 'test'
+      ...
+    1..1
+ok 140 - V3AttachmentPicker — performance mark (Req 17.3)
+  ---
+  duration_ms: 0.894125
+  type: 'suite'
+  ...
+# Subtest: V3AttachmentPicker — navigate-only tree (Req 6.1)
+    # Subtest: does NOT import useExplorerMutations (no mutations in picker)
+    ok 1 - does NOT import useExplorerMutations (no mutations in picker)
+      ---
+      duration_ms: 0.712208
+      type: 'test'
+      ...
+    # Subtest: does NOT import useExplorerDragDrop (no drag-drop in picker)
+    ok 2 - does NOT import useExplorerDragDrop (no drag-drop in picker)
+      ---
+      duration_ms: 0.145792
+      type: 'test'
+      ...
+    1..2
+ok 141 - V3AttachmentPicker — navigate-only tree (Req 6.1)
+  ---
+  duration_ms: 1.164625
+  type: 'suite'
+  ...
+# Subtest: V3AttachmentPicker — right pane content (Req 6.2)
+    # Subtest: uses rankFuzzyResults for search results
+    ok 1 - uses rankFuzzyResults for search results
+      ---
+      duration_ms: 0.05325
+      type: 'test'
+      ...
+    # Subtest: reads recents from the store
+    ok 2 - reads recents from the store
+      ---
+      duration_ms: 0.118708
+      type: 'test'
+      ...
+    # Subtest: renders a search input for filtering
+    ok 3 - renders a search input for filtering
+      ---
+      duration_ms: 0.159041
+      type: 'test'
+      ...
+    1..3
+ok 142 - V3AttachmentPicker — right pane content (Req 6.2)
+  ---
+  duration_ms: 0.381959
+  type: 'suite'
+  ...
+# Subtest: V3AttachmentPicker — pinned tray (Req 6.3, 6.4)
+    # Subtest: renders a pinned tray container
+    ok 1 - renders a pinned tray container
+      ---
+      duration_ms: 0.058167
+      type: 'test'
+      ...
+    # Subtest: renders chips for selected nodes
+    ok 2 - renders chips for selected nodes
+      ---
+      duration_ms: 0.033458
+      type: 'test'
+      ...
+    # Subtest: renders a remove button on each chip
+    ok 3 - renders a remove button on each chip
+      ---
+      duration_ms: 0.0315
+      type: 'test'
+      ...
+    # Subtest: calls removeFromSelection when chip remove button is clicked
+    ok 4 - calls removeFromSelection when chip remove button is clicked
+      ---
+      duration_ms: 0.033959
+      type: 'test'
+      ...
+    1..4
+ok 143 - V3AttachmentPicker — pinned tray (Req 6.3, 6.4)
+  ---
+  duration_ms: 0.2025
+  type: 'suite'
+  ...
+# Subtest: V3AttachmentPicker — interface contract
+    # Subtest: exports V3AttachmentPickerProps interface
+    ok 1 - exports V3AttachmentPickerProps interface
+      ---
+      duration_ms: 0.054959
+      type: 'test'
+      ...
+    # Subtest: accepts projectId prop
+    ok 2 - accepts projectId prop
+      ---
+      duration_ms: 0.049917
+      type: 'test'
+      ...
+    # Subtest: accepts isOpen prop
+    ok 3 - accepts isOpen prop
+      ---
+      duration_ms: 0.042
+      type: 'test'
+      ...
+    # Subtest: accepts onClose prop
+    ok 4 - accepts onClose prop
+      ---
+      duration_ms: 0.049459
+      type: 'test'
+      ...
+    # Subtest: accepts initialSelection prop
+    ok 5 - accepts initialSelection prop
+      ---
+      duration_ms: 0.041792
+      type: 'test'
+      ...
+    # Subtest: accepts onSelectionChange prop
+    ok 6 - accepts onSelectionChange prop
+      ---
+      duration_ms: 0.120333
+      type: 'test'
+      ...
+    1..6
+ok 144 - V3AttachmentPicker — interface contract
+  ---
+  duration_ms: 0.413542
+  type: 'suite'
+  ...
+# Subtest: V3AttachmentPicker — tree filtering (Req 6.1)
+    # Subtest: uses computeVisibleIdsForSearch for tree filtering
+    ok 1 - uses computeVisibleIdsForSearch for tree filtering
+      ---
+      duration_ms: 0.036166
+      type: 'test'
+      ...
+    1..1
+ok 145 - V3AttachmentPicker — tree filtering (Req 6.1)
+  ---
+  duration_ms: 0.057875
+  type: 'suite'
+  ...
+# Subtest: files workspace store — currentLocationId (Task 1.4)
+    # Subtest: default state
+        # Subtest: initializes currentLocationId to null
+        ok 1 - initializes currentLocationId to null
+          ---
+          duration_ms: 0.392625
+          type: 'test'
+          ...
+        1..1
+    ok 1 - default state
+      ---
+      duration_ms: 0.7185
+      type: 'suite'
+      ...
+    # Subtest: setCurrentLocation
+        # Subtest: sets currentLocationId and bumps selectionVersion for a file deep in the tree
+        ok 1 - sets currentLocationId and bumps selectionVersion for a file deep in the tree
+          ---
+          duration_ms: 0.570041
+          type: 'test'
+          ...
+        # Subtest: expands every ancestor folder of the target node
+        ok 2 - expands every ancestor folder of the target node
+          ---
+          duration_ms: 0.117583
+          type: 'test'
+          ...
+        # Subtest: preserves already-expanded folders and existing expand entries for other folders
+        ok 3 - preserves already-expanded folders and existing expand entries for other folders
+          ---
+          duration_ms: 0.176958
+          type: 'test'
+          ...
+        # Subtest: does NOT modify selectedNodeId or selectedFolderId (Tasks tab coexistence — Req 21.7)
+        ok 4 - does NOT modify selectedNodeId or selectedFolderId (Tasks tab coexistence — Req 21.7)
+          ---
+          duration_ms: 0.836084
+          type: 'test'
+          ...
+        # Subtest: navigating to a folder expands that folder and its ancestors
+        ok 5 - navigating to a folder expands that folder and its ancestors
+          ---
+          duration_ms: 0.2385
+          type: 'test'
+          ...
+        # Subtest: null resets currentLocationId to root without touching expandedFolderIds
+        ok 6 - null resets currentLocationId to root without touching expandedFolderIds
+          ---
+          duration_ms: 0.142375
+          type: 'test'
+          ...
+        # Subtest: creates a fresh workspace entry when none exists
+        ok 7 - creates a fresh workspace entry when none exists
+          ---
+          duration_ms: 0.183125
+          type: 'test'
+          ...
+        # Subtest: tolerates an unknown nodeId without throwing or mutating expansions
+        ok 8 - tolerates an unknown nodeId without throwing or mutating expansions
+          ---
+          duration_ms: 0.136667
+          type: 'test'
+          ...
+        # Subtest: guards against cycles in the ancestor chain
+        ok 9 - guards against cycles in the ancestor chain
+          ---
+          duration_ms: 0.135833
+          type: 'test'
+          ...
+        1..9
+    ok 2 - setCurrentLocation
+      ---
+      duration_ms: 2.77675
+      type: 'suite'
+      ...
+    1..2
+ok 146 - files workspace store — currentLocationId (Task 1.4)
+  ---
+  duration_ms: 3.719958
+  type: 'suite'
+  ...
+# Subtest: files workspace store — persist migration v2 → v3 (Task 1.5)
+    # Subtest: uses `files-workspace-v3` as the persist key (v2 blob under v2 key is orphaned)
+    ok 1 - uses `files-workspace-v3` as the persist key (v2 blob under v2 key is orphaned)
+      ---
+      duration_ms: 16.952875
+      type: 'test'
+      ...
+    # Subtest: ignores a legacy v2 blob on mount — workspace entry is NOT seeded from v2
+    ok 2 - ignores a legacy v2 blob on mount — workspace entry is NOT seeded from v2
+      ---
+      duration_ms: 2.058167
+      type: 'test'
+      ...
+    # Subtest: falls back to fresh defaults when the v3 key is present but empty-ish
+    ok 3 - falls back to fresh defaults when the v3 key is present but empty-ish
+      ---
+      duration_ms: 3.390875
+      type: 'test'
+      ...
+    # Subtest: partialize only persists the eight allowed keys (no dropped key is readable)
+    ok 4 - partialize only persists the eight allowed keys (no dropped key is readable)
+      ---
+      duration_ms: 1.908375
+      type: 'test'
+      ...
+    # Subtest: currentLocationId round-trips through persist across a fresh rehydrate
+    ok 5 - currentLocationId round-trips through persist across a fresh rehydrate
+      ---
+      duration_ms: 2.365125
+      type: 'test'
+      ...
+    1..5
+ok 147 - files workspace store — persist migration v2 → v3 (Task 1.5)
+  ---
+  duration_ms: 27.379375
+  type: 'suite'
+  ...
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# [zustand persist middleware] Unable to update item 'files-workspace-v3', the given storage is currently unavailable.
+# Subtest: filesWorkspaceStore — Tasks tab public API lock (Task 8.4)
+    # Subtest: module exports
+        # Subtest: exports the store hook `useFilesWorkspaceStore`
+        ok 1 - exports the store hook `useFilesWorkspaceStore`
+          ---
+          duration_ms: 0.428375
+          type: 'test'
+          ...
+        # Subtest: exports the bundled action hook `useFilesActions`
+        ok 2 - exports the bundled action hook `useFilesActions`
+          ---
+          duration_ms: 0.104583
+          type: 'test'
+          ...
+        # Subtest: exports the per-project slice hook `useFilesProjectSlice`
+        ok 3 - exports the per-project slice hook `useFilesProjectSlice`
+          ---
+          duration_ms: 0.046625
+          type: 'test'
+          ...
+        # Subtest: exports the root-key helpers (`filesParentKey`, `FILES_ROOT_KEY`, `ROOT_KEY`, `parentKey`)
+        ok 4 - exports the root-key helpers (`filesParentKey`, `FILES_ROOT_KEY`, `ROOT_KEY`, `parentKey`)
+          ---
+          duration_ms: 0.081958
+          type: 'test'
+          ...
+        # Subtest: exports the `defaultWorkspace` factory and the frozen `FALLBACK_WORKSPACE`
+        ok 5 - exports the `defaultWorkspace` factory and the frozen `FALLBACK_WORKSPACE`
+          ---
+          duration_ms: 0.093167
+          type: 'test'
+          ...
+        1..5
+    ok 1 - module exports
+      ---
+      duration_ms: 1.154542
+      type: 'suite'
+      ...
+    # Subtest: top-level store state shape
+        # Subtest: exposes `byProjectId` as a plain object map
+        ok 1 - exposes `byProjectId` as a plain object map
+          ---
+          duration_ms: 0.1005
+          type: 'test'
+          ...
+        # Subtest: exposes `ensureProjectWorkspace` with arity 1
+        ok 2 - exposes `ensureProjectWorkspace` with arity 1
+          ---
+          duration_ms: 0.040375
+          type: 'test'
+          ...
+        # Subtest: exposes `_get` with arity 1 and it returns a workspace
+        ok 3 - exposes `_get` with arity 1 and it returns a workspace
+          ---
+          duration_ms: 0.216208
+          type: 'test'
+          ...
+        1..3
+    ok 2 - top-level store state shape
+      ---
+      duration_ms: 0.484125
+      type: 'suite'
+      ...
+    # Subtest: cache actions (design § Audit Note — must preserve public API)
+        # Subtest: exposes `upsertNodes` as a function
+        ok 1 - exposes `upsertNodes` as a function
+          ---
+          duration_ms: 0.147375
+          type: 'test'
+          ...
+        # Subtest: exposes `setChildren` as a function
+        ok 2 - exposes `setChildren` as a function
+          ---
+          duration_ms: 0.140834
+          type: 'test'
+          ...
+        # Subtest: exposes `setFolderPayload` as a function
+        ok 3 - exposes `setFolderPayload` as a function
+          ---
+          duration_ms: 0.034125
+          type: 'test'
+          ...
+        # Subtest: exposes `setNodesAndChildren` as a function
+        ok 4 - exposes `setNodesAndChildren` as a function
+          ---
+          duration_ms: 0.037167
+          type: 'test'
+          ...
+        # Subtest: exposes `markChildrenLoaded` as a function
+        ok 5 - exposes `markChildrenLoaded` as a function
+          ---
+          duration_ms: 0.024292
+          type: 'test'
+          ...
+        # Subtest: exposes `setFolderMeta` as a function
+        ok 6 - exposes `setFolderMeta` as a function
+          ---
+          duration_ms: 0.023333
+          type: 'test'
+          ...
+        # Subtest: exposes `removeNodeFromCaches` as a function
+        ok 7 - exposes `removeNodeFromCaches` as a function
+          ---
+          duration_ms: 0.022833
+          type: 'test'
+          ...
+        # Subtest: exposes `setTaskLinkCounts` as a function
+        ok 8 - exposes `setTaskLinkCounts` as a function
+          ---
+          duration_ms: 0.024042
+          type: 'test'
+          ...
+        # Subtest: exposes `setNodes` as a function
+        ok 9 - exposes `setNodes` as a function
+          ---
+          duration_ms: 0.022416
+          type: 'test'
+          ...
+        # Subtest: exposes `hydrateFromIdb` as a function
+        ok 10 - exposes `hydrateFromIdb` as a function
+          ---
+          duration_ms: 0.023208
+          type: 'test'
+          ...
+        # Subtest: `upsertNodes(projectId, nodes)` populates `nodesById` (signature + behaviour lock)
+        ok 11 - `upsertNodes(projectId, nodes)` populates `nodesById` (signature + behaviour lock)
+          ---
+          duration_ms: 1.967416
+          type: 'test'
+          ...
+        # Subtest: `setChildren(projectId, parentId, childIds)` keys root children by `ROOT_KEY`
+        ok 12 - `setChildren(projectId, parentId, childIds)` keys root children by `ROOT_KEY`
+          ---
+          duration_ms: 0.9785
+          type: 'test'
+          ...
+        # Subtest: `markChildrenLoaded(projectId, parentId)` toggles `loadedChildren`
+        ok 13 - `markChildrenLoaded(projectId, parentId)` toggles `loadedChildren`
+          ---
+          duration_ms: 0.17575
+          type: 'test'
+          ...
+        # Subtest: `setFolderMeta(projectId, folderId, meta)` writes into `folderMeta`
+        ok 14 - `setFolderMeta(projectId, folderId, meta)` writes into `folderMeta`
+          ---
+          duration_ms: 0.321459
+          type: 'test'
+          ...
+        # Subtest: `setTaskLinkCounts(projectId, counts)` replaces the `taskLinkCounts` map
+        ok 15 - `setTaskLinkCounts(projectId, counts)` replaces the `taskLinkCounts` map
+          ---
+          duration_ms: 0.118417
+          type: 'test'
+          ...
+        # Subtest: `removeNodeFromCaches(projectId, nodeId)` drops the id from `nodesById`
+        ok 16 - `removeNodeFromCaches(projectId, nodeId)` drops the id from `nodesById`
+          ---
+          duration_ms: 0.240833
+          type: 'test'
+          ...
+        1..16
+    ok 3 - cache actions (design § Audit Note — must preserve public API)
+      ---
+      duration_ms: 4.52375
+      type: 'suite'
+      ...
+    # Subtest: explorer actions (design § Audit Note — must preserve public API)
+        # Subtest: exposes `toggleExpanded` as a function
+        ok 1 - exposes `toggleExpanded` as a function
+          ---
+          duration_ms: 0.097792
+          type: 'test'
+          ...
+        # Subtest: exposes `setExplorerMode` as a function
+        ok 2 - exposes `setExplorerMode` as a function
+          ---
+          duration_ms: 0.023333
+          type: 'test'
+          ...
+        # Subtest: exposes `setViewMode` as a function
+        ok 3 - exposes `setViewMode` as a function
+          ---
+          duration_ms: 0.022709
+          type: 'test'
+          ...
+        # Subtest: exposes `setSelectedNode` as a function
+        ok 4 - exposes `setSelectedNode` as a function
+          ---
+          duration_ms: 0.02275
+          type: 'test'
+          ...
+        # Subtest: exposes `setSelectedNodeIds` as a function
+        ok 5 - exposes `setSelectedNodeIds` as a function
+          ---
+          duration_ms: 0.022333
+          type: 'test'
+          ...
+        # Subtest: exposes `setSearchQuery` as a function
+        ok 6 - exposes `setSearchQuery` as a function
+          ---
+          duration_ms: 0.025125
+          type: 'test'
+          ...
+        # Subtest: exposes `setSort` as a function
+        ok 7 - exposes `setSort` as a function
+          ---
+          duration_ms: 0.020459
+          type: 'test'
+          ...
+        # Subtest: exposes `setFoldersFirst` as a function
+        ok 8 - exposes `setFoldersFirst` as a function
+          ---
+          duration_ms: 0.020958
+          type: 'test'
+          ...
+        # Subtest: exposes `addRecent` as a function
+        ok 9 - exposes `addRecent` as a function
+          ---
+          duration_ms: 0.02275
+          type: 'test'
+          ...
+        # Subtest: exposes `toggleFavorite` as a function
+        ok 10 - exposes `toggleFavorite` as a function
+          ---
+          duration_ms: 0.024542
+          type: 'test'
+          ...
+        # Subtest: `toggleExpanded(projectId, folderId, expanded?)` writes into `expandedFolderIds`
+        ok 11 - `toggleExpanded(projectId, folderId, expanded?)` writes into `expandedFolderIds`
+          ---
+          duration_ms: 0.135708
+          type: 'test'
+          ...
+        # Subtest: `addRecent(projectId, nodeId)` pushes into `recents` (LRU)
+        ok 12 - `addRecent(projectId, nodeId)` pushes into `recents` (LRU)
+          ---
+          duration_ms: 0.081375
+          type: 'test'
+          ...
+        # Subtest: `toggleFavorite(projectId, nodeId)` flips `favorites[nodeId]`
+        ok 13 - `toggleFavorite(projectId, nodeId)` flips `favorites[nodeId]`
+          ---
+          duration_ms: 0.076292
+          type: 'test'
+          ...
+        # Subtest: `setSelectedNode(projectId, nodeId, parentId?)` updates `selectedNodeId`
+        ok 14 - `setSelectedNode(projectId, nodeId, parentId?)` updates `selectedNodeId`
+          ---
+          duration_ms: 0.078792
+          type: 'test'
+          ...
+        # Subtest: `setSelectedNodeIds(projectId, nodeIds)` replaces `selectedNodeIds`
+        ok 15 - `setSelectedNodeIds(projectId, nodeIds)` replaces `selectedNodeIds`
+          ---
+          duration_ms: 0.090292
+          type: 'test'
+          ...
+        # Subtest: `setSort(projectId, sort)` and `setFoldersFirst(projectId, value)` persist the preference
+        ok 16 - `setSort(projectId, sort)` and `setFoldersFirst(projectId, value)` persist the preference
+          ---
+          duration_ms: 0.103167
+          type: 'test'
+          ...
+        1..16
+    ok 4 - explorer actions (design § Audit Note — must preserve public API)
+      ---
+      duration_ms: 1.093
+      type: 'suite'
+      ...
+    # Subtest: per-project state keys (design § Audit Note — must preserve public API)
+        # Subtest: `defaultWorkspace()` and `FALLBACK_WORKSPACE` expose every audited state key
+        ok 1 - `defaultWorkspace()` and `FALLBACK_WORKSPACE` expose every audited state key
+          ---
+          duration_ms: 0.073125
+          type: 'test'
+          ...
+        # Subtest: fresh project workspace exposes every audited state key with the expected type
+        ok 2 - fresh project workspace exposes every audited state key with the expected type
+          ---
+          duration_ms: 0.095458
+          type: 'test'
+          ...
+        1..2
+    ok 5 - per-project state keys (design § Audit Note — must preserve public API)
+      ---
+      duration_ms: 0.217083
+      type: 'suite'
+      ...
+    # Subtest: selector hooks exposed for Tasks tab consumers
+        # Subtest: `useFilesActions` selector bundle exposes the Tasks-tab-critical actions
+        ok 1 - `useFilesActions` selector bundle exposes the Tasks-tab-critical actions
+          ---
+          duration_ms: 0.047625
+          type: 'test'
+          ...
+        1..1
+    ok 6 - selector hooks exposed for Tasks tab consumers
+      ---
+      duration_ms: 0.072333
+      type: 'suite'
+      ...
+    1..6
+ok 148 - filesWorkspaceStore — Tasks tab public API lock (Task 8.4)
+  ---
+  duration_ms: 7.948
+  type: 'suite'
+  ...
+1..148
+# tests 525
+# suites 108
+# pass 523
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 5079.561417
