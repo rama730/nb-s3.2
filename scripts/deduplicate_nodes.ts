@@ -1,0 +1,159 @@
+import { config } from "dotenv";
+config({ path: ".env.local" });
+import postgres from "postgres";
+
+async function deduplicate() {
+    const connectionString = process.env.DATABASE_URL;
+    if (!connectionString) {
+        console.error("DATABASE_URL not found");
+        process.exit(1);
+    }
+    const sql = postgres(connectionString, { max: 1 });
+
+    try {
+        console.log("Starting database deduplication for project_nodes (Bulk Execution Mode)...");
+
+        await sql.begin(async (tx: any) => {
+            // 1. Create temporary table of nodes to keep (rn = 1)
+            console.log("Step 1: Identifying nodes to keep...");
+            await tx`
+                CREATE TEMP TABLE nodes_to_keep AS
+                WITH RankedNodes AS (
+                    SELECT id, project_id, path, COALESCE(task_id, '00000000-0000-0000-0000-000000000000'::uuid) as task_id,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY project_id, path, COALESCE(task_id, '00000000-0000-0000-0000-000000000000'::uuid)
+                               ORDER BY updated_at DESC, created_at DESC
+                           ) as rn
+                    FROM project_nodes
+                    WHERE deleted_at IS NULL
+                )
+                SELECT id, project_id, path, task_id
+                FROM RankedNodes
+                WHERE rn = 1;
+            `;
+
+            // 2. Create temporary table of nodes to discard (rn > 1)
+            console.log("Step 2: Identifying duplicate nodes to discard...");
+            await tx`
+                CREATE TEMP TABLE nodes_to_discard AS
+                WITH RankedNodes AS (
+                    SELECT id, project_id, path, COALESCE(task_id, '00000000-0000-0000-0000-000000000000'::uuid) as task_id,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY project_id, path, COALESCE(task_id, '00000000-0000-0000-0000-000000000000'::uuid)
+                               ORDER BY updated_at DESC, created_at DESC
+                           ) as rn
+                    FROM project_nodes
+                    WHERE deleted_at IS NULL
+                )
+                SELECT id, project_id, path, task_id
+                FROM RankedNodes
+                WHERE rn > 1;
+            `;
+
+            const discardCountResult = await tx`SELECT COUNT(*) FROM nodes_to_discard;`;
+            const count = discardCountResult[0]?.count ?? "0";
+            console.log(`Found ${count} duplicate nodes to discard.`);
+
+            if (parseInt(count, 10) > 0) {
+                // 3. Delete file_versions of discarded nodes
+                console.log("Step 3: Deleting duplicate file_versions...");
+                await tx`
+                    DELETE FROM file_versions 
+                    WHERE node_id IN (SELECT id FROM nodes_to_discard);
+                `;
+
+                // 4. Delete locks of discarded nodes
+                console.log("Step 4: Deleting locks of duplicate nodes...");
+                await tx`
+                    DELETE FROM project_node_locks 
+                    WHERE node_id IN (SELECT id FROM nodes_to_discard);
+                `;
+
+                // 5. Update events to point to kept nodes
+                console.log("Step 5: Remapping project_node_events to kept nodes...");
+                await tx`
+                    UPDATE project_node_events pne
+                    SET node_id = k.id
+                    FROM nodes_to_discard d
+                    JOIN nodes_to_keep k ON k.project_id = d.project_id AND k.path = d.path AND k.task_id = d.task_id
+                    WHERE pne.node_id = d.id;
+                `;
+
+                // 6. Update task_node_links to point to kept nodes
+                console.log("Step 6: Remapping task_node_links to kept nodes...");
+                await tx`
+                    UPDATE task_node_links tnl
+                    SET node_id = k.id
+                    FROM nodes_to_discard d
+                    JOIN nodes_to_keep k ON k.project_id = d.project_id AND k.path = d.path AND k.task_id = d.task_id
+                    WHERE tnl.node_id = d.id;
+                `;
+
+                // 7. Update project_git_deltas to point to kept nodes
+                console.log("Step 7: Remapping project_git_deltas to kept nodes...");
+                await tx`
+                    UPDATE project_git_deltas pgd
+                    SET node_id = k.id
+                    FROM nodes_to_discard d
+                    JOIN nodes_to_keep k ON k.project_id = d.project_id AND k.path = d.path AND k.task_id = d.task_id
+                    WHERE pgd.node_id = d.id;
+                `;
+
+                // 8. Delete project_file_index of discarded nodes
+                console.log("Step 8: Deleting duplicate project_file_index entries...");
+                await tx`
+                    DELETE FROM project_file_index 
+                    WHERE node_id IN (SELECT id FROM nodes_to_discard);
+                `;
+
+                // 9. Delete duplicate project_nodes
+                console.log("Step 9: Deleting duplicate project_nodes...");
+                await tx`
+                    DELETE FROM project_nodes 
+                    WHERE id IN (SELECT id FROM nodes_to_discard);
+                `;
+            }
+
+            // Clean up temp tables
+            await tx`DROP TABLE nodes_to_keep;`;
+            await tx`DROP TABLE nodes_to_discard;`;
+        });
+
+        // 10. Drop existing indexes if they exist to avoid conflicts when creating new ones
+        console.log("Step 10: Recreating unique indexes...");
+        await sql`DROP INDEX IF EXISTS project_nodes_active_parent_name_uidx;`;
+        await sql`DROP INDEX IF EXISTS project_nodes_active_project_path_uidx;`;
+        await sql`DROP INDEX IF EXISTS project_nodes_active_parent_name_uidx_new;`;
+        await sql`DROP INDEX IF EXISTS project_nodes_active_project_path_uidx_new;`;
+
+        // 11. Create the new unique indexes
+        console.log("Creating unique index: project_nodes_active_parent_name_uidx...");
+        await sql`
+            CREATE UNIQUE INDEX project_nodes_active_parent_name_uidx 
+            ON project_nodes (
+              project_id, 
+              COALESCE(parent_id, '00000000-0000-0000-0000-000000000000'::uuid), 
+              LOWER(name), 
+              COALESCE(task_id, '00000000-0000-0000-0000-000000000000'::uuid)
+            ) WHERE deleted_at IS NULL;
+        `;
+
+        console.log("Creating unique index: project_nodes_active_project_path_uidx...");
+        await sql`
+            CREATE UNIQUE INDEX project_nodes_active_project_path_uidx 
+            ON project_nodes (
+              project_id, 
+              path, 
+              COALESCE(task_id, '00000000-0000-0000-0000-000000000000'::uuid)
+            ) WHERE deleted_at IS NULL;
+        `;
+
+        console.log("✅ Bulk deduplication and index building finished successfully.");
+    } catch (e: any) {
+        console.error("❌ Bulk deduplication failed:", e.message);
+    } finally {
+        await sql.end();
+    }
+}
+
+deduplicate();
