@@ -10,11 +10,13 @@ function assertIncludes(source: string, pattern: RegExp, message: string, errors
 function main() {
   const root = process.cwd();
   const middlewarePath = path.join(root, "middleware.ts");
+  const nextConfigPath = path.join(root, "next.config.ts");
   const layoutPath = path.join(root, "src/app/layout.tsx");
   const providerPath = path.join(root, "src/components/providers/SecurityRuntimeProvider.tsx");
   const turnstilePath = path.join(root, "src/components/auth/TurnstileWidget.tsx");
 
   const middlewareSource = fs.readFileSync(middlewarePath, "utf8");
+  const nextConfigSource = fs.readFileSync(nextConfigPath, "utf8");
   const layoutSource = fs.readFileSync(layoutPath, "utf8");
   const providerSource = fs.readFileSync(providerPath, "utf8");
   const turnstileSource = fs.readFileSync(turnstilePath, "utf8");
@@ -22,6 +24,12 @@ function main() {
   const errors: string[] = [];
 
   assertIncludes(middlewareSource, /Content-Security-Policy/, "middleware.ts must set Content-Security-Policy", errors);
+  if (/Content-Security-Policy/.test(nextConfigSource)) {
+    errors.push("next.config.ts must not define a second Content-Security-Policy; middleware.ts is the single owner");
+  }
+  if (/script-src[^\n]*unsafe-inline/.test(middlewareSource)) {
+    errors.push("middleware script-src must not allow unsafe-inline");
+  }
   assertIncludes(middlewareSource, /x-nonce/, "middleware.ts must forward a nonce header", errors);
   assertIncludes(middlewareSource, /CSRF_COOKIE_NAME/, "middleware.ts must issue the CSRF cookie", errors);
   assertIncludes(layoutSource, /headers\(\)/, "src/app/layout.tsx must read the CSP nonce from request headers", errors);
