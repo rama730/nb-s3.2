@@ -26,6 +26,7 @@ type NodeInit = {
   name: string;
   parentId: string | null;
   type?: "folder" | "file";
+  path?: string;
 };
 
 /** Builds a minimal ProjectNode that satisfies the fields the helpers read. */
@@ -34,7 +35,7 @@ function node(init: NodeInit): ProjectNode {
     id: init.id,
     projectId: "proj-1",
     parentId: init.parentId,
-    path: "/",
+    path: init.path ?? "/",
     type: init.type ?? "folder",
     name: init.name,
     s3Key: null,
@@ -151,6 +152,19 @@ test("encodePath: URI-encodes a reserved `?` character in a filename", () => {
     { id: "q", name: "question?.txt", parentId: null, type: "file" },
   ]);
   assert.equal(encodePath(tree, "q"), encodeURIComponent("question?.txt"));
+});
+
+test("encodePath: falls back to materialized path when ancestors are not cached", () => {
+  const tree = buildTree([
+    {
+      id: "security",
+      name: "SECURITY.md",
+      parentId: "docs",
+      type: "file",
+      path: "/docs/security/SECURITY.md",
+    },
+  ]);
+  assert.equal(encodePath(tree, "security"), "docs/security/SECURITY.md");
 });
 
 // ---------------------------------------------------------------------------
