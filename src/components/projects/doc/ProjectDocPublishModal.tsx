@@ -7,11 +7,11 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Loader2, Users, FileStack, RefreshCw } from "lucide-react";
-import { getReadmeDraftContributorsAction } from "@/app/actions/project/readme";
+import { getDocDraftContributorsAction } from "@/app/actions/project/doc";
 import { UserAvatar } from "@/components/ui/UserAvatar";
 import { StackedAvatars } from "@/components/ui/StackedAvatars";
 
-export interface ProjectReadmePublishModalProps {
+export interface ProjectDocPublishModalProps {
     projectId: string;
     open: boolean;
     onOpenChange: (open: boolean) => void;
@@ -20,7 +20,7 @@ export interface ProjectReadmePublishModalProps {
     "data-readme-publish-readiness-gate"?: string;
 }
 
-export function ProjectReadmePublishModal({ projectId, open, onOpenChange, onPublish, isPublishing, ...rest }: ProjectReadmePublishModalProps) {
+export function ProjectDocPublishModal({ projectId, open, onOpenChange, onPublish, isPublishing, ...rest }: ProjectDocPublishModalProps) {
     const [changeSummary, setChangeSummary] = useState("");
     const [syncToFilesTab, setSyncToFilesTab] = useState(true);
     const [contributors, setContributors] = useState<{ id: string; name: string; avatarUrl: string | null }[]>([]);
@@ -29,7 +29,7 @@ export function ProjectReadmePublishModal({ projectId, open, onOpenChange, onPub
     useEffect(() => {
         if (open) {
             setLoadingContributors(true);
-            getReadmeDraftContributorsAction(projectId).then(res => {
+            getDocDraftContributorsAction(projectId).then(res => {
                 if (res.success && res.contributors) {
                     setContributors(res.contributors);
                 }
@@ -55,7 +55,7 @@ export function ProjectReadmePublishModal({ projectId, open, onOpenChange, onPub
                 <div className="p-6">
                     <DialogHeader className="mb-6">
                         <DialogTitle className="text-xl font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">
-                            Publish README
+                            Publish Document
                         </DialogTitle>
                         <DialogDescription className="text-sm text-zinc-500 dark:text-zinc-400 mt-2">
                             Make your draft changes live to the rest of the team.
@@ -133,7 +133,7 @@ export function ProjectReadmePublishModal({ projectId, open, onOpenChange, onPub
                                     </span>
                                 </div>
                                 <p className="text-xs text-zinc-500 dark:text-zinc-400 leading-snug">
-                                    Automatically creates or updates <code>README.md</code> in your project files. This ensures your README is accessible alongside other project documents.
+                                    Automatically creates or updates <code>README.md</code> in your project files. This ensures your document is accessible alongside other project documents.
                                 </p>
                             </div>
                         </label>
