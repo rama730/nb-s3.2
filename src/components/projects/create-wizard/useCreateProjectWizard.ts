@@ -7,12 +7,12 @@ import { createProjectSchema, type CreateProjectInput, type OpenRoleInput } from
 import { generateSlug, generateProjectId } from '@/lib/utils/project-ids';
 import { toast } from 'sonner';
 import { TOTAL_PHASES, WizardPhaseId } from '@/constants/project-wizard';
-import { applyProjectReadmeCreationIntentAction, createProjectAction } from '@/app/actions/project';
+import { applyProjectDocCreationIntentAction, createProjectAction } from '@/app/actions/project';
 import { parseGithubRepo } from '@/lib/github/repo-preview';
 import { fetchGithubImportPreviewFolder, fetchGithubImportPreviewRoot } from '@/lib/github/import-client';
 import { shouldIgnorePath } from '@/lib/import/import-filters';
 import { getLifecycleStagesForProjectType } from '@/lib/projects/lifecycle-templates';
-import { buildProjectReadmeStarterDraft } from '@/lib/projects/readme-create-intent';
+import { buildProjectDocStarterDraft } from '@/lib/projects/doc-create-intent';
 import { buildProjectImportEventId, buildUploadManifestHash } from '@/lib/import/idempotency';
 import { buildProjectFileKey } from '@/lib/storage/project-file-key';
 
@@ -90,7 +90,7 @@ export function useCreateProjectWizard({ onClose, onSuccess, draftId }: UseCreat
             },
             import_source: { type: 'scratch' },
             readme: {
-                mode: 'starter',
+                mode: 'skip',
                 sourcePath: null,
                 publishOnCreate: false,
                 includeRoles: true,
@@ -434,8 +434,16 @@ export function useCreateProjectWizard({ onClose, onSuccess, draftId }: UseCreat
 
             isValid = true;
         }
-        else if (phase === 2) isValid = await trigger('project_type');
-        else if (phase === 3) isValid = await trigger(['title', 'description']);
+        else if (phase === 2) {
+            const fieldsToValidate: Array<'project_type' | 'custom_project_type' | 'title' | 'description'> = ['project_type', 'title', 'description'];
+            if (getValues('project_type') === 'other') {
+                fieldsToValidate.push('custom_project_type');
+            }
+            isValid = await trigger(fieldsToValidate);
+        }
+        else if (phase === 3) {
+            isValid = await trigger('creator_role');
+        }
         else if (phase === 4) isValid = true;
         else if (phase === 5) isValid = true;
 
@@ -487,7 +495,7 @@ export function useCreateProjectWizard({ onClose, onSuccess, draftId }: UseCreat
             }
 
             try {
-                const starterContent = buildProjectReadmeStarterDraft({
+                const starterContent = buildProjectDocStarterDraft({
                     title: data.title,
                     shortDescription: data.short_description,
                     description: data.description,
@@ -499,22 +507,22 @@ export function useCreateProjectWizard({ onClose, onSuccess, draftId }: UseCreat
                     roles: resolvedRoles,
                     includeRoles: readmeIntent.includeRoles !== false,
                 });
-                const readmeResult = await applyProjectReadmeCreationIntentAction(projectId, {
+                const readmeResult = await applyProjectDocCreationIntentAction(projectId, {
                     ...readmeIntent,
                     starterContent,
                 });
                 readmeApplied = true;
 
                 if (!readmeResult.success) {
-                    console.warn('[create-project] README setup failed', readmeResult.error);
+                    console.warn('[create-project] Doc setup failed', readmeResult.error);
                     return;
                 }
 
                 if (readmeResult.status === 'not_found') {
-                    toast.info('Project created. README source was not ready yet, so you can import it later from the README tab.');
+                    toast.info('Project created. Doc source was not ready yet, so you can import it later from the Doc tab.');
                 }
             } catch (error) {
-                console.warn('[create-project] README setup failed', error);
+                console.warn('[create-project] Doc setup failed', error);
             }
         };
 
