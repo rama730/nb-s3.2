@@ -3,11 +3,11 @@
 import { useMemo, useState } from "react";
 import { CheckCircle2, GitCompareArrows, RotateCcw, Trash2, Users } from "lucide-react";
 
-import type { ProjectReadmeVersion } from "@/lib/projects/readme";
+import type { ProjectDocVersion } from "@/lib/projects/doc";
 import { cn } from "@/lib/utils";
 import { StackedAvatars } from "@/components/ui/StackedAvatars";
 
-export function ProjectReadmeHistory({
+export function ProjectDocHistory({
     versions,
     loading = false,
     onRestore,
@@ -17,7 +17,7 @@ export function ProjectReadmeHistory({
     currentVersionId,
     draftContent = "",
 }: {
-    versions: ProjectReadmeVersion[];
+    versions: ProjectDocVersion[];
     loading?: boolean;
     onRestore: (versionId: string) => void;
     onDelete: (versionId: string) => void;
@@ -51,10 +51,10 @@ export function ProjectReadmeHistory({
                     className="w-full rounded-2xl border border-amber-200 bg-amber-50/60 p-4 text-left text-sm font-semibold text-amber-800 transition hover:border-amber-300 dark:border-amber-900/70 dark:bg-amber-950/20 dark:text-amber-200"
                 >
                     Discard current draft
-                    <span className="mt-1 block text-xs font-medium opacity-80">Clear unpublished README work and return to an empty draft.</span>
+                    <span className="mt-1 block text-xs font-medium opacity-80">Clear unpublished document work and return to an empty draft.</span>
                 </button>
                 <div className="rounded-2xl border border-dashed border-zinc-200 p-6 text-sm text-zinc-500 dark:border-zinc-800">
-                    No published versions yet. Publish the first README to start history.
+                    No published versions yet. Publish the first document to start history.
                 </div>
             </div>
         );
@@ -63,7 +63,7 @@ export function ProjectReadmeHistory({
     return (
         <div className="space-y-3">
             <div className="rounded-2xl border border-zinc-200 bg-zinc-50/70 p-3 text-xs leading-5 text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900/40 dark:text-zinc-400">
-                Restore copies a version into draft. Set current changes the published README. Deleting the current version promotes the newest remaining version automatically.
+                Restore copies a version into draft. Set current changes the published document. Deleting the current version promotes the newest remaining version automatically.
             </div>
             <button
                 type="button"
@@ -71,7 +71,7 @@ export function ProjectReadmeHistory({
                 className="w-full rounded-2xl border border-amber-200 bg-amber-50/60 p-4 text-left text-sm font-semibold text-amber-800 transition hover:border-amber-300 dark:border-amber-900/70 dark:bg-amber-950/20 dark:text-amber-200"
             >
                 Discard current draft
-                <span className="mt-1 block text-xs font-medium opacity-80">Replace unpublished edits with the current published README.</span>
+                <span className="mt-1 block text-xs font-medium opacity-80">Replace unpublished edits with the current published document.</span>
             </button>
             {comparisonVersion ? (
                 <VersionComparison version={comparisonVersion} draftContent={draftContent} onClose={() => setComparisonVersionId(null)} />
@@ -196,7 +196,7 @@ function VersionComparison({
     draftContent,
     onClose,
 }: {
-    version: ProjectReadmeVersion;
+    version: ProjectDocVersion;
     draftContent: string;
     onClose: () => void;
 }) {
