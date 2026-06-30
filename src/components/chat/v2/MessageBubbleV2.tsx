@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useId, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { format } from 'date-fns';
 import {
     AlertCircle,
@@ -38,8 +38,6 @@ import {
 import { refreshConversationCache } from '@/lib/messages/v2-refresh';
 import {
     normalizeMessageReactionSummary,
-    toggleMessageReactionSummary,
-    withReactionSummaryMetadata,
 } from '@/lib/messages/reactions';
 import {
     DropdownMenu,
@@ -49,12 +47,14 @@ import {
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import {
-    MessageAttachmentsV2,
     CodeSegmentV2,
     MESSAGE_TEXT_BASE_CLASS,
     renderTextWithMentions,
-    type ChatAttachmentV2,
 } from './message-rendering';
+import {
+    MessageAttachmentsV2,
+    type ChatAttachmentV2,
+} from './message-attachments';
 import { ApplicationSystemCardV2 } from './ApplicationSystemCardV2';
 import { parseMessageSegments, type MessageSegment } from '@/lib/messages/code-snippets';
 import {
@@ -76,7 +76,7 @@ import { ReportMessageDialog } from './ReportMessageDialog';
 import { useLinkPreview, extractFirstUrl, type LinkPreview } from '@/hooks/useLinkPreview';
 import { MessageContextChipRowV2 } from './MessageContextChipRowV2';
 import { StructuredMessageCardV2 } from './StructuredMessageCardV2';
-import { useMessagesActions, useMessagingStructuredCatalog } from '@/hooks/useMessagesV2';
+import { useMessagesActions, useMessagingStructuredCatalog, useToggleReaction } from '@/hooks/useMessagesV2';
 import type { MessageLinkedWorkSummary } from '@/lib/messages/linked-work';
 import {
     Dialog,
@@ -87,13 +87,11 @@ import {
     DialogTitle,
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
-import { UserAvatar } from '@/components/ui/UserAvatar';
 import { useMessagesV2OutboxStore } from '@/stores/messagesV2OutboxStore';
 
 interface MessageBubbleV2Props {
     message: MessageWithSender;
     linkedWork?: MessageLinkedWorkSummary[];
-    showAvatar?: boolean;
     surface?: 'page' | 'popup';
     onReply?: (message: MessageWithSender) => void;
     onTogglePin?: (messageId: string, pinned: boolean) => void;
@@ -103,9 +101,7 @@ interface MessageBubbleV2Props {
     focusSource?: 'reply' | 'pin' | 'external' | null;
     isConsecutiveFromPrev?: boolean;
     isConsecutiveToNext?: boolean;
-    onSelectMessage?: (message: MessageWithSender) => void;
     showTimestamp?: boolean;
-    conversationType?: 'dm' | 'group' | 'project_group';
 }
 
 function createPendingLinkPreview(url: string): LinkPreview | null {
@@ -120,13 +116,6 @@ function createPendingLinkPreview(url: string): LinkPreview | null {
     } catch {
         return null;
     }
-}
-
-function getApplicationStatusLabel(status: string | null) {
-    if (status === 'accepted') return 'Accepted';
-    if (status === 'rejected') return 'Rejected';
-    if (status === 'project_deleted') return 'Project has been deleted';
-    return 'Pending';
 }
 
 function isOnlyEmojis(text: string): boolean {
@@ -320,7 +309,6 @@ function areAttachmentsEqual(left: ChatAttachmentV2[], right: ChatAttachmentV2[]
 export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
     message,
     linkedWork = [],
-    showAvatar = true,
     surface = 'page',
     onReply,
     onTogglePin,
@@ -330,9 +318,7 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
     focusSource = null,
     isConsecutiveFromPrev = false,
     isConsecutiveToNext = false,
-    onSelectMessage,
     showTimestamp = false,
-    conversationType = 'dm',
 }: MessageBubbleV2Props) {
     const queryClient = useQueryClient();
     const router = useRouter();
@@ -348,7 +334,6 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
     const isPinned = Boolean(metadata.pinned);
     const structured = useMemo(() => getStructuredMessageFromMetadata(metadata), [metadata]);
     const isApplication = metadata.isApplication === true || structured?.kind === 'project_invite';
-    const applicationStatus = typeof metadata.status === 'string' ? metadata.status : null;
     const deliveryState = typeof metadata.deliveryState === 'string' ? metadata.deliveryState : undefined;
     const contextChips = useMemo(() => getMessageContextChipsFromMetadata(metadata), [metadata]);
     const privateFollowUp = useMemo(() => getPrivateFollowUpFromMetadata(metadata), [metadata]);
@@ -359,10 +344,122 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
     const [hiddenForViewer, setHiddenForViewer] = useState(false);
     const [showReactionBar, setShowReactionBar] = useState(false);
     const [reportOpen, setReportOpen] = useState(false);
-    const [isReactionLoading, setIsReactionLoading] = useState(false);
     const [taskDialogOpen, setTaskDialogOpen] = useState(false);
     const [followUpDialogOpen, setFollowUpDialogOpen] = useState(false);
     const [linkedWorkExpanded, setLinkedWorkExpanded] = useState(false);
+    const [swipeOffset, setSwipeOffset] = useState(0);
+    const [isSwiping, setIsSwiping] = useState(false);
+    const touchStartX = useRef(0);
+    const touchStartY = useRef(0);
+    const isSwipeActive = useRef(false);
+
+    const handleTouchStart = (e: React.TouchEvent) => {
+        if (!onReply || !canReply) return;
+        const touch = e.touches[0];
+        if (!touch) return;
+        touchStartX.current = touch.clientX;
+        touchStartY.current = touch.clientY;
+        isSwipeActive.current = true;
+    };
+
+    const handleTouchMove = (e: React.TouchEvent) => {
+        if (!isSwipeActive.current) return;
+        const touch = e.touches[0];
+        if (!touch) return;
+
+        const deltaX = touch.clientX - touchStartX.current;
+        const deltaY = touch.clientY - touchStartY.current;
+
+        if (Math.abs(deltaY) > Math.abs(deltaX)) {
+            isSwipeActive.current = false;
+            setSwipeOffset(0);
+            setIsSwiping(false);
+            return;
+        }
+
+        if (deltaX < 0) {
+            if (e.cancelable) {
+                e.preventDefault();
+            }
+            setIsSwiping(true);
+            const offset = Math.max(-80, deltaX);
+            setSwipeOffset(offset);
+        }
+    };
+
+    const handleTouchEnd = () => {
+        if (!isSwipeActive.current) return;
+        isSwipeActive.current = false;
+        setIsSwiping(false);
+
+        if (swipeOffset <= -50) {
+            onReply?.(message);
+            if (typeof window !== 'undefined' && window.navigator && window.navigator.vibrate) {
+                window.navigator.vibrate(15);
+            }
+        }
+        setSwipeOffset(0);
+    };
+
+    const handleMouseDown = (e: React.MouseEvent) => {
+        if (!onReply || !canReply) return;
+        if (e.button !== 0) return; // Only left click
+        const target = e.target as HTMLElement;
+        if (
+            target.closest('a') ||
+            target.closest('button') ||
+            target.closest('select') ||
+            target.closest('textarea') ||
+            target.closest('input')
+        ) {
+            return;
+        }
+        touchStartX.current = e.clientX;
+        touchStartY.current = e.clientY;
+        isSwipeActive.current = true;
+    };
+
+    const handleMouseMove = (e: React.MouseEvent) => {
+        if (!isSwipeActive.current) return;
+        const deltaX = e.clientX - touchStartX.current;
+        const deltaY = e.clientY - touchStartY.current;
+
+        if (Math.abs(deltaY) > Math.abs(deltaX)) {
+            isSwipeActive.current = false;
+            setSwipeOffset(0);
+            setIsSwiping(false);
+            return;
+        }
+
+        if (Math.abs(deltaX) > 5) {
+            e.preventDefault();
+            setIsSwiping(true);
+            if (deltaX < 0) {
+                const offset = Math.max(-80, deltaX);
+                setSwipeOffset(offset);
+            } else {
+                setSwipeOffset(0);
+            }
+        }
+    };
+
+    const handleMouseUp = () => {
+        if (!isSwipeActive.current) return;
+        isSwipeActive.current = false;
+        setIsSwiping(false);
+
+        if (swipeOffset <= -50) {
+            onReply?.(message);
+        }
+        setSwipeOffset(0);
+    };
+
+    const handleMouseLeave = () => {
+        if (!isSwipeActive.current) return;
+        isSwipeActive.current = false;
+        setIsSwiping(false);
+        setSwipeOffset(0);
+    };
     const [taskTitle, setTaskTitle] = useState('');
     const [taskDescription, setTaskDescription] = useState('');
     const [taskProjectId, setTaskProjectId] = useState<string>('');
@@ -389,6 +486,10 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
         undefined,
         taskDialogOpen || followUpDialogOpen,
     );
+    const {
+        mutateAsync: toggleReaction,
+        isPending: isReactionLoading,
+    } = useToggleReaction(message.conversationId);
     const visibleLinkedWork = linkedWorkExpanded ? linkedWork : linkedWork.slice(0, 2);
 
     const firstUrl = extractFirstUrl(message.content);
@@ -577,59 +678,17 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
         }
 
         setShowReactionBar(false);
-        setIsReactionLoading(true);
-
-        const previousReactionSummary = reactionSummary;
-        const optimisticReactionSummary = toggleMessageReactionSummary(previousReactionSummary, emoji);
-        patchThreadMessage(queryClient, message.conversationId, message.id, (current) => ({
-            ...current,
-            metadata: withReactionSummaryMetadata(
-                (current.metadata || {}) as Record<string, unknown>,
-                optimisticReactionSummary,
-            ),
-        }));
 
         try {
-            const { toggleReaction } = await import('@/app/actions/messaging/features');
-            const result = await toggleReaction(message.id, emoji);
-            if (!result.success) {
-                patchThreadMessage(queryClient, message.conversationId, message.id, (current) => ({
-                    ...current,
-                    metadata: withReactionSummaryMetadata(
-                        (current.metadata || {}) as Record<string, unknown>,
-                        previousReactionSummary,
-                    ),
-                }));
-                toast.error(result.error || 'Failed to react');
-                return;
-            }
-
-            patchThreadMessage(queryClient, message.conversationId, message.id, (current) => ({
-                ...current,
-                metadata: withReactionSummaryMetadata(
-                    (current.metadata || {}) as Record<string, unknown>,
-                    result.reactionSummary || optimisticReactionSummary,
-                ),
-            }));
-        } catch {
-            patchThreadMessage(queryClient, message.conversationId, message.id, (current) => ({
-                ...current,
-                metadata: withReactionSummaryMetadata(
-                    (current.metadata || {}) as Record<string, unknown>,
-                    previousReactionSummary,
-                ),
-            }));
-            toast.error('Failed to react');
-        } finally {
-            setIsReactionLoading(false);
+            await toggleReaction({ messageId: message.id, emoji });
+        } catch (error) {
+            toast.error(error instanceof Error ? error.message : 'Failed to react');
         }
     }, [
         isDeleted,
         isReactionLoading,
-        message.conversationId,
         message.id,
-        queryClient,
-        reactionSummary,
+        toggleReaction,
     ]);
 
     const handleSaveEdit = useCallback(async () => {
@@ -733,14 +792,36 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
     return (
         <>
         <div
-            className={`msg-bubble-lane flex w-full ${isOwn ? 'justify-end' : 'justify-start'}`}
-            style={isOptimistic ? { animation: 'message-appear 250ms ease-out' } : undefined}
+            className={cn(
+                `msg-bubble-lane flex w-full relative ${isOwn ? 'justify-end' : 'justify-start'}`,
+                isOptimistic && 'animate-[message-appear_250ms_ease-out]'
+            )}
         >
-            <div className={`group flex w-full min-w-0 items-end gap-2 ${isOwn ? 'flex-row-reverse' : 'flex-row'}`}>
+            <div
+                className={`group flex w-full min-w-0 items-end gap-2 ${isOwn ? 'flex-row-reverse' : 'flex-row'}`}
+                onTouchStart={handleTouchStart}
+                onTouchMove={handleTouchMove}
+                onTouchEnd={handleTouchEnd}
+                onMouseDown={handleMouseDown}
+                onMouseMove={handleMouseMove}
+                onMouseUp={handleMouseUp}
+                onMouseLeave={handleMouseLeave}
+                style={{
+                    transform: swipeOffset !== 0 ? `translateX(${swipeOffset}px)` : undefined,
+                    transition: isSwiping ? 'none' : 'transform 200ms ease-out',
+                    touchAction: 'pan-y',
+                }}
+            >
                 <div
-                    className={`msg-bubble-stack relative flex min-w-0 flex-col ${isOwn ? 'items-end' : 'items-start'}`}
+                    className={cn(
+                        `msg-bubble-stack relative flex min-w-0 flex-col ${isOwn ? 'items-end' : 'items-start'}`,
+                        isFocusedReplyTarget && 'rounded-2xl transition-[box-shadow,ring-color] duration-300'
+                    )}
                     data-surface={isPopup ? 'popup' : 'page'}
                     data-own={isOwn ? 'true' : 'false'}
+                    style={{
+                        ...((isFocusedReplyTarget) ? { animation: 'message-focus-pulse 1250ms cubic-bezier(0.22,1,0.36,1)' } : {}),
+                    }}
                 >
                         {isApplication ? (
                             <ApplicationSystemCardV2
@@ -753,8 +834,8 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
                                     'msg-bubble-shell my-1',
                                     isOwn ? 'msg-bubble-own' : 'msg-bubble-peer',
                                     isOwn
-                                        ? cn('rounded-2xl', (showAvatar || isConsecutiveToNext) && 'rounded-br-sm', isConsecutiveFromPrev && 'rounded-tr-sm')
-                                        : cn('rounded-2xl', (showAvatar || isConsecutiveToNext) && 'rounded-bl-sm', isConsecutiveFromPrev && 'rounded-tl-sm'),
+                                        ? cn('rounded-2xl', isConsecutiveToNext && 'rounded-br-sm', isConsecutiveFromPrev && 'rounded-tr-sm')
+                                        : cn('rounded-2xl', isConsecutiveToNext && 'rounded-bl-sm', isConsecutiveFromPrev && 'rounded-tl-sm'),
                                     !isOwn && 'border border-border/60'
                                 )}
                             >
@@ -996,20 +1077,14 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
                                                 'msg-bubble-shell my-1',
                                                 isOwn ? 'msg-bubble-own' : 'msg-bubble-peer',
                                                 isOwn
-                                                    ? cn('rounded-2xl', (showAvatar || (isLast && isConsecutiveToNext)) && 'rounded-br-sm', isFirst && isConsecutiveFromPrev && 'rounded-tr-sm')
-                                                    : cn('rounded-2xl', (showAvatar || (isLast && isConsecutiveToNext)) && 'rounded-bl-sm', isFirst && isConsecutiveFromPrev && 'rounded-tl-sm'),
+                                                    ? cn('rounded-2xl', (isLast && isConsecutiveToNext) && 'rounded-br-sm', isFirst && isConsecutiveFromPrev && 'rounded-tr-sm')
+                                                    : cn('rounded-2xl', (isLast && isConsecutiveToNext) && 'rounded-bl-sm', isFirst && isConsecutiveFromPrev && 'rounded-tl-sm'),
                                                 !isOwn && 'border border-border/60',
                                                 isEmojiOnly && '!bg-transparent !bg-none !border-0 !shadow-none !p-0',
                                                 'transition-[transform,box-shadow,ring-color] duration-300 ease-out',
-                                                isFocusedReplyTarget && isFirst && (
-                                                    isOwn
-                                                        ? 'ring-2 ring-white/45 shadow-[0_16px_40px_-22px_rgba(59,130,246,0.9)]'
-                                                        : 'ring-2 ring-primary/45 shadow-[0_16px_40px_-22px_rgba(59,130,246,0.55)]'
-                                                )
                                             )}
                                             style={{
-                                                boxShadow: (isFocusedReplyTarget && isFirst && !isEmojiOnly) ? undefined : (isEmojiOnly ? 'none' : 'var(--msg-shadow)'),
-                                                ...((isFocusedReplyTarget && isFirst) ? { animation: 'message-focus-pulse 1250ms cubic-bezier(0.22,1,0.36,1)' } : {}),
+                                                boxShadow: isEmojiOnly ? 'none' : 'var(--msg-shadow)',
                                             }}
                                         >
                                             {isFirst && renderPrefix()}
@@ -1040,7 +1115,7 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
                                 })}
 
                                 {attachments.length > 0 && (
-                                    <div className="mt-1.5 w-full">
+                                    <div className={cn("mt-1.5", attachments.length === 1 ? "w-fit max-w-full" : "w-full")}>
                                         <MessageAttachmentsV2
                                             attachments={attachments}
                                             onContentLoad={onContentLoad}
@@ -1050,13 +1125,7 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
                             </>
                         )}
 
-                    {showReactionBar && (
-                        <ReactionQuickBar
-                            align={isOwn ? 'end' : 'start'}
-                            onReact={handleReaction}
-                            onClose={() => setShowReactionBar(false)}
-                        />
-                    )}
+
 
                     {reactionSummary.length > 0 && (
                         <ReactionPillRow
@@ -1106,18 +1175,34 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
                     )}
                     <div
                         className={cn(
-                            'msg-action-rail pointer-events-none absolute z-20 flex items-center gap-0.5 opacity-0 transition-opacity focus-within:pointer-events-auto focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100',
+                            'msg-action-rail absolute z-20 flex items-center gap-0.5 transition-opacity',
+                            showReactionBar
+                                ? 'pointer-events-auto opacity-100'
+                                : 'pointer-events-none opacity-0 focus-within:pointer-events-auto focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100',
                             isOwn ? 'msg-action-rail-own flex-row-reverse' : 'msg-action-rail-peer',
                         )}
                     >
-                        <button
-                            type="button"
-                            onClick={() => setShowReactionBar((prev) => !prev)}
-                            className="rounded-full bg-background/90 p-1 text-zinc-400 shadow-sm ring-1 ring-border/60 backdrop-blur transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:bg-zinc-950/90 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
-                            aria-label="Add reaction"
-                        >
-                            <SmilePlus className="h-4 w-4" />
-                        </button>
+                        <div className="relative">
+                            <button
+                                type="button"
+                                data-reaction-trigger={message.id}
+                                onClick={(event) => {
+                                    event.stopPropagation();
+                                    setShowReactionBar((prev) => !prev);
+                                }}
+                                className="rounded-full bg-background/90 p-1 text-zinc-400 shadow-sm ring-1 ring-border/60 backdrop-blur transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:bg-zinc-950/90 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+                                aria-label="Add reaction"
+                            >
+                                <SmilePlus className="h-4 w-4" />
+                            </button>
+                            {showReactionBar && (
+                                <ReactionQuickBar
+                                    align={isOwn ? 'start' : 'end'}
+                                    onReact={handleReaction}
+                                    onClose={() => setShowReactionBar(false)}
+                                />
+                            )}
+                        </div>
 
                         <DropdownMenu modal={false}>
                             <DropdownMenuTrigger asChild>
@@ -1206,6 +1291,17 @@ export const MessageBubbleV2 = React.memo(function MessageBubbleV2({
                     </div>
                 </div>
             </div>
+            {swipeOffset < 0 && (
+                <div
+                    className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center justify-center h-8 w-8 rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-500 transition-all duration-100 pointer-events-none"
+                    style={{
+                        opacity: Math.min(1, Math.abs(swipeOffset) / 50),
+                        transform: `translateY(-50%) scale(${Math.min(1.1, Math.abs(swipeOffset) / 50)})`,
+                    }}
+                >
+                    <CornerUpLeft className={cn("h-4 w-4 transition-colors", swipeOffset <= -50 && "text-primary")} />
+                </div>
+            )}
         </div>
         {taskDialogOpen && (
         <Dialog open={taskDialogOpen} onOpenChange={setTaskDialogOpen}>
@@ -1382,7 +1478,6 @@ export function areMessageBubblePropsEqual(
         arePrivateFollowUpsEqual(prevPrivateFollowUp, nextPrivateFollowUp) &&
         areLinkedWorkEqual(prev.linkedWork, next.linkedWork) &&
         areAttachmentsEqual(prevAttachments, nextAttachments) &&
-        prev.showAvatar === next.showAvatar &&
         prev.surface === next.surface &&
         prev.onReply === next.onReply &&
         prev.onTogglePin === next.onTogglePin &&
@@ -1392,9 +1487,7 @@ export function areMessageBubblePropsEqual(
         prev.focusSource === next.focusSource &&
         prev.isConsecutiveFromPrev === next.isConsecutiveFromPrev &&
         prev.isConsecutiveToNext === next.isConsecutiveToNext &&
-        prev.onSelectMessage === next.onSelectMessage &&
-        prev.showTimestamp === next.showTimestamp &&
-        prev.conversationType === next.conversationType
+        prev.showTimestamp === next.showTimestamp
     );
 }
 
