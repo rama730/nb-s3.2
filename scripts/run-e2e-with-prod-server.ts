@@ -14,6 +14,10 @@ import { config as loadDotenv } from "dotenv";
 loadDotenv({ path: ".env.local", quiet: true });
 loadDotenv({ quiet: true });
 
+if (process.env.E2E_DATABASE_URL?.trim()) {
+  process.env.DATABASE_URL = process.env.E2E_DATABASE_URL;
+}
+
 function resolveServerTarget() {
   const explicitPort = process.env.E2E_PORT;
   const envBaseURL = process.env.E2E_BASE_URL?.trim();
