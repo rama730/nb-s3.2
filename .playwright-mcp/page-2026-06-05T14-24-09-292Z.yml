@@ -1,0 +1,51 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - banner [ref=e3]:
+      - generic [ref=e4]:
+        - link "Navigate to home" [ref=e7] [cursor=pointer]:
+          - /url: /
+          - img [ref=e11]
+          - generic [ref=e14]: NB
+        - navigation "Main navigation" [ref=e15]:
+          - link "Hub" [ref=e16] [cursor=pointer]:
+            - /url: /hub
+            - img [ref=e17]
+            - generic [ref=e22]: Hub
+          - link "Connections" [ref=e23] [cursor=pointer]:
+            - /url: /people
+            - img [ref=e24]
+            - generic [ref=e29]: Connections
+          - link "Messages" [ref=e30] [cursor=pointer]:
+            - /url: /messages
+            - img [ref=e31]
+            - generic [ref=e33]: Messages
+          - link "Settings" [ref=e34] [cursor=pointer]:
+            - /url: /settings
+            - img [ref=e35]
+            - generic [ref=e38]: Settings
+        - generic [ref=e39]:
+          - button "Toggle theme" [ref=e40] [cursor=pointer]:
+            - img [ref=e41]
+          - link "Sign in" [ref=e44] [cursor=pointer]:
+            - /url: /login
+    - main [ref=e45]:
+      - generic [ref=e47]:
+        - img [ref=e48]
+        - heading "Something went wrong" [level=2] [ref=e50]
+        - paragraph [ref=e51]: "[ProjectDetailPage] INTERNAL_ERROR: Failed to load project detail."
+        - button "Try again" [ref=e52] [cursor=pointer]:
+          - img [ref=e53]
+          - text: Try again
+  - region "Notifications alt+T"
+  - generic [ref=e62] [cursor=pointer]:
+    - button "Open Next.js Dev Tools" [ref=e63]:
+      - img [ref=e64]
+    - generic [ref=e67]:
+      - button "Open issues overlay" [ref=e68]:
+        - generic [ref=e69]:
+          - generic [ref=e70]: "0"
+          - generic [ref=e71]: "1"
+        - generic [ref=e72]: Issue
+      - button "Collapse issues badge" [ref=e73]:
+        - img [ref=e74]
+  - alert [ref=e76]
