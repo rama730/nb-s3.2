@@ -5,10 +5,10 @@ import {
 } from "@/lib/github/project-import-runner";
 
 export const projectImport = inngest.createFunction(
-  { id: "project-import", concurrency: 5 },
+  { id: "project-import", concurrency: 5, retries: 0 },
   { event: "project/import" },
   async ({ event, step }) => {
-    const { projectId, importSource, userId } = event.data;
+    const { projectId, importSource, userId, resolutions } = event.data as any;
 
     await step.run("clone-and-process", async () =>
       runGithubProjectImport({
@@ -17,6 +17,7 @@ export const projectImport = inngest.createFunction(
         userId,
         importEventId: event.id || null,
         queueAgeMs: resolveGithubProjectImportQueueAgeMs(event),
+        resolutions,
       }),
     );
   },
