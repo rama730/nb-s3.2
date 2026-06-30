@@ -1,9 +1,9 @@
-import { createProjectReadmeAssetUploadUrlAction, finalizeProjectReadmeAssetUploadAction } from "@/app/actions/project";
-import { buildProjectReadmeImageMarkdown, type ProjectReadmeImageIntent } from "@/lib/projects/readme-media";
+import { createProjectDocAssetUploadUrlAction, finalizeProjectDocAssetUploadAction } from "@/app/actions/project";
+import { buildProjectDocImageMarkdown, type ProjectDocImageIntent } from "@/lib/projects/doc-media";
 import { uploadToSupabaseSignedUrl } from "@/lib/upload/supabase-signed-upload-client";
-import { PROJECT_README_ALLOWED_IMAGE_MIME_TYPES, PROJECT_README_ASSET_MAX_BYTES } from "@/lib/projects/readme";
+import { PROJECT_DOC_ALLOWED_IMAGE_MIME_TYPES, PROJECT_DOC_ASSET_MAX_BYTES } from "@/lib/projects/doc";
 
-export async function uploadProjectReadmeAsset({
+export async function uploadProjectDocAsset({
     projectId,
     file,
     altText,
@@ -15,20 +15,20 @@ export async function uploadProjectReadmeAsset({
     projectId: string;
     file: File;
     altText: string;
-    imageIntent?: ProjectReadmeImageIntent;
+    imageIntent?: ProjectDocImageIntent;
     displayWidth?: number | null;
     caption?: string;
     onProgress?: (progress: number) => void;
 }): Promise<string> {
-    if (!PROJECT_README_ALLOWED_IMAGE_MIME_TYPES.has(file.type)) {
-        throw new Error("Use JPG, PNG, WebP, or GIF images for README media.");
+    if (!PROJECT_DOC_ALLOWED_IMAGE_MIME_TYPES.has(file.type)) {
+        throw new Error("Use JPG, PNG, WebP, or GIF images for Doc media.");
     }
-    if (file.size > PROJECT_README_ASSET_MAX_BYTES) {
+    if (file.size > PROJECT_DOC_ASSET_MAX_BYTES) {
         throw new Error("File exceeds max size limit.");
     }
 
     onProgress?.(18);
-    const upload = await createProjectReadmeAssetUploadUrlAction(projectId, {
+    const upload = await createProjectDocAssetUploadUrlAction(projectId, {
         mimeType: file.type,
         sizeBytes: file.size,
         altText,
@@ -47,7 +47,7 @@ export async function uploadProjectReadmeAsset({
     }, file);
 
     onProgress?.(88);
-    const finalized = await finalizeProjectReadmeAssetUploadAction(projectId, {
+    const finalized = await finalizeProjectDocAssetUploadAction(projectId, {
         uploadIntentId: upload.uploadIntentId,
         altText,
         width: null,
@@ -58,10 +58,10 @@ export async function uploadProjectReadmeAsset({
     
     onProgress?.(100);
     const assetSrc = finalized.asset?.id
-        ? `/api/v1/projects/${projectId}/readme-assets/${finalized.asset.id}`
+        ? `/api/v1/projects/${projectId}/doc-assets/${finalized.asset.id}`
         : finalized.markdown.match(/\]\(([^)]+)\)/)?.[1] ?? "";
         
-    const markdown = buildProjectReadmeImageMarkdown({
+    const markdown = buildProjectDocImageMarkdown({
         src: assetSrc,
         alt: altText,
         intent: imageIntent,
