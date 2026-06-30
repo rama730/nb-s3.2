@@ -18,6 +18,7 @@ import {
     getNotificationReasonLabel,
 } from "@/lib/notifications/presentation";
 import type { NotificationItem, NotificationMuteScope } from "@/lib/notifications/types";
+import { projectUpdateDisplayText } from "@/lib/projects/updates";
 import { cn } from "@/lib/utils";
 
 function getInitial(label: string | null | undefined) {
@@ -67,6 +68,15 @@ export function NotificationRow(props: {
     const reasonLabel = getNotificationReasonLabel(item.reason);
     const isUnread = !item.readAt;
     const isJ1 = item.importance === "important";
+    const bodyText = item.body ? projectUpdateDisplayText(item.body) : null;
+    const secondaryText = preview?.secondaryText ? projectUpdateDisplayText(preview.secondaryText) : null;
+    const showSecondaryText = Boolean(
+        secondaryText &&
+        secondaryText !== bodyText &&
+        secondaryText !== item.title &&
+        (!bodyText || !bodyText.toLowerCase().includes(secondaryText.toLowerCase())) &&
+        (!bodyText || !secondaryText.toLowerCase().includes(bodyText.toLowerCase())),
+    );
 
     const handleOpen = async () => {
         if (!item.href) {
@@ -139,9 +149,9 @@ export function NotificationRow(props: {
                             <p className="line-clamp-2 text-sm font-medium text-zinc-900 dark:text-zinc-50">
                                 {item.title}
                             </p>
-                            {item.body ? (
+                            {bodyText ? (
                                 <p className="mt-1 line-clamp-2 text-sm text-zinc-600 dark:text-zinc-400">
-                                    {item.body}
+                                    {bodyText}
                                 </p>
                             ) : null}
                             {destinationMissing ? (
@@ -160,7 +170,7 @@ export function NotificationRow(props: {
                     </div>
 
                     <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400">
-                        {preview?.secondaryText ? <span>{preview.secondaryText}</span> : null}
+                        {showSecondaryText ? <span>{secondaryText}</span> : null}
                         <span title={absoluteTime ?? undefined}>{relativeTime}</span>
                         {aggregateLabel ? <span>{aggregateLabel}</span> : null}
                     </div>
