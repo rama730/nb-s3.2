@@ -1,0 +1,67 @@
+{
+  "preparedAt": "2026-06-19T00:00:00.000Z",
+  "environment": "production",
+  "owner": "release-owner",
+  "status": "pending",
+  "rollback": {
+    "owner": "incident-owner",
+    "command": "Promote the previous stable deployment, freeze rollout promotion, and keep AUTH_DEGRADED_MODE_ENABLED=true during auth incidents.",
+    "dashboardUrl": "docs/stability-rollout-runbook.md",
+    "alertPolicyUrl": "docs/operations/production-alert-thresholds.md"
+  },
+  "stages": [
+    {
+      "name": "10-percent",
+      "status": "pending",
+      "soakHours": 24,
+      "entryCriteria": [
+        "Staging release gate is green.",
+        "Load suite is green.",
+        "Capacity audit is approved.",
+        "Required alert policies are installed and paging owners are assigned."
+      ],
+      "exitCriteria": [
+        "No sustained error-rate increase.",
+        "Redis and database saturation remain within budget.",
+        "Presence service joins and worker-plane ingress remain healthy.",
+        "No page-severity alert fires during the soak window."
+      ]
+    },
+    {
+      "name": "50-percent",
+      "status": "pending",
+      "soakHours": 24,
+      "entryCriteria": [
+        "10% stage completed without blockers.",
+        "Auth, hub, workspace, and messages remain stable.",
+        "Credential rollback owner is on call."
+      ],
+      "exitCriteria": [
+        "No reconnect storm instability.",
+        "Load-shedding stays within expected thresholds.",
+        "Worker-plane traffic remains isolated from shell latency.",
+        "No unresolved auth callback, webhook signature, or API error alert remains open."
+      ]
+    },
+    {
+      "name": "100-percent",
+      "status": "pending",
+      "soakHours": 72,
+      "entryCriteria": [
+        "50% stage completed without blockers.",
+        "Rollback owner is on call.",
+        "Credential rotation and rollback runbook has been reviewed for this release."
+      ],
+      "exitCriteria": [
+        "72h stability window is complete.",
+        "Final 1M readiness report is READY.",
+        "Release evidence links are attached to the rollout record."
+      ]
+    }
+  ],
+  "notes": [
+    "This file is a rollout control plan, not proof of production approval.",
+    "Keep status pending until release, load, capacity, E2E, and alert evidence are present.",
+    "Do not mark a stage approved without an on-call owner and rollback path."
+  ]
+}
