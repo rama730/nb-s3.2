@@ -475,6 +475,7 @@ export function filterProjectAnalyticsDatasetByContext(
     if (context.source === "all" && context.memberId === null && context.dateRange === "all") return sourceInput;
 
     const now = asDate(sourceInput.now, new Date());
+    const versionsByNode = versionsByNodeLatestFirst(sourceInput.fileVersions);
     const fileIdsForMember = new Set(
         context.memberId
             ? sourceInput.fileVersions
@@ -492,9 +493,11 @@ export function filterProjectAnalyticsDatasetByContext(
         ? sourceInput.sprints.filter((sprint) => withinContextWindow(sprint.updatedAt ?? sprint.endDate ?? sprint.startDate ?? sprint.createdAt, context, now))
         : [];
     const files = surfaceAllows(context, "files")
-        ? sourceInput.files.filter((file) =>
-            memberMatches(context, file.createdBy, fileIdsForMember.has(file.id) ? context.memberId : null) &&
-            withinContextWindow(file.updatedAt ?? file.createdAt, context, now))
+        ? sourceInput.files.filter((file) => {
+            const contributorId = fileActivityContributorId(file, versionsByNode);
+            return memberMatches(context, contributorId, file.createdBy, fileIdsForMember.has(file.id) ? context.memberId : null) &&
+                withinContextWindow(fileActivityAt(file, versionsByNode), context, now);
+        })
         : [];
     const fileIds = new Set(files.map((file) => file.id));
     return {
@@ -604,6 +607,37 @@ const fileLatestAt = (
     return latestVersion ?? iso(file.updatedAt ?? file.createdAt);
 };
 
+const versionsByNodeLatestFirst = (versions: ProjectAnalyticsFileVersionInput[]) => {
+    const grouped = new Map<string, ProjectAnalyticsFileVersionInput[]>();
+    for (const version of versions) {
+        const existing = grouped.get(version.nodeId);
+        if (existing) existing.push(version);
+        else grouped.set(version.nodeId, [version]);
+    }
+    for (const nodeVersions of grouped.values()) {
+        nodeVersions.sort((a, b) => {
+            const byTime = asDate(b.uploadedAt).getTime() - asDate(a.uploadedAt).getTime();
+            return byTime || b.id.localeCompare(a.id);
+        });
+    }
+    return grouped;
+};
+
+const latestFileVersion = (
+    fileId: string,
+    versionsByNode: Map<string, ProjectAnalyticsFileVersionInput[]>,
+) => versionsByNode.get(fileId)?.[0] ?? null;
+
+const fileActivityAt = (
+    file: ProjectAnalyticsFileInput,
+    versionsByNode: Map<string, ProjectAnalyticsFileVersionInput[]>,
+) => latestFileVersion(file.id, versionsByNode)?.uploadedAt ?? file.updatedAt ?? file.createdAt;
+
+const fileActivityContributorId = (
+    file: ProjectAnalyticsFileInput,
+    versionsByNode: Map<string, ProjectAnalyticsFileVersionInput[]>,
+) => latestFileVersion(file.id, versionsByNode)?.uploadedBy ?? file.createdBy ?? null;
+
 const profileMap = (input: BuildProjectAnalyticsInput) => {
     const map = new Map<string, ProjectAnalyticsProfileInput>();
     for (const member of input.members) {
@@ -697,10 +731,10 @@ const buildProjectNextMoves = (
         if (!hasReadmeImport) {
             nextMoves.push({
                 id: "next-review-readme",
-                title: "Review the imported README",
-                body: "Confirm the GitHub README tells the project story before sending collaborators into the workspace.",
+                title: "Review the imported Doc",
+                body: "Confirm the GitHub Doc tells the project story before sending collaborators into the workspace.",
                 tone: "neutral",
-                actionLink: actionLink(input, "Open README", "readme"),
+                actionLink: actionLink(input, "Open Doc", "readme"),
             });
         }
         if (activeTasks.length === 0) {
@@ -734,7 +768,7 @@ const buildProjectNextMoves = (
             nextMoves.push({
                 id: "next-add-readme",
                 title: "Add the project starting point",
-                body: "Create a README or first task so Analytics can move from empty-state guidance to real project signals.",
+                body: "Create a Doc or first task so Analytics can move from empty-state guidance to real project signals.",
                 tone: "neutral",
                 actionLink: actionLink(input, "Open project dashboard", "dashboard"),
             });
@@ -1099,16 +1133,14 @@ export function buildProjectAnalyticsFiles(input: BuildProjectAnalyticsInput): P
     const profiles = profileMap(input);
     const memberByUserId = new Map(input.members.map((member) => [member.userId, member]));
     const visibleFiles = analyticsVisibleFiles(input);
-    const versionsByNode = new Map<string, ProjectAnalyticsFileVersionInput[]>();
-    for (const version of input.fileVersions) {
-        versionsByNode.set(version.nodeId, [...(versionsByNode.get(version.nodeId) ?? []), version]);
-    }
+    const visibleFileIds = new Set(visibleFiles.map((file) => file.id));
+    const versionsByNode = versionsByNodeLatestFirst(input.fileVersions);
     const toFileRef = (file: ProjectAnalyticsFileInput): ProjectAnalyticsFileRef => ({
         id: file.id,
         name: fileDisplayName(file),
         type: file.type ?? "file",
-        updatedAt: iso(file.updatedAt ?? file.createdAt),
-        contributorId: file.createdBy ?? versionsByNode.get(file.id)?.[0]?.uploadedBy ?? null,
+        updatedAt: iso(fileActivityAt(file, versionsByNode)),
+        contributorId: fileActivityContributorId(file, versionsByNode),
         source: normalizeFileSource(file, input),
         publicVisible: file.publicVisible !== false,
         actionLink: actionLink(input, "Open file", "files", file.id),
@@ -1119,8 +1151,8 @@ export function buildProjectAnalyticsFiles(input: BuildProjectAnalyticsInput): P
     const memberContributions = buildProjectAnalyticsMemberSummaries(input)
         .map((summary) => ({
             person: summary.person,
-            files: visibleFiles.filter((file) => file.createdBy === summary.person.id).length,
-            versions: input.fileVersions.filter((version) => version.uploadedBy === summary.person.id && visibleFiles.some((file) => file.id === version.nodeId)).length,
+            files: visibleFiles.filter((file) => fileActivityContributorId(file, versionsByNode) === summary.person.id).length,
+            versions: input.fileVersions.filter((version) => version.uploadedBy === summary.person.id && visibleFileIds.has(version.nodeId)).length,
         }))
         .filter((entry) => entry.files + entry.versions > 0);
     const batchMap = new Map<string, {
@@ -1133,9 +1165,9 @@ export function buildProjectAnalyticsFiles(input: BuildProjectAnalyticsInput): P
         latest: string;
     }>();
     for (const file of visibleFiles) {
-        const updated = iso(file.updatedAt ?? file.createdAt);
+        const updated = iso(fileActivityAt(file, versionsByNode));
         const day = updated.slice(0, 10);
-        const contributorId = file.createdBy ?? versionsByNode.get(file.id)?.[0]?.uploadedBy ?? null;
+        const contributorId = fileActivityContributorId(file, versionsByNode);
         const source = normalizeFileSource(file, input);
         const key = `${day}:${source}:${contributorId ?? "unknown"}`;
         const current = batchMap.get(key) ?? {
@@ -1174,11 +1206,11 @@ export function buildProjectAnalyticsFiles(input: BuildProjectAnalyticsInput): P
         active,
         needsReview: visibleFiles.filter((file) => reviewNodeIds.has(file.id)).map(toFileRef),
         recentlyChanged: visibleFiles
-            .filter((file) => daysOld(file.updatedAt ?? file.createdAt, now) <= 7)
+            .filter((file) => daysOld(fileActivityAt(file, versionsByNode), now) <= 7)
             .map(toFileRef),
         linkedToWork: visibleFiles.filter((file) => linkedNodeIds.has(file.id)).map(toFileRef),
         possiblyStale: visibleFiles
-            .filter((file) => daysOld(file.updatedAt ?? file.createdAt, now) >= 30 && !linkedNodeIds.has(file.id))
+            .filter((file) => daysOld(fileActivityAt(file, versionsByNode), now) >= 30 && !linkedNodeIds.has(file.id))
             .map(toFileRef),
         memberContributions,
         activityBatches,
@@ -1300,50 +1332,60 @@ export function buildProjectAnalyticsTimeline(
             actionLink: actionLink(input, "Open sprint", "sprints", sprint.id),
         });
     }
-    const fileGroups = new Map<string, ProjectAnalyticsFileInput[]>();
+    const versionsByNode = versionsByNodeLatestFirst(input.fileVersions);
+    const fileGroups = new Map<string, {
+        files: ProjectAnalyticsFileInput[];
+        contributorId: string | null;
+        day: string;
+        source: ProjectAnalyticsFileSource;
+    }>();
     for (const file of analyticsVisibleFiles(input)) {
-        const occurredAt = iso(file.updatedAt ?? file.createdAt);
+        const occurredAt = iso(fileActivityAt(file, versionsByNode));
         const day = occurredAt.slice(0, 10);
         const source = normalizeFileSource(file, input);
-        const key = `${day}:${source}:${file.createdBy ?? "unknown"}`;
-        fileGroups.set(key, [...(fileGroups.get(key) ?? []), file]);
+        const contributorId = fileActivityContributorId(file, versionsByNode);
+        const key = `${day}:${source}:${contributorId ?? "unknown"}`;
+        const group = fileGroups.get(key) ?? { files: [], contributorId, day, source };
+        group.files.push(file);
+        fileGroups.set(key, group);
     }
-    for (const groupedFiles of fileGroups.values()) {
-        const sortedFiles = groupedFiles
+    for (const group of fileGroups.values()) {
+        const sortedFiles = group.files
             .slice()
-            .sort((a, b) => asDate(b.updatedAt ?? b.createdAt).getTime() - asDate(a.updatedAt ?? a.createdAt).getTime());
+            .sort((a, b) => asDate(fileActivityAt(b, versionsByNode)).getTime() - asDate(fileActivityAt(a, versionsByNode)).getTime());
         const first = sortedFiles[0];
         if (!first) continue;
-        const source = normalizeFileSource(first, input);
-        if (sortedFiles.length > ANALYTICS_FILE_CAP || source === "github") {
+        const firstOccurredAt = iso(fileActivityAt(first, versionsByNode));
+        if (sortedFiles.length > ANALYTICS_FILE_CAP || group.source === "github") {
             const representativeNames = sortedFiles.slice(0, ANALYTICS_FILE_CAP).map(fileDisplayName);
             events.push({
-                id: `file-group:${source}:${first.createdBy ?? "unknown"}:${iso(first.updatedAt ?? first.createdAt).slice(0, 10)}`,
+                id: `file-group:${group.source}:${group.contributorId ?? "unknown"}:${group.day}`,
                 type: "file",
                 sourceSurface: "files",
-                title: source === "github" ? "Repository files indexed" : `${sortedFiles.length} file changes`,
-                description: source === "github"
+                title: group.source === "github" ? "Repository files indexed" : `${sortedFiles.length} file changes`,
+                description: group.source === "github"
                     ? `${sortedFiles.length} GitHub ${sortedFiles.length === 1 ? "file was" : "files were"} indexed as project context. Open Files for the full inventory.`
                     : `${sortedFiles.length} workspace files changed in this period. Showing the newest ${Math.min(ANALYTICS_FILE_CAP, sortedFiles.length)} as examples.`,
-                occurredAt: iso(first.updatedAt ?? first.createdAt),
-                actor: person(first.createdBy),
+                occurredAt: firstOccurredAt,
+                actor: person(group.contributorId),
                 actionLink: actionLink(input, "Open file workspace", "files", first.id),
                 groupedCount: sortedFiles.length,
                 hiddenCount: Math.max(0, sortedFiles.length - ANALYTICS_FILE_CAP),
-                sourceKind: source,
+                sourceKind: group.source,
                 representativeNames,
             });
             continue;
         }
         for (const file of sortedFiles) {
+            const source = normalizeFileSource(file, input);
             events.push({
                 id: `file:${file.id}`,
                 type: "file",
                 sourceSurface: "files",
                 title: fileDisplayName(file),
                 description: source === "manual" ? "Manual file changed in the workspace." : "File changed in the workspace.",
-                occurredAt: iso(file.updatedAt ?? file.createdAt),
-                actor: person(file.createdBy),
+                occurredAt: iso(fileActivityAt(file, versionsByNode)),
+                actor: person(fileActivityContributorId(file, versionsByNode)),
                 actionLink: actionLink(input, "Open file", "files", file.id),
                 sourceKind: source,
             });
@@ -1453,7 +1495,7 @@ export function buildProjectAnalyticsReport(snapshot: ProjectAnalyticsSnapshot):
     const fileLines = snapshot.files.activityBatches.slice(0, 8).map((batch) =>
         `- ${batch.label} by ${batch.contributor?.name ?? "Unknown contributor"} on ${batch.occurredAt.slice(0, 10)}`);
     return [
-        "# Project Intelligence Report",
+        "# Project Analytics Report",
         "",
         `Generated: ${snapshot.generatedAt}`,
         `Context: member=${snapshot.context.memberId ?? "all"}, surface=${snapshot.context.source}, window=${snapshot.context.dateRange}`,
