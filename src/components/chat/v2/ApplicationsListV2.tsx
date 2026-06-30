@@ -3,7 +3,7 @@
 import { useState, useMemo } from 'react';
 import Image from 'next/image';
 import { formatDistanceToNow } from 'date-fns';
-import { ArrowLeft, ArrowRight, Briefcase, Search, SortAsc } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Briefcase, Filter, Search, SortAsc } from 'lucide-react';
 import { Virtuoso } from 'react-virtuoso';
 import type { getApplicationsInboxPageV2 } from '@/app/actions/messaging/v2';
 import { cn } from '@/lib/utils';
@@ -47,6 +47,7 @@ export function ApplicationsListV2({
     const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'accepted' | 'rejected'>('all');
     const [sortBy, setSortBy] = useState<'newest' | 'status' | 'unread'>('newest');
     const [showSortMenu, setShowSortMenu] = useState(false);
+    const [showFilterMenu, setShowFilterMenu] = useState(false);
 
     const filteredApplications = useMemo(() => {
         let result = applications;
@@ -117,30 +118,58 @@ export function ApplicationsListV2({
 
     return (
         <div className="flex h-full min-h-0 flex-col overflow-hidden bg-white dark:bg-zinc-950">
-            {/* Search + Sort header */}
+            {/* Clean applications tab header */}
             <div className={cn(
-                'border-b border-zinc-100 dark:border-zinc-800',
-                isPopup ? 'px-3 pb-3 pt-2' : 'px-4 pb-4 pt-3',
+                'border-b border-zinc-100 dark:border-zinc-800 flex items-center justify-between',
+                isPopup ? 'px-3 py-3' : 'px-4 py-4',
             )}>
-                <div className="flex items-center gap-2">
-                    <div className="relative min-w-0 flex-1 rounded-2xl border border-zinc-200/80 bg-white/95 p-1 shadow-[0_1px_2px_rgba(15,23,42,0.03)] dark:border-zinc-800 dark:bg-zinc-950">
-                        <div className="relative rounded-[18px] bg-zinc-50 dark:bg-zinc-900">
-                            <Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
-                            <input
-                                type="text"
-                                aria-label="Search applications"
-                                placeholder="Search applications..."
-                                value={searchQuery}
-                                onChange={(e) => setSearchQuery(e.target.value)}
-                                className="h-[44px] w-full rounded-[18px] border border-transparent bg-transparent pl-10 pr-4 text-sm text-zinc-700 outline-none transition-all placeholder:text-zinc-400 focus:border-primary/25 focus:bg-white focus:ring-2 focus:ring-primary/10 dark:text-zinc-200 dark:focus:bg-zinc-950"
-                            />
-                        </div>
+                <h2 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300">
+                    Applications
+                </h2>
+                <div className="flex items-center gap-1.5">
+                    {/* Status Filter Menu */}
+                    <div className="relative">
+                        <button
+                            type="button"
+                            onClick={() => setShowFilterMenu((v) => !v)}
+                            className={cn(
+                                "flex h-9 w-9 items-center justify-center rounded-xl border border-zinc-200 bg-white text-zinc-500 shadow-sm transition-colors hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-400 dark:hover:bg-zinc-900",
+                                statusFilter !== 'all' && "border-primary text-primary dark:border-primary dark:text-primary bg-primary/5"
+                            )}
+                            aria-label="Filter status options"
+                        >
+                            <Filter className="h-4 w-4" />
+                        </button>
+                        {showFilterMenu && (
+                            <>
+                                <div className="fixed inset-0 z-40" onClick={() => setShowFilterMenu(false)} />
+                                <div className="absolute right-0 top-full z-50 mt-1 w-36 rounded-xl border border-zinc-200 bg-white py-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+                                    {filterOptions.map((filter) => (
+                                        <button
+                                            key={filter.key}
+                                            type="button"
+                                            onClick={() => { setStatusFilter(filter.key); setShowFilterMenu(false); }}
+                                            className={cn(
+                                                'w-full px-3 py-2 text-left text-xs transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800',
+                                                statusFilter === filter.key
+                                                    ? 'font-semibold text-primary'
+                                                    : 'text-zinc-600 dark:text-zinc-400',
+                                            )}
+                                        >
+                                            {filter.label}
+                                        </button>
+                                    ))}
+                                </div>
+                            </>
+                        )}
                     </div>
+
+                    {/* Sort Menu */}
                     <div className="relative">
                         <button
                             type="button"
                             onClick={() => setShowSortMenu((v) => !v)}
-                            className="flex h-[52px] w-[52px] items-center justify-center rounded-2xl border border-zinc-200/80 bg-white/95 text-zinc-500 shadow-[0_1px_2px_rgba(15,23,42,0.03)] transition-colors hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-400 dark:hover:bg-zinc-900"
+                            className="flex h-9 w-9 items-center justify-center rounded-xl border border-zinc-200 bg-white text-zinc-500 shadow-sm transition-colors hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-400 dark:hover:bg-zinc-900"
                             aria-label="Sort options"
                         >
                             <SortAsc className="h-4 w-4" />
@@ -169,25 +198,6 @@ export function ApplicationsListV2({
                         )}
                     </div>
                 </div>
-            </div>
-
-            {/* Filter chips */}
-            <div className={cn('flex items-center gap-2 border-b border-zinc-100 dark:border-zinc-800', isPopup ? 'px-3 py-2' : 'px-4 py-2')}>
-                {filterOptions.map((filter) => (
-                    <button
-                        key={filter.key}
-                        type="button"
-                        onClick={() => setStatusFilter(filter.key)}
-                        className={cn(
-                            'rounded-full px-3 py-1 text-xs font-medium transition-colors',
-                            statusFilter === filter.key
-                                ? 'bg-primary text-primary-foreground'
-                                : 'bg-zinc-100 text-zinc-500 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-700',
-                        )}
-                    >
-                        {filter.label}
-                    </button>
-                ))}
             </div>
 
             {/* Empty filtered results */}
