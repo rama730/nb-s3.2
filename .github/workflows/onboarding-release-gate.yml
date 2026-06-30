@@ -49,6 +49,25 @@ jobs:
       - name: Unit tests
         run: npm run test:unit
 
+      - name: Dependency and architecture contracts
+        run: |
+          npm run check:deps:audit
+          npm run check:deps:lockfile
+          npm run check:page-contract
+          npm run check:force-dynamic-allowlist
+          npm run check:runtime-boundaries
+          npm run check:api-versioning-contract
+          npm run check:api-envelope-contract
+          npm run check:query-key-contract
+          npm run check:sql-governance
+
+      - name: Security contracts
+        run: |
+          npm run check:csp-contract
+          npm run check:trusted-proxy-contract
+          npm run check:rls-contract
+          npm run check:authz-contract
+
       - name: Push schema to clean DB
         run: npm run db:push
 
