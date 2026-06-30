@@ -18,6 +18,8 @@ export interface PendingAttachment {
     status: UploadStatus;
     progress: number;
     attempts: number;
+    width?: number;
+    height?: number;
     uploaded?: UploadedAttachment;
     error?: string;
 }
