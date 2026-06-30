@@ -176,7 +176,11 @@ describe("sprint cache patching", () => {
     assert(page.rows.some((row) => row.kind === "task" && row.task.id === "task-2"));
     assert.equal(page.rows.filter((row) => row.kind === "file" && row.task.id === "task-2").length, 2);
     assert(page.drawerPreviews.some((preview) => preview.type === "task" && preview.id === "task-2"));
-    assert(page.drawerPreviews.some((preview) => preview.type === "file" && preview.id === "node-1"));
+    assert.equal(
+      page.drawerPreviews.some((preview) => preview.id === "node-1"),
+      false,
+      "file navigation belongs to the Files workspace, not the sprint drawer",
+    );
   });
 
   it("recomputes completion metrics when a sprint task status changes", () => {
