@@ -15,9 +15,8 @@
 //       `<CreateTaskModal>` and `<TaskDetailPanel>`, which transitively
 //       render the files-store consumers listed below.
 //
-//   Entry point B — src/components/projects/v2/FileTreePicker.tsx
-//     • Does NOT import `@/stores/filesWorkspaceStore`; it uses only
-//       `getProjectNodes` from `@/app/actions/files`.
+//   Entry point B — files-tab/picker/V3AttachmentPicker.tsx
+//     • Uses the canonical v3 picker and shared files workspace store.
 //
 //   Direct files-store consumers reached from those entry points:
 //     src/components/projects/v2/tasks/components/TaskFilesExplorer.tsx
