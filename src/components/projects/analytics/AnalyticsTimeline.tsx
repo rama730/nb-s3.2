@@ -152,66 +152,9 @@ export function AnalyticsTimeline({
                                     : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
                             }`}
                         >
-                            {eventType === "all" ? "All" : eventType}
+                    {eventType === "all" ? "All" : eventType}
                         </button>
                     ))}
-                </div>
-                <div className="mt-3 grid gap-2 lg:grid-cols-4">
-                    <label className="space-y-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300">
-                        <span>Member</span>
-                        <select
-                            value={context.memberId ?? "all"}
-                            onChange={(event) => {
-                                onContextChange({
-                                    ...context,
-                                    memberId: event.target.value === "all" ? null : event.target.value,
-                                });
-                                setLimit(40);
-                            }}
-                            className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs dark:border-zinc-800 dark:bg-zinc-950"
-                        >
-                            <option value="all">All members</option>
-                            {members.map((member) => (
-                                <option key={member.person.id} value={member.person.id}>{member.person.name}</option>
-                            ))}
-                        </select>
-                    </label>
-                    <label className="space-y-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300">
-                        <span>Source surface</span>
-                        <select
-                            value={context.source ?? "all"}
-                            onChange={(event) => {
-                                onContextChange({ ...context, source: event.target.value as ProjectAnalyticsContextFilters["source"] });
-                                setLimit(40);
-                            }}
-                            className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs dark:border-zinc-800 dark:bg-zinc-950"
-                        >
-                            {SOURCE_SURFACES.map((surface) => (
-                                <option key={surface.id} value={surface.id}>{surface.label}</option>
-                            ))}
-                        </select>
-                    </label>
-                    <label className="space-y-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300">
-                        <span>Window</span>
-                        <select
-                            value={context.dateRange}
-                            onChange={(event) => {
-                                onContextChange({ ...context, dateRange: event.target.value as ProjectAnalyticsContextFilters["dateRange"] });
-                                setLimit(40);
-                            }}
-                            className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs dark:border-zinc-800 dark:bg-zinc-950"
-                        >
-                            {ANALYTICS_DATE_RANGE_OPTIONS.map((range) => (
-                                <option key={range.id} value={range.id}>{range.label}</option>
-                            ))}
-                        </select>
-                    </label>
-                    <label className="space-y-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300">
-                        <span>Result window</span>
-                        <div className="rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-500 dark:border-zinc-800 dark:bg-zinc-950">
-                            Showing {timeline?.items?.length ?? 0} of {timeline?.total ?? 0}
-                        </div>
-                    </label>
                 </div>
             </AnalyticsShellCard>
 
@@ -225,19 +168,19 @@ export function AnalyticsTimeline({
                                     <div className="h-px flex-1 bg-zinc-200 dark:bg-zinc-800" />
                                     <span className="text-[11px] text-zinc-500">{group.entries.length} movements</span>
                                 </div>
-                                <div className="rounded-2xl border border-zinc-200 bg-white/60 px-3 dark:border-zinc-800 dark:bg-zinc-950/40">
+                                <div className="relative border-l border-zinc-200 dark:border-zinc-800 pl-6 ml-3.5 space-y-6 mt-3 pb-2">
                                     {group.entries.map((entry) => (
                                         entry.kind === "summary" ? (
-                                            <article key={entry.id} className="flex gap-3 border-b border-zinc-200 py-2.5 text-xs last:border-b-0 dark:border-zinc-800">
-                                                <div className="mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-amber-50 dark:bg-amber-950/40">
+                                            <article key={entry.id} className="relative pl-0 py-1 text-xs">
+                                                <div className="absolute -left-[38px] top-0.5 z-10 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/40">
                                                     <div className="h-1.5 w-1.5 rounded-full bg-amber-500" />
                                                 </div>
                                                 <div className="min-w-0 flex-1">
                                                     <div className="flex flex-wrap items-center gap-2">
-                                                        <p className="font-semibold text-zinc-950 dark:text-zinc-50">{entry.title}</p>
-                                                        <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold text-zinc-500 dark:bg-zinc-900 dark:text-zinc-400">{entry.count} grouped</span>
+                                                        <p className="font-semibold text-zinc-950 dark:text-zinc-50 text-sm">{entry.title}</p>
+                                                        <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[9px] font-semibold text-zinc-500 dark:bg-zinc-900 dark:text-zinc-400">{entry.count} grouped</span>
                                                     </div>
-                                                    <p className="mt-1 text-zinc-500">{entry.description}</p>
+                                                    <p className="mt-1 text-zinc-500 leading-relaxed">{entry.description}</p>
                                                 </div>
                                             </article>
                                         ) : (
