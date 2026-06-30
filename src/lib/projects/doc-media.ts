@@ -1,4 +1,4 @@
-export type ProjectReadmeMediaProject = {
+export type ProjectDocMediaProject = {
     id?: string | null;
     visibility?: string | null;
     githubRepoUrl?: string | null;
@@ -6,29 +6,29 @@ export type ProjectReadmeMediaProject = {
     importSource?: unknown;
 };
 
-export type ProjectReadmeGithubSource = {
+export type ProjectDocGithubSource = {
     owner: string;
     repo: string;
     branch: string;
 };
 
-export type ProjectReadmeImageKind = "badge" | "icon" | "logo" | "diagram" | "content";
-export type ProjectReadmeImageIntent = "logo" | "badge" | "screenshot" | "diagram" | "before_after" | "hero" | "inline";
-export type ProjectReadmeImageSourceKind = "managed" | "project-file" | "github-path" | "external-url" | "replacement";
+export type ProjectDocImageKind = "badge" | "icon" | "logo" | "diagram" | "content";
+export type ProjectDocImageIntent = "logo" | "badge" | "screenshot" | "diagram" | "before_after" | "hero" | "inline";
+export type ProjectDocImageSourceKind = "managed" | "project-file" | "github-path" | "external-url" | "replacement";
 
-export type ProjectReadmeImageIntentOption = {
-    id: ProjectReadmeImageIntent;
+export type ProjectDocImageIntentOption = {
+    id: ProjectDocImageIntent;
     label: string;
     description: string;
     defaultWidth: number | null;
     align: "left" | "center";
 };
 
-export const PROJECT_README_IMAGE_INTENTS: ProjectReadmeImageIntentOption[] = [
+export const PROJECT_DOC_IMAGE_INTENTS: ProjectDocImageIntentOption[] = [
     {
         id: "logo",
         label: "Logo",
-        description: "Small centered identity image at the top of the README.",
+        description: "Small centered identity image at the top of the Doc.",
         defaultWidth: 120,
         align: "center",
     },
@@ -63,7 +63,7 @@ export const PROJECT_README_IMAGE_INTENTS: ProjectReadmeImageIntentOption[] = [
     {
         id: "hero",
         label: "Header",
-        description: "Wide opening visual that introduces the README.",
+        description: "Wide opening visual that introduces the Doc.",
         defaultWidth: 980,
         align: "center",
     },
@@ -76,12 +76,12 @@ export const PROJECT_README_IMAGE_INTENTS: ProjectReadmeImageIntentOption[] = [
     },
 ];
 
-export type ProjectReadmeResolvedImage = {
+export type ProjectDocResolvedImage = {
     src: string | null;
     blockedReason: "invalid" | "external" | null;
     trustedExternal: boolean;
     originalSrc: string;
-    kind: ProjectReadmeImageKind;
+    kind: ProjectDocImageKind;
     width: number | null;
     height: number | null;
     widthPercent: number | null;
@@ -108,8 +108,8 @@ function normalizeBranch(value: unknown) {
     return typeof value === "string" && value.trim() ? value.trim() : "main";
 }
 
-export function getProjectReadmeImageIntentOption(intent: ProjectReadmeImageIntent | null | undefined) {
-    return PROJECT_README_IMAGE_INTENTS.find((option) => option.id === intent) ?? PROJECT_README_IMAGE_INTENTS[2]!;
+export function getProjectDocImageIntentOption(intent: ProjectDocImageIntent | null | undefined) {
+    return PROJECT_DOC_IMAGE_INTENTS.find((option) => option.id === intent) ?? PROJECT_DOC_IMAGE_INTENTS[2]!;
 }
 
 function escapeHtmlAttribute(value: string) {
@@ -128,10 +128,10 @@ function sanitizeInlineText(value: string) {
     return value.replace(/\s+/g, " ").trim();
 }
 
-export function buildProjectReadmeImageMarkdown(input: {
+export function buildProjectDocImageMarkdown(input: {
     src: string;
     alt: string;
-    intent?: ProjectReadmeImageIntent | null;
+    intent?: ProjectDocImageIntent | null;
     width?: number | null;
     height?: number | null;
     caption?: string | null;
@@ -141,7 +141,7 @@ export function buildProjectReadmeImageMarkdown(input: {
     if (!src) return "";
     const alt = sanitizeInlineText(input.alt) || "Project image";
     const caption = sanitizeInlineText(input.caption ?? "");
-    const intent = getProjectReadmeImageIntentOption(input.intent);
+    const intent = getProjectDocImageIntentOption(input.intent);
     const width = typeof input.width === "number" && Number.isFinite(input.width) && input.width > 0
         ? Math.round(input.width)
         : intent.defaultWidth;
@@ -172,7 +172,7 @@ export function buildProjectReadmeImageMarkdown(input: {
     return imageTag;
 }
 
-function readImportSource(project: ProjectReadmeMediaProject) {
+function readImportSource(project: ProjectDocMediaProject) {
     const importSource = project.importSource && typeof project.importSource === "object"
         ? project.importSource as Record<string, unknown>
         : {};
@@ -188,7 +188,7 @@ function readMetadataGithubRepoUrl(metadata: Record<string, unknown>) {
     return owner && name ? `https://github.com/${owner}/${name}` : null;
 }
 
-export function parseProjectReadmeGithubRepoUrl(value: unknown): Pick<ProjectReadmeGithubSource, "owner" | "repo"> | null {
+export function parseProjectDocGithubRepoUrl(value: unknown): Pick<ProjectDocGithubSource, "owner" | "repo"> | null {
     if (typeof value !== "string") return null;
     const trimmed = value.trim();
     if (!trimmed) return null;
@@ -200,14 +200,14 @@ export function parseProjectReadmeGithubRepoUrl(value: unknown): Pick<ProjectRea
     return owner && repo ? { owner, repo } : null;
 }
 
-export function resolveProjectReadmeGithubSource(project: ProjectReadmeMediaProject): ProjectReadmeGithubSource | null {
+export function resolveProjectDocGithubSource(project: ProjectDocMediaProject): ProjectDocGithubSource | null {
     const { importSource, metadata } = readImportSource(project);
     const repoUrl = project.githubRepoUrl
         ?? (typeof importSource.repoUrl === "string" ? importSource.repoUrl : null)
         ?? (typeof metadata.normalizedRepoUrl === "string" ? metadata.normalizedRepoUrl : null)
         ?? (typeof metadata.repoUrl === "string" ? metadata.repoUrl : null)
         ?? readMetadataGithubRepoUrl(metadata);
-    const repo = parseProjectReadmeGithubRepoUrl(repoUrl);
+    const repo = parseProjectDocGithubRepoUrl(repoUrl);
     if (!repo) return null;
     const branch = normalizeBranch(importSource.branch ?? project.githubDefaultBranch ?? metadata.branch);
     return { ...repo, branch };
@@ -246,7 +246,7 @@ function normalizeRelativeReadmeAssetPath(value: string) {
     return `${normalizedPath.map(encodeURIComponent).join("/")}${suffix}`;
 }
 
-function resolveGithubRawImage(value: string, source: ProjectReadmeGithubSource | null) {
+function resolveGithubRawImage(value: string, source: ProjectDocGithubSource | null) {
     if (!source) return null;
     const relativePath = normalizeRelativeReadmeAssetPath(value);
     if (!relativePath) return null;
@@ -257,7 +257,7 @@ function normalizeProtocolRelativeImageUrl(value: string) {
     return value.startsWith("//") ? `https:${value}` : value;
 }
 
-function resolveGithubRepositoryImageUrl(url: URL, source: ProjectReadmeGithubSource | null) {
+function resolveGithubRepositoryImageUrl(url: URL, source: ProjectDocGithubSource | null) {
     if (url.hostname.toLowerCase() !== "github.com") return null;
     const parts = url.pathname.split("/").filter(Boolean);
     if (parts.length < 5) return null;
@@ -284,11 +284,11 @@ function isProjectStorageImage(value: string) {
     return value.startsWith("/api/v1/projects/") || value.startsWith("/_next/") || value.startsWith("/images/");
 }
 
-function isProjectPublic(project: ProjectReadmeMediaProject) {
+function isProjectPublic(project: ProjectDocMediaProject) {
     return project.visibility === "public";
 }
 
-function isTrustedReadmeImageUrl(url: URL, project: ProjectReadmeMediaProject, source: ProjectReadmeGithubSource | null) {
+function isTrustedReadmeImageUrl(url: URL, project: ProjectDocMediaProject, source: ProjectDocGithubSource | null) {
     if (!source || !isProjectPublic(project)) return false;
     if (!TRUSTED_PUBLIC_README_IMAGE_HOSTS.has(url.hostname.toLowerCase())) return false;
     if (url.hostname.toLowerCase() === "raw.githubusercontent.com") {
@@ -305,7 +305,7 @@ function classifyReadmeImage(input: {
     title?: string | null;
     width: number | null;
     height: number | null;
-}) : ProjectReadmeImageKind {
+}) : ProjectDocImageKind {
     const value = input.src.toLowerCase();
     const label = `${input.alt ?? ""} ${input.title ?? ""}`.toLowerCase();
     const width = input.width ?? 0;
@@ -321,15 +321,15 @@ function classifyReadmeImage(input: {
     return "content";
 }
 
-export function resolveProjectReadmeImage(input: {
+export function resolveProjectDocImage(input: {
     src: unknown;
     alt?: unknown;
     title?: unknown;
     width?: unknown;
     height?: unknown;
     allowExternalImages: boolean;
-    project: ProjectReadmeMediaProject;
-}): ProjectReadmeResolvedImage {
+    project: ProjectDocMediaProject;
+}): ProjectDocResolvedImage {
     const originalSrc = typeof input.src === "string" ? input.src.replace(CONTROL_CHARS_REGEX, "").trim() : "";
     const width = parseReadmeHtmlDimension(input.width);
     const height = parseReadmeHtmlDimension(input.height);
@@ -352,7 +352,7 @@ export function resolveProjectReadmeImage(input: {
         if (isProjectStorageImage(normalizedSrc)) {
             return { src: normalizedSrc, blockedReason: null, trustedExternal: false, originalSrc, kind, width, height, widthPercent };
         }
-        const githubSrc = resolveGithubRawImage(normalizedSrc, resolveProjectReadmeGithubSource(input.project));
+        const githubSrc = resolveGithubRawImage(normalizedSrc, resolveProjectDocGithubSource(input.project));
         if (githubSrc) {
             return { src: githubSrc, blockedReason: null, trustedExternal: true, originalSrc, kind, width, height, widthPercent };
         }
@@ -360,7 +360,7 @@ export function resolveProjectReadmeImage(input: {
     }
 
     try {
-        const source = resolveProjectReadmeGithubSource(input.project);
+        const source = resolveProjectDocGithubSource(input.project);
         const parsed = new URL(normalizedSrc);
         if (!SAFE_IMAGE_PROTOCOLS.has(parsed.protocol)) {
             return { src: null, blockedReason: "invalid", trustedExternal: false, originalSrc, kind, width, height, widthPercent };
