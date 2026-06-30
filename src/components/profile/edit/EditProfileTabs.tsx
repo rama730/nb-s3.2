@@ -79,7 +79,7 @@ export function EditProfileTabs({
             }
 
             const cacheBustedUrl = `${finalized.publicUrl}?t=${Date.now()}`;
-            updateForm(type === "avatar" ? "avatar_url" : "banner_url", cacheBustedUrl);
+            updateForm(type === "avatar" ? "avatarUrl" : "bannerUrl", cacheBustedUrl);
             showToast(`${type === "avatar" ? "Avatar" : "Banner"} updated`, "success");
         } catch (error: any) {
             const message = error?.message || "Unknown error";
@@ -129,11 +129,11 @@ export function EditProfileTabs({
                                 <h2 className="text-xl font-semibold text-zinc-900 dark:text-white mb-6">General Properties</h2>
                                 <div className="flex items-center gap-5 relative z-10 w-full">
                                     <div className="w-20 h-20 rounded-2xl bg-zinc-200 dark:bg-zinc-800 border-4 border-white dark:border-zinc-900 overflow-hidden relative group shrink-0">
-                                        {profile.avatar_url ? (
-                                            <Image src={profile.avatar_url} alt="Profile avatar" fill className="object-cover" sizes="80px" />
+                                        {profile.avatarUrl ? (
+                                            <Image src={profile.avatarUrl} alt="Profile avatar" fill className="object-cover" sizes="80px" />
                                         ) : (
                                             <div className="w-full h-full flex items-center justify-center text-2xl font-bold text-zinc-400">
-                                                {(profile.full_name?.[0] || profile.username?.[0] || "?").toUpperCase()}
+                                                {(profile.fullName?.[0] || profile.username?.[0] || "?").toUpperCase()}
                                             </div>
                                         )}
                                         <label className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex flex-col items-center justify-center cursor-pointer transition-opacity text-white">
@@ -155,12 +155,12 @@ export function EditProfileTabs({
                                         <Label htmlFor="profile-full-name">Full Name</Label>
                                         <Input
                                             id="profile-full-name"
-                                            name="full_name"
+                                            name="fullName"
                                             required
                                             minLength={1}
                                             maxLength={PROFILE_LIMITS.fullNameMax}
-                                            value={profile.full_name ?? ""}
-                                            onChange={(e) => updateForm("full_name", e.target.value)}
+                                            value={profile.fullName ?? ""}
+                                            onChange={(e) => updateForm("fullName", e.target.value)}
                                             className="mt-1.5"
                                         />
                                     </div>
