@@ -1,20 +1,20 @@
 "use client";
 
-import type { ProjectReadmeHeading } from "@/lib/projects/readme";
+import type { ProjectDocHeading } from "@/lib/projects/doc";
 import { cn } from "@/lib/utils";
 
-export function ProjectReadmeOutline({ headings }: { headings: ProjectReadmeHeading[] }) {
+export function ProjectDocOutline({ headings }: { headings: ProjectDocHeading[] }) {
     if (!headings.length) {
         return (
             <div className="border-l border-zinc-200 pl-4 text-sm text-zinc-500 dark:border-zinc-800">
-                No headings yet. Add sections to make the README easier to scan.
+                No headings yet. Add sections to make the Doc easier to scan.
             </div>
         );
     }
 
     return (
-        <nav className="border-l border-zinc-200 pl-4 dark:border-zinc-800" aria-label="README outline">
-            <p className="mb-3 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">On This README</p>
+        <nav className="border-l border-zinc-200 pl-4 dark:border-zinc-800" aria-label="Document outline">
+            <p className="mb-3 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">On This Document</p>
             <div className="space-y-1">
                 {headings.map((heading) => (
                     <a
