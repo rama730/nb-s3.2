@@ -101,29 +101,28 @@ export default function AssetPreview({
     }
 
     return (
-      <div className="h-full w-full flex flex-col bg-white dark:bg-zinc-950 overflow-hidden">
-        <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-200 dark:border-zinc-800 z-10 bg-white dark:bg-zinc-950">
-          <div className="text-xs font-mono truncate mr-2">{node.name}</div>
-          <div className="flex items-center gap-1">
-            <Button size="sm" variant="ghost" onClick={handleZoomOut} disabled={scale <= 0.5} className="h-7 w-7 p-0">
-              <ZoomOut className="w-4 h-4" />
-            </Button>
-            <span className="text-xs w-12 text-center text-zinc-500">{Math.round(scale * 100)}%</span>
-            <Button size="sm" variant="ghost" onClick={handleZoomIn} disabled={scale >= 5} className="h-7 w-7 p-0">
-              <ZoomIn className="w-4 h-4" />
-            </Button>
-            <Button size="sm" variant="ghost" onClick={handleReset} className="h-7 w-7 p-0" title="Reset">
-              <RotateCcw className="w-3 h-3" />
-            </Button>
-            <div className="w-px h-4 bg-zinc-200 dark:bg-zinc-800 mx-1" />
-            <Button asChild size="sm" variant="outline" className="h-7">
-              <a href={signedUrl} target="_blank" rel="noreferrer">
-                <ExternalLink className="w-4 h-4 mr-2" />
-                Open
-              </a>
-            </Button>
-          </div>
+      <div className="h-full w-full relative flex flex-col bg-white dark:bg-zinc-950 overflow-hidden">
+        {/* Floating Zoom & Action Controls */}
+        <div className="absolute top-3 right-3 z-10 flex items-center gap-1 bg-zinc-900/80 dark:bg-zinc-950/85 backdrop-blur px-2 py-1 rounded-lg border border-zinc-200/20 shadow-md text-white">
+          <Button size="sm" variant="ghost" onClick={handleZoomOut} disabled={scale <= 0.5} className="h-6 w-6 p-0 text-white hover:text-white hover:bg-white/10 disabled:opacity-40">
+            <ZoomOut className="w-3.5 h-3.5" />
+          </Button>
+          <span className="text-[10px] w-10 text-center font-medium select-none">{Math.round(scale * 100)}%</span>
+          <Button size="sm" variant="ghost" onClick={handleZoomIn} disabled={scale >= 5} className="h-6 w-6 p-0 text-white hover:text-white hover:bg-white/10 disabled:opacity-40">
+            <ZoomIn className="w-3.5 h-3.5" />
+          </Button>
+          <Button size="sm" variant="ghost" onClick={handleReset} className="h-6 w-6 p-0 text-white hover:text-white hover:bg-white/10" title="Reset">
+            <RotateCcw className="w-3 h-3" />
+          </Button>
+          <div className="w-px h-3 bg-white/20 mx-1" />
+          <Button asChild size="sm" variant="ghost" className="h-6 px-1.5 text-[10px] text-white hover:text-white hover:bg-white/10">
+            <a href={signedUrl} target="_blank" rel="noreferrer">
+              <ExternalLink className="w-3 h-3 mr-1" />
+              Open
+            </a>
+          </Button>
         </div>
+
         <div
           ref={containerRef}
           className="flex-1 min-h-0 flex items-center justify-center p-4 overflow-hidden relative bg-zinc-50/50 dark:bg-zinc-900/50 cursor-grab active:cursor-grabbing"
@@ -157,77 +156,44 @@ export default function AssetPreview({
     }
 
     return (
-      <div className="h-full w-full flex flex-col bg-white dark:bg-zinc-950">
-        <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-200 dark:border-zinc-800">
-          <div className="text-xs font-mono truncate">{node.name}</div>
-          <Button asChild size="sm" variant="outline" className="h-7">
-            <a href={signedUrl} target="_blank" rel="noreferrer">
-              <ExternalLink className="w-4 h-4 mr-2" />
-              Open
-            </a>
-          </Button>
-        </div>
-        <div className="flex-1 min-h-0 p-4">
-          <video
-            src={signedUrl}
-            controls
-            preload="metadata"
-            aria-label={`Video: ${node.name}`}
-            className="w-full h-full rounded-md bg-black"
-            onError={() => setVideoError(true)}
-          />
-        </div>
+      <div className="h-full w-full bg-white dark:bg-zinc-950 p-4">
+        <video
+          src={signedUrl}
+          controls
+          preload="metadata"
+          aria-label={`Video: ${node.name}`}
+          className="w-full h-full rounded-md bg-black"
+          onError={() => setVideoError(true)}
+        />
       </div>
     );
   }
 
   if (kind === "audio") {
     return (
-      <div className="h-full w-full flex flex-col bg-white dark:bg-zinc-950">
-        <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-200 dark:border-zinc-800">
-          <div className="text-xs font-mono truncate">{node.name}</div>
-          <Button asChild size="sm" variant="outline" className="h-7">
-            <a href={signedUrl} target="_blank" rel="noreferrer">
-              <ExternalLink className="w-4 h-4 mr-2" />
-              Open
-            </a>
-          </Button>
-        </div>
-        <div className="flex-1 min-h-0 flex items-center justify-center p-8">
-          <audio src={signedUrl} controls preload="metadata" aria-label={`Audio: ${node.name}`} className="w-full" />
-        </div>
+      <div className="h-full w-full flex items-center justify-center p-8 bg-white dark:bg-zinc-950">
+        <audio src={signedUrl} controls preload="metadata" aria-label={`Audio: ${node.name}`} className="w-full max-w-lg" />
       </div>
     );
   }
 
   if (kind === "pdf") {
     return (
-      <div className="h-full w-full flex flex-col bg-white dark:bg-zinc-950">
-        <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-200 dark:border-zinc-800">
-          <div className="text-xs font-mono truncate">{node.name}</div>
-          <Button asChild size="sm" variant="outline" className="h-7">
-            <a href={signedUrl} target="_blank" rel="noreferrer">
-              <ExternalLink className="w-4 h-4 mr-2" />
-              Open
-            </a>
-          </Button>
-        </div>
-        <div className="flex-1 min-h-0">
-          <object
-            data={signedUrl}
-            type="application/pdf"
-            title={node.name}
-            className="w-full h-full border-0 bg-white"
-          >
-            <div className="flex flex-col items-center justify-center h-full gap-3 p-8">
-              <FileText className="w-8 h-8 text-zinc-400" />
-              <p className="text-sm text-zinc-500">PDF preview not supported in this browser.</p>
-              <Button asChild size="sm" variant="outline">
-                <a href={signedUrl} target="_blank" rel="noreferrer">Download PDF</a>
-              </Button>
-            </div>
-          </object>
-        </div>
+      <div className="h-full w-full bg-white dark:bg-zinc-950">
+        <object
+          data={signedUrl}
+          type="application/pdf"
+          title={node.name}
+          className="w-full h-full border-0 bg-white"
+        >
+          <div className="flex flex-col items-center justify-center h-full gap-3 p-8 text-center">
+            <FileText className="w-8 h-8 text-zinc-400" />
+            <p className="text-sm text-zinc-500">PDF preview not supported in this browser.</p>
+            <Button asChild size="sm" variant="outline">
+              <a href={signedUrl} target="_blank" rel="noreferrer">Open PDF in new tab</a>
+            </Button>
+          </div>
+        </object>
       </div>
     );
   }
@@ -235,51 +201,35 @@ export default function AssetPreview({
   if (kind === "doc") {
     const viewerUrl = `https://docs.google.com/viewer?url=${encodeURIComponent(signedUrl)}&embedded=true`;
     return (
-      <div className="h-full w-full flex flex-col bg-white dark:bg-zinc-950">
-        <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-200 dark:border-zinc-800">
-          <div className="text-xs font-mono truncate">{node.name}</div>
-          <Button asChild size="sm" variant="outline" className="h-7">
-            <a href={signedUrl} target="_blank" rel="noreferrer">
-              <ExternalLink className="w-4 h-4 mr-2" />
-              Open
-            </a>
-          </Button>
-        </div>
-        <div className="flex-1 min-h-0">
-          <iframe
-            title={node.name}
-            src={viewerUrl}
-            className="w-full h-full border-0 bg-white"
-          />
-        </div>
+      <div className="h-full w-full bg-white dark:bg-zinc-950">
+        <iframe
+          title={node.name}
+          src={viewerUrl}
+          className="w-full h-full border-0 bg-white"
+        />
       </div>
     );
   }
 
   return (
-    <div className="h-full w-full flex flex-col bg-white dark:bg-zinc-950">
-      <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-200 dark:border-zinc-800">
-        <div className="text-xs font-mono truncate">{node.name}</div>
-        <Button asChild size="sm" variant="outline" className="h-7">
+    <div className="h-full w-full flex items-center justify-center p-8 text-center bg-white dark:bg-zinc-950">
+      <div className="max-w-lg">
+        <div className="mx-auto w-12 h-12 rounded-xl bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center mb-3">
+          <FileText className="w-6 h-6 text-zinc-500" />
+        </div>
+        <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">{node.name}</div>
+        <div className="mt-1 text-xs text-zinc-500">
+          {(node.mimeType || "unknown").toLowerCase()} · {formatBytes(node.size)}
+        </div>
+        <div className="mt-3 text-xs text-zinc-500">
+          This file type doesn&apos;t have an inline preview. Open it in a new tab to view.
+        </div>
+        <Button asChild size="sm" variant="outline" className="mt-4">
           <a href={signedUrl} target="_blank" rel="noreferrer">
             <ExternalLink className="w-4 h-4 mr-2" />
-            Open
+            Open in new tab
           </a>
         </Button>
-      </div>
-      <div className="flex-1 min-h-0 flex items-center justify-center p-8 text-center">
-        <div className="max-w-lg">
-          <div className="mx-auto w-12 h-12 rounded-xl bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center mb-3">
-            <FileText className="w-6 h-6 text-zinc-500" />
-          </div>
-          <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">{node.name}</div>
-          <div className="mt-1 text-xs text-zinc-500">
-            {(node.mimeType || "unknown").toLowerCase()} · {formatBytes(node.size)}
-          </div>
-          <div className="mt-3 text-xs text-zinc-500">
-            This file type doesn&apos;t have an inline preview yet. Use &quot;Open&quot; to view it in a new tab.
-          </div>
-        </div>
       </div>
     </div>
   );
