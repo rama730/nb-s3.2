@@ -802,3 +802,13 @@ server.on("upgrade", async (request, socket, head) => {
 server.listen(PRESENCE_SERVICE_PORT, () => {
   console.info(`[presence] listening on :${PRESENCE_SERVICE_PORT} (${presenceStore.mode})`);
 });
+
+// Native memory monitor to protect against heap leaks
+const MEMORY_LIMIT_MB = 1500;
+setInterval(() => {
+  const heapUsed = process.memoryUsage().heapUsed / 1024 / 1024;
+  if (heapUsed > MEMORY_LIMIT_MB) {
+    console.warn(`[presence] heap footprint (${Math.round(heapUsed)}MB) exceeded threshold. Gracefully restarting.`);
+    process.exit(1);
+  }
+}, 30000).unref();
