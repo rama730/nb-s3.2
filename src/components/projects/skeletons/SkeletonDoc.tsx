@@ -1,7 +1,7 @@
-export function SkeletonReadme() {
+export function SkeletonDoc() {
     return (
         <div className="mx-auto w-full max-w-[1480px] space-y-5 px-4 py-2 sm:px-6 lg:px-8" aria-hidden="true">
-            <span className="sr-only" role="status" aria-live="polite">Loading README…</span>
+            <span className="sr-only" role="status" aria-live="polite">Loading Doc…</span>
             <div className="flex justify-end">
                 <div className="h-9 w-20 animate-pulse rounded-full bg-zinc-100 dark:bg-zinc-900" />
             </div>
