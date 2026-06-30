@@ -75,7 +75,7 @@ export async function executeCodeViaBackend(
       success: false,
       logs: ["[error] Execution backend not configured. Set EXECUTION_BACKEND_URL."],
       error: "Execution backend not configured",
-      settingsHref: "/settings/languages#backend",
+      settingsHref: "/settings/integrations#backend",
     };
   }
 
