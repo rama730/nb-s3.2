@@ -1,0 +1,66 @@
+{
+  "id": "impact-2026-06-21-project-updates-scaling",
+  "title": "High-concurrency scaling enhancements for project updates",
+  "summary": "Optimizes project updates feed for 1M+ concurrent users by shifting from query invalidation to real-time optimistic cache patching, introducing localStorage-first draft sync to prevent database write churn, and adding client-side image compression before signed-url storage uploads.",
+  "riskLevel": "high",
+  "runtimePlanes": [
+    "request",
+    "realtime",
+    "database",
+    "ops"
+  ],
+  "routeClasses": [
+    "active_surface",
+    "public_cached"
+  ],
+  "dataSourcesChanged": [
+    "project_updates",
+    "project_update_drafts",
+    "project_update_comments"
+  ],
+  "canonicalLogicDomains": [
+    "status_lifecycle",
+    "profile_display"
+  ],
+  "concurrencyRisk": "High realtime/cache coordination risk: client-side cache state can drift if real-time events are dropped, reordered, or double-applied. Mitigated by using strict event sequence counters, client-side deduplication keys, and a single cache update reducer that discards outdated payload changes.",
+  "observability": {
+    "metrics": [
+      "project.updates.optimistic_patch_success",
+      "project.updates.realtime_lag_ms",
+      "project.updates.draft_autosave_writes_prevented",
+      "project.updates.client_compression_ratio"
+    ],
+    "logs": [
+      "realtime_sequence_gap_detected",
+      "optimistic_cache_patch_failed",
+      "draft_local_sync_bypass"
+    ],
+    "alerts": [
+      "project_updates_write_rate_anomaly"
+    ]
+  },
+  "rollback": {
+    "strategy": "Revert the real-time cache patching changes in UpdatesTab.tsx to fall back to query invalidation, remove the client-side WebP compression worker, and restore the 500ms debounced database draft autosaving in ProjectUpdateComposer.tsx.",
+    "validation": [
+      "npm run typecheck",
+      "bun test tests/unit/project-updates.test.ts",
+      "npm run check:impact-review"
+    ]
+  },
+  "evidence": {
+    "commands": [
+      "npm run typecheck",
+      "bun test tests/unit/project-updates.test.ts",
+      "npm run check:impact-review"
+    ],
+    "reports": []
+  },
+  "paths": [
+    "src/app/actions/project/updates.ts",
+    "src/components/projects/tabs/UpdatesTab.tsx",
+    "src/components/projects/updates/ProjectUpdateComposer.tsx",
+    "src/components/projects/updates/ProjectUpdateRichTextEditor.tsx",
+    "standards/impact-reviews/project-updates-scaling.json",
+    "tests/unit/project-updates.test.ts"
+  ]
+}
