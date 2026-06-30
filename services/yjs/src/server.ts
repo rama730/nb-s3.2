@@ -3,11 +3,17 @@ import { Redis } from '@hocuspocus/extension-redis';
 import { SQLite } from '@hocuspocus/extension-sqlite';
 import { config as loadDotenv } from "dotenv";
 import * as path from 'node:path';
-import { isReadmeCollaborationDocumentName } from '../../../src/lib/realtime/readme-collaboration-document';
 import {
-    verifyReadmeCollaborationToken,
-    MissingReadmeCollaborationSecretError,
-} from '../../../src/lib/realtime/readme-collaboration-token';
+    isDocCollaborationDocumentName,
+    parseDocCollaborationDocumentName,
+} from '../../../src/lib/realtime/doc-collaboration-document';
+import {
+    verifyDocCollaborationToken,
+    MissingDocCollaborationSecretError,
+} from '../../../src/lib/realtime/doc-collaboration-token';
+import { db } from '../../../src/lib/db';
+import { profiles, projectMarkdowns } from '../../../src/lib/db/schema';
+import { eq, and } from 'drizzle-orm';
 
 loadDotenv({ path: ".env.local" });
 loadDotenv();
@@ -117,43 +123,270 @@ if (process.env.NODE_ENV === 'production') {
     );
 }
 
+async function saveDraft(projectId: string, docSlug: string, content: string) {
+    try {
+        await db
+            .update(projectMarkdowns)
+            .set({
+                draftContent: content,
+                draftUpdatedAt: new Date(),
+            })
+            .where(
+                and(
+                    eq(projectMarkdowns.projectId, projectId),
+                    eq(projectMarkdowns.slug, docSlug)
+                )
+            );
+    } catch (err) {
+        console.error(`[Hocuspocus] Failed to auto-save draft for ${projectId}:${docSlug}:`, err);
+    }
+}
+
+function joinRoomQueue(document: any, userId: string, userName: string) {
+    const collabState = document.getMap('collaborationState');
+    let activeEditors = (collabState.get('activeEditors') as any[]) || [];
+    let spectators = (collabState.get('spectators') as any[]) || [];
+
+    const editorIndex = activeEditors.findIndex((e: any) => e.userId === userId);
+    if (editorIndex !== -1) {
+        activeEditors[editorIndex].userName = userName;
+    } else {
+        const spectatorIndex = spectators.findIndex((s: any) => s.userId === userId);
+        if (spectatorIndex !== -1) {
+            spectators[spectatorIndex].userName = userName;
+        } else {
+            if (activeEditors.length < 5) {
+                activeEditors.push({
+                    userId,
+                    userName,
+                    joinedAt: Date.now()
+                });
+            } else {
+                spectators.push({
+                    userId,
+                    userName,
+                    joinedAt: Date.now()
+                });
+            }
+        }
+    }
+
+    document.transact(() => {
+        collabState.set('activeEditors', activeEditors);
+        collabState.set('spectators', spectators);
+    }, 'server-queue-join');
+}
+
+async function checkRoomEvictionAndPromotion(documentName: string, document: any) {
+    const collabState = document.getMap('collaborationState');
+    let activeEditors = (collabState.get('activeEditors') as any[]) || [];
+    let spectators = (collabState.get('spectators') as any[]) || [];
+    let pendingPromotion = collabState.get('pendingPromotion') as any || null;
+
+    if (activeEditors.length === 0 && spectators.length === 0 && !pendingPromotion) return;
+
+    const states = Array.from(document.awareness.getStates().entries()) as [number, any][];
+    const now = Date.now();
+    let evictedUserIds: string[] = [];
+
+    const remainingEditors = activeEditors.filter((editor: any) => {
+        const userStateEntry = states.find(([_, s]) => s.user?.id === editor.userId);
+        if (!userStateEntry) {
+            evictedUserIds.push(editor.userId);
+            return false;
+        }
+        
+        const state = userStateEntry[1];
+        const lastActive = state.lastActiveAt || 0;
+        const heartbeat = state.heartbeat || 0;
+
+        if (now - lastActive > 45000 || now - heartbeat > 45000) {
+            evictedUserIds.push(editor.userId);
+            return false;
+        }
+
+        return true;
+    });
+
+    if (evictedUserIds.length > 0) {
+        console.log(`[Hocuspocus] Evicting idle editors: ${evictedUserIds.join(', ')} from ${documentName}`);
+        
+        const content = document.getText('markdown').toString();
+        const parsed = parseDocCollaborationDocumentName(documentName);
+        if (parsed) {
+            await saveDraft(parsed.projectId, parsed.docSlug, content);
+            console.log(`[Hocuspocus] Auto-saved draft content for ${documentName} on eviction`);
+        }
+
+        evictedUserIds.forEach((evictedId) => {
+            const evictedEditor = activeEditors.find((e: any) => e.userId === evictedId);
+            if (evictedEditor && !spectators.some((s: any) => s.userId === evictedId)) {
+                spectators.push({
+                    userId: evictedEditor.userId,
+                    userName: evictedEditor.userName,
+                    joinedAt: Date.now(),
+                });
+            }
+        });
+
+        activeEditors = remainingEditors;
+    }
+
+    if (pendingPromotion) {
+        const promotedUserStateEntry = states.find(([_, s]) => s.user?.id === pendingPromotion.userId);
+        const promotedState = promotedUserStateEntry?.[1];
+
+        if (promotedState?.acceptPromotion) {
+            const spectatorObj = spectators.find((s: any) => s.userId === pendingPromotion.userId);
+            if (spectatorObj) {
+                activeEditors.push({
+                    userId: spectatorObj.userId,
+                    userName: spectatorObj.userName,
+                    joinedAt: Date.now(),
+                });
+                spectators = spectators.filter((s: any) => s.userId !== pendingPromotion.userId);
+            }
+            pendingPromotion = null;
+        } else if (now - pendingPromotion.promotedAt > 10000) {
+            console.log(`[Hocuspocus] Promotion expired for user ${pendingPromotion.userId} in ${documentName}`);
+            const spectatorObj = spectators.find((s: any) => s.userId === pendingPromotion.userId);
+            if (spectatorObj) {
+                spectators = spectators.filter((s: any) => s.userId !== pendingPromotion.userId);
+                spectators.push({
+                    ...spectatorObj,
+                    joinedAt: Date.now(),
+                });
+            }
+            pendingPromotion = null;
+        }
+    }
+
+    if (!pendingPromotion && activeEditors.length < 5 && spectators.length > 0) {
+        const nextSpectator = spectators[0];
+        pendingPromotion = {
+            userId: nextSpectator.userId,
+            promotedAt: Date.now(),
+        };
+        console.log(`[Hocuspocus] Offering promotion slot to user ${nextSpectator.userId} in ${documentName}`);
+    }
+
+    document.transact(() => {
+        collabState.set('activeEditors', activeEditors);
+        collabState.set('spectators', spectators);
+        collabState.set('pendingPromotion', pendingPromotion);
+    }, 'server-queue-tick');
+}
+
 const server = new Server({
     port,
     extensions,
     async onConnect(data) {
         assertAllowedOrigin(data.requestHeaders);
-        if (!isReadmeCollaborationDocumentName(data.documentName)) {
+        if (!isDocCollaborationDocumentName(data.documentName)) {
             throw new Error("Unsupported collaboration document");
         }
-        const document = data.instance.documents.get(data.documentName);
-        const connectionCount = document ? document.getConnectionsCount() : 0;
-        if (connectionCount >= 5) {
-            throw new Error("ROOM_FULL");
-        }
-        console.log(`[Hocuspocus] User connected to room: ${data.documentName} (Current editors: ${connectionCount + 1})`);
+        console.log(`[Hocuspocus] User connected to room: ${data.documentName}`);
     },
     async onAuthenticate(data) {
         assertAllowedOrigin(data.requestHeaders);
-        const claims = verifyReadmeCollaborationToken(data.token);
+        const claims = verifyDocCollaborationToken(data.token);
         if (claims.documentName !== data.documentName) {
-            throw new Error("README collaboration token does not match document");
+            throw new Error("Doc collaboration token does not match document");
         }
 
-        data.connectionConfig.readOnly = false;
+        let userName = "Teammate";
+        try {
+            const [profile] = await db
+                .select({ name: profiles.fullName, username: profiles.username })
+                .from(profiles)
+                .where(eq(profiles.id, claims.userId))
+                .limit(1);
+            if (profile?.name) {
+                userName = profile.name;
+            } else if (profile?.username) {
+                userName = profile.username;
+            }
+        } catch (err) {
+            console.error(`[Hocuspocus] Failed to fetch profile name for ${claims.userId}:`, err);
+        }
+
+        const document = data.instance.documents.get(data.documentName);
+        if (document) {
+            joinRoomQueue(document, claims.userId, userName);
+
+            const collabState = document.getMap('collaborationState');
+            const activeEditors = (collabState.get('activeEditors') as any[]) || [];
+            const isActive = activeEditors.some((e: any) => e.userId === claims.userId);
+            data.connectionConfig.readOnly = !isActive;
+        } else {
+            data.connectionConfig.readOnly = false;
+        }
 
         return {
             userId: claims.userId,
+            userName,
             sessionId: claims.sessionId,
             projectId: claims.projectId,
             role: claims.role,
         };
     },
+    async afterLoadDocument(data) {
+        const { document } = data;
+        const collabState = document.getMap('collaborationState');
+        collabState.observe(() => {
+            const activeEditors = (collabState.get('activeEditors') as any[]) || [];
+            document.connections.forEach((conn: any) => {
+                const connUserId = conn.context?.userId;
+                if (connUserId) {
+                    const isActive = activeEditors.some((e: any) => e.userId === connUserId);
+                    conn.connectionConfig.readOnly = !isActive;
+                }
+            });
+        });
+    },
+    async onDisconnect(data) {
+        const userId = data.context?.userId;
+        if (!userId) return;
+
+        const document = data.instance.documents.get(data.documentName);
+        if (!document) return;
+
+        const collabState = document.getMap('collaborationState');
+        let activeEditors = (collabState.get('activeEditors') as any[]) || [];
+        let spectators = (collabState.get('spectators') as any[]) || [];
+
+        activeEditors = activeEditors.filter((e: any) => e.userId !== userId);
+        spectators = spectators.filter((s: any) => s.userId !== userId);
+
+        let pendingPromotion = collabState.get('pendingPromotion') as any || null;
+        if (pendingPromotion?.userId === userId) {
+            pendingPromotion = null;
+        }
+
+        document.transact(() => {
+            collabState.set('activeEditors', activeEditors);
+            collabState.set('spectators', spectators);
+            collabState.set('pendingPromotion', pendingPromotion);
+        }, 'server-queue-leave');
+
+        console.log(`[Hocuspocus] User disconnected: ${userId} from room: ${data.documentName}`);
+    }
 });
+
+setInterval(async () => {
+    for (const [documentName, document] of server.hocuspocus.documents.entries()) {
+        try {
+            await checkRoomEvictionAndPromotion(documentName, document);
+        } catch (err) {
+            console.error(`[Hocuspocus] Error in periodic check for ${documentName}:`, err);
+        }
+    }
+}, 15000);
 
 server.listen().then(() => {
     console.log(`Stable Hocuspocus Yjs backend running on ws://127.0.0.1:${port}`);
 }).catch((error) => {
-    const message = error instanceof MissingReadmeCollaborationSecretError
+    const message = error instanceof MissingDocCollaborationSecretError
         ? error.message
         : error instanceof Error
             ? error.message
@@ -161,3 +394,13 @@ server.listen().then(() => {
     console.error(`[Hocuspocus] Failed to start: ${message}`);
     process.exit(1);
 });
+
+// Native memory monitor to protect against heap leaks
+const MEMORY_LIMIT_MB = 1500;
+setInterval(() => {
+  const heapUsed = process.memoryUsage().heapUsed / 1024 / 1024;
+  if (heapUsed > MEMORY_LIMIT_MB) {
+    console.warn(`[Yjs] heap footprint (${Math.round(heapUsed)}MB) exceeded threshold. Gracefully restarting.`);
+    process.exit(1);
+  }
+}, 30000).unref();
