@@ -44,10 +44,16 @@ export type GitChangeStatus = "modified" | "added" | "deleted";
 
 /** Optional enrichment on `ProjectNode` supplied by the parent view. */
 export type FolderListRowNode = ProjectNode & {
+  /** Latest version uploader id when this row is a file. */
+  updatedById?: string | null;
   /** Upstream-resolved display label for the "By" column. */
   updatedByName?: string | null;
   /** Upstream-resolved username fallback for the "By" column. */
   updatedByUsername?: string | null;
+  /** Latest version uploader avatar when this row is a file. */
+  updatedByAvatarUrl?: string | null;
+  /** Latest version upload timestamp when this row is a file. */
+  versionUpdatedAt?: Date | string | null;
 };
 
 export interface FolderListRowProps {
@@ -111,8 +117,9 @@ function updatedByLabel(node: FolderListRowNode): string {
 
 /** Relative-time label for the "Last updated" column. */
 function updatedAtLabel(node: FolderListRowNode): string {
-  if (node.updatedAt == null) return MISSING;
-  const label = formatRelativeTime(node.updatedAt);
+  const value = node.versionUpdatedAt ?? node.updatedAt;
+  if (value == null) return MISSING;
+  const label = formatRelativeTime(value);
   return label === MISSING ? MISSING : label;
 }
 
@@ -258,6 +265,7 @@ export const FolderListRow = React.memo(function FolderListRow({
   );
 
   const byLabel = updatedByLabel(node);
+  const updatedLabel = updatedAtLabel(node);
 
   return (
     <div
@@ -354,9 +362,9 @@ export const FolderListRow = React.memo(function FolderListRow({
         role="cell"
         data-column="updated"
         className="min-w-0 truncate text-xs text-zinc-500 dark:text-zinc-400"
-        title={node.updatedAt ? String(node.updatedAt) : undefined}
+        title={node.versionUpdatedAt ? String(node.versionUpdatedAt) : node.updatedAt ? String(node.updatedAt) : undefined}
       >
-        {updatedAtLabel(node)}
+        {updatedLabel}
       </div>
 
       {/* Size */}
