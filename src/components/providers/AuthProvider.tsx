@@ -10,6 +10,8 @@ import { getAuthHardeningPhase } from '@/lib/auth/hardening';
 import { buildOAuthRedirectTo, normalizeAuthNextPath, resolveAuthBaseUrl } from '@/lib/auth/redirects';
 import { continueBrowserOAuthRedirect } from '@/lib/auth/oauth';
 import { resetMonotonicEntity, runMonotonicUpdate } from '@/lib/state/monotonic';
+import { loadBrowserProfile, normalizeProfileRecord, profileNeedsHydration } from '@/lib/profile/browser-profile';
+import { cacheManager } from '@/lib/utils/cache-manager';
 
 const AUTH_SIGN_IN_TIMEOUT_MS = 8_000;
 const AUTH_UNREACHABLE_MESSAGE = 'Authentication service is unavailable. Check your Supabase connection and try again.';
@@ -78,60 +80,6 @@ interface AuthContextType extends AuthState {
 // --- Context ---
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// --- Helpers ---
-function transformProfile(profile: any): Profile | null {
-    if (!profile) return null;
-    // If profile is already camelCase (from Drizzle), return it.
-    // If it's snake_case (from Supabase Client), map it.
-    // Drizzle 'Profile' type expects camelCase keys: fullName, avatarUrl
-    
-    // Check if it's likely Supabase raw response
-    const isSnake = 'full_name' in profile || 'avatar_url' in profile;
-    
-    if (isSnake) {
-        return {
-            ...profile,
-            avatarUrl: profile.avatar_url,
-            fullName: profile.full_name,
-            bannerUrl: profile.banner_url,
-            // JSON fields need no mapping usually if they are standard in DB
-            socialLinks: profile.social_links || {},
-            availabilityStatus: profile.availability_status,
-            messagePrivacy: profile.message_privacy,
-            connectionPrivacy: profile.connection_privacy,
-            openTo: profile.open_to || [],
-            experienceLevel: profile.experience_level,
-            hoursPerWeek: profile.hours_per_week,
-            genderIdentity: profile.gender_identity,
-            connectionsCount: profile.connections_count ?? 0,
-            projectsCount: profile.projects_count ?? 0,
-            followersCount: profile.followers_count ?? 0,
-            workspaceInboxCount: profile.workspace_inbox_count ?? 0,
-            workspaceDueTodayCount: profile.workspace_due_today_count ?? 0,
-            workspaceOverdueCount: profile.workspace_overdue_count ?? 0,
-            workspaceInProgressCount: profile.workspace_in_progress_count ?? 0,
-            createdAt: profile.created_at ? new Date(profile.created_at) : undefined,
-            updatedAt: profile.updated_at ? new Date(profile.updated_at) : undefined,
-            deletedAt: profile.deleted_at ? new Date(profile.deleted_at) : undefined,
-            // Ensure all required fields from Profile type are present
-            // We cast because we know the shape matches roughly
-        } as unknown as Profile;
-    }
-    
-    return profile as Profile;
-}
-
-function profileNeedsHydration(profile: any): boolean {
-    if (!profile || typeof profile !== 'object') return false;
-    const experience = profile.experience ?? profile.experience_data;
-    const education = profile.education ?? profile.education_data;
-
-    return (
-        experience === undefined
-        || education === undefined
-    );
-}
-
 let lastSyncedSessionToken: string | null = null;
 
 async function syncBrowserSessionToServer(session: Session | null) {
@@ -152,6 +100,10 @@ async function syncBrowserSessionToServer(session: Session | null) {
     });
 
     if (!response.ok) {
+        if (response.status === 400 || response.status === 401) {
+            const supabase = createClient();
+            await supabase.auth.signOut().catch(() => null);
+        }
         throw new Error(`Browser session sync failed (${response.status})`);
     }
     
@@ -193,7 +145,7 @@ export function AuthProvider({
 }) {
     const MONOTONIC_AUTH_KEY = 'auth-provider:state';
     const transformedInitialProfile = useMemo(
-        () => (initialProfile ? transformProfile(initialProfile) : null),
+        () => (initialProfile ? normalizeProfileRecord(initialProfile) : null),
         [initialProfile],
     );
     const [state, setState] = useState<AuthState>({
@@ -214,14 +166,7 @@ export function AuthProvider({
         const supabase = createClient();
         let cancelled = false;
 
-        const loadProfile = async (userId: string) => {
-            const { data: profile } = await supabase
-                .from('profiles')
-                .select('id, full_name, avatar_url, username, created_at, updated_at, deleted_at')
-                .eq('id', userId)
-                .single();
-            return transformProfile(profile);
-        };
+        const loadProfile = loadBrowserProfile;
         
         const { data: { subscription } } = supabase.auth.onAuthStateChange(
             async (event: string, session: Session | null) => {
@@ -282,7 +227,10 @@ export function AuthProvider({
                         logger.warn('auth.session.clear_failed', {
                             error: error instanceof Error ? error.message : String(error),
                         });
-                    }).finally(() => {
+                    }).finally(async () => {
+                        if (typeof window !== 'undefined') {
+                            await cacheManager.clearAll().catch(() => null);
+                        }
                         runMonotonicUpdate(MONOTONIC_AUTH_KEY, eventVersion, () => {
                             activeUserIdRef.current = null;
                             setState({
@@ -585,11 +533,14 @@ export function AuthProvider({
         // 2. Clear browser session (this also fires the SIGNED_OUT listener)
         await supabase.auth.signOut().catch(() => null);
         
-        // 3. Dispatch cache-clearing event
+        // 3. Clear all cached browser storages (IndexedDB, LocalStorage, Cache API)
         if (typeof window !== 'undefined') {
+            await cacheManager.clearAll().catch(() => null);
+            
+            // 4. Dispatch cache-clearing event
             window.dispatchEvent(new Event('auth:signout'));
             
-            // 4. Hard redirect if not already handled
+            // 5. Hard redirect if not already handled
             if (window.location.pathname !== '/login') {
                 window.location.href = '/login';
             }
@@ -597,18 +548,12 @@ export function AuthProvider({
     }, []);
 
     const refreshProfile = useCallback(async () => {
-        const supabase = createClient();
         const currentUser = state.user; // Use current state user
         if (!currentUser) return;
 
-        const { data: profile } = await supabase
-            .from('profiles')
-            .select('id, full_name, avatar_url, username, created_at, updated_at, deleted_at')
-            .eq('id', currentUser.id)
-            .single();
-
+        const profile = await loadBrowserProfile(currentUser.id);
         if (profile) {
-            setState(prev => ({ ...prev, profile: transformProfile(profile) }));
+            setState(prev => ({ ...prev, profile }));
         }
     }, [state.user]);
 
