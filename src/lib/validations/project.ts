@@ -60,14 +60,14 @@ export const projectNotificationSettingsSchema = z.object({
     daily_digest: z.boolean().default(false),
 });
 
-export const projectReadmeCreationIntentSchema = z.object({
+export const projectDocCreationIntentSchema = z.object({
     mode: z.enum(['detected', 'starter', 'skip']).default('starter'),
     sourcePath: z.string().max(500).nullable().optional(),
     publishOnCreate: z.boolean().default(false),
     includeRoles: z.boolean().default(true),
 });
 
-export type ProjectReadmeCreationIntentInput = z.infer<typeof projectReadmeCreationIntentSchema>;
+export type ProjectDocCreationIntentInput = z.infer<typeof projectDocCreationIntentSchema>;
 
 // Main Project Schema
 export const createProjectSchema = z.object({
@@ -98,7 +98,7 @@ export const createProjectSchema = z.object({
     terms: termsSchema.optional(),
     external_links: externalLinksSchema.optional(),
     notification_preferences: projectNotificationSettingsSchema.optional(),
-    readme: projectReadmeCreationIntentSchema.default({
+    readme: projectDocCreationIntentSchema.default({
         mode: 'starter',
         sourcePath: null,
         publishOnCreate: false,
