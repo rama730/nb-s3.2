@@ -3,18 +3,18 @@
 import { useDeferredValue, useMemo, useState } from "react";
 import { Check, FileText, FolderOpen, ListTodo, Search, Timer, Users } from "lucide-react";
 
-import { ProjectReadmeReferenceOptionCard } from "@/components/projects/readme/ProjectReadmeReferencePreview";
-import { useProjectReadmeReferenceOptions } from "@/hooks/hub/useProjectReadmeData";
+import { ProjectDocReferenceOptionCard } from "@/components/projects/doc/ProjectDocReferencePreview";
+import { useProjectDocReferenceOptions } from "@/hooks/hub/useProjectDocData";
 import {
     buildInlineReadmeReference,
     normalizeReadmeReferenceLabel,
-    type ProjectReadmeReferenceKind,
-    type ProjectReadmeReferenceOption,
-} from "@/lib/projects/readme-blocks";
+    type ProjectDocReferenceKind,
+    type ProjectDocReferenceOption,
+} from "@/lib/projects/doc-blocks";
 import { cn } from "@/lib/utils";
 
 const REFERENCE_KINDS: Array<{
-    id: ProjectReadmeReferenceKind;
+    id: ProjectDocReferenceKind;
     label: string;
     description: string;
     icon: typeof FileText;
@@ -31,19 +31,19 @@ const ALL_REFERENCE_KIND = {
     description: "Search every project record.",
     icon: Search,
 };
-type ReferencePickerKind = ProjectReadmeReferenceKind | typeof ALL_REFERENCE_KIND.id;
+type ReferencePickerKind = ProjectDocReferenceKind | typeof ALL_REFERENCE_KIND.id;
 
-function buildSmartBlock(kind: ProjectReadmeReferenceKind, selected: ProjectReadmeReferenceOption[]) {
+function buildSmartBlock(kind: ProjectDocReferenceKind, selected: ProjectDocReferenceOption[]) {
     const ids = selected.map((option) => option.id).join(",");
     return `{% project.${kind}${ids ? ` ids="${ids}"` : ""} %}`;
 }
 
-function referenceKey(option: Pick<ProjectReadmeReferenceOption, "kind" | "id">) {
+function referenceKey(option: Pick<ProjectDocReferenceOption, "kind" | "id">) {
     return `${option.kind}:${option.id}`;
 }
 
-function buildSmartBlocksFromSelection(selected: ProjectReadmeReferenceOption[]) {
-    const groups = new Map<ProjectReadmeReferenceKind, ProjectReadmeReferenceOption[]>();
+function buildSmartBlocksFromSelection(selected: ProjectDocReferenceOption[]) {
+    const groups = new Map<ProjectDocReferenceKind, ProjectDocReferenceOption[]>();
     selected.forEach((option) => {
         const items = groups.get(option.kind) ?? [];
         items.push(option);
@@ -54,27 +54,29 @@ function buildSmartBlocksFromSelection(selected: ProjectReadmeReferenceOption[])
         .join("\n");
 }
 
-export function ProjectReadmeReferencePicker({
+export function ProjectDocReferencePicker({
     projectId,
     initialKind,
     onInsert,
     onClose,
+    showSelectedPreview = true,
 }: {
     projectId: string;
-    initialKind?: ProjectReadmeReferenceKind;
+    initialKind?: ProjectDocReferenceKind;
     onInsert: (markdown: string) => void;
     onClose?: () => void;
+    showSelectedPreview?: boolean;
 }) {
     const [kind, setKind] = useState<ReferencePickerKind>(initialKind ?? "all");
     const [query, setQuery] = useState("");
     const deferredQuery = useDeferredValue(query);
-    const [selected, setSelected] = useState<ProjectReadmeReferenceOption[]>([]);
+    const [selected, setSelected] = useState<ProjectDocReferenceOption[]>([]);
     const canSearchAll = kind === "all" && deferredQuery.trim().length >= 2;
-    const taskOptionsQuery = useProjectReadmeReferenceOptions(projectId, "tasks", deferredQuery, Boolean(projectId) && (canSearchAll || kind === "tasks"));
-    const sprintOptionsQuery = useProjectReadmeReferenceOptions(projectId, "sprints", deferredQuery, Boolean(projectId) && (canSearchAll || kind === "sprints"));
-    const fileOptionsQuery = useProjectReadmeReferenceOptions(projectId, "files", deferredQuery, Boolean(projectId) && (canSearchAll || kind === "files"));
-    const roleOptionsQuery = useProjectReadmeReferenceOptions(projectId, "roles", deferredQuery, Boolean(projectId) && (canSearchAll || kind === "roles"));
-    const contributorOptionsQuery = useProjectReadmeReferenceOptions(projectId, "contributors", deferredQuery, Boolean(projectId) && (canSearchAll || kind === "contributors"));
+    const taskOptionsQuery = useProjectDocReferenceOptions(projectId, "tasks", deferredQuery, Boolean(projectId) && (canSearchAll || kind === "tasks"));
+    const sprintOptionsQuery = useProjectDocReferenceOptions(projectId, "sprints", deferredQuery, Boolean(projectId) && (canSearchAll || kind === "sprints"));
+    const fileOptionsQuery = useProjectDocReferenceOptions(projectId, "files", deferredQuery, Boolean(projectId) && (canSearchAll || kind === "files"));
+    const roleOptionsQuery = useProjectDocReferenceOptions(projectId, "roles", deferredQuery, Boolean(projectId) && (canSearchAll || kind === "roles"));
+    const contributorOptionsQuery = useProjectDocReferenceOptions(projectId, "contributors", deferredQuery, Boolean(projectId) && (canSearchAll || kind === "contributors"));
     const queryByKind = {
         tasks: taskOptionsQuery,
         sprints: sprintOptionsQuery,
@@ -104,7 +106,7 @@ export function ProjectReadmeReferencePicker({
     const activeKind = kind === "all" ? ALL_REFERENCE_KIND : (REFERENCE_KINDS.find((item) => item.id === kind) ?? REFERENCE_KINDS[0]!);
     const ActiveIcon = activeKind.icon;
     const selectedByKind = useMemo(() => {
-        const groups = new Map<ProjectReadmeReferenceKind, ProjectReadmeReferenceOption[]>();
+        const groups = new Map<ProjectDocReferenceKind, ProjectDocReferenceOption[]>();
         selected.forEach((option) => {
             const list = groups.get(option.kind) ?? [];
             list.push(option);
@@ -113,7 +115,7 @@ export function ProjectReadmeReferencePicker({
         return Array.from(groups.entries());
     }, [selected]);
 
-    const toggleOption = (option: ProjectReadmeReferenceOption) => {
+    const toggleOption = (option: ProjectDocReferenceOption) => {
         setSelected((current) => {
             const key = referenceKey(option);
             const exists = current.some((item) => referenceKey(item) === key);
@@ -145,7 +147,7 @@ export function ProjectReadmeReferencePicker({
             <div>
                 <p className="text-base font-semibold text-zinc-950 dark:text-zinc-50">Insert project mention</p>
                 <p className="mt-1.5 text-sm leading-6 text-zinc-500">
-                    Pick real project records. README stores stable IDs, but readers see compact names and context.
+                    Pick real project records. Doc stores stable IDs, but readers see compact names and context.
                 </p>
             </div>
 
@@ -216,7 +218,7 @@ export function ProjectReadmeReferencePicker({
                 ) : visibleOptions.length ? (
                     <div className="grid max-h-64 gap-2 overflow-y-auto pr-1">
                         {visibleOptions.map((option) => (
-                            <ProjectReadmeReferenceOptionCard
+                            <ProjectDocReferenceOptionCard
                                 key={referenceKey(option)}
                                 option={option}
                                 selected={selectedIds.has(referenceKey(option))}
@@ -231,7 +233,7 @@ export function ProjectReadmeReferencePicker({
                 )}
             </div>
 
-            {selected.length ? (
+            {showSelectedPreview && selected.length ? (
                 <div className="rounded-2xl border border-blue-200 bg-blue-50/60 p-3 dark:border-blue-900/70 dark:bg-blue-950/20">
                     <p className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-blue-600 dark:text-blue-300">Selected mentions</p>
                     <div className="mb-3 rounded-xl bg-white/70 px-3 py-2 text-xs leading-5 text-zinc-600 dark:bg-zinc-950/50 dark:text-zinc-300">
@@ -261,7 +263,7 @@ export function ProjectReadmeReferencePicker({
                     ) : null}
                     <div className="flex flex-wrap gap-2">
                         {selected.slice(0, 6).map((option) => (
-                            <ProjectReadmeReferenceOptionCard key={`selected-${option.kind}-${option.id}`} option={option} selected />
+                            <ProjectDocReferenceOptionCard key={`selected-${option.kind}-${option.id}`} option={option} selected />
                         ))}
                     </div>
                     {selected.length > 4 ? (
