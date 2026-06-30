@@ -46,6 +46,18 @@ jobs:
       - name: Unit tests
         run: npm run test:unit
 
+      - name: Dependency and architecture contracts
+        run: |
+          npm run check:deps:audit
+          npm run check:deps:lockfile
+          npm run check:page-contract
+          npm run check:force-dynamic-allowlist
+          npm run check:runtime-boundaries
+          npm run check:api-versioning-contract
+          npm run check:api-envelope-contract
+          npm run check:query-key-contract
+          npm run check:sql-governance
+
       - name: E2E critical gate (chromium)
         run: npm run test:e2e:critical
 
