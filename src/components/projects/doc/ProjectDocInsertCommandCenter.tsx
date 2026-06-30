@@ -4,12 +4,12 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Search, X } from "lucide-react";
 
 import {
-    PROJECT_README_INSERT_ACTIONS,
-    type ProjectReadmeMorePanel,
-} from "@/components/projects/readme/ProjectReadmeMoreMenu";
+    PROJECT_DOC_INSERT_ACTIONS,
+    type ProjectDocMorePanel,
+} from "@/components/projects/doc/ProjectDocMoreMenu";
 import { cn } from "@/lib/utils";
 
-function actionMatches(action: (typeof PROJECT_README_INSERT_ACTIONS)[number], query: string) {
+function actionMatches(action: (typeof PROJECT_DOC_INSERT_ACTIONS)[number], query: string) {
     const normalized = query.trim().toLowerCase();
     if (!normalized) return true;
     return [
@@ -23,7 +23,7 @@ function actionMatches(action: (typeof PROJECT_README_INSERT_ACTIONS)[number], q
 
 const RECENT_INSERT_KEY = "project-readme-recent-insert-tools";
 
-const INSERT_CATEGORY_LABELS: Record<(typeof PROJECT_README_INSERT_ACTIONS)[number]["category"], string> = {
+const INSERT_CATEGORY_LABELS: Record<(typeof PROJECT_DOC_INSERT_ACTIONS)[number]["category"], string> = {
     write: "Write",
     structure: "Structure",
     project: "Project",
@@ -32,7 +32,7 @@ const INSERT_CATEGORY_LABELS: Record<(typeof PROJECT_README_INSERT_ACTIONS)[numb
     history: "History",
 };
 
-export function ProjectReadmeInsertCommandCenter({
+export function ProjectDocInsertCommandCenter({
     open,
     activePanel,
     panelTitle,
@@ -43,25 +43,25 @@ export function ProjectReadmeInsertCommandCenter({
     children,
 }: {
     open: boolean;
-    activePanel: ProjectReadmeMorePanel | null;
+    activePanel: ProjectDocMorePanel | null;
     panelTitle: string;
     panelDescription: string;
-    onPanelChange: (panel: ProjectReadmeMorePanel) => void;
+    onPanelChange: (panel: ProjectDocMorePanel) => void;
     onClose: () => void;
     projectName?: string | null;
     children: ReactNode;
 }) {
     const [search, setSearch] = useState("");
     const [focusedIndex, setFocusedIndex] = useState(0);
-    const [recentPanels, setRecentPanels] = useState<ProjectReadmeMorePanel[]>([]);
+    const [recentPanels, setRecentPanels] = useState<ProjectDocMorePanel[]>([]);
     const visibleActions = useMemo(
-        () => PROJECT_README_INSERT_ACTIONS.filter((action) => actionMatches(action, search)),
+        () => PROJECT_DOC_INSERT_ACTIONS.filter((action) => actionMatches(action, search)),
         [search],
     );
     const recentActions = useMemo(() => (
         recentPanels
-            .map((panel) => PROJECT_README_INSERT_ACTIONS.find((action) => action.id === panel))
-            .filter((action): action is (typeof PROJECT_README_INSERT_ACTIONS)[number] => Boolean(action))
+            .map((panel) => PROJECT_DOC_INSERT_ACTIONS.find((action) => action.id === panel))
+            .filter((action): action is (typeof PROJECT_DOC_INSERT_ACTIONS)[number] => Boolean(action))
             .filter((action) => visibleActions.some((visible) => visible.id === action.id))
     ), [recentPanels, visibleActions]);
     const groupedActions = useMemo(() => (
@@ -86,7 +86,7 @@ export function ProjectReadmeInsertCommandCenter({
         try {
             const parsed = JSON.parse(window.localStorage.getItem(RECENT_INSERT_KEY) || "[]");
             if (Array.isArray(parsed)) {
-                setRecentPanels(parsed.filter((value): value is ProjectReadmeMorePanel => PROJECT_README_INSERT_ACTIONS.some((action) => action.id === value)).slice(0, 4));
+                setRecentPanels(parsed.filter((value): value is ProjectDocMorePanel => PROJECT_DOC_INSERT_ACTIONS.some((action) => action.id === value)).slice(0, 4));
             }
         } catch {
             setRecentPanels([]);
@@ -144,7 +144,7 @@ export function ProjectReadmeInsertCommandCenter({
             )}
             role="dialog"
             aria-modal="true"
-            aria-label="Insert into README"
+            aria-label="Insert into Doc"
             data-readme-insert-command-center="true"
             data-readme-insert-tools-grouped="true"
             onMouseDown={(event) => {
@@ -156,7 +156,7 @@ export function ProjectReadmeInsertCommandCenter({
                     <aside className="app-scroll app-scroll-y app-scroll-gutter flex min-h-0 flex-col overscroll-contain border-r border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900/20">
                         <header className="flex shrink-0 items-start justify-between gap-4 p-5 pb-0 lg:p-6 lg:pb-0">
                             <div className="min-w-0">
-                                <p className="text-base font-semibold text-zinc-950 dark:text-zinc-50">Insert into README</p>
+                                <p className="text-base font-semibold text-zinc-950 dark:text-zinc-50">Insert into Doc</p>
                                 <p className="mt-1 truncate text-sm text-zinc-500">
                                     {projectName ? `${projectName} workspace` : "Documentation workspace"}
                                 </p>
@@ -172,7 +172,7 @@ export function ProjectReadmeInsertCommandCenter({
                                 className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-zinc-400"
                             />
                         </label>
-                        <nav className="space-y-6 pr-1" aria-label="README insert tools">
+                        <nav className="space-y-6 pr-1" aria-label="Document insert tools">
                             {groupedActions.map((group) => (
                                 <div key={group.category} className="space-y-1">
                                     <p className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-[0.15em] text-zinc-400">
