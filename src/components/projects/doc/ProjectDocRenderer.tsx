@@ -2,6 +2,7 @@
 
 import React, { Suspense, useMemo, type CSSProperties } from "react";
 import dynamic from "next/dynamic";
+import { useRouter, useSearchParams } from "next/navigation";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema, type Options as RehypeSanitizeOptions } from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
@@ -11,25 +12,26 @@ import {
     parseReadmeReferenceHref,
     readmeReferenceHref,
     replaceInlineReadmeReferencesWithMarkdown,
-    type ProjectReadmeReferenceKind,
-    type ProjectReadmeReferenceOption,
-    type ProjectReadmeSmartBlockPreview,
-} from "@/lib/projects/readme-blocks";
-import { buildProjectReadmePlainText } from "@/lib/projects/readme-plain-text";
-import { slugifyReadmeHeading } from "@/lib/projects/readme-headings";
+    type ProjectDocReferenceKind,
+    type ProjectDocReferenceOption,
+    type ProjectDocSmartBlockPreview,
+} from "@/lib/projects/doc-blocks";
+import { buildProjectDocPlainText } from "@/lib/projects/doc-plain-text";
+import { slugifyReadmeHeading } from "@/lib/projects/doc-headings";
 import {
-    projectReadmeReferenceTargetId,
-} from "@/lib/projects/readme-navigation";
+    projectDocReferenceTargetId,
+} from "@/lib/projects/doc-navigation";
 import {
-    projectReadmeEditorTargetId,
-    type ProjectReadmeEditorSourcePosition,
-    type ProjectReadmeEditorTargetKind,
-} from "@/lib/projects/readme-editor-source-map";
-import { resolveProjectReadmeImage, type ProjectReadmeImageKind } from "@/lib/projects/readme-media";
-import { buildProjectReadmeViewModel, type ProjectReadmeViewModel } from "@/lib/projects/readme-view-model";
-import { ProjectReadmeCommandBlock } from "@/components/projects/readme/ProjectReadmeCommandBlock";
-import { ProjectReadmeSmartBlock } from "@/components/projects/readme/ProjectReadmeSmartBlock";
-import { useProjectReadmeSmartBlockPreviews } from "@/hooks/hub/useProjectReadmeData";
+    projectDocEditorTargetId,
+    type ProjectDocEditorSourcePosition,
+    type ProjectDocEditorTargetKind,
+} from "@/lib/projects/doc-editor-source-map";
+import { resolveProjectDocImage, type ProjectDocImageKind } from "@/lib/projects/doc-media";
+import { normalizeProjectDocSlug } from "@/lib/projects/doc";
+import { buildProjectDocViewModel, type ProjectDocViewModel } from "@/lib/projects/doc-view-model";
+import { ProjectDocCommandBlock } from "@/components/projects/doc/ProjectDocCommandBlock";
+import { ProjectDocSmartBlock } from "@/components/projects/doc/ProjectDocSmartBlock";
+import { useProjectDocSmartBlockPreviews } from "@/hooks/hub/useProjectDocData";
 import type { Project } from "@/types/hub";
 import { cn } from "@/lib/utils";
 
@@ -138,7 +140,7 @@ const README_REHYPE_PLUGINS = [
     rehypeRaw,
     [rehypeSanitize, README_HTML_SANITIZE_SCHEMA],
 ] as const;
-const README_MEDIA_MAX_WIDTH_BY_KIND: Record<ProjectReadmeImageKind, number> = {
+const README_MEDIA_MAX_WIDTH_BY_KIND: Record<ProjectDocImageKind, number> = {
     badge: 180,
     icon: 48,
     logo: 220,
@@ -156,13 +158,13 @@ type MarkdownAstNode = {
 };
 
 function sourceTargetProps(
-    kind: ProjectReadmeEditorTargetKind,
+    kind: ProjectDocEditorTargetKind,
     node?: MarkdownAstNode,
     highlightedTargetId?: string | null,
 ) {
     const line = node?.position?.start?.line ?? null;
     const offset = node?.position?.start?.offset ?? null;
-    const targetId = projectReadmeEditorTargetId(kind, line, offset);
+    const targetId = projectDocEditorTargetId(kind, line, offset);
     return {
         "data-readme-source-line": line ?? undefined,
         "data-readme-source-offset": offset ?? undefined,
@@ -178,7 +180,22 @@ function sourceHighlightClass(highlighted: boolean) {
         : "";
 }
 
-function ProjectReadmeInlineReferenceChip({
+function adjustNodePosition(node: MarkdownAstNode | undefined, lineOffset: number, charOffset: number): MarkdownAstNode | undefined {
+    if (!node || !node.position || !node.position.start) return node;
+    return {
+        ...node,
+        position: {
+            ...node.position,
+            start: {
+                ...node.position.start,
+                line: typeof node.position.start.line === "number" ? node.position.start.line + lineOffset : undefined,
+                offset: typeof node.position.start.offset === "number" ? node.position.start.offset + charOffset : undefined,
+            }
+        }
+    };
+}
+
+function ProjectDocInlineReferenceChip({
     fallback,
     option,
     reference,
@@ -186,15 +203,18 @@ function ProjectReadmeInlineReferenceChip({
     highlighted,
     highlightToken,
     onRequestTarget,
+    project,
 }: {
     fallback: React.ReactNode;
-    option?: ProjectReadmeReferenceOption | null;
-    reference?: { kind: ProjectReadmeReferenceKind; id: string } | null;
+    option?: ProjectDocReferenceOption | null;
+    reference?: { kind: ProjectDocReferenceKind; id: string } | null;
     targetId?: string | null;
     highlighted?: boolean;
     highlightToken?: number | null;
     onRequestTarget?: (targetId: string) => void;
+    project?: Project | null;
 }) {
+    const router = useRouter();
     const kind = option?.kind ?? reference?.kind ?? null;
     const fallbackText = kind
         ? normalizeReadmeReferenceLabel(kind, textFromReactNode(fallback) || "")
@@ -223,6 +243,7 @@ function ProjectReadmeInlineReferenceChip({
         highlighted && "bg-blue-100/80 shadow-[0_0_0_4px_rgba(59,130,246,0.22)] dark:bg-blue-500/20",
     );
     const title = [label, detail].filter(Boolean).join(" · ");
+    const optionHref = option?.href;
     const targetProps = targetId
         ? {
             id: targetId,
@@ -233,16 +254,39 @@ function ProjectReadmeInlineReferenceChip({
         }
         : {};
 
+    const handleClick = React.useCallback(
+        (event: React.MouseEvent<HTMLAnchorElement>) => {
+            event.preventDefault();
+            event.stopPropagation();
+
+            let href = optionHref;
+            if (!href && kind && reference?.id && project) {
+                const projectSlug = project.slug || project.id;
+                if (kind === "tasks") {
+                    href = `/projects/${projectSlug}?tab=tasks&drawerType=task&drawerId=${reference.id}`;
+                } else if (kind === "sprints") {
+                    href = `/projects/${projectSlug}/sprints/${reference.id}`;
+                } else if (kind === "files") {
+                    href = `/projects/${projectSlug}?tab=files&fileId=${reference.id}`;
+                }
+            }
+
+            if (href) {
+                router.push(href);
+            } else if (targetId && onRequestTarget) {
+                onRequestTarget(targetId);
+            }
+        },
+        [optionHref, kind, reference, project, targetId, onRequestTarget, router]
+    );
+
     if (targetId && onRequestTarget) {
         return (
             <a
-                href={`#${encodeURIComponent(targetId)}`}
+                href={option?.href || `#${encodeURIComponent(targetId)}`}
                 className={className}
                 title={title}
-                onClick={(event) => {
-                    event.preventDefault();
-                    onRequestTarget(targetId);
-                }}
+                onClick={handleClick}
                 {...targetProps}
             >
                 {content}
@@ -252,7 +296,7 @@ function ProjectReadmeInlineReferenceChip({
 
     if (option?.href) {
         return (
-            <a href={option.href} className={className} title={title} {...targetProps}>
+            <a href={option.href} onClick={handleClick} className={className} title={title} {...targetProps}>
                 {content}
             </a>
         );
@@ -292,7 +336,7 @@ function sanitizeMarkdownUrl(raw: string, allowRelative: boolean, isImage: boole
     }
 }
 
-function readmeMediaStyle(input: ReturnType<typeof resolveProjectReadmeImage>): CSSProperties {
+function readmeMediaStyle(input: ReturnType<typeof resolveProjectDocImage>): CSSProperties {
     const maxWidth = README_MEDIA_MAX_WIDTH_BY_KIND[input.kind];
     const style: CSSProperties = {
         maxWidth: "100%",
@@ -314,7 +358,7 @@ function readmeMediaStyle(input: ReturnType<typeof resolveProjectReadmeImage>): 
     return style;
 }
 
-function readmeMediaClass(kind: ProjectReadmeImageKind, highlighted: boolean) {
+function readmeMediaClass(kind: ProjectDocImageKind, highlighted: boolean) {
     return cn(
         "transition-[background-color,box-shadow,opacity] outline-none",
         kind === "badge" && "mx-0.5 my-1 inline-block rounded-none border-0 align-middle shadow-none",
@@ -326,7 +370,7 @@ function readmeMediaClass(kind: ProjectReadmeImageKind, highlighted: boolean) {
     );
 }
 
-function readmeHiddenMediaClass(kind: ProjectReadmeImageKind, highlighted: boolean) {
+function readmeHiddenMediaClass(kind: ProjectDocImageKind, highlighted: boolean) {
     return cn(
         "text-zinc-500 transition-[background-color,box-shadow] dark:text-zinc-500",
         (kind === "badge" || kind === "icon")
@@ -336,7 +380,45 @@ function readmeHiddenMediaClass(kind: ProjectReadmeImageKind, highlighted: boole
     );
 }
 
-export const ProjectReadmeRenderer = React.memo(function ProjectReadmeRenderer({
+function buildProjectDocSegmentRenderPlans(segments: ProjectDocViewModel["segments"]) {
+    let lineOffset = 0;
+    let charOffset = 0;
+    return segments.map((segment, index) => {
+        if (segment.kind === "block") {
+            const plan = {
+                kind: "block" as const,
+                index,
+                segment,
+            };
+            lineOffset += (segment.block.raw.match(/\n/g) || []).length;
+            charOffset += segment.block.raw.length;
+            return plan;
+        }
+
+        const referenceLinks = extractReferenceLinks(segment.content);
+        const subSections = splitMarkdownIntoSections(segment.content);
+        const sections = subSections.map((section, secIdx) => {
+            const isLastSection = secIdx === subSections.length - 1;
+            const plan = {
+                key: `sec-${index}-${secIdx}`,
+                content: referenceLinks ? `${section}\n\n${referenceLinks}` : section,
+                lineOffset,
+                charOffset,
+            };
+            lineOffset += (section.match(/\n/g) || []).length + (isLastSection ? 0 : 1);
+            charOffset += section.length + (isLastSection ? 0 : 1);
+            return plan;
+        });
+
+        return {
+            kind: "markdown" as const,
+            index,
+            sections,
+        };
+    });
+}
+
+export const ProjectDocRenderer = React.memo(function ProjectDocRenderer({
     content,
     project,
     allowExternalImages = false,
@@ -352,6 +434,8 @@ export const ProjectReadmeRenderer = React.memo(function ProjectReadmeRenderer({
     previewsLoading,
     previewByKey,
     viewModel,
+    docSlug,
+    renderedSlugs = [],
 }: {
     content: string;
     project: Project;
@@ -364,26 +448,32 @@ export const ProjectReadmeRenderer = React.memo(function ProjectReadmeRenderer({
     highlightedTargetToken?: number | null;
     onMediaLoad?: () => void;
     onRequestTarget?: (targetId: string) => void;
-    onRequestSourcePosition?: (position: ProjectReadmeEditorSourcePosition) => void;
+    onRequestSourcePosition?: (position: ProjectDocEditorSourcePosition) => void;
     previewsLoading?: boolean;
-    previewByKey?: Map<string, ProjectReadmeSmartBlockPreview>;
-    viewModel?: ProjectReadmeViewModel;
+    previewByKey?: Map<string, ProjectDocSmartBlockPreview>;
+    viewModel?: ProjectDocViewModel;
+    docSlug?: string;
+    renderedSlugs?: string[];
 }) {
-    const readmeModel = useMemo(() => viewModel ?? buildProjectReadmeViewModel({ content }), [content, viewModel]);
+    const searchParams = useSearchParams();
+    const normalizedDocSlug = normalizeProjectDocSlug(docSlug ?? searchParams?.get("doc") ?? "readme");
+    const isCircularDocReference = renderedSlugs.includes(normalizedDocSlug);
+
+    const readmeModel = useMemo(() => viewModel ?? buildProjectDocViewModel({ content }), [content, viewModel]);
     const segments = readmeModel.segments;
     const headingTargets = readmeModel.headings;
     const headingTargetQueues = useMemo(() => {
         const queues = new Map<string, string[]>();
         headingTargets.forEach((heading) => {
-            const key = buildProjectReadmePlainText(heading.text, { maxLength: 120, stripCodeBlocks: false }) ?? heading.text;
+            const key = buildProjectDocPlainText(heading.text, { maxLength: 120, stripCodeBlocks: false }) ?? heading.text;
             queues.set(key, [...(queues.get(key) ?? []), heading.id]);
         });
         return queues;
     }, [headingTargets]);
     const inlineReferences = readmeModel.references;
-    const blocks = allowSmartBlocks ? readmeModel.previewBlocks : readmeModel.referencePreviewBlocks;
+    const blocks = isCircularDocReference ? [] : (allowSmartBlocks ? readmeModel.previewBlocks : readmeModel.referencePreviewBlocks);
     const commandTargetMaps = readmeModel.commandTargetMaps;
-    const previewsQuery = useProjectReadmeSmartBlockPreviews(project.id, blocks, !previewByKey && blocks.length > 0);
+    const previewsQuery = useProjectDocSmartBlockPreviews(project.id, blocks, !previewByKey && blocks.length > 0);
     const fallbackPreviewByKey = useMemo(() => {
         const map = new Map<string, NonNullable<typeof previewsQuery.data>[number]>();
         for (const preview of previewsQuery.data ?? []) {
@@ -468,12 +558,12 @@ export const ProjectReadmeRenderer = React.memo(function ProjectReadmeRenderer({
         });
     }, [highlightedTargetId, highlightedTargetToken]);
 
-    const markdownRenderSignature = `${fidelity}:${allowExternalImages ? "external" : "safe"}:${previewRenderSignature}`;
+    const markdownRenderSignature = `${fidelity}:${allowExternalImages ? "external" : "safe"}:${previewRenderSignature}:${highlightedTargetId || ""}`;
     const inlineReferenceEntriesByHref = useMemo(() => {
         const map = new Map<string, Array<{
             targetId: string;
-            option?: ProjectReadmeReferenceOption | null;
-            reference: { kind: ProjectReadmeReferenceKind; id: string };
+            option?: ProjectDocReferenceOption | null;
+            reference: { kind: ProjectDocReferenceKind; id: string };
         }>>();
         inlineReferences.forEach((reference, index) => {
             const key = `${reference.kind}:${reference.id}:${index}`;
@@ -482,7 +572,7 @@ export const ProjectReadmeRenderer = React.memo(function ProjectReadmeRenderer({
             const href = readmeReferenceHref(reference.kind, reference.id);
             const entries = map.get(href) ?? [];
             entries.push({
-                targetId: projectReadmeReferenceTargetId(reference.kind, reference.id, index),
+                targetId: projectDocReferenceTargetId(reference.kind, reference.id, index),
                 option,
                 reference,
             });
@@ -504,7 +594,7 @@ export const ProjectReadmeRenderer = React.memo(function ProjectReadmeRenderer({
         node: MarkdownAstNode | undefined,
         props: React.HTMLAttributes<HTMLHeadingElement>,
     ) => {
-        const headingText = buildProjectReadmePlainText(textFromReactNode(children), { maxLength: 120, stripCodeBlocks: false }) ?? textFromReactNode(children);
+        const headingText = buildProjectDocPlainText(textFromReactNode(children), { maxLength: 120, stripCodeBlocks: false }) ?? textFromReactNode(children);
         const occurrenceIndex = headingRenderCounts.get(headingText) ?? 0;
         headingRenderCounts.set(headingText, occurrenceIndex + 1);
         const targetId = id || headingTargetQueues.get(headingText)?.[occurrenceIndex] || slugifyReadmeHeading(headingText, fallbackHeadingIds);
@@ -566,9 +656,9 @@ export const ProjectReadmeRenderer = React.memo(function ProjectReadmeRenderer({
                 const count = inlineReferenceRenderCounts.get(href) ?? 0;
                 inlineReferenceRenderCounts.set(href, count + 1);
                 const entry = inlineReferenceEntriesByHref.get(href)?.[count] ?? null;
-                const targetId = entry?.targetId ?? projectReadmeReferenceTargetId(reference.kind, reference.id, count);
+                const targetId = entry?.targetId ?? projectDocReferenceTargetId(reference.kind, reference.id, count);
                 return (
-                    <ProjectReadmeInlineReferenceChip
+                    <ProjectDocInlineReferenceChip
                         fallback={props.children}
                         highlighted={highlightedTargetId === targetId}
                         highlightToken={highlightedTargetId === targetId ? highlightedTargetToken : null}
@@ -576,17 +666,18 @@ export const ProjectReadmeRenderer = React.memo(function ProjectReadmeRenderer({
                         option={entry?.option}
                         reference={entry?.reference ?? reference}
                         targetId={targetId}
+                        project={project}
                     />
                 );
             }
             const safeHref = typeof href === "string" ? sanitizeMarkdownUrl(href, true, false, allowExternalImages) : "";
             if (!safeHref) return <span className="text-zinc-500">{props.children}</span>;
             const isExternal = /^https?:\/\//i.test(safeHref);
-            const isReadmeTarget = safeHref.startsWith("#") && safeHref.length > 1;
+            const isDocTarget = safeHref.startsWith("#") && safeHref.length > 1;
             return (
                 <a
                     href={safeHref}
-                    onClick={isReadmeTarget && onRequestTarget ? (event) => {
+                    onClick={isDocTarget && onRequestTarget ? (event) => {
                         event.preventDefault();
                         onRequestTarget(safeHref.slice(1));
                     } : undefined}
@@ -658,7 +749,7 @@ export const ProjectReadmeRenderer = React.memo(function ProjectReadmeRenderer({
             const blockHighlighted = highlightedTargetId === commandId || Boolean(sourceProps["data-readme-highlighted"]);
             const lineTargetHighlighted = lineTargets.some((target) => target.id === highlightedTargetId);
             return (
-                <ProjectReadmeCommandBlock
+                <ProjectDocCommandBlock
                     id={commandId}
                     code={value}
                     editorTargetId={sourceProps["data-readme-editor-target-id"]}
@@ -674,7 +765,7 @@ export const ProjectReadmeRenderer = React.memo(function ProjectReadmeRenderer({
             );
         },
         img: ({ src, alt = "", title, width, height, node }: React.ImgHTMLAttributes<HTMLImageElement> & { node?: MarkdownAstNode }) => {
-            const image = resolveProjectReadmeImage({
+            const image = resolveProjectDocImage({
                 src,
                 alt,
                 title,
@@ -691,7 +782,7 @@ export const ProjectReadmeRenderer = React.memo(function ProjectReadmeRenderer({
                         className={readmeHiddenMediaClass(image.kind, highlighted)}
                         data-readme-media-kind={image.kind}
                         data-readme-media-blocked={image.blockedReason ?? "invalid"}
-                        title={image.blockedReason === "external" ? "External image hidden by README settings." : "README image could not be resolved."}
+                        title={image.blockedReason === "external" ? "External image hidden by document settings." : "Document image could not be resolved."}
                         {...sourceProps}
                     >
                         {image.blockedReason === "external" ? "Image hidden" : "Image unavailable"}
@@ -735,14 +826,31 @@ export const ProjectReadmeRenderer = React.memo(function ProjectReadmeRenderer({
         hr: ({ ...props }: React.HTMLAttributes<HTMLHRElement>) => <hr className="my-8 border-zinc-200 dark:border-zinc-800" {...props} />,
     };
 
-    const renderMarkdownWithInlineReferences = (content: string, segmentKey: string) => (
-        <MemoizedMarkdownSegment
-            key={segmentKey}
-            content={content}
-            components={components}
-            renderSignature={markdownRenderSignature}
-        />
-    );
+    const renderMarkdownWithInlineReferences = (content: string, segmentKey: string, lineOffset: number, charOffset: number) => {
+        const adjustedComponents = {
+            ...components,
+            h1: ({ children, id, node, ...props }: any) => components.h1({ children, id, node: adjustNodePosition(node, lineOffset, charOffset), ...props }),
+            h2: ({ children, id, node, ...props }: any) => components.h2({ children, id, node: adjustNodePosition(node, lineOffset, charOffset), ...props }),
+            h3: ({ children, id, node, ...props }: any) => components.h3({ children, id, node: adjustNodePosition(node, lineOffset, charOffset), ...props }),
+            h4: ({ children, id, node, ...props }: any) => components.h4({ children, id, node: adjustNodePosition(node, lineOffset, charOffset), ...props }),
+            p: ({ node, ...props }: any) => components.p({ node: adjustNodePosition(node, lineOffset, charOffset), ...props }),
+            ul: ({ node, ...props }: any) => components.ul({ node: adjustNodePosition(node, lineOffset, charOffset), ...props }),
+            ol: ({ node, ...props }: any) => components.ol({ node: adjustNodePosition(node, lineOffset, charOffset), ...props }),
+            blockquote: ({ node, ...props }: any) => components.blockquote({ node: adjustNodePosition(node, lineOffset, charOffset), ...props }),
+            code: ({ className: codeClassName, children, node, ...props }: any) => components.code({ className: codeClassName, children, node: adjustNodePosition(node, lineOffset, charOffset), ...props }),
+            img: ({ src, alt, title, width, height, node }: any) => components.img({ src, alt, title, width, height, node: adjustNodePosition(node, lineOffset, charOffset) }),
+            table: ({ node, ...props }: any) => components.table({ node: adjustNodePosition(node, lineOffset, charOffset), ...props }),
+        };
+
+        return (
+            <MemoizedMarkdownSegment
+                key={segmentKey}
+                content={content}
+                components={adjustedComponents}
+                renderSignature={markdownRenderSignature}
+            />
+        );
+    };
 
     const handleEditorSourceClickCapture = (event: React.MouseEvent<HTMLElement>) => {
         if (!onRequestSourcePosition) return;
@@ -762,6 +870,15 @@ export const ProjectReadmeRenderer = React.memo(function ProjectReadmeRenderer({
             offset: Number.isFinite(offset) ? offset : null,
         });
     };
+    const segmentRenderPlans = useMemo(() => buildProjectDocSegmentRenderPlans(segments), [segments]);
+
+    if (isCircularDocReference) {
+        return (
+            <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800 dark:border-red-900/50 dark:bg-red-950/20 dark:text-red-300">
+                Circular reference detected: rendering of &quot;{normalizedDocSlug}&quot; was aborted to prevent infinite loops.
+            </div>
+        );
+    }
 
     return (
         <article
@@ -770,17 +887,18 @@ export const ProjectReadmeRenderer = React.memo(function ProjectReadmeRenderer({
             data-readme-editor-source-targets={onRequestSourcePosition ? "true" : undefined}
             onClickCapture={handleEditorSourceClickCapture}
         >
-            <Suspense fallback={<div className="text-sm text-zinc-500">Rendering README…</div>}>
-                {segments.map((segment, index) => {
-                    if (segment.kind === "block") {
-                        const previewKey = `${segment.block.kind}:${segment.block.ids.join(",")}:${segment.block.index}`;
-                        const stablePreviewKey = `${segment.block.kind}:${segment.block.ids.join(",")}`;
+            <Suspense fallback={<div className="text-sm text-zinc-500">Rendering document…</div>}>
+                {segmentRenderPlans.map((plan) => {
+                    if (plan.kind === "block") {
+                        const previewKey = `${plan.segment.block.kind}:${plan.segment.block.ids.join(",")}:${plan.segment.block.index}`;
+                        const stablePreviewKey = `${plan.segment.block.kind}:${plan.segment.block.ids.join(",")}`;
                         const preview = effectivePreviewByKey.get(previewKey) ?? effectivePreviewByKey.get(stablePreviewKey) ?? null;
+
                         return allowSmartBlocks
                             ? (
-                                <ProjectReadmeSmartBlock
-                                    key={`block-${index}`}
-                                    block={segment.block}
+                                <ProjectDocSmartBlock
+                                    key={`block-${plan.index}`}
+                                    block={plan.segment.block}
                                     project={project}
                                     editorMode={editorMode}
                                     preview={preview}
@@ -789,16 +907,10 @@ export const ProjectReadmeRenderer = React.memo(function ProjectReadmeRenderer({
                             )
                             : null;
                     }
-                    const referenceLinks = extractReferenceLinks(segment.content);
-                    const subSections = splitMarkdownIntoSections(segment.content);
 
                     return (
-                        <React.Fragment key={`segment-group-${index}`}>
-                            {subSections.map((section, secIdx) => {
-                                const sectionContent = referenceLinks ? `${section}\n\n${referenceLinks}` : section;
-                                const secKey = `sec-${index}-${secIdx}`;
-                                return renderMarkdownWithInlineReferences(sectionContent, secKey);
-                            })}
+                        <React.Fragment key={`segment-group-${plan.index}`}>
+                            {plan.sections.map((section) => renderMarkdownWithInlineReferences(section.content, section.key, section.lineOffset, section.charOffset))}
                         </React.Fragment>
                     );
                 })}
