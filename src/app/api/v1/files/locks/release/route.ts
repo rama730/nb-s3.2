@@ -43,6 +43,7 @@ export async function POST(request: NextRequest) {
         const releaseSchema = z.object({
             projectId: z.string().uuid(),
             nodeIds: z.array(z.string().min(1)).max(100),
+            sessionId: z.string().uuid().optional(),
         });
 
         const parsed = releaseSchema.safeParse(body);
@@ -50,20 +51,24 @@ export async function POST(request: NextRequest) {
             return jsonError('Invalid request body', 400, 'BAD_REQUEST');
         }
 
-        const { projectId, nodeIds: validNodeIds } = parsed.data;
+        const { projectId, nodeIds: validNodeIds, sessionId } = parsed.data;
         await assertProjectWriteAccess(projectId, user.id);
 
         if (validNodeIds.length === 0) {
             return jsonSuccess(null, 'No locks to release');
         }
 
-        await db.delete(projectNodeLocks).where(
-            and(
-                eq(projectNodeLocks.projectId, projectId),
-                eq(projectNodeLocks.lockedBy, user.id),
-                inArray(projectNodeLocks.nodeId, validNodeIds),
-            ),
-        );
+        const conditions = [
+            eq(projectNodeLocks.projectId, projectId),
+            eq(projectNodeLocks.lockedBy, user.id),
+            inArray(projectNodeLocks.nodeId, validNodeIds),
+        ];
+
+        if (sessionId) {
+            conditions.push(eq(projectNodeLocks.sessionId, sessionId));
+        }
+
+        await db.delete(projectNodeLocks).where(and(...conditions));
 
         return jsonSuccess(null, `Released ${validNodeIds.length} lock(s)`);
     } catch (error) {
