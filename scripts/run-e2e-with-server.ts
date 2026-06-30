@@ -8,6 +8,14 @@
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { execSync } from "node:child_process";
+import { config as loadDotenv } from "dotenv";
+
+loadDotenv({ path: ".env.local", quiet: true });
+loadDotenv({ quiet: true });
+
+if (process.env.E2E_DATABASE_URL?.trim()) {
+  process.env.DATABASE_URL = process.env.E2E_DATABASE_URL;
+}
 
 const baseURL = process.env.E2E_BASE_URL || "http://localhost:3000";
 const readyURL = `${baseURL}/api/v1/ready`;
