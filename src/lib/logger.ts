@@ -11,7 +11,7 @@ interface LogContext {
 }
 
 const REDACT_KEY_PATTERN = /password|token|secret|authorization/i
-const ALLOWED_CONTEXT_KEY_PATTERN = /^(module|userId|viewerUserId|subjectUserId|targetUserId|actorUserId|requestId|sampleRate|route|action|status|success|errorCode|error|message|failureKind|reason|failureReason|eventType|event|type|kind|scope|conversationId|projectId|taskId|nodeId|attachmentId|sessionId|uploadIntentId|deliveryId|durationMs|count|remainingCount|sizeBytes|generatedCount|requestedCount|available|blocked|canViewProfile|visibilityReason|connectionState|currentPercent|targetPercent|runId|metric|normalizedUsername|bucket|storageKey|contentType|limit|offset|cursor|attempt|allowed|routePath|path|code|routeId|subjectCount|viewerCount|finalized|removedObjects|expiredIntents|nextCursor|hasMore|version|createdAt|updatedAt|finalizedAt|redeemedAt|expiresAt|remaining|statusCode|method|_type)$/;
+const ALLOWED_CONTEXT_KEY_PATTERN = /^(module|userId|viewerUserId|subjectUserId|targetUserId|actorUserId|requestId|sampleRate|route|action|status|success|errorCode|error|message|failureKind|reason|failureReason|eventType|event|type|kind|scope|conversationId|projectId|taskId|nodeId|attachmentId|sessionId|uploadIntentId|deliveryId|resourceType|resourceId|durationMs|count|remainingCount|sizeBytes|totalBytes|chunkCount|generatedCount|requestedCount|available|blocked|canViewProfile|visibilityReason|connectionState|currentPercent|targetPercent|runId|metric|normalizedUsername|bucket|storageKey|contentType|limit|offset|cursor|attempt|allowed|routePath|path|code|routeId|subjectCount|viewerCount|finalized|removedObjects|expiredIntents|nextCursor|hasMore|version|createdAt|updatedAt|finalizedAt|redeemedAt|expiresAt|remaining|statusCode|method|inputTokens|outputTokens|totalTokens|promptCredits|_type)$/;
 
 const LEVEL_ORDER: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2, error: 3 }
 
@@ -78,7 +78,8 @@ function emit(level: LogLevel, message: string, context?: LogContext) {
 function sanitizeValue(key: string, value: unknown): unknown {
     if (REDACT_KEY_PATTERN.test(key)) return '[REDACTED]'
     if (typeof value === 'string') {
-        if (REDACT_KEY_PATTERN.test(value)) return '[REDACTED]'
+        const isMessageKey = key === 'error' || key === 'message' || key === 'msg' || key === 'reason' || key === 'failureReason';
+        if (!isMessageKey && REDACT_KEY_PATTERN.test(value)) return '[REDACTED]'
         return value.length > 500 ? `${value.slice(0, 497)}...` : value
     }
     if (Array.isArray(value)) {
