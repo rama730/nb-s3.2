@@ -1,6 +1,6 @@
 {
   "policyVersion": 1,
-  "defaultChangeKind": "remigration",
+  "defaultChangeKind": "append_only",
   "migrationDirectory": "drizzle",
   "existingMigrationFiles": [
     "drizzle/0000_medical_the_liberteens.sql",
@@ -85,7 +85,32 @@
     "drizzle/0077_profile_collaboration_role_stages.sql",
     "drizzle/0078_public_rls_security_hardening.sql",
     "drizzle/0079_profile_column_privilege_hardening.sql",
-    "drizzle/0080_profile_write_privilege_hardening.sql"
+    "drizzle/0080_profile_write_privilege_hardening.sql",
+    "drizzle/0081_project_updates_realtime.sql",
+    "drizzle/0082_project_update_drafts.sql",
+    "drizzle/0083_project_update_drafts_rls.sql",
+    "drizzle/0084_team_invite_collaboration_status.sql",
+    "drizzle/0085_project_update_media_storage.sql",
+    "drizzle/0086_virtual_workspace_fields.sql",
+    "drizzle/0087_non_transactional_indexes.sql",
+    "drizzle/0088_extension_device_session_editor_metadata.sql",
+    "drizzle/0089_project_node_event_sequence_trigger.sql",
+    "drizzle/0090_project_update_comment_threads.sql",
+    "drizzle/0091_extension_auth_code_events.sql",
+    "drizzle/0092_project_updates_performance_indexes.sql",
+    "drizzle/0094_lovely_toad.sql",
+    "drizzle/0095_docs_hub_upgrade.sql",
+    "drizzle/0098_onboarding_state_machine.sql",
+    "drizzle/0099_schema_lineage_and_fk_indexes.sql"
+  ],
+  "legacyDatabaseTags": [
+    "0073_notification_snooze",
+    "0074_notification_entity_cascade",
+    "0075_notification_importance_reclassify",
+    "0076_push_subscriptions",
+    "0077_notification_retention_indexes",
+    "0078_notification_deliveries",
+    "0079_job_heartbeats"
   ],
   "allowedUtilitySqlFiles": [
     "checkpoints/005_task_subtasks.sql",
