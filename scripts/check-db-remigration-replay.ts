@@ -9,11 +9,6 @@ const FRESH_DATABASE_URL =
   process.env.DATABASE_URL_FRESH ||
   process.env.DATABASE_URL_REPLAY_FRESH ||
   null;
-const REQUIRE_DISTINCT_FRESH_REPLAY =
-  process.env.DB_REPLAY_REQUIRE_DISTINCT !== undefined
-    ? process.env.DB_REPLAY_REQUIRE_DISTINCT !== "0" &&
-      process.env.DB_REPLAY_REQUIRE_DISTINCT !== "false"
-    : process.env.CI === "true";
 
 if (!PRIMARY_DATABASE_URL) {
   console.error("DATABASE_URL is required");
@@ -38,6 +33,10 @@ const REQUIRED_TABLES = [
   "recovery_code_redemptions",
   "message_read_receipts",
   "message_delivery_receipts",
+  "project_updates",
+  "project_update_likes",
+  "project_update_comments",
+  "project_update_drafts",
 ];
 
 const REQUIRED_RLS_TABLES = [...REQUIRED_TABLES];
@@ -81,114 +80,46 @@ const REQUIRED_POLICIES = [
   "Users can insert their own delivery receipts",
   "Users can view read receipts in their conversations",
   "Users can upsert their own read receipts",
+  "Project updates are viewable by project access",
+  "Project members can create updates",
+  "Authors and admins can manage updates",
+  "Project update likes are viewable with updates",
+  "Users can create their project update likes",
+  "Users can remove their project update likes",
+  "Project update comments are viewable with updates",
+  "Users can create project update comments",
+  "Authors and admins can manage project update comments",
+  "Project update authors can manage own drafts",
+  "project_updates_media_public_read",
+  "project_updates_media_write",
+  "project_updates_media_delete",
 ];
 
 const REQUIRED_COLUMNS = [
   { tableName: "message_read_receipts", columnName: "conversation_id" },
   { tableName: "message_delivery_receipts", columnName: "conversation_id" },
+  { tableName: "profiles", columnName: "onboarding_status" },
+  { tableName: "profiles", columnName: "onboarding_completed_at" },
+  { tableName: "profiles", columnName: "onboarding_version" },
+  { tableName: "onboarding_drafts", columnName: "completed_through" },
+  { tableName: "onboarding_drafts", columnName: "active_section" },
+  { tableName: "onboarding_drafts", columnName: "schema_version" },
+  { tableName: "onboarding_drafts", columnName: "expires_at" },
 ];
 
 const REQUIRED_REALTIME_PUBLICATION_TABLES = [
+  "profiles",
+  "projects",
+  "tasks",
+  "task_comments",
+  "task_subtasks",
+  "task_comment_likes",
+  "task_node_links",
+  "project_updates",
+  "project_update_comments",
   "message_read_receipts",
   "message_delivery_receipts",
 ];
-
-const PG_IDENTIFIER_MAX = 63;
-
-function escapeIdentifier(identifier: string): string {
-  return identifier.replace(/"/g, '""');
-}
-
-function getDatabaseName(databaseUrl: string): string {
-  const parsed = new URL(databaseUrl);
-  const pathname = parsed.pathname.replace(/^\/+/, "");
-  const decoded = decodeURIComponent(pathname);
-  if (!decoded) throw new Error("DATABASE_URL must include a database name in the path");
-  return decoded;
-}
-
-function withDatabaseName(databaseUrl: string, databaseName: string): string {
-  const parsed = new URL(databaseUrl);
-  parsed.pathname = `/${encodeURIComponent(databaseName)}`;
-  return parsed.toString();
-}
-
-function buildEphemeralDatabaseName(baseName: string): string {
-  const normalizedBase = baseName
-    .toLowerCase()
-    .replace(/[^a-z0-9_]/g, "_")
-    .replace(/_+/g, "_")
-    .replace(/^_+|_+$/g, "") || "db";
-  const suffix = `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-  const prefix = `${normalizedBase}_replay_`;
-  const available = PG_IDENTIFIER_MAX - prefix.length - suffix.length;
-  const trimmedBase = available > 0 ? normalizedBase.slice(0, available) : "";
-  return `${trimmedBase}_replay_${suffix}`.slice(0, PG_IDENTIFIER_MAX);
-}
-
-function sleep(ms: number) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
-async function provisionEphemeralFreshDatabase(primaryDatabaseUrl: string) {
-  const baseName = getDatabaseName(primaryDatabaseUrl);
-  const freshDatabaseName = buildEphemeralDatabaseName(baseName);
-  const adminUrl = withDatabaseName(primaryDatabaseUrl, "postgres");
-  const adminSql = postgres(adminUrl, { ssl: "require", prepare: false, max: 1 });
-  const escapedFreshDatabaseName = escapeIdentifier(freshDatabaseName);
-  const escapedBaseName = escapeIdentifier(baseName);
-
-  try {
-    // Clone from the current primary DB template so replay starts from the
-    // same migrated baseline and validates idempotent setup behavior.
-    await adminSql.unsafe(
-      `CREATE DATABASE "${escapedFreshDatabaseName}" TEMPLATE "${escapedBaseName}"`,
-    );
-  } finally {
-    await adminSql.end();
-  }
-
-  const freshDatabaseUrl = withDatabaseName(primaryDatabaseUrl, freshDatabaseName);
-
-  const cleanup = async () => {
-    const cleanupSql = postgres(adminUrl, { ssl: "require", prepare: false, max: 1 });
-    try {
-      try {
-        await cleanupSql.unsafe(`DROP DATABASE IF EXISTS "${escapedFreshDatabaseName}" WITH (FORCE)`);
-        return;
-      } catch {
-        // Older Postgres variants may not support WITH (FORCE), fall through to terminate+retry.
-      }
-
-      for (let attempt = 0; attempt < 5; attempt += 1) {
-        await cleanupSql.unsafe(`
-          SELECT pg_terminate_backend(pid)
-          FROM pg_stat_activity
-          WHERE datname = '${freshDatabaseName.replace(/'/g, "''")}'
-            AND pid <> pg_backend_pid()
-        `);
-
-        try {
-          await cleanupSql.unsafe(`DROP DATABASE IF EXISTS "${escapedFreshDatabaseName}"`);
-          return;
-        } catch (error) {
-          if (attempt === 4) throw error;
-          await sleep(200 * (attempt + 1));
-        }
-      }
-    } finally {
-      await cleanupSql.end();
-    }
-  };
-
-  return {
-    freshDatabaseName,
-    freshDatabaseUrl,
-    cleanup,
-  };
-}
 
 function run(command: string, args: string[], env: Record<string, string | undefined>) {
   const result = spawnSync(command, args, {
@@ -277,14 +208,14 @@ async function validateDatabase(
       }
     }
 
+    const requiredColumnTables = Array.from(new Set(REQUIRED_COLUMNS.map((column) => column.tableName)));
+    const requiredColumnNames = Array.from(new Set(REQUIRED_COLUMNS.map((column) => column.columnName)));
     const columnRows = await sql<{ tableName: string; columnName: string }[]>`
       SELECT table_name AS "tableName", column_name AS "columnName"
       FROM information_schema.columns
       WHERE table_schema = 'public'
-        AND (
-          (table_name = 'message_read_receipts' AND column_name = 'conversation_id')
-          OR (table_name = 'message_delivery_receipts' AND column_name = 'conversation_id')
-        )
+        AND table_name IN ${sql(requiredColumnTables)}
+        AND column_name IN ${sql(requiredColumnNames)}
     `;
     if (options.strict) {
       const found = new Set(columnRows.map((row) => `${row.tableName}.${row.columnName}`));
@@ -292,7 +223,7 @@ async function validateDatabase(
         .map(({ tableName, columnName }) => `${tableName}.${columnName}`)
         .filter((entry) => !found.has(entry));
       if (missing.length > 0) {
-        throw new Error(`[${label}] missing required messaging receipt columns: ${missing.join(", ")}`);
+        throw new Error(`[${label}] missing required columns: ${missing.join(", ")}`);
       }
     }
 
@@ -340,16 +271,16 @@ async function replayForDatabase(databaseUrl: string, label: string) {
 
   console.log(`[db-remigration] applying migration journal pass 1 (${label})...`);
   runWithRetry(
-    "pnpm",
-    ["exec", "tsx", "scripts/setup-database.ts"],
+    process.execPath,
+    ["--import", "tsx", "scripts/setup-database.ts"],
     { DATABASE_URL: databaseUrl },
     `${label}:migration-pass-1`,
   );
 
   console.log(`[db-remigration] applying migration journal pass 2 (${label})...`);
   runWithRetry(
-    "pnpm",
-    ["exec", "tsx", "scripts/setup-database.ts"],
+    process.execPath,
+    ["--import", "tsx", "scripts/setup-database.ts"],
     { DATABASE_URL: databaseUrl },
     `${label}:migration-pass-2`,
   );
@@ -358,85 +289,27 @@ async function replayForDatabase(databaseUrl: string, label: string) {
   await validateDatabase(databaseUrl, `${label}:post`, { strict: true });
 
   console.log(`[db-remigration] running onboarding SLO check (${label})...`);
-  run("pnpm", ["exec", "tsx", "scripts/check-onboarding-slo.ts"], { DATABASE_URL: databaseUrl });
+  run(process.execPath, ["--import", "tsx", "scripts/check-onboarding-slo.ts"], { DATABASE_URL: databaseUrl });
 }
 
 async function main() {
   console.log("[db-remigration] checking migration journal...");
-  run("pnpm", ["exec", "tsx", "scripts/check-migration-journal.ts"], process.env);
+  run(process.execPath, ["--import", "tsx", "scripts/check-migration-journal.ts"], process.env);
 
-  if (process.env.CI === "true" && REQUIRE_DISTINCT_FRESH_REPLAY && !FRESH_DATABASE_URL) {
+  if (!FRESH_DATABASE_URL) {
     throw new Error(
-      "CI strict replay requires DATABASE_URL_FRESH (or DATABASE_URL_REPLAY_FRESH); auto-provision is disabled in CI gates.",
+      "Fresh replay requires DATABASE_URL_FRESH (or DATABASE_URL_REPLAY_FRESH) pointing to a disposable database. " +
+        "The primary database is never mutated by this check.",
     );
   }
-
-  await replayForDatabase(PRIMARY_DATABASE_URL!, "primary-db");
-
-  let freshDatabaseUrl = FRESH_DATABASE_URL;
-  let managedFreshDatabase:
-    | Awaited<ReturnType<typeof provisionEphemeralFreshDatabase>>
-    | null = null;
-  let freshReplayLabel = "fresh-db";
-  let usingPrimaryAsFreshFallback = false;
-
-  if (!freshDatabaseUrl) {
-    try {
-      console.log(
-        "[db-remigration] DATABASE_URL_FRESH not set; provisioning ephemeral fresh database for replay...",
-      );
-      managedFreshDatabase = await provisionEphemeralFreshDatabase(PRIMARY_DATABASE_URL!);
-      freshDatabaseUrl = managedFreshDatabase.freshDatabaseUrl;
-      console.log(
-        `[db-remigration] provisioned fresh database: ${managedFreshDatabase.freshDatabaseName}`,
-      );
-    } catch (provisionError) {
-      if (REQUIRE_DISTINCT_FRESH_REPLAY) {
-        throw new Error(
-          `could not provision distinct fresh database and strict mode is enabled (DB_REPLAY_REQUIRE_DISTINCT/CI). ` +
-            `Set DATABASE_URL_FRESH (or DATABASE_URL_REPLAY_FRESH) to a dedicated replay database. ` +
-            `Original error: ${provisionError instanceof Error ? provisionError.message : String(provisionError)}`,
-        );
-      }
-      freshDatabaseUrl = PRIMARY_DATABASE_URL!;
-      freshReplayLabel = "fresh-db-fallback-primary";
-      usingPrimaryAsFreshFallback = true;
-      console.warn(
-        "[db-remigration] could not provision a distinct fresh database; replaying on primary as fallback.",
-        provisionError,
-      );
-    }
-  }
-
-  if (!freshDatabaseUrl) {
-    throw new Error(
-      "fresh DB replay requires a database URL. Set DATABASE_URL_FRESH (or allow auto-provision) to continue.",
-    );
-  }
-  if (
-    freshDatabaseUrl === PRIMARY_DATABASE_URL &&
-    (REQUIRE_DISTINCT_FRESH_REPLAY || (!usingPrimaryAsFreshFallback && FRESH_DATABASE_URL))
-  ) {
+  if (FRESH_DATABASE_URL === PRIMARY_DATABASE_URL) {
     throw new Error("fresh DB replay requires DATABASE_URL_FRESH to be distinct from DATABASE_URL.");
   }
 
-  try {
-    await replayForDatabase(freshDatabaseUrl, freshReplayLabel);
-  } finally {
-    if (managedFreshDatabase) {
-      try {
-        await managedFreshDatabase.cleanup();
-        console.log(
-          `[db-remigration] cleaned up ephemeral fresh database: ${managedFreshDatabase.freshDatabaseName}`,
-        );
-      } catch (cleanupError) {
-        console.warn(
-          `[db-remigration] failed to cleanup ephemeral fresh database ${managedFreshDatabase.freshDatabaseName}:`,
-          cleanupError,
-        );
-      }
-    }
-  }
+  console.log("[db-remigration] validating primary database read-only...");
+  await validateDatabase(PRIMARY_DATABASE_URL!, "primary-db:read-only", { strict: true });
+
+  await replayForDatabase(FRESH_DATABASE_URL, "fresh-db");
 
   console.log("\n[db-remigration] replay validation passed.");
 }
