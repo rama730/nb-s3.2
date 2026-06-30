@@ -6,11 +6,24 @@ import { FILES_RUNTIME_BUDGETS, clampNumber } from "@/lib/files/runtime-budgets"
 import { set as idbSet } from "idb-keyval";
 import { setFileContent, getFileContent, deleteFileContent } from "./contentMap";
 
-function syncIdbCache(projectId: string, nodesById: Record<string, ProjectNode>, childrenByParentId: Record<string, string[]>) {
-  void idbSet(`nb-s3-workspace-${projectId}`, {
-    nodesById,
-    childrenByParentId
-  }).catch(e => console.warn("Failed to save IDB cache", e));
+const syncTimeouts: Record<string, NodeJS.Timeout> = {};
+
+function syncIdbCache(
+  projectId: string,
+  nodesById: Record<string, ProjectNode>,
+  childrenByParentId: Record<string, string[]>
+) {
+  if (syncTimeouts[projectId]) {
+    clearTimeout(syncTimeouts[projectId]);
+  }
+
+  syncTimeouts[projectId] = setTimeout(() => {
+    delete syncTimeouts[projectId];
+    void idbSet(`nb-s3-workspace-${projectId}`, {
+      nodesById,
+      childrenByParentId
+    }).catch(e => console.warn("Failed to save IDB cache", e));
+  }, 500); // 500ms debounce
 }
 
 function toEpochMs(value: unknown): number {
@@ -50,6 +63,17 @@ export interface FilesSlice {
   patchNodeVersion: (projectId: string, nodeId: string, currentVersion: number) => void;
   setNodes: (projectId: string, nodes: ProjectNode[]) => void;
   setFileState: (projectId: string, nodeId: string, state: Partial<FileState>) => void;
+  batchUpdateStore: (
+    projectId: string,
+    payloads: Array<{
+      parentId: string | null;
+      childIds: string[];
+      nextCursor: string | null;
+      hasMore: boolean;
+      loaded: boolean;
+    }>,
+    nodes?: ProjectNode[]
+  ) => void;
   hydrateFromIdb: (
     projectId: string,
     nodesById: Record<string, ProjectNode>,
@@ -312,7 +336,10 @@ export const createFilesSlice: StateCreator<FilesWorkspaceState, [], [], FilesSl
         if (nextChildren[key]) nextChildren[key] = nextChildren[key].filter((id) => id !== nodeId);
       } else {
         for (const k of Object.keys(nextChildren)) {
-          nextChildren[k] = nextChildren[k].filter((id) => id !== nodeId);
+          const arr = nextChildren[k];
+          if (arr) {
+            nextChildren[k] = arr.filter((id) => id !== nodeId);
+          }
         }
       }
 
@@ -481,6 +508,48 @@ export const createFilesSlice: StateCreator<FilesWorkspaceState, [], [], FilesSl
           [projectId]: {
             ...ws,
             fileStates: nextFileStates,
+          },
+        },
+      };
+    }),
+
+  batchUpdateStore: (projectId, payloads, nodes = []) =>
+    set((state) => {
+      const ws = state.byProjectId[projectId] ?? defaultWorkspace();
+      const nextById = { ...ws.nodesById };
+      for (const n of nodes) {
+        nextById[n.id] = n;
+      }
+
+      const nextChildren = { ...ws.childrenByParentId };
+      const nextLoadedChildren = { ...ws.loadedChildren };
+      const nextFolderMeta = { ...ws.folderMeta };
+
+      for (const p of payloads) {
+        const key = parentKey(p.parentId);
+        nextChildren[key] = Array.from(new Set(p.childIds));
+        if (p.loaded) {
+          nextLoadedChildren[key] = true;
+        }
+        nextFolderMeta[key] = { nextCursor: p.nextCursor, hasMore: p.hasMore };
+      }
+
+      const budgeted = enforceNodesBudget(nextById, nextChildren, 5000);
+      const limitedNodesById = budgeted.nodesById;
+      const prunedChildrenByParentId = budgeted.childrenByParentId;
+
+      syncIdbCache(projectId, limitedNodesById, prunedChildrenByParentId);
+
+      return {
+        byProjectId: {
+          ...state.byProjectId,
+          [projectId]: {
+            ...ws,
+            nodesById: limitedNodesById,
+            childrenByParentId: prunedChildrenByParentId,
+            loadedChildren: nextLoadedChildren,
+            folderMeta: nextFolderMeta,
+            treeVersion: ws.treeVersion + 1,
           },
         },
       };
