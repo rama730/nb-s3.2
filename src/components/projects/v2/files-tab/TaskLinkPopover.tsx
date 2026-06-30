@@ -13,6 +13,7 @@
 "use client";
 
 import * as React from "react";
+import { createPortal } from "react-dom";
 import { Loader2 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -30,6 +31,69 @@ export interface TaskLinkPopoverProps {
   className?: string;
 }
 
+type PopoverPosition = {
+  top: number;
+  left: number;
+  width: number;
+  bodyMaxHeight: number;
+};
+
+const POPOVER_WIDTH_PX = 256;
+const POPOVER_GAP_PX = 6;
+const VIEWPORT_PADDING_PX = 12;
+const POPOVER_MAX_HEIGHT_PX = 240;
+const POPOVER_HEADER_HEIGHT_PX = 37;
+const POPOVER_MIN_BODY_HEIGHT_PX = 72;
+
+function computePopoverPosition(anchor: DOMRect): PopoverPosition {
+  const viewportWidth = window.innerWidth;
+  const viewportHeight = window.innerHeight;
+  const width = Math.min(
+    POPOVER_WIDTH_PX,
+    Math.max(160, viewportWidth - VIEWPORT_PADDING_PX * 2),
+  );
+  const maxLeft = Math.max(
+    VIEWPORT_PADDING_PX,
+    viewportWidth - width - VIEWPORT_PADDING_PX,
+  );
+
+  let left = anchor.left;
+  if (left > maxLeft) left = maxLeft;
+  if (left < VIEWPORT_PADDING_PX) left = VIEWPORT_PADDING_PX;
+
+  const spaceBelow =
+    viewportHeight - anchor.bottom - POPOVER_GAP_PX - VIEWPORT_PADDING_PX;
+  const spaceAbove = anchor.top - POPOVER_GAP_PX - VIEWPORT_PADDING_PX;
+  const openAbove =
+    spaceBelow < POPOVER_MAX_HEIGHT_PX && spaceAbove > spaceBelow;
+  const availableHeight = Math.max(0, openAbove ? spaceAbove : spaceBelow);
+  const panelHeight = Math.min(
+    POPOVER_MAX_HEIGHT_PX,
+    Math.max(
+      POPOVER_HEADER_HEIGHT_PX + POPOVER_MIN_BODY_HEIGHT_PX,
+      availableHeight,
+    ),
+  );
+
+  let top = openAbove
+    ? anchor.top - POPOVER_GAP_PX - panelHeight
+    : anchor.bottom + POPOVER_GAP_PX;
+  if (!openAbove && top + panelHeight > viewportHeight - VIEWPORT_PADDING_PX) {
+    top = viewportHeight - VIEWPORT_PADDING_PX - panelHeight;
+  }
+  if (top < VIEWPORT_PADDING_PX) top = VIEWPORT_PADDING_PX;
+
+  return {
+    top,
+    left,
+    width,
+    bodyMaxHeight: Math.max(
+      POPOVER_MIN_BODY_HEIGHT_PX,
+      panelHeight - POPOVER_HEADER_HEIGHT_PX,
+    ),
+  };
+}
+
 // ─── Component ───────────────────────────────────────────────────────
 
 export function TaskLinkPopover({
@@ -40,15 +104,39 @@ export function TaskLinkPopover({
 }: TaskLinkPopoverProps): React.JSX.Element | null {
   const [isOpen, setIsOpen] = React.useState(false);
   const containerRef = React.useRef<HTMLDivElement>(null);
+  const popoverRef = React.useRef<HTMLDivElement>(null);
+  const [popoverPosition, setPopoverPosition] =
+    React.useState<PopoverPosition | null>(null);
+
+  const updatePopoverPosition = React.useCallback(() => {
+    const anchor = containerRef.current?.getBoundingClientRect();
+    if (!anchor) return;
+    setPopoverPosition(computePopoverPosition(anchor));
+  }, []);
+
+  React.useEffect(() => {
+    if (!isOpen) {
+      setPopoverPosition(null);
+      return;
+    }
+
+    updatePopoverPosition();
+    window.addEventListener("resize", updatePopoverPosition);
+    window.addEventListener("scroll", updatePopoverPosition, true);
+    return () => {
+      window.removeEventListener("resize", updatePopoverPosition);
+      window.removeEventListener("scroll", updatePopoverPosition, true);
+    };
+  }, [isOpen, updatePopoverPosition]);
 
   // Close popover on outside click
   React.useEffect(() => {
     if (!isOpen) return;
     function handleClickOutside(e: MouseEvent) {
-      if (
-        containerRef.current &&
-        !containerRef.current.contains(e.target as Node)
-      ) {
+      const target = e.target as Node;
+      const isInTrigger = containerRef.current?.contains(target);
+      const isInPopover = popoverRef.current?.contains(target);
+      if (!isInTrigger && !isInPopover) {
         setIsOpen(false);
       }
     }
@@ -73,23 +161,34 @@ export function TaskLinkPopover({
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [isOpen]);
 
-  const handleChipClick = React.useCallback((e: React.MouseEvent) => {
-    e.stopPropagation();
-    setIsOpen((prev) => !prev);
-  }, []);
+  const handleChipClick = React.useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      setIsOpen((prev) => {
+        const next = !prev;
+        if (next) requestAnimationFrame(updatePopoverPosition);
+        return next;
+      });
+    },
+    [updatePopoverPosition],
+  );
 
   if (count < 1) return null;
 
   return (
     <div ref={containerRef} className={cn("relative inline-flex", className)}>
       <TaskLinkChip count={count} onClick={handleChipClick} />
-      {isOpen && (
-        <TaskLinkPopoverContent
-          projectId={projectId}
-          nodeId={nodeId}
-          onClose={() => setIsOpen(false)}
-        />
-      )}
+      {isOpen &&
+        popoverPosition &&
+        createPortal(
+          <TaskLinkPopoverContent
+            projectId={projectId}
+            nodeId={nodeId}
+            ref={popoverRef}
+            position={popoverPosition}
+          />,
+          document.body,
+        )}
     </div>
   );
 }
@@ -99,25 +198,34 @@ export function TaskLinkPopover({
 interface TaskLinkPopoverContentProps {
   projectId: string;
   nodeId: string;
-  onClose: () => void;
+  position: PopoverPosition;
 }
 
-function TaskLinkPopoverContent({
-  projectId,
-  nodeId,
-}: TaskLinkPopoverContentProps): React.JSX.Element {
+const TaskLinkPopoverContent = React.forwardRef<
+  HTMLDivElement,
+  TaskLinkPopoverContentProps
+>(function TaskLinkPopoverContent(
+  { projectId, nodeId, position }: TaskLinkPopoverContentProps,
+  ref,
+): React.JSX.Element {
   const { tasks, isLoading, error } = useTaskLinks(projectId, nodeId);
 
   return (
     <div
+      ref={ref}
       data-testid="task-link-popover"
       role="dialog"
       aria-label="Linked tasks"
       className={cn(
-        "absolute left-0 top-full z-50 mt-1 w-64 rounded-md border border-zinc-200 bg-white shadow-lg",
+        "fixed z-[240] rounded-md border border-zinc-200 bg-white shadow-lg",
         "dark:border-zinc-700 dark:bg-zinc-900",
         "animate-in fade-in-0 zoom-in-95",
       )}
+      style={{
+        top: position.top,
+        left: position.left,
+        width: position.width,
+      }}
       onClick={(e) => e.stopPropagation()}
     >
       <div className="border-b border-zinc-100 px-3 py-2 dark:border-zinc-800">
@@ -125,7 +233,10 @@ function TaskLinkPopoverContent({
           Linked Tasks
         </h4>
       </div>
-      <div className="max-h-48 overflow-y-auto">
+      <div
+        className="overflow-y-auto"
+        style={{ maxHeight: position.bodyMaxHeight }}
+      >
         {isLoading ? (
           <div className="flex items-center justify-center gap-2 px-3 py-4 text-xs text-zinc-500">
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -140,7 +251,10 @@ function TaskLinkPopoverContent({
             No linked tasks.
           </div>
         ) : (
-          <ul role="list" className="divide-y divide-zinc-100 dark:divide-zinc-800">
+          <ul
+            role="list"
+            className="divide-y divide-zinc-100 dark:divide-zinc-800"
+          >
             {tasks.map((task) => (
               <PopoverTaskRow key={task.taskId} task={task} />
             ))}
@@ -149,7 +263,7 @@ function TaskLinkPopoverContent({
       </div>
     </div>
   );
-}
+});
 
 // ─── Popover Task Row ────────────────────────────────────────────────
 
@@ -190,10 +304,7 @@ function StatusDot({ status }: { status: string }): React.JSX.Element {
 
   return (
     <span
-      className={cn(
-        "inline-block h-2 w-2 shrink-0 rounded-full",
-        colorClass,
-      )}
+      className={cn("inline-block h-2 w-2 shrink-0 rounded-full", colorClass)}
       aria-hidden="true"
     />
   );
