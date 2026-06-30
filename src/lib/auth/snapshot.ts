@@ -377,13 +377,12 @@ export function buildAuthSnapshotFromClaims(payload: JwtPayload): AuthSnapshot |
 
     const userMetadata = asRecord(payload.user_metadata)
     const appMetadata = asRecord(payload.app_metadata)
-    const username = typeof userMetadata.username === 'string' ? userMetadata.username.trim() : ''
-    const onboarded = userMetadata.onboarded === true
+    const serverOnboarded = appMetadata.onboarding_complete === true
 
     return {
         userId,
         sessionId: typeof payload.session_id === 'string' ? payload.session_id : null,
-        onboardingComplete: onboarded || username.length > 0,
+        onboardingComplete: serverOnboarded,
         emailVerified: isEmailVerified({
             email_confirmed_at: payload.email_confirmed_at,
             confirmed_at: payload.confirmed_at,
@@ -430,6 +429,57 @@ function authError(message: string, status: number): AuthSnapshotResolution['err
         name: 'AuthError',
         message,
         status,
+    }
+}
+
+async function readVerifiedUserFromAuthServer(
+    supabase: SupabaseClient,
+    accessToken: string,
+): Promise<{ user: User | null; error: AuthSnapshotResolution['error'] }> {
+    const awareClient = supabase as AuthSnapshotAwareClient
+    const getVerifiedUser = awareClient.__getUserFromAuthServer
+        ?? supabase.auth.getUser.bind(supabase.auth)
+
+    let timeoutId: ReturnType<typeof setTimeout> | null = null
+    try {
+        const response = await Promise.race([
+            getVerifiedUser(accessToken),
+            new Promise<never>((_, reject) => {
+                timeoutId = setTimeout(
+                    () => reject(new Error('Auth server verification timed out')),
+                    AUTH_SNAPSHOT_NETWORK_TIMEOUT_MS,
+                )
+            }),
+        ])
+
+        if (response.error) {
+            return {
+                user: null,
+                error: authError(response.error.message || 'Unable to verify auth session', response.error.status || 401),
+            }
+        }
+        return { user: response.data.user, error: null }
+    } catch (error) {
+        return {
+            user: null,
+            error: authError(error instanceof Error ? error.message : 'Unable to verify auth session', 401),
+        }
+    } finally {
+        if (timeoutId) clearTimeout(timeoutId)
+    }
+}
+
+function buildClaimsFromVerifiedUser(accessToken: string, user: User): JwtPayload {
+    const tokenClaims = tryDecodeJwtPayload(accessToken) ?? {}
+    return {
+        ...tokenClaims,
+        sub: user.id,
+        email: user.email,
+        role: user.role,
+        email_confirmed_at: user.email_confirmed_at,
+        confirmed_at: user.confirmed_at,
+        app_metadata: asRecord(user.app_metadata),
+        user_metadata: asRecord(user.user_metadata),
     }
 }
 
@@ -481,13 +531,27 @@ export async function resolveAuthSnapshot(
             user: buildUserFromSnapshot(snapshot),
             error: null,
         }
-    } catch (error) {
-        const message = error instanceof Error ? error.message : 'Unable to verify auth session'
+    } catch {
+        const verified = await readVerifiedUserFromAuthServer(supabase, session.access_token)
+        if (verified.user) {
+            const snapshot = buildAuthSnapshotFromClaims(
+                buildClaimsFromVerifiedUser(session.access_token, verified.user),
+            )
+            if (snapshot) {
+                return {
+                    session,
+                    snapshot,
+                    user: verified.user,
+                    error: null,
+                }
+            }
+        }
+
         return {
             session: null,
             snapshot: null,
             user: null,
-            error: authError(message, 401),
+            error: verified.error ?? authError('Unable to verify auth session', 401),
         }
     }
 }
