@@ -38,13 +38,31 @@ export function encodePath(
   const parts: string[] = [];
   const seen = new Set<string>();
   let cursor: ProjectNode | undefined = start;
+  let missingAncestor = false;
   while (cursor && !seen.has(cursor.id)) {
     seen.add(cursor.id);
     parts.unshift(encodeURIComponent(cursor.name));
     if (cursor.parentId === null || cursor.parentId === undefined) break;
-    cursor = nodesById[cursor.parentId];
+    const parentNode: ProjectNode | undefined = nodesById[cursor.parentId];
+    if (!parentNode) {
+      missingAncestor = true;
+      break;
+    }
+    cursor = parentNode;
+  }
+  if (missingAncestor) {
+    const materialized = encodeMaterializedPath(start);
+    if (materialized) return materialized;
   }
   return parts.join("/");
+}
+
+function encodeMaterializedPath(node: ProjectNode): string {
+  const rawPath = typeof node.path === "string" ? node.path.trim() : "";
+  if (!rawPath || rawPath === "/") return encodeURIComponent(node.name);
+  const segments = rawPath.split("/").filter(Boolean);
+  if (segments.length === 0) return encodeURIComponent(node.name);
+  return segments.map((segment) => encodeURIComponent(segment)).join("/");
 }
 
 /**
@@ -201,7 +219,7 @@ function computeNextSearch(currentSearch: string, encodedPath: string): string {
         continue;
       }
       const key = chunk.slice(0, eqIdx);
-      if (key === "path") continue; // drop and re-emit if needed
+      if (key === "path" || key === "fileId" || key === "line" || key === "column") continue; // drop and re-emit if needed
       others.push({
         key,
         value: chunk.slice(eqIdx + 1),
