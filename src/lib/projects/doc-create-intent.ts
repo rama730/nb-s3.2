@@ -1,9 +1,9 @@
 import type { OpenRoleInput } from "@/lib/validations/project";
 
-export type ProjectReadmeCreationMode = "detected" | "starter" | "skip";
+export type ProjectDocCreationMode = "detected" | "starter" | "skip";
 
-export type ProjectReadmeCreationIntent = {
-    mode: ProjectReadmeCreationMode;
+export type ProjectDocCreationIntent = {
+    mode: ProjectDocCreationMode;
     sourcePath?: string | null;
     publishOnCreate?: boolean;
     includeRoles?: boolean;
@@ -23,7 +23,7 @@ function basename(path: string) {
     return path.split("/").filter(Boolean).pop() || path;
 }
 
-export function isReadmeLikePath(pathOrName: string) {
+export function isDocLikePath(pathOrName: string) {
     const raw = (pathOrName || "").trim();
     if (!raw) return false;
     const name = basename(raw).toLowerCase();
@@ -43,7 +43,7 @@ export function findBestReadmeCandidate<T extends ReadmeCandidate>(items: T[] | 
         if (!item || item.type === "dir") return false;
         if (item.excludedReason) return false;
         if (typeof item.size === "number" && item.size > README_MAX_BYTES) return false;
-        return isReadmeLikePath(item.path || item.name);
+        return isDocLikePath(item.path || item.name);
     });
 
     if (candidates.length === 0) return null;
@@ -72,7 +72,7 @@ function uniqueList(values: unknown[] | undefined) {
     return Array.from(new Set((values || []).map((value) => cleanLine(value)).filter(Boolean)));
 }
 
-export function buildProjectReadmeStarterDraft(input: {
+export function buildProjectDocStarterDraft(input: {
     title: string;
     shortDescription?: string | null;
     description?: string | null;
@@ -82,7 +82,7 @@ export function buildProjectReadmeStarterDraft(input: {
     roles?: OpenRoleInput[];
     includeRoles?: boolean;
 }) {
-    const title = cleanLine(input.title, "Project README") || "Project README";
+    const title = cleanLine(input.title, "Project Doc") || "Project Doc";
     const summary = cleanLine(input.shortDescription) || cleanLine(input.description) || "Describe what this project does, who it helps, and why it exists.";
     const type = cleanLine(input.projectType);
     const technologies = uniqueList(input.technologies);
