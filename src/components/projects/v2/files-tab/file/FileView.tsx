@@ -51,7 +51,20 @@ import {
   Upload,
   VideoOff,
   VolumeOff,
+  BookOpenText,
+  ExternalLink,
+  Plus,
+  Loader2,
 } from "lucide-react";
+
+import { useRouter, usePathname } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
+import {
+  useProjectMarkdowns,
+  PROJECT_MARKDOWNS_LIST_QUERY_KEY,
+  PROJECT_DOC_QUERY_KEY,
+  PROJECT_DOC_DRAFT_QUERY_KEY,
+} from "@/hooks/hub/useProjectDocData";
 
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -62,20 +75,25 @@ import { getProjectFileContent } from "@/app/actions/files/content";
 import { listFileVersions } from "@/app/actions/files/versions";
 import type { ProjectNode } from "@/lib/db/schema";
 import { computeContentHash } from "@/lib/files/content-hash";
+import { normalizeProjectDocSlug } from "@/lib/projects/doc";
 import { cn } from "@/lib/utils";
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 import { useFileVersions } from "@/hooks/useFileVersions";
+import { useProjectMembers } from "@/hooks/hub/useProjectMembers";
 
 import { fileKind, type FileKind } from "../../utils/fileKind";
 import { formatBytes } from "../folder/format";
 import AssetPreview from "../../preview/AssetPreview";
 import MarkdownPreview from "../../preview/MarkdownPreview";
 
+import { FileVersionCompareView } from "./FileVersionCompareView";
 import { FileVersionHistoryPanel } from "./FileVersionHistoryPanel";
 import { LinkedTasksPanel } from "./LinkedTasksPanel";
 import { MetadataStrip, type MetadataStripNode } from "./MetadataStrip";
 import { TextViewer, type TextViewerMode } from "./TextViewer";
 import { isAssetKind, isEmptyMedia, isMarkdownNode } from "./previewPicker";
+import { RevisionControlModal } from "@/components/ui/RevisionControlModal";
+import { createClient } from "@/lib/supabase/client";
 
 // ---------------------------------------------------------------------------
 // Props
@@ -125,6 +143,21 @@ export function FileView({
 }: FileViewProps): React.JSX.Element {
   const { showToast } = useToast();
 
+  // ── Fetch project members for uploader profiles ────────────────────
+  const { data: membersData } = useProjectMembers(projectId);
+  const uploaderNames = React.useMemo(() => {
+    const map: Record<string, string> = {};
+    if (!membersData) return map;
+    membersData.pages.forEach((page: any) => {
+      page.members?.forEach((m: any) => {
+        if (m?.id) {
+          map[m.id] = m.fullName || m.username || m.id;
+        }
+      });
+    });
+    return map;
+  }, [membersData]);
+
   // ── Task link count from store (Req 7.1, 7.4) ──────────────────────
   const taskLinkCount = useFilesWorkspaceStore(
     (s) => s.byProjectId[projectId]?.taskLinkCounts?.[node.id] ?? 0,
@@ -135,7 +168,84 @@ export function FileView({
   const emptyMedia = React.useMemo(() => isEmptyMedia(node, kind), [node, kind]);
   const textLike = kind === "text" || isMd;
 
+  const [compareVersion, setCompareVersion] = React.useState<number | null>(null);
+  const [restoringActive, setRestoringActive] = React.useState(false);
+  const [pendingDropFile, setPendingDropFile] = React.useState<File | null>(null);
+  const [isDropModalOpen, setIsDropModalOpen] = React.useState(false);
+
+  React.useEffect(() => {
+    const handleVersionChanged = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail && detail.nodeId === node.id) {
+        setRestoringActive(false);
+        setCompareVersion(null);
+      }
+    };
+    const handleVersionChangedStart = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail && detail.nodeId === node.id) {
+        setRestoringActive(true);
+      }
+    };
+
+    window.addEventListener("file:version-changed", handleVersionChanged);
+    window.addEventListener("file:version-changed-start", handleVersionChangedStart);
+    return () => {
+      window.removeEventListener("file:version-changed", handleVersionChanged);
+      window.removeEventListener("file:version-changed-start", handleVersionChangedStart);
+    };
+  }, [node.id]);
+
   const [mode, setMode] = React.useState<FileViewMode>("view");
+
+  const onView = React.useCallback(() => {
+    setMode("view");
+  }, []);
+
+  const router = useRouter();
+  const queryClient = useQueryClient();
+  const pathname = usePathname();
+  const projectSlug = pathname?.split("/")[2] || "";
+
+  // Query list of documents to see if this node is linked to any of them
+  const { data: markdowns = [], isLoading: isLoadingMarkdowns } = useProjectMarkdowns(projectId);
+  const linkedDoc = React.useMemo(() => {
+    return markdowns.find((doc: any) => doc.linkedNodeId === node.id);
+  }, [markdowns, node.id]);
+  const isLinked = !!linkedDoc;
+
+  const [isLinkingDoc, setIsLinkingDoc] = React.useState(false);
+
+  const handleLinkToDoc = async () => {
+    if (!projectId || !node.id || isLinkingDoc) return;
+    setIsLinkingDoc(true);
+    try {
+      const filename = node.name || "document.md";
+      const docSlug = normalizeProjectDocSlug(filename, "doc");
+
+      const { linkProjectDocAction } = await import("@/app/actions/project/doc");
+      const result = await linkProjectDocAction(projectId, node.id, docSlug);
+      if (result.success) {
+        showToast("File linked to Documents successfully", "success");
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: PROJECT_MARKDOWNS_LIST_QUERY_KEY(projectId) }),
+          queryClient.invalidateQueries({ queryKey: PROJECT_DOC_DRAFT_QUERY_KEY(projectId, docSlug) }),
+          queryClient.invalidateQueries({ queryKey: PROJECT_DOC_QUERY_KEY(projectId, docSlug) })
+        ]);
+        router.push(`/projects/${projectSlug}?tab=docs&doc=${docSlug}`, { scroll: false });
+      } else {
+        showToast(result.error || "Failed to link file", "error");
+      }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "An error occurred", "error");
+    } finally {
+      setIsLinkingDoc(false);
+    }
+  };
+
+  const handleNavigateToDoc = React.useCallback((slug: string) => {
+    router.push(`/projects/${projectSlug}?tab=docs&doc=${normalizeProjectDocSlug(slug)}`, { scroll: false });
+  }, [router, projectSlug]);
 
   // ── LinkedTasksPanel toggle state (Req 8.1, 8.6) ───────────────────
   const [isLinkedTasksPanelOpen, setIsLinkedTasksPanelOpen] =
@@ -214,6 +324,16 @@ export function FileView({
         setIsDropProcessing(true);
         try {
           if (!droppedFile) return;
+
+          // Enforce file extension type checks
+          const expectedExt = extOf(node.name);
+          const uploadedExt = extOf(droppedFile.name);
+          if (expectedExt !== uploadedExt) {
+            showToast(`Extension mismatch: Expected .${expectedExt} but received .${uploadedExt}`, "error");
+            setIsDropProcessing(false);
+            return;
+          }
+
           const hashResult = await computeContentHash(droppedFile).catch(
             () => null,
           );
@@ -233,13 +353,9 @@ export function FileView({
             return;
           }
 
-          // Hash differs or unknown — proceed with upload
-          const result = await saveAsNewVersion(droppedFile);
-          if (result.success) {
-            showToast(`Saved as version ${result.version.version}`, "success");
-          } else {
-            showToast(result.error || "Failed to save new version", "error");
-          }
+          // Hash differs or unknown — proceed with upload options modal
+          setPendingDropFile(droppedFile);
+          setIsDropModalOpen(true);
         } catch (err) {
           const message =
             err instanceof Error ? err.message : "Drop failed";
@@ -249,25 +365,79 @@ export function FileView({
         }
       })();
     },
-    [canEdit, projectId, node.id, saveAsNewVersion, showToast],
+    [canEdit, projectId, node.id, node.name, saveAsNewVersion, showToast],
+  );
+
+  const handleDropRevisionOptionSelected = React.useCallback(
+    async (choice: { option: "overwrite" | "commit"; comment?: string }) => {
+      if (!pendingDropFile) return;
+      const file = pendingDropFile;
+      setPendingDropFile(null);
+      setIsDropProcessing(true);
+
+      try {
+        if (choice.option === "commit") {
+          const result = await saveAsNewVersion(file, { comment: choice.comment });
+          if (result.success) {
+            showToast(`New revision committed successfully`, "success");
+            // Set node in store
+            useFilesWorkspaceStore.getState().setNodes(projectId, [result.node]);
+          } else {
+            showToast(result.error || "Failed to commit revision", "error");
+          }
+        } else {
+          // Direct overwrite S3 object path
+          if (!node.s3Key) {
+            showToast("Cannot overwrite: Active file has no storage key.", "error");
+            return;
+          }
+          const supabase = createClient();
+          const { error: uploadError } = await supabase.storage
+            .from("project-files")
+            .update(node.s3Key, file, { upsert: true });
+
+          if (uploadError) throw uploadError;
+
+          const { updateProjectFileStats } = await import("@/app/actions/files/content");
+          const updatedNode = (await updateProjectFileStats(
+            projectId,
+            node.id,
+            file.size
+          )) as any;
+
+          if (updatedNode) {
+            useFilesWorkspaceStore.getState().setNodes(projectId, [updatedNode]);
+            showToast("Active revision updated in-place", "success");
+          } else {
+            throw new Error("Failed to update database record stats.");
+          }
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Upload failed";
+        showToast(message, "error");
+      } finally {
+        setIsDropProcessing(false);
+      }
+    },
+    [pendingDropFile, projectId, node.id, node.s3Key, saveAsNewVersion, showToast]
   );
 
   const handleHashMatchConfirm = React.useCallback(async () => {
     if (!hashMatchPromptFile) return;
     const file = hashMatchPromptFile;
     setHashMatchPromptFile(null);
-    setIsDropProcessing(true);
-    try {
-      const result = await saveAsNewVersion(file);
-      if (result.success) {
-        showToast(`Saved as version ${result.version.version}`, "success");
-      } else {
-        showToast(result.error || "Failed to save new version", "error");
-      }
-    } finally {
-      setIsDropProcessing(false);
+    
+    // Check extension
+    const expectedExt = extOf(node.name);
+    const uploadedExt = extOf(file.name);
+    if (expectedExt !== uploadedExt) {
+      showToast(`Extension mismatch: Expected .${expectedExt} but received .${uploadedExt}`, "error");
+      return;
     }
-  }, [hashMatchPromptFile, saveAsNewVersion, showToast]);
+
+    setPendingDropFile(file);
+    setIsDropModalOpen(true);
+  }, [hashMatchPromptFile, node.name, showToast]);
 
   // Signed URL for asset / markdown / binary previews and for the
   // Download + Raw-on-binary actions. Fetched lazily and cached at the
@@ -465,6 +635,8 @@ export function FileView({
         signedUrl={signedUrl}
         projectId={projectId}
         taskLinkCount={taskLinkCount}
+        mode={mode}
+        onView={onView}
         onRaw={onRaw}
         onEdit={onEdit}
         onDownload={onDownload}
@@ -472,6 +644,9 @@ export function FileView({
         isLinkedTasksPanelOpen={isLinkedTasksPanelOpen}
         onToggleVersionHistory={onToggleVersionHistory}
         isVersionHistoryPanelOpen={isVersionHistoryPanelOpen}
+        uploaderNames={uploaderNames}
+        isLinkedDoc={isLinked}
+        onNavigateToDoc={handleNavigateToDoc}
       />
 
       <div className="flex min-h-0 flex-1 flex-col">
@@ -483,20 +658,32 @@ export function FileView({
         <div className="flex min-h-0 flex-1">
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             <ComponentErrorBoundary fallbackMessage="Failed to load preview">
-              {renderPreviewRegion({
-                node,
-                kind,
-                isMd,
-                emptyMedia,
-                textLike,
-                canEdit,
-                mode,
-                signedUrl,
-                signedUrlError,
-                mdContent,
-                mdError,
-                projectId,
-              })}
+              {compareVersion !== null ? (
+                <FileVersionCompareView
+                  projectId={projectId}
+                  nodeId={node.id}
+                  fileName={node.name}
+                  baseVersion={compareVersion}
+                  targetVersion={node.currentVersion ?? 1}
+                  onClose={() => setCompareVersion(null)}
+                  canEdit={canEdit && !restoringActive}
+                />
+              ) : (
+                renderPreviewRegion({
+                  node,
+                  kind,
+                  isMd,
+                  emptyMedia,
+                  textLike,
+                  canEdit: canEdit && !restoringActive,
+                  mode,
+                  signedUrl,
+                  signedUrlError,
+                  mdContent,
+                  mdError,
+                  projectId,
+                })
+              )}
             </ComponentErrorBoundary>
           </div>
 
@@ -535,11 +722,22 @@ export function FileView({
                 canEdit={canEdit}
                 currentVersion={node.currentVersion ?? 1}
                 isDeleted={node.deletedAt != null}
+                uploaderNames={uploaderNames}
+                onCompareClick={setCompareVersion}
               />
             </div>
           )}
         </div>
       </div>
+      {/* Revision control option picker modal for drops */}
+      {isDropModalOpen && (
+        <RevisionControlModal
+          isOpen={isDropModalOpen}
+          onOpenChange={setIsDropModalOpen}
+          fileName={node.name}
+          onSelectOption={handleDropRevisionOptionSelected}
+        />
+      )}
     </div>
   );
 }
@@ -618,15 +816,14 @@ function renderPreviewRegion(p: PreviewRegionProps): React.JSX.Element {
     );
   }
 
-  // Text default view: `TextViewer` in raw mode. Edit is reached only via
-  // the action bar button.
+  // Text default view: `TextViewer` in view mode (read-only with line numbers).
   if (p.kind === "text") {
     return (
       <TextViewer
         projectId={p.projectId}
         node={p.node}
         canEdit={p.canEdit}
-        mode="raw"
+        mode="view"
       />
     );
   }
@@ -752,8 +949,6 @@ function BinaryFallback({
   node,
   signedUrl,
 }: BinaryFallbackProps): React.JSX.Element {
-  const mime = (node.mimeType || "unknown").toLowerCase();
-  const size = formatBytes(node.size, "file") || "—";
   return (
     <div
       data-testid="files-tab-file-view-binary-fallback"
@@ -761,12 +956,6 @@ function BinaryFallback({
     >
       <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-zinc-100 dark:bg-zinc-800">
         <FileQuestion className="h-6 w-6 text-zinc-500" aria-hidden="true" />
-      </div>
-      <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-        {node.name}
-      </div>
-      <div className="text-xs text-zinc-500 dark:text-zinc-400">
-        {mime} · {size}
       </div>
       <div className="max-w-md text-xs text-zinc-500 dark:text-zinc-400">
         This file type doesn&apos;t have an inline preview. Open it in a new
@@ -784,3 +973,9 @@ function BinaryFallback({
 }
 
 export default FileView;
+
+function extOf(filename: string): string {
+  const idx = filename.lastIndexOf(".");
+  if (idx === -1) return "";
+  return filename.slice(idx + 1).toLowerCase();
+}
