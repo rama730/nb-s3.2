@@ -1,5 +1,6 @@
 import { MainLayout } from '@/components/layout/MainLayout';
 import { MainRuntimeProviders } from '@/components/providers/MainRuntimeProviders';
+import { AuthRouteProviders } from '@/components/providers/AuthRouteProviders';
 import { getViewerAuthContext } from '@/lib/server/viewer-context';
 
 async function ResolvedProviders({
@@ -10,9 +11,11 @@ async function ResolvedProviders({
   const { user } = await getViewerAuthContext();
 
   return (
-    <MainRuntimeProviders initialUser={user} initialProfile={null}>
-      <MainLayout>{children}</MainLayout>
-    </MainRuntimeProviders>
+    <AuthRouteProviders initialUser={user} initialProfile={null}>
+      <MainRuntimeProviders initialUser={user}>
+        <MainLayout>{children}</MainLayout>
+      </MainRuntimeProviders>
+    </AuthRouteProviders>
   );
 }
 
