@@ -100,72 +100,8 @@ export async function searchProjectFileIndex(projectId: string, query: string, l
     const safeLimit = Math.min(200, Math.max(1, limit));
     const LARGE_PROJECT_THRESHOLD = 1000;
 
-    let shouldUseHybrid = false;
-    if (filesFeatureFlags.searchHybrid || filesFeatureFlags.wave2HybridSearch) {
-        const cached = projectScaleCache.get(projectId);
-        const now = Date.now();
-        let projectNodeCount = cached && now - cached.ts < PROJECT_SCALE_TTL_MS ? cached.count : null;
-        if (projectNodeCount === null) {
-            const [projectScale] = await db
-                .select({
-                    count: sql<number>`count(*)::int`,
-                })
-                .from(projectNodes)
-                .where(and(eq(projectNodes.projectId, projectId), isNull(projectNodes.deletedAt)));
-            projectNodeCount = projectScale?.count ?? 0;
-            projectScaleCache.set(projectId, { count: projectNodeCount, ts: now });
-        }
-        shouldUseHybrid = projectNodeCount >= LARGE_PROJECT_THRESHOLD;
-    }
-
-    if (shouldUseHybrid) {
-        try {
-            const hybridStartedAt = Date.now();
-            const ranked = await db
-                .select({
-                    nodeId: projectFileIndex.nodeId,
-                    snippet: sql<string>`substring(${projectFileIndex.content} from 1 for 240)`,
-                    rank: sql<number>`ts_rank_cd(
-                        to_tsvector('simple', coalesce(${projectFileIndex.content}, '')),
-                        plainto_tsquery('simple', ${q})
-                    )`,
-                })
-                .from(projectFileIndex)
-                .where(
-                    and(
-                        eq(projectFileIndex.projectId, projectId),
-                        sql<boolean>`to_tsvector('simple', coalesce(${projectFileIndex.content}, '')) @@ plainto_tsquery('simple', ${q})`
-                    )
-                )
-                .orderBy((row) => desc(row.rank))
-                .limit(safeLimit);
-
-            const rows = ranked.map((row) => ({
-                nodeId: row.nodeId,
-                snippet: row.snippet,
-            }));
-            if (rows.length > 0) {
-                logger.metric("files.search.hybrid.hit", {
-                    projectId,
-                    queryLength: q.length,
-                    resultCount: rows.length,
-                    latencyMs: Date.now() - hybridStartedAt,
-                });
-                return rows;
-            }
-            logger.metric("files.search.hybrid.empty", {
-                projectId,
-                queryLength: q.length,
-                latencyMs: Date.now() - hybridStartedAt,
-            });
-        } catch {
-            logger.metric("files.search.hybrid.error", {
-                projectId,
-                queryLength: q.length,
-            });
-            // Fall through to trgm/ilike path.
-        }
-    }
+    // Always use GIN-indexed trigram ilike search to prevent CPU spikes and table scans
+    const shouldUseHybrid = false;
 
     const rows = await db
         .select({
