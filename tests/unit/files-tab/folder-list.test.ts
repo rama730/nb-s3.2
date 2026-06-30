@@ -85,14 +85,14 @@ describe("sortFolderListNodes / compareFolderListNodes — Req 4.2", () => {
     // Names intentionally alternate case so we can prove the compare is
     // sensitivity-base (case + accent insensitive).
     const nodes = [
-      file("f1", "Readme.md"),
+      file("f1", "Doc.md"),
       file("f2", "apple.txt"),
       folder("d1", "Zebra"),
       folder("d2", "alpha"),
     ];
     const sorted = sortFolderListNodes(nodes).map((n) => n.name);
     // Folders first, case-insensitive alphabetical; files second.
-    assert.deepEqual(sorted, ["alpha", "Zebra", "apple.txt", "Readme.md"]);
+    assert.deepEqual(sorted, ["alpha", "Zebra", "apple.txt", "Doc.md"]);
   });
 
   it("breaks name ties by ascending lexicographic id", () => {
