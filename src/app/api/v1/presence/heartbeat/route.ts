@@ -2,11 +2,13 @@ import { NextRequest } from 'next/server';
 import { jsonSuccess, jsonError } from '@/app/api/v1/_envelope';
 import { enforceRouteLimit } from '@/app/api/v1/_shared';
 import { db } from '@/lib/db';
+import { isTransientDbError, readDbErrorCode, withDbRetry } from '@/lib/db/retry';
 import { profiles } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 import { getRedisClient } from '@/lib/redis';
 import { validateCsrf } from '@/lib/security/csrf';
 import { getViewerAuthContext } from '@/lib/server/viewer-context';
+import { logger } from '@/lib/logger';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -44,6 +46,7 @@ export async function POST(request: NextRequest) {
         const auth = await getViewerAuthContext();
         if (!auth.userId || !auth.user) return jsonError('Not authenticated', 401, 'UNAUTHORIZED');
 
+        const userId = auth.userId;
         const sessionId = auth.snapshot?.sessionId ?? null;
         if (!sessionId) {
             return jsonSuccess({ updated: false });
@@ -72,11 +75,26 @@ export async function POST(request: NextRequest) {
             return jsonSuccess({ updated: false });
         }
 
-        // Update last_active_at
-        await db
-            .update(profiles)
-            .set({ lastActiveAt: new Date() })
-            .where(eq(profiles.id, auth.userId));
+        try {
+            await withDbRetry("presence.heartbeat.last_active", async () => {
+                await db
+                    .update(profiles)
+                    .set({ lastActiveAt: new Date() })
+                    .where(eq(profiles.id, userId));
+            }, { module: "presence" });
+        } catch (error) {
+            if (isTransientDbError(error)) {
+                logger.warn("presence.heartbeat_last_active_skipped", {
+                    module: "presence",
+                    userId,
+                    sessionId,
+                    errorCode: readDbErrorCode(error),
+                    error: error instanceof Error ? error.message : String(error),
+                });
+                return jsonSuccess({ updated: false, skipped: "transient_db" });
+            }
+            throw error;
+        }
 
         return jsonSuccess({ updated: true });
     } catch (error) {
