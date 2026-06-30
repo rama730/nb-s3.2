@@ -25,7 +25,7 @@ function buildCalloutMarkdown(kind: CalloutKind, message: string) {
     return [`> [!${kind}]`, ...lines.map((line) => `> ${line}`)].join("\n");
 }
 
-export function ProjectReadmeCalloutBuilder({
+export function ProjectDocCalloutBuilder({
     onInsert,
     onClose,
 }: {
