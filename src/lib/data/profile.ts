@@ -59,6 +59,9 @@ function toBootstrapProfile(
         | 'workspaceDueTodayCount'
         | 'workspaceOverdueCount'
         | 'workspaceInProgressCount'
+        | 'onboardingStatus'
+        | 'onboardingCompletedAt'
+        | 'onboardingVersion'
     > & Partial<Pick<StandardProfile, 'notificationPreferences'>>
 ): StandardProfile {
     return {
@@ -76,6 +79,9 @@ function toBootstrapProfile(
         genderIdentity: null,
         pronouns: null,
         connectionPrivacy: profile.connectionPrivacy ?? 'everyone',
+        onboardingStatus: profile.onboardingStatus ?? 'not_started',
+        onboardingCompletedAt: profile.onboardingCompletedAt ?? null,
+        onboardingVersion: profile.onboardingVersion ?? 1,
         lastActiveAt: null,
         hasRecoveryCodes: false,
     }
@@ -142,6 +148,9 @@ export const getUserProfile = cache(async (userId: string) => {
                 workspaceDueTodayCount: profiles.workspaceDueTodayCount,
                 workspaceOverdueCount: profiles.workspaceOverdueCount,
                 workspaceInProgressCount: profiles.workspaceInProgressCount,
+                onboardingStatus: profiles.onboardingStatus,
+                onboardingCompletedAt: profiles.onboardingCompletedAt,
+                onboardingVersion: profiles.onboardingVersion,
             })
             .from(profiles)
             .where(and(eq(profiles.id, userId), isNull(profiles.deletedAt)))
