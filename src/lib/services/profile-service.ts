@@ -131,6 +131,9 @@ export async function getSelfProfile(userId: string): Promise<StandardProfile | 
         | 'workspaceOverdueCount'
         | 'workspaceInProgressCount'
         | 'lastActiveAt'
+        | 'onboardingStatus'
+        | 'onboardingCompletedAt'
+        | 'onboardingVersion'
         | 'deletedAt'
         | 'createdAt'
         | 'updatedAt'
@@ -173,6 +176,9 @@ export async function getSelfProfile(userId: string): Promise<StandardProfile | 
                 workspaceOverdueCount: true,
                 workspaceInProgressCount: true,
                 lastActiveAt: true,
+                onboardingStatus: true,
+                onboardingCompletedAt: true,
+                onboardingVersion: true,
                 deletedAt: true,
                 createdAt: true,
                 updatedAt: true,
@@ -227,6 +233,9 @@ export async function getSelfProfile(userId: string): Promise<StandardProfile | 
         workspaceDueTodayCount: data.workspaceDueTodayCount ?? 0,
         workspaceOverdueCount: data.workspaceOverdueCount ?? 0,
         workspaceInProgressCount: data.workspaceInProgressCount ?? 0,
+        onboardingStatus: data.onboardingStatus,
+        onboardingCompletedAt: data.onboardingCompletedAt,
+        onboardingVersion: data.onboardingVersion,
         hasRecoveryCodes: false,
         lastActiveAt: data.lastActiveAt ?? null,
         deletedAt: data.deletedAt ?? null,
