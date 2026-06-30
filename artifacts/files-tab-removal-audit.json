@@ -1,19 +1,19 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-06-10T17:28:11.621Z",
+  "generatedAt": "2026-06-29T22:45:51.888Z",
   "searchTool": "git-grep",
   "repoRoot": "/Users/chrama/Downloads/nb-s3",
   "notes": "Best-effort audit: `unexpected` counts are logged for Task 13 review but do NOT fail the build while `filesTabV3Enabled` is ramping. Task 13.4 / 13.5 must re-run this audit and confirm zero `unexpected` references before any deletion lands.",
   "summary": {
     "searchTool": "git-grep",
     "totalTargets": 89,
-    "totalReferences": 389,
+    "totalReferences": 426,
     "counts": {
       "allowed-self": 108,
       "allowed-legacy": 12,
-      "allowed-spec": 239,
-      "likely-collision": 24,
-      "unexpected": 6
+      "allowed-spec": 244,
+      "likely-collision": 58,
+      "unexpected": 4
     }
   },
   "priorities": [
@@ -42,7 +42,7 @@
             },
             {
               "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 559,
+              "line": 568,
               "text": "  // Search the `@/...` alias (e.g. `@/lib/runner/backend`). Consumers almost",
               "classification": "allowed-spec"
             }
@@ -136,20 +136,13 @@
           "label": "src/lib/runner/prefs.ts",
           "searchQuery": "@/lib/runner/prefs",
           "path": "src/lib/runner/prefs.ts",
-          "references": [
-            {
-              "file": "src/components/settings/LanguagesSettings.tsx",
-              "line": 7,
-              "text": "import { getRunnerPref, setRunnerPref } from \"@/lib/runner/prefs\";",
-              "classification": "unexpected"
-            }
-          ],
+          "references": [],
           "counts": {
             "allowed-self": 0,
             "allowed-legacy": 0,
             "allowed-spec": 0,
             "likely-collision": 0,
-            "unexpected": 1
+            "unexpected": 0
           }
         },
         {
@@ -157,20 +150,13 @@
           "label": "src/lib/runner/pyodide.ts",
           "searchQuery": "@/lib/runner/pyodide",
           "path": "src/lib/runner/pyodide.ts",
-          "references": [
-            {
-              "file": "src/components/settings/LanguagesSettings.tsx",
-              "line": 9,
-              "text": "import { preloadPyodide } from \"@/lib/runner/pyodide\";",
-              "classification": "unexpected"
-            }
-          ],
+          "references": [],
           "counts": {
             "allowed-self": 0,
             "allowed-legacy": 0,
             "allowed-spec": 0,
             "likely-collision": 0,
-            "unexpected": 1
+            "unexpected": 0
           }
         },
         {
@@ -841,7 +827,7 @@
             },
             {
               "file": "src/stores/files/types.ts",
-              "line": 266,
+              "line": 277,
               "text": "  setSplitEnabled: (projectId: string, enabled: boolean) => void;",
               "classification": "allowed-self"
             },
@@ -865,7 +851,7 @@
             },
             {
               "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 583,
+              "line": 592,
               "text": " * count its own `export function setSplitEnabled(...)` as \"unexpected\").",
               "classification": "allowed-spec"
             },
@@ -928,7 +914,7 @@
             },
             {
               "file": "src/stores/files/types.ts",
-              "line": 267,
+              "line": 278,
               "text": "  setSplitRatio: (projectId: string, ratio: number) => void;",
               "classification": "allowed-self"
             },
@@ -997,7 +983,7 @@
             },
             {
               "file": "src/stores/files/types.ts",
-              "line": 269,
+              "line": 280,
               "text": "  pinTab: (projectId: string, paneId: WorkspacePane[\"id\"], nodeId: string, pinned: boolean) => void;",
               "classification": "allowed-self"
             },
@@ -1066,7 +1052,7 @@
             },
             {
               "file": "src/stores/files/types.ts",
-              "line": 270,
+              "line": 281,
               "text": "  closeOtherTabs: (projectId: string, paneId: WorkspacePane[\"id\"], keepNodeId: string) => void;",
               "classification": "allowed-self"
             },
@@ -1135,7 +1121,7 @@
             },
             {
               "file": "src/stores/files/types.ts",
-              "line": 271,
+              "line": 282,
               "text": "  closeTabsToRight: (projectId: string, paneId: WorkspacePane[\"id\"], fromNodeId: string) => void;",
               "classification": "allowed-self"
             },
@@ -1209,17 +1195,227 @@
               "classification": "allowed-spec"
             },
             {
+              "file": "src/components/projects/doc/ProjectDocQuickConsole.tsx",
+              "line": 104,
+              "text": "    openTab: ProjectDocRailTabId | null;",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/doc/ProjectDocQuickConsole.tsx",
+              "line": 117,
+              "text": "            return { ...state, openTab: state.openTab === action.id ? null : action.id };",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/doc/ProjectDocQuickConsole.tsx",
+              "line": 119,
+              "text": "            return { ...state, openTab: null };",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/doc/ProjectDocQuickConsole.tsx",
+              "line": 121,
+              "text": "            return { selectedActionId: action.actionId, openTab: action.closePanel ? null : state.openTab };",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/doc/ProjectDocQuickConsole.tsx",
+              "line": 123,
+              "text": "            return state.openTab && !action.availableTabIds.includes(state.openTab)",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/doc/ProjectDocQuickConsole.tsx",
+              "line": 124,
+              "text": "                ? { ...state, openTab: null }",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/doc/ProjectDocQuickConsole.tsx",
+              "line": 614,
+              "text": "    openTab,",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/doc/ProjectDocQuickConsole.tsx",
+              "line": 638,
+              "text": "    onOpenTabChange?: (openTab: ProjectDocRailTabId | null) => void;",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/doc/ProjectDocQuickConsole.tsx",
+              "line": 640,
+              "text": "    openTab?: ProjectDocRailTabId | null;",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/doc/ProjectDocQuickConsole.tsx",
+              "line": 737,
+              "text": "    const [localRailState, dispatchRail] = useReducer(readmeRailReducer, { openTab: null, selectedActionId: null });",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/doc/ProjectDocQuickConsole.tsx",
+              "line": 739,
+              "text": "        openTab: openTab !== undefined ? openTab : localRailState.openTab,",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/doc/ProjectDocQuickConsole.tsx",
+              "line": 756,
+              "text": "        if (railState.openTab && !availableTabIds.includes(railState.openTab)) {",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/doc/ProjectDocQuickConsole.tsx",
+              "line": 762,
+              "text": "    }, [availableTabIds, onOpenTabChange, railState.openTab]);",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/doc/ProjectDocQuickConsole.tsx",
+              "line": 769,
+              "text": "        const nextOpenTab = variant === \"compact\" ? null : railState.openTab;",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/doc/ProjectDocQuickConsole.tsx",
+              "line": 793,
+              "text": "    }, [onOpenTabChange, onRailAction, onSelectedActionChange, railState.openTab, variant]);",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/doc/ProjectDocQuickConsole.tsx",
+              "line": 819,
+              "text": "        const nextOpenTab = railState.openTab === id ? null : id;",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/doc/ProjectDocQuickConsole.tsx",
+              "line": 1161,
+              "text": "    const activeTab = tabs.find((tab) => tab.id === railState.openTab) ?? null;",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/doc/ProjectDocQuickConsole.tsx",
+              "line": 1194,
+              "text": "                        active={railState.openTab === tab.id}",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/doc/ProjectDocViewer.tsx",
+              "line": 125,
+              "text": "    openTab: ProjectDocRailAction[\"railTab\"] | null;",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/doc/ProjectDocViewer.tsx",
+              "line": 192,
+              "text": "    const [railState, setRailState] = useState<ReadmeRailUiState>({ openTab: null, selectedActionId: null });",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/doc/ProjectDocViewer.tsx",
+              "line": 310,
+              "text": "        setRailState({ openTab: action.railTab, selectedActionId: action.id });",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/doc/ProjectDocViewer.tsx",
+              "line": 349,
+              "text": "            const openTab = isDocRailTab(memory.openTab, readmeViewModel.railTabs) ? memory.openTab : null;",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/doc/ProjectDocViewer.tsx",
+              "line": 353,
+              "text": "            if (!openTab && !selectedActionId) return;",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/doc/ProjectDocViewer.tsx",
+              "line": 354,
+              "text": "            setRailState({ openTab, selectedActionId });",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/doc/ProjectDocViewer.tsx",
+              "line": 366,
+              "text": "                openTab: railState.openTab,",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/doc/ProjectDocViewer.tsx",
+              "line": 373,
+              "text": "    }, [hasQuickRail, railState.openTab, railState.selectedActionId, readmeRailMemoryKey, readmeTargetSignature]);",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/doc/ProjectDocViewer.tsx",
+              "line": 428,
+              "text": "                            openTab={railState.openTab}",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/doc/ProjectDocViewer.tsx",
+              "line": 430,
+              "text": "                            onOpenTabChange={(openTab) => setRailState((current) => ({ ...current, openTab }))}",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/doc/ProjectDocViewer.tsx",
+              "line": 475,
+              "text": "                                openTab={railState.openTab}",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/doc/ProjectDocViewer.tsx",
+              "line": 477,
+              "text": "                                onOpenTabChange={(openTab) => setRailState((current) => ({ ...current, openTab }))}",
+              "classification": "likely-collision"
+            },
+            {
               "file": "tests/unit/files-tab/removal-audit.test.ts",
               "line": 268,
               "text": "      { kind: \"store-method\", slice: \"workspaceSlice\", name: \"openTab\" },",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": "tests/unit/project-doc.test.ts",
+              "line": 970,
+              "text": "    assert.match(viewer, /const \\[railState, setRailState\\] = useState<ReadmeRailUiState>\\(\\{ openTab: null, selectedActionId: null \\}\\)/, \"viewer should keep right-rail tabs closed by default\");",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": "tests/unit/project-doc.test.ts",
+              "line": 972,
+              "text": "    assert.match(viewer, /setRailState\\(\\{ openTab: action\\.railTab, selectedActionId: action\\.id \\}\\)/, \"deep links should open the matching rail tab and row\");",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": "tests/unit/project-doc.test.ts",
+              "line": 1004,
+              "text": "    assert.match(rail, /openTab !== undefined \\? openTab : localRailState\\.openTab/, \"controlled null should keep every rail tab closed instead of falling back to stale local state\");",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": "tests/unit/project-doc.test.ts",
+              "line": 1006,
+              "text": "    assert.match(rail, /openTab:\\s*null/, \"rail tabs should be closed by default\");",
+              "classification": "allowed-spec"
+            },
+            {
+              "file": "tests/unit/project-doc.test.ts",
+              "line": 1007,
+              "text": "    assert.match(rail, /state\\.openTab === action\\.id \\? null : action\\.id/, \"clicking the active tab should close it\");",
               "classification": "allowed-spec"
             }
           ],
           "counts": {
             "allowed-self": 0,
             "allowed-legacy": 0,
-            "allowed-spec": 7,
-            "likely-collision": 0,
+            "allowed-spec": 12,
+            "likely-collision": 30,
             "unexpected": 0
           }
         },
@@ -1279,7 +1475,7 @@
             },
             {
               "file": "src/stores/files/types.ts",
-              "line": 268,
+              "line": 279,
               "text": "  closeTab: (projectId: string, paneId: WorkspacePane[\"id\"], nodeId: string) => void;",
               "classification": "allowed-self"
             },
@@ -1342,25 +1538,25 @@
             },
             {
               "file": "src/components/chat/v2/MessagesWorkspaceV2.tsx",
-              "line": 102,
+              "line": 101,
               "text": "    const setActiveTab = useMessagesV2UiStore((state) => state.setActiveTab);",
               "classification": "likely-collision"
             },
             {
               "file": "src/components/chat/v2/MessagesWorkspaceV2.tsx",
-              "line": 782,
+              "line": 751,
               "text": "                                        <DropdownMenuItem data-testid=\"messages-tab-chats\" onClick={() => setActiveTab('chats')}>",
               "classification": "likely-collision"
             },
             {
               "file": "src/components/chat/v2/MessagesWorkspaceV2.tsx",
-              "line": 785,
+              "line": 754,
               "text": "                                        <DropdownMenuItem data-testid=\"messages-tab-applications\" onClick={() => setActiveTab('applications')}>",
               "classification": "likely-collision"
             },
             {
               "file": "src/components/chat/v2/MessagesWorkspaceV2.tsx",
-              "line": 788,
+              "line": 757,
               "text": "                                        <DropdownMenuItem data-testid=\"messages-tab-projects\" onClick={() => setActiveTab('projects')}>",
               "classification": "likely-collision"
             },
@@ -1408,26 +1604,26 @@
             },
             {
               "file": "src/components/projects/dashboard/ProjectDashboardClient.tsx",
-              "line": 169,
+              "line": 198,
               "text": "    const [activeTab, setActiveTab] = useState(() => resolvedActiveTab);",
               "classification": "likely-collision"
             },
             {
               "file": "src/components/projects/dashboard/ProjectDashboardClient.tsx",
-              "line": 432,
-              "text": "        setActiveTab(tabId);",
+              "line": 556,
+              "text": "            setActiveTab(tabId);",
               "classification": "likely-collision"
             },
             {
               "file": "src/components/projects/dashboard/ProjectDashboardClient.tsx",
-              "line": 465,
+              "line": 651,
               "text": "        setActiveTab((prev) => (prev === nextTab ? prev : nextTab));",
               "classification": "likely-collision"
             },
             {
               "file": "src/components/projects/dashboard/ProjectDashboardClient.tsx",
-              "line": 706,
-              "text": "        setActiveTab(\"dashboard\");",
+              "line": 961,
+              "text": "        setActiveTab('dashboard');",
               "classification": "likely-collision"
             },
             {
@@ -1444,32 +1640,56 @@
             },
             {
               "file": "src/components/projects/tabs/AnalyticsTab.tsx",
-              "line": 92,
+              "line": 72,
               "text": "    const [activeTab, setActiveTab] = useState<ProjectAnalyticsTabId>(() => {",
               "classification": "likely-collision"
             },
             {
               "file": "src/components/projects/tabs/AnalyticsTab.tsx",
-              "line": 179,
+              "line": 80,
+              "text": "            setActiveTab(currentAnalyticsTabFromUrl);",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/tabs/AnalyticsTab.tsx",
+              "line": 82,
+              "text": "            setActiveTab(\"overview\");",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/projects/tabs/AnalyticsTab.tsx",
+              "line": 178,
               "text": "                                setActiveTab(tab);",
               "classification": "likely-collision"
             },
             {
               "file": "src/components/projects/v2/tasks/TaskDetailPanel.tsx",
-              "line": 63,
+              "line": 64,
               "text": "  const [activeTab, setActiveTab] = useState<TaskPanelTab>(initialTab ?? \"details\");",
               "classification": "likely-collision"
             },
             {
               "file": "src/components/projects/v2/tasks/TaskDetailPanel.tsx",
-              "line": 80,
+              "line": 81,
               "text": "    setActiveTab(initialTab ?? \"details\");",
               "classification": "likely-collision"
             },
             {
               "file": "src/components/projects/v2/tasks/TaskDetailPanel.tsx",
-              "line": 192,
+              "line": 195,
               "text": "                onClick={() => setActiveTab(tab.id)}",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/workspace/WorkspaceTaskDetailView.tsx",
+              "line": 28,
+              "text": "    const [activeTab, setActiveTab] = useState<TaskPanelTab>(\"details\");",
+              "classification": "likely-collision"
+            },
+            {
+              "file": "src/components/workspace/WorkspaceTaskDetailView.tsx",
+              "line": 100,
+              "text": "                        onClick={() => setActiveTab(tab.id)}",
               "classification": "likely-collision"
             },
             {
@@ -1480,7 +1700,7 @@
             },
             {
               "file": "src/stores/files/types.ts",
-              "line": 272,
+              "line": 283,
               "text": "  setActiveTab: (projectId: string, paneId: WorkspacePane[\"id\"], nodeId: string | null) => void;",
               "classification": "allowed-self"
             },
@@ -1528,25 +1748,25 @@
             },
             {
               "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 509,
+              "line": 518,
               "text": "  // a React `useState` setter called `setActiveTab`). Demote to",
               "classification": "allowed-spec"
             },
             {
               "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 531,
+              "line": 540,
               "text": " * `const [activeTab, setActiveTab] = useState(...)` somewhere else in the",
               "classification": "allowed-spec"
             },
             {
               "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 596,
+              "line": 605,
               "text": "  // `setActiveTab` doesn't match `setActiveTabKey`. Common names like",
               "classification": "allowed-spec"
             },
             {
               "file": "tests/unit/files-tab/removal-audit.test.ts",
-              "line": 597,
+              "line": 606,
               "text": "  // `setActiveTab` still hit unrelated local React `useState` setters; those",
               "classification": "allowed-spec"
             }
@@ -1555,7 +1775,7 @@
             "allowed-self": 4,
             "allowed-legacy": 0,
             "allowed-spec": 11,
-            "likely-collision": 24,
+            "likely-collision": 28,
             "unexpected": 0
           }
         },
@@ -1591,7 +1811,7 @@
             },
             {
               "file": "src/stores/files/types.ts",
-              "line": 273,
+              "line": 284,
               "text": "  reorderTabs: (projectId: string, paneId: WorkspacePane[\"id\"], order: string[]) => void;",
               "classification": "allowed-self"
             },
@@ -1654,7 +1874,7 @@
             },
             {
               "file": "src/stores/files/types.ts",
-              "line": 274,
+              "line": 285,
               "text": "  moveTabToPane: (projectId: string, fromPaneId: WorkspacePane[\"id\"], toPaneId: WorkspacePane[\"id\"], nodeId: string, index?: number) => void;",
               "classification": "allowed-self"
             },
@@ -1717,7 +1937,7 @@
             },
             {
               "file": "src/stores/files/types.ts",
-              "line": 276,
+              "line": 287,
               "text": "  pruneGhostTabs: (projectId: string) => void;",
               "classification": "allowed-self"
             },
@@ -1786,7 +2006,7 @@
             },
             {
               "file": "src/stores/files/types.ts",
-              "line": 319,
+              "line": 330,
               "text": "  toggleBottomPanel: (projectId: string) => void;",
               "classification": "allowed-self"
             },
@@ -1855,7 +2075,7 @@
             },
             {
               "file": "src/stores/files/types.ts",
-              "line": 315,
+              "line": 326,
               "text": "  setBottomPanelTab: (projectId: string, tab: UiState[\"bottomPanelTab\"]) => void;",
               "classification": "allowed-self"
             },
@@ -1930,7 +2150,7 @@
             },
             {
               "file": "src/stores/files/types.ts",
-              "line": 318,
+              "line": 329,
               "text": "  setBottomPanelHeight: (projectId: string, height: number) => void;",
               "classification": "allowed-self"
             },
@@ -1999,7 +2219,7 @@
             },
             {
               "file": "src/stores/files/types.ts",
-              "line": 316,
+              "line": 327,
               "text": "  setLastExecutionOutput: (projectId: string, lines: string[]) => void;",
               "classification": "allowed-self"
             },
@@ -2068,7 +2288,7 @@
             },
             {
               "file": "src/stores/files/types.ts",
-              "line": 317,
+              "line": 328,
               "text": "  setLastExecutionSettingsHref: (projectId: string, href: string | null) => void;",
               "classification": "allowed-self"
             },
@@ -2131,7 +2351,7 @@
             },
             {
               "file": "src/stores/files/types.ts",
-              "line": 323,
+              "line": 334,
               "text": "  setStdinInputText: (projectId: string, text: string) => void;",
               "classification": "allowed-self"
             },
@@ -2206,7 +2426,7 @@
             },
             {
               "file": "src/stores/files/types.ts",
-              "line": 324,
+              "line": 335,
               "text": "  setProblems: (projectId: string, problems: Problem[]) => void;",
               "classification": "allowed-self"
             },
@@ -2269,7 +2489,7 @@
             },
             {
               "file": "src/stores/files/types.ts",
-              "line": 325,
+              "line": 336,
               "text": "  clearProblems: (projectId: string) => void;",
               "classification": "allowed-self"
             },
@@ -2332,7 +2552,7 @@
             },
             {
               "file": "src/stores/files/types.ts",
-              "line": 326,
+              "line": 337,
               "text": "  applyQuickFix: (projectId: string, problemId: string) => void;",
               "classification": "allowed-self"
             },
@@ -2395,7 +2615,7 @@
             },
             {
               "file": "src/stores/files/types.ts",
-              "line": 327,
+              "line": 338,
               "text": "  pushCommandToHistory: (projectId: string, command: string) => void;",
               "classification": "allowed-self"
             },
@@ -2464,7 +2684,7 @@
             },
             {
               "file": "src/stores/files/types.ts",
-              "line": 328,
+              "line": 339,
               "text": "  setSidebarWidth: (projectId: string, width: number) => void;",
               "classification": "allowed-self"
             },
@@ -2545,7 +2765,7 @@
             },
             {
               "file": "src/stores/files/types.ts",
-              "line": 330,
+              "line": 341,
               "text": "  toggleZenMode: (projectId: string) => void;",
               "classification": "allowed-self"
             },
@@ -2608,7 +2828,7 @@
             },
             {
               "file": "src/stores/files/types.ts",
-              "line": 320,
+              "line": 331,
               "text": "  setSearchReplaceOpen: (projectId: string, open: boolean) => void;",
               "classification": "allowed-self"
             },
@@ -2671,7 +2891,7 @@
             },
             {
               "file": "src/stores/files/types.ts",
-              "line": 321,
+              "line": 332,
               "text": "  setCommandPaletteOpen: (projectId: string, open: boolean) => void;",
               "classification": "allowed-self"
             },
@@ -2734,7 +2954,7 @@
             },
             {
               "file": "src/stores/files/types.ts",
-              "line": 331,
+              "line": 342,
               "text": "  setOutputFilterMode: (projectId: string, mode: \"all\" | \"out\" | \"err\") => void;",
               "classification": "allowed-self"
             },
@@ -2827,7 +3047,7 @@
             },
             {
               "file": "tests/unit/stores/tasks-tab-public-api.test.ts",
-              "line": 45,
+              "line": 44,
               "text": "//                     setSort, addRecent, toggleFavorite, saveCurrentView,",
               "classification": "allowed-spec"
             }
@@ -2902,7 +3122,7 @@
             },
             {
               "file": "tests/unit/stores/tasks-tab-public-api.test.ts",
-              "line": 46,
+              "line": 45,
               "text": "//                     applySavedView, deleteSavedView, setExplorerMode,",
               "classification": "allowed-spec"
             }
@@ -2959,7 +3179,7 @@
             },
             {
               "file": "src/stores/files/explorerSlice.ts",
-              "line": 185,
+              "line": 186,
               "text": "  deleteSavedView: (projectId, viewId) =>",
               "classification": "allowed-self"
             },
@@ -2983,7 +3203,7 @@
             },
             {
               "file": "tests/unit/stores/tasks-tab-public-api.test.ts",
-              "line": 46,
+              "line": 45,
               "text": "//                     applySavedView, deleteSavedView, setExplorerMode,",
               "classification": "allowed-spec"
             }
@@ -3034,19 +3254,19 @@
             },
             {
               "file": "src/stores/files/filesSlice.ts",
-              "line": 52,
+              "line": 65,
               "text": "  setFileState: (projectId: string, nodeId: string, state: Partial<FileState>) => void;",
               "classification": "allowed-self"
             },
             {
               "file": "src/stores/files/filesSlice.ts",
-              "line": 441,
+              "line": 468,
               "text": "  setFileState: (projectId, nodeId, fileState) =>",
               "classification": "allowed-self"
             },
             {
               "file": "src/stores/files/types.ts",
-              "line": 263,
+              "line": 274,
               "text": "  setFileState: (projectId: string, nodeId: string, state: Partial<FileState>) => void;",
               "classification": "allowed-self"
             },
@@ -3109,7 +3329,7 @@
             },
             {
               "file": "src/stores/files/types.ts",
-              "line": 295,
+              "line": 306,
               "text": "  setActiveFileSymbols: (projectId: string, symbols: EditorSymbol[]) => void;",
               "classification": "allowed-self"
             },
@@ -3229,7 +3449,7 @@
             },
             {
               "file": "src/stores/files/types.ts",
-              "line": 296,
+              "line": 307,
               "text": "  clearScrollRequest: (projectId: string) => void;",
               "classification": "allowed-self"
             },
@@ -3292,7 +3512,7 @@
             },
             {
               "file": "src/stores/files/types.ts",
-              "line": 299,
+              "line": 310,
               "text": "  setLock: (projectId: string, lock: SoftLock) => void;",
               "classification": "allowed-self"
             },
@@ -3355,7 +3575,7 @@
             },
             {
               "file": "src/stores/files/types.ts",
-              "line": 300,
+              "line": 311,
               "text": "  clearLock: (projectId: string, nodeId: string) => void;",
               "classification": "allowed-self"
             },
@@ -3475,7 +3695,7 @@
             },
             {
               "file": "src/stores/files/types.ts",
-              "line": 308,
+              "line": 319,
               "text": "  setGitCommitMessage: (projectId: string, message: string) => void;",
               "classification": "allowed-self"
             },
@@ -3538,7 +3758,7 @@
             },
             {
               "file": "src/stores/files/types.ts",
-              "line": 309,
+              "line": 320,
               "text": "  setGitBranches: (projectId: string, branches: string[]) => void;",
               "classification": "allowed-self"
             },
@@ -3601,7 +3821,7 @@
             },
             {
               "file": "src/stores/files/types.ts",
-              "line": 310,
+              "line": 321,
               "text": "  setGitLastSync: (projectId: string, syncAt: string, commitSha: string) => void;",
               "classification": "allowed-self"
             },
@@ -3658,7 +3878,7 @@
             },
             {
               "file": "src/stores/files/types.ts",
-              "line": 312,
+              "line": 323,
               "text": "  clearGitState: (projectId: string) => void;",
               "classification": "allowed-self"
             },
