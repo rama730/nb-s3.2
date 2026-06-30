@@ -4,6 +4,8 @@ import { config as loadDotenv } from 'dotenv'
 loadDotenv({ path: '.env.local' })
 loadDotenv()
 
+process.env.NODE_OPTIONS = `${process.env.NODE_OPTIONS || ''} --max-old-space-size=4096`.trim()
+
 type ProcSpec = {
     name: string
     command: string
