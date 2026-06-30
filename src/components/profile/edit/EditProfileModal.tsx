@@ -10,8 +10,8 @@ import { useAuth } from "@/lib/hooks/use-auth";
 import { useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { calculateProfileCompletion } from "@/lib/validations/profile";
-import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { queryKeys } from "@/lib/query-keys";
+import { loadProfileEditRefreshState } from "@/lib/profile/browser-profile";
 
 interface EditProfileModalProps {
     open: boolean;
@@ -46,7 +46,7 @@ export function EditProfileModal({ open, onOpenChange, profile, onOptimisticUpda
     const inFlightRef = useRef(false);
     const wasOpenRef = useRef(false);
     const lastKnownUpdatedAtRef = useRef<string>(
-        toIsoTimestamp(profile?.updatedAt || profile?.updated_at)
+        toIsoTimestamp(profile?.updatedAt)
     );
     const baseProfileRef = useRef<any>(toFormState(profile));
     const originalUsernameRef = useRef<string>(toFormState(profile).username || "");
@@ -54,8 +54,8 @@ export function EditProfileModal({ open, onOpenChange, profile, onOptimisticUpda
     const completion = useMemo(
         () =>
             calculateProfileCompletion({
-                avatarUrl: formState?.avatar_url || "",
-                fullName: formState?.full_name || "",
+                avatarUrl: formState?.avatarUrl || "",
+                fullName: formState?.fullName || "",
                 username: formState?.username || "",
                 headline: formState?.headline || "",
                 bio: formState?.bio || "",
@@ -82,14 +82,14 @@ export function EditProfileModal({ open, onOpenChange, profile, onOptimisticUpda
             baseProfileRef.current = normalized;
             originalUsernameRef.current = normalized.username || "";
             setFormState(normalized);
-            lastKnownUpdatedAtRef.current = toIsoTimestamp(profile?.updatedAt || profile?.updated_at);
+            lastKnownUpdatedAtRef.current = toIsoTimestamp(profile?.updatedAt);
             setHasChanges(false);
             setSaveState("idle");
             setSaveErrorMessage(null);
             setShowDiscardConfirm(false);
             setActiveSection(initialSection);
         }
-    }, [initialSection, open, profile?.id, profile?.updatedAt, profile?.updated_at]);
+    }, [initialSection, open, profile?.id, profile?.updatedAt]);
 
     const applyOptimisticPatch = (payload: Record<string, unknown>) => {
         if (!onOptimisticUpdate) return;
@@ -113,34 +113,7 @@ export function EditProfileModal({ open, onOpenChange, profile, onOptimisticUpda
 
     const loadLatestServerProfileState = async () => {
         if (!profile?.id) return null;
-        const supabase = createSupabaseBrowserClient();
-        const { data, error } = await supabase
-            .from("profiles")
-            .select(`
-                id,
-                full_name,
-                username,
-                headline,
-                bio,
-                location,
-                website,
-                avatar_url,
-                banner_url,
-                availability_status,
-                open_to,
-                skills,
-                social_links,
-                experience,
-                education,
-                updated_at
-            `)
-            .eq("id", profile.id)
-            .single();
-        if (error || !data) return null;
-        return {
-            formState: toFormState(data),
-            updatedAt: toIsoTimestamp(data.updated_at),
-        };
+        return loadProfileEditRefreshState(profile.id);
     };
 
     const persistChanges = async (payload: Record<string, unknown>, closeOnSuccess: boolean) => {
@@ -152,14 +125,14 @@ export function EditProfileModal({ open, onOpenChange, profile, onOptimisticUpda
         try {
             for (const [key, value] of Object.entries(payload)) {
                 if (key === "expectedUpdatedAt") continue;
-                if (key === "fullName") rollbackPatch.fullName = baseProfileRef.current.full_name
+                if (key === "fullName") rollbackPatch.fullName = baseProfileRef.current.fullName
                 if (key === "username") rollbackPatch.username = baseProfileRef.current.username
                 if (key === "headline") rollbackPatch.headline = baseProfileRef.current.headline
                 if (key === "bio") rollbackPatch.bio = baseProfileRef.current.bio
                 if (key === "location") rollbackPatch.location = baseProfileRef.current.location
                 if (key === "website") rollbackPatch.website = baseProfileRef.current.website
-                if (key === "avatarUrl") rollbackPatch.avatarUrl = baseProfileRef.current.avatar_url
-                if (key === "bannerUrl") rollbackPatch.bannerUrl = baseProfileRef.current.banner_url
+                if (key === "avatarUrl") rollbackPatch.avatarUrl = baseProfileRef.current.avatarUrl
+                if (key === "bannerUrl") rollbackPatch.bannerUrl = baseProfileRef.current.bannerUrl
                 if (key === "skills") rollbackPatch.skills = baseProfileRef.current.skills
                 if (key === "socialLinks") rollbackPatch.socialLinks = baseProfileRef.current.socialLinks
                 if (key === "availabilityStatus") rollbackPatch.availabilityStatus = baseProfileRef.current.availabilityStatus
