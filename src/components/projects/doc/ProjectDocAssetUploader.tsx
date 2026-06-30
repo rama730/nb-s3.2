@@ -5,17 +5,17 @@ import Image from "next/image";
 import { Check, ImagePlus, Loader2, X } from "lucide-react";
 
 import {
-    createProjectReadmeAssetUploadUrlAction,
-    finalizeProjectReadmeAssetUploadAction,
+    createProjectDocAssetUploadUrlAction,
+    finalizeProjectDocAssetUploadAction,
 } from "@/app/actions/project";
 import {
-    PROJECT_README_ALLOWED_IMAGE_MIME_TYPES,
-    PROJECT_README_ASSET_MAX_BYTES,
-} from "@/lib/projects/readme";
+    PROJECT_DOC_ALLOWED_IMAGE_MIME_TYPES,
+    PROJECT_DOC_ASSET_MAX_BYTES,
+} from "@/lib/projects/doc";
 import {
-    buildProjectReadmeImageMarkdown,
-    type ProjectReadmeImageIntent,
-} from "@/lib/projects/readme-media";
+    buildProjectDocImageMarkdown,
+    type ProjectDocImageIntent,
+} from "@/lib/projects/doc-media";
 import { uploadToSupabaseSignedUrl } from "@/lib/upload/supabase-signed-upload-client";
 import { cn } from "@/lib/utils";
 
@@ -49,7 +49,7 @@ function readImageDimensions(file: File): Promise<ImageDimensions | null> {
     });
 }
 
-export function ProjectReadmeAssetUploader({
+export function ProjectDocAssetUploader({
     projectId,
     projectVisibility,
     imageIntent = "screenshot",
@@ -59,7 +59,7 @@ export function ProjectReadmeAssetUploader({
 }: {
     projectId: string;
     projectVisibility?: string | null;
-    imageIntent?: ProjectReadmeImageIntent;
+    imageIntent?: ProjectDocImageIntent;
     displayWidth?: number | null;
     caption?: string;
     onInserted: (markdown: string) => void;
@@ -88,12 +88,12 @@ export function ProjectReadmeAssetUploader({
 
     const handleFileSelected = (file: File | null | undefined) => {
         if (!file) return;
-        if (!PROJECT_README_ALLOWED_IMAGE_MIME_TYPES.has(file.type)) {
-            setError("Use JPG, PNG, WebP, or GIF images for README media.");
+        if (!PROJECT_DOC_ALLOWED_IMAGE_MIME_TYPES.has(file.type)) {
+            setError("Use JPG, PNG, WebP, or GIF images for document media.");
             return;
         }
-        if (file.size > PROJECT_README_ASSET_MAX_BYTES) {
-            setError(`README images must be ${formatFileSize(PROJECT_README_ASSET_MAX_BYTES)} or smaller.`);
+        if (file.size > PROJECT_DOC_ASSET_MAX_BYTES) {
+            setError(`Document images must be ${formatFileSize(PROJECT_DOC_ASSET_MAX_BYTES)} or smaller.`);
             return;
         }
         pendingFileRef.current = file;
@@ -130,7 +130,7 @@ export function ProjectReadmeAssetUploader({
         setUploadPhase("preparing");
         setUploadProgress(18);
         try {
-            const upload = await createProjectReadmeAssetUploadUrlAction(projectId, {
+            const upload = await createProjectDocAssetUploadUrlAction(projectId, {
                 mimeType: file.type,
                 sizeBytes: file.size,
                 altText: normalizedAltText,
@@ -148,7 +148,7 @@ export function ProjectReadmeAssetUploader({
             }, file);
             setUploadPhase("finalizing");
             setUploadProgress(88);
-            const finalized = await finalizeProjectReadmeAssetUploadAction(projectId, {
+            const finalized = await finalizeProjectDocAssetUploadAction(projectId, {
                 uploadIntentId: upload.uploadIntentId,
                 altText: normalizedAltText,
                 width: imageDimensions?.width ?? null,
@@ -158,9 +158,9 @@ export function ProjectReadmeAssetUploader({
             setUploadPhase("inserted");
             setUploadProgress(100);
             const assetSrc = finalized.asset?.id
-                ? `/api/v1/projects/${projectId}/readme-assets/${finalized.asset.id}`
+                ? `/api/v1/projects/${projectId}/doc-assets/${finalized.asset.id}`
                 : finalized.markdown.match(/\]\(([^)]+)\)/)?.[1] ?? "";
-            const markdown = buildProjectReadmeImageMarkdown({
+            const markdown = buildProjectDocImageMarkdown({
                 src: assetSrc,
                 alt: normalizedAltText,
                 intent: imageIntent,
@@ -187,7 +187,7 @@ export function ProjectReadmeAssetUploader({
     };
 
     const privacyCopy = projectVisibility === "public"
-        ? "This image will be served from the managed README media route."
+        ? "This image will be served from the managed document media route."
         : "This image follows the project access rules after it is inserted.";
 
     return (
@@ -282,7 +282,7 @@ export function ProjectReadmeAssetUploader({
                 </div>
             ) : null}
             <p className="text-xs leading-5 text-zinc-500">
-                {privacyCopy} Add clear alt text so the published README stays accessible.
+                {privacyCopy} Add clear alt text so the published document stays accessible.
             </p>
             {error ? <p className="text-xs text-red-500">{error}</p> : null}
         </div>
