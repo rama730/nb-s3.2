@@ -35,13 +35,14 @@ function normalizeMarkdown(md: string): string {
         .trim();
 }
 
-export function ProjectReadmeWysiwygEditor({
+export function ProjectDocWysiwygEditor({
     ydoc,
     provider,
     initialContent,
     currentUserName,
     onContentChange,
     synced,
+    readOnly = false,
 }: {
     ydoc: Y.Doc;
     provider: HocuspocusProvider | null;
@@ -49,6 +50,7 @@ export function ProjectReadmeWysiwygEditor({
     currentUserName?: string;
     onContentChange?: (markdown: string) => void;
     synced?: boolean;
+    readOnly?: boolean;
 }) {
     const collaboratorName = currentUserName || 'Teammate';
     const collaboratorColor = useMemo(() => stableCaretColor(collaboratorName), [collaboratorName]);
@@ -91,6 +93,7 @@ export function ProjectReadmeWysiwygEditor({
     }, [provider]);
 
     const editor = useEditor({
+        editable: !readOnly,
         extensions: [
             StarterKit.configure({
                 undoRedo: false, // History is handled by Yjs
@@ -140,6 +143,12 @@ export function ProjectReadmeWysiwygEditor({
             },
         },
     });
+
+    useEffect(() => {
+        if (editor) {
+            editor.setEditable(!readOnly);
+        }
+    }, [editor, readOnly]);
 
     useEffect(() => {
         // Overwrite or sync the visual content if the latest code editor markdown differs
