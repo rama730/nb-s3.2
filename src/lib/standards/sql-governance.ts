@@ -2,7 +2,7 @@ import { z } from "zod";
 
 export const SQL_CHANGE_KINDS = [
   "query_only",
-  "remigration",
+  "append_only",
   "break_glass",
 ] as const;
 
@@ -18,6 +18,7 @@ export const SqlGovernanceManifestSchema = z.object({
   defaultChangeKind: z.enum(SQL_CHANGE_KINDS),
   migrationDirectory: z.string().min(1),
   existingMigrationFiles: z.array(z.string().min(1)).min(1),
+  legacyDatabaseTags: z.array(z.string().min(1)).default([]),
   allowedUtilitySqlFiles: z.array(z.string().min(1)).default([]),
   breakGlassExceptions: z.array(SqlGovernanceExceptionSchema).default([]),
 });
