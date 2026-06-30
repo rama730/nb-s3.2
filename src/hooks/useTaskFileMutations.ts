@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { useRouter } from "next/navigation";
 
 import { createClient } from "@/lib/supabase/client";
 import type { ProjectNode } from "@/lib/db/schema";
@@ -121,6 +122,7 @@ export function useTaskFileMutations(params: {
   } = params;
 
   const supabase = useMemo(() => createClient(), []);
+  const router = useRouter();
   const [uploadQueue, setUploadQueue] = useState<TaskFileUploadStatus[]>([]);
   const [pendingResolutions, setPendingResolutions] = useState<TaskFilePendingResolution[]>([]);
   const [unresolvedReplacementCount, setUnresolvedReplacementCount] = useState(0);
@@ -182,26 +184,14 @@ export function useTaskFileMutations(params: {
     });
   }, [attachments, loadIntentSearchMatches]);
 
-  const handleDownload = useCallback(async (node: ProjectNode) => {
-    if (!node.s3Key) return;
-
-    try {
-      const { data, error: urlError } = await supabase.storage
-        .from("project-files")
-        .createSignedUrl(node.s3Key, 3600);
-      if (urlError) throw urlError;
-      if (!data?.signedUrl) throw new Error("Failed to create download link");
-
-      const anchor = document.createElement("a");
-      anchor.href = data.signedUrl;
-      anchor.target = "_blank";
-      anchor.rel = "noopener noreferrer";
-      anchor.download = node.name;
-      anchor.click();
-    } catch (error) {
-      notifyError(error instanceof Error ? error.message : "Failed to create download link");
-    }
-  }, [notifyError, supabase.storage]);
+  const handleDownload = useCallback((node: ProjectNode) => {
+    const pathParts = node.path && node.path !== "/"
+      ? node.path.split("/").filter(Boolean)
+      : [node.name];
+    const encodedPath = pathParts.map((part) => encodeURIComponent(part)).join("/");
+    const href = `/projects/${projectId}?tab=files&fileId=${encodeURIComponent(node.id)}&path=${encodedPath}`;
+    router.push(href);
+  }, [projectId, router]);
 
   const runAfterSuccess = useCallback(async () => {
     clearPendingWarnings();
