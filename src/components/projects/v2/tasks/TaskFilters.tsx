@@ -1,21 +1,17 @@
 "use client";
 
 import React, { useState, useRef, useEffect } from "react";
-import { Filter, Check, LayoutGrid, List, Layers, Archive } from "lucide-react";
+import { Filter, Check, Layers, Archive } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { useReducedMotionPreference } from "@/components/providers/theme-provider";
 
 interface TaskFiltersProps {
-    viewMode: 'board' | 'list';
-    setViewMode: (mode: 'board' | 'list') => void;
     scope: 'all' | 'backlog' | 'sprint';
     setScope?: (scope: 'all' | 'backlog' | 'sprint') => void;
 }
 
 export default function TaskFilters({
-    viewMode,
-    setViewMode,
     scope = 'all',
     setScope,
 }: TaskFiltersProps) {
@@ -77,7 +73,6 @@ export default function TaskFilters({
                                 <button
                                     onClick={() => {
                                         setScope?.('all');
-                                        setViewMode('board');
                                     }}
                                     className="text-xs text-primary hover:opacity-80 font-medium"
                                 >
@@ -87,37 +82,6 @@ export default function TaskFilters({
                         </div>
 
                         <div className="p-4 space-y-5 max-h-[70vh] overflow-y-auto">
-                            {/* View Mode */}
-                            <div className="space-y-2">
-                                <label className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">View</label>
-                                <div className="grid grid-cols-2 gap-2">
-                                    <button
-                                        onClick={() => setViewMode('board')}
-                                        className={cn(
-                                            "flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium border transition-all",
-                                            viewMode === 'board'
-                                                ? "app-selected-surface border-primary/15"
-                                                : "border-zinc-200 text-zinc-600 hover:bg-zinc-50 dark:border-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-800"
-                                        )}
-                                    >
-                                        <LayoutGrid className="w-4 h-4" />
-                                        Board
-                                    </button>
-                                    <button
-                                        onClick={() => setViewMode('list')}
-                                        className={cn(
-                                            "flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium border transition-all",
-                                            viewMode === 'list'
-                                                ? "app-selected-surface border-primary/15"
-                                                : "border-zinc-200 text-zinc-600 hover:bg-zinc-50 dark:border-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-800"
-                                        )}
-                                    >
-                                        <List className="w-4 h-4" />
-                                        List
-                                    </button>
-                                </div>
-                            </div>
-
                             {/* Scope */}
                             <div className="space-y-2">
                                 <label className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Scope</label>
