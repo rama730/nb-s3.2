@@ -9,6 +9,8 @@ interface StepFooterProps {
   totalSteps: number
   canProceed: boolean
   isLoading: boolean
+  loadingLabel?: string
+  nextLabel?: string
   onBack: () => void
   onNext: () => void
   onSubmit: () => void
@@ -19,6 +21,8 @@ export function StepFooter({
   totalSteps,
   canProceed,
   isLoading,
+  loadingLabel = "Saving...",
+  nextLabel = "Continue",
   onBack,
   onNext,
   onSubmit,
@@ -41,6 +45,7 @@ export function StepFooter({
         <Button
           variant="ghost"
           onClick={onBack}
+          disabled={isLoading}
           className={cn(
             "text-muted-foreground min-h-[44px]",
             "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
@@ -70,11 +75,14 @@ export function StepFooter({
         )}
       >
         {isLoading ? (
-          <Loader2 className="h-4 w-4 animate-spin" />
+          <>
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            {loadingLabel}
+          </>
         ) : isFinalStep ? (
           "Complete setup"
         ) : (
-          "Continue"
+          nextLabel
         )}
       </button>
     </div>
