@@ -27,7 +27,7 @@ USING (
                   FROM "project_members" pm
                   WHERE pm.project_id = p.id
                     AND pm.user_id = auth.uid()
-                    AND pm.role IN ('admin', 'member')
+                    AND pm.role IN ('owner', 'admin', 'member')
               )
           )
     )
@@ -46,7 +46,7 @@ WITH CHECK (
                   FROM "project_members" pm
                   WHERE pm.project_id = p.id
                     AND pm.user_id = auth.uid()
-                    AND pm.role IN ('admin', 'member')
+                    AND pm.role IN ('owner', 'admin', 'member')
               )
           )
     )
