@@ -1,17 +1,17 @@
-export type ProjectReadmeStylePresetId = "open_source" | "product_demo" | "technical_docs" | "internal_brief" | "portfolio_showcase";
+export type ProjectDocStylePresetId = "open_source" | "product_demo" | "technical_docs" | "internal_brief" | "portfolio_showcase";
 
-export type ProjectReadmeStylePreset = {
-    id: ProjectReadmeStylePresetId;
+export type ProjectDocStylePreset = {
+    id: ProjectDocStylePresetId;
     label: string;
     description: string;
     sections: string[];
 };
 
-export const PROJECT_README_STYLE_PRESETS: ProjectReadmeStylePreset[] = [
+export const PROJECT_DOC_STYLE_PRESETS: ProjectDocStylePreset[] = [
     {
         id: "open_source",
         label: "Open-source GitHub",
-        description: "Portable project README with install, usage, contributing, and license sections.",
+        description: "Portable project Doc with install, usage, contributing, and license sections.",
         sections: ["Overview", "Install", "Usage", "Contributing", "License"],
     },
     {
@@ -45,7 +45,7 @@ function titleOrFallback(value: string | null | undefined) {
     return title || "Project Name";
 }
 
-export function buildProjectReadmeStylePresetMarkdown(presetId: ProjectReadmeStylePresetId, projectTitle?: string | null) {
+export function buildProjectDocStylePresetMarkdown(presetId: ProjectDocStylePresetId, projectTitle?: string | null) {
     const title = titleOrFallback(projectTitle);
     switch (presetId) {
         case "product_demo":
