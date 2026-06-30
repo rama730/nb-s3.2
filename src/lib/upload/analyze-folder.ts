@@ -91,7 +91,7 @@ export async function analyzeUploadedFolder(files: FileList, signal?: AbortSigna
         } catch { /* Invalid JSON */ }
     }
 
-    // Process README (only if no description from package.json)
+    // Process Doc (only if no description from package.json)
     if (!result.description && readmeContent) {
         const lines = readmeContent.split('\n').filter(l => l.trim() && !l.startsWith('#') && !l.startsWith('!'));
         if (lines.length) result.description = lines.slice(0, 2).join(' ').substring(0, 200);
