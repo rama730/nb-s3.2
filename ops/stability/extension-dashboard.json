@@ -1,0 +1,98 @@
+{
+  "dashboard": "NB Workspace Extension Runtime",
+  "owner": "workspace-platform",
+  "lastReviewed": "2026-06-20",
+  "metrics": [
+    {
+      "name": "extension.auth_code.exchange",
+      "type": "counter",
+      "groupBy": ["success", "errorCode"],
+      "slo": {
+        "successRate": ">= 99.5%",
+        "p95DurationMs": "<= 500"
+      },
+      "alerts": [
+        {
+          "name": "extension-auth-code-failures",
+          "condition": "failure_rate_5m > 2%",
+          "severity": "page"
+        }
+      ]
+    },
+    {
+      "name": "extension.file.download_intent",
+      "type": "histogram",
+      "groupBy": ["projectId", "success"],
+      "slo": {
+        "p95DurationMs": "<= 500"
+      },
+      "alerts": [
+        {
+          "name": "extension-download-intent-latency",
+          "condition": "p95_10m > 1000ms",
+          "severity": "ticket"
+        }
+      ]
+    },
+    {
+      "name": "extension.file_upload.intent",
+      "type": "histogram",
+      "groupBy": ["projectId", "success"],
+      "slo": {
+        "p95DurationMs": "<= 750"
+      },
+      "alerts": [
+        {
+          "name": "extension-upload-intent-failures",
+          "condition": "failure_rate_10m > 2%",
+          "severity": "ticket"
+        }
+      ]
+    },
+    {
+      "name": "extension.file_upload.finalize",
+      "type": "histogram",
+      "groupBy": ["projectId", "success"],
+      "slo": {
+        "p95DurationMs": "<= 2500"
+      },
+      "alerts": [
+        {
+          "name": "extension-upload-finalize-failures",
+          "condition": "failure_rate_10m > 1%",
+          "severity": "page"
+        },
+        {
+          "name": "extension-upload-finalize-latency",
+          "condition": "p95_10m > 5000ms",
+          "severity": "ticket"
+        }
+      ]
+    },
+    {
+      "name": "extension.webview.log",
+      "type": "counter",
+      "groupBy": ["action"],
+      "slo": {
+        "errorRate": "<= 1%"
+      },
+      "alerts": [
+        {
+          "name": "extension-webview-errors",
+          "condition": "error_logs_10m > 20",
+          "severity": "ticket"
+        }
+      ]
+    }
+  ],
+  "loadProbe": {
+    "script": "qa/load/extension-sync.k6.js",
+    "requiredEnv": ["BASE_URL", "EXTENSION_TOKEN", "EXTENSION_PROJECT_ID", "EXTENSION_FILE_PATH"],
+    "thresholds": {
+      "http_req_failed": "rate < 0.02",
+      "http_req_duration_p95_ms": 900,
+      "extension_download_intent_p95_ms": 500,
+      "extension_signed_range_p95_ms": 1200
+    }
+  }
+}
