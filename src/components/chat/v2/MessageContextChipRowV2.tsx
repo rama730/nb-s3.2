@@ -37,7 +37,10 @@ export function MessageContextChipRowV2({
     }
 
     return (
-        <div className={cn('flex min-w-0 max-w-full flex-wrap gap-1.5 overflow-hidden', compact ? 'mt-1.5' : 'mt-2')}>
+        <div className={cn(
+            'flex min-w-0 max-w-full flex-wrap gap-1.5 overflow-hidden',
+            compact ? 'mt-1.5' : 'mt-2',
+        )}>
             {chips.map((chip) => (
                 <div
                     key={`${chip.kind}:${chip.id}`}
