@@ -4,7 +4,7 @@ import { mergeMessages } from '@/lib/messages/utils';
 
 export type MessageThreadItem =
     | { type: 'date'; id: string; dateKey: string; date: Date }
-    | { type: 'message'; id: string; message: MessageWithSender; showAvatar: boolean }
+    | { type: 'message'; id: string; message: MessageWithSender }
     | { type: 'unread-divider'; id: string; count: number }
     | { type: 'bottom-sentinel'; id: string };
 
@@ -103,31 +103,10 @@ export function buildMessageThreadModel({
             type: 'message',
             id: message.id,
             message,
-            showAvatar: false,
         });
     });
 
-    const decoratedGroups = groups.map((group) => ({
-        ...group,
-        items: group.items.map((item, index): MessageThreadItem => {
-            if (item.type !== 'message') {
-                return item;
-            }
-
-            const prevItem = group.items[index - 1];
-            const prevMessageFromSameSender = prevItem?.type === 'message'
-                && prevItem.message.senderId === item.message.senderId;
-            const isPeerMessage = Boolean(item.message.senderId)
-                && (!viewerId || item.message.senderId !== viewerId);
-
-            return {
-                ...item,
-                showAvatar: isPeerMessage && !prevMessageFromSameSender,
-            };
-        }),
-    }));
-
-    const items: MessageThreadItem[] = decoratedGroups.flatMap((group) => [
+    const items: MessageThreadItem[] = groups.flatMap((group) => [
         {
             type: 'date' as const,
             id: `date-header-${group.dateKey}`,
@@ -137,13 +116,13 @@ export function buildMessageThreadModel({
         ...group.items,
     ]);
     items.push({ type: 'bottom-sentinel', id: `bottom-sentinel-${conversationId}` });
-    const groupCounts = decoratedGroups.map((group) => group.items.length);
-    const groupIndexByDataIndex = decoratedGroups.flatMap((group, groupIndex) =>
+    const groupCounts = groups.map((group) => group.items.length);
+    const groupIndexByDataIndex = groups.flatMap((group, groupIndex) =>
         group.items.map(() => groupIndex),
     );
     return {
         messages: orderedMessages,
-        groups: decoratedGroups,
+        groups,
         items,
         unreadMessageIds,
         groupCounts,
