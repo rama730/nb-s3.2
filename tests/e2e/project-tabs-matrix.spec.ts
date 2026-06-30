@@ -101,7 +101,7 @@ test.describe("Project tabs matrix @critical", () => {
     };
 
     await switchTab("project-tab-readme", "readme", "readme");
-    await expect(page.getByText(/README|Create the project README|README unavailable/i).first()).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText(/Doc|Create the project Doc|Doc unavailable/i).first()).toBeVisible({ timeout: 15000 });
 
     await switchTab("project-tab-sprints", "sprints", "sprints");
     await expect(page.getByText(/Sprint|No Sprints Yet|Sprint planning/i).first()).toBeVisible({ timeout: 15000 });
