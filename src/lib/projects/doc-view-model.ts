@@ -1,82 +1,82 @@
 import {
     inlineReferencesToSmartBlocks,
     normalizeReadmeReferenceLabel,
-    parseProjectReadmeInlineReferences,
+    parseProjectDocInlineReferences,
     splitMarkdownBySmartBlocks,
-    type ProjectReadmeInlineReference,
-    type ProjectReadmeReferenceOption,
-    type ProjectReadmeSmartBlock,
-} from "@/lib/projects/readme-blocks";
-import { extractProjectReadmeHeadings, type ProjectReadmeHeading } from "@/lib/projects/readme-headings";
+    type ProjectDocInlineReference,
+    type ProjectDocReferenceOption,
+    type ProjectDocSmartBlock,
+} from "@/lib/projects/doc-blocks";
+import { extractProjectDocHeadings, type ProjectDocHeading } from "@/lib/projects/doc-headings";
 import {
-    buildProjectReadmeCommandTargetMaps,
-    buildProjectReadmeRailReport,
-    extractProjectReadmeCommandShortcuts,
-    PROJECT_README_PRIMARY_COMMAND_GROUPS,
-    type ProjectReadmeCommandGroup,
-    type ProjectReadmeQuickCommand,
-    type ProjectReadmeRailReport,
-} from "@/lib/projects/readme-quick-console";
-import { projectReadmeReferenceTargetId } from "@/lib/projects/readme-navigation";
+    buildProjectDocCommandTargetMaps,
+    buildProjectDocRailReport,
+    extractProjectDocCommandShortcuts,
+    PROJECT_DOC_PRIMARY_COMMAND_GROUPS,
+    type ProjectDocCommandGroup,
+    type ProjectDocQuickCommand,
+    type ProjectDocRailReport,
+} from "@/lib/projects/doc-quick-console";
+import { projectDocReferenceTargetId } from "@/lib/projects/doc-navigation";
 
-export type ProjectReadmeRailTabId = "brief" | "commands" | "links" | "outline" | "config" | "options";
-export type ProjectReadmeRailActionKind = "command" | "heading" | "reference";
+export type ProjectDocRailTabId = "brief" | "commands" | "links" | "outline" | "config" | "options" | "search";
+export type ProjectDocRailActionKind = "command" | "heading" | "reference";
 
-export type ProjectReadmeRailAction = {
+export type ProjectDocRailAction = {
     id: string;
-    kind: ProjectReadmeRailActionKind;
-    railTab: ProjectReadmeRailTabId;
+    kind: ProjectDocRailActionKind;
+    railTab: ProjectDocRailTabId;
     label: string;
     description: string | null;
     targetId: string;
     copyText: string | null;
     openHref: string | null;
     sourceIndex: number;
-    command?: ProjectReadmeQuickCommand;
-    commandGroup?: ProjectReadmeCommandGroup;
+    command?: ProjectDocQuickCommand;
+    commandGroup?: ProjectDocCommandGroup;
     groupLabel?: string;
     platforms: string[];
-    riskLevel?: ProjectReadmeQuickCommand["riskLevel"];
+    riskLevel?: ProjectDocQuickCommand["riskLevel"];
     riskLabel?: string | null;
-    reference?: ProjectReadmeInlineReference;
+    reference?: ProjectDocInlineReference;
     referencePreviewKey?: string;
-    previewOption?: ProjectReadmeReferenceOption | null;
+    previewOption?: ProjectDocReferenceOption | null;
     previewLoading?: boolean;
     previewError?: boolean;
-    heading?: ProjectReadmeHeading;
+    heading?: ProjectDocHeading;
 };
 
-export type ProjectReadmeTargetRegistryEntry = {
+export type ProjectDocTargetRegistryEntry = {
     id: string;
     kind: "heading" | "command" | "reference";
     label: string;
-    railTab: ProjectReadmeRailTabId;
+    railTab: ProjectDocRailTabId;
     level?: number;
     sourceIndex: number;
 };
 
-export type ProjectReadmeViewModel = {
+export type ProjectDocViewModel = {
     content: string;
     excerpt: string | null;
-    headings: ProjectReadmeHeading[];
-    commands: ProjectReadmeQuickCommand[];
-    references: ProjectReadmeInlineReference[];
+    headings: ProjectDocHeading[];
+    commands: ProjectDocQuickCommand[];
+    references: ProjectDocInlineReference[];
     segments: ReturnType<typeof splitMarkdownBySmartBlocks>;
-    smartBlocks: ProjectReadmeSmartBlock[];
-    referencePreviewBlocks: ProjectReadmeSmartBlock[];
-    previewBlocks: ProjectReadmeSmartBlock[];
-    commandTargetMaps: ReturnType<typeof buildProjectReadmeCommandTargetMaps>;
-    report: ProjectReadmeRailReport;
-    railTabs: ProjectReadmeRailTabId[];
-    railActions: ProjectReadmeRailAction[];
-    recommendedAction: ProjectReadmeRailAction | null;
-    targetRegistry: Map<string, ProjectReadmeTargetRegistryEntry>;
+    smartBlocks: ProjectDocSmartBlock[];
+    referencePreviewBlocks: ProjectDocSmartBlock[];
+    previewBlocks: ProjectDocSmartBlock[];
+    commandTargetMaps: ReturnType<typeof buildProjectDocCommandTargetMaps>;
+    report: ProjectDocRailReport;
+    railTabs: ProjectDocRailTabId[];
+    railActions: ProjectDocRailAction[];
+    recommendedAction: ProjectDocRailAction | null;
+    targetRegistry: Map<string, ProjectDocTargetRegistryEntry>;
     targetIds: string[];
     targetSignature: string;
 };
 
 const VIEW_MODEL_CACHE_LIMIT = 12;
-const viewModelCache = new Map<string, ProjectReadmeViewModel>();
+const viewModelCache = new Map<string, ProjectDocViewModel>();
 
 function stableReadmeHash(value: string) {
     let hash = 5381;
@@ -90,7 +90,7 @@ function readmeViewModelCacheKey(input: {
     content: string;
     contentHash?: string | null;
     excerpt?: string | null;
-    storedHeadings?: ProjectReadmeHeading[];
+    storedHeadings?: ProjectDocHeading[];
 }) {
     if (input.contentHash) return `content-hash:${input.contentHash}`;
     const headingSignature = input.storedHeadings?.map((heading) => `${heading.id}:${heading.text}:${heading.level}`).join("|") ?? "";
@@ -102,7 +102,7 @@ function readmeViewModelCacheKey(input: {
     ].join(":");
 }
 
-function rememberViewModel(key: string, model: ProjectReadmeViewModel) {
+function rememberViewModel(key: string, model: ProjectDocViewModel) {
     if (viewModelCache.has(key)) viewModelCache.delete(key);
     viewModelCache.set(key, model);
     while (viewModelCache.size > VIEW_MODEL_CACHE_LIMIT) {
@@ -113,9 +113,9 @@ function rememberViewModel(key: string, model: ProjectReadmeViewModel) {
     return model;
 }
 
-function uniquePreviewBlocks(blocks: ProjectReadmeSmartBlock[]) {
+function uniquePreviewBlocks(blocks: ProjectDocSmartBlock[]) {
     const seen = new Set<string>();
-    const unique: ProjectReadmeSmartBlock[] = [];
+    const unique: ProjectDocSmartBlock[] = [];
     for (const block of blocks) {
         const key = `${block.kind}:${block.ids.join(",")}:${block.index}`;
         if (seen.has(key)) continue;
@@ -126,13 +126,13 @@ function uniquePreviewBlocks(blocks: ProjectReadmeSmartBlock[]) {
 }
 
 function buildRailTabs(input: {
-    report: ProjectReadmeRailReport;
-    commands: ProjectReadmeQuickCommand[];
-    references: ProjectReadmeInlineReference[];
-    headings: ProjectReadmeHeading[];
+    report: ProjectDocRailReport;
+    commands: ProjectDocQuickCommand[];
+    references: ProjectDocInlineReference[];
+    headings: ProjectDocHeading[];
 }) {
-    const tabs: Array<{ id: ProjectReadmeRailTabId; score: number; order: number }> = [];
-    const primaryCommands = input.commands.filter((command) => PROJECT_README_PRIMARY_COMMAND_GROUPS.has(command.group));
+    const tabs: Array<{ id: ProjectDocRailTabId; score: number; order: number }> = [];
+    const primaryCommands = input.commands.filter((command) => PROJECT_DOC_PRIMARY_COMMAND_GROUPS.has(command.group));
     const configCommands = input.commands.filter((command) => command.group === "config");
     const optionCommands = input.commands.filter((command) => command.group === "options");
     const setupCommands = primaryCommands.filter((command) => (
@@ -142,7 +142,7 @@ function buildRailTabs(input: {
         || command.group === "agents"
     ));
     const hasBrief = Boolean(input.report.summary || input.report.summaryItems.length || input.report.signals.length || input.report.nextAction);
-    const add = (id: ProjectReadmeRailTabId, score: number) => {
+    const add = (id: ProjectDocRailTabId, score: number) => {
         tabs.push({ id, score, order: tabs.length });
     };
 
@@ -170,18 +170,18 @@ function buildRailTabs(input: {
         .map((tab) => tab.id);
 }
 
-function commandRailTab(command: ProjectReadmeQuickCommand): ProjectReadmeRailTabId {
+function commandRailTab(command: ProjectDocQuickCommand): ProjectDocRailTabId {
     if (command.group === "config") return "config";
     if (command.group === "options") return "options";
     return "commands";
 }
 
 function buildRailActions(input: {
-    headings: ProjectReadmeHeading[];
-    commands: ProjectReadmeQuickCommand[];
-    references: ProjectReadmeInlineReference[];
+    headings: ProjectDocHeading[];
+    commands: ProjectDocQuickCommand[];
+    references: ProjectDocInlineReference[];
 }) {
-    const commandActions: ProjectReadmeRailAction[] = input.commands.map((command, index) => ({
+    const commandActions: ProjectDocRailAction[] = input.commands.map((command, index) => ({
         id: `command:${command.id}`,
         kind: "command",
         railTab: commandRailTab(command),
@@ -199,13 +199,13 @@ function buildRailActions(input: {
         riskLabel: command.riskLabel,
     }));
 
-    const referenceActions: ProjectReadmeRailAction[] = input.references.map((reference, index) => ({
+    const referenceActions: ProjectDocRailAction[] = input.references.map((reference, index) => ({
         id: `reference:${reference.kind}:${reference.id}:${index}`,
         kind: "reference",
         railTab: "links",
         label: normalizeReadmeReferenceLabel(reference.kind, reference.label),
         description: null,
-        targetId: projectReadmeReferenceTargetId(reference.kind, reference.id, index),
+        targetId: projectDocReferenceTargetId(reference.kind, reference.id, index),
         copyText: null,
         openHref: null,
         sourceIndex: index,
@@ -214,7 +214,7 @@ function buildRailActions(input: {
         platforms: [],
     }));
 
-    const headingActions: ProjectReadmeRailAction[] = input.headings.map((heading, index) => ({
+    const headingActions: ProjectDocRailAction[] = input.headings.map((heading, index) => ({
         id: `heading:${heading.id}:${index}`,
         kind: "heading",
         railTab: "outline",
@@ -231,7 +231,7 @@ function buildRailActions(input: {
     return [...commandActions, ...referenceActions, ...headingActions];
 }
 
-function pickRecommendedAction(actions: ProjectReadmeRailAction[]) {
+function pickRecommendedAction(actions: ProjectDocRailAction[]) {
     const commandActions = actions.filter((action) => action.kind === "command");
     return commandActions.find((action) => action.commandGroup === "recommended")
         ?? commandActions.find((action) => action.commandGroup === "install" || action.commandGroup === "claude" || action.commandGroup === "agents")
@@ -243,11 +243,11 @@ function pickRecommendedAction(actions: ProjectReadmeRailAction[]) {
 }
 
 function buildTargetRegistry(input: {
-    headings: ProjectReadmeHeading[];
-    commands: ProjectReadmeQuickCommand[];
-    references: ProjectReadmeInlineReference[];
+    headings: ProjectDocHeading[];
+    commands: ProjectDocQuickCommand[];
+    references: ProjectDocInlineReference[];
 }) {
-    const registry = new Map<string, ProjectReadmeTargetRegistryEntry>();
+    const registry = new Map<string, ProjectDocTargetRegistryEntry>();
     input.headings.forEach((heading, index) => {
         registry.set(heading.id, {
             id: heading.id,
@@ -271,7 +271,7 @@ function buildTargetRegistry(input: {
     });
 
     input.references.forEach((reference, index) => {
-        const id = projectReadmeReferenceTargetId(reference.kind, reference.id, index);
+        const id = projectDocReferenceTargetId(reference.kind, reference.id, index);
         registry.set(id, {
             id,
             kind: "reference",
@@ -283,21 +283,40 @@ function buildTargetRegistry(input: {
     return registry;
 }
 
-export function buildProjectReadmeViewModel(input: {
+function stripFrontmatter(markdown: string): string {
+    const trimmed = markdown.trimStart();
+    if (trimmed.startsWith("---")) {
+        const lines = markdown.split("\n");
+        let endIdx = -1;
+        for (let i = 1; i < lines.length; i++) {
+            const line = lines[i];
+            if (line !== undefined && line.trim() === "---") {
+                endIdx = i;
+                break;
+            }
+        }
+        if (endIdx !== -1) {
+            return lines.slice(endIdx + 1).join("\n");
+        }
+    }
+    return markdown;
+}
+
+export function buildProjectDocViewModel(input: {
     content: string;
     contentHash?: string | null;
     excerpt?: string | null;
-    storedHeadings?: ProjectReadmeHeading[];
-}): ProjectReadmeViewModel {
+    storedHeadings?: ProjectDocHeading[];
+    }): ProjectDocViewModel {
     const cacheKey = readmeViewModelCacheKey(input);
     const cached = viewModelCache.get(cacheKey);
     if (cached) return cached;
 
-    const content = input.content;
-    const headingsFromContent = extractProjectReadmeHeadings(content);
+    const content = stripFrontmatter(input.content);
+    const headingsFromContent = extractProjectDocHeadings(content);
     const headings = headingsFromContent.length ? headingsFromContent : input.storedHeadings ?? [];
-    const commands = extractProjectReadmeCommandShortcuts(content);
-    const references = parseProjectReadmeInlineReferences(content);
+    const commands = extractProjectDocCommandShortcuts(content);
+    const references = parseProjectDocInlineReferences(content);
     const segments = splitMarkdownBySmartBlocks(content);
     const smartBlocks = segments.flatMap((segment) => segment.kind === "block" ? [segment.block] : []);
     const referencePreviewBlocks = inlineReferencesToSmartBlocks(references);
@@ -305,7 +324,7 @@ export function buildProjectReadmeViewModel(input: {
         ...smartBlocks,
         ...referencePreviewBlocks,
     ]);
-    const report = buildProjectReadmeRailReport({
+    const report = buildProjectDocRailReport({
         content,
         excerpt: input.excerpt,
         commands,
@@ -328,7 +347,7 @@ export function buildProjectReadmeViewModel(input: {
         smartBlocks,
         referencePreviewBlocks,
         previewBlocks,
-        commandTargetMaps: buildProjectReadmeCommandTargetMaps(content),
+        commandTargetMaps: buildProjectDocCommandTargetMaps(content),
         report,
         railTabs,
         railActions,
