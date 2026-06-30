@@ -367,12 +367,25 @@ describe("Stage timeout — FilesTabRoot integration wiring", () => {
     // one *runtime* invocation — double-calling would start two timer
     // chains and two console warnings on a hung stage.
     const callRe =
-      /const\s+(?:stage|\[\s*stage\s*\])\s*=\s*useFilesTabStartupStage\s*\(\s*projectId\s*\)\s*;/g;
+      /const\s+\[\s*stage\s*,\s*signalStageComplete\s*\]\s*=\s*useFilesTabStartupStage\s*\(\s*projectId\s*\)\s*;/g;
     const matches = FILES_TAB_ROOT_SRC.match(callRe) ?? [];
     assert.equal(
       matches.length,
       1,
-      `Expected exactly one 'const [stage] = useFilesTabStartupStage(projectId);' call site in FilesTabRoot.tsx, found ${matches.length}`,
+      `Expected exactly one 'const [stage, signalStageComplete] = useFilesTabStartupStage(projectId);' call site in FilesTabRoot.tsx, found ${matches.length}`,
+    );
+  });
+
+  it("signals stage completion from the root boot lifecycle", () => {
+    assert.match(
+      FILES_TAB_ROOT_SRC,
+      /signalStageComplete\("explorer"\)/,
+      "FilesTabRoot.tsx must complete the explorer startup stage after booting",
+    );
+    assert.match(
+      FILES_TAB_ROOT_SRC,
+      /signalStageComplete\("main"\)/,
+      "FilesTabRoot.tsx must complete the main startup stage without waiting for timeout",
     );
   });
 
@@ -389,5 +402,4 @@ describe("Stage timeout — FilesTabRoot integration wiring", () => {
     );
   });
 });
-
 
