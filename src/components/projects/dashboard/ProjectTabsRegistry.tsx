@@ -6,7 +6,7 @@ import { SkeletonFiles } from "@/components/projects/skeletons/SkeletonFiles";
 import { SkeletonSprints } from "@/components/projects/skeletons/SkeletonSprints";
 import { SkeletonSettings } from "@/components/projects/skeletons/SkeletonSettings";
 import { SkeletonAnalytics } from "@/components/projects/skeletons/SkeletonAnalytics";
-import { SkeletonReadme } from "@/components/projects/skeletons/SkeletonReadme";
+import { SkeletonDoc } from "@/components/projects/skeletons/SkeletonDoc";
 
 // Generic Skeleton for other tabs
 const TabSkeleton = () => (
@@ -60,9 +60,9 @@ export const DashboardTab = dynamic(
     { loading: () => <TabSkeleton />, ssr: true }
 );
 
-export const ReadmeTab = dynamic(
-    () => import("@/components/projects/tabs/ReadmeTab"),
-    { loading: () => <SkeletonReadme />, ssr: false }
+export const DocTab = dynamic(
+    () => import("@/components/projects/tabs/DocTab"),
+    { loading: () => <SkeletonDoc />, ssr: false }
 );
 
 export const UpdatesTab = dynamic(
