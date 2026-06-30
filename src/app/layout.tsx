@@ -14,8 +14,6 @@ import "./globals.css";
 import { buildThemePrehydrateScript } from "@/lib/theme/appearance";
 import { RoutePerformanceObserver } from "@/components/observability/RoutePerformanceObserver";
 import { resolveAuthBaseUrl } from "@/lib/auth/redirects";
-import { AuthProvider } from "@/components/providers/AuthProvider";
-import { getViewerProfileContext, toClientViewer } from "@/lib/server/viewer-context";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -92,11 +90,6 @@ export default async function RootLayout({
   const headerStore = await headers();
   const nonce = headerStore.get("x-nonce") || undefined;
   
-  const authContext = await getViewerProfileContext();
-  const clientViewer = toClientViewer(authContext);
-  const initialUser = clientViewer.userId ? { id: clientViewer.userId } as any : null;
-  const initialProfile = authContext.profile;
-
   return (
     <html lang="en" data-scroll-behavior="smooth" data-csp-nonce={nonce} suppressHydrationWarning>
       <head>
@@ -108,11 +101,9 @@ export default async function RootLayout({
       <body className={`${geistSans.variable} ${geistMono.variable} font-sans antialiased`}>
         <SecurityRuntimeProvider nonce={nonce ?? null}>
           <Suspense fallback={<div className="min-h-screen w-full bg-zinc-50 dark:bg-zinc-950" />}>
-            <AuthProvider initialUser={initialUser} initialProfile={initialProfile}>
-              <I18nAndThemeProviders nonce={nonce ?? undefined}>
-                {children}
-              </I18nAndThemeProviders>
-            </AuthProvider>
+            <I18nAndThemeProviders nonce={nonce ?? undefined}>
+              {children}
+            </I18nAndThemeProviders>
           </Suspense>
         </SecurityRuntimeProvider>
       </body>
