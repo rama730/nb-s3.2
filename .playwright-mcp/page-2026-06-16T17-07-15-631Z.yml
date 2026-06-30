@@ -1,0 +1,96 @@
+- generic [active] [ref=e1]:
+  - main [ref=e2]:
+    - generic [ref=e3]:
+      - complementary [ref=e4]:
+        - generic [ref=e5]:
+          - button "Authorize" [disabled]:
+            - img
+            - generic: Authorize
+          - button "Cancel" [ref=e6] [cursor=pointer]:
+            - img
+            - generic [ref=e7]: Cancel
+      - generic [ref=e9]:
+        - generic [ref=e10]:
+          - generic [ref=e11]:
+            - generic [ref=e12]:
+              - generic [ref=e13]: E
+              - generic [ref=e14]:
+                - paragraph [ref=e15]: Extension Connection
+                - paragraph [ref=e16]: Connect VS Code to Edge
+            - generic [ref=e17]: Verified callback
+          - generic [ref=e18]:
+            - generic [ref=e19]:
+              - heading "Authorize editor session" [level=1] [ref=e20]
+              - paragraph [ref=e21]: Review the account, callback, and flow before creating one revocable editor token.
+            - generic [ref=e22]:
+              - paragraph [ref=e23]: Checking authentication
+              - paragraph [ref=e24]: Confirming your browser session before this editor request can continue.
+        - generic [ref=e25]:
+          - generic [ref=e26]:
+            - img [ref=e27]
+            - generic [ref=e36]: Account
+            - generic [ref=e37]: Checking session
+          - generic [ref=e38]:
+            - img [ref=e39]
+            - generic [ref=e41]: Editor
+            - generic [ref=e42]: VS Code
+          - generic [ref=e43]:
+            - img [ref=e44]
+            - generic [ref=e47]: Callback
+            - generic [ref=e48]: vscode://nb-workspace.nb-vscode
+        - generic [ref=e49]:
+          - generic [ref=e50]:
+            - img [ref=e51]
+            - generic [ref=e54]:
+              - paragraph [ref=e55]: One editor session
+              - paragraph [ref=e56]: The token belongs to this browser-approved editor request.
+          - generic [ref=e57]:
+            - img [ref=e58]
+            - generic [ref=e61]:
+              - paragraph [ref=e62]: Revocable access
+              - paragraph [ref=e63]: Remove this session later from integrations settings.
+          - generic [ref=e64]:
+            - img [ref=e65]
+            - generic [ref=e68]:
+              - paragraph [ref=e69]: No password sharing
+              - paragraph [ref=e70]: Your password is never sent to the editor.
+        - generic [ref=e71]:
+          - generic [ref=e72]:
+            - generic [ref=e73]:
+              - generic [ref=e74]:
+                - paragraph [ref=e75]: Connection flow
+                - paragraph [ref=e76]: The browser approves the request, the server creates the token, and the editor receives it through the callback.
+              - generic [ref=e77]: Awaiting action
+            - list [ref=e78]:
+              - listitem [ref=e79]:
+                - generic [ref=e80]:
+                  - img [ref=e82]
+                  - generic [ref=e85]: Active
+                - heading "Authorize access" [level=3] [ref=e86]
+                - paragraph [ref=e87]: Confirm the signed-in account, editor, and callback destination.
+              - listitem [ref=e88]:
+                - generic [ref=e89]:
+                  - img [ref=e91]
+                  - generic [ref=e94]: Waiting
+                - heading "Generate device token" [level=3] [ref=e95]
+                - paragraph [ref=e96]: Create one revocable token for this editor session.
+              - listitem [ref=e97]:
+                - generic [ref=e98]:
+                  - img [ref=e100]
+                  - generic [ref=e102]: Waiting
+                - heading "Return to editor" [level=3] [ref=e103]
+                - paragraph [ref=e104]: Send the token back through the approved editor callback.
+          - generic [ref=e105]:
+            - generic [ref=e106]:
+              - img [ref=e108]
+              - heading "Awaiting authorization" [level=2] [ref=e111]
+            - generic [ref=e112]:
+              - paragraph [ref=e113]: Authorizing creates a revocable token for VS Code. Cancel returns to the editor without granting access.
+              - generic [ref=e114]:
+                - generic [ref=e115]:
+                  - img [ref=e116]
+                  - generic [ref=e119]: The editor receives a token only after you approve this request.
+                - generic [ref=e120]:
+                  - img [ref=e121]
+                  - generic [ref=e124]: The token can be revoked from integrations settings.
+  - region "Notifications alt+T"
