@@ -6,12 +6,12 @@ import { dirname, join } from 'path';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: join(__dirname, '..', '.env.local') });
 
-const DATABASE_URL = process.env.DATABASE_URL;
+const DATABASE_URL = process.env.E2E_DATABASE_URL;
 const RUN_ID = process.env.E2E_RUN_ID || 'local';
 const TARGET_EMAIL = process.env.E2E_USER_EMAIL || 'codex.e2e.smoke@example.com';
 
 if (!DATABASE_URL) {
-  console.error('DATABASE_URL is required');
+  console.error('E2E_DATABASE_URL is required and must identify a disposable test database');
   process.exit(1);
 }
 
