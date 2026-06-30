@@ -1,10 +1,15 @@
+import { config } from "dotenv";
+
+config({ path: ".env.local", quiet: true });
+
 function isCi() {
   return process.env.CI === "true";
 }
 
 function main() {
-  if (!isCi()) {
-    console.log("[db-replay-env] non-CI environment; skipping strict replay env checks.");
+  const strict = isCi() || process.argv.includes("--strict");
+  if (!strict) {
+    console.log("[db-replay-env] advisory mode; pass --strict to require disposable replay configuration.");
     return;
   }
 
@@ -16,18 +21,18 @@ function main() {
   );
 
   if (!primary) {
-    throw new Error("DATABASE_URL is required in CI.");
+    throw new Error("DATABASE_URL is required for strict replay validation.");
   }
   if (!fresh) {
     throw new Error(
-      "CI requires DATABASE_URL_FRESH (or DATABASE_URL_REPLAY_FRESH) for strict fresh replay.",
+      "Strict replay requires DATABASE_URL_FRESH (or DATABASE_URL_REPLAY_FRESH).",
     );
   }
   if (fresh === primary) {
-    throw new Error("DATABASE_URL_FRESH must be distinct from DATABASE_URL in CI.");
+    throw new Error("DATABASE_URL_FRESH must be distinct from DATABASE_URL.");
   }
 
-  console.log("[db-replay-env] strict CI replay env checks passed.");
+  console.log("[db-replay-env] strict replay env checks passed.");
 }
 
 try {
