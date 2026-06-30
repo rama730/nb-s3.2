@@ -9,14 +9,14 @@ import { isSafeHttpUrl } from '@/lib/security/urls';
 // ── Form State (used by EditProfileModal) ───────────────────────────
 
 export type ProfileFormState = {
-    full_name: string;
+    fullName: string;
     username: string;
     headline: string;
     bio: string;
     location: string;
     website: string;
-    avatar_url: string;
-    banner_url: string;
+    avatarUrl: string;
+    bannerUrl: string;
     availabilityStatus: string;
     openTo: string[];
     skills: string[];
@@ -31,14 +31,14 @@ export type ProfileFormState = {
 export function toFormState(profile: Record<string, unknown> | null | undefined): ProfileFormState {
     const s = (profile || {}) as Record<string, unknown>;
     return {
-        full_name: str(s.fullName ?? s.full_name),
+        fullName: str(s.fullName ?? s.full_name),
         username: str(s.username),
         headline: str(s.headline),
         bio: str(s.bio),
         location: str(s.location),
         website: str(s.website),
-        avatar_url: str(s.avatarUrl ?? s.avatar_url),
-        banner_url: str(s.bannerUrl ?? s.banner_url),
+        avatarUrl: str(s.avatarUrl ?? s.avatar_url),
+        bannerUrl: str(s.bannerUrl ?? s.banner_url),
         availabilityStatus: str(s.availabilityStatus ?? s.availability_status) || "available",
         openTo: arr(s.openTo ?? s.open_to),
         skills: arr(s.skills),
@@ -83,14 +83,14 @@ export function toServerPayload(
     })();
 
     return {
-        fullName: formState.full_name,
+        fullName: formState.fullName,
         username: formState.username,
         headline: formState.headline,
         bio: formState.bio,
         location: formState.location,
         website: formState.website,
-        avatarUrl: formState.avatar_url,
-        bannerUrl: formState.banner_url,
+        avatarUrl: formState.avatarUrl,
+        bannerUrl: formState.bannerUrl,
         skills: formState.skills,
         socialLinks: formState.socialLinks,
         availabilityStatus: formState.availabilityStatus,
@@ -136,14 +136,14 @@ export function applyPayloadToFormBase(
 ): ProfileFormState {
     return {
         ...base,
-        full_name: payload.fullName !== undefined ? str(payload.fullName) : base.full_name,
+        fullName: payload.fullName !== undefined ? str(payload.fullName) : base.fullName,
         username: payload.username !== undefined ? str(payload.username) : base.username,
         headline: payload.headline !== undefined ? str(payload.headline) : base.headline,
         bio: payload.bio !== undefined ? str(payload.bio) : base.bio,
         location: payload.location !== undefined ? str(payload.location) : base.location,
         website: payload.website !== undefined ? str(payload.website) : base.website,
-        avatar_url: payload.avatarUrl !== undefined ? str(payload.avatarUrl) : base.avatar_url,
-        banner_url: payload.bannerUrl !== undefined ? str(payload.bannerUrl) : base.banner_url,
+        avatarUrl: payload.avatarUrl !== undefined ? str(payload.avatarUrl) : base.avatarUrl,
+        bannerUrl: payload.bannerUrl !== undefined ? str(payload.bannerUrl) : base.bannerUrl,
         availabilityStatus: payload.availabilityStatus !== undefined ? str(payload.availabilityStatus) : base.availabilityStatus,
         openTo: payload.openTo !== undefined ? arr(payload.openTo) : base.openTo,
         skills: payload.skills !== undefined ? arr(payload.skills) : base.skills,
