@@ -33,7 +33,7 @@ describe('auth snapshot remote fallback', () => {
                 iat: nowSeconds,
                 exp: nowSeconds + 60,
                 user_metadata: { username: 'remote-user', onboarded: true },
-                app_metadata: { role: 'member' },
+                app_metadata: { role: 'member', onboarding_complete: true },
             })
 
             let getUserCalls = 0
@@ -41,7 +41,7 @@ describe('auth snapshot remote fallback', () => {
                 id: 'user-remote-1',
                 email: 'remote@example.com',
                 email_confirmed_at: '2026-03-12T10:00:00.000Z',
-                app_metadata: { role: 'member' },
+                app_metadata: { role: 'member', onboarding_complete: true },
                 user_metadata: { username: 'remote-user', onboarded: true },
             }
 
