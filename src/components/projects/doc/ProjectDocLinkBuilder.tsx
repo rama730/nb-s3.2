@@ -31,7 +31,7 @@ function validateReadmeLinkUrl(url: string) {
     return "Unsafe link protocol blocked. Use https://, mailto:, tel:, /relative-path, or #section.";
 }
 
-export function ProjectReadmeLinkBuilder({
+export function ProjectDocLinkBuilder({
     onInsert,
     onClose,
 }: {
