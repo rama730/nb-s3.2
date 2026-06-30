@@ -103,6 +103,7 @@ export default function ConnectionsClient(_props: ConnectionsClientProps) {
 
     // Disconnect
     const [disconnectTarget, setDisconnectTarget] = useState<{ id: string; name: string } | null>(null);
+    const [showBulkDisconnectConfirm, setShowBulkDisconnectConfirm] = useState(false);
 
     const confirmDisconnect = useCallback(() => {
         if (!disconnectTarget) return;
@@ -161,10 +162,13 @@ export default function ConnectionsClient(_props: ConnectionsClientProps) {
         setSelectedIds(new Set());
     }, [selectedIds, router]);
 
-    const handleBulkDisconnect = useCallback(async () => {
+    const handleBulkDisconnect = useCallback(() => {
         if (selectedIds.size === 0) return;
-        const confirm = window.confirm(`Are you sure you want to disconnect from ${selectedIds.size} users?`);
-        if (!confirm) return;
+        setShowBulkDisconnectConfirm(true);
+    }, [selectedIds]);
+
+    const handleBulkDisconnectConfirmed = useCallback(async () => {
+        if (selectedIds.size === 0) return;
 
         // Map userIds to connectionIds
         const selectedConnectionIds = connections
@@ -179,6 +183,8 @@ export default function ConnectionsClient(_props: ConnectionsClientProps) {
             setSelectedIds(new Set());
         } catch (error) {
             toast.error(`Failed to disconnect from users`, { id: toastId });
+        } finally {
+            setShowBulkDisconnectConfirm(false);
         }
     }, [selectedIds, connections, bulkActions.disconnect]);
 
@@ -348,14 +354,16 @@ export default function ConnectionsClient(_props: ConnectionsClientProps) {
                                     {bulkActions.disconnect.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <X className="w-3.5 h-3.5" />}
                                     Remove
                                 </button>
-                                <button
-                                    type="button"
-                                    onClick={handleBulkMessage}
-                                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/20 dark:bg-zinc-900/20 text-sm font-medium hover:bg-white/30 dark:hover:bg-zinc-900/30 transition-colors"
-                                >
-                                    <MessageSquare className="w-3.5 h-3.5" />
-                                    Message
-                                </button>
+                                {selectedIds.size === 1 && (
+                                    <button
+                                        type="button"
+                                        onClick={handleBulkMessage}
+                                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/20 dark:bg-zinc-900/20 text-sm font-medium hover:bg-white/30 dark:hover:bg-zinc-900/30 transition-colors"
+                                    >
+                                        <MessageSquare className="w-3.5 h-3.5" />
+                                        Message
+                                    </button>
+                                )}
                             </div>
                         </div>
                     </div>
@@ -571,6 +579,16 @@ export default function ConnectionsClient(_props: ConnectionsClientProps) {
                 confirmLabel="Disconnect"
                 variant="destructive"
                 onConfirm={confirmDisconnect}
+            />
+
+            <ConfirmDialog
+                open={showBulkDisconnectConfirm}
+                onOpenChange={setShowBulkDisconnectConfirm}
+                title="Remove Connections"
+                description={`Are you sure you want to disconnect from the ${selectedIds.size} selected connections?`}
+                confirmLabel="Remove"
+                variant="destructive"
+                onConfirm={handleBulkDisconnectConfirmed}
             />
 
             {/* Profile preview drawer (#14, Phase 5) */}
