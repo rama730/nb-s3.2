@@ -606,7 +606,7 @@ function PersonCard({
                     ) : null}
                 </div>
                 {actions ? (
-                    <div className="flex items-center gap-2 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-within:opacity-100 transition-opacity">
+                    <div className="flex items-center gap-2 shrink-0">
                         {actions}
                     </div>
                 ) : null}
@@ -691,7 +691,6 @@ function PersonCard({
                 <div className="flex items-start gap-3">
                     <div className={cn(
                         "relative rounded-full flex-shrink-0",
-                        profile.availabilityStatus === "available" && "ring-2 ring-emerald-400/60",
                     )}>
                         <Avatar profile={profile} size={48} priority={priority} />
                         {profile.availabilityStatus === "available" ? (
