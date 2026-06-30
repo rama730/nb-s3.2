@@ -2,11 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { and, eq, isNull } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { projectMembers, projectReadmeAssets, projectReadmes, projects } from "@/lib/db/schema";
+import { projectMembers, projectMarkdownAssets, projectMarkdowns, projects } from "@/lib/db/schema";
 import { logger } from "@/lib/logger";
 import { normalizeProjectPublicTabVisibility } from "@/lib/projects/settings-policies";
 import { createAdminClient, createClient } from "@/lib/supabase/server";
 import { enforceRouteLimit, jsonError } from "@/app/api/v1/_shared";
+import { resolveProjectDocPermission } from "@/lib/projects/doc";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -30,21 +31,22 @@ export async function GET(
 
     const [row] = await db
         .select({
-            bucket: projectReadmeAssets.bucket,
-            storageKey: projectReadmeAssets.storageKey,
+            bucket: projectMarkdownAssets.bucket,
+            storageKey: projectMarkdownAssets.storageKey,
             ownerId: projects.ownerId,
             visibility: projects.visibility,
             publicTabVisibility: projects.publicTabVisibility,
-            readmePublishedVersionId: projectReadmes.publishedVersionId,
+            readmeSettings: projectMarkdowns.settings,
+            readmePublishedVersionId: projectMarkdowns.publishedVersionId,
         })
-        .from(projectReadmeAssets)
-        .innerJoin(projects, eq(projects.id, projectReadmeAssets.projectId))
-        .leftJoin(projectReadmes, eq(projectReadmes.projectId, projectReadmeAssets.projectId))
+        .from(projectMarkdownAssets)
+        .innerJoin(projects, eq(projects.id, projectMarkdownAssets.projectId))
+        .leftJoin(projectMarkdowns, eq(projectMarkdowns.id, projectMarkdownAssets.markdownId))
         .where(
             and(
-                eq(projectReadmeAssets.projectId, projectId),
-                eq(projectReadmeAssets.id, assetId),
-                isNull(projectReadmeAssets.deletedAt),
+                eq(projectMarkdownAssets.projectId, projectId),
+                eq(projectMarkdownAssets.id, assetId),
+                isNull(projectMarkdownAssets.deletedAt),
                 isNull(projects.deletedAt),
             ),
         )
@@ -55,19 +57,28 @@ export async function GET(
     const membership = user
         ? await db.query.projectMembers.findFirst({
             where: and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, user.id)),
-            columns: { userId: true },
+            columns: { role: true },
         })
         : null;
 
-    const isMember = Boolean(user && (user.id === row.ownerId || membership));
-    const isPublishedPublic =
-        row.visibility === "public" &&
-        normalizeProjectPublicTabVisibility(row.publicTabVisibility).readme &&
-        Boolean(row.readmePublishedVersionId);
+    const isOwner = Boolean(user && user.id === row.ownerId);
+    const isMember = Boolean(isOwner || membership);
+    const permission = resolveProjectDocPermission({
+        actorUserId: user?.id,
+        projectVisibility: row.visibility,
+        publicTabVisibility: row.publicTabVisibility,
+        settings: row.readmeSettings,
+        membershipRole: isOwner ? "owner" : membership?.role,
+        isOwner,
+        isActiveMember: isMember,
+        hasPublishedReadme: Boolean(row.readmePublishedVersionId),
+    });
 
-    if (!isMember && !isPublishedPublic) {
+    if (!permission.canReadPublished && !permission.canEdit) {
         return jsonError("Not found", 404, "NOT_FOUND");
     }
+
+    const isPublishedPublic = permission.accessLevel === "public";
 
     const admin = await createAdminClient();
     const signedUrlTtlSeconds = isPublishedPublic ? 60 * 60 : 60;
