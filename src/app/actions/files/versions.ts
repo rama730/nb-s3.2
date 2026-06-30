@@ -69,7 +69,7 @@ async function enqueueProjectFileVersionNotification(input: Parameters<typeof en
 export async function listFileVersions(
   projectId: string,
   nodeId: string,
-): Promise<FileVersion[]> {
+): Promise<(FileVersion & { uploadedByName?: string | null; uploadedByUsername?: string | null })[]> {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   const actorId = user?.id ?? null;
@@ -84,8 +84,22 @@ export async function listFileVersions(
   if (node.type !== "file") throw new Error("Versions are tracked only on files");
 
   const rows = await db
-    .select()
+    .select({
+      id: fileVersions.id,
+      nodeId: fileVersions.nodeId,
+      version: fileVersions.version,
+      s3Key: fileVersions.s3Key,
+      size: fileVersions.size,
+      mimeType: fileVersions.mimeType,
+      contentHash: fileVersions.contentHash,
+      uploadedBy: fileVersions.uploadedBy,
+      uploadedAt: fileVersions.uploadedAt,
+      comment: fileVersions.comment,
+      uploadedByName: profiles.fullName,
+      uploadedByUsername: profiles.username,
+    })
     .from(fileVersions)
+    .leftJoin(profiles, eq(fileVersions.uploadedBy, profiles.id))
     .where(eq(fileVersions.nodeId, nodeId))
     .orderBy(desc(fileVersions.version))
     .limit(LIST_VERSIONS_MAX);
@@ -101,6 +115,7 @@ export async function getVersionSignedUrl(
   nodeId: string,
   version: number,
   ttlSeconds: number = 300,
+  download: boolean = false,
 ): Promise<{ url: string; expiresAt: number }> {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -123,7 +138,7 @@ export async function getVersionSignedUrl(
   const admin = await createAdminClient();
   const { data, error } = await admin.storage
     .from("project-files")
-    .createSignedUrl(version_row.s3Key, clampedTtl);
+    .createSignedUrl(version_row.s3Key, clampedTtl, { download });
   if (error || !data?.signedUrl) throw new Error("Failed to create signed URL");
 
   return { url: data.signedUrl, expiresAt: Date.now() + clampedTtl * 1000 };
@@ -329,6 +344,21 @@ export async function replaceNodeWithNewVersion(input: {
       fileId: input.nodeId,
     },
   });
+
+  if (result.node) {
+    const profile = await db.query.profiles.findFirst({
+      where: eq(profiles.id, user.id),
+      columns: { fullName: true, username: true, avatarUrl: true },
+    });
+    Object.assign(result.node, {
+      updatedById: user.id,
+      updatedByName: profile?.fullName ?? null,
+      updatedByUsername: profile?.username ?? null,
+      updatedByAvatarUrl: profile?.avatarUrl ?? null,
+      versionUpdatedAt: result.node.updatedAt,
+    });
+  }
+
   revalidatePath(`/projects/${input.projectId}`);
   return result;
 }
@@ -367,40 +397,38 @@ export async function restoreFileVersion(
     });
     if (!source) throw new Error("Version not found");
 
-    const nextVersion = (current.currentVersion ?? 1) + 1;
-
-    const [versionRow] = await tx
-      .insert(fileVersions)
-      .values({
-        nodeId,
-        version: nextVersion,
-        s3Key: source.s3Key,
-        size: source.size,
-        mimeType: source.mimeType,
-        contentHash: source.contentHash,
-        uploadedBy: user.id,
-        comment: `Restored from v${source.version}`,
-      })
-      .returning();
-
     const [updatedNode] = await tx
       .update(projectNodes)
       .set({
         s3Key: source.s3Key,
         size: source.size,
         mimeType: source.mimeType,
-        currentVersion: nextVersion,
+        currentVersion: targetVersion,
         updatedAt: new Date(),
       })
       .where(eq(projectNodes.id, nodeId))
       .returning();
 
-    return { node: updatedNode!, version: versionRow! };
+    return { node: updatedNode!, version: source };
   });
+
+  if (result.node) {
+    const profile = await db.query.profiles.findFirst({
+      where: eq(profiles.id, user.id),
+      columns: { fullName: true, username: true, avatarUrl: true },
+    });
+    Object.assign(result.node, {
+      updatedById: user.id,
+      updatedByName: profile?.fullName ?? null,
+      updatedByUsername: profile?.username ?? null,
+      updatedByAvatarUrl: profile?.avatarUrl ?? null,
+      versionUpdatedAt: result.node.updatedAt,
+    });
+  }
 
   await recordNodeEvent(projectId, user.id, nodeId, "restore_file_version", {
     restoredFrom: targetVersion,
-    newVersion: result.version.version,
+    newVersion: targetVersion,
   });
   revalidatePath(`/projects/${projectId}`);
   return result;
@@ -413,3 +441,111 @@ function sanitizeHash(input: string | null | undefined): string | null {
   if (!/^[0-9a-f]{64}$/.test(trimmed)) return null;
   return trimmed;
 }
+
+export async function getFileVersionContentAction(
+  projectId: string,
+  nodeId: string,
+  versionNumber: number,
+): Promise<{ success: true; content: string }> {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  const actorId = user?.id ?? null;
+  await assertProjectFileReadAccess(projectId, actorId);
+
+  const versionRow = await db.query.fileVersions.findFirst({
+    where: and(eq(fileVersions.nodeId, nodeId), eq(fileVersions.version, versionNumber)),
+    columns: { s3Key: true, size: true }
+  });
+
+  if (!versionRow) {
+    throw new Error("Version not found");
+  }
+
+  const MAX_INLINE_BYTES = 2 * 1024 * 1024; // 2MB cap
+  if (versionRow.size > MAX_INLINE_BYTES) {
+    throw new Error("File version too large for line diff comparison.");
+  }
+
+  const adminClient = await createAdminClient();
+  const { data, error } = await adminClient.storage.from("project-files").download(versionRow.s3Key);
+  if (error) throw error;
+  
+  const text = await data.text();
+  return { success: true, content: text };
+}
+
+export async function deleteFileVersionAction(
+  projectId: string,
+  nodeId: string,
+  versionNumber: number,
+): Promise<{ success: boolean; nextActiveVersion?: number | null; node?: typeof projectNodes.$inferSelect }> {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("Unauthorized");
+  
+  const { allowed } = await consumeRateLimit(`delete-version:${user.id}`, 30, 60);
+  if (!allowed) throw new Error("Rate limit exceeded");
+
+  await assertProjectWriteAccess(projectId, user.id);
+  
+  const target = await db.query.fileVersions.findFirst({
+    where: and(eq(fileVersions.nodeId, nodeId), eq(fileVersions.version, versionNumber)),
+  });
+  if (!target) throw new Error("Version not found");
+
+  // Prevent deleting the last remaining version to keep file nodes safe
+  const allVersions = await db.query.fileVersions.findMany({
+    where: eq(fileVersions.nodeId, nodeId),
+    orderBy: desc(fileVersions.version),
+  });
+  if (allVersions.length <= 1) {
+    throw new Error("Cannot delete the only remaining version of this file.");
+  }
+
+  // Delete from S3
+  const adminClient = await createAdminClient();
+  await adminClient.storage.from("project-files").remove([target.s3Key]);
+
+  // Delete from db
+  await db.delete(fileVersions).where(eq(fileVersions.id, target.id));
+
+  // Check if we deleted the current active version
+  const node = await db.query.projectNodes.findFirst({
+    where: eq(projectNodes.id, nodeId),
+    columns: { currentVersion: true },
+  });
+
+  let nextActiveVersion: number | null = null;
+  let updatedNode: typeof projectNodes.$inferSelect | undefined = undefined;
+  if (node && node.currentVersion === versionNumber) {
+    // Find the next highest version available
+    const remaining = await db.query.fileVersions.findFirst({
+      where: eq(fileVersions.nodeId, nodeId),
+      orderBy: desc(fileVersions.version),
+    });
+    if (remaining) {
+      nextActiveVersion = remaining.version;
+      const [resNode] = await db
+        .update(projectNodes)
+        .set({
+          s3Key: remaining.s3Key,
+          size: remaining.size,
+          mimeType: remaining.mimeType,
+          currentVersion: remaining.version,
+          updatedAt: new Date(),
+        })
+        .where(eq(projectNodes.id, nodeId))
+        .returning();
+      updatedNode = resNode;
+    }
+  }
+
+  await recordNodeEvent(projectId, user.id, nodeId, "delete_file_version", {
+    deletedVersion: versionNumber,
+    newActiveVersion: nextActiveVersion,
+  });
+
+  revalidatePath(`/projects/${projectId}`);
+  return { success: true, nextActiveVersion, node: updatedNode };
+}
+
