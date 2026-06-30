@@ -2,10 +2,10 @@
 
 import { useMemo, useState } from "react";
 import { Check, Copy } from "lucide-react";
-import { projectReadmeEditorTargetId } from "@/lib/projects/readme-editor-source-map";
+import { projectDocEditorTargetId } from "@/lib/projects/doc-editor-source-map";
 import { cn } from "@/lib/utils";
 
-export type ProjectReadmeCommandLineTarget = {
+export type ProjectDocCommandLineTarget = {
     id: string;
     startLine: number;
     endLine: number;
@@ -29,7 +29,7 @@ async function copyTextWithFallback(value: string) {
     if (!copied) throw new Error("Clipboard fallback failed");
 }
 
-export function ProjectReadmeCommandBlock({
+export function ProjectDocCommandBlock({
     code,
     language,
     id,
@@ -49,7 +49,7 @@ export function ProjectReadmeCommandBlock({
     highlighted?: boolean;
     highlightedTargetId?: string | null;
     highlightToken?: number | null;
-    lineTargets?: ProjectReadmeCommandLineTarget[];
+    lineTargets?: ProjectDocCommandLineTarget[];
     onCopied?: (id: string) => void;
     sourceLine?: number | null;
     sourceOffset?: number | null;
@@ -57,7 +57,7 @@ export function ProjectReadmeCommandBlock({
     const [copied, setCopied] = useState(false);
     const codeLines = code.trimEnd().split("\n");
     const lineTargetByStartLine = useMemo(() => {
-        const map = new Map<number, ProjectReadmeCommandLineTarget>();
+        const map = new Map<number, ProjectDocCommandLineTarget>();
         lineTargets.forEach((target) => map.set(target.startLine, target));
         return map;
     }, [lineTargets]);
@@ -65,7 +65,7 @@ export function ProjectReadmeCommandBlock({
         () => lineTargets.find((target) => target.id === highlightedTargetId) ?? null,
         [highlightedTargetId, lineTargets],
     );
-    const rootEditorTargetId = editorTargetId ?? projectReadmeEditorTargetId("command", sourceLine ?? null, sourceOffset ?? null);
+    const rootEditorTargetId = editorTargetId ?? projectDocEditorTargetId("command", sourceLine ?? null, sourceOffset ?? null);
 
     const handleCopy = async () => {
         if (id) onCopied?.(id);
@@ -74,7 +74,7 @@ export function ProjectReadmeCommandBlock({
             setCopied(true);
             window.setTimeout(() => setCopied(false), 1400);
         } catch (error) {
-            console.error("[ProjectReadmeCommandBlock] Copy failed", error);
+            console.error("[ProjectDocCommandBlock] Copy failed", error);
         }
     };
 
@@ -119,7 +119,7 @@ export function ProjectReadmeCommandBlock({
                     {codeLines.map((line, index) => {
                         const target = lineTargetByStartLine.get(index);
                         const sourceLineForCode = typeof sourceLine === "number" ? sourceLine + index + 1 : null;
-                        const lineEditorTargetId = projectReadmeEditorTargetId("command", sourceLineForCode, null);
+                        const lineEditorTargetId = projectDocEditorTargetId("command", sourceLineForCode, null);
                         const lineHighlighted = Boolean(
                             highlightedLineTarget
                             && index >= highlightedLineTarget.startLine
