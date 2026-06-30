@@ -25,7 +25,7 @@ export const ReactionPillRow = React.memo(function ReactionPillRow({
 
     return (
         <div
-            className={`msg-reaction-row mt-1 flex w-full min-w-0 max-w-full flex-wrap gap-1 ${
+            className={`msg-reaction-row mt-1 flex w-fit min-w-0 max-w-full flex-wrap gap-1 ${
                 align === 'end' ? 'justify-end' : 'justify-start'
             }`}
         >
