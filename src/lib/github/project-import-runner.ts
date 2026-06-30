@@ -118,6 +118,7 @@ export async function markGithubProjectImportFailed(input: {
       ...((src?.metadata || {}) as Record<string, unknown>),
       lastError: errorMessage,
       syncPhase: "failed",
+      syncProgress: null,
       importEventId:
         importEventId ??
         ((src?.metadata || {}) as Record<string, unknown>).importEventId ??
@@ -141,8 +142,9 @@ export async function runGithubProjectImport(input: {
   userId: string;
   importEventId?: string | null;
   queueAgeMs?: number | null;
+  resolutions?: Record<string, "keep_local" | "overwrite_github"> | null;
 }): Promise<GithubProjectImportResult> {
-  const { projectId, importSource, userId } = input;
+  const { projectId, importSource, userId, resolutions } = input;
   const importEventId = input.importEventId ?? null;
   const repoUrl = normalizeGithubRepoUrl(importSource.repoUrl || "");
   const branch = normalizeGithubBranch(importSource.branch ?? undefined);
@@ -315,7 +317,138 @@ export async function runGithubProjectImport(input: {
         );
 
         const fileNodes = nodes.filter((n) => n.type === "file");
-        await insertVirtualFileNodes(projectId, fileNodes, folderMap, userId);
+        
+        // --- START RECONCILIATION ---
+        
+        // 1. Get existing project file nodes
+        const localNodes = await db
+          .select({
+            id: projectNodes.id,
+            path: projectNodes.path,
+            gitHash: projectNodes.gitHash,
+            s3Key: projectNodes.s3Key,
+            currentVersion: projectNodes.currentVersion,
+          })
+          .from(projectNodes)
+          .where(
+            and(
+              eq(projectNodes.projectId, projectId),
+              isNull(projectNodes.deletedAt),
+              eq(projectNodes.type, "file")
+            )
+          );
+
+        const localMap = new Map(localNodes.map((n) => [n.path, n]));
+        const filesToInsert: typeof fileNodes = [];
+        const resolutionMap = resolutions || {};
+
+        // Track remote paths to detect deletions
+        const remotePaths = new Set<string>();
+
+        // 2. Classify remote files
+        const totalFilesToProcess = fileNodes.length;
+        let processedFiles = 0;
+        let lastProgressUpdate = Date.now();
+
+        const updateProgress = async (processed: number, phase: string, msg: string) => {
+          processedFiles = processed;
+          const percentage = totalFilesToProcess > 0 ? Math.round((processed / totalFilesToProcess) * 100) : 100;
+          const now = Date.now();
+          if (processed === 0 || processed === totalFilesToProcess || now - lastProgressUpdate > 300) {
+            lastProgressUpdate = now;
+            await db
+              .update(projects)
+              .set({
+                importSource: {
+                  ...existingSource,
+                  metadata: {
+                    ...sourceMetadata,
+                    syncPhase: phase,
+                    syncProgress: {
+                      total: totalFilesToProcess,
+                      processed,
+                      percentage,
+                      message: msg,
+                    },
+                  },
+                } as any,
+                updatedAt: new Date(),
+              })
+              .where(eq(projects.id, projectId));
+          }
+        };
+
+        await updateProgress(0, "reconciling", "Analyzing repository changes...");
+
+        for (const remote of fileNodes) {
+          const normalizedPath = `/${remote.path.replace(/^\//, "")}`;
+          remotePaths.add(normalizedPath);
+          const local = localMap.get(normalizedPath);
+
+          if (local) {
+            const isLocallyModified = local.s3Key !== null;
+            const isRemoteModified = local.gitHash !== remote.sha;
+
+            if (isRemoteModified) {
+              const res = resolutionMap[remote.path];
+              // Overwrite if user specifically chose to, OR if it's unmodified locally
+              const shouldOverwrite = res === "overwrite_github" || (!isLocallyModified);
+
+              if (shouldOverwrite) {
+                // Update existing node
+                await db
+                  .update(projectNodes)
+                  .set({
+                    gitHash: remote.sha,
+                    s3Key: null, // Reset to pull fresh from remote
+                    size: remote.size,
+                    currentVersion: local.currentVersion + 1,
+                    updatedAt: new Date(),
+                  })
+                  .where(eq(projectNodes.id, local.id));
+              }
+            }
+          } else {
+            // New file -> safe to insert
+            filesToInsert.push(remote);
+          }
+
+          processedFiles++;
+          if (processedFiles % 10 === 0 || processedFiles === totalFilesToProcess) {
+            await updateProgress(processedFiles, "reconciling", `Processing file changes (${processedFiles}/${totalFilesToProcess})...`);
+          }
+        }
+
+        await updateProgress(totalFilesToProcess, "reconciling", "Applying deletions and finalizing nodes...");
+
+        // 3. Handle remote deletions
+        for (const local of localNodes) {
+          if (!remotePaths.has(local.path)) {
+            // Check if local was modified and user chose to keep it
+            const relativePath = local.path.replace(/^\//, "");
+            const res = resolutionMap[relativePath];
+            const isLocallyModified = local.s3Key !== null;
+            const shouldKeep = res === "keep_local" || (isLocallyModified && res !== "overwrite_github");
+
+            if (!shouldKeep) {
+              // Delete locally
+              await db
+                .update(projectNodes)
+                .set({
+                  deletedAt: new Date(),
+                  updatedAt: new Date(),
+                })
+                .where(eq(projectNodes.id, local.id));
+            }
+          }
+        }
+
+        // 4. Insert brand new files
+        if (filesToInsert.length > 0) {
+          await insertVirtualFileNodes(projectId, filesToInsert, folderMap, userId);
+        }
+        
+        // --- END RECONCILIATION ---
 
         // Schedule background hydration
         // We trigger an Inngest event for Phase 2 Tarball Stream
@@ -343,6 +476,14 @@ export async function runGithubProjectImport(input: {
               githubLastSyncAt: new Date(),
               githubLastCommitSha: latestSha,
               updatedAt: new Date(),
+              importSource: {
+                ...existingSource,
+                metadata: {
+                  ...sourceMetadata,
+                  syncPhase: "ready",
+                  syncProgress: null,
+                },
+              } as any,
             })
             .where(eq(projects.id, projectId));
 
