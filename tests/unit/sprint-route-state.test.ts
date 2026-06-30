@@ -8,7 +8,7 @@ import {
 } from "@/lib/projects/sprint-detail";
 
 describe("sprint route state", () => {
-  it("parses filter and drawer state from search params", () => {
+  it("drops legacy file drawer state while preserving sprint filters", () => {
     const params = new URLSearchParams({
       filter: "files",
       mode: "grouped",
@@ -20,7 +20,7 @@ describe("sprint route state", () => {
 
     assert.equal(state.filter, "files");
     assert.equal(state.mode, "grouped");
-    assert.deepEqual(state.drawer, { type: "file", id: "node-123" });
+    assert.deepEqual(state.drawer, { type: "none", id: null });
   });
 
   it("falls back to canonical defaults for invalid route state", () => {
@@ -48,9 +48,9 @@ describe("sprint route state", () => {
       buildProjectSprintDetailHref("network-for-builders", "sprint-1", {
         filter: "files",
         mode: "files",
-        drawer: { type: "file", id: "node-1" },
+        drawer: { type: "task", id: "task-2" },
       }),
-      "/projects/network-for-builders/sprints/sprint-1?filter=files&mode=files&drawerType=file&drawerId=node-1",
+      "/projects/network-for-builders/sprints/sprint-1?filter=files&mode=files&drawerType=task&drawerId=task-2",
     );
     assert.equal(
       buildProjectSprintTabHref("network/builders & co"),
