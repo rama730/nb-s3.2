@@ -35,7 +35,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { History } from "lucide-react";
 
-import { formatBytes } from "../folder/format";
+import { formatBytes, formatRelativeTime } from "../folder/format";
 import { TaskLinkPopover } from "../TaskLinkPopover";
 import { VersionPill } from "../VersionPill";
 import { FileActionsBar } from "./FileActionsBar";
@@ -53,8 +53,11 @@ import { FileActionsBar } from "./FileActionsBar";
  * Req 5.9.
  */
 export type MetadataStripNode = ProjectNode & {
+  updatedById?: string | null;
   updatedByName?: string | null;
   updatedByUsername?: string | null;
+  updatedByAvatarUrl?: string | null;
+  versionUpdatedAt?: Date | string | null;
 };
 
 // ---------------------------------------------------------------------------
@@ -173,20 +176,6 @@ function toIso(value: string | Date | null | undefined): string {
   return d.toISOString();
 }
 
-/**
- * Resolve the "updater" display label per Req 4.6 / Req 5.1. Falls back to
- * username when the full display name is absent, and to `—` when both
- * fields are empty.
- */
-function updatedByLabel(node: MetadataStripNode): string {
-  const name = typeof node.updatedByName === "string" ? node.updatedByName.trim() : "";
-  if (name.length > 0) return name;
-  const username =
-    typeof node.updatedByUsername === "string" ? node.updatedByUsername.trim() : "";
-  if (username.length > 0) return username;
-  return MISSING;
-}
-
 /** Lowercased MIME type or `—` when the MIME type is absent / blank. */
 function mimeLabel(node: MetadataStripNode): string {
   const mime = typeof node.mimeType === "string" ? node.mimeType.trim() : "";
@@ -222,6 +211,10 @@ export interface MetadataStripProps {
   projectId?: string;
   /** Number of tasks linked to this node (from store taskLinkCounts). Req 7.1. */
   taskLinkCount?: number;
+  /** The current active viewing mode. */
+  mode: "view" | "raw" | "edit";
+  /** Callback to restore default view mode. */
+  onView: () => void;
   /** Raw toggle handler (Req 5.2). */
   onRaw: () => void;
   /** Edit mode handler (Req 5.8). */
@@ -236,7 +229,11 @@ export interface MetadataStripProps {
   onToggleVersionHistory?: () => void;
   /** Whether the FileVersionHistoryPanel is currently open (Req 10.2). */
   isVersionHistoryPanelOpen?: boolean;
+  /** Optional uploader display name cache map. */
+  uploaderNames?: Record<string, string>;
   className?: string;
+  isLinkedDoc?: boolean;
+  onNavigateToDoc?: (slug: string) => void;
 }
 
 /**
@@ -250,6 +247,8 @@ export function MetadataStrip({
   signedUrl,
   projectId,
   taskLinkCount,
+  mode,
+  onView,
   onRaw,
   onEdit,
   onDownload,
@@ -257,7 +256,10 @@ export function MetadataStrip({
   isLinkedTasksPanelOpen,
   onToggleVersionHistory,
   isVersionHistoryPanelOpen,
+  uploaderNames,
   className,
+  isLinkedDoc,
+  onNavigateToDoc,
 }: MetadataStripProps): React.JSX.Element {
   // Dev-only invariant assertion. When this fires, the parent forgot to
   // gate the render on `currentLocation.type === "file"` or lost the
@@ -282,7 +284,23 @@ export function MetadataStrip({
     Number.isInteger(currentVersion) &&
     currentVersion > 1;
 
-  const isoTimestamp = toIso(node.updatedAt);
+  const displayName = React.useMemo(() => {
+    const directName = typeof node.updatedByName === "string" ? node.updatedByName.trim() : "";
+    if (directName) return directName;
+    const directUser = typeof node.updatedByUsername === "string" ? node.updatedByUsername.trim() : "";
+    if (directUser) return directUser;
+    if (node.createdBy && uploaderNames?.[node.createdBy]) {
+      return uploaderNames[node.createdBy];
+    }
+    return null;
+  }, [node.updatedByName, node.updatedByUsername, node.createdBy, uploaderNames]);
+  const updatedAtValue = node.versionUpdatedAt ?? node.updatedAt;
+  const isoTimestamp = toIso(updatedAtValue);
+  const relativeTimestamp = formatRelativeTime(updatedAtValue);
+  const updatedAtText =
+    relativeTimestamp === MISSING
+      ? MISSING
+      : `Last updated ${relativeTimestamp}${displayName ? ` by ${displayName}` : ""}`;
 
   return (
     <div
@@ -312,42 +330,29 @@ export function MetadataStrip({
             </span>
           </>
         ) : null}
-        {onToggleVersionHistory && (
-          <>
-            {!showVersionPill && <Separator />}
-            <Button
-              type="button"
-              variant={isVersionHistoryPanelOpen ? "secondary" : "ghost"}
-              size="sm"
-              onClick={onToggleVersionHistory}
-              aria-pressed={isVersionHistoryPanelOpen}
-              aria-label="View history"
-              data-testid="files-tab-metadata-view-history"
-              className="h-5 px-1.5 text-[10px]"
-            >
-              <History className="mr-0.5 h-3 w-3" aria-hidden="true" />
-              View history
-            </Button>
-          </>
-        )}
         <Separator />
         {isoTimestamp === MISSING ? (
-          <span data-field="updated-at">{MISSING}</span>
+          <span data-field="updated-at">{updatedAtText}</span>
         ) : (
           <time
             data-field="updated-at"
             dateTime={isoTimestamp}
             className="tabular-nums"
+            title={isoTimestamp}
           >
-            {isoTimestamp}
+            {updatedAtText}
           </time>
         )}
         <Separator />
-        <span data-field="updated-by">
-          {updatedByLabel(node) === MISSING ? MISSING : `by ${updatedByLabel(node)}`}
-        </span>
-        <Separator />
         <span data-field="mime-type">{mimeLabel(node)}</span>
+        {isLinkedDoc && (
+          <>
+            <Separator />
+            <span className="font-semibold text-zinc-800 dark:text-zinc-200" data-field="used-as-doc">
+              Used as a Doc
+            </span>
+          </>
+        )}
         {projectId && (taskLinkCount ?? 0) > 0 ? (
           <>
             <Separator />
@@ -361,15 +366,22 @@ export function MetadataStrip({
       </div>
 
       <FileActionsBar
+        mode={mode}
+        onView={onView}
         onRaw={onRaw}
         onEdit={onEdit}
         onDownload={onDownload}
         onToggleLinkedTasks={onToggleLinkedTasks}
         isLinkedTasksPanelOpen={isLinkedTasksPanelOpen}
+        onToggleVersionHistory={onToggleVersionHistory}
+        isVersionHistoryPanelOpen={isVersionHistoryPanelOpen}
         projectId={projectId}
         nodeId={node.id}
         fileName={node.name}
+        fileSize={node.size}
         mimeType={node.mimeType}
+        isLinkedDoc={isLinkedDoc}
+        onNavigateToDoc={onNavigateToDoc}
       />
     </div>
   );
