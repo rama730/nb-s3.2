@@ -32,6 +32,7 @@ export interface ProjectFilesWorkspaceProps {
     initialFileNodes?: ProjectNode[];
     syncStatus?: "pending" | "cloning" | "indexing" | "ready" | "failed";
     importSourceType?: "github" | "upload" | "scratch" | null;
+    initialOpenFileId?: string | null;
     initialOpenPath?: string | null;
     /** Legacy V2 line-target; V3 has no line targeting and this is dropped. */
     initialOpenLine?: number | null;
@@ -46,6 +47,7 @@ export interface FilesTabV3Props {
     isOwnerOrMember: boolean;
     isActive?: boolean;
     syncStatus?: "pending" | "cloning" | "indexing" | "ready" | "failed";
+    initialOpenFileId?: string | null;
     initialOpenPath?: string | null;
 }
 
@@ -64,6 +66,7 @@ export function adaptToV3Props(
         isOwnerOrMember: props.isOwnerOrMember,
         isActive: props.isActive,
         syncStatus: props.syncStatus,
+        initialOpenFileId: props.initialOpenFileId ?? null,
         initialOpenPath: props.initialOpenPath ?? null,
     };
 }
