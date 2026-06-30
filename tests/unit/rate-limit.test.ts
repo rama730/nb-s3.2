@@ -7,12 +7,7 @@ import assert from 'node:assert/strict'
 delete process.env.UPSTASH_REDIS_REST_URL
 delete process.env.UPSTASH_REDIS_REST_TOKEN
 
-let consumeRateLimit: (key: string, limit: number, windowSeconds: number) => Promise<{
-    allowed: boolean
-    count: number
-    limit: number
-    resetAt: number
-}>
+let consumeRateLimit: typeof import('../../src/lib/security/rate-limit').consumeRateLimit
 
 describe('consumeRateLimit (local fallback)', () => {
     before(async () => {
@@ -62,5 +57,19 @@ describe('consumeRateLimit (local fallback)', () => {
 
         const resultB = await consumeRateLimit(keyB, 1, 60)
         assert.equal(resultB.allowed, true)
+    })
+
+    it('charges weighted operations by their declared cost', async () => {
+        const key = `test-weighted-${Date.now()}`
+
+        const first = await consumeRateLimit(key, 10, 60, { cost: 7 })
+        const second = await consumeRateLimit(key, 10, 60, { cost: 4 })
+        const third = await consumeRateLimit(key, 10, 60, { cost: 3 })
+
+        assert.equal(first.allowed, true)
+        assert.equal(first.remaining, 3)
+        assert.equal(second.allowed, false)
+        assert.equal(third.allowed, true)
+        assert.equal(third.remaining, 0)
     })
 })
