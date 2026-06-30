@@ -1,29 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 
-type ValidationOptions = {
-  strict?: boolean;
-};
-
 type ValidationResult = {
   errors: string[];
   warnings: string[];
   checkedFiles: number;
 };
-
-const LEGACY_SNAKE_CASE_COMPONENT_ALLOWLIST = new Set([
-  "src/components/hub/SimpleHubClient.tsx",
-  "src/components/profile/ProfileForm.tsx",
-  "src/components/profile/edit/EditProfileModal.tsx",
-  "src/components/profile/edit/EditProfileTabs.tsx",
-  "src/components/profile/v2/sections/ActivityFeedContainer.tsx",
-  "src/components/projects/v2/tasks/CreateTaskModal.tsx",
-  "src/components/projects/v2/tasks/TaskCard.tsx",
-  "src/components/projects/v2/tasks/TaskDetailTabs/CommentsTab.tsx",
-  "src/components/projects/v2/tasks/TaskDetailTabs/DetailsTab.tsx",
-  "src/components/projects/v2/tasks/TasksTable.tsx",
-  "src/components/providers/AuthProvider.tsx",
-]);
 
 const DISALLOWED_SURFACE_TOKENS_RE = /\b(full_name|avatar_url|social_links|availability_status|experience_level|open_to|banner_url)\b/;
 
@@ -48,7 +30,6 @@ function collectComponentFiles(dir: string, into: string[]) {
 
 export function validateDataShapeContract(
   rootDir: string = process.cwd(),
-  options: ValidationOptions = {},
 ): ValidationResult {
   const files: string[] = [];
   collectComponentFiles(path.join(rootDir, "src", "components"), files);
@@ -61,22 +42,7 @@ export function validateDataShapeContract(
     const source = fs.readFileSync(absolute, "utf8");
     if (!DISALLOWED_SURFACE_TOKENS_RE.test(source)) continue;
 
-    if (LEGACY_SNAKE_CASE_COMPONENT_ALLOWLIST.has(rel)) {
-      warnings.push(
-        `${rel}: legacy snake_case surface remains allowlisted; migrate this component to normalized view models before Phase 2.`,
-      );
-      continue;
-    }
-
     errors.push(`${rel}: direct snake_case identity/profile fields are forbidden in component surfaces.`);
-  }
-
-  if (options.strict && warnings.length > 0) {
-    errors.push(
-      ...warnings.map((warning) =>
-        warning.replace("legacy snake_case surface remains allowlisted; ", "strict mode forbids allowlisted legacy surface: "),
-      ),
-    );
   }
 
   return {
@@ -87,8 +53,7 @@ export function validateDataShapeContract(
 }
 
 function main() {
-  const strict = process.argv.includes("--strict");
-  const result = validateDataShapeContract(process.cwd(), { strict });
+  const result = validateDataShapeContract(process.cwd());
 
   if (result.warnings.length > 0) {
     console.warn("[data-shape-contract] legacy surface warnings:");
