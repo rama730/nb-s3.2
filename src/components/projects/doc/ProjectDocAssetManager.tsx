@@ -3,25 +3,25 @@
 import { useEffect, useMemo, useState } from "react";
 import { Check, ImagePlus, Link2, Replace } from "lucide-react";
 
-import { ProjectReadmeAssetUploader } from "@/components/projects/readme/ProjectReadmeAssetUploader";
+import { ProjectDocAssetUploader } from "@/components/projects/doc/ProjectDocAssetUploader";
 import {
-    buildProjectReadmeImageMarkdown,
-    getProjectReadmeImageIntentOption,
-    PROJECT_README_IMAGE_INTENTS,
-    type ProjectReadmeImageIntent,
-    type ProjectReadmeImageSourceKind,
-} from "@/lib/projects/readme-media";
+    buildProjectDocImageMarkdown,
+    getProjectDocImageIntentOption,
+    PROJECT_DOC_IMAGE_INTENTS,
+    type ProjectDocImageIntent,
+    type ProjectDocImageSourceKind,
+} from "@/lib/projects/doc-media";
 import { cn } from "@/lib/utils";
 
 const IMAGE_SOURCE_MODES: Array<{
-    id: ProjectReadmeImageSourceKind;
+    id: ProjectDocImageSourceKind;
     label: string;
     description: string;
 }> = [
     {
         id: "managed",
         label: "Upload",
-        description: "Best for private or app-owned README media.",
+        description: "Best for private or app-owned document media.",
     },
     {
         id: "project-file",
@@ -45,7 +45,7 @@ const IMAGE_SOURCE_MODES: Array<{
     },
 ];
 
-function defaultSourcePlaceholder(mode: ProjectReadmeImageSourceKind) {
+function defaultSourcePlaceholder(mode: ProjectDocImageSourceKind) {
     if (mode === "external-url") return "https://example.com/screenshot.png";
     if (mode === "replacement") return "docs/assets/new-image.png";
     return "docs/assets/screenshot.png";
@@ -63,7 +63,7 @@ function parseSelectedImageMarkup(value: string) {
     return { alt: readAttr("alt"), src: readAttr("src") };
 }
 
-export function ProjectReadmeAssetManager({
+export function ProjectDocAssetManager({
     projectId,
     projectVisibility,
     selectedMarkdown = "",
@@ -75,19 +75,19 @@ export function ProjectReadmeAssetManager({
     onInserted: (markdown: string) => void;
 }) {
     const selectedImage = useMemo(() => parseSelectedImageMarkup(selectedMarkdown), [selectedMarkdown]);
-    const [intent, setIntent] = useState<ProjectReadmeImageIntent>("screenshot");
-    const [sourceMode, setSourceMode] = useState<ProjectReadmeImageSourceKind>(selectedImage ? "replacement" : "managed");
+    const [intent, setIntent] = useState<ProjectDocImageIntent>("screenshot");
+    const [sourceMode, setSourceMode] = useState<ProjectDocImageSourceKind>(selectedImage ? "replacement" : "managed");
     const [src, setSrc] = useState(selectedImage?.src ?? "");
     const [altText, setAltText] = useState(selectedImage?.alt ?? "");
     const [caption, setCaption] = useState("");
     const [customWidth, setCustomWidth] = useState("");
-    const intentOption = getProjectReadmeImageIntentOption(intent);
+    const intentOption = getProjectDocImageIntentOption(intent);
     const displayWidth = useMemo(() => {
         const parsed = Number(customWidth);
         if (Number.isFinite(parsed) && parsed > 0) return Math.round(parsed);
         return intentOption?.defaultWidth;
     }, [customWidth, intentOption?.defaultWidth]);
-    const generatedMarkdown = useMemo(() => buildProjectReadmeImageMarkdown({
+    const generatedMarkdown = useMemo(() => buildProjectDocImageMarkdown({
         src,
         alt: altText,
         intent,
@@ -96,7 +96,7 @@ export function ProjectReadmeAssetManager({
     }), [altText, caption, displayWidth, intent, src]);
     const canInsertManualImage = sourceMode !== "managed" && src.trim() && altText.trim();
     const privacyCopy = projectVisibility === "public"
-        ? "Public README media can use managed upload or stable repo-relative paths."
+        ? "Public document media can use managed upload or stable repo-relative paths."
         : "Private projects should prefer managed upload so media follows project access rules.";
 
     useEffect(() => {
@@ -113,7 +113,7 @@ export function ProjectReadmeAssetManager({
                     <ImagePlus className="h-4 w-4" />
                 </span>
                 <div>
-                    <p className="text-sm font-semibold text-zinc-950 dark:text-zinc-50">README image</p>
+                    <p className="text-sm font-semibold text-zinc-950 dark:text-zinc-50">Document image</p>
                     <p className="mt-1 text-xs leading-5 text-zinc-500">
                         {selectedImage
                             ? "A selected image is ready to replace. Choose the new purpose, source, width, and alt text."
@@ -123,7 +123,7 @@ export function ProjectReadmeAssetManager({
             </div>
 
             <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                {PROJECT_README_IMAGE_INTENTS.map((option) => {
+                {PROJECT_DOC_IMAGE_INTENTS.map((option) => {
                     const active = option.id === intent;
                     return (
                         <button
@@ -176,7 +176,7 @@ export function ProjectReadmeAssetManager({
 
             {sourceMode === "managed" ? (
                 <div className="rounded-2xl border border-zinc-200 p-4 dark:border-zinc-800">
-                    <ProjectReadmeAssetUploader
+                    <ProjectDocAssetUploader
                         projectId={projectId}
                         projectVisibility={projectVisibility}
                         imageIntent={intent}
@@ -254,7 +254,7 @@ export function ProjectReadmeAssetManager({
                     <div className="mt-3 rounded-xl bg-zinc-50 p-3 dark:bg-zinc-900/60">
                         <p className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Markdown</p>
                         <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap text-xs leading-5 text-zinc-700 dark:text-zinc-300">
-                            {generatedMarkdown || "Add a source and alt text to generate portable README image markup."}
+                            {generatedMarkdown || "Add a source and alt text to generate portable document image markup."}
                         </pre>
                     </div>
                     <div className="mt-3 flex justify-end">
@@ -274,7 +274,7 @@ export function ProjectReadmeAssetManager({
             <ul className="space-y-1 text-xs leading-5 text-zinc-500">
                 <li>{privacyCopy}</li>
                 <li>Use repo-relative paths for GitHub portability; use managed upload when access control matters.</li>
-                <li>Large screenshots and diagrams receive stable display widths to prevent oversized README images.</li>
+                <li>Large screenshots and diagrams receive stable display widths to prevent oversized document images.</li>
             </ul>
         </div>
     );
