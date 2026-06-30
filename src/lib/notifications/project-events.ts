@@ -135,7 +135,7 @@ function defaultHref(input: EnqueueProjectNotificationEventInput, project: Proje
         case "files_workspace":
             return `/projects/${encodeURIComponent(slugOrId)}?tab=files`;
         case "readme":
-            return `/projects/${encodeURIComponent(slugOrId)}?tab=readme`;
+            return `/projects/${encodeURIComponent(slugOrId)}?tab=docs&doc=readme`;
         case "updates":
             return `/projects/${encodeURIComponent(slugOrId)}?tab=updates`;
         case "project_lifecycle":
