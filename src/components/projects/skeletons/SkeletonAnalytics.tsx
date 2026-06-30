@@ -21,7 +21,7 @@ export function SkeletonAnalytics() {
                     <div className="h-24 rounded-xl bg-zinc-200 dark:bg-zinc-800" />
                 </div>
             </section>
-            <span className="sr-only" role="status" aria-live="polite">Loading project intelligence...</span>
+            <span className="sr-only" role="status" aria-live="polite">Loading project analytics...</span>
         </div>
     );
 }
