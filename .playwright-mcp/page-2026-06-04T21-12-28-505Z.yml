@@ -1,0 +1,77 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - banner [ref=e3]:
+      - generic [ref=e4]:
+        - link "Navigate to home" [ref=e7] [cursor=pointer]:
+          - /url: /
+          - img [ref=e11]
+          - generic [ref=e14]: NB
+        - navigation "Main navigation" [ref=e15]:
+          - link "Hub" [ref=e16] [cursor=pointer]:
+            - /url: /hub
+            - img [ref=e17]
+            - generic [ref=e22]: Hub
+          - link "Connections" [ref=e23] [cursor=pointer]:
+            - /url: /people
+            - img [ref=e24]
+            - generic [ref=e29]: Connections
+          - link "Messages" [ref=e30] [cursor=pointer]:
+            - /url: /messages
+            - img [ref=e31]
+            - generic [ref=e33]: Messages
+          - link "Settings" [ref=e34] [cursor=pointer]:
+            - /url: /settings
+            - img [ref=e35]
+            - generic [ref=e38]: Settings
+        - generic [ref=e39]:
+          - button "Theme (loading)" [disabled]
+          - link "Sign in" [ref=e41] [cursor=pointer]:
+            - /url: /login
+    - main [ref=e42]:
+      - generic [ref=e45]:
+        - generic [ref=e48]:
+          - generic [ref=e49]:
+            - link "Hub" [ref=e50] [cursor=pointer]:
+              - /url: /hub
+              - img [ref=e51]
+              - text: Hub
+            - generic [ref=e53]:
+              - heading "E2E Applications Fixture Project" [level=1] [ref=e54]
+              - generic [ref=e55]:
+                - generic [ref=e56]: Created by
+                - link "E2E Peer User" [ref=e57] [cursor=pointer]:
+                  - /url: /u/e2e_peer_user
+              - generic "Active Project" [ref=e58]
+            - generic [ref=e60]:
+              - generic "Total Views" [ref=e61]:
+                - img [ref=e62]
+                - generic [ref=e65]: "1"
+              - generic "Followers" [ref=e66]:
+                - img [ref=e67]
+                - generic [ref=e72]: "0"
+          - generic [ref=e73]:
+            - button "Follow" [ref=e74] [cursor=pointer]:
+              - img [ref=e75]
+              - generic [ref=e78]: Follow
+            - button "Share Project" [ref=e80] [cursor=pointer]:
+              - img [ref=e81]
+        - generic [ref=e89]:
+          - button "Dashboard" [ref=e90] [cursor=pointer]:
+            - img [ref=e91]
+            - text: Dashboard
+          - button "Updates" [ref=e96] [cursor=pointer]:
+            - img [ref=e97]
+            - text: Updates
+          - button "Files" [ref=e101] [cursor=pointer]:
+            - img [ref=e102]
+            - text: Files
+        - region "Project detail content" [ref=e104]
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=e117] [cursor=pointer]:
+    - generic [ref=e120]:
+      - text: Rendering
+      - generic [ref=e121]:
+        - generic [ref=e122]: .
+        - generic [ref=e123]: .
+        - generic [ref=e124]: .
+  - alert [ref=e125]
