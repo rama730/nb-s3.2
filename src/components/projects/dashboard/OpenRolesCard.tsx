@@ -3,6 +3,8 @@
 import { memo, useMemo, useState, useCallback, useEffect } from "react";
 import { Briefcase, CheckCircle, Clock, XCircle, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useSecurityRuntime } from "@/components/providers/SecurityRuntimeProvider";
+import { serializeJsonLd } from "@/lib/security/json-ld";
 import DashboardCard from "./DashboardCard";
 
 import { type ApplicationStatusResult } from "@/app/actions/applications";
@@ -53,6 +55,7 @@ export default function OpenRolesCard({
     onDeclineInvitation,
     invitationLoading = false,
 }: OpenRolesCardProps) {
+    const { nonce } = useSecurityRuntime();
     const openRoles = useMemo(() => roles.filter((r: any) => {
         const remaining = (r?.count || 0) - (r?.filled || 0);
         return remaining > 0;
@@ -138,15 +141,20 @@ export default function OpenRolesCard({
             }))
         };
     }, [openRoles]);
+    const serializedJsonLd = useMemo(
+        () => jsonLd ? serializeJsonLd(jsonLd) : null,
+        [jsonLd],
+    );
 
     const isApplyDisabled = isBlocked || isApplyPending;
 
     return (
         <>
-            {jsonLd && (
+            {serializedJsonLd && (
                 <script
                     type="application/ld+json"
-                    dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+                    nonce={nonce ?? undefined}
+                    dangerouslySetInnerHTML={{ __html: serializedJsonLd }}
                 />
             )}
             <DashboardCard
