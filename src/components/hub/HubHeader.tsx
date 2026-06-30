@@ -2,7 +2,7 @@
 
 import { memo, useState, useRef, useEffect } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Plus, Grid3X3, List, Filter } from 'lucide-react';
+import { Plus, Filter } from 'lucide-react';
 import { FILTER_VIEWS, VIEW_MODES, FilterView, ViewMode } from '@/constants/hub';
 import { HubFilters } from '@/types/hub';
 import { useReducedMotionPreference } from '@/components/providers/theme-provider';
@@ -110,36 +110,6 @@ const HubHeader = memo(function HubHeader({
             </div>
 
             <div className="flex items-center gap-2">
-                {/* View Mode Toggle */}
-                <div className="flex items-center bg-zinc-100 dark:bg-zinc-800 rounded-lg p-1">
-                    <button
-                        type="button"
-                        onClick={() => onViewModeChange(VIEW_MODES.GRID)}
-                        aria-label="Grid view"
-                        aria-pressed={viewMode === VIEW_MODES.GRID}
-                        className={`p-2 rounded-md transition-colors ${viewMode === VIEW_MODES.GRID
-                                ? 'bg-white dark:bg-zinc-700 shadow-sm text-primary'
-                                : 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'
-                            }`}
-                    >
-                        <Grid3X3 className="w-4 h-4" />
-                    </button>
-                    <button
-                        type="button"
-                        onClick={() => onViewModeChange(VIEW_MODES.LIST)}
-                        aria-label="List view"
-                        aria-pressed={viewMode === VIEW_MODES.LIST}
-                        className={`p-2 rounded-md transition-colors ${viewMode === VIEW_MODES.LIST
-                                ? 'bg-white dark:bg-zinc-700 shadow-sm text-primary'
-                                : 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'
-                            }`}
-                    >
-                        <List className="w-4 h-4" />
-                    </button>
-                </div>
-
-
-
                 {/* Main Filter Dropdown Toggle */}
                 <div className="relative" ref={filterDropdownRef}>
                     <button
