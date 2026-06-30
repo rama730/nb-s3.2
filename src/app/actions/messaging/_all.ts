@@ -40,6 +40,10 @@ import {
 } from '@/lib/messages/structured';
 import { buildConversationParticipantPreview } from '@/lib/messages/preview-authority';
 import { buildMessageAttachmentAccessUrl } from '@/lib/messages/attachment-access';
+import {
+    MESSAGE_MEDIA_PREVIEW_MAX_WIDTH,
+    normalizeMediaDimensions,
+} from '@/lib/messages/media-metadata';
 import { buildMessageSearchDocumentSql } from '@/lib/messages/search-document';
 import { isTemporaryMessageId } from '@/lib/messages/utils';
 import { emitMessageBurstNotifications } from '@/lib/notifications/emitters';
@@ -1144,7 +1148,8 @@ type NormalizedAttachmentInput = UploadedAttachment & {
 };
 
 function buildImageThumbnailUrl(signedUrl: string): string {
-    return signedUrl.replace('/object/sign/', '/render/image/sign/') + '&width=240&height=240&resize=cover';
+    return signedUrl.replace('/object/sign/', '/render/image/sign/')
+        + `&width=${MESSAGE_MEDIA_PREVIEW_MAX_WIDTH}&resize=contain&format=origin`;
 }
 
 function extractStoragePathFromAttachmentUrl(url: string | null | undefined): string | null {
@@ -3500,6 +3505,10 @@ export async function uploadAttachment(
 
         const file = formData.get('file') as File;
         if (!file) return { success: false, error: 'No file provided' };
+        const mediaDimensions = normalizeMediaDimensions(
+            formData.get('width'),
+            formData.get('height'),
+        );
         const clientUploadIdRaw = formData.get('clientUploadId');
         const clientUploadId =
             typeof clientUploadIdRaw === 'string' && clientUploadIdRaw.trim().length > 0
@@ -3712,8 +3721,8 @@ export async function uploadAttachment(
             sizeBytes: normalizedSize,
             mimeType: mimeType || 'application/octet-stream',
             thumbnailUrl,
-            width: null,
-            height: null,
+            width: mediaDimensions?.width ?? null,
+            height: mediaDimensions?.height ?? null,
         };
 
         await db
