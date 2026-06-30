@@ -42,13 +42,14 @@
 "use client";
 
 import * as React from "react";
-import { AlertTriangle, PanelLeftOpen } from "lucide-react";
+import { AlertTriangle, PanelLeftOpen, Loader2 } from "lucide-react";
 
 import type { ProjectNode } from "@/lib/db/schema";
 import { useFilesWorkspaceStore } from "@/stores/filesWorkspaceStore";
 
 import { useFilesTabRole } from "./FilesTabRoleContext";
 import { useCurrentLocation } from "./hooks/useCurrentLocation";
+import { FilesTabBootContext } from "./hooks/useFolderContents";
 import { ancestorChain } from "./navigation";
 import { BreadcrumbBar } from "./breadcrumb/BreadcrumbBar";
 import { FolderListView } from "./folder/FolderListView";
@@ -73,6 +74,7 @@ export interface FilesTabMainProps {
   isActive?: boolean;
   /** Sync status surfaced to `useExplorerBoot` through `FolderListView`. */
   syncStatus?: string;
+  onToggleGitHubSync?: () => void;
 }
 
 // Stable empty object used by selectors reading `nodesById` when the
@@ -90,9 +92,14 @@ export function FilesTabMain({
   projectName,
   isActive = true,
   syncStatus,
+  onToggleGitHubSync,
 }: FilesTabMainProps): React.JSX.Element {
   const { canEdit } = useFilesTabRole();
   const location = useCurrentLocation(projectId);
+
+  // Read the booting state from the explorer context (injected via FilesTabRoot)
+  const bootContext = React.useContext(FilesTabBootContext);
+  const isBooting = bootContext?.isBooting ?? false;
 
   // ── Sidebar collapsed state (Req 18.1–18.6) ──────────────────────
   const sidebarCollapsed = useFilesWorkspaceStore(
@@ -158,8 +165,19 @@ export function FilesTabMain({
           <PanelLeftOpen className="w-4 h-4" />
         </button>
       )}
-      <BreadcrumbBar projectId={projectId} location={location} />
-      {unresolved ? (
+      <BreadcrumbBar projectId={projectId} location={location} onToggleGitHubSync={onToggleGitHubSync} />
+      {isBooting ? (
+        <div
+          role="status"
+          aria-busy="true"
+          aria-live="polite"
+          data-testid="files-tab-main-loading"
+          className="flex flex-1 items-center justify-center gap-2 p-8 text-zinc-500"
+        >
+          <Loader2 className="h-4 w-4 animate-spin text-zinc-400 dark:text-zinc-500" />
+          <span>Loading workspace...</span>
+        </div>
+      ) : unresolved ? (
         <LocationNotFound />
       ) : location === null ||
         location.type === "root" ||
